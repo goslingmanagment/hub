@@ -148,6 +148,11 @@ export class Docker {
     return started.raw;
   }
 
+  /** Restart the whole container (a stand that got stuck). */
+  async restart(): Promise<void> {
+    await httpJson({ host: "", port: 0, socketPath: DOCKER_SOCK, path: `/containers/${this.container}/restart?t=2`, method: "POST" });
+  }
+
   async pids(): Promise<Record<string, number | null>> {
     for (let i = 0; i < 20; i++) {
       try {

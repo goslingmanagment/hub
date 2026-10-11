@@ -10,7 +10,7 @@
 // {cmd:"chrome.status"} → {ok, pid?, running}. The current pids are in
 // /run/pb/pids.json for the stand's fault injection (docker exec … kill).
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 
@@ -186,6 +186,18 @@ function netSelftest(): Promise<Record<string, unknown>> {
   });
 }
 
+/** The pid of Chrome's network service process (the operator watches it:
+ *  Chrome restarts a crashed one by itself and says nothing over CDP). */
+function networkServicePid(): number | null {
+  try {
+    const out = execFileSync("pgrep", ["-u", String(CHROME_UID), "-f", "utility-sub-type=network.mojom.NetworkService"], { encoding: "utf8" });
+    const pid = Number(out.trim().split(/\s+/)[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 function listenControl(): void {
   if (existsSync(CTL_SOCK)) unlinkSync(CTL_SOCK);
   const server = createServer((socket) => {
@@ -209,6 +221,9 @@ function listenControl(): void {
           break;
         case "chrome.status":
           reply({ ok: true, running: chrome !== null, pid: chrome?.pid ?? null });
+          break;
+        case "chrome.netpid":
+          reply({ ok: true, pid: networkServicePid() });
           break;
         default:
           reply({ ok: false, error: "unknown command" });

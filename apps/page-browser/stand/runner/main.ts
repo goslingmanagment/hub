@@ -60,8 +60,15 @@ async function main(): Promise<void> {
   const engine = new StandEngine(process.env.STAND_OPERATOR ?? "ws://10.250.250.20:7700/rpc", "stand-token", Date.now());
   const stand = new StandServer(process.env.STAND_SERVER ?? "10.250.250.10");
   const docker = new Docker(process.env.STAND_BROWSER_CONTAINER ?? "pb-stand-browser-1");
-  const results: Array<RunResult & { run: number; ms: number }> = [];
-  for (let run = 1; run <= runs; run++) {
+  // A run that could not be set up (the stand itself failed: a timeout, a
+  // browser that did not come back) says nothing about the criterion. It is
+  // counted apart and replaced by another run; two in a row restart the
+  // browser container.
+  const results: Array<RunResult & { run: number; ms: number; invalid: boolean }> = [];
+  let valid = 0;
+  let invalidInRow = 0;
+  let resets = 0;
+  for (let run = 1; valid < runs && run <= runs * 2 + 2; run++) {
     const started = monoMs();
     const log = (event: string, fields?: Record<string, unknown>) =>
       console.log(JSON.stringify({ run, ms: Math.round(monoMs() - started), event, ...fields }));
@@ -72,18 +79,33 @@ async function main(): Promise<void> {
       result = { ok: false, violations: [`scenario error: ${(error as Error).stack}`], notes: {} };
     }
     await stand.clearFaults().catch(() => undefined);
-    results.push({ run, ms: Math.round(monoMs() - started), ...result });
-    console.log(JSON.stringify({ run, ok: result.ok, violations: result.violations, notes: result.notes }));
+    const invalid = result.violations.length > 0 && result.violations.every((violation) => violation.startsWith("scenario error:"));
+    results.push({ run, ms: Math.round(monoMs() - started), invalid, ...result });
+    console.log(JSON.stringify({ run, ok: result.ok, invalid, violations: result.violations, notes: result.notes }));
+    if (invalid) {
+      invalidInRow += 1;
+      if (invalidInRow >= 2) {
+        resets += 1;
+        invalidInRow = 0;
+        engine.close();
+        await docker.restart().catch(() => undefined);
+        await engine.waitReady(180_000).catch(() => undefined);
+      }
+    } else {
+      valid += 1;
+      invalidInRow = 0;
+    }
   }
-  const failed = results.filter((result) => !result.ok);
-  const summary = { scenario: name, runs, passed: runs - failed.length, failed: failed.length, results };
+  const counted = results.filter((result) => !result.invalid);
+  const failed = counted.filter((result) => !result.ok);
+  const summary = { scenario: name, runs: counted.length, passed: counted.length - failed.length, failed: failed.length, invalid: results.length - counted.length, resets, results };
   const file = `/stand/results/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   try {
     writeFileSync(file, JSON.stringify(summary, null, 2));
   } catch {
     // results dir not mounted
   }
-  console.log(JSON.stringify({ scenario: name, runs, passed: summary.passed, failed: summary.failed, file }));
+  console.log(JSON.stringify({ scenario: name, runs: summary.runs, passed: summary.passed, failed: summary.failed, invalid: summary.invalid, resets, file }));
   engine.close();
   process.exit(failed.length === 0 ? 0 : 1);
 }

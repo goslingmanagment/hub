@@ -49,9 +49,11 @@ if [ "${PB_WAIT_CA:-0}" = "1" ]; then
 fi
 if [ -f /stand/ca/ca.pem ]; then
   install -d -o pb-chrome -g pb-chrome -m 700 /home/pb-chrome/.pki /home/pb-chrome/.pki/nssdb
+  # A restarted container keeps the database: create it only once (on an
+  # existing one `certutil -N` waits for a password on stdin).
   HOME=/home/pb-chrome setpriv --reuid=pb-chrome --regid=pb-chrome --init-groups sh -c '
-    certutil -d sql:$HOME/.pki/nssdb -N --empty-password 2>/dev/null || true
-    certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n pb-stand-ca -i /stand/ca/ca.pem'
+    [ -f $HOME/.pki/nssdb/cert9.db ] || certutil -d sql:$HOME/.pki/nssdb -N --empty-password </dev/null
+    certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n pb-stand-ca -i /stand/ca/ca.pem </dev/null' </dev/null
   export NODE_EXTRA_CA_CERTS=/stand/ca/ca.pem
 fi
 

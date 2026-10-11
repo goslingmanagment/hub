@@ -68,6 +68,14 @@ const CFG = {
     /** "latitude,longitude,accuracy" or empty: no geolocation override. */
     geolocation: envStr("PB_GEO", ""),
   },
+  /** Where Fetch interception is enabled: "browser" (one browser-target
+   *  handler; Chrome 155 also pauses CORS preflights there — and races on
+   *  their request id, see FINDINGS) or "target" (each page, frame and
+   *  worker; preflights travel with their request). */
+  fetchScope: envStr("PB_FETCH_SCOPE", "browser"),
+  /** Hand a preflight's answer on with Fetch.fulfillRequest (the fix of the
+   *  duplicate-request-id race); stand knob to measure without it. */
+  preflightFulfill: envStr("PB_PREFLIGHT_FULFILL", "1") === "1",
   /** The self-test also checks the rules extension (an image with it). */
   selftestRules: envStr("PB_SELFTEST_RULES", "0") === "1",
   selftestNeverPath: envStr("PB_SELFTEST_NEVER_PATH", "/api/v1/message/ack"),
@@ -128,6 +136,13 @@ interface TargetInfo {
   setup?: Promise<void>;
   /** A worker paused before its first script until the guard is in. */
   guardBreakpoint?: string;
+  /** The next pause before a script is the first script of a (re)started
+   *  worker: the guard goes in there. */
+  needsGuard?: boolean;
+  /** A service worker: Chrome stops and starts it again under the same
+   *  session (Inspector.targetCrashed → targetReloadedAfterCrash), so the
+   *  debugger and its breakpoint stay for the session's life. */
+  persistentGuard?: boolean;
 }
 const targets = new Map<string, TargetInfo>();
 let sitePage: TargetInfo | null = null;
@@ -146,7 +161,7 @@ function sendState(): void {
     state,
     reason: stateReason,
     exit: egress.exitOpen ? "open" : "closed",
-    gate: egress.gateState,
+    gate: egress.gate.state,
     cdp: cdp.cdpUp ? "up" : "down",
     selftest,
     mono: monoMs(),
@@ -186,6 +201,10 @@ async function setUpTarget(info: TargetInfo, waiting: boolean): Promise<void> {
     if (process.env.PB_DEBUG_FETCH === "1" && isWorker) log("target.step", { type: info.type, step: name });
   };
   try {
+    if ((isPage || isWorker) && CFG.fetchScope === "target") {
+      step("fetch");
+      await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, s);
+    }
     if (isPage || isWorker) {
       step("network");
       await cdp.send("Network.enable", { maxTotalBufferSize: 100 * 1024 * 1024, maxResourceBufferSize: 20 * 1024 * 1024 }, s);
@@ -209,6 +228,8 @@ async function setUpTarget(info: TargetInfo, waiting: boolean): Promise<void> {
       await cdp.send("Debugger.enable", {}, s);
       const bp = await cdp.send<{ breakpointId: string }>("Debugger.setInstrumentationBreakpoint", { instrumentation: "beforeScriptExecution" }, s);
       info.guardBreakpoint = bp.breakpointId;
+      info.needsGuard = true;
+      info.persistentGuard = info.type === "service_worker";
     }
     if (isPage || isWorker) {
       // Service workers are attached once, by the browser target; a second
@@ -241,12 +262,13 @@ cdp.on("Debugger.paused", (event) => {
   const s = event.sessionId;
   const info = s ? targets.get(s) : undefined;
   const params = event.params as { reason: string; callFrames: Array<{ callFrameId: string }> };
-  if (!s || !info?.guardBreakpoint) {
+  if (!s || !info?.guardBreakpoint || !info.needsGuard) {
+    // A later script of the worker, or the site's own `debugger;`: go on.
     if (s) cdp.post("Debugger.resume", {}, s);
     return;
   }
   const breakpointId = info.guardBreakpoint;
-  info.guardBreakpoint = undefined;
+  info.needsGuard = false;
   void (async () => {
     try {
       const frame = params.callFrames[0];
@@ -254,16 +276,43 @@ cdp.on("Debugger.paused", (event) => {
         ? await cdp.send<{ exceptionDetails?: unknown }>("Debugger.evaluateOnCallFrame", { callFrameId: frame.callFrameId, expression: GUARD, silent: true }, s)
         : await cdp.send<{ exceptionDetails?: unknown }>("Runtime.evaluate", { expression: GUARD, silent: true }, s);
       if (result.exceptionDetails) log("guard.worker_failed", { type: info.type, url: info.url, details: result.exceptionDetails });
-      await cdp.send("Debugger.removeBreakpoint", { breakpointId }, s).catch(() => undefined);
-      log("guard.worker_installed", { type: info.type, url: info.url, reason: params.reason });
+      log("guard.worker_installed", { type: info.type, url: info.url, reason: params.reason, persistent: info.persistentGuard === true });
+      if (!info.persistentGuard) await cdp.send("Debugger.removeBreakpoint", { breakpointId }, s).catch(() => undefined);
     } catch (error) {
       log("guard.worker_failed", { type: info.type, url: info.url, error: (error as Error).message });
     } finally {
-      // Disabling the debugger resumes the worker and leaves nothing behind
-      // (no pauses on the site's own `debugger;` statements).
-      cdp.post("Debugger.disable", {}, s);
+      if (info.persistentGuard) {
+        // The breakpoint stays for the next start of the worker.
+        cdp.post("Debugger.resume", {}, s);
+      } else {
+        // Disabling the debugger resumes the worker and leaves nothing behind
+        // (no pauses on the site's own `debugger;` statements).
+        info.guardBreakpoint = undefined;
+        cdp.post("Debugger.disable", {}, s);
+      }
     }
   })();
+});
+
+// A service worker stopped by Chrome and started again (stand finding: the
+// session stays, no new attach). Its next first script needs the guard; if
+// it waits for the debugger, it is let go — the breakpoint stops it before
+// that script.
+cdp.on("Inspector.targetCrashed", (event) => {
+  const info = event.sessionId ? targets.get(event.sessionId) : undefined;
+  if (info?.persistentGuard) {
+    info.needsGuard = true;
+    observe("worker.stopped", { type: info.type, url: info.url });
+  }
+});
+
+cdp.on("Inspector.targetReloadedAfterCrash", (event) => {
+  const s = event.sessionId;
+  const info = s ? targets.get(s) : undefined;
+  if (!s || !info?.persistentGuard) return;
+  info.needsGuard = true;
+  observe("worker.restarted", { type: info.type, url: info.url });
+  cdp.post("Runtime.runIfWaitingForDebugger", {}, s);
 });
 
 cdp.on("Target.detachedFromTarget", (event) => {
@@ -413,7 +462,7 @@ function startLimit(op: Operation): void {
     observe("op.limit", { op: op.id, kind: op.kind, status: op.status, mainSends: op.main?.sends ?? 0 });
     // The gate's window goes with the operation; an API tunnel still busy
     // with it is cut so nothing of it leaves later.
-    egress.cutApi("operation over its time limit");
+    egress.cutClass("api", "operation over its time limit");
     if (op.status !== null) {
       finishOp(op, { outcome: "response", status: op.status, sends: op.main?.sends ?? 0, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
     } else {
@@ -431,7 +480,7 @@ function finishOp(op: Operation, outcome: Record<string, unknown>): void {
   if (awaitingMain.get(op.key) === op) awaitingMain.delete(op.key);
   for (const phys of [op.preflight, op.main]) {
     const wid = phys ? windowId(phys) : null;
-    if (wid) egress.gateClose(wid);
+    if (wid) egress.gate.close(wid);
   }
   op.onFinish({ ...outcome, preflight: op.preflight ? { sends: op.preflight.sends } : null, preflightSendMono: op.preflightSendMono });
 }
@@ -453,10 +502,14 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   // not on the preflight's loadingFinished (that may come later).
   if (role === "preflight" && op.kind === "site") awaitingMain.set(op.key, op);
   const id = windowId(phys);
-  if (id && op.deadline !== null) egress.gateOpen(id, op.deadline);
-  // The response stops once more at its headers: the body's stream is armed
-  // there, before a byte of it reaches the page.
-  const intercept = CFG.captureBodies && role === "main" && phys.networkId !== null ? { interceptResponse: true } : {};
+  const bodiless = ["GET", "HEAD", "OPTIONS"].includes(params.request.method.toUpperCase());
+  if (id && op.deadline !== null) egress.gate.open(id, op.deadline, bodiless);
+  // The response stops once more at its headers: for a request, the body's
+  // stream is armed there, before a byte of it reaches the page; for a
+  // preflight, its answer is handed on by Fetch.fulfillRequest (see
+  // onResponseStage — the race of Chrome's preflight interception).
+  const intercept =
+    (CFG.captureBodies && role === "main" && phys.networkId !== null) || (role === "preflight" && CFG.preflightFulfill) ? { interceptResponse: true } : {};
   void resolvePaused(event, "continue", { requestId: params.requestId, ...extra, ...intercept });
 }
 
@@ -485,12 +538,12 @@ cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
   phys.sends += 1;
   observe("send", { op: op.id, kind: op.kind, role: phys.role, n: phys.sends });
   const wid = windowId(phys);
-  if (wid) {
-    const first = egress.gateSent(wid);
-    if (!first || phys.sends > 1) {
-      log("retry.detected", { op: op.id, role: phys.role, sends: phys.sends });
-      observe("retry", { op: op.id, kind: op.kind, role: phys.role, sends: phys.sends });
-    }
+  if (wid) egress.gate.announced(wid);
+  if (phys.sends > 1) {
+    // Never seen on the stand: Chrome announces a request once even when it
+    // repeats it. Kept as a tripwire for a Chrome that starts to.
+    log("retry.detected", { op: op.id, role: phys.role, sends: phys.sends });
+    observe("retry", { op: op.id, kind: op.kind, role: phys.role, sends: phys.sends });
   }
   if (op.kind === "hub" && phys.role === "main" && phys.sends === 1) rpc.send({ type: "sent", attemptId: op.id, mono: monoMs() });
 });
@@ -547,7 +600,7 @@ cdp.on("Network.responseReceived", (event) => {
     op.sessionId = event.sessionId ?? null;
   }
   const wid = windowId(phys);
-  if (wid) egress.gateResponding(wid);
+  if (wid) egress.gate.responding(wid);
 });
 
 cdp.on("Network.loadingFinished", (event) => {
@@ -557,7 +610,7 @@ cdp.on("Network.loadingFinished", (event) => {
   phys.done = true;
   const op = phys.op;
   const wid = windowId(phys);
-  if (wid) egress.gateClose(wid);
+  if (wid) egress.gate.close(wid);
   if (phys.role === "preflight") {
     // The request itself comes next (unless it is already out).
     if (!op.main) op.mainTimer = setTimeout(() => finishOp(op, { outcome: "transport_error", sent: false, error: "the request did not follow its preflight" }), 5000);
@@ -672,6 +725,7 @@ interface ResponseStage {
   requestId: string;
   networkId?: string;
   responseStatusCode?: number;
+  responseStatusText?: string;
   responseErrorReason?: string;
   responseHeaders?: Array<{ name: string; value: string }>;
 }
@@ -686,7 +740,7 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   const phys = params.networkId ? byNetworkId.get(params.networkId) : undefined;
   const release = () =>
     cdp
-      .send("Fetch.continueResponse", { requestId: params.requestId })
+      .send("Fetch.continueResponse", { requestId: params.requestId }, event.sessionId)
       .catch((error: Error) => log("fetch.response_failed", { error: error.message }))
       .finally(() => cdp.ack(event.seq));
   if (!phys || phys.done || params.responseStatusCode === undefined) {
@@ -696,13 +750,42 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   const op = phys.op;
   // The response is here: no repeat of the request can follow.
   const wid = windowId(phys);
-  if (wid) egress.gateResponding(wid);
+  if (wid) egress.gate.responding(wid);
+  if (phys.role === "preflight") {
+    // Chrome 155 pauses a preflight in Fetch as a request with the same
+    // request id as the request it guards. Its client in the network
+    // service is done at the headers and drops the loader; the browser
+    // removes the interception job only when it notices that, while the
+    // request itself may already be asking for a job under the same id —
+    // "DevTools: Duplicate request ID", and the browser kills the network
+    // service (stand finding, 4 crash dumps). Handing the server's own
+    // answer on with fulfillRequest ends the job at once, before the client
+    // sees it, so the request cannot meet it.
+    await cdp
+      .send(
+        "Fetch.fulfillRequest",
+        {
+          requestId: params.requestId,
+          responseCode: params.responseStatusCode,
+          responseHeaders: params.responseHeaders ?? [],
+          ...(params.responseStatusText ? { responsePhrase: params.responseStatusText } : {}),
+          body: "",
+        },
+        event.sessionId,
+      )
+      .catch((error: Error) => {
+        log("fetch.preflight_fulfill_failed", { error: error.message });
+        return cdp.send("Fetch.continueResponse", { requestId: params.requestId }, event.sessionId).catch(() => undefined);
+      })
+      .finally(() => cdp.ack(event.seq));
+    return;
+  }
   const declared = headerOf(params.responseHeaders, "content-length");
   const contentLength = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
   if (op.kind === "hub" && contentLength !== null && contentLength > CFG.hubBodyLimit) {
     // Over the limit by its own word: cancelled before the body (plan §4.2).
     observe("body.over_limit", { op: op.id, contentLength });
-    await cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Aborted" }).catch(() => undefined);
+    await cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Aborted" }, event.sessionId).catch(() => undefined);
     cdp.ack(event.seq);
     op.status = params.responseStatusCode;
     finishOp(op, { outcome: "response", status: op.status, bodyOverflow: true, contentLength, sends: phys.sends, sendMono: op.sendMono });
@@ -839,7 +922,7 @@ interface PausedParams {
 function resolvePaused(event: CdpEvent, action: "continue" | "fail", params: Record<string, unknown>): Promise<void> {
   const method = action === "continue" ? "Fetch.continueRequest" : "Fetch.failRequest";
   return cdp
-    .send(method, params)
+    .send(method, params, event.sessionId)
     .then(() => undefined)
     .catch((error: Error) => log("fetch.resolve_failed", { method, error: error.message }))
     .finally(() => cdp.ack(event.seq));
@@ -989,7 +1072,7 @@ function hubResult(attempt: HubAttempt, outcome: Record<string, unknown>): void 
     if (attempt.op.mainTimer) clearTimeout(attempt.op.mainTimer);
     for (const phys of [attempt.op.preflight, attempt.op.main]) {
       const wid = phys ? windowId(phys) : null;
-      if (wid) egress.gateClose(wid);
+      if (wid) egress.gate.close(wid);
     }
   }
   rpc.send({ type: "result", attemptId: attempt.attemptId, ...outcome });
@@ -1296,7 +1379,7 @@ async function start(): Promise<void> {
     // The site may read the position without a prompt nobody would answer.
     await cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: new URL(CFG.siteUrl).origin });
   }
-  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+  if (CFG.fetchScope === "browser") await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
   await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
   for (let i = 0; i < 50 && !sitePage; i++) await sleep(100);
   if (!sitePage) throw new Error("no page target attached");
@@ -1321,6 +1404,8 @@ async function start(): Promise<void> {
   egress.openExit();
   setState("site_loading");
   await cdp.send("Page.navigate", { url: CFG.siteUrl }, sitePage.sessionId);
+  networkServicePid = null;
+  probeMisses = 0;
   setState("ready");
 }
 
@@ -1376,6 +1461,50 @@ async function controlLost(reason: string): Promise<void> {
   log("holder.relinked", linked);
   restarting = false;
   await startLoop();
+}
+
+// ── the browser's health ──────────────────────────────────────────────────
+//
+// Stand finding: Chrome's network service crashed once; Chrome restarted it
+// by itself and stayed up, the CDP connection stayed up — and the page never
+// answered again. None of that is a lost connection. Two checks every 2 s
+// while ready: the page answers a trivial evaluate within 5 s (twice in a row
+// missed = hung), and the network service is still the same process. Either
+// failing: the exit closes and the browser starts over, as on a lost CDP.
+
+let networkServicePid: number | null = null;
+let probeMisses = 0;
+let probing = false;
+
+async function healthProbe(): Promise<void> {
+  if (probing || restarting || state !== "ready" || !sitePage) return;
+  probing = true;
+  try {
+    const page = sitePage;
+    const answered = await Promise.race([
+      // Any answer counts, an error too: the renderer is processing commands.
+      cdp.send("Runtime.evaluate", { expression: "1", returnByValue: true }, page.sessionId).then(
+        () => true,
+        (error: Error) => error.name === "CdpError",
+      ),
+      sleep(5000).then(() => false),
+    ]);
+    if (state !== "ready" || restarting || sitePage !== page) return;
+    probeMisses = answered ? 0 : probeMisses + 1;
+    const net = await supervisor({ cmd: "chrome.netpid" }).then((reply) => (typeof reply.pid === "number" ? reply.pid : null), () => null);
+    const netChanged = networkServicePid !== null && net !== null && net !== networkServicePid;
+    if (networkServicePid === null) networkServicePid = net;
+    if (netChanged || probeMisses >= 2) {
+      const reason = netChanged ? "the network service restarted" : "the page stopped answering";
+      log("browser.unhealthy", { reason, probeMisses, networkServicePid, now: net });
+      rpc.send({ type: "alarm", kind: "browser_down", detail: { reason } });
+      probeMisses = 0;
+      networkServicePid = null;
+      await controlLost(`browser unhealthy: ${reason}`);
+    }
+  } finally {
+    probing = false;
+  }
 }
 
 // ── engine messages ───────────────────────────────────────────────────────
@@ -1437,9 +1566,9 @@ function onWsAdmitResult(message: EngineMessage): void {
   resolve(message.ok === true && Number(message.deadlineMono) > monoMs());
 }
 
-egress.onGateEvent = (event) => {
-  if (event.kind !== "up_chunk") log("gate.event", event);
-  observe("gate", { ...event, gateEvent: event.kind });
+egress.gate.onEvent = (event) => {
+  if (event.kind !== "first_bytes") log("gate.event", { kind: event.kind, window: event.window, ...event.detail });
+  observe("gate", { gateEvent: event.kind, window: event.window, ...event.detail });
 };
 
 async function onCommand(message: EngineMessage): Promise<void> {
@@ -1499,12 +1628,19 @@ async function onCommand(message: EngineMessage): Promise<void> {
         await cdp.send("HeapProfiler.collectGarbage", {}, sitePage.sessionId);
         return reply({ ok: true });
       case "test.cutApi":
-        return reply({ ok: true, cut: egress.cutApi("stand: cut API tunnels") });
+        return reply({ ok: true, cut: egress.cutClass("api", "stand: cut API tunnels") });
+      case "test.stopServiceWorkers":
+        // Stand only: stop the site's service workers; Chrome starts one
+        // again on the next event for it.
+        if (!sitePage) return reply({ ok: false, error: "no page" });
+        await cdp.send("ServiceWorker.enable", {}, sitePage.sessionId);
+        await cdp.send("ServiceWorker.stopAllWorkers", {}, sitePage.sessionId);
+        return reply({ ok: true });
       case "test.cutWs":
         return reply({ ok: true, cut: egress.cutClass("ws", "stand: cut socket tunnels") });
       case "test.config": {
         // Stand only: switch the candidates for comparison runs.
-        if (typeof message.gate === "boolean") egress.gateEnabled = message.gate;
+        if (typeof message.gate === "boolean") egress.gate.enabled = message.gate;
         if (typeof message.placeholder === "boolean") CFG.hubPlaceholderHost = message.placeholder;
         if (typeof message.hubAbort === "boolean") CFG.hubAbortBeforeDeadline = message.hubAbort;
         if (typeof message.wsHostRefuse === "boolean") CFG.refuseWsHostRequests = message.wsHostRefuse;
@@ -1512,15 +1648,18 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.urlAlways === "boolean") testUrlAlways = message.urlAlways;
         if (typeof message.dataDelayMs === "number") testDataDelayMs = message.dataDelayMs;
         if (typeof message.cdpDelayMs === "number") cdp.testDelayMs = message.cdpDelayMs;
+        if (typeof message.burstClose === "boolean") egress.gate.burstClose = message.burstClose;
+        if (typeof message.preflightFulfill === "boolean") CFG.preflightFulfill = message.preflightFulfill;
+        if (typeof message.fetchScope === "string") CFG.fetchScope = message.fetchScope;
         if (typeof message.hubBodyLimit === "number") CFG.hubBodyLimit = message.hubBodyLimit;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
-        return reply({ ok: true, gate: egress.gateEnabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });
+        return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });
       }
       case "test.tunnels":
-        return reply({ ok: true, tunnels: egress.journal().slice(-200), gate: egress.gateState });
+        return reply({ ok: true, tunnels: egress.journal().slice(-200), gate: egress.gate.state });
       case "status":
-        return reply({ ok: true, binding: BINDING, state, reason: stateReason, exit: egress.exitOpen, gate: egress.gateState, targets: [...targets.values()].map((t) => ({ type: t.type, url: t.url })) });
+        return reply({ ok: true, binding: BINDING, state, reason: stateReason, exit: egress.exitOpen, gate: egress.gate.state, targets: [...targets.values()].map((t) => ({ type: t.type, url: t.url })) });
       default:
         return reply({ ok: false, error: "unknown command" });
     }
@@ -1543,6 +1682,7 @@ async function main(): Promise<void> {
   heartbeat();
   setInterval(heartbeat, 1000);
   setInterval(sendState, 5000);
+  setInterval(() => void healthProbe(), 2000);
   await egress.listen(CFG.proxyPort);
   await rpc.listen(CFG.rpcPort);
   cdp.onHolderEvent = (event) => {

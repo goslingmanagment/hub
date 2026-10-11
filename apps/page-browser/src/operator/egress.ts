@@ -3,41 +3,17 @@
 // its password (Chrome cannot do that itself). Closed exit = every CONNECT is
 // refused and every open tunnel is cut at once.
 //
-// PROTOTYPE CANDIDATE — the API send gate (plan §4.1 "рубеж отправки", §4.2
-// step 4, owner decisions №10 and №16). The proxy cannot see requests inside
-// TLS, but on the API host only one admitted request is ever in flight and
-// every other request waits in Chrome's Fetch interception. So the bytes
-// Chrome writes into API tunnels are forwarded only inside the window of the
-// physical request that was just released, and a new tunnel to the API is
-// accepted only at the start of such a window:
-//   closed      — nothing released: bytes are held, new tunnels refused;
-//   open        — a request was released: forward (and accept new tunnels)
-//                 until its deadline on CLOCK_MONOTONIC; at the deadline,
-//                 unsent, every API tunnel is cut — the request never leaves;
-//   sent        — Chrome announced the request's headers
-//                 (requestWillBeSentExtraInfo). The announcement comes before
-//                 the bytes are written and may overtake them, so forwarding
-//                 goes on until the window carried bytes and then stayed
-//                 quiet for QUIET_MS; after that bytes are held. New tunnels
-//                 are refused from the announcement on. Why: Chrome's network
-//                 stack repeats a request on its own after REFUSED_STREAM,
-//                 GOAWAY, a reset or a 408, and CDP does not report the
-//                 repeat (stand finding). A repeat on a new connection meets
-//                 the refusal; a repeat on the same connection comes a round
-//                 trip later and is held. No response headers in 20 s → the
-//                 API tunnels are cut;
-//   responding  — the response headers arrived (no repeat can follow):
-//                 forward the held bytes (flow control, acks) and the rest;
-//   closed      — the request finished.
-// Bytes held while closed are the housekeeping of idle connections, or
-// requests Chrome released without us (a CDP detach) — on a CDP loss the
-// operator cuts every tunnel, so those never leave. What this gate does not
-// cover is measured on the stand (README of the stage-1 report).
+// Tunnels to the API host pass through the send gate (gate.ts): their bytes
+// go up only inside the window of the request that was just released.
+// Tunnels to the socket host are admitted one by one by the engine (each
+// socket of the site is its own tunnel). The same port serves the rules
+// extension to Chrome's policy installer (plan §4.6).
 
 import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import { connect as tcpConnect, isIP, type Socket } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 
+import { ApiGate, RecordTracker } from "./gate.ts";
 import { makeLog, monoMs } from "../shared/util.ts";
 
 const log = makeLog("egress");
@@ -50,8 +26,6 @@ export interface SocksConfig {
   user: string;
   pass: string;
 }
-
-export type GateState = "closed" | "open" | "sent" | "responding";
 
 export interface TunnelRecord {
   id: number;
@@ -68,13 +42,6 @@ export interface TunnelRecord {
 
 const EXTENSION_DIST = process.env.PB_EXTENSION_DIST ?? "/opt/page-browser/extension-dist";
 const HELD_LIMIT = 4 * 1024 * 1024;
-/** Plan §4.14: a Hub request's limit (REQUEST_TIMEOUT_MS of the engine). */
-const SENT_TIMEOUT_MS = 20_000;
-/** After Chrome announced the send: the window closes once it carried bytes
- *  and then stayed quiet this long. Must be shorter than a round trip to the
- *  API (a repeat cannot come sooner) and longer than Chrome's lag between
- *  the announcement and the write. */
-const QUIET_MS = Number(process.env.PB_GATE_QUIET_MS ?? "5");
 
 class Tunnel {
   readonly rec: TunnelRecord;
@@ -82,8 +49,8 @@ class Tunnel {
   upstream: Socket | null = null;
   held: Buffer[] = [];
   heldBytes = 0;
-  /** Bytes forwarded up while the current admission's window was open. */
-  forwardedInWindow = 0;
+  /** TLS records of what went up (API tunnels). */
+  readonly records = new RecordTracker();
   constructor(rec: TunnelRecord, client: Socket) {
     this.rec = rec;
     this.client = client;
@@ -93,44 +60,27 @@ class Tunnel {
 export class Egress {
   readonly socks: SocksConfig;
   readonly classify: (host: string) => HostClass;
-  /** Admission of a new socket connection (ws host): resolves true to let
-   *  the CONNECT through. */
+  readonly gate = new ApiGate();
+  /** Admission of a new socket connection (socket host): resolves true to
+   *  let the CONNECT through. */
   admitWsTunnel: (host: string) => Promise<boolean> = async () => false;
-  /** Called when the gate cut tunnels on its own (expiry, retry). */
-  onGateEvent: (event: { kind: string; admissionId: string | null; tunnels: number; forwardedInWindow: number }) => void = () => undefined;
 
-  /** The API send gate (prototype candidate); off = plain forwarding, to
-   *  measure what the gate changes. */
-  gateEnabled = process.env.PB_GATE !== "0";
   #exitOpen = false;
   #tunnels = new Set<Tunnel>();
   #nextId = 1;
   #journal: TunnelRecord[] = [];
-  #gate: GateState = "closed";
-  #gateAdmission: string | null = null;
-  #gateDeadline = 0;
-  #deadlineTimer: NodeJS.Timeout | null = null;
-  #sentTimer: NodeJS.Timeout | null = null;
-  #quietTimer: NodeJS.Timeout | null = null;
-  #gateOpenedMono = 0;
-  #gateFirstBytes = false;
-  /** Bytes forwarded up on API tunnels in the current window. */
-  #windowBytes = 0;
-  #lastChunkMono = 0;
-  /** In `sent`: true once the window went quiet — bytes are held. */
-  #sentHold = false;
 
   constructor(socks: SocksConfig, classify: (host: string) => HostClass) {
     this.socks = socks;
     this.classify = classify;
+    this.gate.cut = (reason) => this.cutClass("api", reason);
+    this.gate.flush = () => {
+      for (const tunnel of this.#tunnels) if (tunnel.rec.cls === "api") this.#flush(tunnel);
+    };
   }
 
   get exitOpen(): boolean {
     return this.#exitOpen;
-  }
-
-  get gateState(): { state: GateState; admissionId: string | null; deadline: number } {
-    return { state: this.#gate, admissionId: this.#gateAdmission, deadline: this.#gateDeadline };
   }
 
   journal(): TunnelRecord[] {
@@ -146,170 +96,14 @@ export class Egress {
   closeExit(reason: string): void {
     const wasOpen = this.#exitOpen;
     this.#exitOpen = false;
+    this.gate.reset();
     const cut = this.#cutWhere(() => true, `exit closed: ${reason}`);
-    this.#setGate("closed", null, 0);
     log("exit.closed", { reason, wasOpen, cut });
-  }
-
-  // ── the API send gate ──────────────────────────────────────────────────
-
-  gateOpen(admissionId: string, deadlineMono: number): void {
-    this.#setGate("open", admissionId, deadlineMono);
-    this.#gateOpenedMono = monoMs();
-    this.#gateFirstBytes = false;
-    this.#windowBytes = 0;
-    this.#lastChunkMono = 0;
-    this.#sentHold = false;
-    for (const tunnel of this.#apiTunnels()) {
-      tunnel.forwardedInWindow = 0;
-      this.#flush(tunnel);
-    }
-    const ms = deadlineMono - monoMs();
-    this.#deadlineTimer = setTimeout(() => this.#onDeadline(admissionId), Math.max(0, ms));
-  }
-
-  /** Chrome announced the released request's headers
-   *  (requestWillBeSentExtraInfo). Returns false for a second announcement
-   *  of one request — never seen on the stand: Chrome announces a request
-   *  once even when it repeats it. */
-  gateSent(admissionId: string): boolean {
-    if (this.#gateAdmission !== admissionId) return true;
-    if (this.#gate === "open") {
-      const deadline = this.#gateDeadline;
-      const deadlineTimer = this.#deadlineTimer;
-      this.#deadlineTimer = null; // kept: an announced request may still be unsent at the deadline
-      this.#setGate("sent", admissionId, deadline);
-      this.#deadlineTimer = deadlineTimer;
-      this.#sentHold = false;
-      if (this.gateEnabled) {
-        this.#armQuiet();
-        this.#sentTimer = setTimeout(() => {
-          this.#sentTimer = null;
-          if (this.#gate !== "sent" || this.#gateAdmission !== admissionId) return;
-          const cut = this.#cutWhere((tunnel) => tunnel.rec.cls === "api", "gate: no response 20 s after the send");
-          this.onGateEvent({ kind: "sent_timeout", admissionId, tunnels: cut, forwardedInWindow: this.#windowBytes });
-        }, SENT_TIMEOUT_MS);
-      }
-      return true;
-    }
-    if (this.gateEnabled && (this.#gate === "sent" || this.#gate === "responding")) {
-      const cut = this.#cutWhere((tunnel) => tunnel.rec.cls === "api", "gate: second send of one admission (retry)");
-      this.onGateEvent({ kind: "retry_cut", admissionId, tunnels: cut, forwardedInWindow: 0 });
-      return false;
-    }
-    return true;
-  }
-
-  /** In `sent`: hold once the window carried bytes and stayed quiet. */
-  #armQuiet(): void {
-    if (this.#quietTimer) clearTimeout(this.#quietTimer);
-    this.#quietTimer = null;
-    if (this.#gate !== "sent" || this.#sentHold) return;
-    // No bytes yet in this window: the announcement overtook the write.
-    if (this.#windowBytes === 0) return;
-    const wait = Math.max(0, QUIET_MS - (monoMs() - this.#lastChunkMono));
-    this.#quietTimer = setTimeout(() => {
-      this.#quietTimer = null;
-      if (this.#gate !== "sent" || this.#sentHold) return;
-      if (monoMs() - this.#lastChunkMono + 0.5 >= QUIET_MS) {
-        this.#sentHold = true;
-        if (process.env.PB_DEBUG_NET === "1") this.onGateEvent({ kind: "sent_hold", admissionId: this.#gateAdmission, tunnels: 0, forwardedInWindow: this.#windowBytes });
-      } else {
-        this.#armQuiet();
-      }
-    }, wait);
-  }
-
-  gateResponding(admissionId: string): void {
-    if (this.#gateAdmission !== admissionId) return;
-    if (this.#gate === "sent" || this.#gate === "open") {
-      this.#setGate("responding", admissionId, this.#gateDeadline);
-      for (const tunnel of this.#apiTunnels()) this.#flush(tunnel);
-    }
-  }
-
-  gateClose(admissionId: string): void {
-    if (this.#gateAdmission !== admissionId) return;
-    this.#setGate("closed", null, 0);
-  }
-
-  /** Cut every API tunnel (stand: force the next request onto a new one). */
-  cutApi(reason: string): number {
-    return this.#cutWhere((tunnel) => tunnel.rec.cls === "api", reason);
   }
 
   /** Cut every tunnel of one host class. */
   cutClass(cls: HostClass, reason: string): number {
     return this.#cutWhere((tunnel) => tunnel.rec.cls === cls, reason);
-  }
-
-  #setGate(state: GateState, admissionId: string | null, deadline: number): void {
-    if (this.#deadlineTimer && state !== "open") {
-      clearTimeout(this.#deadlineTimer);
-      this.#deadlineTimer = null;
-    }
-    if (this.#sentTimer && state !== "sent") {
-      clearTimeout(this.#sentTimer);
-      this.#sentTimer = null;
-    }
-    if (this.#quietTimer && state !== "sent") {
-      clearTimeout(this.#quietTimer);
-      this.#quietTimer = null;
-    }
-    this.#gate = state;
-    this.#gateAdmission = admissionId;
-    this.#gateDeadline = deadline;
-  }
-
-  #onDeadline(admissionId: string): void {
-    this.#deadlineTimer = null;
-    if (!this.gateEnabled) return;
-    if (this.#gateAdmission !== admissionId) return;
-    // Announced and already on its way (bytes went out): not an expiry.
-    if (!(this.#gate === "open" || (this.#gate === "sent" && this.#windowBytes === 0))) return;
-    // The deadline passed and the request has not left.
-    // From now on nothing of it may leave: hold, and cut the API tunnels that
-    // are holding bytes or still connecting.
-    let forwarded = 0;
-    for (const tunnel of this.#apiTunnels()) forwarded += tunnel.forwardedInWindow;
-    // Every API tunnel goes: one may still be finishing a handshake the
-    // request would follow on.
-    const cut = this.#cutWhere((tunnel) => tunnel.rec.cls === "api", "gate: admission expired before send");
-    this.#setGate("closed", null, 0);
-    this.onGateEvent({ kind: "expired", admissionId, tunnels: cut, forwardedInWindow: forwarded });
-  }
-
-  #gateForwards(): boolean {
-    if (!this.gateEnabled) return true;
-    if (this.#gate === "responding") return true;
-    if (this.#gate === "open") return monoMs() < this.#gateDeadline;
-    if (this.#gate === "sent" && !this.#sentHold) return this.#windowBytes > 0 || monoMs() < this.#gateDeadline;
-    return false;
-  }
-
-  /** Bytes went up an API tunnel inside the window. */
-  #noteForwarded(tunnel: Tunnel, bytes: number): void {
-    tunnel.forwardedInWindow += bytes;
-    this.#windowBytes += bytes;
-    this.#lastChunkMono = monoMs();
-    if (this.#gate === "sent" && !this.#sentHold) this.#armQuiet();
-  }
-
-  #apiTunnels(): Tunnel[] {
-    return [...this.#tunnels].filter((tunnel) => tunnel.rec.cls === "api");
-  }
-
-  #flush(tunnel: Tunnel): void {
-    if (!tunnel.upstream || tunnel.held.length === 0) return;
-    const bytes = Buffer.concat(tunnel.held);
-    tunnel.held = [];
-    tunnel.heldBytes = 0;
-    tunnel.rec.up += bytes.length;
-    if (tunnel.rec.cls === "api") this.#noteForwarded(tunnel, bytes.length);
-    if (tunnel.rec.cls === "api" && this.#gate === "open") {
-      this.onGateEvent({ kind: "flushed_held", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: bytes.length });
-    }
-    tunnel.upstream.write(bytes);
   }
 
   #cutWhere(predicate: (tunnel: Tunnel) => boolean, reason: string): number {
@@ -334,12 +128,83 @@ export class Egress {
     log("tunnel.closed", { ...tunnel.rec });
   }
 
+  #refuse(rec: TunnelRecord, client: Socket, result: string): void {
+    rec.closedMono = monoMs();
+    rec.result = result;
+    this.#journal.push(rec);
+    log("tunnel.refused", { ...rec });
+    client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+  }
+
+  // ── bytes from Chrome ──────────────────────────────────────────────────
+
+  #hold(tunnel: Tunnel, bytes: Buffer): void {
+    if (bytes.length === 0) return;
+    tunnel.held.push(bytes);
+    tunnel.heldBytes += bytes.length;
+    if (tunnel.heldBytes > HELD_LIMIT) this.#finish(tunnel, "held bytes over the limit");
+  }
+
+  #up(tunnel: Tunnel, bytes: Buffer): void {
+    if (bytes.length === 0 || !tunnel.upstream) return;
+    tunnel.rec.up += bytes.length;
+    if (tunnel.rec.cls === "api") tunnel.records.advance(bytes);
+    tunnel.upstream.write(bytes);
+  }
+
+  /** Forward what a tunnel holds (its order is never changed). */
+  #flush(tunnel: Tunnel): void {
+    if (!tunnel.upstream || tunnel.held.length === 0) return;
+    const bytes = Buffer.concat(tunnel.held);
+    tunnel.held = [];
+    tunnel.heldBytes = 0;
+    this.#up(tunnel, bytes);
+  }
+
+  #onClientData(tunnel: Tunnel, chunk: Buffer): void {
+    if (!this.#tunnels.has(tunnel)) return;
+    if (!tunnel.upstream) {
+      this.#hold(tunnel, chunk);
+      return;
+    }
+    if (tunnel.rec.cls !== "api") {
+      this.#up(tunnel, chunk);
+      return;
+    }
+    if (this.gate.forwards()) {
+      this.#flush(tunnel);
+      if (this.gate.wantsOneRecord) {
+        // Exactly one record of this window goes up; what follows waits.
+        const end = tunnel.records.oneRecord(chunk);
+        if (end >= 0) {
+          this.#up(tunnel, chunk.subarray(0, end));
+          this.gate.noteChunk(end);
+          this.gate.recordDone();
+          this.#hold(tunnel, chunk.subarray(end));
+          return;
+        }
+      }
+      this.#up(tunnel, chunk);
+      this.gate.noteChunk(chunk.length);
+      return;
+    }
+    // Not forwarding. A record already half through is finished first; what
+    // follows is held from a record boundary on.
+    let rest = chunk;
+    if (tunnel.held.length === 0 && tunnel.records.midRecord) {
+      const prefix = tunnel.records.prefixToBoundary(chunk);
+      this.#up(tunnel, chunk.subarray(0, prefix));
+      rest = chunk.subarray(prefix);
+    }
+    this.#hold(tunnel, rest);
+  }
+
   // ── the proxy ──────────────────────────────────────────────────────────
 
   listen(port: number): Promise<void> {
     const server = createHttpServer((req, res) => {
       // The one thing served here: the rules extension, to Chrome's policy
-      // installer (plan §4.6 — Chrome fetches it from no other place).
+      // installer (Chrome fetches it from no other place).
       const files: Record<string, [string, string]> = {
         "/pb-extension/update.xml": [`${EXTENSION_DIST}/update.xml`, "application/xml"],
         "/pb-extension/hub.crx": [`${EXTENSION_DIST}/hub.crx`, "application/x-chrome-extension"],
@@ -364,62 +229,24 @@ export class Egress {
     const colon = target.lastIndexOf(":");
     const host = target.slice(0, colon).replace(/^\[|\]$/g, "").toLowerCase();
     const port = Number(target.slice(colon + 1));
-    const cls = this.#refusal(host, port) ? "denied" : this.classify(host);
+    const cls = this.#localOrPrivate(host, port) ? "denied" : this.classify(host);
     const rec: TunnelRecord = { id: this.#nextId++, host, port, cls, openedMono: monoMs(), closedMono: null, up: 0, down: 0, held: 0, result: "" };
-    const tunnel = new Tunnel(rec, client);
     client.on("error", () => undefined);
-    if (cls === "api" && this.gateEnabled && this.#exitOpen && !(this.#gate === "open" && monoMs() < this.#gateDeadline)) {
-      // A new connection to the API serves only the admitted request just
-      // released. Any other moment it is Chrome repeating a request on a new
+    if (!this.#exitOpen) return this.#refuse(rec, client, "refused: exit closed");
+    if (cls === "denied") return this.#refuse(rec, client, "refused: host");
+    if (cls === "api") {
+      // A new connection to the API serves only the request just released.
+      // Any other moment it is Chrome repeating a request on a new
       // connection, retrying one whose admission expired, or sending one it
       // released without us (a CDP detach).
-      rec.closedMono = rec.openedMono;
-      rec.result = `refused: gate ${this.#gate}`;
-      this.#journal.push(rec);
-      log("tunnel.refused", { ...rec });
-      this.onGateEvent({ kind: "repeat_tunnel_refused", admissionId: this.#gateAdmission, tunnels: 1, forwardedInWindow: 0 });
-      client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
-      return;
+      if (!this.gate.admitsTunnel()) return this.#refuse(rec, client, `refused: gate ${this.gate.state.phase}`);
+      this.gate.noteTunnel();
     }
-    if (!this.#exitOpen || cls === "denied") {
-      rec.closedMono = rec.openedMono;
-      rec.result = this.#exitOpen ? "refused: host" : "refused: exit closed";
-      this.#journal.push(rec);
-      log("tunnel.refused", { ...rec });
-      client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
-      return;
-    }
+    const tunnel = new Tunnel(rec, client);
     this.#tunnels.add(tunnel);
     client.on("close", () => this.#finish(tunnel, tunnel.rec.result || "client closed"));
-    // Bytes from Chrome: the gate decides for API tunnels.
-    const onClientData = (chunk: Buffer) => {
-      if (!this.#tunnels.has(tunnel)) return;
-      if (tunnel.rec.cls === "api" && (!this.#gateForwards() || !tunnel.upstream)) {
-        tunnel.held.push(chunk);
-        tunnel.heldBytes += chunk.length;
-        if (tunnel.heldBytes > HELD_LIMIT) this.#finish(tunnel, "gate: held bytes over the limit");
-        return;
-      }
-      if (!tunnel.upstream) {
-        tunnel.held.push(chunk);
-        tunnel.heldBytes += chunk.length;
-        return;
-      }
-      // Bytes held earlier go first: the stream's order is never changed.
-      if (tunnel.held.length > 0) this.#flush(tunnel);
-      tunnel.rec.up += chunk.length;
-      if (tunnel.rec.cls === "api") {
-        if (process.env.PB_DEBUG_NET === "1") this.onGateEvent({ kind: "up_chunk", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: chunk.length });
-        this.#noteForwarded(tunnel, chunk.length);
-        if (!this.#gateFirstBytes && (this.#gate === "open" || this.#gate === "sent")) {
-          this.#gateFirstBytes = true;
-          this.onGateEvent({ kind: "first_bytes", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: Math.round((monoMs() - this.#gateOpenedMono) * 1000) / 1000 });
-        }
-      }
-      tunnel.upstream.write(chunk);
-    };
-    client.on("data", onClientData);
-    if (head.length > 0) onClientData(head);
+    client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
+    if (head.length > 0) this.#onClientData(tunnel, head);
 
     const proceed = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve(true);
     proceed
@@ -427,11 +254,7 @@ export class Egress {
         if (!this.#tunnels.has(tunnel)) return;
         if (!admitted || !this.#exitOpen) {
           this.#tunnels.delete(tunnel);
-          rec.closedMono = monoMs();
-          rec.result = admitted ? "refused: exit closed" : "refused: socket not admitted";
-          this.#journal.push(rec);
-          log("tunnel.refused", { ...rec });
-          client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+          this.#refuse(rec, client, admitted ? "refused: exit closed" : "refused: socket not admitted");
           return;
         }
         return socksConnect(this.socks, host, port).then((upstream) => {
@@ -448,19 +271,14 @@ export class Egress {
           upstream.on("error", () => undefined);
           upstream.resume();
           client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-          // Bytes Chrome sent before the tunnel was up (none, normally).
-          if (tunnel.rec.cls !== "api" || this.#gateForwards()) this.#flush(tunnel);
           log("tunnel.open", { id: rec.id, host, port, cls });
         });
       })
-      .catch((error: Error) => {
-        rec.result = `socks: ${error.message}`;
-        this.#finish(tunnel, rec.result);
-      });
+      .catch((error: Error) => this.#finish(tunnel, `socks: ${error.message}`));
   }
 
   /** Local and private destinations are refused even with an open exit. */
-  #refusal(host: string, port: number): boolean {
+  #localOrPrivate(host: string, port: number): boolean {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) return true;
     if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
     const kind = isIP(host);

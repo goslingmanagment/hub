@@ -267,7 +267,7 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
         arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId, reused: event.reused })),
         faults: events.filter((event) => event.t === "fault" || event.t === "h2.rst" || event.t === "h2.goaway").map((event) => event.t),
         operatorSaw: retries.map((o) => ({ sends: o.sends })),
-        gateCuts: gateEvents.filter((o) => o.gateEvent !== "up_chunk" && o.gateEvent !== "first_bytes").map((o) => String(o.gateEvent) + ":" + String(o.tunnels)),
+        gateCuts: gateEvents.filter((o) => o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => String(o.gateEvent)),
         siteDone: [...ctx.engine.siteDone.values()].filter((d) => String(d.siteRequestId) && grants.some((g) => g.id === d.siteRequestId)).map((d) => ({ outcome: d.outcome, sends: d.sends, errorText: d.errorText })),
       },
     };
@@ -336,7 +336,7 @@ const sendTime: Scenario = async (ctx) => {
   const firstHub = `${tag}-h0`;
   const debug = {
     timing: ctx.engine.observed.filter((o) => o.kind === "timing" && o.op === firstHub),
-    gate: ctx.engine.observed.filter((o) => o.kind === "gate" && (String(o.admissionId ?? "").includes(firstHub) || String(o.admissionId ?? "").includes(`${tag}-h1`))).map((o) => `${String(o.gateEvent)} ${String(o.admissionId)} tunnel=${String(o.tunnels)} n=${String(o.forwardedInWindow)} @${Math.round((o.mono as number) * 100) / 100}`),
+    gate: ctx.engine.observed.filter((o) => o.kind === "gate" && String(o.window ?? "").includes(firstHub)).map((o) => `${String(o.gateEvent)} ${String(o.window)} @${Math.round((o.mono as number) * 100) / 100}`),
     sent: ctx.engine.observed.filter((o) => o.kind === "send" && o.op === firstHub),
     arrivals: reqs(await ctx.stand.journal(), firstHub).map((event) => ({ method: event.method, mono: event.mono, conn: event.connId, reused: event.reused })),
     grant: ctx.engine.grants.find((g) => g.id === firstHub),
@@ -383,7 +383,7 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
         hubAbort,
         outcome,
         arrivals: reqs(events, rid).map((event) => `${event.method} +${Math.round(event.mono - (ctx.engine.grants.find((g) => g.rid === rid)?.deadlineMono ?? 0))}ms vs deadline`),
-        gateEvents: ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "up_chunk" && o.gateEvent !== "first_bytes").map((o) => ({ event: o.gateEvent, tunnels: o.tunnels })),
+        gateEvents: ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut })),
         aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length,
       },
     };
@@ -610,6 +610,44 @@ const wsContexts: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes };
 };
 
+/** A service worker Chrome stopped and started again is a new run of its
+ *  script: is the socket guard there again before the script? */
+const wsSwRestart: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wssw-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const notes: Record<string, unknown> = {};
+  const guardsBefore = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "installed" && o.target === "service_worker").length;
+  await ctx.engine.eval(`site.serviceWorker()`);
+  const first = await ctx.engine.eval<{ index: number }>(`site.inServiceWorker({ op: "ws", rid: ${JSON.stringify(`${tag}-a`)} })`);
+  await ctx.engine.eval(`site.inServiceWorker({ op: "wsSend", index: ${first.index}, data: ${JSON.stringify(FORBIDDEN)} })`);
+  const guardsBeforeStop = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "installed" && o.target === "service_worker").length;
+  const blockedBeforeStop = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "blocked_send" && o.target === "service_worker").length;
+  notes.stop = (await ctx.engine.command("test.stopServiceWorkers")).ok;
+  await sleep(1500);
+  // The next message starts the worker again.
+  notes.probeAfterRestart = await ctx.engine.eval(`site.inServiceWorker({ op: "probe" })`);
+  const second = await ctx.engine.eval<{ index: number; readyState: number }>(`site.inServiceWorker({ op: "ws", rid: ${JSON.stringify(`${tag}-b`)} })`);
+  notes.socketAfterRestart = second;
+  notes.sendAfterRestart = await ctx.engine.eval(`site.inServiceWorker({ op: "wsSend", index: ${second.index}, data: ${JSON.stringify(FORBIDDEN)} })`);
+  await ctx.engine.eval(`site.inServiceWorker({ op: "wsSend", index: ${second.index}, data: "p" })`);
+  await sleep(1000);
+  const events = await ctx.stand.journal();
+  const frames = events.filter((event) => event.t === "ws.frame").map((event) => String(event.text));
+  if (frames.some((text) => text.includes('"t":99'))) violations.push("a forbidden message left a restarted service worker");
+  if (!events.some((event) => event.t === "ws.open" && event.rid === `${tag}-b`)) violations.push("the restarted service worker opened no socket (nothing was tested)");
+  if (!frames.includes("p")) violations.push("the allowed message of the restarted service worker did not arrive");
+  void guardsBefore;
+  const guards = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "installed" && o.target === "service_worker").length - guardsBeforeStop;
+  const blocked = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "blocked_send" && o.target === "service_worker").length - blockedBeforeStop;
+  notes.guardInstallsAfterRestart = guards;
+  notes.blockedAfterRestart = blocked;
+  notes.restarts = ctx.engine.observed.filter((o) => o.kind === "worker.restarted").length;
+  if (guards < 1) violations.push("the guard was not installed again in the restarted service worker");
+  if (blocked < 1) violations.push("the forbidden message of the restarted service worker was not reported");
+  return { ok: violations.length === 0, violations, notes };
+};
+
 /** Stage 1 item 5: every frame the server sends reaches the engine, in
  *  order and once — in a burst, after a reconnect and on a worker's socket. */
 const wsFrames: Scenario = async (ctx) => {
@@ -774,6 +812,7 @@ export const scenarios: Record<string, Scenario> = {
   "ws-contexts": wsContexts,
   "ws-h2": wsOverH2,
   "ws-frames": wsFrames,
+  "ws-sw-restart": wsSwRestart,
   "ws-refused": wsRefused,
   "ws-blank-iframe": wsBlankIframe,
   "ws-detect": wsDetect,
