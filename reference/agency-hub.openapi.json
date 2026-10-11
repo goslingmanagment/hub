@@ -133664,15 +133664,30 @@
                           "role": {
                             "type": "string"
                           },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "stale",
+                              "missing"
+                            ]
+                          },
                           "startedAt": {
-                            "type": "string"
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           },
                           "lastSeenAt": {
-                            "type": "string"
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "role",
+                          "state",
                           "startedAt",
                           "lastSeenAt"
                         ],
@@ -133920,9 +133935,16 @@
                           "maximum": 9007199254740991
                         },
                         "active": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "failedLastHour": {
                           "type": "integer",

@@ -4,11 +4,14 @@
 // queue and the open incidents. Read-only: it writes no row and no metric.
 //
 // The clock it runs on decides what is read when:
-//   - the feed of sent requests is read on every request (an index range of
-//     the window, `listOpsLiveAttempts`);
-//   - pages, processes and incidents are read at most once in two seconds;
-//   - the queue summary — a pass over the whole job table — at most once in
-//     thirty seconds.
+//   - the feed of sent requests, and the oldest request still unanswered, on
+//     every request (index ranges: `listOpsLiveAttempts`,
+//     `readOpsLiveOldestUnanswered`);
+//   - pages, processes, incidents and the queue as it is now at most once a
+//     second — for the one caller that asks every two seconds that is every
+//     time, and for any number of callers never more than that;
+//   - the jobs failed in the last hour — a pass over the whole job table — at
+//     most once in five minutes.
 // Each cached part is read by one request at a time: the others wait for that
 // read instead of starting their own.
 //
@@ -18,15 +21,20 @@
 import type { OpsLiveAttempt, OpsLivePage, OpsLiveResponse } from "@agency_hub_core/contracts";
 import {
   ENGINE_OWNED_SYNC_PAGE_MODES,
+  INSTANCE_STALE_TTL_MS,
   listAllInstances,
   listNotificationIncidents,
   listOpenWorkOfAllPages,
   listOpsLiveAttempts,
+  listOpsLiveLegacyLastSends,
   listOpsLivePages,
   listSyncPages,
-  readOpsLiveQueueSummary,
+  readOpsLiveFailedLastHour,
+  readOpsLiveOldestUnanswered,
+  readOpsLiveQueueNow,
   type OpsLiveAttemptRow,
-  type OpsLiveQueueSummary,
+  type OpsLiveQueueNow,
+  type RuntimeInstanceRow,
   type SyncHoldRow,
   type SyncPageRow,
   type SyncWorkStatusFields,
@@ -39,39 +47,66 @@ import { WORK_CLASSES } from "../sync/engine/scheduler.ts";
 import { WAITING_REASONS, type QueueStatus } from "../sync/engine/status.ts";
 import { isFanslyRoute, routeBudget } from "../sync/fansly/routes.ts";
 import { readPauseSettingMs, readSyncPageQueue } from "../sync/inspect.ts";
+import { RUNTIME_ROLES } from "./runtime-heartbeat.ts";
 
 /** Without a cursor: every request sent within this window. With one: how
  *  long before the window a request may have been sent and still be reported
- *  when it completes. */
+ *  when it completes, when nothing says it was still unanswered. */
 export const OPS_LIVE_FEED_WINDOW_MS = 10 * 60_000;
 /** A cursor reaches this far before the instant it was issued: a request sent
  *  or completed by a transaction still open at that instant, or stamped by a
  *  clock a little behind, is in the next answer. */
 export const OPS_LIVE_CURSOR_OVERLAP_MS = 30_000;
+/** How far back a request may have been sent and still be followed to its
+ *  answer, and how old a cursor may be and still be one. An hour: what the
+ *  screen keeps. */
+export const OPS_LIVE_OPEN_WINDOW_MS = 60 * 60_000;
+/** How far back the older journal is searched for a page's last request. */
+export const OPS_LIVE_LAST_SEND_WINDOW_MS = 6 * 60 * 60_000;
 export const OPS_LIVE_MAX_ATTEMPTS = 2_000;
-export const OPS_LIVE_STATE_TTL_MS = 2_000;
-export const OPS_LIVE_QUEUE_TTL_MS = 30_000;
+export const OPS_LIVE_STATE_TTL_MS = 1_000;
+export const OPS_LIVE_FAILED_JOBS_TTL_MS = 5 * 60_000;
 export const OPS_LIVE_SUMMARY_MAX_LENGTH = 160;
 
 // ── cursor ──────────────────────────────────────────────────────────────────
 
-const CURSOR_PATTERN = /^t1-([0-9a-z]{1,11})$/;
+const CURSOR_PATTERN = /^t2-([0-9a-z]{1,11})(?:-([0-9a-z]{1,11}))?$/;
 
-/** The cursor of an answer generated at `issuedAt`: opaque to the caller. */
-export function encodeOpsLiveCursor(issuedAt: Date): string {
-  return `t1-${issuedAt.getTime().toString(36)}`;
+export interface OpsLiveCursor {
+  /** When the answer that carried the cursor was generated. */
+  issuedAt: Date;
+  /** The send instant of the oldest request that had no answer then; null:
+   *  every request had one. */
+  openSince: Date | null;
 }
 
-/** When the cursor was issued; null for anything this build did not issue —
- *  answered as if no cursor were given. */
-export function decodeOpsLiveCursor(cursor: unknown): Date | null {
+function instantOf(text: string): Date | null {
+  const ms = Number.parseInt(text, 36);
+  if (!Number.isSafeInteger(ms) || ms <= 0) return null;
+  const instant = new Date(ms);
+  return Number.isNaN(instant.getTime()) ? null : instant;
+}
+
+/** The cursor of an answer generated at `issuedAt`: opaque to the caller. It
+ *  carries the oldest unanswered request's send instant, so the next answer
+ *  can reach back to that request when it completes. */
+export function encodeOpsLiveCursor(issuedAt: Date, openSince: Date | null = null): string {
+  const issued = `t2-${issuedAt.getTime().toString(36)}`;
+  return openSince === null ? issued : `${issued}-${openSince.getTime().toString(36)}`;
+}
+
+/** What the cursor says; null for anything this build did not issue — a
+ *  cursor of the first form (`t1-…`) included — answered as if no cursor
+ *  were given. */
+export function decodeOpsLiveCursor(cursor: unknown): OpsLiveCursor | null {
   if (typeof cursor !== "string") return null;
   const match = CURSOR_PATTERN.exec(cursor);
   if (match === null) return null;
-  const issuedAtMs = Number.parseInt(match[1]!, 36);
-  if (!Number.isSafeInteger(issuedAtMs) || issuedAtMs <= 0) return null;
-  const issuedAt = new Date(issuedAtMs);
-  return Number.isNaN(issuedAt.getTime()) ? null : issuedAt;
+  const issuedAt = instantOf(match[1]!);
+  if (issuedAt === null) return null;
+  if (match[2] === undefined) return { issuedAt, openSince: null };
+  const openSince = instantOf(match[2]);
+  return openSince === null ? null : { issuedAt, openSince };
 }
 
 export interface OpsLiveFeedWindow {
@@ -84,19 +119,28 @@ export interface OpsLiveFeedWindow {
 /**
  * The window of the feed. Without a cursor: the requests sent in the last
  * ten minutes. With one: those sent or completed since 30 seconds before it
- * was issued, as long as they were sent no more than ten minutes before that.
- * A cursor from the future counts as issued now; one so old that its window
- * would reach past the last ten minutes is answered as if it were absent.
+ * was issued — read among the requests sent no more than ten minutes before
+ * that, and further back, to the oldest request that was unanswered when the
+ * cursor was issued, so that its answer is reported however late it comes.
+ * Never further back than an hour: a request older than that is not followed,
+ * and a cursor older than that is answered as if it were absent. A cursor
+ * from the future counts as issued now.
  */
-export function opsLiveFeedWindow(cursorIssuedAt: Date | null, now: Date): OpsLiveFeedWindow {
-  const floorMs = now.getTime() - OPS_LIVE_FEED_WINDOW_MS;
-  const sinceMs = cursorIssuedAt === null
-    ? floorMs
-    : Math.min(cursorIssuedAt.getTime(), now.getTime()) - OPS_LIVE_CURSOR_OVERLAP_MS;
-  if (cursorIssuedAt === null || sinceMs <= floorMs) {
-    return { sentAfter: new Date(floorMs), changedAfter: new Date(floorMs) };
-  }
-  return { sentAfter: new Date(sinceMs - OPS_LIVE_FEED_WINDOW_MS), changedAfter: new Date(sinceMs) };
+export function opsLiveFeedWindow(cursor: OpsLiveCursor | null, now: Date): OpsLiveFeedWindow {
+  const nowMs = now.getTime();
+  const fresh = new Date(nowMs - OPS_LIVE_FEED_WINDOW_MS);
+  if (cursor === null) return { sentAfter: fresh, changedAfter: fresh };
+  const issuedMs = Math.min(cursor.issuedAt.getTime(), nowMs);
+  if (nowMs - issuedMs > OPS_LIVE_OPEN_WINDOW_MS) return { sentAfter: fresh, changedAfter: fresh };
+  const changedAfterMs = issuedMs - OPS_LIVE_CURSOR_OVERLAP_MS;
+  let sentAfterMs = changedAfterMs - OPS_LIVE_FEED_WINDOW_MS;
+  // The feed reads what was sent strictly after its floor: one millisecond
+  // before the unanswered request's send instant, so that it is included.
+  if (cursor.openSince !== null) sentAfterMs = Math.min(sentAfterMs, cursor.openSince.getTime() - 1);
+  return {
+    sentAfter: new Date(Math.max(sentAfterMs, nowMs - OPS_LIVE_OPEN_WINDOW_MS)),
+    changedAfter: new Date(changedAfterMs),
+  };
 }
 
 // ── the feed ────────────────────────────────────────────────────────────────
@@ -171,9 +215,26 @@ function isEngineServed(page: SyncPageRow): boolean {
   return (ENGINE_OWNED_SYNC_PAGE_MODES as readonly string[]).includes(page.mode);
 }
 
+/** The later of two instants, either of which may be missing. */
+function later(left: Date | null, right: Date | null): Date | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return left.getTime() >= right.getTime() ? left : right;
+}
+
 async function readPages(app: Pick<AppContext, "db" | "config">): Promise<OpsLivePage[]> {
   const pages = await listOpsLivePages(app.db);
   const syncPages = new Map((await listSyncPages(app.db)).map((page) => [page.pageId, page]));
+  // A page the engine does not serve has no stored last send: its requests
+  // are in the older journal, read once for all such pages.
+  const notServed = pages.filter((page) => {
+    const syncPage = syncPages.get(page.id);
+    return syncPage === undefined || !isEngineServed(syncPage);
+  });
+  const legacyLastSends = await listOpsLiveLegacyLastSends(app.db, {
+    pageIds: notServed.map((page) => page.id),
+    since: new Date(Date.now() - OPS_LIVE_LAST_SEND_WINDOW_MS),
+  });
   const worksByPage = new Map<number, SyncWorkStatusFields[]>();
   for (const work of await listOpenWorkOfAllPages(app.db)) {
     const works = worksByPage.get(work.pageId);
@@ -188,8 +249,7 @@ async function readPages(app: Pick<AppContext, "db" | "config">): Promise<OpsLiv
     const syncPage = syncPages.get(page.id);
     if (syncPage === undefined) {
       // A page the Fansly Sync Engine has no row for (OnlyFans): no engine
-      // pauses, holds or work, and no stored last send — its requests are in
-      // the feed.
+      // pauses, holds or work; its last request is the older journal's.
       answer.push({
         label: page.label,
         platform: page.platform,
@@ -202,7 +262,7 @@ async function readPages(app: Pick<AppContext, "db" | "config">): Promise<OpsLiv
         dueNow: 0,
         nextDueAt: null,
         waiting: [],
-        lastSentAt: null,
+        lastSentAt: legacyLastSends.get(page.id)?.toISOString() ?? null,
       });
       continue;
     }
@@ -230,7 +290,7 @@ async function readPages(app: Pick<AppContext, "db" | "config">): Promise<OpsLiv
       waiting: works.length === 0
         ? []
         : opsLiveWaitingOf(await readSyncPageQueue(app.db, syncPage, works, settingMs, now)),
-      lastSentAt: syncPage.lastSendAt?.toISOString() ?? null,
+      lastSentAt: later(syncPage.lastSendAt, legacyLastSends.get(page.id) ?? null)?.toISOString() ?? null,
     });
   }
   return answer;
@@ -238,12 +298,37 @@ async function readPages(app: Pick<AppContext, "db" | "config">): Promise<OpsLiv
 
 // ── processes, incidents ────────────────────────────────────────────────────
 
-async function readProcesses(app: Pick<AppContext, "db">): Promise<OpsLiveResponse["processes"]> {
-  return (await listAllInstances(app.db)).map((instance) => ({
-    role: instance.role,
-    startedAt: instance.startedAt.toISOString(),
-    lastSeenAt: instance.lastSeenAt.toISOString(),
-  }));
+/**
+ * One row per role: every role Hub runs, then any other role seen, by name.
+ *
+ * The heartbeat table keeps a row per process instance, and keeps the row of
+ * a process that stopped without saying so for half an hour. Listed as they
+ * are, a restarted `api` was two rows for that long — one of them silent —
+ * and a role that never came back was no row at all once its last one was
+ * reaped. So: a role is its freshest instance; it is `stale` when that one
+ * has not beaten within the stale window, and `missing` when it has none.
+ */
+export function opsLiveProcessesOf(
+  instances: ReadonlyArray<Pick<RuntimeInstanceRow, "role" | "startedAt" | "lastSeenAt">>,
+  now: Date,
+): OpsLiveResponse["processes"] {
+  const freshest = new Map<string, Pick<RuntimeInstanceRow, "role" | "startedAt" | "lastSeenAt">>();
+  for (const instance of instances) {
+    const known = freshest.get(instance.role);
+    if (known === undefined || instance.lastSeenAt.getTime() > known.lastSeenAt.getTime()) freshest.set(instance.role, instance);
+  }
+  const expected: readonly string[] = RUNTIME_ROLES;
+  const others = [...freshest.keys()].filter((role) => !expected.includes(role)).sort();
+  return [...expected, ...others].map((role) => {
+    const instance = freshest.get(role);
+    if (instance === undefined) return { role, state: "missing" as const, startedAt: null, lastSeenAt: null };
+    return {
+      role,
+      state: now.getTime() - instance.lastSeenAt.getTime() <= INSTANCE_STALE_TTL_MS ? ("active" as const) : ("stale" as const),
+      startedAt: instance.startedAt.toISOString(),
+      lastSeenAt: instance.lastSeenAt.toISOString(),
+    };
+  });
 }
 
 /** At most `OPS_LIVE_SUMMARY_MAX_LENGTH` characters, never half of a
@@ -312,6 +397,7 @@ interface OpsLiveState {
   pages: OpsLivePage[];
   processes: OpsLiveResponse["processes"];
   incidents: OpsLiveResponse["incidents"];
+  queue: OpsLiveQueueNow;
 }
 
 /** The reader behind the route: one per API process, with its two caches. */
@@ -320,29 +406,38 @@ export function createOpsLiveReader(
   options: OpsLiveReaderOptions = {},
 ): (cursor: unknown) => Promise<OpsLiveResponse> {
   const nowMs = options.nowMs ?? Date.now;
-  // One connection at a time: three short reads in a row, not three at once.
+  // One connection at a time: four short reads in a row, not four at once.
   const state = cachedRead<OpsLiveState>(async () => {
     const pages = await readPages(app);
-    const processes = await readProcesses(app);
+    const processes = opsLiveProcessesOf(await listAllInstances(app.db), new Date());
     const incidents = await readIncidents(app);
-    return { pages, processes, incidents };
+    const queue = await readOpsLiveQueueNow(app.db);
+    return { pages, processes, incidents, queue };
   }, OPS_LIVE_STATE_TTL_MS, nowMs);
-  const queue = cachedRead<OpsLiveQueueSummary>(() => readOpsLiveQueueSummary(app.db), OPS_LIVE_QUEUE_TTL_MS, nowMs);
+  const failedJobs = cachedRead<number>(() => readOpsLiveFailedLastHour(app.db), OPS_LIVE_FAILED_JOBS_TTL_MS, nowMs);
 
   return async (cursor) => {
     const generatedAt = new Date();
     const window = opsLiveFeedWindow(decodeOpsLiveCursor(cursor), generatedAt);
+    // Before the feed, never after it. A request answered between the two
+    // reads is then both in this answer's cursor and — if the feed already
+    // saw its answer — in this answer: it comes once more next time, and the
+    // caller merges by id. The other way round it could be missed for good:
+    // unanswered in the feed, already gone from the cursor.
+    const openSince = await readOpsLiveOldestUnanswered(app.db, {
+      sentAfter: new Date(generatedAt.getTime() - OPS_LIVE_OPEN_WINDOW_MS),
+    });
     const attempts = await listOpsLiveAttempts(app.db, { ...window, limit: OPS_LIVE_MAX_ATTEMPTS });
-    const { pages, processes, incidents } = await state();
+    const { pages, processes, incidents, queue } = await state();
     return {
       generatedAt: generatedAt.toISOString(),
       revision: opsLiveRevision(),
       processes,
       pages,
       attempts: opsLiveAttemptsOf(attempts),
-      queue: await queue(),
+      queue: { ...queue, failedLastHour: await failedJobs() },
       incidents,
-      nextCursor: encodeOpsLiveCursor(generatedAt),
+      nextCursor: encodeOpsLiveCursor(generatedAt, openSince),
     };
   };
 }

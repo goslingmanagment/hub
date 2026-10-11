@@ -30,9 +30,15 @@ export const opsLiveQuerySchema = z.object({
 });
 
 export const opsLiveProcessSchema = z.object({
+  /** One row per role: every role Hub runs, and any other one seen. */
   role: z.string(),
-  startedAt: isoTimestamp,
-  lastSeenAt: isoTimestamp,
+  /** `active`: the role's freshest instance beat within the stale window.
+   *  `stale`: it has not — the process stopped without saying so, or hangs.
+   *  `missing`: no instance of the role has a row at all. */
+  state: z.enum(["active", "stale", "missing"]),
+  /** Of the role's freshest instance; null when the role is missing. */
+  startedAt: isoTimestamp.nullable(),
+  lastSeenAt: isoTimestamp.nullable(),
 }).strict();
 
 export const opsLiveHoldSchema = z.object({
@@ -67,8 +73,10 @@ export const opsLivePageSchema = z.object({
     reason: agentSyncWaitingReasonEnum,
     count: z.number().int().positive(),
   }).strict()),
-  /** The engine's last send for the page; null: none, or a page the engine
-   *  does not serve. */
+  /** The page's last sent request. For a page the engine serves: its stored
+   *  last send, null when it never sent. For any other page: the latest
+   *  request of the older journal in the last six hours — null then means
+   *  "none in six hours", not "never". */
   lastSentAt: isoTimestamp.nullable(),
 }).strict();
 
@@ -91,9 +99,13 @@ export const opsLiveAttemptSchema = z.object({
 }).strict();
 
 export const opsLiveQueueSchema = z.object({
-  /** Ready to run, not in a dead-letter queue. */
+  /** Ready to run, not in a dead-letter queue. Counted for this answer. */
   waiting: opsLiveCount,
-  active: opsLiveCount,
+  /** The job queue's own counter, which it refreshes about once a minute:
+   *  approximate, and up to that old. null: it has not refreshed every
+   *  queue's counter in the last five minutes — unknown, not zero. */
+  active: opsLiveCount.nullable(),
+  /** Counted at most five minutes ago. */
   failedLastHour: opsLiveCount,
   /** Parked in dead-letter queues. */
   deadLetters: opsLiveCount,
@@ -117,7 +129,8 @@ export const opsLiveResponseSchema = z.object({
   pages: z.array(opsLivePageSchema),
   /** Sent requests by send time, oldest first; at most 2000, the oldest
    *  dropped first. Merge by `id`: an unanswered request comes again,
-   *  completed, in a later answer. */
+   *  completed, in a later answer — however long its answer took, within an
+   *  hour of its sending. */
   attempts: z.array(opsLiveAttemptSchema).max(2000),
   queue: opsLiveQueueSchema,
   incidents: z.array(opsLiveIncidentSchema),

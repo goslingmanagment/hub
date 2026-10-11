@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { opsLiveQuerySchema, opsLiveResponseSchema, routeSchemas } from "@agency_hub_core/contracts";
-import type { OpsLiveAttemptRow, SyncHoldRow } from "@agency_hub_core/db";
+import { INSTANCE_STALE_TTL_MS, type OpsLiveAttemptRow, type SyncHoldRow } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import { buildRoutePolicyIndex, computeAuthPolicyVerdict } from "../apps/runtime/src/api/auth-policy.ts";
@@ -10,12 +10,14 @@ import {
   OPS_LIVE_CURSOR_OVERLAP_MS,
   OPS_LIVE_FEED_WINDOW_MS,
   OPS_LIVE_MAX_ATTEMPTS,
+  OPS_LIVE_OPEN_WINDOW_MS,
   cachedRead,
   decodeOpsLiveCursor,
   encodeOpsLiveCursor,
   opsLiveAttemptsOf,
   opsLiveFeedWindow,
   opsLiveHoldsOf,
+  opsLiveProcessesOf,
   opsLiveRevision,
   opsLiveSummaryOf,
   opsLiveWaitingOf,
@@ -40,13 +42,21 @@ describe("cursor", () => {
   it("round-trips the instant it was issued, in the contract's alphabet", () => {
     const cursor = encodeOpsLiveCursor(NOW);
     expect(cursor).toMatch(/^[A-Za-z0-9_-]{1,200}$/);
-    expect(decodeOpsLiveCursor(cursor)).toEqual(NOW);
+    expect(decodeOpsLiveCursor(cursor)).toEqual({ issuedAt: NOW, openSince: null });
+  });
+
+  it("carries the send instant of the oldest request that was unanswered when it was issued", () => {
+    const cursor = encodeOpsLiveCursor(NOW, ago(40 * 60_000));
+    expect(cursor).toMatch(/^[A-Za-z0-9_-]{1,200}$/);
+    expect(decodeOpsLiveCursor(cursor)).toEqual({ issuedAt: NOW, openSince: ago(40 * 60_000) });
   });
 
   it("reads nothing it did not issue: such a cursor is as good as absent", () => {
     for (const unreadable of [
-      undefined, null, 42, ["t1-abc"], "", "garbage", "t2-abc", "t1-", "t1-ABC", "t1-abc def",
-      `t1-${"z".repeat(11)}`, `t1-${"a".repeat(200)}`, "../../etc/passwd", "t1--1",
+      undefined, null, 42, ["t2-abc"], "", "garbage", "t3-abc", "t2-", "t2-ABC", "t2-abc def",
+      `t2-${"z".repeat(11)}`, `t2-${"a".repeat(200)}`, "../../etc/passwd", "t2--1", "t2-abc-", "t2-abc-ABC", "t2-abc-def-ghi",
+      // The first form of the cursor, from the build before this one.
+      "t1-abc", encodeOpsLiveCursor(NOW).replace("t2-", "t1-"),
     ]) {
       expect(decodeOpsLiveCursor(unreadable), String(unreadable)).toBeNull();
     }
@@ -54,28 +64,97 @@ describe("cursor", () => {
 });
 
 describe("feed window", () => {
+  const cursor = (issuedAgoMs: number, openSinceAgoMs: number | null = null) => ({
+    issuedAt: ago(issuedAgoMs),
+    openSince: openSinceAgoMs === null ? null : ago(openSinceAgoMs),
+  });
+
   it("without a cursor: the requests sent in the last ten minutes", () => {
     const window = opsLiveFeedWindow(null, NOW);
     expect(window).toEqual({ sentAfter: ago(OPS_LIVE_FEED_WINDOW_MS), changedAfter: ago(OPS_LIVE_FEED_WINDOW_MS) });
   });
 
   it("with a cursor: sent or completed since 30 seconds before it was issued", () => {
-    const window = opsLiveFeedWindow(ago(2_000), NOW);
+    const window = opsLiveFeedWindow(cursor(2_000), NOW);
     expect(window.changedAfter).toEqual(ago(2_000 + OPS_LIVE_CURSOR_OVERLAP_MS));
     // A request sent up to ten minutes before that still comes when it completes.
     expect(window.sentAfter).toEqual(ago(2_000 + OPS_LIVE_CURSOR_OVERLAP_MS + OPS_LIVE_FEED_WINDOW_MS));
   });
 
-  it("a cursor from the future counts as issued now", () => {
-    expect(opsLiveFeedWindow(new Date(NOW.getTime() + 3_600_000), NOW).changedAfter).toEqual(ago(OPS_LIVE_CURSOR_OVERLAP_MS));
+  it("reaches back to a request that was unanswered when the cursor was issued, itself included", () => {
+    // Sent 40 minutes ago and unanswered two seconds ago: answered now, by a
+    // sync that came back and closed what it had left open.
+    const window = opsLiveFeedWindow(cursor(2_000, 40 * 60_000), NOW);
+    expect(window.changedAfter).toEqual(ago(2_000 + OPS_LIVE_CURSOR_OVERLAP_MS));
+    // The feed reads what was sent strictly after its floor.
+    expect(window.sentAfter).toEqual(ago(40 * 60_000 + 1));
+    // An unanswered request younger than the ordinary reach changes nothing.
+    expect(opsLiveFeedWindow(cursor(2_000, 60_000), NOW)).toEqual(opsLiveFeedWindow(cursor(2_000), NOW));
   });
 
-  it("a cursor older than the window is answered as if it were absent", () => {
-    expect(opsLiveFeedWindow(ago(OPS_LIVE_FEED_WINDOW_MS - OPS_LIVE_CURSOR_OVERLAP_MS), NOW)).toEqual(opsLiveFeedWindow(null, NOW));
-    expect(opsLiveFeedWindow(ago(24 * 3_600_000), NOW)).toEqual(opsLiveFeedWindow(null, NOW));
-    // One second younger than that, and it is a cursor again.
-    const young = opsLiveFeedWindow(ago(OPS_LIVE_FEED_WINDOW_MS - OPS_LIVE_CURSOR_OVERLAP_MS - 1_000), NOW);
-    expect(young.changedAfter).toEqual(ago(OPS_LIVE_FEED_WINDOW_MS - 1_000));
+  it("never reaches further back than an hour, whatever the cursor says", () => {
+    expect(opsLiveFeedWindow(cursor(2_000, 5 * 3_600_000), NOW).sentAfter).toEqual(ago(OPS_LIVE_OPEN_WINDOW_MS));
+    // A caller that was away for 55 minutes: its cursor still counts, and
+    // ten minutes before it is already past the hour.
+    const away = opsLiveFeedWindow(cursor(55 * 60_000), NOW);
+    expect(away.changedAfter).toEqual(ago(55 * 60_000 + OPS_LIVE_CURSOR_OVERLAP_MS));
+    expect(away.sentAfter).toEqual(ago(OPS_LIVE_OPEN_WINDOW_MS));
+  });
+
+  it("a caller that was away for a quarter of an hour is told what completed meanwhile", () => {
+    const window = opsLiveFeedWindow(cursor(15 * 60_000), NOW);
+    expect(window.changedAfter).toEqual(ago(15 * 60_000 + OPS_LIVE_CURSOR_OVERLAP_MS));
+    expect(window.sentAfter).toEqual(ago(15 * 60_000 + OPS_LIVE_CURSOR_OVERLAP_MS + OPS_LIVE_FEED_WINDOW_MS));
+  });
+
+  it("a cursor from the future counts as issued now", () => {
+    expect(opsLiveFeedWindow({ issuedAt: new Date(NOW.getTime() + 3_600_000), openSince: null }, NOW).changedAfter).toEqual(ago(OPS_LIVE_CURSOR_OVERLAP_MS));
+  });
+
+  it("a cursor older than an hour is answered as if it were absent", () => {
+    expect(opsLiveFeedWindow(cursor(OPS_LIVE_OPEN_WINDOW_MS + 1), NOW)).toEqual(opsLiveFeedWindow(null, NOW));
+    expect(opsLiveFeedWindow(cursor(24 * 3_600_000, 25 * 3_600_000), NOW)).toEqual(opsLiveFeedWindow(null, NOW));
+    // At the hour exactly it is still a cursor.
+    expect(opsLiveFeedWindow(cursor(OPS_LIVE_OPEN_WINDOW_MS), NOW).changedAfter).toEqual(ago(OPS_LIVE_OPEN_WINDOW_MS + OPS_LIVE_CURSOR_OVERLAP_MS));
+  });
+});
+
+describe("processes", () => {
+  const instance = (role: string, lastSeenAgoMs: number, startedAgoMs = 3_600_000) => ({
+    role,
+    startedAt: ago(startedAgoMs),
+    lastSeenAt: ago(lastSeenAgoMs),
+  });
+
+  it("is one row per role Hub runs, in its order, and a role without a single instance is missing", () => {
+    expect(opsLiveProcessesOf([], NOW)).toEqual(
+      ["api", "worker", "scheduler", "sync"].map((role) => ({ role, state: "missing", startedAt: null, lastSeenAt: null })),
+    );
+    const rows = opsLiveProcessesOf([instance("sync", 20_000), instance("api", 30_000)], NOW);
+    expect(rows.map((row) => [row.role, row.state])).toEqual([
+      ["api", "active"], ["worker", "missing"], ["scheduler", "missing"], ["sync", "active"],
+    ]);
+    expect(rows[0]).toEqual({ role: "api", state: "active", startedAt: ago(3_600_000).toISOString(), lastSeenAt: ago(30_000).toISOString() });
+  });
+
+  it("takes a role's freshest instance: the row a killed process left behind does not make its successor silent", () => {
+    // Killed twenty minutes ago; its successor beats. The table keeps both
+    // rows for half an hour.
+    const rows = opsLiveProcessesOf([instance("api", 20 * 60_000, 5 * 3_600_000), instance("api", 15_000, 19 * 60_000)], NOW);
+    expect(rows.filter((row) => row.role === "api")).toEqual([
+      { role: "api", state: "active", startedAt: ago(19 * 60_000).toISOString(), lastSeenAt: ago(15_000).toISOString() },
+    ]);
+  });
+
+  it("says stale when the freshest has not beaten within the stale window", () => {
+    const state = (lastSeenAgoMs: number) => opsLiveProcessesOf([instance("worker", lastSeenAgoMs)], NOW)[1]!.state;
+    expect(state(INSTANCE_STALE_TTL_MS)).toBe("active");
+    expect(state(INSTANCE_STALE_TTL_MS + 1)).toBe("stale");
+  });
+
+  it("lists a role Hub does not know after its own, by name", () => {
+    const rows = opsLiveProcessesOf([instance("zeta", 1_000), instance("board", 1_000), instance("api", 1_000)], NOW);
+    expect(rows.map((row) => row.role)).toEqual(["api", "worker", "scheduler", "sync", "board", "zeta"]);
   });
 });
 
@@ -325,6 +404,18 @@ describe("wire schema", () => {
     expect(opsLiveResponseSchema.parse(answer)).toEqual(answer);
   });
 
+  it("takes a role in one of three states, without instants when it is missing", () => {
+    const processes = opsLiveProcessesOf([{ role: "api", startedAt: ago(60_000), lastSeenAt: ago(1_000) }], NOW);
+    expect(opsLiveResponseSchema.parse({ ...answer, processes }).processes).toEqual(processes);
+    expect(opsLiveResponseSchema.safeParse({ ...answer, processes: [{ ...processes[0], state: "quiet" }] }).success).toBe(false);
+    expect(opsLiveResponseSchema.safeParse({ ...answer, processes: [{ ...processes[0], instanceId: "api-1" }] }).success).toBe(false);
+  });
+
+  it("takes an unknown count of active jobs as null, never as a number it is not", () => {
+    expect(opsLiveResponseSchema.parse({ ...answer, queue: { ...answer.queue, active: null } }).queue.active).toBeNull();
+    expect(opsLiveResponseSchema.safeParse({ ...answer, queue: { ...answer.queue, waiting: null } }).success).toBe(false);
+  });
+
   it("refuses a field the contract does not name, at every level", () => {
     const attempt = opsLiveAttemptsOf([attemptRow()])[0]!;
     expect(opsLiveResponseSchema.safeParse({ ...answer, attempts: [attempt] }).success).toBe(true);
@@ -356,7 +447,7 @@ describe("wire schema", () => {
 
   it("takes any cursor text, and nothing a caller sends there is an error", () => {
     expect(opsLiveQuerySchema.parse({})).toEqual({});
-    expect(opsLiveQuerySchema.parse({ cursor: "t1-abc" })).toEqual({ cursor: "t1-abc" });
+    expect(opsLiveQuerySchema.parse({ cursor: "t2-abc" })).toEqual({ cursor: "t2-abc" });
     expect(opsLiveQuerySchema.parse({ cursor: "%%% not a cursor" }).cursor).toBe("%%% not a cursor");
     // A repeated parameter arrives as a list: read as no cursor.
     expect(opsLiveQuerySchema.parse({ cursor: ["a", "b"] }).cursor).toBeUndefined();

@@ -15,12 +15,17 @@ import {
   upsertInstanceHeartbeat,
   type Database,
 } from "@agency_hub_core/db";
-import { buildRunningSnapshot, sha256Hex } from "@agency_hub_core/shared";
+import { buildRunningSnapshot, createLogger, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { OPS_LIVE_QUEUE_TTL_MS, OPS_LIVE_STATE_TTL_MS, createOpsLiveReader } from "../apps/runtime/src/services/ops-live.ts";
+import {
+  OPS_LIVE_FAILED_JOBS_TTL_MS,
+  OPS_LIVE_STATE_TTL_MS,
+  createOpsLiveReader,
+  encodeOpsLiveCursor,
+} from "../apps/runtime/src/services/ops-live.ts";
 import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
@@ -45,9 +50,12 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
  *    pauses, holds in force, open work, and why that work waits in the
  *    engine's own words;
  *  - the feed of sent requests over both journals, and how a cursor narrows
- *    it and brings an unanswered request again once it completes;
- *  - the job queue with dead letters counted apart, the open incidents, the
- *    process heartbeats;
+ *    it and brings an unanswered request again once it completes — also one
+ *    answered long after it was sent, and after the caller was away;
+ *  - the job queue with dead letters counted apart and its own counter of
+ *    active jobs only while that is fresh, the open incidents, one row per
+ *    role for the processes;
+ *  - that a served request is not logged and a refused one is;
  *  - that nothing of a request's parameters, a work's subject, a hold's key
  *    or an error message leaves, and that the read writes nothing.
  */
@@ -184,6 +192,16 @@ async function job(name: string, state: string, createdAgo: string, startAfter: 
     `insert into pgboss.job (name, state, created_on, start_after, completed_on)
      values ($1, $2::pgboss.job_state, now() - $3::interval, now() + $4::interval, now() - $5::interval)`,
     [name, state, createdAgo, startAfter, completedAgo],
+  );
+}
+
+/** What pg-boss's monitor does about once a minute: counts each queue's
+ *  active jobs into its row and stamps the instant. */
+async function refreshQueueCounters(): Promise<void> {
+  await testDb!.pool.query(
+    `update pgboss.queue q
+        set monitor_on = now(),
+            active_count = (select count(*) from pgboss.job j where j.name = q.name and j.state = 'active')`,
   );
 }
 
@@ -346,6 +364,41 @@ describe("access", () => {
     }
   });
 
+  it("is not logged when it is served, and is when it is refused", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const logger = createLogger("info", { write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const logged = await buildApiServer(createTestAppContext(testDb!, {
+      authPolicyEnforcement: "enforce",
+      healthSyncMonitoringToken: MONITORING_TOKEN,
+      logger: logger as never,
+    }));
+    try {
+      const about = (url: string) => {
+        const ids = new Set(lines.filter((line) => (line.req as { url?: string } | undefined)?.url === url).map((line) => line.reqId));
+        return lines.filter((line) => ids.has(line.reqId) || String(line.msg ?? "").includes("ops/live"));
+      };
+      const ask = (headers: Record<string, string>) => logged.inject({ method: "GET", url: "/api/v1/ops/live", headers });
+
+      // The screen asks every two seconds: a served request leaves no line.
+      for (let round = 0; round < 3; round += 1) expect((await ask({ "x-monitoring-token": MONITORING_TOKEN })).statusCode).toBe(200);
+      expect(lines.filter((line) => String(line.msg ?? "").includes("ops/live") || (line.req as { url?: string } | undefined)?.url === "/api/v1/ops/live")).toEqual([]);
+
+      // Another route still writes its two lines.
+      expect((await logged.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBeLessThan(600);
+      expect(about("/api/v1/health").map((line) => line.msg)).toEqual(["incoming request", "request completed"]);
+
+      // A wrong key, and a caller that is not the owner: one line each, with the status and nothing of the key.
+      expect((await ask({ "x-monitoring-token": "not-the-token" })).statusCode).toBe(401);
+      const leadCookie = await loginCookie(logged, "lead", "lead-secret");
+      expect((await ask({ cookie: leadCookie })).statusCode).toBe(403);
+      const refused = lines.filter((line) => line.msg === "ops/live request refused");
+      expect(refused.map((line) => [line.level, line.statusCode])).toEqual([[40, 401], [40, 403]]);
+      expect(JSON.stringify(refused)).not.toMatch(/not-the-token|cookie|x-monitoring-token/);
+    } finally {
+      await logged.close();
+    }
+  });
+
   it("without a configured token only the owner's session reads it", async () => {
     await server!.close();
     server = await buildApiServer(createTestAppContext(testDb!, { authPolicyEnforcement: "enforce" }));
@@ -364,11 +417,32 @@ describe("pages", () => {
       ["fansly", "lora-2", true],
       ["onlyfans", "lora-of", false],
     ]);
-    // A page outside the engine has none of its state.
-    expect(answer.pages[2]).toEqual({
+    // A page outside the engine has none of its state; its last request is the older journal's.
+    const { lastSentAt, ...outside } = answer.pages[2]!;
+    expect(outside).toEqual({
       label: "lora-of", platform: "onlyfans", engine: false, pausedAll: false, pausedRequests: false, pausedResources: [],
-      holds: [], openWork: 0, dueNow: 0, nextDueAt: null, waiting: [], lastSentAt: null,
+      holds: [], openWork: 0, dueNow: 0, nextDueAt: null, waiting: [],
     });
+    // The fixture's pulls: 60 and 45 seconds ago.
+    expect(Date.now() - new Date(lastSentAt!).getTime()).toBeGreaterThan(40_000);
+    expect(Date.now() - new Date(lastSentAt!).getTime()).toBeLessThan(59_000);
+  });
+
+  it("takes an OnlyFans page's last request from the older journal: hours old is still known, older than six is not", async () => {
+    const lastSentAgoMs = async () => {
+      // Past the one-second state cache.
+      const read = createOpsLiveReader(appContext);
+      const page = (await read(undefined)).pages.find((entry) => entry.label === "lora-of")!;
+      return page.lastSentAt === null ? null : Date.now() - new Date(page.lastSentAt).getTime();
+    };
+    // The pulls come in batches hours apart: the last one two hours ago.
+    await testDb!.pool.query("update sync_http_attempts set started_at = started_at - interval '2 hours', finished_at = finished_at - interval '2 hours'");
+    const twoHours = await lastSentAgoMs();
+    expect(twoHours).toBeGreaterThan(2 * HOUR_MS);
+    expect(twoHours).toBeLessThan(2 * HOUR_MS + 60_000);
+    // Seven hours ago: none in the six hours that are searched. The contract says what null means here.
+    await testDb!.pool.query("update sync_http_attempts set started_at = started_at - interval '5 hours', finished_at = finished_at - interval '5 hours'");
+    expect(await lastSentAgoMs()).toBeNull();
   });
 
   it("counts a page's open work and says why it waits in the engine's own words", async () => {
@@ -500,9 +574,86 @@ describe("attempts", () => {
     expect(first.attempts.find((attempt) => attempt.id === `e${attempts.pending}`)!.completedAt).toBeNull();
   });
 
+  it("reports an answer that comes long after the request was sent, in both journals", async () => {
+    // A sync that went down forty minutes ago left a request of each journal unanswered.
+    const engine = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 2_400, completedSecondsAgo: null, outcome: "sent" });
+    const older = await legacyAttempt({ pageId: pages.onlyfans, startedSecondsAgo: 2_300, state: "success", httpStatus: 200 });
+    await testDb!.pool.query("update sync_http_attempts set finished_at = null, http_status = null where id = $1", [older]);
+
+    // Sent longer ago than the feed's ten minutes: not in the first answer...
+    const first = await live();
+    expect(first.attempts.some((attempt) => attempt.id === `e${engine}` || attempt.id === `l${older}`)).toBe(false);
+    const cursorUrl = `/api/v1/ops/live?cursor=${first.nextCursor}`;
+    expect((await live(cursorUrl)).attempts.map((attempt) => attempt.id)).toEqual([`e${attempts.fresh}`]);
+
+    // ...and the sync comes back: it closes what it left with the instant of its return.
+    await testDb!.pool.query("update sync_attempts set outcome = 'unknown', completed_at = clock_timestamp() where id = $1", [engine]);
+    await testDb!.pool.query("update sync_http_attempts set finished_at = clock_timestamp(), http_status = 200 where id = $1", [older]);
+    const after = await live(cursorUrl);
+    // The oldest of them is the one the cursor reached back to: it is in, not just what came after it.
+    expect(after.attempts.map((attempt) => attempt.id)).toEqual([`e${engine}`, `l${older}`, `e${attempts.fresh}`]);
+    expect(after.attempts[0]).toMatchObject({ failed: true, httpStatus: null });
+    expect(after.attempts[0]!.completedAt).not.toBeNull();
+    expect(after.attempts[1]).toMatchObject({ failed: false, httpStatus: 200 });
+    expect(after.attempts[1]!.completedAt).not.toBeNull();
+
+    // Without a cursor that knew of them they are too old to be in the feed at all.
+    expect((await live()).attempts.some((attempt) => attempt.id === `e${engine}`)).toBe(false);
+  });
+
+  it("does not follow a request sent more than an hour ago", async () => {
+    const ancient = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 2 * 3_600, completedSecondsAgo: null, outcome: "sent" });
+    const first = await live();
+    await testDb!.pool.query("update sync_attempts set outcome = 'unknown', completed_at = clock_timestamp() where id = $1", [ancient]);
+    const after = await live(`/api/v1/ops/live?cursor=${first.nextCursor}`);
+    expect(after.attempts.some((attempt) => attempt.id === `e${ancient}`)).toBe(false);
+  });
+
+  it("tells a caller that was away for a quarter of an hour what completed meanwhile", async () => {
+    // Sent twenty minutes ago, answered twelve minutes ago: after the cursor was issued.
+    const meanwhile = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 1_200, completedSecondsAgo: 720, outcome: "response", httpStatus: 200 });
+    const cursor = encodeOpsLiveCursor(new Date(Date.now() - 15 * 60_000));
+    const answer = await live(`/api/v1/ops/live?cursor=${cursor}`);
+    expect(answer.attempts.map((attempt) => attempt.id)).toContain(`e${meanwhile}`);
+    // Everything of the last ten minutes is there too.
+    expect(answer.attempts.map((attempt) => attempt.id)).toEqual(expect.arrayContaining([`e${attempts.old}`, `e${attempts.fresh}`, `l${legacy.ok}`]));
+    // A cursor from before the hour is no cursor: the plain ten minutes.
+    const stale = await live(`/api/v1/ops/live?cursor=${encodeOpsLiveCursor(new Date(Date.now() - 2 * HOUR_MS))}`);
+    expect(stale.attempts.map((attempt) => attempt.id)).toEqual((await live()).attempts.map((attempt) => attempt.id));
+  });
+
+  it("does not lose a request that is answered while an answer is being put together", async () => {
+    const slow = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 2_400, completedSecondsAgo: null, outcome: "sent" });
+    const first = await live();
+
+    // The reader's first statement finds the oldest unanswered request; the
+    // request is answered right after it, before the feed is read.
+    let statements = 0;
+    const interleaved = new Proxy(appContext.db, {
+      get(target, property, receiver) {
+        if (property !== "execute") return Reflect.get(target, property, receiver);
+        return async (...args: unknown[]) => {
+          const result = await (target.execute as (...given: unknown[]) => Promise<unknown>).apply(target, args);
+          statements += 1;
+          if (statements === 1) {
+            await testDb!.pool.query("update sync_attempts set outcome = 'unknown', completed_at = clock_timestamp() where id = $1", [slow]);
+          }
+          return result;
+        };
+      },
+    });
+    const read = createOpsLiveReader({ ...appContext, db: interleaved });
+    const second = opsLiveResponseSchema.parse(await read(first.nextCursor));
+    const seen = second.attempts.find((attempt) => attempt.id === `e${slow}`);
+    expect(seen?.completedAt).not.toBeNull();
+    // And the cursor that answer hands out still reaches it: it comes once more, to be merged by id.
+    const third = await live(`/api/v1/ops/live?cursor=${second.nextCursor}`);
+    expect(third.attempts.some((attempt) => attempt.id === `e${slow}`)).toBe(true);
+  });
+
   it("a cursor Hub cannot read is answered as if it were absent, not with an error", async () => {
     const plain = (await live()).attempts.map((attempt) => attempt.id);
-    for (const cursor of ["garbage", "t1-", "t9-abc", "%00", "a".repeat(500), "..%2F..%2Fetc"]) {
+    for (const cursor of ["garbage", "t2-", "t9-abc", "t1-abc", "%00", "a".repeat(500), "..%2F..%2Fetc"]) {
       const answer = await live(`/api/v1/ops/live?cursor=${cursor}`);
       expect(answer.attempts.map((attempt) => attempt.id), cursor).toEqual(plain);
     }
@@ -529,11 +680,32 @@ describe("queue, incidents, processes", () => {
     await job("sync.page.execute", "completed", "3 hours", "-3 hours", "2 hours");
     // A record of a failure seven days old: a dead letter, never "the oldest waiting job".
     await job("sync.page.execute.dlq", "created", "7 days", "-7 days");
+    await refreshQueueCounters();
 
     const { queue } = await live();
     expect(queue).toMatchObject({ waiting: 2, active: 1, failedLastHour: 1, deadLetters: 1 });
     expect(queue.oldestWaitingAgeMs).toBeGreaterThanOrEqual(5 * 60_000);
     expect(queue.oldestWaitingAgeMs).toBeLessThan(6 * 60_000);
+  });
+
+  it("reports the queue's own count of active jobs only while every queue's counter is fresh", async () => {
+    await createJobQueues();
+    await job("sync.page.execute", "active", "1 minute", "-1 minute");
+    const active = async () => (await createOpsLiveReader(appContext)(undefined)).queue.active;
+
+    // pg-boss has not counted yet: unknown, not zero.
+    expect(await active()).toBeNull();
+    await refreshQueueCounters();
+    expect(await active()).toBe(1);
+    // One queue's counter was last refreshed six minutes ago: a sum with an old part in it says nothing.
+    await testDb!.pool.query("update pgboss.queue set monitor_on = now() - interval '6 minutes' where name = 'sync.page.execute'");
+    expect(await active()).toBeNull();
+    // Four minutes is within what is reported.
+    await testDb!.pool.query("update pgboss.queue set monitor_on = now() - interval '4 minutes' where name = 'sync.page.execute'");
+    expect(await active()).toBe(1);
+    // A queue that has no refresh instant at all, among fresh ones.
+    await testDb!.pool.query("update pgboss.queue set monitor_on = null where name = 'sync.page.execute.dlq'");
+    expect(await active()).toBeNull();
   });
 
   it("lists the open incidents, newest first, with a summary of at most 160 characters", async () => {
@@ -564,23 +736,31 @@ describe("queue, incidents, processes", () => {
     expect(incidents[1]!.id).toMatch(/^\d+$/);
   });
 
-  it("lists the processes' heartbeats and the revision this build runs", async () => {
+  it("gives one row per role — active, stale or missing — and the revision this build runs", async () => {
     const startedAt = new Date("2026-10-10T21:42:58.049Z");
-    for (const role of ["sync", "api"]) {
+    for (const [role, instanceId] of [["sync", "sync-1"], ["api", "api-old"], ["api", "api-new"], ["worker", "worker-1"]]) {
       await upsertInstanceHeartbeat(appContext.db, {
-        role, instanceId: `${role}-1`, startedAt, imageTag: "2260ef739aa0", running: buildRunningSnapshot(appContext.config),
+        role: role!, instanceId: instanceId!, startedAt, imageTag: "2260ef739aa0", running: buildRunningSnapshot(appContext.config),
       });
     }
+    // An api process that was killed twenty minutes ago; its successor beats.
+    await testDb!.pool.query("update runtime_instances set last_seen_at = now() - interval '20 minutes' where instance_id = 'api-old'");
+    // A worker that has been silent for ten minutes.
+    await testDb!.pool.query("update runtime_instances set last_seen_at = now() - interval '10 minutes' where instance_id = 'worker-1'");
     const previous = process.env.GIT_SHA;
     process.env.GIT_SHA = "2260ef739aa0";
     try {
       const answer = await live();
       expect(answer.revision).toBe("2260ef739aa0");
-      expect(answer.processes.map((entry) => [entry.role, entry.startedAt])).toEqual([
-        ["api", startedAt.toISOString()],
-        ["sync", startedAt.toISOString()],
+      expect(answer.processes.map((entry) => [entry.role, entry.state, entry.startedAt])).toEqual([
+        ["api", "active", startedAt.toISOString()],
+        ["worker", "stale", startedAt.toISOString()],
+        // No row at all: a role that never came up, or one whose last row was reaped.
+        ["scheduler", "missing", null],
+        ["sync", "active", startedAt.toISOString()],
       ]);
-      expect(Date.now() - new Date(answer.processes[0]!.lastSeenAt).getTime()).toBeLessThan(60_000);
+      expect(Date.now() - new Date(answer.processes[0]!.lastSeenAt!).getTime()).toBeLessThan(60_000);
+      expect(answer.processes[2]!.lastSeenAt).toBeNull();
       expect(Math.abs(Date.now() - new Date(answer.generatedAt).getTime())).toBeLessThan(60_000);
     } finally {
       if (previous === undefined) delete process.env.GIT_SHA;
@@ -590,14 +770,14 @@ describe("queue, incidents, processes", () => {
 });
 
 describe("the clock it runs on", () => {
-  it("reads the feed on every request, pages and incidents once in two seconds, the queue once in thirty", async () => {
+  it("reads the feed on every request, the state at most once a second, the failed jobs once in five minutes", async () => {
     // The route's reader on a clock the test moves.
     let clockMs = 1_000_000;
     const read = createOpsLiveReader(appContext, { nowMs: () => clockMs });
     const first = opsLiveResponseSchema.parse(await read(undefined));
-    expect(first.queue.waiting).toBe(0);
+    expect(first.queue).toMatchObject({ waiting: 0, failedLastHour: 0 });
 
-    // A request sent now, a page paused now, an incident opened now, a job waiting now.
+    // A request sent now, a page paused now, an incident opened now, a job waiting and a job failed now.
     const sentNow = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 0, completedSecondsAgo: null, outcome: "sent" });
     await setPagePause(db(), { pageId: pages.running, all: true });
     await openNotificationIncident(testDb!.db, {
@@ -605,6 +785,7 @@ describe("the clock it runs on", () => {
     });
     await createJobQueues();
     await job("sync.page.execute", "created", "1 minute", "-1 minute");
+    await job("sync.page.execute", "failed", "20 minutes", "-20 minutes", "10 minutes");
 
     clockMs += OPS_LIVE_STATE_TTL_MS - 1;
     const second = opsLiveResponseSchema.parse(await read(undefined));
@@ -613,14 +794,44 @@ describe("the clock it runs on", () => {
     expect(second.incidents).toEqual([]);
     expect(second.queue).toEqual(first.queue);
 
+    // A second after the first read: a caller that asks every two seconds always gets the state as it is.
     clockMs += 1;
     const third = opsLiveResponseSchema.parse(await read(undefined));
     expect(third.pages.find((page) => page.label === "lora-1")!.pausedAll).toBe(true);
     expect(third.incidents).toHaveLength(1);
-    expect(third.queue).toEqual(first.queue);
+    expect(third.queue.waiting).toBe(1);
+    // The one number that needs a pass over the whole job table is kept for five minutes.
+    expect(third.queue.failedLastHour).toBe(0);
 
-    clockMs += OPS_LIVE_QUEUE_TTL_MS - OPS_LIVE_STATE_TTL_MS;
-    expect(opsLiveResponseSchema.parse(await read(undefined)).queue.waiting).toBe(1);
+    clockMs += OPS_LIVE_FAILED_JOBS_TTL_MS - OPS_LIVE_STATE_TTL_MS;
+    expect(opsLiveResponseSchema.parse(await read(undefined)).queue.failedLastHour).toBe(1);
+  });
+
+  it("many callers at once read the state once", async () => {
+    let statements = 0;
+    const counting = new Proxy(appContext.db, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        if (property !== "execute" && property !== "query") return value;
+        if (property === "execute") {
+          return (...args: unknown[]) => {
+            statements += 1;
+            return (target.execute as (...given: unknown[]) => Promise<unknown>).apply(target, args);
+          };
+        }
+        return value;
+      },
+    });
+    const read = createOpsLiveReader({ ...appContext, db: counting });
+    await read(undefined);
+    const alone = statements;
+    statements = 0;
+    // Past the cache, five callers together: five feeds, one state.
+    await new Promise((resolve) => setTimeout(resolve, OPS_LIVE_STATE_TTL_MS + 50));
+    await Promise.all([1, 2, 3, 4, 5].map(() => read(undefined)));
+    // Each caller's own two statements (the oldest unanswered request, the feed), and the state's once.
+    expect(statements).toBeLessThan(alone + 4 * 2 + 1);
+    expect(statements).toBeGreaterThanOrEqual(5 * 2);
   });
 
   it("writes nothing: no audit row, no metric sample, no table of its own", async () => {
