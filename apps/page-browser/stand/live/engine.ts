@@ -100,7 +100,6 @@ let inFlight: (Queued & { startedMono: number }) | null = null;
 let lastStart = -Infinity;
 let lastEnd = -Infinity;
 let gap = PAUSE_MS;
-const cdpLosses: number[] = [];
 const siteStarts: number[] = [];
 let paused: string | null = null;
 const counts = { site: 0, hub: 0, ws: 0, refused: 0, paused: 0 };
@@ -214,11 +213,12 @@ function report(): void {
     const alarm = engine.alarms[alarmsSeen]!;
     journal("alarm", { kind: alarm.kind, detail: alarm.detail });
     if (alarm.kind === "halted" || alarm.kind === "client_check_mismatch" || alarm.kind === "ws_blocked_send") stopSession(`alarm ${String(alarm.kind)}`);
-    if (alarm.kind === "cdp_lost") {
-      const now = monoMs();
-      cdpLosses.push(now);
-      if (cdpLosses.filter((at) => now - at < 600_000).length >= 2) stopSession("CDP lost twice in 10 minutes");
-    }
+    // After a loss the operator starts a new Chrome by itself. The first
+    // session does not go on by itself: one loss stops it. (The rule used
+    // to wait for a second loss in 10 minutes, but the operator reports one
+    // loss twice — the CDP socket, then the holder's link — so it stopped
+    // at the first anyway; rehearsal finding.)
+    if (alarm.kind === "cdp_lost") stopSession("CDP lost");
   }
   for (; statesSeen < engine.states.length; statesSeen++) {
     const state = engine.states[statesSeen]!;
