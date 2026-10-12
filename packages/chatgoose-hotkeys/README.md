@@ -14,10 +14,11 @@ sha256 of every file). ALL client releases must carry the same manifest sha256,
 vendored from one clean hub commit. Re-vendor all three in one session; never
 hand-edit the copies.
 
-`chat-extension` runs the scheme as hotkey client `'extension'`, the same rows
-as the Fansly extension; the scheme's client type stays `'extension' |
-'desktop'`. In the table below "all" means every client, "extensions" means both
-extensions.
+`chat-extension` runs the scheme as hotkey client `'extension'`. The Fansly
+extension runs it as `'fansly'`: every `'extension'` row plus the rows only it
+has (`servesClient`); a row a client does not serve is reserved there
+(swallowed, no action). In the table below "all" means every client,
+"extensions" means both extensions, "Fansly" the Fansly extension alone.
 
 ## The scheme
 
@@ -41,7 +42,7 @@ works without switching.
 | Split | ⌘⇧L | Ctrl+Alt+L | Д | all |
 | Spenders | ⌘⇧M | Ctrl+Alt+M | Ь | all |
 | Coach | ⌘⇧C | Ctrl+Alt+C | С | extensions (reserved in desktop) |
-| Notes (the fan's Fansly notes) | ⌘⇧K | Ctrl+Alt+K | Л | extensions (reserved in desktop) |
+| Notes (the fan's Fansly notes) | ⌘⇧K | Ctrl+Alt+K | Л | Fansly (reserved in the others) |
 
 The cheatsheet key (`?` outside inputs), send, chat navigation and board keys
 stay client-owned and are not part of this table.

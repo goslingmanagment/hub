@@ -57,7 +57,7 @@ describe("chatgoose hotkey scheme", () => {
     }
   });
 
-  it("names every action in both locales and scopes Coach and Notes to the extension", () => {
+  it("names every action in both locales and scopes Coach to the extensions, Notes to the Fansly one", () => {
     for (const def of HOTKEYS) {
       expect(def.name.ru.length).toBeGreaterThan(0);
       expect(def.name.en.length).toBeGreaterThan(0);
@@ -65,8 +65,13 @@ describe("chatgoose hotkey scheme", () => {
     }
     expect(hotkeysForClient("desktop").map((def) => def.action)).not.toContain("coach");
     expect(hotkeysForClient("extension").map((def) => def.action)).toContain("coach");
+    // ChatSpace (client "extension") keeps exactly its table; Fansly runs it plus Notes.
     expect(hotkeysForClient("desktop").map((def) => def.action)).not.toContain("notes");
-    expect(hotkeysForClient("extension").map((def) => def.action)).toContain("notes");
+    expect(hotkeysForClient("extension").map((def) => def.action)).not.toContain("notes");
+    expect(hotkeysForClient("fansly").map((def) => def.action)).toEqual([
+      ...hotkeysForClient("extension").map((def) => def.action),
+      "notes",
+    ]);
     expect(hotkeyName(hotkeyDef("fix"), "desktop")).toBe("Improve");
     expect(hotkeyName(hotkeyDef("recap"), "desktop")).toBe("Scan");
     expect(hotkeyName(hotkeyDef("recap"), "extension", "en")).toBe("Recap");
@@ -91,17 +96,20 @@ describe("chatgoose hotkey engine — matching", () => {
       it(`${platform}: ${def.action} fires on its physical key in EN and RU layouts`, () => {
         const mods = comboFor(platform, def.level);
         for (const key of [def.key.toLowerCase(), def.ruKey.toLowerCase()]) {
-          const decision = press(platform, "extension", ev(def.code, key, mods));
+          const decision = press(platform, "fansly", ev(def.code, key, mods));
           expect(decision).toEqual({ kind: "action", action: def.action, repeat: false });
         }
       });
     }
   }
 
-  it("keeps Coach and Notes reserved (swallowed, no action) in the desktop", () => {
+  it("keeps Coach reserved in the desktop and Notes everywhere but the Fansly extension", () => {
     expect(press("mac", "desktop", ev("KeyC", "c", { metaKey: true, shiftKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
-    expect(press("mac", "desktop", ev("KeyK", "k", { metaKey: true, shiftKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
-    expect(press("win", "desktop", ev("KeyK", "л", { ctrlKey: true, altKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
+    for (const client of ["desktop", "extension"] as const) {
+      expect(press("mac", client, ev("KeyK", "k", { metaKey: true, shiftKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
+      expect(press("win", client, ev("KeyK", "л", { ctrlKey: true, altKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
+    }
+    expect(press("mac", "fansly", ev("KeyK", "k", { metaKey: true, shiftKey: true }))).toEqual({ kind: "action", action: "notes", repeat: false });
   });
 
   it("is strict about modifiers", () => {
