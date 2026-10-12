@@ -6,7 +6,9 @@
 #   page.sh up --page <name> --image <tag> [--socks <host:port>]
 #              [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
 #              (a new page needs --socks and a profile; an existing one keeps
-#              what it had unless told otherwise)
+#              what it had unless told otherwise; --tz and --lang are only
+#              Chrome's defaults until the engine's hello brings the page's
+#              own environment)
 #   page.sh rollback --page <name>
 #   page.sh down --page <name>
 #   page.sh forget --page <name>
@@ -175,8 +177,9 @@ up() {
   [[ "$previous" == "$IMAGE" ]] && previous="$(value PB_PREVIOUS_IMAGE "$old")"
   time_zone="${TZ_ARG:-$(value PB_TZ "$old")}"
   lang="${LANG_ARG:-$(value PB_LANG "$old")}"
-  [[ "${time_zone:-UTC}" =~ ^[A-Za-z0-9_+/-]{1,64}$ ]] || fail "--tz: a zone name"
-  [[ "${lang:-en-US}" =~ ^[a-z]{2,3}(-[A-Z]{2})?$ ]] || fail "--lang: a language tag"
+  # By the rules Chrome's run script checks them with (src/env/rules.ts).
+  [[ ${#time_zone} -le 64 && "${time_zone:-UTC}" =~ ^[A-Z][A-Za-z0-9_+-]*(/[A-Z][A-Za-z0-9_+-]*){0,2}$ ]] || fail "--tz: an IANA zone name"
+  [[ "${lang:-en-US}" =~ ^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$ ]] || fail "--lang: a language tag"
 
   if [[ "$NEW_PROFILE" == 1 ]]; then
     docker volume create "pb-profile-$profile" >/dev/null

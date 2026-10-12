@@ -9,34 +9,92 @@
 # Chrome create its user namespaces; --no-sandbox is never used.
 set -eu
 
-# The page's time zone and language (plan §4.1, step 2): the container's
-# settings until the operator passes its own (PR 5).
-TIME_ZONE="${PB_TZ:-UTC}"
-LANG_TAG="${PB_LANG:-en-US}"
-printf '%s' "$TIME_ZONE" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$' || { echo "chrome: PB_TZ is malformed" >&2; exit 1; }
-printf '%s' "$LANG_TAG" | grep -Eq '^[a-z]{2,3}(-[A-Z]{2})?$' || { echo "chrome: PB_LANG is malformed" >&2; exit 1; }
+fail() {
+  echo "chrome: $*" >&2
+  exit 1
+}
+
+# --- the page's environment (plan §4.1, step 2; src/env/) ---
+# Its time zone and languages, as the operator handed them over for this
+# start (src/env/handover.ts) — or, with no hand-over (before the engine's
+# first hello), the container's defaults PB_TZ and PB_LANG. This script is
+# root and the file is pb-operator's, so: it is read as pb-operator (a link
+# to a file only root may read reads nothing), every value is checked again
+# by the rules of src/env/rules.ts — the same expressions —, a value that
+# fails stops Chrome's start and is never printed, and the values go on only
+# quoted, or as checked tags into the policy's JSON.
+HANDOVER=/run/pb/operator/chrome-env
+POLICY=/etc/opt/chrome/policies/managed/page.json
+ZONE_RE='^[A-Z][A-Za-z0-9_+-]*(/[A-Z][A-Za-z0-9_+-]*){0,2}$'
+TAG_RE='[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?'
+LANGUAGES_RE="^$TAG_RE(,$TAG_RE){0,9}\$"
+
+# matches <value> <ERE>: the whole value is one line, and it matches.
+matches() {
+  case "$1" in *"
+"*) return 1 ;; esac
+  printf '%s\n' "$1" | LC_ALL=C grep -Eqx -e "$2"
+}
+
+if [ -e "$HANDOVER" ] || [ -L "$HANDOVER" ]; then
+  SOURCE="the operator's hand-over"
+  handover="$(/command/s6-setuidgid pb-operator head -c 1024 -- "$HANDOVER")" || fail "the page's environment cannot be read"
+  # Exactly "TZ=…" and "LANGUAGES=…", one line each: anything more stays
+  # in the second value and fails its check.
+  case "$handover" in
+    "TZ="*"
+LANGUAGES="*) ;;
+    *) fail "the page's environment is malformed ($SOURCE)" ;;
+  esac
+  TIME_ZONE="${handover%%
+*}"
+  TIME_ZONE="${TIME_ZONE#TZ=}"
+  LANGUAGES="${handover#*
+}"
+  LANGUAGES="${LANGUAGES#LANGUAGES=}"
+else
+  SOURCE="the container's defaults"
+  TIME_ZONE="${PB_TZ:-UTC}"
+  LANGUAGES="${PB_LANG:-en-US}"
+fi
+{ [ "${#TIME_ZONE}" -le 64 ] && matches "$TIME_ZONE" "$ZONE_RE"; } || fail "the time zone is malformed ($SOURCE)"
+matches "$LANGUAGES" "$LANGUAGES_RE" || fail "the languages are malformed ($SOURCE)"
+
+# Chrome's UI language and the start of navigator.languages: LANGUAGE (the
+# list, tried in order — gettext's colons) and LANG (the first language's
+# POSIX locale), not --lang (stage 1, amendment 10). The list itself:
+# ForcedLanguages, a page policy next to the image's hub.json.
+FIRST="${LANGUAGES%%,*}"
+LANGUAGE_LIST="$(printf '%s' "$LANGUAGES" | tr , :)"
+case "$FIRST" in
+  *-[A-Z][A-Z] | *-[0-9][0-9][0-9]) LOCALE="${FIRST%%-*}_${FIRST##*-}.UTF-8" ;;
+  *) LOCALE="${FIRST%%-*}.UTF-8" ;;
+esac
+printf '{ "ForcedLanguages": ["%s"] }\n' "$(printf '%s' "$LANGUAGES" | sed 's/,/", "/g')" > "$POLICY.tmp"
+chmod 644 "$POLICY.tmp"
+mv -f "$POLICY.tmp" "$POLICY"
+echo "chrome: time zone $TIME_ZONE, languages $LANGUAGES ($SOURCE)"
+# --- end of the page's environment ---
 
 i=0
 while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
   sleep 0.1
   i=$((i + 1))
 done
-[ -S /tmp/.X11-unix/X99 ] || { echo "chrome: no X server" >&2; exit 1; }
+[ -S /tmp/.X11-unix/X99 ] || fail "no X server"
 
 # The profile's lock (Singleton*) stays: the container's host name is the
 # profile's own, so Chrome itself takes over the lock of a Chrome that is
 # gone (stage 1, amendment 33), and still refuses a profile another Chrome
 # holds.
 
-# On Linux Chrome takes its UI language and navigator.language from the
-# environment, not from --lang (stage 1, amendment 10).
 exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin DISPLAY=:99 \
-  TZ="$TIME_ZONE" LANGUAGE="$LANG_TAG" LANG="$(printf '%s' "$LANG_TAG" | tr - _).UTF-8" \
+  TZ="$TIME_ZONE" LANGUAGE="$LANGUAGE_LIST" LANG="$LOCALE" \
   /command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable \
   --user-data-dir=/data/profile \
   --remote-debugging-port=9222 \
   --window-size=1920,1080 \
-  --lang="$LANG_TAG" \
+  --lang="$FIRST" \
   --no-first-run \
   --ignore-gpu-blocklist \
   about:blank

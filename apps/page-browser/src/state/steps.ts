@@ -17,8 +17,13 @@ export const STEPS = [
 ] as const;
 export type Step = (typeof STEPS)[number];
 
+/** Spec §6.1's reasons, and one more (PR 5): `env_mismatch` — the page's
+ *  environment could not be handed to Chrome, or the browser does not show
+ *  it (plan §4.1, step 2; spec §10). Spec §6.1 has no reason for that step;
+ *  it is to be added there before an engine reads these. */
 export const STOP_REASONS = [
   "selftest_failed",
+  "env_mismatch",
   "exit_ip_changed",
   "proxy_unavailable",
   "proxy_auth",

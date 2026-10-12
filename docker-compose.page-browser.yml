@@ -61,6 +61,8 @@ services:
       PB_SOCKS_PORT: ${PB_SOCKS_PORT:?the SOCKS5 port}
       PB_SYNC_IP: ${PB_SYNC_IP:?the address of sync in pb-control}
       PB_API_IP: ${PB_API_IP:?the address of api in pb-control}
+      # Chrome's time zone and language until the engine's hello brings the
+      # page's own (plan §4.1, step 2; apps/page-browser/src/env/).
       PB_TZ: ${PB_TZ:-UTC}
       PB_LANG: ${PB_LANG:-en-US}
     secrets:
