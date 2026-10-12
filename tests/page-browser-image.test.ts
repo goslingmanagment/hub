@@ -141,7 +141,10 @@ describe("the page's container (docker-compose.page-browser.yml)", () => {
   });
 
   it("stays out of Hub's stack", () => {
-    expect(read("docker-compose.production.yml")).not.toContain("page-browser");
+    // Hub's deploy refuses any service but api, worker, scheduler, sync and
+    // postgres, and its stack scope recreates PostgreSQL.
+    const services = read("docker-compose.production.yml").match(/^services:\n([\s\S]*?)(?=^\S)/m)?.[1] ?? "";
+    expect([...services.matchAll(/^ {2}([a-z0-9][a-z0-9_-]*):$/gm)].map((match) => match[1])).toEqual(["postgres", "api", "scheduler", "worker", "sync"]);
   });
 });
 
