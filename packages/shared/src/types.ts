@@ -152,6 +152,10 @@ export const aiUsageFeatures = [
   "coach-chat",
   // Voice notes: the ElevenLabs TTS lane's script-generation feature.
   "voice-script",
+  // The Fansly notes panel's «fill with AI»: the questionnaire fields of the
+  // fan's native note, filled from the whole chat (POST /ai/features and the
+  // client usage batch alike).
+  "fan-notes-fill",
 ] as const;
 export type AiUsageFeature = (typeof aiUsageFeatures)[number];
 

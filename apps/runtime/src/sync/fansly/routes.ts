@@ -44,7 +44,7 @@ type LegacyOnlyRoute = keyof typeof LEGACY_ONLY_ROUTES;
  *  owner decision №3): an API read outside the catalogue and the two login
  *  operations of the owner's manual login. The engine never sends on them;
  *  it admits the site's requests on them and journals them in sync_attempts
- *  with origin `site` or `login` (0269), so the route clocks count them. */
+ *  with origin `site` or `login` (0270), so the route clocks count them. */
 const SITE_ROUTES = {
   "site.other": { method: "GET", template: "<an API path outside the catalogue>" },
   "auth.login": { method: "POST", template: "/login" },
@@ -246,7 +246,7 @@ export function isFanslySiteRoute(value: unknown): value is FanslySiteRoute {
 }
 
 /** The route of an attempt's `operation` in sync_attempts: a wire id (an
- *  engine send), or — for a site or login attempt (0269) — any catalogue
+ *  engine send), or — for a site or login attempt (0270) — any catalogue
  *  route its request matched, a legacy-only endpoint and the site's own
  *  routes included; null for an operation this build does not know (its
  *  clock then counts against every route). */

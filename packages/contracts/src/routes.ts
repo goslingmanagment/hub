@@ -2234,7 +2234,8 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // schema-valid body carries both: ~1.99M code units, measured 12.13MB with the
 // media list and JSON framing, which 12 MiB (12.58MB) still clears by about
 // 0.45MB. No request the service accepts comes near it. A field added after
-// this one has to be counted in the test before it ships.
+// this one has to be counted in the test before it ships: fan-notes-fill's
+// `noteFields` (30 labels x 60 code units, about 11KB at six bytes) is.
 //
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart; asserted against the measured worst case in
@@ -2249,6 +2250,30 @@ export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
 export const AI_LIVE_TEXT_MAX_ITEMS = 60;
 /** Per item, in UTF-16 code units. */
 export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
+
+// fan-notes-fill: the questionnaire labels of the fan's native note («Имя»,
+// «Локация», …), as the Fansly notes panel reads them off the chatter's
+// template. The model answers one `Label: value` line per label, the label
+// copied byte for byte, so a label may not hold what would break that line or
+// change under the prompt's escaping: no line break, no `:`, no `<`, `>` or
+// `&`. Labels are trimmed here, so the line carries the trimmed label.
+export const AI_NOTE_FIELDS_MAX = 30;
+/** Per label, after trimming, in UTF-16 code units. */
+export const AI_NOTE_FIELD_LABEL_MAX_CHARS = 60;
+
+const aiNoteFieldLabelSchema = z.string()
+  .trim()
+  .min(1)
+  .max(AI_NOTE_FIELD_LABEL_MAX_CHARS)
+  .regex(/^[^\r\n\u2028\u2029:<>&]*$/, "A note field label holds no line break, ':', '<', '>' or '&'");
+
+export const aiNoteFieldsSchema = z.array(aiNoteFieldLabelSchema)
+  .min(1)
+  .max(AI_NOTE_FIELDS_MAX)
+  .refine(
+    (labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length,
+    { message: "noteFields repeat (labels compare case-insensitively)" },
+  );
 
 // An instant as the client writes it: ISO 8601 with seconds and an explicit
 // offset, at most nine fractional digits. The house `isoTimestamp` is a bare
@@ -2316,6 +2341,9 @@ export const aiFeatureStreamBodySchema = z.object({
   // freshness gate skipped. New clients send variantCount instead. Do not
   // remove while a supported client still sends it.
   greetingMode: z.literal("new-follower").optional(),
+  // fan-notes-fill only, and required there: the questionnaire labels to fill,
+  // in output order (above). Any other feature refuses the field with a 400.
+  noteFields: aiNoteFieldsSchema.optional(),
   // chat-extension H-4b: ids only, never text. Fan messages the client saw in
   // the open chat before it asked for this generation, newest first. The hub
   // answers each one in the `context_v1` frame (`knownFanMessages`) from the

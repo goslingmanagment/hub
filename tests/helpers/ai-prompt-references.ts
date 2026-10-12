@@ -83,6 +83,13 @@ const SHAPES: ReadonlyArray<readonly [name: string, input: PromptBuildInput]> = 
   }],
   ["coach-chat preset", { ...COACH, chatterQuestion: "Разбери текущую ситуацию.", preset: "situation" }],
   ["voice-script", { ...BASE, feature: "voice-script", draftText: "hey love, wanna see more? xx", replyTone: "spicy" }],
+  ["fan-notes-fill", {
+    ...BASE,
+    feature: "fan-notes-fill",
+    fanBio: "into gym and anime, from Texas",
+    transcriptCoverage: "full-history",
+    noteFields: ["Имя", "Локация", "Возраст", "Работа", "Хобби", "Фетиши", "Характеристика", "Медиа"],
+  }],
 ];
 
 export interface ReferencePrompt {

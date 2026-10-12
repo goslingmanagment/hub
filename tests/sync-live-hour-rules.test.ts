@@ -89,7 +89,7 @@ describe("canonical routes of the journals", () => {
     expect(acceptanceRouteOf("engine", "messages.page")).toBe("messages.page");
     expect(acceptanceRouteOf("legacy", "messages")).toBe("messages.page");
     expect(acceptanceRouteOf("legacy", "ws_connect")).toBe("ws.upgrade");
-    // A site read of a legacy-only endpoint (Project Browser, 0269) counts on its route.
+    // A site read of a legacy-only endpoint (Project Browser, 0270) counts on its route.
     expect(acceptanceRouteOf("engine", "earnings.overview")).toBe("earnings.overview");
     expect(acceptanceRouteOf("engine", "no.such")).toBe("unknown:engine:no.such");
     expect(acceptanceRouteOf("legacy", "brand_new_lane")).toBe("unknown:legacy:brand_new_lane");

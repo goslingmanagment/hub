@@ -231,6 +231,7 @@ const FEATURE_LABELS: Record<string, string> = {
   "hi-greeting": "Приветствие",
   "coach-chat": "Коуч",
   "voice-script": "Голосовой сценарий",
+  "fan-notes-fill": "Заметки: анкета",
 };
 
 export function featureLabel(feature: string): string {

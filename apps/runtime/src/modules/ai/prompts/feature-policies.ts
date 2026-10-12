@@ -75,6 +75,10 @@ export const HI_GREETING_MESSAGE_COUNT = 25;
 // ─── Feature thresholds (research §1) ───────────────────────────────────
 
 export const MIN_MESSAGES_FOR_DEEP = 30;
+/** fan-notes-fill: any conversation with a message may be filled. The gate
+ * only refuses an empty one; a chat without a single fan fact simply comes back
+ * with every value empty. */
+export const MIN_MESSAGES_FOR_NOTES_FILL = 1;
 /** hi-greeting is locked unless the conversation has at most this many messages. */
 export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
@@ -86,6 +90,9 @@ export const DEFAULT_MODEL_ID = 'anthropic:claude-opus-5-5';
 export const DEFAULT_FAN_SUMMARY_MODEL_ID = DEFAULT_MODEL_ID;
 /** improve-draft, hi-greeting and voice-script delegate to fast-reply. */
 export const DEFAULT_REPLY_MODEL_ID = DEFAULT_MODEL_ID;
+/** fan-notes-fill: a short extraction over the whole chat runs on Sonnet 5.5
+ * by default (owner, 2026-10-12). A request's `model` still overrides it. */
+export const DEFAULT_FAN_NOTES_FILL_MODEL_ID = 'anthropic:claude-sonnet-5-5';
 
 export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'fast-reply': DEFAULT_REPLY_MODEL_ID,
@@ -94,6 +101,7 @@ export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'chat-review': DEFAULT_MODEL_ID,
   'ping': DEFAULT_REPLY_MODEL_ID,
   'coach-chat': DEFAULT_MODEL_ID,
+  'fan-notes-fill': DEFAULT_FAN_NOTES_FILL_MODEL_ID,
 };
 
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
@@ -103,6 +111,7 @@ export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, Reasoning
   'chat-review': 'low',
   'ping': 'low',
   'coach-chat': 'low',
+  'fan-notes-fill': 'low',
 };
 
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {
@@ -125,6 +134,7 @@ export const OPERATION_FEATURES = [
   'hi-greeting',
   'coach-chat',
   'voice-script',
+  'fan-notes-fill',
 ] as const satisfies readonly OperationFeature[];
 
 export const FEATURE_POLICIES = {
@@ -303,6 +313,34 @@ export const FEATURE_POLICIES = {
     usesFanProfile: false,
     includesFanBio: false,
     usesImageNotes: true,
+  },
+  // The Fansly notes panel's «fill with AI»: the chatter's questionnaire labels
+  // (noteFields) filled from the whole chat, one `Label: value` line each. Read
+  // like the full Recap (deep window, spending and subscription data, the
+  // client's full-history transcript), but a short single text with its own
+  // model. No dossier: the stored dossier is an earlier model's summary, with
+  // its inferences and strategy, and this note must hold only what the fan
+  // stated; the whole chat it would summarize is in the prompt already. The
+  // fan's own bio counts as his statement. No image notes: an automatic image
+  // description is not a fact the fan stated.
+  'fan-notes-fill': {
+    surface: 'panel-tab',
+    resultKind: 'text',
+    promptMode: 'analysis',
+    timeoutBucket: 'deep',
+    messageCountBucket: 'deep',
+    modelFeature: 'fan-notes-fill',
+    includesEarnings: true,
+    minMessages: MIN_MESSAGES_FOR_NOTES_FILL,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsSplitAll: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+    usesFanProfile: false,
+    includesFanBio: true,
+    usesImageNotes: false,
   },
 } as const satisfies Record<OperationFeature, FeaturePolicy>;
 

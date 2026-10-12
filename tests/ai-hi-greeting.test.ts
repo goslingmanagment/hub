@@ -103,7 +103,7 @@ describe('hi-greeting contract (additive, still strict)', () => {
 });
 
 describe('greeting request shape (feature service)', () => {
-  const OTHER_FEATURES: OperationFeature[] = ['fast-reply', 'improve-draft', 'help-me', 'fan-summary', 'chat-review', 'ping', 'coach-chat', 'voice-script'];
+  const OTHER_FEATURES: OperationFeature[] = ['fast-reply', 'improve-draft', 'help-me', 'fan-summary', 'chat-review', 'ping', 'coach-chat', 'voice-script', 'fan-notes-fill'];
   // `clientContext: null` means "the request carries none" (a default parameter
   // would swallow an explicit undefined).
   const shape = (feature: OperationFeature, extra: Record<string, unknown> = {}, clientContext: Record<string, unknown> | null = context) =>
