@@ -1,0 +1,144 @@
+# The stand on the production server agency-de (plan §5, stage 2; owner's
+# decision №14): the stage-1 stand with its scenarios, apart from Hub.
+#
+# - Its own Compose project and its own internal network (no way out of the
+#   host, nothing shared with Hub's networks); Hub's containers and database
+#   are never touched.
+# - Every container has CPU and memory limits (together 2.6 CPU, 3.4 GB) and
+#   no swap; none restarts by itself, so a reboot leaves the stand down.
+# - The page container runs under the production image's seccomp and
+#   AppArmor profiles (stage 3, PR 2), not unconfined as on the Mac.
+# - The runner reaches Docker only through docker-proxy.mjs.
+# - Started only by stand.sh, which refuses while the guard (guard.sh) is not
+#   watching Hub.
+#
+# Images are built on the server by stand.sh (pb-stand/*:<rev>); PB_SRC is
+# the uploaded prototype tree of that revision.
+name: pb-stand
+
+x-stand: &stand
+  restart: "no"
+  labels:
+    agency.stand: pb-stand
+  security_opt:
+    - no-new-privileges:true
+
+networks:
+  stand:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.0.0/24
+
+volumes:
+  ca: {}
+  proxy: {}
+
+services:
+  stand-server:
+    <<: *stand
+    image: pb-stand/server:${PB_REV:?the revision}
+    networks:
+      stand:
+        ipv4_address: 10.231.0.10
+    cpus: 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    volumes:
+      - ca:/stand/ca
+      - ${PB_SRC:?the prototype tree}/stand/pages:/stand/pages:ro
+    environment:
+      STAND_SOCKS_USER: pb
+      STAND_SOCKS_PASS: pb-secret
+
+  browser:
+    <<: *stand
+    image: pb-stand/browser:${PB_REV}
+    depends_on: [stand-server]
+    networks:
+      stand:
+        ipv4_address: 10.231.0.20
+    # What the prototype's root supervisor and init need, as in PR 2.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_ADMIN]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=/opt/pb-stand/security/seccomp-chrome.json
+      - apparmor=page-browser
+    shm_size: 1gb
+    cpus: 1.5
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 1024
+    volumes:
+      - ca:/stand/ca:ro
+      - ${PB_SRC}/src:/opt/page-browser/src:ro
+      - ${PB_SRC}/docker:/opt/page-browser/docker:ro
+    environment:
+      PB_SOCKS_HOST: 10.231.0.10
+      PB_SOCKS_PORT: "1080"
+      PB_SOCKS_USER: pb
+      PB_SOCKS_PASS: pb-secret
+      PB_RPC_FROM: 10.231.0.0/24
+      PB_RPC_TOKEN: stand-token
+      PB_STAND: "1"
+      PB_AUTOSTART: "1"
+      PB_FAST_RETRY: "1"
+      PB_WAIT_CA: "1"
+      PB_RUNTIME_ENABLE: "1"
+      PB_DEBUG_FETCH: "0"
+      PB_DEBUG_NET: "0"
+      PB_DEBUG_CDP: "0"
+      PB_DEBUG_RECORDS: "0"
+      PB_HALT_ON_ENGINE_LOSS: "${PB_HALT_ON_ENGINE_LOSS:-0}"
+      PB_ON_BLOCKED_SEND: log
+      PB_SELFTEST_RULES: "1"
+      PB_TZ: UTC
+      PB_LANG: en-US
+      PB_GEO: ""
+      PB_CHROME_ARGS: "--ignore-gpu-blocklist"
+
+  docker-proxy:
+    <<: *stand
+    image: node:22-bookworm-slim
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cpus: 0.1
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - proxy:/proxy
+      - ./docker-proxy.mjs:/stand/docker-proxy.mjs:ro
+    environment:
+      PROXY_SOCKET: /proxy/docker.sock
+      PROXY_CONTAINERS: pb-stand-browser-1
+    command: ["node", "/stand/docker-proxy.mjs"]
+
+  runner:
+    <<: *stand
+    image: node:22-bookworm-slim
+    depends_on: [browser, docker-proxy]
+    working_dir: /pb
+    networks:
+      stand:
+        ipv4_address: 10.231.0.30
+    cap_drop: [ALL]
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 256
+    volumes:
+      - proxy:/proxy
+      - ${PB_SRC}:/pb:ro
+      - /opt/pb-stand/results:/stand/results
+    environment:
+      STAND_OPERATOR: ws://10.231.0.20:7700/rpc
+      STAND_SERVER: 10.231.0.10
+      STAND_NAME: pb-stand
+      STAND_BROWSER_CONTAINER: pb-stand-browser-1
+      STAND_DOCKER_SOCK: /proxy/docker.sock
+    command: ["sleep", "infinity"]

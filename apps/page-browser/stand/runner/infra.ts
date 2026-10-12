@@ -124,7 +124,9 @@ export class StandServer {
 
 // ── docker ────────────────────────────────────────────────────────────────
 
-const DOCKER_SOCK = "/var/run/docker.sock";
+// On a shared server the runner reaches Docker only through the stand's
+// proxy (stand/agency-de/docker-proxy.mjs).
+const DOCKER_SOCK = process.env.STAND_DOCKER_SOCK ?? "/var/run/docker.sock";
 
 export class Docker {
   readonly container: string;
