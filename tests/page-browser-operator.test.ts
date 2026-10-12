@@ -52,6 +52,7 @@ interface SetUp {
   netSelftest: string;
   lines: string[];
   newOperator: () => Promise<Operator>;
+  rpcPort: () => number;
 }
 
 async function setUp(options: { extension?: "required"; exitIp?: () => string; holderMaxBytes?: number } = {}): Promise<SetUp> {
@@ -112,7 +113,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string; h
   cleanups.push(() => engine.close());
   engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
   await engine.waitFor("helloResult");
-  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, lines, newOperator };
+  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
@@ -304,7 +305,41 @@ describe("commands", () => {
   });
 });
 
+describe("a new owner", () => {
+  it("is quiesced only after the previous owner's queued commands had their turn, and none of them runs", async () => {
+    const s = await setUp();
+    await started(s);
+    const starts = () => s.control.calls.filter((call) => call === "start").length;
+    expect(starts()).toBe(1);
+    // Chrome does not answer Browser.close: the stop holds the queue for its 2 s.
+    s.chrome.handlers.set("Browser.close", () => null);
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId: "slow-stop", notAfterMono: monoMs() + 10_000, command: { kind: "stopPage" } });
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId: "late-restart", notAfterMono: monoMs() + 10_000, command: { kind: "restartBrowser" } });
+    await until(() => s.operator.page.halted, 2000, "the stop under way");
+    const next = new FakeEngine();
+    next.generation = 2;
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    expect(await next.waitFor("helloResult")).toMatchObject({ ok: true });
+    await next.waitFor("quiesced", undefined, 10_000);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(starts()).toBe(1);
+    expect(s.operator.page.halted).toBe(true);
+  });
+});
+
 describe("a lost control (plan §4.9)", () => {
+  it("the work tab gone: the browser is not trusted any more", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!;
+    s.chrome.event("Target.detachedFromTarget", { sessionId: tab.sessionId, targetId: tab.targetId });
+    await until(() => s.operator.page.snapshot.stopReason === "cdp_lost", 3000, "the failure");
+    expect(s.operator.egress.exitOpen).toBe(false);
+  });
+
+
   it("CDP lost with every process alive: the exit closes at once, the alarm says a foreign request may have left, Chrome is killed and the start retried", async () => {
     const s = await setUp();
     await started(s);

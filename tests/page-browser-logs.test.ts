@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { hostAndPath, Journals } from "../apps/page-browser/src/logs/journal.ts";
 import { forgetSecrets, registerSecret } from "../apps/page-browser/src/shared/secrets.ts";
-import { makeLog, setLogSink } from "../apps/page-browser/src/shared/util.ts";
+import { makeLog, setLogSink, urlForLogLine } from "../apps/page-browser/src/shared/util.ts";
 import { quiet, tempDir } from "./helpers/page-browser-fakes.ts";
 
 // The operator's journals (Project Browser plan §4.11): JSON Lines on the
@@ -42,6 +42,39 @@ describe("the journals", () => {
   it("keep a URL's host and path only", () => {
     expect(hostAndPath("https://cdn3.fansly.com/abc/1.jpg?Policy=xyz&Signature=sig&Key-Pair-Id=k#frag")).toEqual({ host: "cdn3.fansly.com", path: "/abc/1.jpg" });
     expect(hostAndPath("not a url")).toEqual({ host: "", path: "" });
+    expect(hostAndPath("https://user:pa55@fansly.com/p#access_token=t0k")).toEqual({ host: "fansly.com", path: "/p" });
+    // A data: URL is its own payload: only its scheme is kept.
+    expect(hostAndPath("data:text/html,<p>secret</p>")).toEqual({ host: "", path: "data:" });
+  });
+
+  it("and so does the process log: no credentials, query, fragment or payload of a URL", () => {
+    expect(urlForLogLine("https://user:pa55@fansly.com:8443/p/q?x=1#access_token=t0k")).toBe("https://fansly.com:8443/p/q");
+    expect(urlForLogLine("wss://wsv3.fansly.com/?token=abc")).toBe("wss://wsv3.fansly.com/");
+    expect(urlForLogLine("data:text/plain;base64,c2VjcmV0")).toBe("data:");
+    expect(urlForLogLine("blob:https://fansly.com/3f1c")).toBe("blob:");
+    expect(urlForLogLine("about:blank")).toBe("about:");
+    expect(urlForLogLine("")).toBe("");
+  });
+
+  it("stop the page's traffic when a journal cannot be written", async () => {
+    const logDir = dir();
+    const troubles: string[] = [];
+    // A directory where the file should be: the open fails like a full disk would.
+    mkdirSync(join(logDir, "requests-2026-10-13.jsonl"));
+    const journals = new Journals({ dir: logDir, now: () => Date.parse("2026-10-13T10:00:00Z"), log: quiet, onTrouble: (reason) => troubles.push(reason) });
+    journals.request({ method: "GET", host: "fansly.com", path: "/", resourceType: "Document", admission: null, decision: "failed", result: "x" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(troubles).toHaveLength(1);
+    expect(troubles[0]).toMatch(/^the requests journal could not be written/);
+    await journals.close();
+  });
+
+  it("and when a journal falls behind the disk", async () => {
+    const troubles: string[] = [];
+    const journals = new Journals({ dir: dir(), log: quiet, maxPendingBytes: 1024, onTrouble: (reason) => troubles.push(reason) });
+    for (let i = 0; i < 50; i++) journals.request({ method: "GET", host: "fansly.com", path: `/${"x".repeat(100)}`, resourceType: "Document", admission: null, decision: "failed", result: "x" });
+    expect(troubles).toEqual([expect.stringMatching(/^the requests journal is \d+ bytes behind the disk$/)]);
+    await journals.close();
   });
 
   it("compress a day that ended and remove what is older than the retention", async () => {

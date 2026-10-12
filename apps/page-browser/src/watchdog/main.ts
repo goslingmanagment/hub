@@ -1,5 +1,5 @@
-// The watchdog's process (s6 service `watchdog`, as root: it kills the
-// operator through s6). See watchdog.ts.
+// The watchdog's process (s6 service `watchdog`, as pb-operator: s6 lets
+// that user kill the operator through its service). See watchdog.ts.
 
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";

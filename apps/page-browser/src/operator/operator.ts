@@ -45,7 +45,7 @@ import { ProbeDriver } from "../selftest/probes.ts";
 import { PageState } from "../state/page-state.ts";
 import { atLeast, type StopReason } from "../state/steps.ts";
 import { registerSecret } from "../shared/secrets.ts";
-import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, monoMs, sleep, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
 import type { OperatorConfig } from "./config.ts";
 import { HealthProbe } from "./health.ts";
@@ -173,7 +173,15 @@ export class Operator {
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
     this.#bufferId = loadBufferId(this.config.stateDir);
 
-    this.journals = new Journals({ dir: this.config.logDir });
+    this.journals = new Journals({
+      dir: this.config.logDir,
+      // Nothing may pass unrecorded: the exit closes, and a running page
+      // fails (and tries again after the backoff).
+      onTrouble: (reason) => {
+        this.egress.closeExit(`journals: ${reason}`);
+        if (this.#controlExpected || this.#starting) void this.#fail("disk_full", `the journals cannot be written: ${reason}`);
+      },
+    });
     this.page = new PageState({ backoffMs: DEFAULT_PARAMS.restartBackoffMs });
     this.page.onTransition = (transition) => {
       this.#log("state", { from: transition.from, to: transition.to, stopReason: transition.stopReason, retryAtWall: transition.retryAtWall, halted: transition.halted, note: transition.note });
@@ -216,6 +224,11 @@ export class Operator {
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
       onDecided: (request, decision) => this.#journalRequest(request, decision),
+      // With CDP or the holder link down, their own loss handles it; with
+      // both up, Chrome is not answering for its paused requests.
+      onIndeterminate: (_request, why) => {
+        if (this.cdp.cdpUp && this.cdp.linked) this.#controlLost("cdp_lost", `a paused request's resolution got no answer (${why})`);
+      },
     });
     this.#health = new HealthProbe(this.cdp, this.control, this.chrome, {
       everyMs: this.#timings.healthEveryMs,
@@ -351,6 +364,9 @@ export class Operator {
           this.egress.closeExit("a Chrome from before this operator");
           await this.#withChrome(() => this.chrome.kill()).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
         }
+        // The link may have gone during the replay or the cleanup; its loss
+        // could not start another link while this one ran: link again.
+        if (!this.cdp.linked) continue;
         return;
       }
     } finally {
@@ -677,20 +693,26 @@ export class Operator {
     if (this.#ipTimer) this.#armIpTimer();
   }
 
-  /** Nothing of a previous owner is in flight in this operator (no
-   *  admissions yet): the last send the gate saw is all there is. */
+  /** The previous owner's work is over once its queued commands had their
+   *  turn — each is refused there now, the generation having moved on — and
+   *  there are no admissions yet: the last send the gate saw is all there is. */
   async #quiesce(): Promise<{ lastSendMono: number | null; lastSendWall: number | null }> {
+    await this.#commandChain;
     const last = this.egress.gate.lastSend;
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
 
-  /** One command at a time. */
+  /** One command at a time. The RPC checked its owner and deadline when it
+   *  came; both are checked again at its turn: an owner superseded while it
+   *  waited, or a deadline gone, and it is not executed. */
   async #onCommand(command: Command): Promise<CommandOutcome> {
     const previous = this.#commandChain;
     let release: () => void = () => undefined;
     this.#commandChain = new Promise<void>((resolve) => (release = resolve));
     await previous;
     try {
+      if (command.ownerGeneration < this.rpc.generation) return { ok: false, detail: "generation_stale" };
+      if (monoMs() > command.notAfterMono) return { ok: false, detail: "expired" };
       return await this.#execute(command);
     } finally {
       release();

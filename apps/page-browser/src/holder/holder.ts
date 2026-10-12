@@ -13,7 +13,10 @@
 //
 // Over its store limit (128 MB, plan §4.14) the holder kills Chrome — the
 // held requests die with the browser, none is released — and exits only once
-// Chrome's side of the connection is gone. It exits as well when Chrome
+// Chrome's side of the connection is gone. A planned stop asks the operator
+// to close the exit first; an operator that does not confirm in time gets
+// the same treatment: Chrome goes before CDP does. A timeout never lets go
+// of a live CDP connection. It exits as well when Chrome
 // closes the connection: the session and its interception are gone, and s6
 // starts a fresh holder for the next Chrome.
 //
@@ -83,6 +86,8 @@ export class Holder {
   #overflowed = false;
   #exiting = false;
   #stopping: { resolve: () => void } | null = null;
+  /** A planned stop runs: it ends with its own exit code. */
+  #stopRequested = false;
   #cdpClosed: Promise<void> | null = null;
 
   constructor(options: HolderOptions) {
@@ -106,12 +111,14 @@ export class Holder {
   /** A planned stop (SIGTERM): the operator closes the exit first, then the
    *  holder lets go of CDP (plan §4.1). */
   async stop(): Promise<void> {
-    if (this.#exiting) return;
+    if (this.#exiting || this.#stopRequested) return;
+    this.#stopRequested = true;
     if (this.#cdpUp() && this.#operatorLinked()) {
       const answered = new Promise<void>((resolve) => (this.#stopping = { resolve }));
       this.#toOperator(JSON.stringify({ t: "stopping" }));
       const answer = await Promise.race([answered.then(() => true), sleep(this.#options.stopGraceMs ?? 1000).then(() => false)]);
       this.#log("stopping", { exitClosedByOperator: answer });
+      if (!answer) await this.#killChromeUntilGone("a stop the operator did not confirm");
     }
     this.#exit(0);
   }
@@ -170,17 +177,27 @@ export class Holder {
     this.#overflowed = true;
     this.#log("overflow", { storeBytes: this.#storeBytes, stored: this.#store.size });
     this.#toOperator(JSON.stringify({ t: "overflow" }));
-    try {
-      await this.#options.killChrome();
-    } catch (error) {
-      this.#log("overflow.kill_failed", { error: errorMessage(error) });
-    }
-    const closed = await Promise.race([
-      (this.#cdpClosed ?? Promise.resolve()).then(() => true),
-      sleep(this.#options.overflowGraceMs ?? 5000).then(() => false),
-    ]);
-    if (!closed) this.#log("overflow.chrome_still_connected", { graceMs: this.#options.overflowGraceMs ?? 5000 });
+    await this.#killChromeUntilGone("overflow");
     this.#exit(3);
+  }
+
+  /** Kill Chrome, and again, until its side of the connection is gone: the
+   *  held requests die with the browser. Only then may the holder let go. */
+  async #killChromeUntilGone(why: string): Promise<void> {
+    const graceMs = this.#options.overflowGraceMs ?? 5000;
+    for (let attempt = 1; this.#cdpUp(); attempt += 1) {
+      try {
+        await this.#options.killChrome();
+      } catch (error) {
+        this.#log("chrome.kill_failed", { why, attempt, error: errorMessage(error) });
+      }
+      const closed = await Promise.race([
+        (this.#cdpClosed ?? Promise.resolve()).then(() => true),
+        sleep(graceMs).then(() => false),
+      ]);
+      if (closed) return;
+      this.#log("chrome.still_connected", { why, attempt, graceMs });
+    }
   }
 
   #exit(code: number): void {
@@ -241,7 +258,7 @@ export class Holder {
         // The session and every interception of it are gone in Chrome. The
         // operator closes the exit and restarts Chrome (plan §4.1); s6
         // starts a fresh holder for it.
-        if (!this.#overflowed) this.#exit(2);
+        if (!this.#overflowed && !this.#stopRequested) this.#exit(2);
       };
     });
     ws.onText = (payload) => this.#onChromeMessage(payload);

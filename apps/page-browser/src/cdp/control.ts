@@ -17,7 +17,7 @@
 // page's environment, PR 5). A web target whose setup fails is never let run.
 
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
-import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, sleep, urlForLogLine, type Logger } from "../shared/util.ts";
 
 export interface TargetInfo {
   sessionId: string;
@@ -150,7 +150,7 @@ export class BrowserControl {
       setup: new Promise<boolean>((resolve) => (settle = resolve)),
     };
     this.#targets.set(target.sessionId, target);
-    this.#log("target.attached", { type: target.type, url: target.url.split("?")[0], waiting: params.waitingForDebugger, nested: target.parentSessionId !== null });
+    this.#log("target.attached", { type: target.type, url: urlForLogLine(target.url), waiting: params.waitingForDebugger, nested: target.parentSessionId !== null });
     void this.#setUp(target, params.waitingForDebugger).then(settle);
   }
 

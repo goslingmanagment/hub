@@ -29,11 +29,17 @@ async function setUp() {
   cleanups.push(() => holder.stop());
   await until(() => chrome.live !== undefined, 3000, "the holder's DevTools connection");
   const operator = (decide: (request: PausedRequest) => ReturnType<ConstructorParameters<typeof PausedRequests>[1]["decide"]> = () => ({ action: "fail", reason: "BlockedByClient", why: "test" })) => {
-    const cdp = new Cdp({ socketPath: holder.socketPath, commandTimeoutMs: 2000, log: quiet });
+    const cdp = new Cdp({ socketPath: holder.socketPath, commandTimeoutMs: 500, log: quiet });
     const decided: Array<[PausedRequest, string]> = [];
-    const paused = new PausedRequests(cdp, { decide, onDecided: (request, decision) => decided.push([request, decision.action]), log: quiet });
+    const indeterminate: string[] = [];
+    const paused = new PausedRequests(cdp, {
+      decide,
+      onDecided: (request, decision) => decided.push([request, decision.action]),
+      onIndeterminate: (request) => indeterminate.push(request.requestId),
+      log: quiet,
+    });
     cleanups.push(() => cdp.close());
-    return { cdp, paused, decided };
+    return { cdp, paused, decided, indeterminate };
   };
   return { chrome, holder, operator };
 }
@@ -82,6 +88,27 @@ describe("paused requests", () => {
     // A live pause after the replay is the new operator's to decide.
     chrome.event("Fetch.requestPaused", { requestId: "interception-8", networkId: "R8", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
     await until(() => chrome.sent("Fetch.continueRequest").length === 1);
+  });
+
+  it("whose resolution Chrome does not answer stay unacknowledged — the request may still be paused — and are reported", async () => {
+    const { chrome, holder, operator } = await setUp();
+    chrome.handlers.set("Fetch.failRequest", () => null);
+    const { cdp, indeterminate } = operator();
+    await cdp.connect();
+    chrome.event("Fetch.requestPaused", { requestId: "interception-3", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
+    await until(() => indeterminate.length === 1, 3000, "the unanswered resolution");
+    expect(indeterminate).toEqual(["interception-3"]);
+    expect(holder.holder?.stats.stored).toBe(1);
+  });
+
+  it("whose resolution Chrome refuses (the pause is gone) are acknowledged", async () => {
+    const { chrome, holder, operator } = await setUp();
+    chrome.handlers.set("Fetch.failRequest", () => ({ error: { code: -32602, message: "Invalid InterceptionId." } }));
+    const { cdp, indeterminate } = operator();
+    await cdp.connect();
+    chrome.event("Fetch.requestPaused", { requestId: "interception-4", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
+    await until(() => holder.holder?.stats.stored === 0, 2000, "the acknowledgement");
+    expect(indeterminate).toEqual([]);
   });
 
   it("at the response stage, unasked for, are failed", async () => {

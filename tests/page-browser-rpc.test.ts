@@ -158,11 +158,15 @@ describe("the owner generation", () => {
     const other = await second.engine(2);
     other.send(hello({ pageId: 8, ownerGeneration: 2 }));
     expect(await other.waitFor("helloResult")).toMatchObject({ ok: true });
-    // And from then on page 8's own rule holds, across a restart too.
+    // And from then on page 8's own rule holds, across a restart too —
+    // and page 7's floor is still there: going 7 → 8 → 7 does not reset it.
     const third = await setUp({ storePath: join(first.storeDir, "owner-generation") });
     const stale = await third.engine(1);
     stale.send(hello({ pageId: 8, ownerGeneration: 1 }));
     expect(await stale.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
+    const back = await third.engine(1);
+    back.send(hello({ pageId: 7, ownerGeneration: 1 }));
+    expect(await back.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
   });
 
   it("lets a higher one supersede the current connection, and tells it the previous one is quiesced", async () => {

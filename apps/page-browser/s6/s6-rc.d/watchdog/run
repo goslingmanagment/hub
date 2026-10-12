@@ -1,7 +1,8 @@
 #!/bin/sh
-# The operator's watchdog (plan §4.9; src/watchdog/), as root: an operator
-# whose heartbeat stopped for 5 s is killed through s6 — its proxy, and with
-# it the exit, dies with it — and s6 starts a new one.
+# The operator's watchdog (plan §4.9; src/watchdog/), as pb-operator — s6
+# lets that user control the operator's service (scripts/chrome-control): an
+# operator whose heartbeat stopped for 5 s is killed through s6 — its proxy,
+# and with it the exit, dies with it — and s6 starts a new one.
 set -eu
-exec env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin \
-  node --no-warnings /opt/page-browser/src/watchdog/main.ts
+exec env -i HOME=/home/pb-operator PATH=/usr/local/bin:/usr/bin:/bin \
+  /command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/watchdog/main.ts

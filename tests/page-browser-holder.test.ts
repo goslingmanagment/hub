@@ -34,7 +34,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setUp(maxBytes = 128 * 1024 * 1024) {
+async function setUp(maxBytes = 128 * 1024 * 1024, options: { stopGraceMs?: number; failedKills?: number } = {}) {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const chrome = new FakeChrome();
@@ -49,9 +49,11 @@ async function setUp(maxBytes = 128 * 1024 * 1024) {
     maxBytes,
     killChrome: async () => {
       kills += 1;
+      if (kills <= (options.failedKills ?? 0)) throw new Error("s6-svc failed");
       await chrome.shutdown();
     },
-    overflowGraceMs: 2000,
+    overflowGraceMs: options.failedKills ? 200 : 2000,
+    ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
     pollMs: 20,
     onExit: (code) => exits.push(code),
     log: quiet,
@@ -167,6 +169,30 @@ describe("the CDP holder", () => {
     await stopped;
     await until(() => exits.length === 1);
     expect(exits).toEqual([0]);
+  });
+
+  it("on a planned stop the operator does not confirm in time: Chrome goes before CDP does", async () => {
+    const { chrome, holder, exits, socketPath, kills } = await setUp(undefined, { stopGraceMs: 100 });
+    const operator = await connectOperator(socketPath);
+    await until(() => operator.messages.length > 0);
+    await holder.stop();
+    expect(operator.messages.some((message) => message.t === "stopping")).toBe(true);
+    expect(kills()).toBe(1);
+    expect(chrome.running).toBe(false);
+    await until(() => exits.length === 1);
+    expect(exits).toEqual([0]);
+  });
+
+  it("on overflow tries the kill again until Chrome is gone, and only then lets go of CDP", async () => {
+    const { chrome, exits, socketPath, kills } = await setUp(256 * 1024, { failedKills: 2 });
+    const operator = await connectOperator(socketPath);
+    operator.socket.pause();
+    const big = "y".repeat(64 * 1024);
+    for (let i = 0; i < 8; i++) chrome.event("Network.dataReceived", { requestId: "R", data: big });
+    await until(() => exits.length === 1, 5000, "the holder's exit");
+    expect(kills()).toBe(3);
+    expect(chrome.running).toBe(false);
+    expect(exits).toEqual([3]);
   });
 
   it("ignores the stand's fault commands unless they are allowed", async () => {

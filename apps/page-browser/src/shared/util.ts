@@ -61,3 +61,26 @@ export function envStr(name: string, fallback: string): string {
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** What of a URL may be logged or journaled: an HTTP(S) or WS(S) URL's
+ *  scheme, host, port and path — never its credentials, query or fragment,
+ *  where tokens travel — and of any other URL only its scheme (a `data:` URL
+ *  is its own payload). */
+export function urlForLog(url: string): { scheme: string; host: string; path: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { scheme: "", host: "", path: "" };
+  }
+  const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+  if (!["http", "https", "ws", "wss"].includes(scheme)) return { scheme, host: "", path: "" };
+  return { scheme, host: parsed.host.toLowerCase(), path: parsed.pathname };
+}
+
+/** urlForLog as one string: "https://host/path", or "data:" for the rest. */
+export function urlForLogLine(url: string): string {
+  const { scheme, host, path } = urlForLog(url);
+  if (scheme === "") return "";
+  return host === "" ? `${scheme}:` : `${scheme}://${host}${path}`;
+}

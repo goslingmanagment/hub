@@ -5,13 +5,19 @@
 // resolution was answered by Chrome, so an operator that dies in between
 // learns about it again from the holder's replay.
 //
+// A resolution Chrome did not answer (no answer in time, the link down) is
+// not acknowledged: the request may still be paused, so it stays in the
+// holder's store, and the operator treats the browser as out of control
+// (`onIndeterminate`: the exit closes, Chrome goes). An error answer means
+// Chrome no longer has that pause, and is acknowledged.
+//
 // A pause from before this operator instance (a replay) is failed whatever
 // it is: an admission it may have had died with the previous instance, and a
 // request is never released without one. A pause at the response stage is
 // asked for only by the paths that admit requests (PR 7, PR 9); one that
 // arrives otherwise is failed too.
 
-import type { Cdp, CdpEvent } from "./client.ts";
+import { CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
 import { errorMessage, makeLog, type Logger } from "../shared/util.ts";
 
 /** Fetch.ErrorReason values the operator uses. */
@@ -42,6 +48,8 @@ export interface PausedOptions {
   decide: (request: PausedRequest) => PausedDecision;
   /** Every decision, for the request journal (logs/). */
   onDecided?: (request: PausedRequest, decision: PausedDecision) => void;
+  /** Chrome did not answer a resolution: the request may still be paused. */
+  onIndeterminate?: (request: PausedRequest, why: string) => void;
   log?: Logger;
 }
 
@@ -112,16 +120,19 @@ export class PausedRequests {
     this.#resolving += 1;
     const method = decision.action === "continue" ? "Fetch.continueRequest" : "Fetch.failRequest";
     const params = decision.action === "continue" ? { requestId: request.requestId, ...decision.params } : { requestId: request.requestId, errorReason: decision.reason };
+    let answered = true;
     try {
       await this.#cdp.send(method, params, request.sessionId ?? undefined);
     } catch (error) {
-      // Gone already (its target closed, Chrome restarted, a replay of a
-      // request a previous instance did resolve) — or CDP is down, and the
-      // request dies with the browser the operator restarts.
-      this.#log("resolve.failed", { method, error: errorMessage(error) });
+      // An error answer: gone already (its target closed, Chrome restarted, a
+      // replay of a request a previous instance did resolve). No answer: it
+      // may still be paused.
+      answered = !(error instanceof CdpUnanswered);
+      this.#log(answered ? "resolve.refused" : "resolve.unanswered", { method, error: errorMessage(error) });
+      if (!answered) this.#options.onIndeterminate?.(request, errorMessage(error));
     } finally {
       this.#resolving -= 1;
-      this.#cdp.ack(request.seq);
+      if (answered) this.#cdp.ack(request.seq);
     }
   }
 }

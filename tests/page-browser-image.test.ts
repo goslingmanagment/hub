@@ -89,19 +89,21 @@ describe("the operator's services (PR 4)", () => {
   const services = "apps/page-browser/s6/s6-rc.d";
   const dependencies = (service: string) => readdirSync(path.join(root, services, service, "dependencies.d")).sort();
 
-  it("run the holder and the operator as pb-operator, and the watchdog as root, from the image's src", () => {
+  it("run the holder, the operator and its watchdog as pb-operator, from the image's src", () => {
     for (const [service, main] of [
       ["cdp-holder", "holder"],
       ["operator", "operator"],
+      ["watchdog", "watchdog"],
     ]) {
       const run = read(`${services}/${service}/run`);
       expect(read(`${services}/${service}/type`).trim()).toBe("longrun");
       expect(run).toContain(`/command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/${main}/main.ts`);
       expect(run).toMatch(/exec env -i HOME=\/home\/pb-operator PATH=\/usr\/local\/bin:\/usr\/bin:\/bin/);
     }
-    const watchdog = read(`${services}/watchdog/run`);
-    expect(watchdog).toContain("node --no-warnings /opt/page-browser/src/watchdog/main.ts");
-    expect(watchdog).not.toContain("s6-setuidgid");
+    // The watchdog kills a hung operator through s6, which lets pb-operator
+    // control that service and Chrome's, nothing else.
+    const control = read("apps/page-browser/s6/scripts/chrome-control");
+    expect(control.match(/s6-svperms -G pb-operator \S+/g)).toEqual(["s6-svperms -G pb-operator /run/service/chrome", "s6-svperms -G pb-operator /run/service/operator"]);
     expect(read("apps/page-browser/Dockerfile")).toContain("COPY src/ /opt/page-browser/src/");
     for (const main of ["holder", "operator", "watchdog"]) expect(existsSync(path.join(app, "src", main, "main.ts"))).toBe(true);
   });

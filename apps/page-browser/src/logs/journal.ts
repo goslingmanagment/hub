@@ -20,7 +20,7 @@ import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 
 import { scrub } from "../shared/secrets.ts";
-import { errorMessage, makeLog, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, urlForLog, type Logger } from "../shared/util.ts";
 
 export type JournalKind = "connections" | "requests" | "states";
 const KINDS: readonly JournalKind[] = ["connections", "requests", "states"];
@@ -64,9 +64,10 @@ export interface StateLine {
 
 /** A URL's host and path, nothing else. */
 export function hostAndPath(url: string): { host: string; path: string } {
+  const { scheme, path } = urlForLog(url);
+  if (path === "") return { host: "", path: scheme === "" ? "" : `${scheme}:` };
   try {
-    const parsed = new URL(url);
-    return { host: parsed.hostname.toLowerCase(), path: parsed.pathname };
+    return { host: new URL(url).hostname.toLowerCase(), path };
   } catch {
     return { host: "", path: "" };
   }
@@ -79,6 +80,11 @@ export interface JournalOptions {
   retentionDays?: number;
   now?: () => number;
   log?: Logger;
+  /** Bytes a journal may have waiting for the disk (default 8 MiB). */
+  maxPendingBytes?: number;
+  /** The journals cannot keep up or cannot write: what passes through the
+   *  page would go unrecorded, so the operator stops the page's traffic. */
+  onTrouble?: (reason: string) => void;
 }
 
 export class Journals {
@@ -88,7 +94,10 @@ export class Journals {
   readonly #log: Logger;
   #day = "";
   readonly #streams = new Map<JournalKind, WriteStream>();
-  #failed = false;
+  readonly #maxPendingBytes: number;
+  readonly #onTrouble: (reason: string) => void;
+  /** Journals over their pending bytes, until they drain. */
+  readonly #behind = new Set<JournalKind>();
   #housekeeping: Promise<void> = Promise.resolve();
 
   constructor(options: JournalOptions) {
@@ -96,6 +105,8 @@ export class Journals {
     this.#retentionDays = options.retentionDays ?? 30;
     this.#now = options.now ?? Date.now;
     this.#log = options.log ?? makeLog("journal");
+    this.#maxPendingBytes = options.maxPendingBytes ?? 8 * 1024 * 1024;
+    this.#onTrouble = options.onTrouble ?? (() => undefined);
     mkdirSync(this.#dir, { recursive: true, mode: 0o700 });
     this.#roll();
   }
@@ -131,17 +142,27 @@ export class Journals {
     const stream = this.#stream(kind);
     const text = scrub(JSON.stringify({ at: new Date(this.#now()).toISOString(), ...line }));
     stream.write(`${text}\n`);
+    if (stream.writableLength > this.#maxPendingBytes && !this.#behind.has(kind)) {
+      this.#behind.add(kind);
+      this.#log("write.behind", { kind, pendingBytes: stream.writableLength });
+      this.#onTrouble(`the ${kind} journal is ${stream.writableLength} bytes behind the disk`);
+    }
   }
 
   #stream(kind: JournalKind): WriteStream {
     let stream = this.#streams.get(kind);
     if (!stream) {
       stream = createWriteStream(join(this.#dir, `${kind}-${this.#day}.jsonl`), { flags: "a", mode: 0o600 });
-      stream.on("error", (error) => {
-        // A full disk must not take the operator down; the journal says so once.
-        if (!this.#failed) this.#log("write.failed", { kind, error: errorMessage(error) });
-        this.#failed = true;
+      const opened = stream;
+      opened.on("error", (error) => {
+        // A full disk must not take the operator down: the page's traffic
+        // stops instead, and the next line opens the file anew.
+        if (this.#streams.get(kind) === opened) this.#streams.delete(kind);
+        this.#behind.delete(kind);
+        this.#log("write.failed", { kind, error: errorMessage(error) });
+        this.#onTrouble(`the ${kind} journal could not be written: ${errorMessage(error)}`);
       });
+      opened.on("drain", () => this.#behind.delete(kind));
       this.#streams.set(kind, stream);
     }
     return stream;

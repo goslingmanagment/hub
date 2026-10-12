@@ -21,7 +21,7 @@ import { isIP, type Socket } from "node:net";
 import { ApiGate, controlRecordLimit, serverHelloIsTls13 } from "./gate.ts";
 import type { HostClass, HostClassifier } from "./hosts.ts";
 import { SocksError, socksConnect, type SocksConfig, type SocksFailure } from "./socks5.ts";
-import { errorMessage, makeLog, monoMs, wallMs, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 
 export interface TunnelRecord {
   id: number;
@@ -146,7 +146,7 @@ export class Egress {
 
   listen(port: number, host = "127.0.0.1"): Promise<number> {
     const server = createHttpServer((req, res) => {
-      this.#log("plain.refused", { method: req.method ?? "", path: (req.url ?? "").split("?")[0] ?? "" });
+      this.#log("plain.refused", { method: req.method ?? "", url: (req.url ?? "").startsWith("/") ? (req.url ?? "").split(/[?#]/)[0] : urlForLogLine(req.url ?? "") });
       res.writeHead(403, { "content-length": "0", connection: "close" }).end();
     });
     server.on("connect", (req: IncomingMessage, client: Socket, head: Buffer) => this.#onConnect(req, client, head));
