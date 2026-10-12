@@ -13,7 +13,10 @@
  * the platform constraints behind them live in README.md. */
 
 export type HotkeyPlatform = "mac" | "win";
-export type HotkeyClient = "extension" | "desktop";
+/** "extension" rows run in both extensions (Fansly and ChatSpace); "fansly"
+ * is the Fansly extension, which runs every "extension" row plus the rows
+ * only it has (see `servesClient`). */
+export type HotkeyClient = "extension" | "desktop" | "fansly";
 export type HotkeyLevel = "text" | "panel";
 
 export type HotkeyAction =
@@ -28,7 +31,8 @@ export type HotkeyAction =
   | "review"
   | "split"
   | "spenders"
-  | "coach";
+  | "coach"
+  | "notes";
 
 export interface HotkeyDef {
   readonly action: HotkeyAction;
@@ -49,7 +53,7 @@ export interface HotkeyDef {
 }
 
 /** Bumped whenever an assignment changes; both clients must ship the same value. */
-export const HOTKEY_SCHEME_VERSION = 1;
+export const HOTKEY_SCHEME_VERSION = 2;
 
 const BOTH: readonly HotkeyClient[] = ["extension", "desktop"];
 
@@ -66,6 +70,7 @@ export const HOTKEYS: readonly HotkeyDef[] = [
   { action: "split", level: "panel", code: "KeyL", key: "L", ruKey: "Д", clients: BOTH, name: { ru: "Split — ответ частями", en: "Split" }, guarded: false },
   { action: "spenders", level: "panel", code: "KeyM", key: "M", ruKey: "Ь", clients: BOTH, name: { ru: "Спендеры", en: "Spenders" }, guarded: false },
   { action: "coach", level: "panel", code: "KeyC", key: "C", ruKey: "С", clients: ["extension"], name: { ru: "Coach", en: "Coach" }, guarded: false },
+  { action: "notes", level: "panel", code: "KeyK", key: "K", ruKey: "Л", clients: ["fansly"], name: { ru: "Заметки о фане", en: "Notes" }, guarded: false },
 ];
 
 /** macOS only: the extension's pre-v1 Cmd+Shift habits (both clients honour
@@ -126,8 +131,14 @@ export function hotkeyDef(action: HotkeyAction): HotkeyDef {
   return def;
 }
 
+/** Whether a row is live in a client. The Fansly extension is also an
+ * "extension": it runs those rows too. Elsewhere a row's key is reserved. */
+export function servesClient(def: HotkeyDef, client: HotkeyClient): boolean {
+  return def.clients.includes(client) || (client === "fansly" && def.clients.includes("extension"));
+}
+
 export function hotkeysForClient(client: HotkeyClient): readonly HotkeyDef[] {
-  return HOTKEYS.filter((def) => def.clients.includes(client));
+  return HOTKEYS.filter((def) => servesClient(def, client));
 }
 
 /** The feature name shown in the given client. */

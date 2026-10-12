@@ -1,4 +1,4 @@
-import { HOTKEYS, MAC_SHIFT_ALIASES, MAC_SHIFT_SWALLOWED, isMacKeys, type HotkeyAction, type HotkeyClient, type HotkeyDef, type HotkeyPlatform } from "./scheme.ts";
+import { HOTKEYS, MAC_SHIFT_ALIASES, MAC_SHIFT_SWALLOWED, isMacKeys, servesClient, type HotkeyAction, type HotkeyClient, type HotkeyDef, type HotkeyPlatform } from "./scheme.ts";
 
 /** The fields of a DOM KeyboardEvent the engine reads. */
 export interface HotkeyKeyEvent {
@@ -139,7 +139,7 @@ export function createHotkeyEngine(options: HotkeyEngineOptions): HotkeyEngine {
   for (const def of HOTKEYS) byCode.set(`${def.level}:${def.code}`, def);
 
   function decide(def: HotkeyDef, event: HotkeyKeyEvent, fresh: boolean): HotkeyDecision {
-    if (!def.clients.includes(client)) return { kind: "swallow", reason: "reserved" };
+    if (!servesClient(def, client)) return { kind: "swallow", reason: "reserved" };
     if (event.repeat) return { kind: "action", action: def.action, repeat: true };
     if (def.guarded && !fresh) return { kind: "swallow", reason: "rollover" };
     return { kind: "action", action: def.action, repeat: false };
