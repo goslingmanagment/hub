@@ -92,6 +92,7 @@ function histogramFor(metric: keyof typeof CLIENT_HEALTH_PERF_METRICS, samples: 
 /** A report body as the extension builds it (its `kind` rides the envelope). */
 function healthReport(overrides: {
   version?: string;
+  hostKind?: string;
   build?: string | null;
   contractOk?: boolean;
   missing?: string[];
@@ -105,7 +106,7 @@ function healthReport(overrides: {
     window: { from: "2026-10-03T10:00:00.123Z", to: "2026-10-03T10:15:00.456Z" },
     client: { name: "chat-extension", version: overrides.version ?? "1.4.2", browser: "firefox", browserMajor: 157, os: "windows" },
     host: {
-      kind: "chatspace",
+      kind: overrides.hostKind ?? "chatspace",
       build: overrides.build === undefined ? "index-DEVowLko" : overrides.build,
       contractOk: overrides.contractOk ?? true,
       missing: overrides.missing ?? [],
@@ -209,6 +210,7 @@ async function missingTotals() {
 interface PerfRow {
   hour: Date;
   client_version: string;
+  host_kind: string;
   host_build: string;
   metric: string;
   schema_version: number;
@@ -222,10 +224,10 @@ interface PerfRow {
 
 async function perfRows(metric?: string): Promise<PerfRow[]> {
   const rows = await testDb!.pool.query<Omit<PerfRow, "counts" | "count"> & { counts: string[]; count: string }>(
-    `select hour, client_version, host_build, metric, schema_version, unit, bounds, counts, count, sum, max
+    `select hour, client_version, host_kind, host_build, metric, schema_version, unit, bounds, counts, count, sum, max
        from client_health_perf_hourly
       where $1::text is null or metric = $1
-      order by hour, client_version collate "C", host_build collate "C", metric collate "C", schema_version`,
+      order by hour, client_version collate "C", host_kind collate "C", host_build collate "C", metric collate "C", schema_version`,
     [metric ?? null],
   );
   return rows.rows.map((row) => ({ ...row, counts: row.counts.map(Number), count: Number(row.count) }));
@@ -400,6 +402,70 @@ describe("client_health intake (H-11b)", () => {
     const receipt = await testDb!.pool.query<{ received_hour: Date }>("select received_hour from client_health_receipts");
     expect(receipt.rows[0]!.received_hour.getTime()).toBe(stored!.hour.getTime());
 
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("HF-13: a Fansly tab's parse and snapshot histograms are kept under its host; ChatSpace's report is kept as before", async (context) => {
+    if (!server) return context.skip();
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionHealthIngestEnabled", value: true }]);
+    const warn = vi.spyOn(app.logger!, "warn");
+
+    // At each budget and just past it (a frame 0.1 ms, a task 2 ms, a snapshot step 5 ms), and overruns.
+    const frame = histogramFor("frameParseMs", [0.004, 0.03, 0.1, 0.1004, 2, 2.4, 60]);
+    const xhr = histogramFor("xhrParseMs", [0.01, 0.6, 2, 3.2]);
+    const snapshot = histogramFor("snapshotMs", [0.8, 5, 5.2, 40]);
+    const roundTrip = histogramFor("snapshotRoundTripMs", [4, 5, 12, 7000]);
+    const fansly = healthReport({
+      hostKind: "fansly-web",
+      build: "main-AbCdEfGh",
+      perf: [frame, xhr, snapshot, roundTrip, histogramFor("insertMs", [20])],
+      counters: { "p1.insert-misplaced": 0 },
+    });
+    // The report a ChatSpace tab sends today, with nothing of HF-13 in it.
+    const insert = histogramFor("insertMs", [10, 40, 90]);
+    const chatspace = healthReport({ perf: [insert, histogramFor("routeToDockMs", [3])], counters: { "p1.insert-misplaced": 0 } });
+    for (const report of [fansly, chatspace]) {
+      expect(clientHealthReportV1Schema.safeParse(report).success).toBe(true);
+    }
+
+    // The capture lane, as the extension calls it: one batch, both tabs' reports.
+    expect(await ingestOk(narrowToken, [healthEvent(fansly), healthEvent(chatspace)])).toEqual({ accepted: 2, duplicates: 0 });
+    expect(warn.mock.calls.filter(([, message]) => String(message).startsWith("client_health"))).toEqual([]);
+    expect(await journal()).toEqual([]);
+
+    // Each new histogram stored as sent, under the Fansly host.
+    for (const histogram of [frame, xhr, snapshot, roundTrip]) {
+      const rows = await perfRows(histogram.metric);
+      expect(rows, histogram.metric).toHaveLength(1);
+      expect(rows[0], histogram.metric).toMatchObject({
+        client_version: "1.4.2", host_kind: "fansly-web", host_build: "main-AbCdEfGh", schema_version: 1, unit: "ms",
+        bounds: histogram.bounds, counts: histogram.counts, count: histogram.count, sum: histogram.sum, max: histogram.max,
+      });
+    }
+    // A value at a budget and one just past it are two buckets.
+    expect((await perfRows("frameParseMs"))[0]!.counts).toEqual([1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0]);
+    expect((await perfRows("snapshotMs"))[0]!.counts).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0]);
+    expect((await perfRows("snapshotRoundTripMs"))[0]).toMatchObject({ max: 7000 });
+    expect((await perfRows("snapshotRoundTripMs"))[0]!.counts.at(-1)).toBe(1);
+
+    // One metric on two hosts is two rows; the ChatSpace rows hold what they held before HF-13.
+    expect((await perfRows("insertMs")).map((row) => [row.host_kind, row.host_build, row.count, row.sum, row.max])).toEqual([
+      ["chatspace", "index-DEVowLko", 3, 140, 90],
+      ["fansly-web", "main-AbCdEfGh", 1, 20, 20],
+    ]);
+    expect((await perfRows("insertMs"))[0]).toMatchObject({ bounds: insert.bounds, counts: insert.counts });
+    expect(await contractTotals()).toEqual([
+      { ...GROUP, reports: 1, failed_reports: 0 },
+      { ...GROUP, host_kind: "fansly-web", host_build: "main-AbCdEfGh", reports: 1, failed_reports: 0 },
+    ]);
+    expect(await tableCounts()).toEqual({
+      client_health_receipts: 2,
+      client_health_contract_hourly: 2,
+      client_health_missing_hourly: 0,
+      client_health_counters_hourly: 2,
+      // Fansly: four new metrics, insertMs, two footprint sizes; ChatSpace: insertMs, routeToDockMs, two footprint sizes.
+      client_health_perf_hourly: 11,
+    });
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
