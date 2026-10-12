@@ -58,6 +58,7 @@ done
 
 page_dir() { printf '%s/pages/%s' "$PB_BASE" "$PAGE"; }
 env_file() { printf '%s/page.env' "$(page_dir)"; }
+next_file() { printf '%s/page.env.next' "$(page_dir)"; }
 value() {
   [[ -f "$2" ]] || return 0
   sed -n "s/^$1=//p" "$2" | tail -n 1
@@ -85,24 +86,35 @@ healthy() {
   fi
 }
 
-# Run the state in $1 (a page.env candidate). Healthy: it becomes page.env.
-# Not: the previous state, if any, runs again, and this fails.
+# Run the candidate state (page.env.next). The host's rules admit it before
+# it starts — the page's current state and the candidate, both its own, until
+# the switch ends; if they cannot be applied, nothing changes. Healthy: the
+# candidate becomes page.env. Not: the previous state, if any, runs again,
+# and this fails.
 switch_to() {
-  local next="$1" what="$2"
+  local what="$1" next
+  next="$(next_file)"
+  if ! "$PB_BASE/egress-rules.sh" apply; then
+    rm -f "$next"
+    fail "$what: the host's rules could not admit the new state; nothing changed"
+  fi
   if compose_with "$next" up -d --force-recreate --no-build >/dev/null && healthy; then
     mv "$next" "$(env_file)"
-    "$PB_BASE/egress-rules.sh" apply
+    "$PB_BASE/egress-rules.sh" apply \
+      || echo "page: warning: the host's rules still admit $PAGE's previous SOCKS5 too (run egress-rules.sh apply)" >&2
     echo "page: page-browser-$PAGE healthy on $(value PB_IMAGE "$(env_file)")"
     return 0
   fi
   if [[ -f "$(env_file)" ]]; then
     rm -f "$next"
+    "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the failed state's SOCKS5" >&2
     compose_with "$(env_file)" up -d --force-recreate --no-build >/dev/null && healthy \
       && fail "$what failed; page-browser-$PAGE is back on $(value PB_IMAGE "$(env_file)")"
     fail "$what failed, and page-browser-$PAGE did not come back healthy on $(value PB_IMAGE "$(env_file)")"
   fi
   compose_with "$next" down >/dev/null 2>&1 || true
   rm -f "$next"
+  "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the removed page" >&2
   fail "$what failed; the new page was removed"
 }
 
@@ -174,7 +186,8 @@ up() {
     (umask 077; openssl rand -hex 24 > "$dir/secrets/vnc_password")
   fi
   local next
-  next="$(mktemp "$dir/page.env.XXXXXX")"
+  next="$(next_file)"
+  (umask 077; : > "$next")
   cat > "$next" <<EOF
 PB_PAGE=$PAGE
 PB_IMAGE=$IMAGE
@@ -195,7 +208,7 @@ EOF
   chmod 600 "$next"
   # A new page's addresses are in the host's rules only once it is healthy:
   # until then the host lets it reach nothing.
-  switch_to "$next" "up $IMAGE"
+  switch_to "up $IMAGE"
 }
 
 rollback() {
@@ -206,10 +219,9 @@ rollback() {
   [[ -n "$previous" ]] || fail "$PAGE has no previous image"
   docker image inspect "$previous" >/dev/null 2>&1 || fail "the previous image $previous is gone"
   local next
-  next="$(mktemp "$(page_dir)/page.env.XXXXXX")"
-  sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next"
-  chmod 600 "$next"
-  switch_to "$next" "rollback to $previous"
+  next="$(next_file)"
+  (umask 077; sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next")
+  switch_to "rollback to $previous"
 }
 
 down() {
@@ -240,6 +252,16 @@ status() {
     printf '%-24s page.env %-44s running: %s\n' "page-browser-$name" "$(value PB_IMAGE "$file")" "$state"
   done
 }
+
+# One page operation at a time on the server: a profile's owner is checked
+# and claimed (its page's files written) under the same lock.
+if [[ "$command" =~ ^(up|rollback|down|forget)$ ]]; then
+  exec 8>"$PB_BASE/.page.lock"
+  flock -w 900 8 || fail "another page operation holds $PB_BASE/.page.lock"
+  # Under the lock no switch is under way: a candidate left here is a dead
+  # run's, and the host's rules must not admit it.
+  rm -f "$PB_BASE"/pages/*/page.env.next
+fi
 
 case "$command" in
   up) up ;;

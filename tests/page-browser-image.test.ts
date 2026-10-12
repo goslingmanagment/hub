@@ -114,8 +114,10 @@ describe("the host's layer (egress-rules.sh)", () => {
     expect(rules).toContain("net.bridge.bridge-nf-call-iptables");
     expect(rules).toMatch(/flock -w 30 9/);
     // New chains are hooked before the old ones are unhooked; nothing hooked is flushed.
-    expect(rules.indexOf('-I DOCKER-USER 1 -j "$NEW_FWD"')).toBeLessThan(rules.indexOf('-D DOCKER-USER -j "$chain"'));
-    expect(rules.indexOf('-D DOCKER-USER -j "$chain"')).toBeLessThan(rules.indexOf('-F "$chain"'));
+    const apply = rules.slice(rules.indexOf("\napply() {"));
+    expect(apply.indexOf('-I DOCKER-USER 1 -j "$NEW_FWD"')).toBeLessThan(apply.indexOf('-D DOCKER-USER -j "$chain"'));
+    expect(apply.indexOf('-D DOCKER-USER -j "$chain"')).toBeLessThan(apply.indexOf('-F "$chain"'));
+    expect(rules).toContain("trap drop_unhooked EXIT");
     expect(read("scripts/deploy-page-browser.sh")).toContain("modprobe br_netfilter");
   });
 });
@@ -124,11 +126,18 @@ describe("a page's container on the server (page.sh)", () => {
   const page = read("apps/page-browser/host/page.sh");
 
   it("switches to a new state only when it is healthy, else brings the old one back", () => {
-    expect(page).toContain('switch_to "$next" "up $IMAGE"');
-    expect(page).toContain('switch_to "$next" "rollback to $previous"');
+    expect(page).toContain('switch_to "up $IMAGE"');
+    expect(page).toContain('switch_to "rollback to $previous"');
     const switchTo = page.slice(page.indexOf("switch_to() {"), page.indexOf("\n}\n", page.indexOf("switch_to() {")));
+    // The host's rules admit the candidate before it starts; failing, nothing changes.
+    expect(switchTo.indexOf('egress-rules.sh" apply')).toBeLessThan(switchTo.indexOf('compose_with "$next" up'));
     expect(switchTo.indexOf("healthy")).toBeLessThan(switchTo.indexOf('mv "$next" "$(env_file)"'));
     expect(switchTo).toContain('compose_with "$(env_file)" up -d --force-recreate --no-build');
+    expect(read("apps/page-browser/host/egress-rules.sh")).toContain('"$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next');
+  });
+
+  it("runs one page operation at a time", () => {
+    expect(page).toMatch(/\^\(up\|rollback\|down\|forget\)\$ \]\]; then\n {2}exec 8>"\$PB_BASE\/\.page\.lock"\n {2}flock -w 900 8/);
   });
 
   it("gives a profile to one page at a time, and Chrome keeps its own profile lock", () => {

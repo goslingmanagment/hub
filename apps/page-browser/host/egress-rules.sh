@@ -12,11 +12,13 @@
 # Traffic inside one bridge reaches iptables only through br_netfilter:
 # `deploy-page-browser.sh host` loads it, and this refuses to run without it.
 #
-# Built from the pages' env files ($PB_BASE/pages/*/page.env) into new
-# chains under a fresh name, jumped to first; only then are the previous
-# chains unhooked and deleted. An interrupted run leaves an extra, older set
-# hooked — each set alone admits only what its pages may do — and the next
-# run removes it. One run at a time (flock).
+# Built from the pages' env files ($PB_BASE/pages/*/page.env, and a
+# page.env.next while page.sh switches that page) into new chains under a
+# fresh name, jumped to first; only then are the previous chains unhooked
+# and deleted. A run that fails before its hooks removes its own chains; an
+# interrupted one leaves an extra, older set hooked — each set alone admits
+# only what its pages may do — and the next run removes it. One run at a time
+# (flock).
 #
 # Installed by scripts/deploy-page-browser.sh, run by page.sh after every
 # page change and at boot by page-browser-egress.service.
@@ -44,6 +46,19 @@ old_chains() {
   "${IPT[@]}" -S | sed -n 's/^-N \(PB-\(FWD\|IN\)-[0-9a-f-]*\)$/\1/p' | grep -vx -e "$NEW_FWD" -e "$NEW_IN" || true
 }
 
+HOOKED=0
+# A run that fails before hooking its chains leaves none of them behind.
+drop_unhooked() {
+  [[ "$HOOKED" == 0 ]] || return 0
+  local chain
+  for chain in "$NEW_FWD" "$NEW_IN"; do
+    "${IPT[@]}" -D DOCKER-USER -j "$chain" 2>/dev/null || true
+    "${IPT[@]}" -D INPUT -j "$chain" 2>/dev/null || true
+    "${IPT[@]}" -F "$chain" 2>/dev/null || true
+    "${IPT[@]}" -X "$chain" 2>/dev/null || true
+  done
+}
+
 apply() {
   [[ "$(sysctl -n net.bridge.bridge-nf-call-iptables 2>/dev/null)" == "1" ]] \
     || fail "br_netfilter is off: traffic inside a bridge would pass unfiltered (run deploy-page-browser.sh host)"
@@ -54,10 +69,11 @@ apply() {
   NEW_IN="PB-IN-$run"
   "${IPT[@]}" -N "$NEW_FWD"
   "${IPT[@]}" -N "$NEW_IN"
+  trap drop_unhooked EXIT
 
   "${IPT[@]}" -A "$NEW_FWD" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   shopt -s nullglob
-  for env_file in "$BASE"/pages/*/page.env; do
+  for env_file in "$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next; do
     egress="$(sed -n 's/^PB_EGRESS_IP=//p' "$env_file")"
     control="$(sed -n 's/^PB_CONTROL_IP=//p' "$env_file")"
     socks_ip="$(sed -n 's/^PB_SOCKS_IP=//p' "$env_file")"
@@ -86,6 +102,7 @@ apply() {
 
   "${IPT[@]}" -I DOCKER-USER 1 -j "$NEW_FWD"
   "${IPT[@]}" -I INPUT 1 -j "$NEW_IN"
+  HOOKED=1
   local chain
   for chain in $(old_chains); do
     case "$chain" in
@@ -95,7 +112,7 @@ apply() {
     "${IPT[@]}" -F "$chain"
     "${IPT[@]}" -X "$chain"
   done
-  echo "egress-rules: applied for $pages page(s)"
+  echo "egress-rules: applied for $pages page state(s)"
 }
 
 show() {
