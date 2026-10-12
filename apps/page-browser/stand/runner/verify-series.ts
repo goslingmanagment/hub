@@ -15,7 +15,7 @@ const SERIES: Record<string, Record<string, number>> = {
     "ws-contexts": 50, "ws-refused": 50, "ws-blank-iframe": 50, "ws-h2": 50, "ws-sw-restart": 50,
     "ws-tamper": 20, "ws-handshake-outcome": 20, "ws-frames": 20, "rules": 20, "rules-bypass": 20, "ws-detect": 5,
     "site-redirect": 20, "site-redirect-xhr": 20, "hub-redirect": 20, "xhr-parity": 10,
-    "body-capture": 20, "inventory-capture": 10, "body-burst": 5, "hub-slow-body": 10, "hub-gc-body": 5,
+    "body-capture": 20, "inventory-capture": 10, "redacted-capture": 10, "body-burst": 5, "hub-slow-body": 10, "hub-gc-body": 5,
   },
   B: {
     "loss-operator-kill": 50, "loss-operator-kill-inflight": 50, "loss-operator-hang": 50, "loss-holder-kill": 50,

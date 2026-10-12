@@ -48,7 +48,8 @@ export interface Inventory {
   truncated?: boolean;
 }
 
-function category(key: string): string | null {
+/** The sensitive category of a key's name, or null. */
+export function categoryOf(key: string): string | null {
   for (const [name, pattern] of CATEGORIES) if (pattern.test(key)) return name;
   return null;
 }
@@ -111,7 +112,7 @@ export function inspectBody(chunks: Buffer[] | null, over: boolean, maxBytes: nu
         truncated = true;
         break;
       }
-      const cat = category(key);
+      const cat = categoryOf(key);
       const name = label(key, cat);
       if (name === "{?}") unknownKeys += 1;
       const next = path === "" ? name : `${path}.${name}`;

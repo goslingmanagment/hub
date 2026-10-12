@@ -11,7 +11,7 @@
 // /run/pb/pids.json for the stand's fault injection (docker exec … kill).
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 
 import { encodeMessage, readMessages } from "../shared/frames.ts";
@@ -178,8 +178,59 @@ function dropUnrecordedExtensionDirs(): void {
   if (dropped > 0) log("chrome.extension_dirs_dropped", { dropped });
 }
 
+/** A Chrome process of Chrome's user is alive (any instance, ours or not;
+ *  the X server runs as that user too and does not count). */
+function chromeProcessAlive(): boolean {
+  for (const pid of readdirSync("/proc")) {
+    if (!/^\d+$/.test(pid)) continue;
+    try {
+      const status = readFileSync(`/proc/${pid}/status`, "utf8");
+      const uid = /^Uid:\s+(\d+)/m.exec(status)?.[1];
+      const name = /^Name:\s+(.*)$/m.exec(status)?.[1] ?? "";
+      if (uid !== undefined && Number(uid) === CHROME_UID && /chrom/i.test(name)) return true;
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+  return false;
+}
+
+/** Chrome's profile lock names the host and the process that held it. A
+ *  recreated container has another host name, and Chrome then takes the
+ *  profile for one in use on another computer and does not start (pilot,
+ *  second session; FINDINGS 44). Before a start, with no Chrome process
+ *  alive, the lock is stale whatever it names: it goes. */
+function dropStaleProfileLock(): void {
+  if (chromeProcessAlive()) {
+    log("chrome.profile_lock_kept", { reason: "a Chrome process is alive" });
+    return;
+  }
+  const names = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+  let heldBy: string | null = null;
+  let dropped = 0;
+  for (const name of names) {
+    const path = `${PROFILE}/${name}`;
+    try {
+      lstatSync(path);
+    } catch {
+      continue;
+    }
+    if (name === "SingletonLock") {
+      try {
+        heldBy = readlinkSync(path);
+      } catch {
+        heldBy = null;
+      }
+    }
+    rmSync(path, { force: true });
+    dropped += 1;
+  }
+  if (dropped > 0) log("chrome.profile_lock_dropped", { dropped, heldBy });
+}
+
 function startChrome(env: Record<string, string>): number {
   if (chrome && chrome.exitCode === null && chrome.signalCode === null) return chrome.pid!;
+  dropStaleProfileLock();
   dropUnrecordedExtensionDirs();
   const args = [
     `--user-data-dir=${PROFILE}`,

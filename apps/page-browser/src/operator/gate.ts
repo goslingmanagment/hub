@@ -242,6 +242,8 @@ export class ApiGate {
       const cut = this.cut("gate: no response 20 s after the send");
       this.onEvent({ kind: "no_response", window: id, detail: { cut, bytes: w.bytes } });
     }, NO_RESPONSE_MS);
+    // The operation's limit starts again here too (FINDINGS 43).
+    this.onEvent({ kind: "announced", window: id, detail: {} });
     if (this.#phase === "open" && w.requestRecords === Infinity) this.#watchQuiet();
   }
 

@@ -10,13 +10,14 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync, type WriteStream } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
 import { Egress, socksConnect, type HostClass } from "./egress.ts";
 import { guardSource, type GuardPolicy } from "./guard.ts";
 import { inspectBody } from "./inventory.ts";
+import { redactBody } from "./redact.ts";
 import { RpcServer, type EngineMessage } from "./rpc.ts";
 import { encodeMessage, readMessages } from "../shared/frames.ts";
 import { envInt, envStr, makeLog, monoMs, sleep } from "../shared/util.ts";
@@ -109,8 +110,11 @@ const CFG = {
    *  sensitive marked) and drops it: nothing is written (Astra review 13 —
    *  which fields Fansly's answers carry, before any is written). Hub
    *  responses are not captured in this mode: their receiving limit and the
-   *  file's flush (FINDINGS 35) stay out of reach. */
-  captureMode: (envStr("PB_CAPTURE_MODE", "file") === "inventory" ? "inventory" : "file") as "file" | "inventory",
+   *  file's flush (FINDINGS 35) stay out of reach. "redacted" does the same
+   *  in memory and then writes the body with every value that may be a
+   *  secret or a contact taken out (src/operator/redact.ts), at once and
+   *  whole — or not at all. */
+  captureMode: ((mode) => (mode === "inventory" || mode === "redacted" ? mode : "file"))(envStr("PB_CAPTURE_MODE", "file")) as "file" | "inventory" | "redacted",
   /** Inventory: a body over this size is counted and hashed, not inspected. */
   inventoryMaxBytes: envInt("PB_INVENTORY_MAX_BYTES", 8 * 1024 * 1024),
   /** A Hub response over this declared size is cancelled before its body. */
@@ -503,7 +507,10 @@ interface Capture {
   /** The file and its stream (mode "file"); null in mode "inventory". */
   file: string | null;
   stream: WriteStream | null;
-  /** Mode "inventory": the body so far, in memory; null once over the size. */
+  /** The capture mode when the stream was armed. */
+  mode: "file" | "inventory" | "redacted";
+  /** Modes "inventory" and "redacted": the body so far, in memory; null
+   *  once over the size. */
   memory: Buffer[] | null;
   memoryOver: boolean;
   hash: Hash;
@@ -612,7 +619,31 @@ function newOperation(kind: Operation["kind"], id: string, key: string, onFinish
   return op;
 }
 
-/** Start the operation's clock at its admission. */
+/** Stand: release an admitted site request this much later (a send that
+ *  lags its admission, as under load — FINDINGS 43). */
+let testReleaseDelayMs = 0;
+/** Stand: false = the limit counts from the admission only (the control). */
+let limitFromSend = true;
+
+/** A request's limit counts from its last send (FINDINGS 43): the gate cuts
+ *  a sent request without an answer 20 s after Chrome announced it, and the
+ *  limit, 1 s later, must not overtake that cut when the send lagged the
+ *  admission — else a request about to end by the cut stops the page. The
+ *  limit starts again at the announcement and at the first bytes, whichever
+ *  comes later. A request never sent keeps the limit from its admission. */
+function restartLimitAtSend(window: string): void {
+  if (!limitFromSend) return;
+  const admissionId = window.slice(0, window.lastIndexOf(":"));
+  for (const op of liveOps) {
+    if (op.admissionId !== admissionId || op.done || !op.limitTimer) continue;
+    clearTimeout(op.limitTimer);
+    startLimit(op);
+    observe("op.limit_from_send", { op: op.id, window });
+    return;
+  }
+}
+
+/** Start the operation's clock: at its admission, again at each send. */
 function startLimit(op: Operation): void {
   op.limitTimer = setTimeout(() => {
     if (op.done) return;
@@ -699,7 +730,7 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   // stream is armed there, before a byte of it reaches the page; for a
   // preflight, its answer is handed on by Fetch.fulfillRequest (see
   // onResponseStage — the race of Chrome's preflight interception).
-  phys.wantCapture = CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request) && !(CFG.captureMode === "inventory" && op.kind === "hub");
+  phys.wantCapture = CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request) && !(CFG.captureMode !== "file" && op.kind === "hub");
   // Every request's response stops at its headers too: a redirect must be
   // handed on by fulfillRequest (see onResponseStage).
   const intercept = role === "main" || CFG.preflightFulfill ? { interceptResponse: true } : {};
@@ -1153,13 +1184,14 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   if (sessionId && params.networkId) {
     let created: Capture | null = null;
     try {
-      const inventory = CFG.captureMode === "inventory";
-      if (!inventory) mkdirSync(CFG.bodiesDir, { recursive: true });
-      const file = inventory ? null : `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin`;
+      const mode = CFG.captureMode;
+      if (mode === "file") mkdirSync(CFG.bodiesDir, { recursive: true });
+      const file = mode === "file" ? `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin` : null;
       const capture: Capture = {
         file,
         stream: file === null ? null : createWriteStream(file),
-        memory: inventory ? [] : null,
+        mode,
+        memory: mode === "file" ? null : [],
         memoryOver: false,
         hash: createHash("sha256"),
         decoded: 0,
@@ -1283,8 +1315,10 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
   } else {
     how = "a chunk was missing or short";
   }
-  // Mode "inventory": the body is read for its key names, then dropped.
-  const inventory = capture.stream === null ? inspectBody(capture.memory, capture.memoryOver, CFG.inventoryMaxBytes) : undefined;
+  // Modes "inventory" and "redacted": the body is read for its key names;
+  // "redacted" then writes it with the secrets taken out. Then it is dropped.
+  const inventory = capture.mode !== "file" ? inspectBody(capture.memory, capture.memoryOver, CFG.inventoryMaxBytes) : undefined;
+  const written = capture.mode === "redacted" ? writeRedacted(capture, phys) : undefined;
   capture.memory = null;
   return {
     file: capture.file,
@@ -1298,7 +1332,26 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
     how,
     ended,
     ...(inventory ? { inventory } : {}),
+    ...(written ? { written } : {}),
   };
+}
+
+/** Mode "redacted": the body as it will stay on disk — whole, secrets out —
+ *  written at once (no stream, so no flush to wait for), or not at all. */
+function writeRedacted(capture: Capture, phys: Physical): Record<string, unknown> {
+  if (capture.broken) return { ok: false, reason: "the body is not whole" };
+  const redacted = redactBody(capture.memory, capture.memoryOver, CFG.inventoryMaxBytes);
+  if (!redacted.ok) return { ok: false, reason: redacted.reason };
+  const file = `${CFG.bodiesDir}/${Date.now()}-${(phys.networkId ?? "x").replace(/[^A-Za-z0-9.]/g, "_")}.json`;
+  try {
+    mkdirSync(CFG.bodiesDir, { recursive: true });
+    writeFileSync(file, redacted.text, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    rmSync(file, { force: true });
+    return { ok: false, reason: `not written: ${(error as Error).message.slice(0, 80)}` };
+  }
+  capture.file = file;
+  return { ok: true, file, bytes: Buffer.byteLength(redacted.text), sha256: createHash("sha256").update(redacted.text).digest("hex"), redactions: redacted.redactions };
 }
 
 /** Finish an operation once its body file is closed: the result says the
@@ -1590,7 +1643,9 @@ function onSiteAdmitResult(message: EngineMessage): void {
   op.admissionId = `site:${id}`;
   op.deadline = deadline;
   startLimit(op);
-  releasePhysical(op, pending.event, pending.params, pending.role, testSiteUrlSame ? { url: pending.params.request.url } : {});
+  const release = () => releasePhysical(op, pending.event, pending.params, pending.role, testSiteUrlSame ? { url: pending.params.request.url } : {});
+  if (testReleaseDelayMs > 0) setTimeout(release, testReleaseDelayMs);
+  else release();
 }
 
 // ── Hub requests (plan §4.2) ──────────────────────────────────────────────
@@ -2329,6 +2384,10 @@ function onWsAdmitResult(message: EngineMessage): void {
 }
 
 egress.gate.onEvent = (event) => {
+  // The send, as the gate sees it: its first bytes, and Chrome's
+  // announcement, which starts the gate's 20 s and may come after them.
+  if ((event.kind === "first_bytes" || event.kind === "announced") && event.window !== null) restartLimitAtSend(event.window);
+  if (event.kind === "announced") return;
   if (event.kind !== "first_bytes") log("gate.event", { kind: event.kind, window: event.window, ...event.detail });
   observe("gate", { gateEvent: event.kind, window: event.window, ...event.detail });
 };
@@ -2431,8 +2490,10 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.haltOnEngineLoss === "boolean") CFG.haltOnEngineLoss = message.haltOnEngineLoss;
         if (typeof message.maxBodyBytes === "number") CFG.maxBodyBytes = message.maxBodyBytes;
         if (typeof message.captureBodies === "boolean") CFG.captureBodies = message.captureBodies;
-        if (message.captureMode === "file" || message.captureMode === "inventory") CFG.captureMode = message.captureMode;
+        if (message.captureMode === "file" || message.captureMode === "inventory" || message.captureMode === "redacted") CFG.captureMode = message.captureMode;
         if (typeof message.inventoryMaxBytes === "number") CFG.inventoryMaxBytes = message.inventoryMaxBytes;
+        if (typeof message.releaseDelayMs === "number") testReleaseDelayMs = message.releaseDelayMs;
+        if (typeof message.limitFromSend === "boolean") limitFromSend = message.limitFromSend;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
         return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, wsHostRefuse: CFG.refuseWsHostRequests });

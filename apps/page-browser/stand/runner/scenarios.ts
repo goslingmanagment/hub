@@ -935,6 +935,48 @@ const staleAfterLimit: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes: { pageStopped, first: { arrivals: firstArrivals, outcome: told?.outcome ?? null, error: told?.error ?? null }, second: arrivalsVsDeadline(ctx, events, second) } };
 };
 
+/** FINDINGS 43: the send lags its admission by 2.5 s (as under load) and the
+ *  server answers in 30 s. The gate cuts the request 20 s after the send;
+ *  the operation's limit, counted from the send, comes after that cut: the
+ *  operation ends as a transport error and the page stays up. The control —
+ *  the limit counted from the admission only — must stop the page (21 s
+ *  after the admission, 1.5 s before the cut), or the scenario shows
+ *  nothing. */
+const limitFromSend: Scenario = async (ctx) => {
+  const violations: string[] = [];
+  const notes: Record<string, unknown> = {};
+  const one = async (label: string, fromSend: boolean) => {
+    await fresh(ctx);
+    const rid = `lfs-${label}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { releaseDelayMs: 2500, limitFromSend: fromSend });
+    const since = monoMs();
+    const halted = () => ctx.engine.alarms.some((alarm) => alarm.kind === "halted" && Number(alarm.recvMono) >= since);
+    ctx.arm();
+    try {
+      await ctx.engine.eval(`site.api(${JSON.stringify(rid)}, { query: "delay=30000" }), true`, false);
+      await until(() => ctx.engine.siteDoneOf(rid) !== null || halted(), 45_000, `the end of ${rid}`);
+      await sleep(1500);
+    } finally {
+      if (!halted()) await ctx.engine.command("test.config", { releaseDelayMs: 0, limitFromSend: true }, 60_000);
+    }
+    const done = ctx.engine.siteDoneOf(rid);
+    const result = { halted: halted(), outcome: done?.outcome ?? null, error: done?.error ?? null, ms: Math.round(monoMs() - since) };
+    notes[label] = result;
+    if (halted()) {
+      await ctx.engine.command("restart");
+      await ctx.engine.waitReady(180_000);
+      await ctx.engine.command("test.config", { releaseDelayMs: 0, limitFromSend: true }, 60_000);
+    }
+    return result;
+  };
+  const fixed = await one("from-send", true);
+  if (fixed.halted) violations.push(`the page stopped though the gate's cut ends the request (${fixed.error})`);
+  else if (fixed.outcome !== "transport_error") violations.push(`the request ended as ${fixed.outcome} (${fixed.error}), not by the gate's cut`);
+  const control = await one("from-admission", false);
+  if (violations.length === 0 && !control.halted) violations.push("scenario error: the control (limit from the admission) did not stop the page (not exercised)");
+  return { ok: violations.length === 0, violations, notes };
+};
+
 /** The page cancels a released request that has no answer yet while Chrome's
  *  network service stands and still holds it, and the engine admits its next
  *  operation after the reported end (Astra review 7, finding 1). `warm`: the
@@ -1242,6 +1284,67 @@ const inventoryCapture: Scenario = async (ctx) => {
     const after = await files();
     rows.push({ filesBefore: before, filesAfter: after });
     if (after !== before) violations.push(`the bodies directory went from ${before} to ${after} files`);
+  } finally {
+    await ctx.engine.command("test.config", { captureMode: "file" }, 60_000);
+    ctx.engine.serialize = false;
+  }
+  return { ok: violations.length === 0, violations, notes: { rows } };
+};
+
+/** Capture mode "redacted": a JSON body within the size is written whole at
+ *  once with the secrets taken out — an answer with nothing to take out is
+ *  written byte for byte (the stand's answers are minified JSON), one that
+ *  carries an e-mail has it replaced; the hash of what the page read still
+ *  matches; a body over the size or not JSON is not written; a Hub response
+ *  is not captured; every file is mode 0600. */
+const redactedCapture: Scenario = async (ctx) => {
+  await fresh(ctx);
+  ctx.engine.serialize = true;
+  const tag = `rc-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const rows: unknown[] = [];
+  const sh = async (cmd: string) => (await ctx.docker.exec(["sh", "-c", cmd])).trim();
+  const CASES = [...BODY_CASES, { name: "an e-mail in the answer", query: "size=3000&note=owner@example.test" } as BodyCase];
+  try {
+    await ctx.engine.command("test.config", { captureMode: "redacted", inventoryMaxBytes: 8 * 1024 * 1024 });
+    for (const [index, c] of CASES.entries()) {
+      const rid = `${tag}-${index}`;
+      const call = `site.apiHash(${JSON.stringify(rid)}, ${JSON.stringify(c.query)}, ${JSON.stringify(c.how ?? "arrayBuffer")})`;
+      let page = await ctx.engine.eval<{ status?: number; bytes?: number; sha256?: string; error?: string }>(call);
+      if (c.twice) page = await ctx.engine.eval(call);
+      await sleep(400);
+      const done = ctx.engine.siteDoneOf(rid);
+      const body = (done?.body ?? null) as { file: string | null; bytes: number; sha256: string; complete: boolean; how: string; written?: { ok: boolean; reason?: string; file?: string; bytes?: number; sha256?: string; redactions?: Record<string, number> } } | null;
+      const w = body?.written;
+      const same = body !== null && body.sha256 === page.sha256 && body.bytes === page.bytes;
+      const over = (page.bytes ?? 0) > 8 * 1024 * 1024;
+      let mode = "";
+      let onDisk = "";
+      if (w?.ok && w.file) {
+        mode = await sh(`stat -c %a ${w.file}`);
+        onDisk = await sh(`sha256sum ${w.file} | cut -c1-64`);
+      }
+      rows.push({ case: c.name, pageBytes: page.bytes ?? page.error, same, written: w?.ok ?? null, reason: w?.reason ?? null, redactions: w?.redactions ?? null, mode, writtenSame: w?.sha256 === body?.sha256 });
+      if (!same) violations.push(`${c.name}: the counted body differs from what the page read`);
+      if (over) {
+        if (w?.ok !== false) violations.push(`${c.name}: a body over the size was written`);
+        continue;
+      }
+      if (w?.ok !== true) {
+        violations.push(`${c.name}: not written (${w?.reason ?? "no result"})`);
+        continue;
+      }
+      if (mode !== "600") violations.push(`${c.name}: the file's mode is ${mode}`);
+      if (onDisk !== w.sha256) violations.push(`${c.name}: the file on disk is not what the operator reported`);
+      const redacted = Object.keys(w.redactions ?? {}).length > 0;
+      if (c.name === "an e-mail in the answer") {
+        if (!redacted || (await sh(`grep -c 'owner@example.test' ${w.file} || true`)) !== "0") violations.push(`${c.name}: the e-mail was not taken out`);
+      } else if (redacted || w.sha256 !== body!.sha256) {
+        violations.push(`${c.name}: an answer with nothing to take out was not written byte for byte`);
+      }
+    }
+    const hubResult = await ctx.engine.sendHub(`${tag}-hub`, `${API}/api/item?rid=${tag}-hub`, { authorization: "stand-token" });
+    if (hubResult.outcome !== "response" || (hubResult.body ?? null) !== null) violations.push(`Hub: ${hubResult.outcome}, body ${JSON.stringify(hubResult.body ?? null).slice(0, 80)}`);
   } finally {
     await ctx.engine.command("test.config", { captureMode: "file" }, 60_000);
     ctx.engine.serialize = false;
@@ -1911,6 +2014,7 @@ export const scenarios: Record<string, Scenario> = {
   "next-admission-expired": nextAdmission(EXPIRY_DELAY_MS),
   "next-admission-slow": nextAdmission(4800),
   "stale-after-limit": staleAfterLimit,
+  "limit-from-send": limitFromSend,
   "cancel-next-admission": cancelNextAdmission("warm"),
   "document-replaced-site": documentReplacedWhileWaiting("site"),
   "document-replaced-site-simple": documentReplacedWhileWaiting("site-simple"),
@@ -1924,6 +2028,7 @@ export const scenarios: Record<string, Scenario> = {
   "rules-bypass": rules(true),
   "body-capture": bodyCapture,
   "inventory-capture": inventoryCapture,
+  "redacted-capture": redactedCapture,
   "body-burst": bodyBurst,
   "ws-contexts": wsContexts,
   "ws-h2": wsOverH2,

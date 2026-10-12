@@ -22,7 +22,7 @@ case "$PART" in
     run ws-tamper 20; run ws-handshake-outcome 20; run ws-frames 20; run rules 20; run rules-bypass 20; run ws-detect 5
     for s in site-redirect site-redirect-xhr hub-redirect; do run "$s" 20; done
     run xhr-parity 10
-    run body-capture 20; run inventory-capture 10; run body-burst 5; run hub-slow-body 10; run hub-gc-body 5
+    run body-capture 20; run inventory-capture 10; run redacted-capture 10; run body-burst 5; run hub-slow-body 10; run hub-gc-body 5
     ;;
   B)
     for s in loss-operator-kill loss-operator-kill-inflight loss-operator-hang loss-holder-kill loss-holder-kill-inflight loss-cdp-break loss-cdp-break-inflight loss-cdp-drop loss-chrome-kill loss-planned-stop; do run "$s" 50; done

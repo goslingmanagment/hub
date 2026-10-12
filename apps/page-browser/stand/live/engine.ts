@@ -50,8 +50,11 @@ const WS_WAIT_MS = Number(process.env.LIVE_WS_WAIT_MS ?? "2500");
 const HUB_EXTRACT = (process.env.LIVE_HUB_EXTRACT ?? "response.account.id,response.account.username").split(",").filter(Boolean);
 const SITE_PER_HOUR = 300;
 const WINDOW_MS = 15_000;
-/** An operation that reports no end in this long stops the session. */
-const STUCK_MS = 25_000;
+/** An operation that reports no end in this long stops the session. The
+ *  operator's own limit counts from the last send (FINDINGS 43): a preflight
+ *  sent at the 15 s deadline, cut 20 s later, then its request, cut 20 s
+ *  after its own send — so a backstop, past every limit the operator keeps. */
+const STUCK_MS = 60_000;
 const WS_STUCK_MS = 15_000;
 /** The stand's rehearsal: the stand's short token and its navigation hook. */
 const REHEARSAL = process.env.LIVE_REHEARSAL === "1";
@@ -124,6 +127,13 @@ function bodySummary(body: unknown, route: string | null = null): Record<string,
     complete: b.complete ?? null,
     how: b.how ?? null,
     ...(inventory ? { inventory } : {}),
+    // Mode "redacted": the copy that stays on disk, secrets taken out.
+    ...(b.written && typeof b.written === "object"
+      ? (() => {
+          const w = b.written as { ok?: boolean; reason?: string; bytes?: number; sha256?: string; redactions?: Record<string, number> };
+          return { written: { ok: w.ok ?? null, reason: w.reason ?? null, bytes: w.bytes ?? null, sha256: typeof w.sha256 === "string" ? w.sha256.slice(0, 16) : null, redactions: w.redactions ?? null } };
+        })()
+      : {}),
   };
 }
 
