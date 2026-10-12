@@ -57,7 +57,7 @@ describe("chatgoose hotkey scheme", () => {
     }
   });
 
-  it("names every action in both locales and scopes Coach to the extension", () => {
+  it("names every action in both locales and scopes Coach and Notes to the extension", () => {
     for (const def of HOTKEYS) {
       expect(def.name.ru.length).toBeGreaterThan(0);
       expect(def.name.en.length).toBeGreaterThan(0);
@@ -65,6 +65,8 @@ describe("chatgoose hotkey scheme", () => {
     }
     expect(hotkeysForClient("desktop").map((def) => def.action)).not.toContain("coach");
     expect(hotkeysForClient("extension").map((def) => def.action)).toContain("coach");
+    expect(hotkeysForClient("desktop").map((def) => def.action)).not.toContain("notes");
+    expect(hotkeysForClient("extension").map((def) => def.action)).toContain("notes");
     expect(hotkeyName(hotkeyDef("fix"), "desktop")).toBe("Improve");
     expect(hotkeyName(hotkeyDef("recap"), "desktop")).toBe("Scan");
     expect(hotkeyName(hotkeyDef("recap"), "extension", "en")).toBe("Recap");
@@ -96,8 +98,10 @@ describe("chatgoose hotkey engine — matching", () => {
     }
   }
 
-  it("keeps Coach reserved (swallowed, no action) in the desktop", () => {
+  it("keeps Coach and Notes reserved (swallowed, no action) in the desktop", () => {
     expect(press("mac", "desktop", ev("KeyC", "c", { metaKey: true, shiftKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
+    expect(press("mac", "desktop", ev("KeyK", "k", { metaKey: true, shiftKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
+    expect(press("win", "desktop", ev("KeyK", "л", { ctrlKey: true, altKey: true }))).toEqual({ kind: "swallow", reason: "reserved" });
   });
 
   it("is strict about modifiers", () => {

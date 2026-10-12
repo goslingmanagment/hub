@@ -41,6 +41,7 @@ works without switching.
 | Split | ⌘⇧L | Ctrl+Alt+L | Д | all |
 | Spenders | ⌘⇧M | Ctrl+Alt+M | Ь | all |
 | Coach | ⌘⇧C | Ctrl+Alt+C | С | extensions (reserved in desktop) |
+| Notes (the fan's Fansly notes) | ⌘⇧K | Ctrl+Alt+K | Л | extensions (reserved in desktop) |
 
 The cheatsheet key (`?` outside inputs), send, chat navigation and board keys
 stay client-owned and are not part of this table.
@@ -59,7 +60,9 @@ Windows is strict: no aliases.
   Fansly), F stays find-in-page (the chatters use it in chats). Under
   accel+shift: P and W are reserved, R hard-reloads, T reopens a closed tab,
   F is reserved as exit-fullscreen while in full screen, V is paste-as-plain
-  -text — none of them is used.
+  -text, N reopens a closed window — none of them is used. K (Notes) is
+  free in both schemes: Firefox opens the Web Console on Ctrl+Shift+K and
+  Cmd+Option+K, never on Cmd+Shift+K or Ctrl+Alt+K.
 - **macOS.** Cmd+H hides and Cmd+M minimises the app; Services on selected
   text sit on ⌘⇧L (Safari search), ⌘⇧M (Terminal man page), ⌘⇧Y (Stickies),
   ⌘⇧A (Terminal man index) — L and M are the extension's long-standing Split
