@@ -246,11 +246,13 @@ export function isFanslySiteRoute(value: unknown): value is FanslySiteRoute {
 }
 
 /** The route of an attempt's `operation` in sync_attempts: a wire id (an
- *  engine send) or a route of the site's own requests (origin `site` or
- *  `login`, 0269); null for an operation this build does not know. */
+ *  engine send), or — for a site or login attempt (0269) — any catalogue
+ *  route its request matched, a legacy-only endpoint and the site's own
+ *  routes included; null for an operation this build does not know (its
+ *  clock then counts against every route). */
 export function routeOfEngineOperation(operation: string): FanslyRoute | null {
   const route = operation as FanslyRoute;
-  return FANSLY_ROUTES.get(route)?.wire === route || isFanslySiteRoute(route) ? route : null;
+  return FANSLY_ROUTES.has(route) ? route : null;
 }
 
 /** The route of a legacy send log `operation`; null for one this build does

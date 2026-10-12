@@ -1,3 +1,4 @@
+-- agency-hub:no-transaction
 -- 0269_sync_attempts_origin.sql
 --
 -- Project Browser (docs/plans/project-browser/plan.md §3.2; stage 3 PR 8): a
@@ -13,29 +14,80 @@
 --            of the owner's manual login)
 --
 -- A site or login attempt has the class 'site' and no work; an engine attempt
--- keeps its class (urgent, requests, planned). Its `operation` is its route
--- (a catalogue route, `site.other`, `auth.login`, `auth.twofa`).
+-- keeps its class (urgent, requests, planned). Its `operation` is its route.
 --
--- Additive: a column with a constant default (catalog-only, no rewrite) and
--- the class check widened. Both checks are added NOT VALID and validated
--- after, so the scan takes no exclusive lock. The previous image never names
--- `origin` (it inserts sync_attempts by named columns) and never writes the
--- class 'site': it runs unchanged after a rollback. Nothing writes a site
--- attempt yet.
-alter table sync_attempts add column if not exists origin text not null default 'engine';
-
-alter table sync_attempts drop constraint if exists sync_attempts_class_check;
-alter table sync_attempts add constraint sync_attempts_class_check
-  check (class in ('urgent', 'requests', 'planned', 'site')) not valid;
+-- The live engine keeps running while this migrates (the deploy leaves the
+-- previous sync up), and sync_attempts is its journal, so nothing here holds
+-- the table for long. Each statement runs in its own transaction:
+-- 1. the column, with a constant default (catalog only, no rewrite);
+-- 2. each check swapped NOT VALID in one ALTER (both brief, under ACCESS
+--    EXCLUSIVE): every DDL waits at most 1 s for its lock and retries,
+--    instead of queueing the engine's reads and writes behind a long reader,
+--    and fails the migration after ~60 s;
+-- 3. each check validated apart, under SHARE UPDATE EXCLUSIVE: the scan of
+--    the table conflicts with no read or write.
+-- Re-running after a crash is safe: every statement is idempotent.
+--
+-- The previous image never names `origin` (it inserts sync_attempts by named
+-- columns) and never writes the class 'site': it runs unchanged after a
+-- rollback. Nothing writes a site attempt yet.
+-- agency-hub:statement
+do $do$
+begin
+  for attempt in 1..60 loop
+    begin
+      set local lock_timeout = '1s';
+      alter table sync_attempts add column if not exists origin text not null default 'engine';
+      return;
+    exception when lock_not_available then
+      perform pg_sleep(0.5);
+    end;
+  end loop;
+  raise exception 'could not lock sync_attempts to add origin';
+end
+$do$;
+-- agency-hub:statement
+do $do$
+begin
+  for attempt in 1..60 loop
+    begin
+      set local lock_timeout = '1s';
+      alter table sync_attempts
+        drop constraint if exists sync_attempts_class_check,
+        add constraint sync_attempts_class_check check (class in ('urgent', 'requests', 'planned', 'site')) not valid;
+      return;
+    exception when lock_not_available then
+      perform pg_sleep(0.5);
+    end;
+  end loop;
+  raise exception 'could not lock sync_attempts to widen its class check';
+end
+$do$;
+-- agency-hub:statement
 alter table sync_attempts validate constraint sync_attempts_class_check;
-
-alter table sync_attempts drop constraint if exists sync_attempts_origin_check;
-alter table sync_attempts add constraint sync_attempts_origin_check check (
-  origin in ('engine', 'site', 'login')
-  and (origin = 'engine') = (class <> 'site')
-  and (origin = 'engine' or work_id is null)
-) not valid;
+-- agency-hub:statement
+do $do$
+begin
+  for attempt in 1..60 loop
+    begin
+      set local lock_timeout = '1s';
+      alter table sync_attempts
+        drop constraint if exists sync_attempts_origin_check,
+        add constraint sync_attempts_origin_check check (
+          origin in ('engine', 'site', 'login')
+          and (origin = 'engine') = (class <> 'site')
+          and (origin = 'engine' or work_id is null)
+        ) not valid;
+      return;
+    exception when lock_not_available then
+      perform pg_sleep(0.5);
+    end;
+  end loop;
+  raise exception 'could not lock sync_attempts to add its origin check';
+end
+$do$;
+-- agency-hub:statement
 alter table sync_attempts validate constraint sync_attempts_origin_check;
-
+-- agency-hub:statement
 comment on column sync_attempts.origin is
   'Whose request (Project Browser, 0269): engine (a work''s send), site (the page''s own site request) or login (an operation of the owner''s manual login). A site or login attempt has class site and no work.';

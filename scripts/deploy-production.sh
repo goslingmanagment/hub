@@ -892,10 +892,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # CONCURRENTLY. Index-only: the previous image never needs it.
   "0268_page_fans_account_probe_unresolved_idx.sql"
   # Project Browser PR 8: sync_attempts.origin (engine, site, login) with a
-  # constant default (catalog only) and the class check widened to 'site';
-  # both checks NOT VALID, then validated. The previous image never names
-  # `origin` and never writes the class 'site'; nothing writes a site attempt
-  # yet, so it runs unchanged after a rollback.
+  # constant default (catalog only) and the class check widened to 'site'.
+  # No-transaction: each DDL waits at most 1 s for its lock (retried ~60 s),
+  # the checks are added NOT VALID and validated apart under SHARE UPDATE
+  # EXCLUSIVE, so the running engine's journal is never held for a scan. The
+  # previous image never names `origin` and never writes the class 'site';
+  # nothing writes a site attempt yet, so it runs unchanged after a rollback.
   "0269_sync_attempts_origin.sql"
 )
 
