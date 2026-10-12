@@ -49,7 +49,8 @@ export interface RequestLine {
   resourceType: string;
   /** The engine's admission (attempt id), or why there was none. */
   admission: string | null;
-  decision: "continued" | "failed";
+  /** "fulfilled": answered by the operator, nothing sent (env/check.ts). */
+  decision: "continued" | "failed" | "fulfilled";
   result: string;
 }
 

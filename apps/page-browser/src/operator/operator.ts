@@ -7,6 +7,13 @@
 //   operator's command) → 4 control attached → 5 self-test with the exit
 //   closed → 6 exit IP verified through the page's SOCKS5 → 7 exit open.
 //
+// Step 2 (env/): the page's time zone and languages from the engine's hello
+// are handed to Chrome's start (env/handover.ts), its position is set in
+// every page target (cdp/control.ts); once control is attached, what the
+// browser shows is compared with them (env/check.ts) on every start, and a
+// difference fails it (`env_mismatch`). A hello that changes them starts the
+// page again: Chrome takes them only when it starts.
+//
 // Steps 8–10 (the site loads, the session is confirmed, ready) come with
 // later PRs; this operator stops at the open exit and never navigates.
 //
@@ -31,6 +38,9 @@ import { join } from "node:path";
 import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
+import { EnvCheck } from "../env/check.ts";
+import { writeHandover } from "../env/handover.ts";
+import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
 import { classifyFanslyHost, FANSLY_HOSTS, type HostClassifier } from "../egress/hosts.ts";
 import { Egress } from "../egress/proxy.ts";
@@ -59,6 +69,8 @@ export interface OperatorTimings {
   chromeUpMs: number;
   /** The control's setup and the work tab. */
   attachMs: number;
+  /** The environment's check in the browser (env/check.ts). */
+  envCheckMs: number;
   heartbeatMs: number;
   /** A `state` at least this often (the engine alarms after 2 min without). */
   stateEveryMs: number;
@@ -75,6 +87,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   replayWaitMs: 10_000,
   chromeUpMs: 30_000,
   attachMs: 10_000,
+  envCheckMs: 10_000,
   heartbeatMs: 1000,
   stateEveryMs: 5000,
   healthEveryMs: 2000,
@@ -128,6 +141,7 @@ export class Operator {
   readonly cdp: Cdp;
   readonly control: BrowserControl;
   readonly probes: ProbeDriver;
+  readonly envCheck: EnvCheck;
   readonly page: PageState;
   readonly journals: Journals;
   readonly paused: PausedRequests;
@@ -231,6 +245,7 @@ export class Operator {
       },
     });
     this.probes = new ProbeDriver(this.cdp, this.control, { apiHost: this.#apiHost, exitClosed: () => !this.egress.exitOpen });
+    this.envCheck = new EnvCheck(this.cdp, this.control);
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
       onDecided: (request, decision) => this.#journalRequest(request, decision),
@@ -454,7 +469,17 @@ export class Operator {
       // made every restart of a running page fail once.
       if (!(await this.#waitUntil(() => !this.#holderSpent && this.cdp.linked, 3000))) throw new StartFailure("cdp_lost", "the holder of the previous Chrome did not go");
       check();
-      this.page.advance("env_applied", "the container's time zone and language; the page's own come with PR 5");
+      // Step 2: the page's environment for this Chrome (it takes it when it
+      // starts), from the engine's last hello.
+      const env = this.#settings?.env;
+      if (!env) throw new StartFailure("env_mismatch", "no environment of the page from the engine yet");
+      try {
+        writeHandover(this.config.chromeEnvPath, env);
+      } catch (error) {
+        throw new StartFailure("env_mismatch", `the page's environment could not be handed to Chrome: ${errorMessage(error)}`);
+      }
+      this.control.geolocation = env.geolocation;
+      this.page.advance("env_applied", describeEnv(env));
       await this.#withChrome(async () => {
         check();
         this.control.reset();
@@ -470,7 +495,13 @@ export class Operator {
       await this.control.attach(this.#timings.attachMs);
       this.#chromeVersion = await this.control.version();
       check();
-      this.page.advance("control_attached", this.#chromeVersion);
+      // What the browser shows is the page's environment (plan §4.1, step
+      // 2), after every start: a restarted or updated Chrome included.
+      const shown = await this.envCheck.run(env, this.#timings.envCheckMs);
+      check();
+      this.#log(shown.ok ? "env.verified" : "env.mismatch", { durationMs: shown.durationMs, seen: shown.seen, mismatches: shown.mismatches });
+      if (!shown.ok) throw new StartFailure("env_mismatch", `the browser does not show the page's environment: ${shown.mismatches.join("; ")}`);
+      this.page.advance("control_attached", `${this.#chromeVersion}; environment verified: ${describeEnv(env)}`);
       this.#health.start();
       const result = await this.#selfTestNow();
       check();
@@ -681,8 +712,11 @@ export class Operator {
   // ── the interception ───────────────────────────────────────────────────
 
   /** No path admits a request in this operator yet: whatever is not a
-   *  self-test probe the self-test waits for is failed. */
+   *  self-test probe the self-test waits for, or the environment check's
+   *  own page (answered here, never sent), is failed. */
   #decide(request: PausedRequest): PausedDecision {
+    const envPage = this.envCheck.onPaused(request);
+    if (envPage) return envPage;
     const probe = this.probes.onPaused(request);
     if (probe === "continue") return { action: "continue" };
     if (probe === "fail") return { action: "fail", reason: "BlockedByClient", why: "a self-test probe that may not go on" };
@@ -692,15 +726,18 @@ export class Operator {
   #journalRequest(request: PausedRequest, decision: PausedDecision): void {
     const { host, path } = hostAndPath(request.url);
     const probe = /^#pb-selftest-/.test(request.urlFragment);
-    this.journals.request({
-      method: request.method,
-      host,
-      path,
-      resourceType: request.resourceType,
-      admission: probe && decision.action === "continue" ? "self-test probe (exit closed)" : null,
-      decision: decision.action === "continue" ? "continued" : "failed",
-      result: decision.action === "continue" ? "released to the closed exit" : `${decision.reason}: ${decision.why}`,
-    });
+    const line = { method: request.method, host, path, resourceType: request.resourceType };
+    switch (decision.action) {
+      case "continue":
+        this.journals.request({ ...line, admission: probe ? "self-test probe (exit closed)" : null, decision: "continued", result: "released to the closed exit" });
+        return;
+      case "fail":
+        this.journals.request({ ...line, admission: null, decision: "failed", result: `${decision.reason}: ${decision.why}` });
+        return;
+      case "fulfill":
+        this.journals.request({ ...line, admission: "environment check (answered here, not sent)", decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
+        return;
+    }
   }
 
   // ── the engine ─────────────────────────────────────────────────────────
@@ -719,20 +756,24 @@ export class Operator {
     this.#settings = settings;
     this.#applyParams(hello.params);
     this.egress.setSocks(settings.socks);
-    const changed =
+    const egressChanged =
       previous !== null &&
       (previous.pinnedExitIp !== settings.pinnedExitIp ||
         previous.socks.ip !== settings.socks.ip ||
         previous.socks.port !== settings.socks.port ||
         previous.socks.username !== settings.socks.username ||
         previous.socks.password !== settings.socks.password);
+    // Chrome takes the time zone and the languages only when it starts.
+    const envChanged = previous !== null && !sameEnv(previous.env, settings.env);
+    const changed = egressChanged || envChanged;
     if (changed && !this.page.halted && (this.#starting || atLeast(this.page.step, "chrome_started"))) {
       // What was verified is not what the engine says now: the exit closes
       // and the page starts again on the new settings.
-      this.egress.closeExit("the engine changed the page's SOCKS5 or pinned IP");
-      queueMicrotask(() => void this.#launch(false, "the engine changed the page's SOCKS5 or pinned IP"));
+      const why = egressChanged ? "the engine changed the page's SOCKS5 or pinned IP" : "the engine changed the page's environment";
+      this.egress.closeExit(why);
+      queueMicrotask(() => void this.#launch(false, why));
     }
-    this.#log("engine.settings", { pageId: settings.pageId, pinnedExitIp: settings.pinnedExitIp, socks: `${settings.socks.ip}:${settings.socks.port}`, changed });
+    this.#log("engine.settings", { pageId: settings.pageId, pinnedExitIp: settings.pinnedExitIp, socks: `${settings.socks.ip}:${settings.socks.port}`, env: describeEnv(settings.env), changed });
     return { bufferId: this.#bufferId, state: this.state };
   }
 

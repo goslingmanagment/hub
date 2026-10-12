@@ -1,6 +1,6 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -164,6 +164,9 @@ export class FakeChromeControl implements ChromeControl {
   readonly chrome: FakeChrome;
   readonly calls: string[] = [];
   networkPid: number | null = 4242;
+  /** Chrome's run script, before Chrome is up (the model reads the
+   *  page's environment there). */
+  onStart: () => void = () => undefined;
 
   constructor(chrome: FakeChrome) {
     this.chrome = chrome;
@@ -171,6 +174,7 @@ export class FakeChromeControl implements ChromeControl {
 
   async start(): Promise<void> {
     this.calls.push("start");
+    this.onStart();
     await this.chrome.boot();
   }
 
@@ -441,7 +445,7 @@ export function hello(overrides: Record<string, unknown> = {}, params: Record<st
       ...params,
     },
     socks5: { ip: "127.0.0.1", port: 1080, username: SOCKS_USER, password: SOCKS_PASSWORD },
-    env: { timeZone: "Europe/Berlin", languages: ["en-US"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } },
+    env: { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } },
     ...overrides,
   };
 }
@@ -468,16 +472,35 @@ export interface ModelRequest {
   fragment: string;
   method: string;
   sessionId: string | undefined;
-  outcome: "paused" | "continued" | "failed" | "blocked_by_extension";
+  outcome: "paused" | "continued" | "failed" | "fulfilled" | "blocked_by_extension";
   /** The proxy's answer to the request's CONNECT, when it was continued. */
   proxyStatus?: number;
   failReason?: string;
 }
 
+/** A tab or frame of the model: where it is, and whether its document came. */
+interface ModelTarget {
+  targetId: string;
+  sessionId: string;
+  url: string;
+  context: string | null;
+  loaded: boolean;
+}
+
+/** What Chrome shows of the page's environment (the model's process). */
+export interface ModelEnv {
+  timeZone: string;
+  languages: string[];
+  screen: { width: number; height: number };
+}
+
 /** A browser behind FakeChrome, scripted enough for the operator's start:
  *  targets and auto-attach, the work tab, isolated worlds, the self-test's
  *  fetch() — paused in Fetch, or cancelled by a rules extension — and what a
- *  continued request does: a CONNECT to the operator's proxy. */
+ *  continued request does: a CONNECT to the operator's proxy. And the page's
+ *  environment: the time zone and languages Chrome's start took from the
+ *  operator's hand-over (`chromeStarts`), geolocation grants and overrides,
+ *  throwaway browser contexts, a page whose document the operator answers. */
 export class BrowserModel {
   readonly chrome: FakeChrome;
   readonly requests: ModelRequest[] = [];
@@ -486,8 +509,21 @@ export class BrowserModel {
   proxyPort = 0;
   /** Called on Browser.close, before Chrome goes. */
   onBrowserClose: () => void = () => undefined;
+  /** What this Chrome shows: set by its start from the hand-over. */
+  env: ModelEnv = { timeZone: "UTC", languages: ["en-US", "en"], screen: { width: 1920, height: 1080 } };
+  /** Chrome's own names of zones (its ICU's canonical names). */
+  readonly aliases = new Map<string, string>([["Europe/Kyiv", "Europe/Kiev"]]);
+  /** A test's way to make Chrome show something else. */
+  shows: Partial<ModelEnv> & { position?: { latitude: number; longitude: number; accuracy: number } } = {};
+  /** The hand-overs Chrome's starts read (null: none there). */
+  readonly handovers: Array<string | null> = [];
+  readonly grants: Array<{ origin: string; context: string | null; permissions: string[] }> = [];
+  readonly overrides = new Map<string, { latitude: number; longitude: number; accuracy: number }>();
+  readonly disposed: string[] = [];
+  readonly #tabs = new Map<string, ModelTarget>();
   #targets = 0;
   #contexts = 0;
+  #browserContexts = 0;
   #requests = 0;
 
   constructor(chrome: FakeChrome) {
@@ -499,9 +535,12 @@ export class BrowserModel {
       }
       return {};
     });
-    chrome.handlers.set("Target.createTarget", () => {
+    chrome.handlers.set("Target.createTarget", (command) => {
       const n = ++this.#targets;
-      setTimeout(() => chrome.event("Target.attachedToTarget", { sessionId: `S${n}`, targetInfo: { targetId: `T${n}`, type: "page", url: "about:blank" }, waitingForDebugger: true }), 5);
+      const url = String(command.params.url ?? "about:blank");
+      const context = typeof command.params.browserContextId === "string" ? command.params.browserContextId : null;
+      this.#tabs.set(`S${n}`, { targetId: `T${n}`, sessionId: `S${n}`, url, context, loaded: url === "about:blank" });
+      setTimeout(() => chrome.event("Target.attachedToTarget", { sessionId: `S${n}`, targetInfo: { targetId: `T${n}`, type: "page", url }, waitingForDebugger: true }), 5);
       return { targetId: `T${n}` };
     });
     chrome.handlers.set("Target.closeTarget", (command) => {
@@ -509,10 +548,35 @@ export class BrowserModel {
       setTimeout(() => chrome.event("Target.detachedFromTarget", { sessionId: targetId === "T-initial" ? "S-initial" : `S${targetId.slice(1)}` }), 0);
       return { success: true };
     });
+    chrome.handlers.set("Target.createBrowserContext", () => ({ browserContextId: `C${++this.#browserContexts}` }));
+    chrome.handlers.set("Target.disposeBrowserContext", (command) => {
+      const context = String(command.params.browserContextId);
+      this.disposed.push(context);
+      for (const tab of [...this.#tabs.values()].filter((entry) => entry.context === context)) {
+        this.#tabs.delete(tab.sessionId);
+        setTimeout(() => chrome.event("Target.detachedFromTarget", { sessionId: tab.sessionId, targetId: tab.targetId }), 0);
+      }
+      return {};
+    });
+    chrome.handlers.set("Browser.grantPermissions", (command) => {
+      this.grants.push({ origin: String(command.params.origin), context: typeof command.params.browserContextId === "string" ? command.params.browserContextId : null, permissions: command.params.permissions as string[] });
+      return {};
+    });
+    chrome.handlers.set("Emulation.setGeolocationOverride", (command) => {
+      const { latitude, longitude, accuracy } = command.params as { latitude: number; longitude: number; accuracy: number };
+      this.overrides.set(String(command.sessionId), { latitude, longitude, accuracy });
+      return {};
+    });
+    // A tab let run loads its document: through the interception.
+    chrome.handlers.set("Runtime.runIfWaitingForDebugger", (command) => {
+      const tab = command.sessionId === undefined ? undefined : this.#tabs.get(command.sessionId);
+      if (tab && !tab.loaded && /^https?:/.test(tab.url)) setTimeout(() => this.#navigate(tab), 0);
+      return {};
+    });
     chrome.handlers.set("Browser.getVersion", () => ({ product: "Chrome/155.0.8059.39", protocolVersion: "1.3" }));
     chrome.handlers.set("Page.getFrameTree", (command) => ({ frameTree: { frame: { id: `F-${command.sessionId ?? ""}` } } }));
     chrome.handlers.set("Page.createIsolatedWorld", () => ({ executionContextId: ++this.#contexts }));
-    chrome.handlers.set("Runtime.evaluate", () => ({ result: { type: "number", value: 1 } }));
+    chrome.handlers.set("Runtime.evaluate", (command) => ({ result: { type: "object", value: this.#evaluate(String(command.params.expression ?? ""), command.sessionId) } }));
     chrome.handlers.set("Runtime.callFunctionOn", (command) => {
       const args = command.params.arguments as Array<{ value: string }>;
       const [url, method] = [args[0]!.value, args[1]!.value];
@@ -522,6 +586,14 @@ export class BrowserModel {
     chrome.handlers.set("Fetch.continueRequest", (command) => {
       const request = this.#byInterception(String(command.params.requestId));
       if (request) void this.#continue(request);
+      return {};
+    });
+    chrome.handlers.set("Fetch.fulfillRequest", (command) => {
+      const request = this.#byInterception(String(command.params.requestId));
+      if (!request) return { error: { code: -32602, message: "Invalid InterceptionId." } };
+      request.outcome = "fulfilled";
+      const tab = request.sessionId === undefined ? undefined : this.#tabs.get(request.sessionId);
+      if (tab && `${request.url}${request.fragment}` === tab.url) tab.loaded = true;
       return {};
     });
     chrome.handlers.set("Fetch.failRequest", (command) => {
@@ -539,8 +611,25 @@ export class BrowserModel {
     });
   }
 
+  /** Chrome starts, as its run script starts it: with the time zone and
+   *  languages of the hand-over at `path`, if there is one. */
+  chromeStarts(path: string): void {
+    this.#tabs.clear();
+    this.overrides.clear();
+    let text: string | null;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      text = null;
+    }
+    this.handovers.push(text);
+    const timeZone = /^TZ=(.*)$/m.exec(text ?? "")?.[1] ?? "UTC";
+    const languages = (/^LANGUAGES=(.*)$/m.exec(text ?? "")?.[1] ?? "en-US").split(",");
+    this.env = { timeZone, languages, screen: { width: 1920, height: 1080 } };
+  }
+
   /** A request of the page itself pauses in Fetch (the site, a worker...). */
-  pause(url: string, method = "GET", sessionId = "S1"): ModelRequest {
+  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch"): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
     const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused" };
@@ -550,10 +639,42 @@ export class BrowserModel {
       requestId: request.interceptionId,
       networkId: request.networkId,
       request: { url: request.url, urlFragment: request.fragment, method, headers: {} },
-      resourceType: "Fetch",
+      resourceType,
       frameId: `F-${sessionId}`,
     });
     return request;
+  }
+
+  #navigate(tab: ModelTarget): void {
+    this.pause(tab.url, "GET", tab.sessionId, "Document");
+  }
+
+  /** What the page's script reads, by the operator's expression. */
+  #evaluate(expression: string, sessionId: string | undefined): unknown {
+    const tab = sessionId === undefined ? undefined : this.#tabs.get(sessionId);
+    if (expression.includes("pbEnvShown")) {
+      const zone = JSON.parse(/\}\)\((".*")\)$/.exec(expression)?.[1] ?? '""') as string;
+      const env = { ...this.env, ...this.shows };
+      const known = /^[A-Z][A-Za-z_]+(\/[A-Z][A-Za-z_]+)*$/.test(zone);
+      return {
+        timeZone: this.aliases.get(env.timeZone) ?? env.timeZone,
+        settingsTimeZone: known ? (this.aliases.get(zone) ?? zone) : null,
+        languages: env.languages,
+        language: env.languages[0],
+        screen: env.screen,
+      };
+    }
+    if (expression.includes("pbEnvReady")) {
+      const url = JSON.parse(/\}\)\((".*")\)$/.exec(expression)?.[1] ?? '""') as string;
+      return tab !== undefined && tab.loaded && tab.url === url;
+    }
+    if (expression.includes("pbEnvPosition")) {
+      if (!tab || !/^(https:|http:\/\/127\.0\.0\.1)/.test(tab.url)) return { error: "1 Only secure origins are allowed (see: https://goo.gl/Y0ZkNV)." };
+      const origin = new URL(tab.url).origin;
+      if (!this.grants.some((grant) => grant.origin === origin && grant.context === tab.context && grant.permissions.includes("geolocation"))) return { error: "1 User denied Geolocation" };
+      return this.shows.position ?? this.overrides.get(tab.sessionId) ?? { error: "2 Position update is unavailable" };
+    }
+    return 1;
   }
 
   #byInterception(id: string): ModelRequest | undefined {

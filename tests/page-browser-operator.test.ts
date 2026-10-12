@@ -50,6 +50,8 @@ interface SetUp {
   socks: FakeSocks;
   logDir: string;
   netSelftest: string;
+  /** The operator's hand-over of the page's environment to Chrome's start. */
+  chromeEnv: string;
   lines: string[];
   newOperator: () => Promise<Operator>;
   rpcPort: () => number;
@@ -76,6 +78,9 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
   cleanups.push(ipify.close);
   socks.routes.set("api.ipify.org:443", ipify.port);
   const control = new FakeChromeControl(chrome);
+  const chromeEnv = join(temp.dir, "chrome-env");
+  // Chrome's run script takes the hand-over as Chrome starts.
+  control.onStart = () => model.chromeStarts(chromeEnv);
   const netSelftest = join(temp.dir, "net-selftest.json");
   writeNetSelftest(netSelftest);
   const logDir = join(temp.dir, "logs");
@@ -90,6 +95,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
         rpcPort: 0,
         rpcToken: RPC_TOKEN,
         netSelftestPath: netSelftest,
+        chromeEnvPath: chromeEnv,
         logDir,
         stateDir: join(temp.dir, "state"),
         heartbeatPath: join(temp.dir, "alive"),
@@ -98,7 +104,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
       chrome: control,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -113,7 +119,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
   cleanups.push(() => engine.close());
   engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
   await engine.waitFor("helloResult");
-  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, lines, newOperator, rpcPort: () => rpcPort };
+  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
@@ -484,6 +490,121 @@ describe("a lost control (plan §4.9)", () => {
     await until(() => !s.chrome.running, 5000);
     expect(next.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
     expect(next.egress.exitOpen).toBe(false);
+  });
+});
+
+describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
+  const evaluations = (s: SetUp, marker: string) => s.chrome.sent("Runtime.evaluate").filter((command) => String(command.params.expression).includes(marker));
+
+  it("goes to Chrome's start from the hello, its position to every tab before it runs, and is verified in the browser", async () => {
+    const s = await setUp();
+    await started(s);
+    // Chrome's start took the hello's time zone and languages from the hand-over.
+    expect(readFileSync(s.chromeEnv, "utf8")).toBe("TZ=Europe/Berlin\nLANGUAGES=en-US,en\n");
+    expect(s.model.handovers).toEqual(["TZ=Europe/Berlin\nLANGUAGES=en-US,en\n"]);
+    const states = journal(s.logDir, "states");
+    expect(states.find((line) => line.to === "env_applied")?.note).toBe("time zone Europe/Berlin; languages en-US, en; position 52.5, 13.4 ±50 m");
+    expect(String(states.find((line) => line.to === "control_attached")?.note)).toContain("environment verified: time zone Europe/Berlin");
+    // The site's grant came before any tab could run; every tab got the position before it ran.
+    const order = s.chrome.commands.map((command) => `${command.method}${command.sessionId ? `@${command.sessionId}` : ""}`);
+    expect(s.model.grants[0]).toEqual({ origin: "https://fansly.com", context: null, permissions: ["geolocation"] });
+    expect(order.indexOf("Browser.grantPermissions")).toBeLessThan(order.indexOf("Target.setAutoAttach"));
+    for (const session of ["S1", "S2"]) {
+      expect(order.indexOf(`Emulation.setGeolocationOverride@${session}`), session).toBeGreaterThan(-1);
+      expect(order.indexOf(`Emulation.setGeolocationOverride@${session}`), session).toBeLessThan(order.indexOf(`Runtime.runIfWaitingForDebugger@${session}`));
+      expect(s.model.overrides.get(session), session).toEqual({ latitude: 52.5, longitude: 13.4, accuracy: 50 });
+    }
+    // The check page: in a throwaway context, granted there only, its
+    // document answered by the operator — nothing sent — and the context gone.
+    expect(s.model.grants[1]).toEqual({ origin: "http://127.0.0.1", context: "C1", permissions: ["geolocation"] });
+    expect(s.model.requests.filter((request) => request.url === "http://127.0.0.1/pb-env-check").map((request) => request.outcome)).toEqual(["fulfilled"]);
+    expect(s.model.disposed).toEqual(["C1"]);
+    expect(s.chrome.sent("Fetch.continueRequest")).toHaveLength(1); // the self-test's probe only
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "127.0.0.1", path: "/pb-env-check", decision: "fulfilled" }));
+    // What the browser showed, in the log.
+    const verified = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "env.verified");
+    expect(verified?.seen).toEqual({
+      timeZone: "Europe/Berlin",
+      settingsTimeZone: "Europe/Berlin",
+      languages: ["en-US", "en"],
+      language: "en-US",
+      screen: { width: 1920, height: 1080 },
+      geolocation: { latitude: 52.5, longitude: 13.4, accuracy: 50 },
+    });
+    // The work tab was read from an isolated world, never its main one.
+    expect(evaluations(s, "pbEnvShown").every((command) => typeof command.params.contextId === "number")).toBe(true);
+  });
+
+  it.each([
+    ["a time zone", { timeZone: "UTC" }, "time zone UTC, not Europe/Berlin"],
+    ["languages Chrome extends with its UI language's defaults", { languages: ["en-US", "en", "en-GB"] }, "Chrome adds its UI language's defaults"],
+    ["a screen", { screen: { width: 800, height: 600 } }, "screen 800×600, not 1920×1080"],
+    ["a position", { position: { latitude: 0, longitude: 0, accuracy: 50 } }, "position 0, 0 ±50 m, not 52.5, 13.4 ±50 m"],
+  ])("%s the browser does not show as set fails the start: env_mismatch, the exit never opens, and it is tried again", async (_what, shows, reason) => {
+    const s = await setUp();
+    Object.assign(s.model.shows, shows);
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "env_mismatch", 10_000, "the failure");
+    expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", halted: false, retryAtWall: expect.any(Number) });
+    const failure = journal(s.logDir, "states").find((line) => line.stopReason === "env_mismatch");
+    expect(String(failure?.note)).toContain(reason);
+    expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
+    expect(s.engine.last("state")).toMatchObject({ stopReason: "env_mismatch" });
+    // No self-test, no exit IP: the start stopped at the check.
+    expect(s.socks.connects).toEqual([]);
+    expect(s.control.calls).toContain("kill");
+    await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
+  });
+
+  it("is verified again on every start: after Chrome crashed, and then a difference fails that start", async () => {
+    const s = await setUp();
+    await started(s);
+    expect(evaluations(s, "pbEnvShown")).toHaveLength(1);
+    await s.chrome.shutdown();
+    await until(() => s.operator.page.snapshot.stopReason === "chrome_crashed", 3000);
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the page back");
+    expect(evaluations(s, "pbEnvShown")).toHaveLength(2);
+    expect(s.model.handovers).toHaveLength(2);
+    // The same profile, a Chrome that now shows another zone.
+    s.model.shows.timeZone = "America/New_York";
+    await s.chrome.shutdown();
+    await until(() => s.operator.page.snapshot.stopReason === "env_mismatch", 10_000, "the difference found");
+    expect(s.operator.egress.exitOpen).toBe(false);
+  });
+
+  it("changed by the engine starts the page again: Chrome takes the new one, and it is verified", async () => {
+    const s = await setUp();
+    await started(s);
+    s.engine.close();
+    await until(() => s.engine.closed !== null);
+    const again = new FakeEngine();
+    await again.connect(s.rpcPort());
+    cleanups.push(() => again.close());
+    const env = { timeZone: "Europe/Kyiv", languages: ["uk-UA", "uk", "en-US", "en"], geolocation: { latitude: 50.45, longitude: 30.52, accuracyM: 30 } };
+    again.send(hello({ env, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await again.waitFor("helloResult");
+    const kyiv = "TZ=Europe/Kyiv\nLANGUAGES=uk-UA,uk,en-US,en\n";
+    await until(() => s.model.handovers.at(-1) === kyiv && s.operator.page.step === "exit_open", 10_000, "the page up again");
+    expect(readFileSync(s.chromeEnv, "utf8")).toBe(kyiv);
+    expect(s.model.overrides.get(s.operator.control.workTab!.sessionId)).toEqual({ latitude: 50.45, longitude: 30.52, accuracy: 30 });
+    // Chrome names the zone its own way (Europe/Kiev): the same zone.
+    const verified = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((line) => line.e === "env.verified").at(-1);
+    expect(verified?.seen).toMatchObject({ timeZone: "Europe/Kiev", settingsTimeZone: "Europe/Kiev", languages: env.languages });
+  });
+
+  it("refuses a hello whose environment breaks its rules: the connection closes, nothing changes", async () => {
+    const s = await setUp();
+    await started(s);
+    s.engine.close();
+    await until(() => s.engine.closed !== null);
+    const bad = new FakeEngine();
+    await bad.connect(s.rpcPort());
+    cleanups.push(() => bad.close());
+    bad.send(hello({ env: { timeZone: "Europe/Berlin; touch /tmp/pb", languages: ["en-US"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } }, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await until(() => bad.closed !== null, 3000, "the connection to close");
+    expect(bad.of("helloResult")).toEqual([]);
+    expect(readFileSync(s.chromeEnv, "utf8")).toBe("TZ=Europe/Berlin\nLANGUAGES=en-US,en\n");
+    expect(s.operator.page.step).toBe("exit_open");
   });
 });
 

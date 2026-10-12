@@ -5,15 +5,16 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { compareEnv, type SeenEnv } from "../apps/page-browser/src/env/check.ts";
 import { handoverText, HANDOVER_PATH, writeHandover } from "../apps/page-browser/src/env/handover.ts";
 import { EnvError, LANGUAGES_SYNTAX, TAG_SYNTAX, validateEnv, ZONE_SYNTAX, type PageEnv } from "../apps/page-browser/src/env/rules.ts";
 import { parseEngineMessage } from "../apps/page-browser/src/rpc/protocol.ts";
 import { hello, tempDir } from "./helpers/page-browser-fakes.ts";
 
 // The page's environment (Project Browser plan §4.1, step 2; spec §6.1
-// `hello.env`; stage 3, PR 5): strict rules for the engine's values, the
-// hand-over to Chrome's start, and the root run script that checks them
-// again by the same rules.
+// `hello.env`, §10; stage 3, PR 5): strict rules for the engine's values,
+// the hand-over to Chrome's start, the root run script that checks them
+// again by the same rules, and the comparison with what the browser shows.
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const chromeRun = readFileSync(path.join(root, "apps/page-browser/s6/s6-rc.d/chrome/run"), "utf8");
@@ -104,7 +105,7 @@ describe("the rules (env/rules.ts)", () => {
   });
 
   it("make a hello malformed: the protocol refuses it", () => {
-    expect(parseEngineMessage(JSON.stringify(hello()))).toMatchObject({ ok: true, message: { env: { timeZone: "Europe/Berlin" } } });
+    expect(parseEngineMessage(JSON.stringify(hello()))).toMatchObject({ ok: true, message: { env: { timeZone: "Europe/Berlin", languages: ["en-US", "en"] } } });
     expect(parseEngineMessage(JSON.stringify(hello({ env: withEnv({ timeZone: "$(reboot)" }) })))).toEqual({ ok: false, error: 'env.timeZone "$(reboot)" is not an IANA zone name' });
     expect(parseEngineMessage(JSON.stringify(hello({ env: withEnv({ languages: ["en-US;q=1"] }) })))).toMatchObject({ ok: false, error: expect.stringMatching(/^env\.languages\[0\]/) });
     expect(parseEngineMessage(JSON.stringify(hello({ env: withPosition({ accuracyM: 0 }) })))).toMatchObject({ ok: false, error: expect.stringMatching(/accuracyM/) });
@@ -261,5 +262,34 @@ describe("Chrome's run script (s6-rc.d/chrome/run)", () => {
       const result = spawnSync("sh", ["-c", `set -eu\n${definitions}\nmatches "$V" "$${variable}"`], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", V: value }, encoding: "utf8" });
       expect(result.status === 0, `${variable} ${JSON.stringify(value)}`).toBe(expression.test(value));
     }
+  });
+});
+
+describe("the comparison with what the browser shows (env/check.ts)", () => {
+  const seen = (patch: Partial<SeenEnv> = {}): SeenEnv => ({
+    timeZone: "Europe/Berlin",
+    settingsTimeZone: "Europe/Berlin",
+    languages: ["de-DE", "de", "en-US", "en"],
+    language: "de-DE",
+    screen: { width: 1920, height: 1080 },
+    geolocation: { latitude: 52.52, longitude: 13.405, accuracy: 35 },
+    ...patch,
+  });
+
+  it("is clean when everything is the page's — a zone Chrome names its own way included", () => {
+    expect(compareEnv(ENV, seen())).toEqual([]);
+    expect(compareEnv(withEnv({ timeZone: "Europe/Kyiv" }), seen({ timeZone: "Europe/Kiev", settingsTimeZone: "Europe/Kiev" }))).toEqual([]);
+  });
+
+  it("names every difference", () => {
+    expect(compareEnv(ENV, seen({ timeZone: "UTC" }))).toEqual(["time zone UTC, not Europe/Berlin"]);
+    expect(compareEnv(withEnv({ timeZone: "Mars/Olympus_Mons" }), seen({ timeZone: "UTC", settingsTimeZone: null }))).toEqual(["time zone UTC, not Mars/Olympus_Mons (Chrome does not know that zone)"]);
+    expect(compareEnv(withEnv({ languages: ["de-DE", "de"] }), seen())).toEqual([
+      "navigator.languages de-DE, de, en-US, en, not de-DE, de (Chrome adds its UI language's defaults after the page's list: the page's settings must list them too)",
+    ]);
+    expect(compareEnv(ENV, seen({ languages: ["en-US", "en"], language: "en-US" }))).toEqual(["navigator.languages en-US, en, not de-DE, de, en-US, en", "navigator.language en-US, not de-DE"]);
+    expect(compareEnv(ENV, seen({ screen: { width: 1280, height: 720 } }))).toEqual(["screen 1280×720, not 1920×1080"]);
+    expect(compareEnv(ENV, seen({ geolocation: { error: "1 User denied Geolocation" } }))).toEqual(["no position: 1 User denied Geolocation"]);
+    expect(compareEnv(ENV, seen({ geolocation: { latitude: 52.52, longitude: 13.405, accuracy: 100 } }))).toEqual(["position 52.52, 13.405 ±100 m, not 52.52, 13.405 ±35 m"]);
   });
 });

@@ -1,9 +1,11 @@
 // Every request of every tab, frame and worker stops in Fetch on the browser
-// target (plan §4.1, step 4) and is resolved here: continued or failed,
-// never left. The decision is the operator's (`decide`); this module is the
-// mechanics. A paused request is acknowledged to the holder only once its
-// resolution was answered by Chrome, so an operator that dies in between
-// learns about it again from the holder's replay.
+// target (plan §4.1, step 4) and is resolved here: continued, failed, or
+// answered by the operator itself (the environment check's own page,
+// env/check.ts — nothing is sent), never left. The decision is the
+// operator's (`decide`); this module is the mechanics. A paused request is
+// acknowledged to the holder only once its resolution was answered by
+// Chrome, so an operator that dies in between learns about it again from
+// the holder's replay.
 //
 // A resolution Chrome did not answer (no answer in time, the link down) is
 // not acknowledged: the request may still be paused, so it stays in the
@@ -42,7 +44,11 @@ export interface PausedRequest {
   redirectedRequestId: string | null;
 }
 
-export type PausedDecision = { action: "continue"; params?: Record<string, unknown> } | { action: "fail"; reason: FailReason; why: string };
+export type PausedDecision =
+  | { action: "continue"; params?: Record<string, unknown> }
+  | { action: "fail"; reason: FailReason; why: string }
+  /** Answered here (Fetch.fulfillRequest): the request goes nowhere. */
+  | { action: "fulfill"; status: number; headers: Array<{ name: string; value: string }>; body: string; why: string };
 
 export interface PausedOptions {
   decide: (request: PausedRequest) => PausedDecision;
@@ -118,8 +124,22 @@ export class PausedRequests {
 
   async #resolve(request: PausedRequest, decision: PausedDecision): Promise<void> {
     this.#resolving += 1;
-    const method = decision.action === "continue" ? "Fetch.continueRequest" : "Fetch.failRequest";
-    const params = decision.action === "continue" ? { requestId: request.requestId, ...decision.params } : { requestId: request.requestId, errorReason: decision.reason };
+    let method: string;
+    let params: Record<string, unknown>;
+    switch (decision.action) {
+      case "continue":
+        method = "Fetch.continueRequest";
+        params = { requestId: request.requestId, ...decision.params };
+        break;
+      case "fail":
+        method = "Fetch.failRequest";
+        params = { requestId: request.requestId, errorReason: decision.reason };
+        break;
+      case "fulfill":
+        method = "Fetch.fulfillRequest";
+        params = { requestId: request.requestId, responseCode: decision.status, responseHeaders: decision.headers, body: Buffer.from(decision.body, "utf8").toString("base64") };
+        break;
+    }
     let answered = true;
     try {
       await this.#cdp.send(method, params, request.sessionId ?? undefined);
