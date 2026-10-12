@@ -133,24 +133,26 @@ series() {
 }
 
 image_check() {
-  local rev="$1" apparmor="${2:-page-browser}" ctx="$BASE/ctx/$1" work profile health="" label failed=0
+  local rev="$1" apparmor="${2:-page-browser}" health="" label failed=0
+  # Not local: the EXIT trap's cleanup runs after this function returns.
+  CTX="$BASE/ctx/$1"
   guard_ok
   nothing_running
-  [[ -d "$ctx" ]] || fail "no $ctx"
+  [[ -d "$CTX" ]] || fail "no $CTX"
   docker image inspect "pb-stand/page-browser:$rev" >/dev/null || fail "no image pb-stand/page-browser:$rev"
   docker network inspect "$CONTROL_NET" >/dev/null 2>&1 \
     || docker network create --internal --subnet 10.231.10.0/24 --label "$LABEL" "$CONTROL_NET" >/dev/null
   docker network inspect "$EGRESS_NET" >/dev/null 2>&1 \
     || docker network create --internal --subnet 10.231.11.0/24 -o com.docker.network.bridge.enable_icc=false --label "$LABEL" "$EGRESS_NET" >/dev/null
 
-  work="$(mktemp -d)"
-  profile="$(cat /proc/sys/kernel/random/uuid)"
-  mkdir -m 700 "$work/secrets"
-  (umask 077; openssl rand -hex 16 > "$work/secrets/vnc_password")
-  cat > "$work/page.env" <<EOF
+  WORK="$(mktemp -d)"
+  PROFILE="$(cat /proc/sys/kernel/random/uuid)"
+  mkdir -m 700 "$WORK/secrets"
+  (umask 077; openssl rand -hex 16 > "$WORK/secrets/vnc_password")
+  cat > "$WORK/page.env" <<EOF
 PB_PAGE=stand-check
 PB_IMAGE=pb-stand/page-browser:$rev
-PB_PROFILE_ID=$profile
+PB_PROFILE_ID=$PROFILE
 PB_CONTROL_IP=10.231.10.250
 PB_EGRESS_IP=10.231.11.250
 PB_SOCKS_IP=192.0.2.10
@@ -159,9 +161,9 @@ PB_SYNC_IP=10.231.10.2
 PB_API_IP=10.231.10.3
 PB_TZ=Europe/Berlin
 PB_LANG=en-US
-PB_SECCOMP_PROFILE=$ctx/apps/page-browser/security/seccomp-chrome.json
+PB_SECCOMP_PROFILE=$CTX/apps/page-browser/security/seccomp-chrome.json
 PB_APPARMOR_PROFILE=$apparmor
-PB_SECRETS_DIR=$work/secrets
+PB_SECRETS_DIR=$WORK/secrets
 EOF
   # The production page file, in the stand's networks, labelled for the
   # guard and never restarted by Docker.
@@ -169,7 +171,7 @@ EOF
   # network before /init (see there).
   [[ -x "$BASE/tools/busybox" ]] \
     || docker run --rm --network none -v "$BASE/tools:/out" busybox:1.37-musl cp /bin/busybox /out/busybox
-  cat > "$work/stand.yml" <<EOF
+  cat > "$WORK/stand.yml" <<EOF
 services:
   browser:
     restart: "no"
@@ -188,17 +190,18 @@ networks:
     name: $EGRESS_NET
 EOF
   check_compose() {
-    docker compose -p pb-stand-image -f "$ctx/docker-compose.page-browser.yml" -f "$work/stand.yml" --env-file "$work/page.env" "$@"
+    docker compose -p pb-stand-image -f "$CTX/docker-compose.page-browser.yml" -f "$WORK/stand.yml" --env-file "$WORK/page.env" "$@"
   }
   # shellcheck disable=SC2329
   cleanup() {
     check_compose down >/dev/null 2>&1 || true
-    docker volume rm "pb-profile-$profile" "pb-buffer-$profile" >/dev/null 2>&1 || true
-    rm -rf "$work"
+    docker volume rm "pb-profile-$PROFILE" "pb-buffer-$PROFILE" >/dev/null 2>&1 || true
+    rm -f "$WORK/secrets/vnc_password" "$WORK/page.env" "$WORK/stand.yml"
+    rmdir "$WORK/secrets" "$WORK" 2>/dev/null || true
   }
   trap cleanup EXIT
-  docker volume create --label "$LABEL" "pb-profile-$profile" >/dev/null
-  docker volume create --label "$LABEL" "pb-buffer-$profile" >/dev/null
+  docker volume create --label "$LABEL" "pb-profile-$PROFILE" >/dev/null
+  docker volume create --label "$LABEL" "pb-buffer-$PROFILE" >/dev/null
 
   run_check() {
     label="$1"
@@ -212,7 +215,7 @@ EOF
       docker logs page-browser-stand-check 2>&1 | tail -30 >&2
       return 1
     fi
-    docker cp "$ctx/apps/page-browser/stand/image-check.mjs" page-browser-stand-check:/tmp/image-check.mjs >/dev/null
+    docker cp "$CTX/apps/page-browser/stand/image-check.mjs" page-browser-stand-check:/tmp/image-check.mjs >/dev/null
     docker exec page-browser-stand-check chmod 644 /tmp/image-check.mjs
     docker exec page-browser-stand-check /command/s6-setuidgid pb-operator node --no-warnings /tmp/image-check.mjs
   }
