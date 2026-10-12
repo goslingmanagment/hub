@@ -67,7 +67,10 @@ function bySpecificity(a: CompiledTemplate, b: CompiledTemplate): number {
 export function compileApiMatcher(specs: Iterable<FanslyRouteSpec>): (apiPath: string) => FanslyRoute | null {
   const byLength = new Map<number, CompiledTemplate[]>();
   for (const spec of specs) {
-    if (spec.host !== "api") continue;
+    // GET templates of the API only: a login operation (POST) is matched by
+    // its path below, and a route without a path template (`<…>`, the site's
+    // reads outside the catalogue) matches nothing by itself.
+    if (spec.host !== "api" || (spec.method as string) !== "GET" || spec.template.startsWith("<")) continue;
     const segments = segmentsOf(spec.template).map((segment) => (isParameter(segment) ? null : segment));
     const list = byLength.get(segments.length) ?? [];
     list.push({ route: spec.route, segments });

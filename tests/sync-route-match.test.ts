@@ -17,7 +17,9 @@ function filled(template: string): string {
   return template.replace(/:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\}/g, "723606174951284736");
 }
 
-const API_ROUTES = [...FANSLY_ROUTES.values()].filter((spec) => spec.host === "api");
+// The API reads with a path template (a login operation is a POST; the site's
+// reads outside the catalogue have no template).
+const API_ROUTES = [...FANSLY_ROUTES.values()].filter((spec) => spec.host === "api" && (spec.method as string) === "GET" && !spec.template.startsWith("<"));
 
 describe("the catalogue's API routes", () => {
   it.each(API_ROUTES.map((spec) => [spec.route, spec.template] as const))("%s (%s) matches its own route", (route, template) => {
@@ -57,6 +59,17 @@ describe("a literal segment beats a parameter", () => {
   it("at the first place the templates differ", () => {
     expect(match("/y/x/1")).toBe("posts.tips");
     expect(match("/z/x/1")).toBe("post.replies");
+  });
+
+  it("only GET templates of the API take part", () => {
+    const withOthers = compileApiMatcher([
+      ...table,
+      { route: "polls" as FanslyRoute, method: "POST" as "GET", host: "api", template: "/login", wire: null },
+      { route: "tips" as FanslyRoute, method: "GET", host: "api", template: "<an API path outside the catalogue>", wire: null },
+      { route: "trackinglinks" as FanslyRoute, method: "GET", host: "ws", template: "/login", wire: null },
+    ]);
+    expect(withOthers("/login")).toBeNull();
+    expect(withOthers("/<an API path outside the catalogue>")).toBeNull();
   });
 });
 
