@@ -1397,6 +1397,35 @@ describe("CLI parsing", () => {
     // The guard did not throw the --fan error; control reached the user lookup.
     expect(cliMocks.findUserById).toHaveBeenCalledWith(expect.anything(), 1);
   });
+
+  it("ai:feature-smoke checks fan-notes-fill labels with the contract before any I/O", async () => {
+    const smoke = (...extra: string[]) => {
+      const program = buildProgram();
+      program.exitOverride();
+      return program.parseAsync([
+        "ai:feature-smoke", "--feature", "fan-notes-fill", "--page", "svc-fs",
+        "--conversation", "group-1", "--as-user-id", "1", ...extra,
+      ], { from: "user" });
+    };
+    await expect(smoke()).rejects.toThrow("fan-notes-fill requires --note-fields <labels>");
+    await expect(smoke("--note-fields", "Имя,имя")).rejects.toThrow("--note-fields: noteFields repeat");
+    await expect(smoke("--note-fields", "Хобби & интересы")).rejects.toThrow("--note-fields:");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("ai:feature-smoke requires --fan for fan-notes-fill on a FANSLY page", async () => {
+    cliMocks.findPageByLabel.mockResolvedValueOnce({
+      page: { id: 44, label: "svc-fs", platform: "fansly" },
+      credentials: null,
+      proxy: null,
+    });
+    const program = buildProgram();
+    program.exitOverride();
+    await expect(program.parseAsync([
+      "ai:feature-smoke", "--feature", "fan-notes-fill", "--page", "svc-fs",
+      "--conversation", "group-1", "--as-user-id", "1", "--note-fields", "Имя, Локация ,Возраст",
+    ], { from: "user" })).rejects.toThrow("fan-notes-fill requires --fan <ref> on fansly");
+  });
   // Decision #223: the drill seam may not answer for the real gate.
   describe("capture:reclaim --assume-free-bytes", () => {
     it("REJECTS the drill figure on an executing run, before any database work", async () => {

@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { Command, InvalidArgumentError } from "commander";
 import { PgBoss } from "pg-boss";
 
+import { aiNoteFieldsSchema } from "@agency_hub_core/contracts";
 import {
   assertDomainEventTargetMonthsAttached,
   createModel,
@@ -1199,7 +1200,7 @@ export function buildProgram() {
   program
     .command("ai:feature-smoke")
     .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
-    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat")
+    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat | fan-notes-fill")
     .requiredOption("--page <label>", "page label")
     .requiredOption("--conversation <ref>", "conversation ref (OF: the fan id; Fansly canonical: the groupId)")
     .requiredOption("--as-user-id <id>", "immutable chatter/owner ID the generation is attributed to", parseUserId)
@@ -1207,12 +1208,26 @@ export function buildProgram() {
     .option("--question <text>", "coach-chat: the chatter's question (required for coach-chat)")
     .option("--fan <ref>", "canonical fan ref (Fansly: separate from the --conversation groupId)")
     .option("--model <model>", "gateway model override")
+    .option("--note-fields <labels>", "fan-notes-fill: comma-separated questionnaire labels, e.g. \"Имя,Локация,Возраст\"")
     .action(async (options) => {
       // Fail fast with a clear CLI message instead of a server 400: the T5 gate
       // rejects coach-chat without a chatterQuestion before any provider call.
       // This is platform-independent, so it stays ahead of the app context.
       if (options.feature === "coach-chat" && !options.question?.trim()) {
         throw new Error("coach-chat requires --question <text>");
+      }
+      // The smoke calls the feature service directly, past the route's schema:
+      // check the labels with the contract's own rules here.
+      let noteFields: string[] | undefined;
+      if (options.noteFields !== undefined) {
+        const parsed = aiNoteFieldsSchema.safeParse(String(options.noteFields).split(","));
+        if (!parsed.success) {
+          throw new Error(`--note-fields: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        }
+        noteFields = parsed.data;
+      }
+      if (options.feature === "fan-notes-fill" && noteFields === undefined) {
+        throw new Error("fan-notes-fill requires --note-fields <labels>");
       }
       const app = await createAppContext();
       try {
@@ -1231,11 +1246,11 @@ export function buildProgram() {
         // the groupId, which survives fan-scope erasure). Fail fast to match the
         // server gate before any provider spend.
         if (
-          options.feature === "coach-chat"
+          (options.feature === "coach-chat" || options.feature === "fan-notes-fill")
           && pageRow.page.platform === "fansly"
           && !options.fan?.trim()
         ) {
-          throw new Error("coach-chat requires --fan <ref> on fansly");
+          throw new Error(`${options.feature} requires --fan <ref> on fansly`);
         }
         const user = await findUserById(app.db, options.asUserId);
         if (!user || user.disabledAt !== null || user.deletedAt !== null
@@ -1263,6 +1278,7 @@ export function buildProgram() {
             ...(options.question ? { chatterQuestion: options.question } : {}),
             ...(options.fan ? { fanRef: options.fan } : {}),
             ...(options.model ? { model: options.model } : {}),
+            ...(noteFields ? { noteFields } : {}),
           },
         );
         const preparedMs = Date.now() - startedAt;

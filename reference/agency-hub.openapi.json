@@ -64952,7 +64952,8 @@
                                       "ping",
                                       "hi-greeting",
                                       "coach-chat",
-                                      "voice-script"
+                                      "voice-script",
+                                      "fan-notes-fill"
                                     ]
                                   },
                                   "requestCount": {
@@ -64994,7 +64995,8 @@
                                     "ping",
                                     "hi-greeting",
                                     "coach-chat",
-                                    "voice-script"
+                                    "voice-script",
+                                    "fan-notes-fill"
                                   ]
                                 },
                                 "requestCount": {
@@ -113544,7 +113546,8 @@
                             "ping",
                             "hi-greeting",
                             "coach-chat",
-                            "voice-script"
+                            "voice-script",
+                            "fan-notes-fill"
                           ]
                         },
                         "model": {
@@ -113955,6 +113958,17 @@
                     "enum": [
                       "new-follower"
                     ]
+                  },
+                  "noteFields": {
+                    "minItems": 1,
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60,
+                      "pattern": "^[^\\r\\n\\u2028\\u2029:<>&]*$"
+                    }
                   },
                   "knownFanMessageIds": {
                     "minItems": 1,
@@ -114488,7 +114502,8 @@
                       "ping",
                       "hi-greeting",
                       "coach-chat",
-                      "voice-script"
+                      "voice-script",
+                      "fan-notes-fill"
                     ]
                   },
                   "pageLabel": {
@@ -118952,7 +118967,8 @@
                                     "ping",
                                     "hi-greeting",
                                     "coach-chat",
-                                    "voice-script"
+                                    "voice-script",
+                                    "fan-notes-fill"
                                   ]
                                 },
                                 "requestCount": {
@@ -118994,7 +119010,8 @@
                                   "ping",
                                   "hi-greeting",
                                   "coach-chat",
-                                  "voice-script"
+                                  "voice-script",
+                                  "fan-notes-fill"
                                 ]
                               },
                               "requestCount": {

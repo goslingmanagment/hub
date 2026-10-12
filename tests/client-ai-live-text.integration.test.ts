@@ -207,6 +207,7 @@ async function ask(input: {
       conversationRef: input.fan ?? FAN,
       ...(feature === "improve-draft" || feature === "voice-script" ? { draftText: "my draft" } : {}),
       ...(feature === "coach-chat" ? { chatterQuestion: "what next?" } : {}),
+      ...(feature === "fan-notes-fill" ? { noteFields: ["Имя", "Локация"] } : {}),
       ...(input.live !== undefined
         ? { liveTextContext: { capturedAt: new Date().toISOString(), items: input.live } }
         : {}),
