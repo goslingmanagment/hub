@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -47,8 +48,30 @@ describe("the services", () => {
   it("the container is healthy only with the kernel check passed and the X server up", () => {
     expect(read("apps/page-browser/Dockerfile")).toContain('CMD ["/etc/s6-overlay/scripts/health"]');
     const health = read("apps/page-browser/s6/scripts/health");
-    expect(health).toContain(`grep -q '"ok":true' /run/pb/net-selftest.json`);
-    expect(health).toContain("s6-svstat -o up,updownfor /run/service/xvnc");
+    const checks = health.split("\n").filter((line) => /\|\| exit 1$/.test(line));
+    expect(checks).toEqual([
+      `grep -q '"ok":true' /run/pb/net-selftest.json || exit 1`,
+      "up_for xvnc 5 || exit 1",
+      "[ -S /tmp/.X11-unix/X99 ] || exit 1",
+    ]);
+    expect(health).toContain('s6-svstat -o up,updownfor "/run/service/$1"');
+  });
+
+  it("fails the script on any failed check (a test inside `a && b` does not stop a `set -e` script)", () => {
+    const health = read("apps/page-browser/s6/scripts/health");
+    // The checks, with s6-svstat answering from a table and the files there.
+    const checks = health
+      .slice(health.indexOf("up_for() {"))
+      .replace('/command/s6-svstat -o up,updownfor "/run/service/$1"', 'svstat "$1"')
+      .replace(/^grep .*$/m, "true || exit 1")
+      .replace(/^\[ -S .*$/m, "true || exit 1");
+    const status = (xvnc: string) => {
+      const svstat = `svstat() { case "$1" in xvnc) echo "${xvnc}" ;; *) echo "true 9" ;; esac; }`;
+      return spawnSync("sh", ["-c", `set -eu\n${svstat}\n${checks}`]).status;
+    };
+    expect(status("true 10")).toBe(0);
+    expect(status("false 0")).toBe(1);
+    expect(status("true 3")).toBe(1);
   });
 
   it("nothing starts before the egress rules and their kernel check", () => {

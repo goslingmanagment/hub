@@ -4,8 +4,16 @@
 # display and the owner's screen — has been up for 5 s at least, not
 # restarting. Chrome is the operator's to watch.
 set -eu
-grep -q '"ok":true' /run/pb/net-selftest.json
-# shellcheck disable=SC2046
-set -- $(/command/s6-svstat -o up,updownfor /run/service/xvnc)
-[ "$1" = true ] && [ "$2" -ge 5 ]
-[ -S /tmp/.X11-unix/X99 ]
+
+# up_for <service> <seconds>: the service is up, for that long at least.
+# (A failed test inside `a && b` does not stop a `set -e` script: every
+# check ends in an explicit exit.)
+up_for() {
+  # shellcheck disable=SC2046
+  set -- "$2" $(/command/s6-svstat -o up,updownfor "/run/service/$1")
+  [ "${2:-}" = true ] && [ "${3:-0}" -ge "$1" ]
+}
+
+grep -q '"ok":true' /run/pb/net-selftest.json || exit 1
+up_for xvnc 5 || exit 1
+[ -S /tmp/.X11-unix/X99 ] || exit 1
