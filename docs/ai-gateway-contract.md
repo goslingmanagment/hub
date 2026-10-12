@@ -69,6 +69,9 @@ Allowed `feature` values are exactly the AI usage ledger enum:
 - `scan`
 - `ping`
 - `hi-greeting`
+- `coach-chat`
+- `voice-script`
+- `fan-notes-fill`
 
 Desktop-only `compare` remains a local orchestration mode and must be reported/submitted as the
 underlying feature operations, currently `fast-reply`.
@@ -807,6 +810,38 @@ server-loaded transcript/profile context and rejects clientContext. Page access,
 platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
+
+### Notes fill (`fan-notes-fill`)
+
+The Fansly notes panel's «fill with AI»: the chatter starts a questionnaire note
+from a template (`Имя: `, `Локация: `, …) and the hub fills it from the whole
+chat. The client sends the labels; the hub assembles the prompt
+(`templates/fan-notes-fill.md`) and streams the answer.
+
+- `noteFields`: 1-30 labels, in output order. Each is trimmed, then 1-60 UTF-16
+  code units, with no line break (`\r`, `\n`, U+2028, U+2029), no `:` and no
+  `<`, `>` or `&` (the prompt escaping would change those, and the answer must
+  copy the label byte for byte). No two labels may be equal case-insensitively.
+  A label outside these rules is a schema 400. The field is required for
+  `fan-notes-fill` (`fan-notes-fill requires noteFields`) and refused on every
+  other feature (`<feature> does not accept noteFields`), both 400
+  `bad_request`.
+- Context as for a full Recap: on Fansly the client sends `clientContext` with
+  the whole conversation it read (`transcriptCoverage` usually
+  `full-history`), the spending and subscription blocks and the bio, plus
+  `fanRef`, which is required on Fansly (`fanRef is required on fansly for
+  fan-notes-fill`). The prompt reads the transcript, spending, subscription and
+  bio; it never reads the stored dossier, image notes, the display name or the
+  chatter's saved name. OnlyFans reads the hub archive with the deep window.
+  The only product gate is an empty chat (`gate_min_messages`, at least 1).
+- Answer: exactly one `Label: value` line per requested label, in order, the
+  label as sent (after trimming), nothing else. A value is short and in
+  Russian; a label the chat says nothing about comes back as `Label: ` (the
+  model may drop the trailing space). The client merges: an empty field takes
+  the value, a filled one is never overwritten.
+- Model: `anthropic:claude-sonnet-5-5` at `low` reasoning by default
+  (`DEFAULT_FEATURE_MODELS` / `DEFAULT_FEATURE_REASONING`); a request's `model`
+  and `reasoningEffort` override it. Prompt blocks are sent uncached.
 
 ### Split for Ping, Hi and Coach drafts (`split-all-v1`, chat-extension H-10)
 

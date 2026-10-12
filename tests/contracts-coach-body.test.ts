@@ -5,6 +5,8 @@ import {
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   AI_LIVE_TEXT_MAX_CHARS,
   AI_LIVE_TEXT_MAX_ITEMS,
+  AI_NOTE_FIELD_LABEL_MAX_CHARS,
+  AI_NOTE_FIELDS_MAX,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
   routeSchemas,
@@ -128,6 +130,12 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     model: unit.repeat(100),
     draftText: unit.repeat(20_000),
     chatterQuestion: unit.repeat(2_000),
+    // fan-notes-fill: 30 labels of 60 code units, kept distinct by a two-digit
+    // tail (labels must not repeat). ~11KB at six bytes a unit.
+    noteFields: Array.from(
+      { length: AI_NOTE_FIELDS_MAX },
+      (_, index) => `${unit.repeat(AI_NOTE_FIELD_LABEL_MAX_CHARS - 2)}${String(index).padStart(2, "0")}`,
+    ),
     // Ids are digits only, so their worst case does not depend on `unit`:
     // ten distinct 30-digit ids.
     knownFanMessageIds: Array.from(

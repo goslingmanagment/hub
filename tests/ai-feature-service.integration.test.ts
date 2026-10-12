@@ -3795,3 +3795,145 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
+
+describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
+  const NOTE_FIELDS = ["Имя", "Локация", "Возраст", "Работа", "Хобби", "Фетиши", "Характеристика", "Медиа"];
+  // The extension sends what a full Recap sends: the whole chat it read.
+  const notesPayload = (over: Record<string, unknown> = {}) => ({
+    clientRequestId: randomUUID(),
+    pageLabel: "svc-fs",
+    platform: "fansly",
+    conversationRef: "group-777",
+    fanRef: "fan-42",
+    messageCount: 3000,
+    noteFields: NOTE_FIELDS,
+    clientContext: {
+      transcript: "[10:00] Fan: im Mike, 34, from Austin\n[10:05] Model: hey Mike",
+      messageCount: 2,
+      fanDisplayName: "Mike R",
+      fanSpendingData: "Total spent: $310.00 (tips $60.00, messages $250.00)",
+      fanSubscriptionData: "Subscribed: yes (since 2026-03-01, renews)",
+      fanBio: "gym rat, Texas",
+      fanCustomName: "Mike VIP whale",
+      transcriptCoverage: "full-history",
+    },
+    ...over,
+  });
+  const post = (feature: string, payload: Record<string, unknown>) =>
+    apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload,
+    });
+
+  it("fills the labels from the client's whole chat on Sonnet 5.5 low by default", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({ noteFields: ["  Имя ", ...NOTE_FIELDS.slice(1)] }));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(aiFrames(res.body).at(-1)?.type).toBe("done");
+    const body = capture.input!.body;
+    expect(body).toMatchObject({
+      feature: "fan-notes-fill",
+      model: "anthropic:claude-sonnet-5-5",
+      reasoningEffort: "low",
+    });
+    expect(body.prompt.userBlocks.every((block) => block.cache === "none")).toBe(true);
+    expect(body.prompt.systemBlocks.every((block) => block.cache === "none")).toBe(true);
+    const task = body.prompt.userBlocks.at(-1)!.text;
+    // The trimmed labels, in order, in the task block only.
+    expect(task).toContain(`<note_fields>\n${NOTE_FIELDS.join("\n")}\n</note_fields>`);
+    expect(task).toContain(`Output exactly ${NOTE_FIELDS.length} lines`);
+    const user = body.prompt.userBlocks.map((block) => block.text).join("");
+    expect(user).toContain("Fansly agency chatter");
+    expect(user).toContain("[10:00] Fan: im Mike, 34, from Austin");
+    expect(user).toContain("(the transcript below covers the ENTIRE conversation history)");
+    expect(user).toContain("Total spent: $310.00");
+    expect(user).toContain("Subscribed: yes (since 2026-03-01, renews)");
+    expect(user).toContain("Fan bio: gym rat, Texas");
+    // The chatter's saved name and the display name are not fan statements.
+    expect(user).not.toContain("Mike VIP whale");
+    expect(user).not.toContain("Mike R");
+    const { rows } = await testDb.pool.query<{ conversation_ref: string | null; fan_ref: string | null }>(
+      `select conversation_ref, fan_ref from ai_generation_content
+       where feature = 'fan-notes-fill' order by id desc limit 1`,
+    );
+    expect(rows[0]).toEqual({ conversation_ref: "group-777", fan_ref: "fan-42" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps the request's model and reasoning overrides", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" }));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(capture.input!.body).toMatchObject({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("requires noteFields, refuses them on every other feature, before any provider call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const missing = await post("fan-notes-fill", notesPayload({ noteFields: undefined }));
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(missing.json().message).toBe("fan-notes-fill requires noteFields");
+    for (const feature of ["fan-summary", "help-me", "fast-reply", "chat-review"]) {
+      const stray = await post(feature, notesPayload());
+      expect(stray.statusCode, stray.body).toBe(400);
+      expect(stray.json().message).toBe(`${feature} does not accept noteFields`);
+    }
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses labels the contract does not allow, and a fansly request without fanRef", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    for (const noteFields of [
+      [],
+      ["Имя", "имя"],
+      ["Имя:"],
+      ["Имя\nВозраст"],
+      ["   "],
+      ["Хобби & интересы"],
+      ["x".repeat(61)],
+      Array.from({ length: 31 }, (_, index) => `Поле ${index}`),
+    ]) {
+      const res = await post("fan-notes-fill", notesPayload({ noteFields }));
+      expect(res.statusCode, JSON.stringify(noteFields)).toBe(400);
+    }
+    const noFan = await post("fan-notes-fill", notesPayload({ fanRef: undefined }));
+    expect(noFan.statusCode, noFan.body).toBe(400);
+    expect(noFan.json().message).toBe("fanRef is required on fansly for fan-notes-fill");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses an empty conversation (gate_min_messages)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({
+      clientContext: { transcript: "(no messages)", messageCount: 0, fanDisplayName: "Mike R" },
+    }));
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toBe("gate_min_messages");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});

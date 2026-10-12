@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
+  FAN_NOTES_FILL_TEMPLATE,
   FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
@@ -27,6 +28,7 @@ const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
   ['hi-greeting.md', HI_GREETING_TEMPLATE],
   ['coach-chat.md', COACH_CHAT_TEMPLATE],
   ['voice-script.md', VOICE_SCRIPT_TEMPLATE],
+  ['fan-notes-fill.md', FAN_NOTES_FILL_TEMPLATE],
 ];
 
 function readTemplateFile(file: string): string {
@@ -41,7 +43,7 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
   }
 
   it('covers every .md template file', () => {
-    expect(TEMPLATE_FILES).toHaveLength(10);
+    expect(TEMPLATE_FILES).toHaveLength(11);
   });
 
   for (const [file, constant] of TEMPLATE_FILES) {

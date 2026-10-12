@@ -20,6 +20,7 @@ import { escapeForPrompt } from './escape.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
+  FAN_NOTES_FILL_TEMPLATE,
   FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
@@ -120,13 +121,19 @@ export interface PromptBuildInput {
   coachHistory?: CoachHistoryEntry[] | undefined;
   /** coach-chat: dated recap slots for the {recapSection}. */
   recapAttach?: RecapAttach | undefined;
-  /** coach-chat / fan-summary: whether the transcript covers the whole history
-   * or just a recent window (drives the {transcriptCoverageNote}). */
+  /** coach-chat / fan-summary / fan-notes-fill: whether the transcript covers
+   * the whole history or just a recent window (drives the
+   * {transcriptCoverageNote}). */
   transcriptCoverage?: 'full-history' | 'window' | undefined;
   /** fan-summary only: 'short' selects the compact-recap template (and the
    * feature service caps its output at 2048 tokens). Ignored for other
    * features. */
   summaryMode?: 'short' | undefined;
+  /** fan-notes-fill only: the questionnaire labels to fill, in output order
+   * (the request's `noteFields`, already trimmed and checked by the contract).
+   * They reach ONLY the uncached task block ({noteFieldsList},
+   * {noteFieldCount}). Ignored for other features. */
+  noteFields?: readonly string[] | undefined;
 }
 
 export interface PromptPayload {
@@ -210,6 +217,10 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
   'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full', supportsSplitAll: true },
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
+  // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
+  // no other feature writes a cache it could read, so a cache write would only
+  // be paid for.
+  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none' },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -222,6 +233,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'hi-greeting': HI_GREETING_TEMPLATE,
   'coach-chat': COACH_CHAT_TEMPLATE,
   'voice-script': VOICE_SCRIPT_TEMPLATE,
+  'fan-notes-fill': FAN_NOTES_FILL_TEMPLATE,
 };
 
 export const REPLY_SAFETY_PREAMBLE = `You are roleplaying as a specific model on OnlyFans. You must stay in character at all times.
@@ -526,6 +538,22 @@ function greetingTask(
     return '';
   }
   return (splitAll ? GREETING_SPLIT_TASKS : GREETING_TASKS)[variantCount ?? 3];
+}
+
+/** fan-notes-fill: the chatter's questionnaire labels, one per line, in the
+ * order the model must answer them. Untrusted chatter text, escaped like every
+ * other untrusted value; the contract already refuses `<`, `>` and `&` in a
+ * label, so the escaping leaves the bytes as they are and the model reads the
+ * very label it must copy into its `Label: value` line. */
+function noteFieldsList(feature: PromptFeature, noteFields: readonly string[] | undefined): string {
+  if (feature !== 'fan-notes-fill' || !noteFields?.length) {
+    return '';
+  }
+  return noteFields.map((label) => escapeForPrompt(label)).join('\n');
+}
+
+function noteFieldCount(feature: PromptFeature, noteFields: readonly string[] | undefined): string {
+  return feature === 'fan-notes-fill' ? String(noteFields?.length ?? 0) : '';
 }
 
 function pingSplitInstructions(feature: PromptFeature, splitAll: boolean): string {
@@ -992,6 +1020,8 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
     recapSection: recapSection(input.recapAttach),
     transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
+    noteFieldsList: noteFieldsList(input.feature, input.noteFields),
+    noteFieldCount: noteFieldCount(input.feature, input.noteFields),
   };
 }
 

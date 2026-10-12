@@ -133,6 +133,9 @@ export interface AiFeatureRequestBody {
    * validations, one message unless variantCount says otherwise, and the
    * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
+  /** fan-notes-fill only, and required there: the questionnaire labels of the
+   * fan's native note, in output order (trimmed and checked by the contract). */
+  noteFields?: string[];
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
@@ -217,6 +220,24 @@ export function assertGreetingRequestShape(
     if (body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) {
       throw new BadRequestError("fanAvatarUrl and fanUsername require hi-greeting");
     }
+  }
+}
+
+/** fan-notes-fill (the Fansly notes panel's «fill with AI»): the questionnaire
+ * labels are the whole task, so the feature REQUIRES `noteFields`, and every
+ * other feature REFUSES them, so a stray list can never reshape a Reply or a
+ * Recap prompt. The labels' own rules (count, length, characters, repeats) are
+ * the contract's. Pure, like the greeting rules above. */
+export function assertNoteFieldsRequestShape(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "noteFields">,
+): void {
+  if (feature === "fan-notes-fill") {
+    if (body.noteFields === undefined || body.noteFields.length === 0) {
+      throw new BadRequestError("fan-notes-fill requires noteFields");
+    }
+  } else if (body.noteFields !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteFields`);
   }
 }
 
@@ -364,6 +385,7 @@ export async function prepareAiFeatureStream(
   if (body.summaryMode !== undefined && feature !== "fan-summary") {
     throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
+  assertNoteFieldsRequestShape(feature, body);
   // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
   // the canonical groupId, NOT the fan — so a restricted row keyed only by
   // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
@@ -383,6 +405,13 @@ export async function prepareAiFeatureStream(
     throw new BadRequestError(
       "fanRef is required on fansly for coach-chat and short fan-summary",
     );
+  }
+  // The same erasure rule for the notes fill: its record holds the facts of one
+  // fan (name, age, location), so on Fansly, where conversationRef is the
+  // groupId, the record must carry the fan. A new feature: no released client
+  // sends it without fanRef.
+  if (isFanslyRequest && !body.fanRef?.trim() && feature === "fan-notes-fill") {
+    throw new BadRequestError("fanRef is required on fansly for fan-notes-fill");
   }
 
   // Access is checked HERE, before any context loads — a principal without
@@ -905,10 +934,11 @@ export async function prepareAiFeatureStream(
     preset: feature === "coach-chat" ? body.preset : undefined,
     recapAttach,
     transcriptCoverage:
-      feature === "coach-chat" || feature === "fan-summary"
+      feature === "coach-chat" || feature === "fan-summary" || feature === "fan-notes-fill"
         ? body.clientContext?.transcriptCoverage
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
+    noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.

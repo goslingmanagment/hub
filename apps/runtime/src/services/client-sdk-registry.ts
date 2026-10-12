@@ -42,6 +42,35 @@ export interface ClientSdkRegistryRow {
 export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
   // client-sdk-registry:begin
   {
+    "bundleSha256": "64a972fd6222146851797da149e109f53a116eeabd35fb875dac3d48c3288842",
+    "contractHash": "030124539ce7c649519ca0acafe8c6c131e3620025e7b858650857baa7119bbc",
+    "sourceCommit": "6ee3d627e204efd791424b5ae5802b9e4a48b82c",
+    "vendorDistSha256": "bd65e2476a58b208e6f4ffa4797904d0ad9f40acb1d43e993ea0e176eec7e384",
+    "zodVersion": "4.4.3",
+    "status": "released",
+    "clients": [
+      {
+        "name": "fansly-chat",
+        "versions": [
+          "2.8.1",
+          "2.9.0"
+        ]
+      }
+    ],
+    "operations": [
+      "aiUsageBatch",
+      "authIssueDeviceTokenWithPassword",
+      "authRevokeCurrentDeviceToken",
+      "followerOutreachAttempt",
+      "pageConversationProfile",
+      "pageTopSpenders",
+      "upsertFanProfile",
+      "voiceNoteCreate",
+      "voiceNoteStatus"
+    ],
+    "fixture": "tests/fixtures/client-sdks/64a972fd6222"
+  },
+  {
     "bundleSha256": "6d2ce2a90751df7280891ceb6dcc6c8fe9f99a89ef99fbb040d4734e778d5e5e",
     "contractHash": "b95b765c12f50905cb8f98c2d9644cf5adc4234299cd6516f0cd649b39235aab",
     "sourceCommit": "e033e3ec097f913a32433febcf60c6f3615ba071",
