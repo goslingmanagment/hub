@@ -891,6 +891,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # (account_probe_at) where account_probe_resolved is false, built
   # CONCURRENTLY. Index-only: the previous image never needs it.
   "0268_page_fans_account_probe_unresolved_idx.sql"
+  # Project Browser PR 8: sync_attempts.origin (engine, site, login) with a
+  # constant default (catalog only) and the class check widened to 'site';
+  # both checks NOT VALID, then validated. The previous image never names
+  # `origin` and never writes the class 'site'; nothing writes a site attempt
+  # yet, so it runs unchanged after a rollback.
+  "0269_sync_attempts_origin.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
