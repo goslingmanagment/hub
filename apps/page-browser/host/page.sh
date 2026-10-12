@@ -15,10 +15,11 @@
 # A page's files: $PB_BASE/pages/<page>/page.env (the Compose variables:
 # image and the previous one, profile, addresses, SOCKS5, zone, language)
 # and secrets/ — vnc_password (the owner's screen) and rpc_token (the
-# operator's RPC), made here once, root's only. Its addresses in pb-control and pb-egress end in the same octet,
-# chosen once. The profile's volumes outlive the container: `down` keeps
-# them; `forget` drops a removed page's files, and `up --profile` then gives
-# its profile to another page. A profile belongs to one page at a time.
+# operator's RPC), made here once, root's only. Its addresses in pb-control
+# and pb-egress end in the same octet, chosen once. The profile's volumes
+# outlive the container: `down` keeps them; `forget` drops a removed page's
+# files, and `up --profile` then gives its profile to another page. A
+# profile belongs to one page at a time.
 #
 # A new container replaces the old one only when it is healthy: until then
 # page.env keeps the old state, and a failed `up` or `rollback` brings the

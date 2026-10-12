@@ -148,6 +148,23 @@ describe("the owner generation", () => {
     expect(await late.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
   });
 
+  it("counts within one page: a profile moved to another page takes that page's generations", async () => {
+    const first = await setUp();
+    const engine9 = await first.engine(9);
+    engine9.send(hello({ ownerGeneration: 9 }));
+    await engine9.waitFor("helloResult");
+    // The volume goes to page 8 with the profile; its engine is at 2.
+    const second = await setUp({ storePath: join(first.storeDir, "owner-generation") });
+    const other = await second.engine(2);
+    other.send(hello({ pageId: 8, ownerGeneration: 2 }));
+    expect(await other.waitFor("helloResult")).toMatchObject({ ok: true });
+    // And from then on page 8's own rule holds, across a restart too.
+    const third = await setUp({ storePath: join(first.storeDir, "owner-generation") });
+    const stale = await third.engine(1);
+    stale.send(hello({ pageId: 8, ownerGeneration: 1 }));
+    expect(await stale.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
+  });
+
   it("lets a higher one supersede the current connection, and tells it the previous one is quiesced", async () => {
     const { engine, quiesced, executed } = await setUp();
     const old = await engine(1);

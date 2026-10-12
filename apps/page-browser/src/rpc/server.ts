@@ -89,8 +89,9 @@ export class RpcServer {
     this.#linkLossMs = options.linkLossMs ?? 5000;
   }
 
+  /** The generation of the engine connected now (0: none). */
   get generation(): number {
-    return this.#options.generations.current;
+    return this.#active?.generation ?? 0;
   }
 
   /** The engine is connected and was heard within the link-loss time. */
@@ -227,13 +228,13 @@ export class RpcServer {
       return this.#refuseHello(conn, "protocol_major");
     }
     const generations = this.#options.generations;
-    const previous = generations.current;
+    const previous = generations.current(hello.pageId);
     if (hello.ownerGeneration < previous) {
       this.#log("hello.refused", { reason: "generation_stale", generation: hello.ownerGeneration, current: previous });
       return this.#refuseHello(conn, "generation_stale");
     }
     try {
-      generations.raise(hello.ownerGeneration);
+      generations.raise(hello.pageId, hello.ownerGeneration);
     } catch (error) {
       // An owner the operator cannot remember is not accepted.
       this.#log("hello.unrecorded", { error: errorMessage(error) });
