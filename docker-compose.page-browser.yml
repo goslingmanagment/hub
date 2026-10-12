@@ -22,10 +22,12 @@ services:
   browser:
     image: ${PB_IMAGE:?the image tag}
     container_name: page-browser-${PB_PAGE}
-    # A constant host name: Chrome's profile lock names the host, and a
-    # recreated container must not take its own profile for another
-    # machine's (stage 1, amendment 33).
-    hostname: page-browser
+    # The profile's own host name: Chrome's profile lock names the host, so
+    # a recreated container — or the profile on another page — takes over
+    # the lock of a Chrome that is gone instead of taking the profile for
+    # another machine's (stage 1, amendment 33). page.sh never lets two
+    # containers mount one profile.
+    hostname: pb-${PB_PROFILE_ID}
     restart: unless-stopped
     stop_grace_period: 20s
     networks:

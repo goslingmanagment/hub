@@ -69,6 +69,6 @@ ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_VERBOSITY=1
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s \
-  CMD grep -q '"ok":true' /run/pb/net-selftest.json
+  CMD ["/etc/s6-overlay/scripts/health"]
 
 ENTRYPOINT ["/init"]

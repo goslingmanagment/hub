@@ -14,7 +14,7 @@ usage() {
 Usage:
   scripts/deploy-page-browser.sh host     <user@host>
   scripts/deploy-page-browser.sh build    <user@host>
-  scripts/deploy-page-browser.sh up       <user@host> --page <name> --image <tag> --socks <host:port>
+  scripts/deploy-page-browser.sh up       <user@host> --page <name> --image <tag> [--socks <host:port>]
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
@@ -25,6 +25,10 @@ Usage:
             its containers), the seccomp profile, the AppArmor profile
             `page-browser`, the host's egress rules and their boot unit,
             the Compose file and page.sh under /opt/agency-hub/page-browser.
+            Loads br_netfilter (and at every boot): from then on traffic
+            inside every Docker bridge passes iptables, where Docker's own
+            rules accept it — the page rules need it, and Docker loads it
+            for pb-egress anyway.
   build     Builds hub-page-browser:<Chrome version>-<commit> on the server
             from this checkout's HEAD (committed files only) and the vendor
             cache (PB_VENDOR_CACHE, default ~/code/.cache/page-browser:
@@ -105,6 +109,10 @@ host() {
     install -m 755 \"\$staging/${APP_DIR}/host/page.sh\" ${REMOTE_BASE}/page.sh
     install -m 644 \"\$staging/${APP_DIR}/security/apparmor-page-browser\" /etc/apparmor.d/page-browser
     apparmor_parser -r -W /etc/apparmor.d/page-browser
+    modprobe br_netfilter
+    printf 'br_netfilter\\n' > /etc/modules-load.d/page-browser.conf
+    printf 'net.bridge.bridge-nf-call-iptables = 1\\n' > /etc/sysctl.d/90-page-browser.conf
+    sysctl -q -w net.bridge.bridge-nf-call-iptables=1
     network() {
       local name=\$1 subnet=\$2; shift 2
       if docker network inspect \"\$name\" >/dev/null 2>&1; then

@@ -23,11 +23,10 @@ while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
 done
 [ -S /tmp/.X11-unix/X99 ] || { echo "chrome: no X server" >&2; exit 1; }
 
-# A recreated container has a new Chrome: the profile's lock of the old one
-# goes, when no Chrome runs here (stage 1, amendment 33).
-if ! pgrep -u pb-chrome -f '^/opt/google/chrome/chrome' >/dev/null; then
-  /command/s6-setuidgid pb-chrome rm -f /data/profile/SingletonLock /data/profile/SingletonSocket /data/profile/SingletonCookie
-fi
+# The profile's lock (Singleton*) stays: the container's host name is the
+# profile's own, so Chrome itself takes over the lock of a Chrome that is
+# gone (stage 1, amendment 33), and still refuses a profile another Chrome
+# holds.
 
 # On Linux Chrome takes its UI language and navigator.language from the
 # environment, not from --lang (stage 1, amendment 10).

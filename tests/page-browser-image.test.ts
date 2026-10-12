@@ -44,6 +44,13 @@ describe("the services", () => {
     expect(read(`${services}/chrome/timeout-kill`).trim()).toBe("5000");
   });
 
+  it("the container is healthy only with the kernel check passed and the X server up", () => {
+    expect(read("apps/page-browser/Dockerfile")).toContain('CMD ["/etc/s6-overlay/scripts/health"]');
+    const health = read("apps/page-browser/s6/scripts/health");
+    expect(health).toContain(`grep -q '"ok":true' /run/pb/net-selftest.json`);
+    expect(health).toContain("s6-svstat -o up,updownfor /run/service/xvnc");
+  });
+
   it("nothing starts before the egress rules and their kernel check", () => {
     expect(existsSync(path.join(root, services, "net-selftest/dependencies.d/init-net"))).toBe(true);
     expect(existsSync(path.join(root, services, "xvnc/dependencies.d/net-selftest"))).toBe(true);
@@ -86,6 +93,48 @@ describe("the egress rules (init-net)", () => {
       .filter((match) => match[0].includes('expect: "refused"'))
       .map((match) => match[1]);
     expect(chromeRefused).toEqual(["the internet", "the page's SOCKS5", "CDP", "the operator's RPC", "the screen", "DNS", "Docker's DNS"]);
+  });
+});
+
+describe("the host's layer (egress-rules.sh)", () => {
+  const rules = read("apps/page-browser/host/egress-rules.sh");
+
+  it("holds pb-egress to each page's SOCKS5, pb-control to sync's and api's own ports, and the host shut", () => {
+    expect(rules).toContain('-s "$egress" -d "$socks_ip" -p tcp --dport "$socks_port" -j RETURN');
+    expect(rules).toContain('-s "$egress" -j DROP');
+    expect(rules).toContain('-s "$SYNC_IP" -d "$control" -p tcp --dport 7700 -j RETURN');
+    expect(rules).toContain('-s "$API_IP" -d "$control" -p tcp -m multiport --dports 6901,7700 -j RETURN');
+    expect(rules).toContain('-d "$control" -j DROP');
+    expect(rules).toContain('-s "$control" -j DROP');
+    expect(rules).toContain('-A "$NEW_IN" -s "$CONTROL_SUBNET" -j DROP');
+    expect(rules).toContain('-A "$NEW_IN" -s "$EGRESS_SUBNET" -j DROP');
+  });
+
+  it("refuses to run where bridge traffic skips iptables, and swaps whole chain sets one run at a time", () => {
+    expect(rules).toContain("net.bridge.bridge-nf-call-iptables");
+    expect(rules).toMatch(/flock -w 30 9/);
+    // New chains are hooked before the old ones are unhooked; nothing hooked is flushed.
+    expect(rules.indexOf('-I DOCKER-USER 1 -j "$NEW_FWD"')).toBeLessThan(rules.indexOf('-D DOCKER-USER -j "$chain"'));
+    expect(rules.indexOf('-D DOCKER-USER -j "$chain"')).toBeLessThan(rules.indexOf('-F "$chain"'));
+    expect(read("scripts/deploy-page-browser.sh")).toContain("modprobe br_netfilter");
+  });
+});
+
+describe("a page's container on the server (page.sh)", () => {
+  const page = read("apps/page-browser/host/page.sh");
+
+  it("switches to a new state only when it is healthy, else brings the old one back", () => {
+    expect(page).toContain('switch_to "$next" "up $IMAGE"');
+    expect(page).toContain('switch_to "$next" "rollback to $previous"');
+    const switchTo = page.slice(page.indexOf("switch_to() {"), page.indexOf("\n}\n", page.indexOf("switch_to() {")));
+    expect(switchTo.indexOf("healthy")).toBeLessThan(switchTo.indexOf('mv "$next" "$(env_file)"'));
+    expect(switchTo).toContain('compose_with "$(env_file)" up -d --force-recreate --no-build');
+  });
+
+  it("gives a profile to one page at a time, and Chrome keeps its own profile lock", () => {
+    expect(page).toContain('owner="$(profile_owner "$profile")"');
+    expect(page).toContain('--filter "volume=pb-profile-$profile"');
+    expect(read("apps/page-browser/s6/s6-rc.d/chrome/run")).not.toMatch(/rm -f \/data\/profile\/Singleton/);
   });
 });
 
@@ -137,7 +186,7 @@ describe("the page's container (docker-compose.page-browser.yml)", () => {
     expect(compose).toContain("\nnetworks:\n  pb-control:\n    external: true\n  pb-egress:\n    external: true\n");
     expect(compose).toMatch(/name: pb-profile-\$\{PB_PROFILE_ID\}/);
     expect(compose).toMatch(/name: pb-buffer-\$\{PB_PROFILE_ID\}/);
-    expect(compose).toContain("hostname: page-browser");
+    expect(compose).toContain("hostname: pb-${PB_PROFILE_ID}");
   });
 
   it("stays out of Hub's stack", () => {

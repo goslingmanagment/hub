@@ -3,10 +3,13 @@
 # as root by scripts/deploy-page-browser.sh over SSH — the only way these
 # containers are created, recreated and removed.
 #
-#   page.sh up --page <name> --image <tag> --socks <host:port>
+#   page.sh up --page <name> --image <tag> [--socks <host:port>]
 #              [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
+#              (a new page needs --socks and a profile; an existing one keeps
+#              what it had unless told otherwise)
 #   page.sh rollback --page <name>
 #   page.sh down --page <name>
+#   page.sh forget --page <name>
 #   page.sh status [--page <name>]
 #
 # A page's files: $PB_BASE/pages/<page>/page.env (the Compose variables:
@@ -14,7 +17,12 @@
 # and secrets/vnc_password (the owner's screen, made here once, root's
 # only). Its addresses in pb-control and pb-egress end in the same octet,
 # chosen once. The profile's volumes outlive the container: `down` keeps
-# them, and `up --profile` gives an existing profile to a page.
+# them; `forget` drops a removed page's files, and `up --profile` then gives
+# its profile to another page. A profile belongs to one page at a time.
+#
+# A new container replaces the old one only when it is healthy: until then
+# page.env keeps the old state, and a failed `up` or `rollback` brings the
+# old container back.
 set -euo pipefail
 
 PB_BASE="${PB_BASE:-/opt/agency-hub/page-browser}"
@@ -54,9 +62,16 @@ value() {
   [[ -f "$2" ]] || return 0
   sed -n "s/^$1=//p" "$2" | tail -n 1
 }
-compose() { docker compose -p "page-browser-$PAGE" -f "$COMPOSE_FILE" --env-file "$(env_file)" "$@"; }
+# Compose with a given env file: page.env, or the next state being tried.
+compose_with() {
+  local env="$1"
+  shift
+  docker compose -p "page-browser-$PAGE" -f "$COMPOSE_FILE" --env-file "$env" "$@"
+}
 
-wait_healthy() {
+# The container's health (the image's check: the kernel check passed, the X
+# server is up); 1 with its log's start lines when it is not healthy.
+healthy() {
   local container="page-browser-$PAGE" health=""
   for _ in $(seq 1 "$HEALTH_WAIT_S"); do
     health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
@@ -64,11 +79,43 @@ wait_healthy() {
     sleep 1
   done
   if [[ "$health" != "healthy" ]]; then
-    docker logs --tail 60 "$container" 2>&1 | grep -E 'init-net|net-selftest|s6-rc|rc.init' >&2 || true
-    fail "$container is ${health:-missing}"
+    docker logs --tail 60 "$container" 2>&1 | grep -E 'init-net|net-selftest|xvnc|s6-rc|rc.init' >&2 || true
+    echo "page: $container is ${health:-missing}" >&2
+    return 1
   fi
-  docker exec "$container" grep -q '"ok":true' /run/pb/net-selftest.json || fail "$container: the kernel check did not pass"
-  echo "page: $container healthy, kernel check passed"
+}
+
+# Run the state in $1 (a page.env candidate). Healthy: it becomes page.env.
+# Not: the previous state, if any, runs again, and this fails.
+switch_to() {
+  local next="$1" what="$2"
+  if compose_with "$next" up -d --force-recreate --no-build >/dev/null && healthy; then
+    mv "$next" "$(env_file)"
+    "$PB_BASE/egress-rules.sh" apply
+    echo "page: page-browser-$PAGE healthy on $(value PB_IMAGE "$(env_file)")"
+    return 0
+  fi
+  if [[ -f "$(env_file)" ]]; then
+    rm -f "$next"
+    compose_with "$(env_file)" up -d --force-recreate --no-build >/dev/null && healthy \
+      && fail "$what failed; page-browser-$PAGE is back on $(value PB_IMAGE "$(env_file)")"
+    fail "$what failed, and page-browser-$PAGE did not come back healthy on $(value PB_IMAGE "$(env_file)")"
+  fi
+  compose_with "$next" down >/dev/null 2>&1 || true
+  rm -f "$next"
+  fail "$what failed; the new page was removed"
+}
+
+# Who else holds a profile: another page's files, or another container
+# mounting its volume. Two Chromes on one profile would share its session
+# and corrupt it.
+profile_owner() {
+  local profile="$1" file
+  for file in "$PB_BASE"/pages/*/page.env; do
+    [[ -f "$file" && "$file" != "$(env_file)" ]] || continue
+    [[ "$(value PB_PROFILE_ID "$file")" == "$profile" ]] && { value PB_PAGE "$file"; return 0; }
+  done
+  docker ps -a --filter "volume=pb-profile-$profile" --format '{{.Names}}' | grep -vx "page-browser-$PAGE" | head -n 1 || true
 }
 
 free_octet() {
@@ -84,14 +131,19 @@ up() {
   [[ -n "$PAGE" ]] || fail "--page is required"
   [[ "$IMAGE" =~ ^hub-page-browser:[A-Za-z0-9_.-]+$ ]] || fail "--image: hub-page-browser:<tag>"
   docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "no image $IMAGE here (build it first)"
-  [[ "$SOCKS" =~ ^([A-Za-z0-9.-]+):([0-9]{1,5})$ ]] || fail "--socks: <host>:<port>"
-  local socks_host="${BASH_REMATCH[1]}" socks_port="${BASH_REMATCH[2]}" socks_ip
-  socks_ip="$(getent ahostsv4 "$socks_host" | awk 'NR == 1 { print $1 }')"
-  [[ "$socks_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cannot resolve $socks_host"
-
-  local dir old="" profile octet previous="" time_zone lang
+  local dir old="" profile octet previous="" time_zone lang socks_ip socks_port
   dir="$(page_dir)"
   [[ -f "$(env_file)" ]] && old="$(env_file)"
+  if [[ -z "$SOCKS" && -n "$old" ]]; then
+    # The page's SOCKS5 as it was.
+    socks_ip="$(value PB_SOCKS_IP "$old")"
+    socks_port="$(value PB_SOCKS_PORT "$old")"
+  else
+    [[ "$SOCKS" =~ ^([A-Za-z0-9.-]+):([0-9]{1,5})$ ]] || fail "--socks: <host>:<port>"
+    socks_port="${BASH_REMATCH[2]}"
+    socks_ip="$(getent ahostsv4 "${BASH_REMATCH[1]}" | awk 'NR == 1 { print $1 }')"
+  fi
+  [[ "$socks_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cannot resolve the SOCKS5 host"
   if [[ "$NEW_PROFILE" == 1 ]]; then
     [[ -z "$PROFILE" ]] || fail "--profile and --new-profile together"
     profile="$(cat /proc/sys/kernel/random/uuid)"
@@ -100,6 +152,9 @@ up() {
     [[ -n "$profile" ]] || fail "a new page needs --profile <uuid> or --new-profile"
     [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "--profile: a UUID"
     docker volume inspect "pb-profile-$profile" "pb-buffer-$profile" >/dev/null 2>&1 || fail "no volumes of profile $profile"
+    local owner
+    owner="$(profile_owner "$profile")"
+    [[ -z "$owner" ]] || fail "profile $profile belongs to $owner (remove it with down, then forget)"
   fi
   octet="$(value PB_EGRESS_IP "$old" | sed -n "s/^$EGRESS_PREFIX\.//p")"
   [[ -n "$octet" ]] || octet="$(free_octet)"
@@ -138,11 +193,9 @@ PB_APPARMOR_PROFILE=${PB_APPARMOR_PROFILE:-page-browser}
 PB_SECRETS_DIR=$dir/secrets
 EOF
   chmod 600 "$next"
-  mv "$next" "$(env_file)"
-  # The host's rules first: the new container is never out without them.
-  "$PB_BASE/egress-rules.sh" apply
-  compose up -d --force-recreate --no-build >/dev/null
-  wait_healthy
+  # A new page's addresses are in the host's rules only once it is healthy:
+  # until then the host lets it reach nothing.
+  switch_to "$next" "up $IMAGE"
 }
 
 rollback() {
@@ -156,16 +209,25 @@ rollback() {
   next="$(mktemp "$(page_dir)/page.env.XXXXXX")"
   sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next"
   chmod 600 "$next"
-  mv "$next" "$(env_file)"
-  compose up -d --force-recreate --no-build >/dev/null
-  wait_healthy
-  echo "page: $PAGE back on $previous (was $current)"
+  switch_to "$next" "rollback to $previous"
 }
 
 down() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
-  compose down >/dev/null
+  compose_with "$(env_file)" down >/dev/null
   echo "page: page-browser-$PAGE removed; profile $(value PB_PROFILE_ID "$(env_file)") kept"
+}
+
+# A removed page's files go; its profile's volumes stay, free for another
+# page (`up --profile`).
+forget() {
+  [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
+  ! docker inspect "page-browser-$PAGE" >/dev/null 2>&1 || fail "page-browser-$PAGE still exists (down first)"
+  local profile
+  profile="$(value PB_PROFILE_ID "$(env_file)")"
+  rm -rf "$(page_dir)"
+  "$PB_BASE/egress-rules.sh" apply
+  echo "page: $PAGE forgotten; profile $profile is free"
 }
 
 status() {
@@ -174,8 +236,8 @@ status() {
     [[ -f "$file" ]] || continue
     name="$(value PB_PAGE "$file")"
     [[ -z "$PAGE" || "$PAGE" == "$name" ]] || continue
-    state="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "page-browser-$name" 2>/dev/null)" || state=absent
-    printf '%-24s %-48s %s\n' "page-browser-$name" "$(value PB_IMAGE "$file")" "$state"
+    state="$(docker inspect -f '{{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "page-browser-$name" 2>/dev/null)" || state="absent"
+    printf '%-24s page.env %-44s running: %s\n' "page-browser-$name" "$(value PB_IMAGE "$file")" "$state"
   done
 }
 
@@ -183,6 +245,7 @@ case "$command" in
   up) up ;;
   rollback) rollback ;;
   down) down ;;
+  forget) forget ;;
   status) status ;;
-  *) fail "usage: page.sh up|rollback|down|status [options]" ;;
+  *) fail "usage: page.sh up|rollback|down|forget|status [options]" ;;
 esac
