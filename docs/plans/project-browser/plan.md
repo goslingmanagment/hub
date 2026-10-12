@@ -398,6 +398,7 @@ tests/sync-browser-*.integration.test.ts    движок с поддельным
         meta skuid pb-chrome oif lo tcp dport 3128 accept           # Chrome — только локальный прокси
         meta skuid pb-operator oif lo tcp dport 9222 accept         # оператор и держатель — CDP
         meta skuid pb-operator ip daddr $SOCKS5_IP tcp dport $SOCKS5_PORT accept
+        reject with icmpx admin-prohibited                          # остальное — отказ сразу
       }
       chain input { type filter hook input priority 0; policy drop;
         iif lo accept
@@ -411,6 +412,8 @@ tests/sync-browser-*.integration.test.ts    движок с поддельным
     У `sync` и `api` постоянные адреса в `pb-control` (`ipv4_address`): деплой Hub пересоздаёт эти контейнеры, но адреса не меняются, и правила в работающих контейнерах страниц остаются верными. Каждый вызов RPC — ещё и с токеном.
 
     Chrome по умолчанию ходит к `localhost` мимо прокси. Поэтому правило для `pb-chrome` пускает его только на порт прокси: страница сайта не достучится ни до CDP, ни до RPC оператора. UDP и DNS у Chrome закрыты целиком.
+
+    Запрещённое не отбрасывается молча, а получает отказ: отброшенный SYN на ядре 7.0 просто ждёт тайм-аута, и отказ правил не отличить от плохой сети. С `reject` ядро отвечает сразу (TCP — `EHOSTUNREACH`, UDP — `EPERM`), и `net-selftest` проверяет именно это (PR 2, #574).
   - Второй слой — на хосте: правило в цепочке `DOCKER-USER` пропускает из адреса контейнера в `pb-egress` только IP и порт SOCKS5 этой страницы.
 - **Локальный прокси оператора** — HTTP-прокси с методом `CONNECT` на `127.0.0.1:3128`:
   - выход закрыт — на любой `CONNECT` ответ `403` с причиной, соединение в журнал;

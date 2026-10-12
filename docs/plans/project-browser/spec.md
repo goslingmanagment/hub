@@ -377,6 +377,7 @@ type OperatorToEngine = HelloResult | Quiesced | State | PingPong | Check | Sent
   "DefaultNotificationsSetting": 2, "DownloadRestrictions": 3,
   "RestoreOnStartup": 4, "RestoreOnStartupURLs": ["about:blank"],
   "RemoteDebuggingAllowed": true, "DeveloperToolsAvailability": 1,
+  "DefaultBrowserSettingEnabled": false, "MetricsReportingEnabled": false,
   "ExtensionSettings": {
     "*": { "installation_mode": "blocked" },
     "<ID расширения>": { "installation_mode": "force_installed",
@@ -389,9 +390,10 @@ type OperatorToEngine = HelloResult | Quiesced | State | PingPong | Check | Sent
   - `AutofillAddressEnabled` и `AutofillCreditCardEnabled` — так в политиках выражается «автозаполнение выключено»;
   - `RestoreOnStartup` и `RestoreOnStartupURLs` — Chrome всегда стартует на `about:blank` (план §4.1, шаг 3) и не открывает прошлых вкладок до подключения контроля;
   - `RemoteDebuggingAllowed` и `DeveloperToolsAvailability` — явно разрешены, чтобы порт CDP не зависел от значений по умолчанию (план §3.1);
+  - `DefaultBrowserSettingEnabled` и `MetricsReportingEnabled` — Chrome не спрашивает про браузер по умолчанию и не шлёт статистику в Google; так работал образ прототипа на тестовом аккаунте;
   - `update_url` — на порту прокси. Правила ОС пускают Chrome только на `127.0.0.1:3128` (план §4.5), поэтому CRX и манифест обновления оператор раздаёт там же. К loopback Chrome ходит мимо прокси, и запрос приходит оператору обычным `GET`.
 - `<ID расширения>` — постоянный ID нашего ключа подписи (план §4.6), появится в PR 6.
-- Самопроверка сверяет применённые политики с этим файлом (план §3.1). Как их читать из Chrome, снимает прототип.
+- Самопроверка сверяет применённые политики с этим файлом (план §3.1). Chrome показывает их на `chrome://policy` строками: имя, значение, источник, уровень, статус. Стенд PR 2 читает их так (`apps/page-browser/stand/image-check.mjs`): все 21 политика применены, обязательные, с уровня платформы. Слова источника, уровня и статуса Chrome переводит на язык страницы, поэтому стенд запускает Chrome по-английски; самопроверке оператора (PR 4) нужен способ, не зависящий от языка.
 
 ### 8.2 Параметры
 
