@@ -942,7 +942,8 @@ export interface CaptureResult {
   inMemory: { response: unknown; parsed: unknown } | null;
 }
 
-function pageErrorState(page: SyncPageRow, holds: HoldSet): PageErrorState {
+/** The page as the outcome rules read it (also a site request's, `engine/site-slot.ts`). */
+export function pageErrorState(page: SyncPageRow, holds: HoldSet): PageErrorState {
   return {
     holds: holds.page,
     networkFailureStreak: page.networkFailureStreak,

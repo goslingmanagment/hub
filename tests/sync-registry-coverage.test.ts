@@ -626,14 +626,16 @@ describe("shadow mode is gone (step 4, S4-23)", () => {
         inserts.push(`${match[1]}(${match[2]!.replace(/\s+/g, " ").trim()}) ${match[3]!.trim()}`);
       }
     }
-    // The only writers of the two tables: demand, the standing rows, an admission.
-    expect(inserts).toHaveLength(3);
+    // The only writers of the two tables: demand, the standing rows, an
+    // admission, and the admission of a page's own site request (0269).
+    expect(inserts).toHaveLength(4);
     const [demand, standing] = inserts.filter((insert) => insert.startsWith("sync_work("));
     for (const insert of [demand!, standing!]) {
       expect(insert).toMatch(/^sync_work\(page_id, shadow, resource, subject, /);
       expect(insert).toContain("${input.pageId}::bigint, false, ");
     }
-    const [admission] = inserts.filter((insert) => insert.startsWith("sync_attempts("));
-    expect(admission).not.toMatch(/\bshadow\b/);
+    const admissions = inserts.filter((insert) => insert.startsWith("sync_attempts("));
+    expect(admissions).toHaveLength(2);
+    for (const admission of admissions) expect(admission).not.toMatch(/\bshadow\b/);
   });
 });
