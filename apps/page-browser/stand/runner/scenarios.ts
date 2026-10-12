@@ -1209,7 +1209,7 @@ const inventoryCapture: Scenario = async (ctx) => {
   const violations: string[] = [];
   const rows: unknown[] = [];
   const files = async () => Number((await ctx.docker.exec(["sh", "-c", "ls /data/buffer/bodies 2>/dev/null | wc -l"])).trim());
-  const STAND_KEYS = ["ok", "rid", "method", "path", "connId", "streamId", "proto", "reused", "nthOnConn", "mono", "seq", "bodyBytes"];
+  const STAND_KEYS = ["ok", "rid", "method", "path", "connId", "streamId", "proto", "reused", "nthOnConn", "mono", "seq", "bodyBytes", "pad"];
   try {
     await ctx.engine.command("test.config", { captureMode: "inventory", inventoryMaxBytes: 8 * 1024 * 1024 });
     const before = await files();
@@ -1220,7 +1220,7 @@ const inventoryCapture: Scenario = async (ctx) => {
       if (c.twice) page = await ctx.engine.eval(call);
       await sleep(400);
       const done = ctx.engine.siteDoneOf(rid);
-      const body = (done?.body ?? null) as { file: string | null; bytes: number; sha256: string; complete: boolean; how: string; inventory?: { inspected: boolean; json?: boolean; paths?: string[]; sensitive?: string[] } } | null;
+      const body = (done?.body ?? null) as { file: string | null; bytes: number; sha256: string; complete: boolean; how: string; inventory?: { inspected: boolean; json?: boolean; paths?: string[]; sensitive?: unknown[] } } | null;
       const inv = body?.inventory;
       const same = body !== null && body.sha256 === page.sha256 && body.bytes === page.bytes;
       rows.push({ case: c.name, pageBytes: page.bytes ?? page.error, captured: body?.bytes ?? null, same, file: body?.file ?? null, complete: body?.complete ?? null, inspected: inv?.inspected ?? null, json: inv?.json ?? null, paths: inv?.paths?.length ?? null, sensitive: inv?.sensitive ?? null });
@@ -1229,8 +1229,10 @@ const inventoryCapture: Scenario = async (ctx) => {
       if ((c.expect ?? "complete") === "complete" && body?.complete !== true) violations.push(`${c.name}: not marked complete (${body?.how})`);
       if ((page.bytes ?? 0) > 8 * 1024 * 1024) {
         if (inv?.inspected !== false) violations.push(`${c.name}: a body over the inventory size was inspected`);
-      } else if (inv?.inspected !== true || inv.json !== true || !STAND_KEYS.every((key) => inv.paths?.includes(key)) || (inv.sensitive?.length ?? -1) !== 0) {
-        violations.push(`${c.name}: the inventory is not the stand answer's keys (${JSON.stringify(inv).slice(0, 200)})`);
+      } else if (inv?.inspected !== true || inv.json !== true || (inv.paths?.length ?? 0) === 0 || !inv.paths!.every((path) => STAND_KEYS.includes(path) || path === "{?}") || (inv.sensitive?.length ?? -1) !== 0) {
+        // Vetted names as they are, the stand's own names off the vocabulary
+        // as {?}; no value, no other key.
+        violations.push(`${c.name}: the inventory is not the stand answer's shape (${JSON.stringify(inv).slice(0, 200)})`);
       }
     }
     const hubResult = await ctx.engine.sendHub(`${tag}-hub`, `${API}/api/item?rid=${tag}-hub`, { authorization: "stand-token" });

@@ -104,7 +104,7 @@ const schemasSeen = new Set<string>();
 function bodySummary(body: unknown, route: string | null = null): Record<string, unknown> | null {
   if (body === null || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
-  const inv = b.inventory as { inspected?: boolean; reason?: string; json?: boolean; success?: boolean | null; paths?: string[]; sensitive?: string[]; truncated?: boolean } | undefined;
+  const inv = b.inventory as { inspected?: boolean; reason?: string; json?: boolean; success?: boolean | null; paths?: string[]; sensitive?: unknown[]; unknownKeys?: number; sampledArrays?: number; truncated?: boolean } | undefined;
   let inventory: Record<string, unknown> | undefined;
   if (inv) {
     const schema = inv.paths ? createHash("sha256").update(inv.paths.join("\n")).digest("hex").slice(0, 12) : null;
@@ -112,7 +112,7 @@ function bodySummary(body: unknown, route: string | null = null): Record<string,
       schemasSeen.add(`${route} ${schema}`);
       journal("schema", { route, schema, paths: inv.paths, sensitive: inv.sensitive ?? [], truncated: inv.truncated ?? false });
     }
-    inventory = { inspected: inv.inspected ?? null, reason: inv.reason ?? null, json: inv.json ?? null, success: inv.success ?? null, keys: inv.paths?.length ?? null, sensitive: inv.sensitive ?? null, schema };
+    inventory = { inspected: inv.inspected ?? null, reason: inv.reason ?? null, json: inv.json ?? null, success: inv.success ?? null, keys: inv.paths?.length ?? null, unknownKeys: inv.unknownKeys ?? null, sampledArrays: inv.sampledArrays ?? null, truncated: inv.truncated ?? null, sensitive: inv.sensitive ?? null, schema };
   }
   return {
     file: typeof b.file === "string" ? b.file.split("/").at(-1) : null,
