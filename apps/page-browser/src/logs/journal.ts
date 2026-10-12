@@ -219,7 +219,17 @@ export class Journals {
     this.#day = day;
     // Yesterday's files are compressed only once everything written to them
     // is on disk.
-    const ending = [...this.#streams.values()].map((stream) => new Promise<void>((resolve) => stream.end(() => resolve())));
+    // A journal that was behind has caught up once yesterday's file is
+    // written: its next line opens today's file, the gap first.
+    const ending = [...this.#streams].map(
+      ([kind, stream]) =>
+        new Promise<void>((resolve) =>
+          stream.end(() => {
+            this.#behind.delete(kind);
+            resolve();
+          }),
+        ),
+    );
     this.#streams.clear();
     this.#housekeeping = this.#housekeeping.then(() => Promise.all(ending)).then(() => this.#compressAndExpire());
   }

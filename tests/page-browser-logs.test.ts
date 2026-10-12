@@ -83,6 +83,23 @@ describe("the journals", () => {
     expect(lines.length).toBeLessThan(50);
   });
 
+  it("a journal behind the disk at midnight takes lines again once yesterday's file is written", async () => {
+    const logDir = dir();
+    let now = Date.parse("2026-10-13T23:59:59Z");
+    const journals = new Journals({ dir: logDir, now: () => now, log: quiet, maxPendingBytes: 1024 });
+    for (let i = 0; i < 50; i++) journals.request({ method: "GET", host: "fansly.com", path: `/${"x".repeat(100)}`, resourceType: "Document", admission: null, decision: "failed", result: "x" });
+    expect(await journals.flushed()).toBe(false);
+    now = Date.parse("2026-10-14T00:00:01Z");
+    journals.state({ from: "exit_closed", to: "env_applied", stopReason: null, retryAtWall: null, halted: false, note: "" });
+    await journals.housekeep();
+    expect(await journals.flushed()).toBe(true);
+    journals.request({ method: "GET", host: "fansly.com", path: "/after-midnight", resourceType: "Document", admission: null, decision: "failed", result: "x" });
+    await journals.close();
+    const today = readFileSync(join(logDir, "requests-2026-10-14.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(today[0]).toMatchObject({ gap: true });
+    expect(today[1]).toMatchObject({ path: "/after-midnight" });
+  });
+
   it("are flushed only when everything written reached the disk", async () => {
     const good = new Journals({ dir: dir(), log: quiet });
     good.state({ from: "exit_closed", to: "env_applied", stopReason: null, retryAtWall: null, halted: false, note: "" });

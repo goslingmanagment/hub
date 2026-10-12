@@ -349,6 +349,36 @@ describe("a new owner, a start under way", () => {
     expect(s.control.calls).toContain("kill");
   });
 
+  it("a third owner waits until the second one ended the start, and that ending never touches the third one's browser", async () => {
+    let hold = false;
+    const releases: Array<() => void> = [];
+    const s = await setUp({ exitIp: () => (hold ? new Promise<string>((resolve) => releases.push(() => resolve("203.0.113.7"))) : "203.0.113.7") });
+    hold = true;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "selftest_passed", 10_000, "the exit-IP check under way");
+    const socks5 = { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD };
+    const second = new FakeEngine();
+    second.generation = 2;
+    await second.connect(s.rpcPort());
+    cleanups.push(() => second.close());
+    second.send(hello({ ownerGeneration: 2, socks5 }));
+    await second.waitFor("helloResult");
+    const third = new FakeEngine();
+    third.generation = 3;
+    await third.connect(s.rpcPort());
+    cleanups.push(() => third.close());
+    third.send(hello({ ownerGeneration: 3, socks5 }));
+    await third.waitFor("quiesced", undefined, 10_000);
+    hold = false;
+    expect(await command(third, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the third owner's page up");
+    for (const release of releases.splice(0)) release();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(s.operator.page.step).toBe("exit_open");
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.chrome.running).toBe(true);
+  });
+
   it("a queued command of the old owner stays refused after the new one disconnected", async () => {
     const s = await setUp();
     await started(s);

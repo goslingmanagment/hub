@@ -145,6 +145,8 @@ export class Operator {
   #starting = false;
   /** The start that runs now, or the last one: settles when it ended. */
   #runDone: Promise<void> = Promise.resolve();
+  /** A start being ended for a new owner (#stand): settles when it ended. */
+  #standing: Promise<void> = Promise.resolve();
   /** The holder is stopping: the exit stays closed until a holder links
    *  again — nothing may open it between "exit.closed" and the detach. */
   #holderStopping = false;
@@ -571,12 +573,19 @@ export class Operator {
   async #stand(note: string): Promise<void> {
     this.egress.closeExit(note);
     this.#cancelRun();
+    const run = this.#run;
     this.#clearRetry();
     this.#health.stop();
     this.#stopIpTimer();
     await this.#runDone;
+    // A newer start that began meanwhile has the browser: nothing of it is
+    // touched here (it stops whatever Chrome it finds itself).
+    if (run !== this.#run) return;
     this.#controlExpected = false;
-    await this.#withChrome(() => this.chrome.kill()).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
+    await this.#withChrome(async () => {
+      if (run === this.#run) await this.chrome.kill();
+    }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
+    if (run !== this.#run) return;
     this.control.reset();
     this.page.stand(note);
   }
@@ -741,7 +750,8 @@ export class Operator {
     // A start under way ends here, the exit closed: the new owner starts the
     // page. A page that is up stays up — the browser outlives its owner
     // (a Hub deploy is one).
-    if (this.#starting) await this.#stand("a new owner of the page");
+    if (this.#starting) this.#standing = this.#stand("a new owner of the page");
+    await this.#standing;
     const last = this.egress.gate.lastSend;
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
