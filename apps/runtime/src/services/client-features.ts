@@ -34,8 +34,13 @@ export interface ClientFeatureRequirement {
 }
 
 const ONLYFANS: readonly Platform[] = ["onlyfans"];
+const FANSLY: readonly Platform[] = ["fansly"];
 
-/** Every flag the extension knows, with what it needs. The pilot is OnlyFans only. */
+/**
+ * Every flag the extension knows, with what it needs. The pilot is OnlyFans
+ * only; the flags of Fansly's own AI generations (R20 HF-12) exist on Fansly
+ * alone.
+ */
 export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName, ClientFeatureRequirement>> = {
   // Client-only: the hub has no action behind these.
   insertion: { platforms: ONLYFANS, capabilities: [] },
@@ -56,6 +61,13 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   stats: { platforms: ONLYFANS, capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] },
   newcomers: { platforms: ONLYFANS, capabilities: ["audience-new-v1", "preview-send-custody-v1"] },
   previewSend: { platforms: ONLYFANS, capabilities: ["preview-send-custody-v1"] },
+  // R20 HF-12: on Fansly the narrow token's AI switch puts Reply, Fix, Hi and
+  // Ping behind `drafts`, the voice script behind `voice` and the notes fill
+  // behind `notesFill` (client-ai-switch.ts). On OnlyFans these flags do not
+  // exist and those generations keep the master switch and the version.
+  drafts: { platforms: FANSLY, capabilities: [] },
+  voice: { platforms: FANSLY, capabilities: [] },
+  notesFill: { platforms: FANSLY, capabilities: [] },
 };
 
 /**

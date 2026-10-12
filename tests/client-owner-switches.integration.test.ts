@@ -133,8 +133,16 @@ async function chatExtensionAuditIds(): Promise<number[]> {
   return rows.rows.map((row) => Number(row.id));
 }
 
-const everyFeature = (reason: string) => Object.fromEntries(
-  CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, { available: false, reason }]),
+/** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly
+ *  alone, every other flag on OnlyFans alone. */
+const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
+/** Every flag off on a page of platform `on`: for `reason` where the flag
+ *  exists, `platform_unsupported` where it does not. */
+const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") => Object.fromEntries(
+  CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, {
+    available: false,
+    reason: (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on ? reason : "platform_unsupported",
+  }]),
 );
 
 describe("owner switches of the chat extension", () => {
@@ -289,7 +297,7 @@ describe("owner switches of the chat extension", () => {
       stats: { available: true },
       preview: { available: false, reason: "flag_off" },
     });
-    expect(features["lora-fansly"]).toEqual(everyFeature("platform_unsupported"));
+    expect(features["lora-fansly"]).toEqual(everyFeature("flag_off", "fansly"));
     expect(features["nova-of"]).toMatchObject({ coach: { available: false, reason: "binding_missing" } });
 
     const owner = await bootstrapAs(ownerToken);
