@@ -20,6 +20,22 @@ const dynamicWsRestriction = {
   message: websocketMessage,
 };
 
+// Project Browser (apps/page-browser, plan §3.3). Its processes run their
+// TypeScript on Node's type stripping, so only erasable syntax. And the
+// network belongs to the modules whose job it is: egress/ (Chrome's way out,
+// the SOCKS5), cdp/ (the holder link), holder/ (Chrome's DevTools endpoint)
+// and rpc/ (the engine's endpoint); everything else reaches the network only
+// through them. Type imports stay allowed.
+const pageBrowserErasableOnly = [
+  "TSEnumDeclaration",
+  "TSModuleDeclaration",
+  "TSParameterProperty",
+  "TSImportEqualsDeclaration",
+  "TSExportAssignment",
+].map((selector) => ({ selector, message: "apps/page-browser runs on Node's type stripping: erasable TypeScript only (no enums, namespaces, parameter properties)." }));
+const pageBrowserNetworkMessage = "Project Browser: network modules only in egress/, cdp/, holder/ and rpc/ (plan §3.3).";
+const pageBrowserNetworkModules = ["net", "http", "https", "tls", "dgram", "http2"].flatMap((name) => [name, `node:${name}`]).concat(["undici", "ws"]);
+
 // The family lint standard (Stage 35), grown from the Stage 19 bootstrap.
 // Two layers:
 // - Base hygiene seeded from the desktop's config: js/ts recommended,
@@ -201,6 +217,31 @@ export default tseslint.config(
     files: ["packages/shared/src/http-client.ts"],
     rules: {
       "no-restricted-syntax": ["error", moneyRestriction, dynamicUndiciRestriction, dynamicWsRestriction],
+    },
+  },
+  {
+    files: ["apps/page-browser/src/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...pageBrowserErasableOnly, {
+        selector: "ImportExpression > Literal[value=/^(node:)?(net|http|https|tls|dgram|http2)$/]",
+        message: pageBrowserNetworkMessage,
+      }],
+      "@typescript-eslint/no-restricted-imports": ["error", {
+        paths: pageBrowserNetworkModules.map((name) => ({ name, allowTypeImports: true, message: pageBrowserNetworkMessage })),
+      }],
+      "no-restricted-globals": ["error", ...["WebSocket", "fetch", "EventSource", "XMLHttpRequest"].map((name) => ({ name, message: pageBrowserNetworkMessage }))],
+      "no-restricted-properties": ["error", ...["globalThis", "global"].flatMap((object) => ["WebSocket", "fetch"].map((property) => ({
+        object, property, message: pageBrowserNetworkMessage,
+      })))],
+    },
+  },
+  {
+    files: ["apps/page-browser/src/{egress,cdp,holder,rpc}/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...pageBrowserErasableOnly],
+      "@typescript-eslint/no-restricted-imports": "off",
+      "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
     },
   },
   {
