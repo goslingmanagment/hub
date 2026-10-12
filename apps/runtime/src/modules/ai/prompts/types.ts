@@ -16,6 +16,7 @@ export type FeatureType =
   | 'hi-greeting'
   | 'coach-chat'
   | 'voice-script'
+  | 'fan-notes-fill'
   | 'compare';
 
 /** Features with their own model selection; improve-draft & hi-greeting delegate to fast-reply. */
@@ -25,7 +26,8 @@ export type ModelSelectableFeature =
   | 'fan-summary'
   | 'chat-review'
   | 'ping'
-  | 'coach-chat';
+  | 'coach-chat'
+  | 'fan-notes-fill';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 

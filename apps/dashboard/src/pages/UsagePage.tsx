@@ -19,7 +19,11 @@ const FEATURE_ORDER: { key: string; label: string }[] = [
 ];
 
 const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
-  [...FEATURE_ORDER, { key: "voice-script", label: "Voice script" }].map((f) => [f.key, f.label]),
+  [
+    ...FEATURE_ORDER,
+    { key: "voice-script", label: "Voice script" },
+    { key: "fan-notes-fill", label: "Fan notes fill" },
+  ].map((f) => [f.key, f.label]),
 );
 const TABLE_FEATURES = new Set(FEATURE_ORDER.map((feature) => feature.key));
 
