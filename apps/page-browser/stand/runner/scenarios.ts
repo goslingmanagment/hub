@@ -1249,6 +1249,10 @@ const inventoryCapture: Scenario = async (ctx) => {
   ctx.engine.serialize = true;
   const tag = `ic-${ctx.run}-${Date.now() % 100000}`;
   const violations: string[] = [];
+  // A stall or a crash while capturing is this scenario's failure, not a
+  // run that does not count (Astra review 16).
+  const armedAt = monoMs();
+  ctx.arm();
   const rows: unknown[] = [];
   const files = async () => Number((await ctx.docker.exec(["sh", "-c", "ls /data/buffer/bodies 2>/dev/null | wc -l"])).trim());
   const STAND_KEYS = ["ok", "rid", "method", "path", "connId", "streamId", "proto", "reused", "nthOnConn", "mono", "seq", "bodyBytes", "pad"];
@@ -1288,6 +1292,8 @@ const inventoryCapture: Scenario = async (ctx) => {
     await ctx.engine.command("test.config", { captureMode: "file" }, 60_000);
     ctx.engine.serialize = false;
   }
+  const lost = ctx.engine.alarms.filter((alarm) => Number(alarm.recvMono) >= armedAt).map((alarm) => alarm.kind);
+  if (lost.length > 0) violations.push(`the operator lost control or stopped the page while capturing: ${lost.join(", ")}`);
   return { ok: violations.length === 0, violations, notes: { rows } };
 };
 
@@ -1302,6 +1308,10 @@ const redactedCapture: Scenario = async (ctx) => {
   ctx.engine.serialize = true;
   const tag = `rc-${ctx.run}-${Date.now() % 100000}`;
   const violations: string[] = [];
+  // A stall or a crash while capturing is this scenario's failure, not a
+  // run that does not count (Astra review 16).
+  const armedAt = monoMs();
+  ctx.arm();
   const rows: unknown[] = [];
   const sh = async (cmd: string) => (await ctx.docker.exec(["sh", "-c", cmd])).trim();
   const CASES = [...BODY_CASES, { name: "an e-mail in the answer", query: "size=3000&note=owner@example.test" } as BodyCase];
@@ -1349,6 +1359,8 @@ const redactedCapture: Scenario = async (ctx) => {
     await ctx.engine.command("test.config", { captureMode: "file" }, 60_000);
     ctx.engine.serialize = false;
   }
+  const lost = ctx.engine.alarms.filter((alarm) => Number(alarm.recvMono) >= armedAt).map((alarm) => alarm.kind);
+  if (lost.length > 0) violations.push(`the operator lost control or stopped the page while capturing: ${lost.join(", ")}`);
   return { ok: violations.length === 0, violations, notes: { rows } };
 };
 
