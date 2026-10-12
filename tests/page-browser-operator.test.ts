@@ -584,8 +584,11 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     again.send(hello({ env, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
     await again.waitFor("helloResult");
     const kyiv = "TZ=Europe/Kyiv\nLANGUAGES=uk-UA,uk,en-US,en\n";
-    await until(() => s.model.handovers.at(-1) === kyiv && s.operator.page.step === "exit_open", 10_000, "the page up again");
+    await until(() => s.model.handovers.at(-1) === kyiv && s.operator.page.step === "exit_open", 5000, "the page up again");
     expect(readFileSync(s.chromeEnv, "utf8")).toBe(kyiv);
+    // One restart, nothing failed on the way.
+    expect(s.model.handovers).toHaveLength(2);
+    expect(journal(s.logDir, "states").some((line) => line.stopReason !== null)).toBe(false);
     expect(s.model.overrides.get(s.operator.control.workTab!.sessionId)).toEqual({ latitude: 50.45, longitude: 30.52, accuracy: 30 });
     // Chrome names the zone its own way (Europe/Kiev): the same zone.
     const verified = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((line) => line.e === "env.verified").at(-1);
