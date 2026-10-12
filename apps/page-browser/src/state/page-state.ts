@@ -112,6 +112,13 @@ export class PageState {
     return retryAtWall;
   }
 
+  /** Back to step 1 with nothing failed: the page stands until the engine
+   *  starts it (a start that a new owner of the page ended). */
+  stand(note: string): void {
+    this.#upSince = null;
+    this.#set("exit_closed", null, null, false, note);
+  }
+
   /** A stop that holds until the engine starts the page again. */
   halt(reason: StopReason, note: string): void {
     this.#upSince = null;

@@ -69,12 +69,31 @@ describe("the journals", () => {
     await journals.close();
   });
 
-  it("and when a journal falls behind the disk", async () => {
+  it("and when a journal falls behind the disk: its lines wait for no more than the bound, and the gap is written", async () => {
+    const logDir = dir();
     const troubles: string[] = [];
-    const journals = new Journals({ dir: dir(), log: quiet, maxPendingBytes: 1024, onTrouble: (reason) => troubles.push(reason) });
+    const journals = new Journals({ dir: logDir, now: () => Date.parse("2026-10-13T10:00:00Z"), log: quiet, maxPendingBytes: 1024, onTrouble: (reason) => troubles.push(reason) });
     for (let i = 0; i < 50; i++) journals.request({ method: "GET", host: "fansly.com", path: `/${"x".repeat(100)}`, resourceType: "Document", admission: null, decision: "failed", result: "x" });
     expect(troubles).toEqual([expect.stringMatching(/^the requests journal is \d+ bytes behind the disk$/)]);
+    expect(await journals.flushed()).toBe(false);
     await journals.close();
+    const lines = readFileSync(join(logDir, "requests-2026-10-13.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const gap = lines.find((line) => line.gap === true);
+    expect(gap?.dropped).toBe(50 - (lines.length - 1));
+    expect(lines.length).toBeLessThan(50);
+  });
+
+  it("are flushed only when everything written reached the disk", async () => {
+    const good = new Journals({ dir: dir(), log: quiet });
+    good.state({ from: "exit_closed", to: "env_applied", stopReason: null, retryAtWall: null, halted: false, note: "" });
+    expect(await good.flushed()).toBe(true);
+    await good.close();
+    const logDir = dir();
+    mkdirSync(join(logDir, "states-2026-10-13.jsonl"));
+    const bad = new Journals({ dir: logDir, now: () => Date.parse("2026-10-13T10:00:00Z"), log: quiet });
+    bad.state({ from: "exit_closed", to: "env_applied", stopReason: null, retryAtWall: null, halted: false, note: "" });
+    expect(await bad.flushed()).toBe(false);
+    await bad.close();
   });
 
   it("compress a day that ended and remove what is older than the retention", async () => {

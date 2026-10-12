@@ -73,6 +73,8 @@ export class RpcServer {
   readonly #options: RpcServerOptions;
   readonly #log: Logger;
   readonly #ledger = new CommandLedger();
+  /** The page of the last accepted hello. */
+  #pageId: number | null = null;
   #server: Server | null = null;
   #active: Conn | null = null;
   #lastHeard = 0;
@@ -89,9 +91,10 @@ export class RpcServer {
     this.#linkLossMs = options.linkLossMs ?? 5000;
   }
 
-  /** The generation of the engine connected now (0: none). */
+  /** The highest generation accepted for the page of the last accepted
+   *  hello (0: none yet). An engine that disconnects does not lower it. */
   get generation(): number {
-    return this.#active?.generation ?? 0;
+    return this.#pageId === null ? 0 : this.#options.generations.current(this.#pageId);
   }
 
   /** The engine is connected and was heard within the link-loss time. */
@@ -249,6 +252,7 @@ export class RpcServer {
     }
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
+    this.#pageId = hello.pageId;
     this.#active = conn;
     this.#lastHeard = monoMs();
     this.#lastPingAt = 0;

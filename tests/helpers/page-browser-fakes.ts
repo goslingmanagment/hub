@@ -294,10 +294,10 @@ export class FakeSocks {
 }
 
 /** The exit-IP service over plain HTTP: answers `ip`. */
-export async function fakeIpify(answer: () => string): Promise<{ port: number; close: () => Promise<void> }> {
+export async function fakeIpify(answer: () => string | Promise<string>): Promise<{ port: number; close: () => Promise<void> }> {
   const server = createHttpServer((_req, res) => {
     res.setHeader("content-type", "text/plain");
-    res.end(answer());
+    void Promise.resolve(answer()).then((ip) => res.end(ip));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();

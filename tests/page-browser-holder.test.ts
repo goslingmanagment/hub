@@ -183,6 +183,15 @@ describe("the CDP holder", () => {
     expect(exits).toEqual([0]);
   });
 
+  it("on a planned stop with no operator linked: Chrome goes before CDP does", async () => {
+    const { chrome, holder, exits, kills } = await setUp(undefined, { stopGraceMs: 100 });
+    await holder.stop();
+    expect(kills()).toBe(1);
+    expect(chrome.running).toBe(false);
+    await until(() => exits.length === 1);
+    expect(exits).toEqual([0]);
+  });
+
   it("on overflow tries the kill again until Chrome is gone, and only then lets go of CDP", async () => {
     const { chrome, exits, socketPath, kills } = await setUp(256 * 1024, { failedKills: 2 });
     const operator = await connectOperator(socketPath);

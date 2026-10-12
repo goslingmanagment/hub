@@ -96,8 +96,12 @@ export class Journals {
   readonly #streams = new Map<JournalKind, WriteStream>();
   readonly #maxPendingBytes: number;
   readonly #onTrouble: (reason: string) => void;
-  /** Journals over their pending bytes, until they drain. */
+  /** Journals over their pending bytes, until they drain: their lines are
+   *  dropped meanwhile, counted, and the gap is written when they drain. */
   readonly #behind = new Set<JournalKind>();
+  readonly #dropped = new Map<JournalKind, number>();
+  /** Write errors so far. */
+  #errors = 0;
   #housekeeping: Promise<void> = Promise.resolve();
 
   constructor(options: JournalOptions) {
@@ -125,6 +129,8 @@ export class Journals {
 
   /** Settles when the files written so far are flushed and closed. */
   async close(): Promise<void> {
+    for (const [kind, stream] of this.#streams) this.#writeGap(kind, stream);
+    this.#behind.clear();
     const streams = [...this.#streams.values()];
     this.#streams.clear();
     await Promise.all(streams.map((stream) => new Promise<void>((resolve) => stream.end(() => resolve()))));
@@ -137,12 +143,31 @@ export class Journals {
     return this.#housekeeping;
   }
 
+  /** Everything written so far reached the disk: true when it all did,
+   *  and nothing failed or fell behind meanwhile (a start waits for it). */
+  async flushed(timeoutMs = 2000): Promise<boolean> {
+    if (this.#behind.size > 0) return false;
+    const errors = this.#errors;
+    const written = Promise.all(
+      [...this.#streams.values()].map((stream) => new Promise<boolean>((resolve) => stream.write("", (error) => resolve(!error)))),
+    ).then((results) => results.every(Boolean));
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs)));
+    const ok = await Promise.race([written, late]);
+    clearTimeout(timer);
+    return ok && this.#errors === errors && this.#behind.size === 0;
+  }
+
   #write(kind: JournalKind, line: object): void {
+    if (this.#behind.has(kind)) {
+      this.#dropped.set(kind, (this.#dropped.get(kind) ?? 0) + 1);
+      return;
+    }
     this.#roll();
     const stream = this.#stream(kind);
     const text = scrub(JSON.stringify({ at: new Date(this.#now()).toISOString(), ...line }));
-    stream.write(`${text}\n`);
-    if (stream.writableLength > this.#maxPendingBytes && !this.#behind.has(kind)) {
+    stream.write(`${text}\n`, () => this.#maybeCaughtUp(kind, stream));
+    if (stream.writableLength > this.#maxPendingBytes) {
       this.#behind.add(kind);
       this.#log("write.behind", { kind, pendingBytes: stream.writableLength });
       this.#onTrouble(`the ${kind} journal is ${stream.writableLength} bytes behind the disk`);
@@ -158,14 +183,34 @@ export class Journals {
         // A full disk must not take the operator down: the page's traffic
         // stops instead, and the next line opens the file anew.
         if (this.#streams.get(kind) === opened) this.#streams.delete(kind);
+        // No drain comes from a failed file: the next line opens a new one,
+        // which carries the gap first.
         this.#behind.delete(kind);
+        this.#errors += 1;
         this.#log("write.failed", { kind, error: errorMessage(error) });
         this.#onTrouble(`the ${kind} journal could not be written: ${errorMessage(error)}`);
       });
-      opened.on("drain", () => this.#behind.delete(kind));
+      this.#writeGap(kind, opened);
       this.#streams.set(kind, stream);
     }
     return stream;
+  }
+
+  /** A journal that was behind has written everything: it takes lines again,
+   *  the first being the gap. */
+  #maybeCaughtUp(kind: JournalKind, stream: WriteStream): void {
+    if (!this.#behind.has(kind) || stream.writableLength > 0 || stream.writableEnded || this.#streams.get(kind) !== stream) return;
+    this.#behind.delete(kind);
+    this.#log("write.caught_up", { kind, dropped: this.#dropped.get(kind) ?? 0 });
+    this.#writeGap(kind, stream);
+  }
+
+  /** The lines dropped while the journal was behind or failing: one line. */
+  #writeGap(kind: JournalKind, stream: WriteStream): void {
+    const dropped = this.#dropped.get(kind) ?? 0;
+    if (dropped === 0) return;
+    this.#dropped.delete(kind);
+    stream.write(`${JSON.stringify({ at: new Date(this.#now()).toISOString(), gap: true, dropped })}\n`);
   }
 
   #roll(): void {

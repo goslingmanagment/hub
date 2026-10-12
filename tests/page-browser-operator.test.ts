@@ -55,7 +55,7 @@ interface SetUp {
   rpcPort: () => number;
 }
 
-async function setUp(options: { extension?: "required"; exitIp?: () => string; holderMaxBytes?: number } = {}): Promise<SetUp> {
+async function setUp(options: { extension?: "required"; exitIp?: () => string | Promise<string>; holderMaxBytes?: number } = {}): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -326,6 +326,65 @@ describe("a new owner", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(starts()).toBe(1);
     expect(s.operator.page.halted).toBe(true);
+  });
+});
+
+describe("a new owner, a start under way", () => {
+  it("ends the start: Chrome goes, the exit never opens, the page stands until the new owner starts it", async () => {
+    let held: (() => void) | null = null;
+    const s = await setUp({ exitIp: () => (held === null ? "203.0.113.7" : new Promise<string>((resolve) => (held = () => resolve("203.0.113.7")))) });
+    held = () => undefined;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "selftest_passed", 10_000, "the exit-IP check under way");
+    const next = new FakeEngine();
+    next.generation = 2;
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("quiesced", undefined, 10_000);
+    (held as (() => void) | null)?.();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.operator.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
+    expect(s.control.calls).toContain("kill");
+  });
+
+  it("a queued command of the old owner stays refused after the new one disconnected", async () => {
+    const s = await setUp();
+    await started(s);
+    const starts = () => s.control.calls.filter((call) => call === "start").length;
+    s.chrome.handlers.set("Browser.close", () => null);
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId: "slow-stop-2", notAfterMono: monoMs() + 10_000, command: { kind: "stopPage" } });
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId: "late-restart-2", notAfterMono: monoMs() + 10_000, command: { kind: "restartBrowser" } });
+    await until(() => s.operator.page.halted, 2000, "the stop under way");
+    const next = new FakeEngine();
+    next.generation = 2;
+    await next.connect(s.rpcPort());
+    next.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("helloResult");
+    await next.close();
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    expect(starts()).toBe(1);
+    expect(s.operator.page.halted).toBe(true);
+  });
+});
+
+describe("the holder stopping", () => {
+  it("latches the exit closed: an openExit under way does not open it before the detach", async () => {
+    let held: (() => void) | null = null;
+    const s = await setUp({ exitIp: () => (held === null ? "203.0.113.7" : new Promise<string>((resolve) => (held = () => resolve("203.0.113.7")))) });
+    await started(s);
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    held = () => undefined;
+    const commandId = "open-under-way";
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId, notAfterMono: monoMs() + 10_000, command: { kind: "openExit" } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const stopped = s.holder.holder!.stop();
+    (held as (() => void) | null)?.();
+    await stopped;
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(await s.engine.waitFor("commandResult", (message) => message.commandId === commandId, 10_000)).toMatchObject({ ok: false });
+    expect(s.operator.egress.exitOpen).toBe(false);
   });
 });
 

@@ -143,6 +143,11 @@ export class Operator {
   /** The current start; a newer one, a stop or a failure supersedes it. */
   #run = 0;
   #starting = false;
+  /** The start that runs now, or the last one: settles when it ended. */
+  #runDone: Promise<void> = Promise.resolve();
+  /** The holder is stopping: the exit stays closed until a holder links
+   *  again — nothing may open it between "exit.closed" and the detach. */
+  #holderStopping = false;
   #stopped = false;
   #linking = false;
   /** Chrome runs under the operator's control: losing it is a failure. */
@@ -244,7 +249,12 @@ export class Operator {
           this.#controlLost("holder_overflow", "the holder's store overflowed: the operator fell behind");
           return;
         case "stopping":
-          // The holder is told to stop: the exit closes before it lets go of CDP.
+          // The holder is told to stop: the exit closes before it lets go of
+          // CDP, and stays closed — a start or an openExit under way ends
+          // here, none may open it before the detach.
+          this.#holderStopping = true;
+          this.#cancelRun();
+          this.#clearRetry();
           this.egress.closeExit("the holder stops");
           this.cdp.holderCommand("exit.closed");
           return;
@@ -346,6 +356,7 @@ export class Operator {
         let link: HolderLink;
         try {
           link = await this.cdp.connect();
+          this.#holderStopping = false;
         } catch {
           await sleep(this.#timings.holderRelinkMs);
           continue;
@@ -399,6 +410,13 @@ export class Operator {
 
   // ── the start (plan §4.1) ─────────────────────────────────────────────
 
+  /** A start, remembered until it ends (a new owner waits for it). */
+  #launch(fresh: boolean, note: string): Promise<void> {
+    const done = this.#startRun(fresh, note);
+    this.#runDone = done;
+    return done;
+  }
+
   async #startRun(fresh: boolean, note: string): Promise<void> {
     if (this.#stopped || (!fresh && this.page.halted)) return;
     this.#clearRetry();
@@ -412,6 +430,9 @@ export class Operator {
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
     try {
+      // Nothing may pass unrecorded: the journals must be writing.
+      if (!(await this.journals.flushed())) throw new StartFailure("disk_full", "the journals cannot be written");
+      check();
       // A Chrome that runs now is a previous start's or nobody's: the page
       // starts with a fresh one.
       await this.#withChrome(async () => {
@@ -458,6 +479,10 @@ export class Operator {
   }
 
   #openExit(): void {
+    if (this.#holderStopping) {
+      this.#log("exit.kept_closed", { why: "the holder is stopping" });
+      return;
+    }
     this.egress.openExit();
     this.page.advance("exit_open");
     this.#armIpTimer();
@@ -541,6 +566,21 @@ export class Operator {
     this.#retryTimer = null;
   }
 
+  /** End whatever start runs, kill its Chrome, and let the page stand with
+   *  the exit closed until the engine starts it. */
+  async #stand(note: string): Promise<void> {
+    this.egress.closeExit(note);
+    this.#cancelRun();
+    this.#clearRetry();
+    this.#health.stop();
+    this.#stopIpTimer();
+    await this.#runDone;
+    this.#controlExpected = false;
+    await this.#withChrome(() => this.chrome.kill()).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
+    this.control.reset();
+    this.page.stand(note);
+  }
+
   /** A failure: the exit closes, Chrome is killed (nothing of it is trusted
    *  any more; a self-test probe still queued dies with it), and the start
    *  is tried again after the backoff. */
@@ -561,7 +601,7 @@ export class Operator {
     await this.#withChrome(() => this.chrome.kill()).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run || this.#stopped) return; // a newer start took over meanwhile
     this.control.reset();
-    this.#retryTimer = setTimeout(() => void this.#startRun(false, `a retry after ${why}`), Math.max(0, retryAtWall - Date.now()));
+    this.#retryTimer = setTimeout(() => void this.#launch(false, `a retry after ${why}`), Math.max(0, retryAtWall - Date.now()));
   }
 
   /** A stop that holds until the engine's restartBrowser. `stop`: Chrome
@@ -670,7 +710,7 @@ export class Operator {
       // What was verified is not what the engine says now: the exit closes
       // and the page starts again on the new settings.
       this.egress.closeExit("the engine changed the page's SOCKS5 or pinned IP");
-      queueMicrotask(() => void this.#startRun(false, "the engine changed the page's SOCKS5 or pinned IP"));
+      queueMicrotask(() => void this.#launch(false, "the engine changed the page's SOCKS5 or pinned IP"));
     }
     this.#log("engine.settings", { pageId: settings.pageId, pinnedExitIp: settings.pinnedExitIp, socks: `${settings.socks.ip}:${settings.socks.port}`, changed });
     return { bufferId: this.#bufferId, state: this.state };
@@ -698,6 +738,10 @@ export class Operator {
    *  there are no admissions yet: the last send the gate saw is all there is. */
   async #quiesce(): Promise<{ lastSendMono: number | null; lastSendWall: number | null }> {
     await this.#commandChain;
+    // A start under way ends here, the exit closed: the new owner starts the
+    // page. A page that is up stays up — the browser outlives its owner
+    // (a Hub deploy is one).
+    if (this.#starting) await this.#stand("a new owner of the page");
     const last = this.egress.gate.lastSend;
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
@@ -736,7 +780,7 @@ export class Operator {
         return { ok: true, detail: "the page is stopped" };
       case "restartBrowser":
         this.#exitHeld = false;
-        void this.#startRun(true, "the engine's restartBrowser");
+        void this.#launch(true, "the engine's restartBrowser");
         return { ok: true, detail: "the start began" };
       case "selfTest":
         return this.#selfTestCommand();

@@ -113,13 +113,16 @@ export class Holder {
   async stop(): Promise<void> {
     if (this.#exiting || this.#stopRequested) return;
     this.#stopRequested = true;
+    let confirmed = false;
     if (this.#cdpUp() && this.#operatorLinked()) {
       const answered = new Promise<void>((resolve) => (this.#stopping = { resolve }));
       this.#toOperator(JSON.stringify({ t: "stopping" }));
-      const answer = await Promise.race([answered.then(() => true), sleep(this.#options.stopGraceMs ?? 1000).then(() => false)]);
-      this.#log("stopping", { exitClosedByOperator: answer });
-      if (!answer) await this.#killChromeUntilGone("a stop the operator did not confirm");
+      confirmed = await Promise.race([answered.then(() => true), sleep(this.#options.stopGraceMs ?? 1000).then(() => false)]);
+      this.#log("stopping", { exitClosedByOperator: confirmed });
     }
+    // Without the operator's word — no answer, or no operator linked — the
+    // exit is not known to be closed.
+    if (this.#cdpUp() && !confirmed) await this.#killChromeUntilGone(this.#operatorLinked() ? "a stop the operator did not confirm" : "a stop with no operator linked");
     this.#exit(0);
   }
 
