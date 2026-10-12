@@ -231,6 +231,7 @@ export async function loadAiContextFrameBody(
   try {
     coverage = await loadClientConversationCoverage(app, {
       pageId: input.pageId,
+      platform: input.platform,
       conversationRef: input.conversationRef,
     });
   } catch (error) {
