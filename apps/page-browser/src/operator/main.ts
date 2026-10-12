@@ -16,6 +16,7 @@ import { createHash, type Hash } from "node:crypto";
 import { Cdp, type CdpEvent } from "./cdp.ts";
 import { Egress, socksConnect, type HostClass } from "./egress.ts";
 import { guardSource, type GuardPolicy } from "./guard.ts";
+import { inspectBody } from "./inventory.ts";
 import { RpcServer, type EngineMessage } from "./rpc.ts";
 import { encodeMessage, readMessages } from "../shared/frames.ts";
 import { envInt, envStr, makeLog, monoMs, sleep } from "../shared/util.ts";
@@ -103,6 +104,15 @@ const CFG = {
     return pattern === "" ? null : new RegExp(pattern);
   })(),
   bodiesDir: envStr("PB_BODIES_DIR", "/data/buffer/bodies"),
+  /** "file" writes captured bodies to bodiesDir. "inventory" keeps each in
+   *  memory, reports its sizes, hash and JSON key names (names that look
+   *  sensitive marked) and drops it: nothing is written (Astra review 13 —
+   *  which fields Fansly's answers carry, before any is written). Hub
+   *  responses are not captured in this mode: their receiving limit and the
+   *  file's flush (FINDINGS 35) stay out of reach. */
+  captureMode: (envStr("PB_CAPTURE_MODE", "file") === "inventory" ? "inventory" : "file") as "file" | "inventory",
+  /** Inventory: a body over this size is counted and hashed, not inspected. */
+  inventoryMaxBytes: envInt("PB_INVENTORY_MAX_BYTES", 8 * 1024 * 1024),
   /** A Hub response over this declared size is cancelled before its body. */
   hubBodyLimit: envInt("PB_HUB_BODY_LIMIT", 32 * 1024 * 1024),
   heartbeat: "/run/pb/operator.alive",
@@ -490,8 +500,12 @@ cdp.on("Runtime.bindingCalled", (event) => {
  *  chunk by chunk, never whole in memory. `decoded` — the body as the page
  *  gets it; `encoded` — the bytes of the transfer (compressed). */
 interface Capture {
-  file: string;
-  stream: WriteStream;
+  /** The file and its stream (mode "file"); null in mode "inventory". */
+  file: string | null;
+  stream: WriteStream | null;
+  /** Mode "inventory": the body so far, in memory; null once over the size. */
+  memory: Buffer[] | null;
+  memoryOver: boolean;
   hash: Hash;
   decoded: number;
   encoded: number;
@@ -633,7 +647,8 @@ function finishOp(op: Operation, outcome: Record<string, unknown>): void {
   // here: its file is not whole and no result says it is.
   for (const phys of [op.preflight, op.main]) {
     if (phys?.capture) {
-      phys.capture.stream.destroy();
+      phys.capture.stream?.destroy();
+      phys.capture.memory = null;
       phys.capture = null;
     }
   }
@@ -684,7 +699,7 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   // stream is armed there, before a byte of it reaches the page; for a
   // preflight, its answer is handed on by Fetch.fulfillRequest (see
   // onResponseStage — the race of Chrome's preflight interception).
-  phys.wantCapture = CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request);
+  phys.wantCapture = CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request) && !(CFG.captureMode === "inventory" && op.kind === "hub");
   // Every request's response stops at its headers too: a redirect must be
   // handed on by fulfillRequest (see onResponseStage).
   const intercept = role === "main" || CFG.preflightFulfill ? { interceptResponse: true } : {};
@@ -1138,11 +1153,14 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   if (sessionId && params.networkId) {
     let created: Capture | null = null;
     try {
-      mkdirSync(CFG.bodiesDir, { recursive: true });
-      const file = `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin`;
+      const inventory = CFG.captureMode === "inventory";
+      if (!inventory) mkdirSync(CFG.bodiesDir, { recursive: true });
+      const file = inventory ? null : `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin`;
       const capture: Capture = {
         file,
-        stream: createWriteStream(file),
+        stream: file === null ? null : createWriteStream(file),
+        memory: inventory ? [] : null,
+        memoryOver: false,
         hash: createHash("sha256"),
         decoded: 0,
         encoded: 0,
@@ -1154,7 +1172,7 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
         writeError: null,
         flushed: null,
       };
-      capture.stream.on("error", (error: Error) => {
+      capture.stream?.on("error", (error: Error) => {
         capture.writeError = error.message;
         capture.broken = true;
       });
@@ -1169,8 +1187,9 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
       observe("body.arm_failed", { op: op.id, error: (error as Error).message });
       // A file opened for nothing goes again.
       if (created !== null && phys.capture !== created) {
-        created.stream.destroy();
-        rmSync(created.file, { force: true });
+        created.stream?.destroy();
+        created.memory = null;
+        if (created.file !== null) rmSync(created.file, { force: true });
       }
     }
   } else {
@@ -1181,7 +1200,13 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
 
 function appendBody(capture: Capture, data: Buffer, announced: number | null, encoded: number): void {
   if (announced !== null && data.length !== announced) capture.broken = true;
-  capture.stream.write(data);
+  if (capture.stream) capture.stream.write(data);
+  else if (capture.memory) {
+    if (capture.decoded + data.length > CFG.inventoryMaxBytes) {
+      capture.memory = null;
+      capture.memoryOver = true;
+    } else capture.memory.push(data);
+  }
   capture.hash.update(data);
   capture.decoded += data.length;
   capture.encoded += encoded;
@@ -1228,10 +1253,13 @@ cdp.on("Network.dataReceived", (event) => {
 function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "limit", totalEncoded: number | null): Record<string, unknown> | null {
   const capture = phys.capture;
   if (!capture) return null;
-  capture.flushed = new Promise<void>((resolve) => {
-    capture.stream.once("error", () => resolve());
-    capture.stream.end(() => resolve());
-  });
+  const stream = capture.stream;
+  if (stream) {
+    capture.flushed = new Promise<void>((resolve) => {
+      stream.once("error", () => resolve());
+      stream.end(() => resolve());
+    });
+  }
   const encoded = totalEncoded ?? capture.encoded;
   let complete = false;
   let how = "incomplete";
@@ -1255,6 +1283,9 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
   } else {
     how = "a chunk was missing or short";
   }
+  // Mode "inventory": the body is read for its key names, then dropped.
+  const inventory = capture.stream === null ? inspectBody(capture.memory, capture.memoryOver, CFG.inventoryMaxBytes) : undefined;
+  capture.memory = null;
   return {
     file: capture.file,
     bytes: capture.decoded,
@@ -1266,6 +1297,7 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
     complete,
     how,
     ended,
+    ...(inventory ? { inventory } : {}),
   };
 }
 
@@ -1620,7 +1652,8 @@ function hubResult(attempt: HubAttempt, outcome: Record<string, unknown>): void 
       const wid = phys ? windowId(phys) : null;
       if (wid) egress.gate.close(wid);
       if (phys?.capture) {
-        phys.capture.stream.destroy();
+        phys.capture.stream?.destroy();
+        phys.capture.memory = null;
         phys.capture = null;
       }
     }
@@ -2398,6 +2431,8 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.haltOnEngineLoss === "boolean") CFG.haltOnEngineLoss = message.haltOnEngineLoss;
         if (typeof message.maxBodyBytes === "number") CFG.maxBodyBytes = message.maxBodyBytes;
         if (typeof message.captureBodies === "boolean") CFG.captureBodies = message.captureBodies;
+        if (message.captureMode === "file" || message.captureMode === "inventory") CFG.captureMode = message.captureMode;
+        if (typeof message.inventoryMaxBytes === "number") CFG.inventoryMaxBytes = message.inventoryMaxBytes;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
         return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, wsHostRefuse: CFG.refuseWsHostRequests });

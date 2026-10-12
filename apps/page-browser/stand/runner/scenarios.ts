@@ -1197,6 +1197,56 @@ const bodyCapture: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes: { rows } };
 };
 
+/** Capture mode "inventory" (Astra review 13): the same bodies, read in
+ *  memory for their key names and dropped — the hash and size still match
+ *  what the page read, the bodies directory gets no file, a body over the
+ *  inventory size is counted and hashed but not inspected, and a Hub
+ *  response is not captured at all. */
+const inventoryCapture: Scenario = async (ctx) => {
+  await fresh(ctx);
+  ctx.engine.serialize = true;
+  const tag = `ic-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const rows: unknown[] = [];
+  const files = async () => Number((await ctx.docker.exec(["sh", "-c", "ls /data/buffer/bodies 2>/dev/null | wc -l"])).trim());
+  const STAND_KEYS = ["ok", "rid", "method", "path", "connId", "streamId", "proto", "reused", "nthOnConn", "mono", "seq", "bodyBytes"];
+  try {
+    await ctx.engine.command("test.config", { captureMode: "inventory", inventoryMaxBytes: 8 * 1024 * 1024 });
+    const before = await files();
+    for (const [index, c] of BODY_CASES.entries()) {
+      const rid = `${tag}-${index}`;
+      const call = `site.apiHash(${JSON.stringify(rid)}, ${JSON.stringify(c.query)}, ${JSON.stringify(c.how ?? "arrayBuffer")})`;
+      let page = await ctx.engine.eval<{ status?: number; bytes?: number; sha256?: string; error?: string }>(call);
+      if (c.twice) page = await ctx.engine.eval(call);
+      await sleep(400);
+      const done = ctx.engine.siteDoneOf(rid);
+      const body = (done?.body ?? null) as { file: string | null; bytes: number; sha256: string; complete: boolean; how: string; inventory?: { inspected: boolean; json?: boolean; paths?: string[]; sensitive?: string[] } } | null;
+      const inv = body?.inventory;
+      const same = body !== null && body.sha256 === page.sha256 && body.bytes === page.bytes;
+      rows.push({ case: c.name, pageBytes: page.bytes ?? page.error, captured: body?.bytes ?? null, same, file: body?.file ?? null, complete: body?.complete ?? null, inspected: inv?.inspected ?? null, json: inv?.json ?? null, paths: inv?.paths?.length ?? null, sensitive: inv?.sensitive ?? null });
+      if (!same) violations.push(`${c.name}: the counted body differs from what the page read (${body?.bytes ?? "none"} vs ${page.bytes ?? page.error} bytes)`);
+      if (body !== null && body.file !== null) violations.push(`${c.name}: a file was named in inventory mode`);
+      if ((c.expect ?? "complete") === "complete" && body?.complete !== true) violations.push(`${c.name}: not marked complete (${body?.how})`);
+      if ((page.bytes ?? 0) > 8 * 1024 * 1024) {
+        if (inv?.inspected !== false) violations.push(`${c.name}: a body over the inventory size was inspected`);
+      } else if (inv?.inspected !== true || inv.json !== true || !STAND_KEYS.every((key) => inv.paths?.includes(key)) || (inv.sensitive?.length ?? -1) !== 0) {
+        violations.push(`${c.name}: the inventory is not the stand answer's keys (${JSON.stringify(inv).slice(0, 200)})`);
+      }
+    }
+    const hubResult = await ctx.engine.sendHub(`${tag}-hub`, `${API}/api/item?rid=${tag}-hub`, { authorization: "stand-token" });
+    rows.push({ case: "Hub", outcome: hubResult.outcome, status: hubResult.status, body: hubResult.body ?? null });
+    if (hubResult.outcome !== "response" || hubResult.status !== 200) violations.push(`Hub: ${hubResult.outcome} ${hubResult.status}`);
+    if ((hubResult.body ?? null) !== null) violations.push("Hub: a response was captured in inventory mode");
+    const after = await files();
+    rows.push({ filesBefore: before, filesAfter: after });
+    if (after !== before) violations.push(`the bodies directory went from ${before} to ${after} files`);
+  } finally {
+    await ctx.engine.command("test.config", { captureMode: "file" }, 60_000);
+    ctx.engine.serialize = false;
+  }
+  return { ok: violations.length === 0, violations, notes: { rows } };
+};
+
 /** Ten 15 MB responses in a row (150 MB, over Chrome's own 100 MB buffer of
  *  bodies) with the operator handling every CDP message 300 ms late. */
 const bodyBurst: Scenario = async (ctx) => {
@@ -1871,6 +1921,7 @@ export const scenarios: Record<string, Scenario> = {
   rules: rules(false),
   "rules-bypass": rules(true),
   "body-capture": bodyCapture,
+  "inventory-capture": inventoryCapture,
   "body-burst": bodyBurst,
   "ws-contexts": wsContexts,
   "ws-h2": wsOverH2,

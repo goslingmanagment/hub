@@ -72,6 +72,8 @@ services:
       # operator never writes a login, session, 2FA or authorisation path.
       PB_CAPTURE_BODIES: ${PB_CAPTURE_BODIES:-0}
       PB_CAPTURE_ALLOW: ${PB_CAPTURE_ALLOW:-}
+      # "inventory": bodies are read in memory for their key names, never written.
+      PB_CAPTURE_MODE: ${PB_CAPTURE_MODE:-file}
       PB_SELFTEST_RULES: "1"
       PB_SELFTEST_NEVER_PATH: /api/v1/message/ack
       PB_IPCHECK_HOST: api.ipify.org

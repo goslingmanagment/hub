@@ -26,6 +26,7 @@
 
 import { createServer } from "node:http";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import { StandEngine, type Decision } from "../runner/engine.ts";
 import { monoMs } from "../../src/shared/util.ts";
@@ -56,11 +57,11 @@ const WS_STUCK_MS = 15_000;
 const REHEARSAL = process.env.LIVE_REHEARSAL === "1";
 
 /** Hub requests of the test: named reads only, each exactly as Hub's wire
- *  sends it (`packages/fansly/src/wire/specs.ts`, main 6ee3d627) — a GET is
- *  not always a read (/emails/unsubscribe is one). A session enables some of
- *  them (LIVE_HUB_READS). Only the identity read returns fields to the
- *  terminal; the others leave their bodies in the page's buffer, if the
- *  capture allows their path. */
+ *  sends it (`buildFanslyWireTarget`, `packages/fansly/src/wire/specs.ts`,
+ *  main 6ee3d627: `ngsw-bypass=true` first, then the spec's keys in order) —
+ *  a GET is not always a read (/emails/unsubscribe is one). A session
+ *  enables some of them (LIVE_HUB_READS). Only the identity read returns
+ *  fields to the terminal. */
 const HUB_READS: Record<string, { path: string; query: string; extract: boolean }> = {
   "account.me": { path: "/api/v1/account/me", query: "", extract: true },
   "messaging.groups": { path: "/api/v1/messaging/groups", query: "offset=0&limit=100&sortOrder=1&flags=0", extract: false },
@@ -94,11 +95,25 @@ function safeUrl(url: unknown): string {
   }
 }
 
-/** A captured body as the journal keeps it: its file in the page's buffer,
- *  sizes, hash and whether it is whole — never its content. */
-function bodySummary(body: unknown): Record<string, unknown> | null {
+/** A captured body as the journal keeps it: its file in the page's buffer
+ *  (mode "file"), sizes, hash and whether it is whole — never its content.
+ *  In mode "inventory" the operator kept no file; the journal gets the
+ *  count of key names, the names marked sensitive and a hash of the name
+ *  set, whose full list is journalled once per route and set ("schema"). */
+const schemasSeen = new Set<string>();
+function bodySummary(body: unknown, route: string | null = null): Record<string, unknown> | null {
   if (body === null || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
+  const inv = b.inventory as { inspected?: boolean; reason?: string; json?: boolean; success?: boolean | null; paths?: string[]; sensitive?: string[]; truncated?: boolean } | undefined;
+  let inventory: Record<string, unknown> | undefined;
+  if (inv) {
+    const schema = inv.paths ? createHash("sha256").update(inv.paths.join("\n")).digest("hex").slice(0, 12) : null;
+    if (schema !== null && route !== null && !schemasSeen.has(`${route} ${schema}`)) {
+      schemasSeen.add(`${route} ${schema}`);
+      journal("schema", { route, schema, paths: inv.paths, sensitive: inv.sensitive ?? [], truncated: inv.truncated ?? false });
+    }
+    inventory = { inspected: inv.inspected ?? null, reason: inv.reason ?? null, json: inv.json ?? null, success: inv.success ?? null, keys: inv.paths?.length ?? null, sensitive: inv.sensitive ?? null, schema };
+  }
   return {
     file: typeof b.file === "string" ? b.file.split("/").at(-1) : null,
     bytes: b.bytes ?? null,
@@ -108,7 +123,16 @@ function bodySummary(body: unknown): Record<string, unknown> | null {
     sha256: typeof b.sha256 === "string" ? b.sha256.slice(0, 16) : null,
     complete: b.complete ?? null,
     how: b.how ?? null,
+    ...(inventory ? { inventory } : {}),
   };
+}
+
+/** "GET apiv3.fansly.com/api/v1/account/723…/wallets?ngsw-bypass" →
+ *  "GET /api/v1/account/:id/wallets". */
+function routeOf(label: string): string {
+  const [method, rest = ""] = label.split(" ");
+  const path = rest.replace(/\?.*$/, "").replace(/^[^/]*/, "").replace(/\/\d{6,}(?=\/|$)/g, "/:id");
+  return `${method} ${path}`;
 }
 
 type Kind = "site" | "hub" | "ws";
@@ -306,7 +330,7 @@ function finished(item: Queued): void {
     preflightStatus,
     source: d.source ?? null,
     error: d.error ?? d.errorText ?? null,
-    body: bodySummary(d.body),
+    body: bodySummary(d.body, routeOf(item.label)),
   });
   if (d.status === 429 || preflightStatus === 429) stopSession(`429 on ${item.label}`);
 }
@@ -407,7 +431,7 @@ function control(): void {
         if (name === undefined || !HUB_ENABLED.has(name)) return reply(400, { error: `not an enabled read; enabled: ${[...HUB_ENABLED].join(", ")}` });
         if (stopped !== null) return reply(409, { error: `session stopped: ${stopped}` });
         const read = HUB_READS[name]!;
-        void hubRequest(read.path, read.query, "GET", read.extract).then((result) => reply(200, result));
+        void hubRequest(read.path, read.query === "" ? "ngsw-bypass=true" : `ngsw-bypass=true&${read.query}`, "GET", read.extract).then((result) => reply(200, result));
         return;
       }
       if (req.method === "POST" && req.url === "/stop") {
