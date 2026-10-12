@@ -155,7 +155,7 @@ describe("the site path of the live actor", () => {
     const site = new FakeSiteBrowser();
     site.answer = (request) => ({ kind: "response", status: request.id === "limited" ? 429 : 401, retryAfterMs: null });
     site.ask({ id: "limited" });
-    site.ask({ id: "login-screen", manualLogin: true });
+    site.ask({ id: "login-screen", path: "/api/v1/versioning?ngsw-bypass=true", manualLogin: true });
     await runActor(pageId, site, () => site.granted.length === 2);
     await waitFor(async () => ((await attempts(pageId)).every((row) => row.outcome === "response") ? true : null), 5_000, "the commits");
     const held = await rows<{ scope: string; key: string; kind: string }>("select scope, key, kind from sync_holds where page_id = $1 order by scope, key", [pageId]);

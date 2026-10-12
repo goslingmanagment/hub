@@ -18,11 +18,12 @@ import { CYCLE } from "./scheduler.ts";
 //   cannot pass within what is left of that wait: the page paused, a hold of
 //   the page or of its route longer than the rest, a request no route
 //   admits, the hour's ceiling reached.
-// - The manual login (the operator's mode): its requests — the login
-//   operations and the reads of the login screens — pass the owner's pause,
-//   a credentials hold and checks-only; the pacer, the budgets, the page's
-//   ownership and a network hold still hold. Outside it a login operation is
-//   refused, and under those three every request of the site is.
+// - The manual login (the operator's mode): the login operations and the
+//   reads of the login screens (`LOGIN_SCREEN_READS`) — nothing else of the
+//   site — pass the owner's pause, a credentials hold and checks-only; the
+//   pacer, the budgets, the page's ownership and a network hold still hold.
+//   Outside it a login operation is refused, and under those three every
+//   other request of the site is.
 
 /** How long a site request may wait for its admission (spec §3). */
 export const SITE_WAIT_MS = 60_000;
@@ -37,24 +38,43 @@ export const SITE_TURN_EVERY = CYCLE.length;
  *  earlier: 21 s from its last send). */
 export const SITE_END_WAIT_MS = 60_000;
 
-/** A site request the engine can admit: its route and whose it is. */
+/** The API paths (from `/api/v1`) the login screens read, as the test
+ *  account showed them (stage 1, sessions 1–5): the app's version, the
+ *  third-party sign-in providers, the device id. In the manual login these
+ *  pass the owner's pause and a credentials hold with the login operations;
+ *  any other read of the site does not (Astra's review of PR 8). */
+export const LOGIN_SCREEN_READS: ReadonlySet<string> = new Set(["/versioning", "/thirdpartyconnect/providers", "/device/id"]);
+
+/** A site request the engine can admit: its route, whose it is, and whether
+ *  the manual login's exemption covers it. */
 export interface ClassifiedSiteRequest {
   request: PendingSiteRequest;
   route: FanslyRoute;
   origin: "site" | "login";
+  /** A login operation, or a read of the login screens, in the manual
+   *  login: it passes the owner's pause, a credentials hold, checks-only, and
+   *  its 401/403 holds nothing. */
+  exempt: boolean;
+}
+
+function apiPathOf(path: string): string {
+  const bare = path.split("?", 1)[0]!;
+  const api = bare.startsWith("/api/v1/") ? bare.slice("/api/v1".length) : bare;
+  return api.length > 1 && api.endsWith("/") ? api.slice(0, -1) : api;
 }
 
 /** The route of a site request, or why no route admits it. */
 export function classifySiteRequest(request: PendingSiteRequest): ClassifiedSiteRequest | { refuse: SiteRefusalReason } {
   const match = matchSiteRequest(request.host, request.method, request.path);
+  const loginScreen = request.manualLogin && request.method.toUpperCase() === "GET" && request.host === "api" && LOGIN_SCREEN_READS.has(apiPathOf(request.path));
   switch (match.kind) {
     case "route":
-      return { request, route: match.route, origin: "site" };
+      return { request, route: match.route, origin: "site", exempt: loginScreen };
     case "site_other":
-      return { request, route: SITE_OTHER_ROUTE, origin: "site" };
+      return { request, route: SITE_OTHER_ROUTE, origin: "site", exempt: loginScreen };
     case "login":
       // A login operation belongs to the owner's manual login only.
-      return request.manualLogin ? { request, route: match.route, origin: "login" } : { refuse: "mode" };
+      return request.manualLogin ? { request, route: match.route, origin: "login", exempt: true } : { refuse: "mode" };
     case "refused":
       return { refuse: match.reason };
   }
@@ -104,7 +124,7 @@ export function decideSite(pending: readonly PendingSiteRequest[], ctx: SiteCont
       refuse.push({ id: request.id, reason: classified.refuse });
       continue;
     }
-    const manual = request.manualLogin;
+    const manual = classified.exempt;
     if (ctx.pausedAll && !manual) {
       refuse.push({ id: request.id, reason: "paused" });
       continue;

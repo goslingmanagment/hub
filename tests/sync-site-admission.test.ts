@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import type { PendingSiteRequest } from "../apps/runtime/src/sync/engine/ports.ts";
 import {
   classifySiteRequest,
@@ -13,6 +14,7 @@ import {
   type SiteContext,
 } from "../apps/runtime/src/sync/engine/site-admission.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { FakeClock, FakeOwnership, FakePauseSource, ScriptedRng } from "./helpers/sync-fakes.ts";
 
 // The admission of a page's own site requests (Project Browser, spec §3,
 // owner decision №3; stage 3 PR 8): which waiting request a slot admits,
@@ -79,11 +81,24 @@ describe("the decision at a slot", () => {
     }
   });
 
-  it("the manual login passes them, its reads and its login operation alike", () => {
+  it("the manual login passes them for its login operations and the login screens' reads only", () => {
     for (const ctx of [context({ pausedAll: true }), context({ pageHeld: { kind: "credentials" } }), context({ checksOnly: true })]) {
       expect(decideSite([request({ method: "POST", path: "/api/v1/login", manualLogin: true })], ctx).admit?.route).toBe("auth.login");
-      expect(decideSite([request({ manualLogin: true })], ctx).admit?.route).toBe("site.other");
+      expect(decideSite([request({ path: "/api/v1/versioning?ngsw-bypass=true", manualLogin: true })], ctx).admit?.route).toBe("site.other");
+      expect(decideSite([request({ path: "/api/v1/thirdpartyconnect/providers", manualLogin: true })], ctx).admit).not.toBeNull();
+      // Any other read of the site, in the manual login too, is refused there
+      // (Astra's review of PR 8: `/message` must not pass a pause).
+      const other = decideSite([request({ path: "/api/v1/message?groupId=123", manualLogin: true })], ctx);
+      expect(other.admit).toBeNull();
+      expect(["paused", "credentials"]).toContain(other.refuse[0]?.reason);
     }
+  });
+
+  it("the exemption is the manual login's alone", () => {
+    expect(classifySiteRequest(request({ path: "/api/v1/versioning" }))).toMatchObject({ exempt: false });
+    expect(classifySiteRequest(request({ path: "/api/v1/versioning", manualLogin: true }))).toMatchObject({ exempt: true });
+    expect(classifySiteRequest(request({ path: "/api/v1/timeline/home", manualLogin: true }))).toMatchObject({ exempt: false });
+    expect(classifySiteRequest(request({ method: "POST", path: "/api/v1/login/twofa", manualLogin: true }))).toMatchObject({ exempt: true, origin: "login" });
   });
 
   it("a network hold holds the manual login too: it waits, or is refused when the hold outlasts its wait", () => {
@@ -111,6 +126,43 @@ describe("the site's share of the slots", () => {
     }
     turns.engineAdmitted();
     expect(turns.due()).toBe(true);
+  });
+});
+
+describe("the pacer's final check before a grant", () => {
+  function armed(ownershipAlive = true) {
+    const clock = new FakeClock();
+    const ownership = new FakeOwnership();
+    ownership.isAlive = ownershipAlive;
+    const pacer = new Pacer({ clock, rng: new ScriptedRng([0]), pause: new FakePauseSource(2_500), ownership });
+    pacer.initTakeover(0);
+    const admission = pacer.arm({ settingMs: 2_500, jitterU: 0, pauseMs: 2_500, earliestMono: clock.monoNow() }, 1, clock.monoNow());
+    return { clock, pacer, admission };
+  }
+
+  it("passes a live admission without a send mark, once", () => {
+    const { pacer, admission } = armed();
+    expect(pacer.checkRemoteGrant(admission)).toBeNull();
+    expect(admission.sentMono).toBeNull();
+    expect(pacer.checkRemoteGrant(admission)?.reason).toBe("lease_used");
+  });
+
+  it("refuses when the ownership is gone or the send window passed", () => {
+    expect(armed(false).pacer.checkRemoteGrant(armed(false).admission)).not.toBeNull();
+    const lost = armed(false);
+    expect(lost.pacer.checkRemoteGrant(lost.admission)?.reason).toBe("lease_inactive");
+    const late = armed();
+    late.clock.advance(15_000);
+    expect(late.pacer.checkRemoteGrant(late.admission)?.reason).toBe("send_deadline_passed");
+  });
+
+  it("the send then counts at the completion of a response", () => {
+    const { clock, pacer, admission } = armed();
+    expect(pacer.checkRemoteGrant(admission)).toBeNull();
+    clock.advance(400);
+    pacer.complete(admission, transportOutcomeOfSite({ kind: "response", status: 200, retryAfterMs: null }));
+    expect(admission.sendMark).toBe("completion_fallback");
+    expect(admission.sentMono).toBe(clock.monoNow());
   });
 });
 

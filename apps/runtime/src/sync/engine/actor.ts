@@ -52,6 +52,7 @@ import {
   type OwnershipSession,
   type PageTransport,
   type SiteAdmissionPort,
+  type SiteRequestEnd,
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
@@ -531,10 +532,21 @@ export class SyncActor {
     this.#siteTurns.siteAdmitted();
     d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
     const armed = d.pacer.arm(grant, attemptId, issuedMono);
-    site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) });
-
-    this.#phase("send");
-    const end = await siteEnd(site, classified.request.id, signals.abort);
+    // The final word before the browser may send: the same check an engine
+    // send passes at `onRequestStart` (ownership alive, within the window,
+    // past the floor and the pause), without its send mark (Astra's review
+    // of PR 8: a lost ownership must never reach a grant).
+    const refusal = d.pacer.checkRemoteGrant(armed);
+    let end: SiteRequestEnd;
+    if (refusal !== null) {
+      site.refuse(classified.request.id, "lease");
+      d.metrics.increment("sync_site_refused", { reason: "lease" });
+      end = { kind: "aborted_before_send", reason: refusal.reason };
+    } else {
+      site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) });
+      this.#phase("send");
+      end = await siteEnd(site, classified.request.id, signals.abort);
+    }
     // The browser reports no send instant yet (PR 12): a request that may
     // have gone out counts as sent at its completion, the safe upper bound.
     d.pacer.complete(armed, transportOutcomeOfSite(end));

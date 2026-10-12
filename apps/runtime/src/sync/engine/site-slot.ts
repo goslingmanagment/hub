@@ -104,7 +104,7 @@ export async function admitSite(
   },
 ): Promise<{ attemptId: number }> {
   const { classified, grant } = input;
-  const manual = classified.request.manualLogin;
+  const manual = classified.exempt;
   return inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update", live: true });
     const page = await getSyncPage(tx, d.pageId);
@@ -171,7 +171,7 @@ export async function commitSiteEnd(
     });
     return;
   }
-  const effect = siteAnswerEffect(end, classified.request.manualLogin);
+  const effect = siteAnswerEffect(end, classified.exempt);
   const now = d.clock.wallNow();
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });

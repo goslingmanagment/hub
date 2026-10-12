@@ -332,7 +332,10 @@ export type SiteRefusalReason =
   | "credentials"
   | "held"
   | "route_held"
-  | "hour_ceiling";
+  | "hour_ceiling"
+  /** The admission's final check refused the grant (ownership lost, the send
+   *  window passed, the pause): nothing may be sent. */
+  | "lease";
 
 /** The page browser's side of the site admission: its pending requests, the
  *  engine's answers, the end of an admitted request. Absent on a page without
