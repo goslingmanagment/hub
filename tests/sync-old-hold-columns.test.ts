@@ -208,7 +208,7 @@ describe("the statements that write the page row", () => {
     ]);
     expect(writers.map((writer) => `${writer.statement} ${writer.name}`)).toEqual([
       "update insertAdmission",
-      // A page's own site request (Project Browser, 0269).
+      // A page's own site request (Project Browser, 0270).
       "update insertSiteAdmission",
       "update captureAttempt",
       "insert ensureSyncPage",
