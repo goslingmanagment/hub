@@ -75,6 +75,7 @@ run_remote() {
     *"ps -q sync"*) next_sync_status ;;
     *"agency-hub.source-revision"*) printf '%s\n' "$TEST_IMAGE_METADATA" ;;
     *"docker tag "*) return 0 ;;
+    *"docker network inspect "*) return 0 ;;
     *"--current config --format json"*) if [[ -n "$TEST_CURRENT_COMPOSE_JSON" ]]; then printf '%s\n' "$TEST_CURRENT_COMPOSE_JSON"; else printf '%s\n' "$TEST_COMPOSE_JSON"; fi ;;
     *"config --format json"*) printf '%s\n' "$TEST_COMPOSE_JSON" ;;
     *"config --hash postgres"*) printf '%s\n' "$TEST_CONFIG_HASH" ;;
@@ -866,6 +867,42 @@ describe("production deploy behavior without production access", () => {
   // An app-scope rollback now recreates only the runtime's services, then runs
   // the forward path's sync owner and send-guard confirmations, and still
   // returns to fail() whatever happens.
+  // Project Browser (PR 3): the release joins pb-control, which only
+  // scripts/deploy-page-browser.sh makes. Missing, it would fail Compose's
+  // `up` after the running containers are gone.
+  describe("the release's external networks", () => {
+    it("are read from the Compose file: pb-control", () => {
+      const result = runFunctions(["compose_external_networks"], "compose_external_networks", { ROOT_DIR: repoRoot });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual(["pb-control"]);
+    });
+
+    it("stop the deploy when the server lacks one", () => {
+      const result = runFunctions(["compose_external_networks", "verify_remote_external_networks"], "verify_remote_external_networks", {
+        ROOT_DIR: repoRoot,
+        TEST_REMOTE_FAILURE_PATTERN: "docker network inspect pb-control",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("The release joins the external network pb-control, which root@fixture.invalid lacks");
+      expect(commands()).toEqual(["docker network inspect pb-control >/dev/null 2>&1"]);
+    });
+
+    it("pass when it exists", () => {
+      const result = runFunctions(["compose_external_networks", "verify_remote_external_networks"], "verify_remote_external_networks", { ROOT_DIR: repoRoot });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("External network pb-control exists");
+    });
+
+    it("are checked in the preflight, before anything is built or changed", () => {
+      const text = readFileSync(deployPath, "utf8");
+      const main = text.slice(text.indexOf("\nstart_phase preflight\n"));
+      const check = main.indexOf("\nverify_remote_external_networks\n");
+      expect(check).toBeGreaterThan(0);
+      expect(check).toBeLessThan(main.indexOf("\ncapture_remote_rollback_image\n"));
+      expect(check).toBeLessThan(main.indexOf("\nbuild_candidate_image\n"));
+    });
+  });
+
   describe("rollback of the remote stack", () => {
     const syncConfirmation = "docker compose --current exec -T api node apps/runtime/dist/cli.js sync ownership confirm-stopped "
       + '--running-hosts "$sync_hosts" --acquired-before "$listed_at"';

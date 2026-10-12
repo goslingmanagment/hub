@@ -1241,6 +1241,28 @@ preflight_migration_files() {
   log "Migration filename preflight passed"
 }
 
+# The external networks the release joins (Project Browser's pb-control,
+# made by scripts/deploy-page-browser.sh host) must already exist: Compose
+# would refuse them only at `up`, after the running containers are gone.
+compose_external_networks() {
+  awk '
+    /^networks:/ { top = 1; next }
+    /^[^ #]/ { top = 0 }
+    top && /^  [A-Za-z0-9_.-]+:/ { name = $1; sub(/:$/, "", name) }
+    top && /^    external: true/ { print name }
+  ' "${ROOT_DIR}/docker-compose.production.yml"
+}
+
+verify_remote_external_networks() {
+  local network
+  while IFS= read -r network; do
+    [[ -n "$network" ]] || continue
+    run_remote "docker network inspect $(printf '%q' "$network") >/dev/null 2>&1" \
+      || fail "The release joins the external network ${network}, which ${REMOTE} lacks; create it first (scripts/deploy-page-browser.sh host)"
+    log "External network ${network} exists"
+  done < <(compose_external_networks)
+}
+
 remote_release_file_args() {
   local quoted=()
   local file
@@ -2689,6 +2711,7 @@ log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
 verify_remote_no_capture_rewrite_in_flight \
   || fail "A capture rewrite run is in flight on ${REMOTE}; deploying would kill it mid-walk"
+verify_remote_external_networks
 capture_remote_rollback_image
 capture_remote_release_files
 

@@ -55,6 +55,14 @@ services:
       - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
     ports:
       - "127.0.0.1:3000:3000"
+    networks:
+      default: {}
+      # Project Browser (plan §3.1, PR 3): the page browsers' control network,
+      # where the API opens a page's login form and screen. Its address is
+      # fixed: every running page container lets it in by this address, and a
+      # Hub deploy recreates api without changing it.
+      pb-control:
+        ipv4_address: 10.230.0.3
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,6 +169,12 @@ services:
       TZ: UTC
       MALLOC_ARENA_MAX: "2"
     command: ["node", "apps/runtime/dist/startup.js", "sync"]
+    networks:
+      default: {}
+      # Project Browser (plan §3.1, PR 3): the engine reaches each page's
+      # operator here, from a fixed address its egress rules let in.
+      pb-control:
+        ipv4_address: 10.230.0.2
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,3 +198,9 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  # Made by `scripts/deploy-page-browser.sh host` (internal, 10.230.0.0/24),
+  # never by this stack; the deploy checks it exists before changing anything.
+  pb-control:
+    external: true

@@ -375,6 +375,31 @@ describe("compose config", () => {
   // Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the
   // one in flight (≤ 30 s) finish and write its completion; Docker's default
   // 10 s would cut it and leave its page closed.
+  // Project Browser (plan §3.1, PR 3): the engine and the API reach the page
+  // containers in pb-control from fixed addresses, the ones each page
+  // container's egress rules let in (apps/page-browser/host/page.sh); nothing
+  // else of Hub's stack joins it.
+  it("docker-compose.production.yml puts sync and api in pb-control at the addresses the page containers let in", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const pageScript = await readComposeFile("apps/page-browser/host/page.sh");
+    const deployScript = await readComposeFile("scripts/deploy-page-browser.sh");
+    const prefix = pageScript.match(/^CONTROL_PREFIX="\$\{PB_CONTROL_PREFIX:-([0-9.]+)\}"$/m)?.[1];
+    expect(prefix).toBe("10.230.0");
+    expect(pageScript).toContain('SYNC_IP="$CONTROL_PREFIX.2"');
+    expect(pageScript).toContain('API_IP="$CONTROL_PREFIX.3"');
+    expect(deployScript).toContain("network pb-control 10.230.0.0/24 --internal");
+
+    for (const [service, address] of [["sync", `${prefix}.2`], ["api", `${prefix}.3`]] as const) {
+      const block = getServiceBlock(text, service) ?? "";
+      expect(block).toContain(`    networks:\n      default: {}\n`);
+      expect(block).toMatch(new RegExp(`\n {6}pb-control:\n {8}ipv4_address: ${address.replaceAll(".", "\\.")}\n`));
+    }
+    for (const service of ["postgres", "worker", "scheduler"]) {
+      expect(getServiceBlock(text, service) ?? "").not.toContain("pb-control");
+    }
+    expect(text).toMatch(/\nnetworks:\n(?: {2}#.*\n)* {2}pb-control:\n {4}external: true\n/);
+  });
+
   it("docker-compose.production.yml gives the api time to complete an in-flight Fansly request", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
     expect(getServiceBlock(text, "api")).toMatch(/^ {4}stop_grace_period: 45s$/m);
