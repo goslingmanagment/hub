@@ -162,6 +162,13 @@ in and the ids are ignored. Each id is judged against the transcript that served
 | `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, cut by the Coach prompt budget, or only in a store the serving reader did not read). |
 | `unknown` | The hub cannot tell: the stores could not be read, or the window holds the id as the model's own message. |
 
+Message ids are exact on the whole path. A message id is the platform's id as its store keeps it,
+from the store to the prompt and the frame: the transcript keys, deduplicates and orders messages
+by that string (a decimal id compares by its value, never through a JavaScript number), and an id
+of `knownFanMessageIds` matches a window ref only as the same string. Fansly ids (18-19 digits)
+pass 2^53, where two different ids can be one double; each stays its own message and gets its own
+answer. OnlyFans ids are far below 2^53, so their transcripts are what they were.
+
 `included` is the only answer that says the model read the message. The same window serves every
 retry of a request, so an id the hub holds but that lies before the window stays `absent` however
 often the client asks again: `messageCount` can be as low as 5, and ten fan messages with the

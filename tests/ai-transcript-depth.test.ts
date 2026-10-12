@@ -217,7 +217,7 @@ describe("the cost of a 3000-message full Recap", () => {
   function transcriptOf(count: number, chars: number): string {
     const startMs = Date.parse("2026-09-01T00:00:00.000Z");
     const messages: TranscriptMessage[] = Array.from({ length: count }, (_, index) => ({
-      id: index + 1,
+      id: String(index + 1),
       createdAtMs: startMs + index * 60_000,
       sender: index % 2 === 0 ? "Fan" : "Model",
       text: "x".repeat(chars),

@@ -59,7 +59,7 @@ function frame(overrides: Record<string, unknown> = {}) {
 }
 
 function message(id: number, sender: "Fan" | "Model", text: string, createdAtMs = id): TranscriptMessage {
-  return { id, createdAtMs, sender, text, labels: [] };
+  return { id: String(id), createdAtMs, sender, text, labels: [] };
 }
 
 function sseFetch(frames: unknown[]): typeof fetch {
@@ -197,18 +197,10 @@ describe("knownFanMessageIds body field", () => {
 });
 
 describe("served window", () => {
-  it("names each transcript message by the ref its store keeps", () => {
-    const at = new Date("2026-10-04T05:00:00.000Z");
-    const rows = [
-      { messageRef: "9003", occurredAt: at },
-      // A second row of the same message never renames it: first wins.
-      { messageRef: "9003.0", occurredAt: at },
-      // Rows the transcript cannot shape are not candidates.
-      { messageRef: "9002", occurredAt: null },
-      { messageRef: "not-a-number", occurredAt: at },
-      { messageRef: "9001", occurredAt: at },
-    ];
-    const window = servedWindowOf(rows, [message(9001, "Fan", "hey", 1000), message(9003, "Model", "hi", 2000)]);
+  it("names each transcript message by the ref its store keeps: its own id", () => {
+    // Which rows the transcript can shape (a decimal ref, an event time) is
+    // the loader's rule (tests/ai-transcript-exact-ids.integration.test.ts).
+    const window = servedWindowOf([message(9001, "Fan", "hey", 1000), message(9003, "Model", "hi", 2000)]);
     expect(window).toEqual([
       { messageRef: "9001", occurredAt: new Date(1000), isFromFan: true },
       { messageRef: "9003", occurredAt: new Date(2000), isFromFan: false },
