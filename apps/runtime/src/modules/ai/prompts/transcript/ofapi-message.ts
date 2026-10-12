@@ -17,7 +17,12 @@ export const ofapiMessageMediaSchema = z.looseObject({
  * transcript builder. Loose: OFAPI adds fields freely.
  */
 export const ofapiChatMessageSchema = z.looseObject({
-  id: z.number(),
+  /**
+   * OFAPI sends a number. The hub's own stores keep the exact decimal string
+   * and pass that instead (HF-8a: Fansly ids pass 2^53, where a number
+   * rounds). The transcript keys a message by `String(id)` either way.
+   */
+  id: z.union([z.number(), z.string()]),
   /** OF HTML ('<p>…</p>', '<br>', entities) — stripped to plain text downstream. */
   text: z.string().nullish(),
   giphyId: z.union([z.string(), z.number()]).nullish(),

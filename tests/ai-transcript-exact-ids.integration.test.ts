@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createFanslyPage,
   createModel,
   createOnlyFansPage,
   lookupAiLiveTextMessages,
@@ -17,6 +18,7 @@ import {
   loadTranscriptContext,
   mediaNoteLimitsFor,
   mergeLiveText,
+  UNCONFIRMED_SOCKET_MESSAGE_LABEL,
   type AiTranscriptUnionMode,
 } from "../apps/runtime/src/modules/ai/index.ts";
 import { promptDigest, referencePrompts } from "./helpers/ai-prompt-references.ts";
@@ -622,5 +624,143 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
         },
       }
     `);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+// ── Fansly: ids past 2^53 ─────────────────────────────────────────────────
+//
+// Every message id below is ONE double: 9·10^17, whose step is 128
+// (`Number("899999999999999936") === Number("900000000000000064")`, ties
+// round to even). Keyed by `Number(ref)`, the whole chat was one message.
+
+const FS_FAN = "700000000000000001";
+const FS_GROUP = "800000000000000001";
+const EVEN = ["899999999999999936", "900000000000000064"] as const;
+const STEP = ["900000000000000001", "900000000000000002"] as const;
+const SOCKET_ONLY = "900000000000000003";
+const DELETED = "900000000000000005";
+const NEVER_SEEN = "900000000000000007";
+
+async function seedFanslyChat() {
+  const model = await createModel(testDb!.db, { slug: "exact-fs", name: "exact-fs" });
+  const page = (await createFanslyPage(testDb!.db, { modelId: model!.id, label: "exact-fs" }))!;
+  const rows: SeedRow[] = [
+    { ref: EVEN[0], minutes: 0, text: "first of the even pair" },
+    { ref: EVEN[1], minutes: 1, text: "second of the even pair" },
+    // One instant: only the id orders them.
+    { ref: STEP[1], minutes: 2, text: "the larger id of the step pair" },
+    { ref: STEP[0], mine: true, minutes: 2, text: "the smaller id of the step pair" },
+    { ref: DELETED, minutes: 3, text: "deleted: never served", deleted: true },
+    // Not a decimal id: the transcript cannot key it, so it never serves.
+    { ref: "fs-not-an-id", minutes: 3, text: "never served" },
+  ];
+  for (const row of rows) {
+    await archiveRow(page.id, "fansly", FS_GROUP, row);
+  }
+  await testDb!.pool.query(
+    `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+     values ($1, $2, $3)`,
+    [page.id, FS_GROUP, FS_FAN],
+  );
+  // A socket message the archive does not hold yet (the live overlay).
+  await testDb!.pool.query(
+    `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id,
+       is_sent_by_page, created_at, content, decoder_version, first_visible_at)
+     values ($1, $2, $3, $4, false, $5, 'socket only, same double', 1, $5)`,
+    [page.id, SOCKET_ONLY, FS_GROUP, FS_FAN, at(4)],
+  );
+  return page;
+}
+
+describe("Fansly ids past 2^53 stay apart up to the prompt and the coverage answer (HF-8a)", () => {
+  const KNOWN = [STEP[1], EVEN[1], EVEN[0], DELETED, NEVER_SEEN, STEP[0], SOCKET_ONLY];
+
+  it("the archive reader", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyChat();
+    const loaded = await loadTranscriptContext(app, { pageId: page.id, conversationRef: FS_GROUP, limit: 100 });
+
+    expect(loaded.transcript).toBe([
+      "[10:00] Fan: first of the even pair",
+      "[10:01] Fan: second of the even pair",
+      "[10:02] Model: the smaller id of the step pair",
+      "[10:02] Fan: the larger id of the step pair",
+    ].join("\n"));
+    expect(loaded.messages.map((message) => message.id)).toEqual([EVEN[0], EVEN[1], STEP[0], STEP[1]]);
+    expect(loaded.served.window.map((message) => message.messageRef)).toEqual([EVEN[0], EVEN[1], STEP[0], STEP[1]]);
+
+    const prompt = buildPrompt({ ...referencePrompts().find(({ name }) => name === "fansly fast-reply flirty")!.input,
+      transcript: loaded.transcript });
+    expect(prompt.userBlocks.map((block) => block.text).join("\n")).toContain(loaded.transcript);
+
+    const frame = await loadAiContextFrameBody(app, {
+      pageId: page.id,
+      platform: "fansly",
+      conversationRef: FS_GROUP,
+      served: loaded.served,
+      messages: loaded.messages,
+      requestedCount: 100,
+      knownFanMessageIds: KNOWN,
+    });
+    expect(frame).toMatchObject({
+      source: "archive",
+      servedHead: { messageRef: STEP[1], isFromFan: true },
+      window: { requested: 100, served: 4 },
+      knownFanMessages: [
+        { id: STEP[1], state: "included" },
+        { id: EVEN[1], state: "included" },
+        { id: EVEN[0], state: "included" },
+        { id: DELETED, state: "deleted" },
+        { id: NEVER_SEEN, state: "absent" },
+        // The model's own message.
+        { id: STEP[0], state: "unknown" },
+        // The overlay did not serve, so its message is not in the window.
+        { id: SOCKET_ONLY, state: "absent" },
+      ],
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the live overlay union, where only the socket message is unconfirmed", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyChat();
+    const loaded = await loadTranscriptContext(app, {
+      pageId: page.id,
+      conversationRef: FS_GROUP,
+      limit: 100,
+      liveOverlay: "serve",
+      chatUnavailable: true,
+    });
+
+    expect(loaded.served.source).toBe("live_union");
+    expect(loaded.transcript).toBe([
+      "[10:00] Fan: first of the even pair",
+      "[10:01] Fan: second of the even pair",
+      "[10:02] Model: the smaller id of the step pair",
+      "[10:02] Fan: the larger id of the step pair",
+      `[10:04] Fan: ${UNCONFIRMED_SOCKET_MESSAGE_LABEL} socket only, same double`,
+    ].join("\n"));
+    // One label: the archive's messages of the same double are not the socket's.
+    expect(loaded.unconfirmedSocketMessages).toBe(1);
+    expect(loaded.served.window.map((message) => message.messageRef))
+      .toEqual([EVEN[0], EVEN[1], STEP[0], STEP[1], SOCKET_ONLY]);
+
+    const frame = await loadAiContextFrameBody(app, {
+      pageId: page.id,
+      platform: "fansly",
+      conversationRef: FS_GROUP,
+      served: loaded.served,
+      messages: loaded.messages,
+      requestedCount: 100,
+      knownFanMessageIds: KNOWN,
+    });
+    expect(frame.knownFanMessages).toEqual([
+      { id: STEP[1], state: "included" },
+      { id: EVEN[1], state: "included" },
+      { id: EVEN[0], state: "included" },
+      { id: DELETED, state: "deleted" },
+      { id: NEVER_SEEN, state: "absent" },
+      { id: STEP[0], state: "unknown" },
+      { id: SOCKET_ONLY, state: "included" },
+    ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

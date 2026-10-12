@@ -21,8 +21,8 @@ export type AiContextSource = (typeof AI_CONTEXT_SOURCES)[number];
 export type AiKnownFanMessageState = (typeof AI_KNOWN_FAN_MESSAGE_STATES)[number];
 export type AiFanLanguageEvidence = (typeof AI_FAN_LANGUAGE_EVIDENCE)[number];
 
-/** One message as the frame names it: the ref its store keeps, never the
- *  transcript's numeric id. */
+/** One message as the frame names it: the ref its store keeps, which is the
+ *  transcript's own message id (HF-8a: never a number). */
 export interface AiContextMessageRef {
   messageRef: string;
   occurredAt: Date | null;
@@ -44,24 +44,13 @@ export interface TranscriptServedSnapshot {
 }
 
 /**
- * The transcript's messages under the refs their stores keep. The transcript
- * keys a message by `Number(ref)`; a ref is recovered from the served rows
- * with the transcript's own rules: only rows it can shape (a finite numeric
- * ref and an event time), the first row of a ref wins.
+ * The transcript's messages under the refs their stores keep. A transcript
+ * message's id IS its row's ref, the exact string (HF-8a): two ids a double
+ * cannot tell apart are two messages here and get two answers.
  */
-export function servedWindowOf(
-  rows: ReadonlyArray<{ messageRef: string; occurredAt: Date | null }>,
-  messages: readonly TranscriptMessage[],
-): AiContextMessageRef[] {
-  const refById = new Map<number, string>();
-  for (const row of rows) {
-    const id = Number(row.messageRef);
-    if (Number.isFinite(id) && row.occurredAt !== null && !refById.has(id)) {
-      refById.set(id, row.messageRef);
-    }
-  }
+export function servedWindowOf(messages: readonly TranscriptMessage[]): AiContextMessageRef[] {
   return messages.map((message) => ({
-    messageRef: refById.get(message.id) ?? String(message.id),
+    messageRef: message.id,
     occurredAt: new Date(message.createdAtMs),
     isFromFan: message.sender === "Fan",
   }));
@@ -137,7 +126,8 @@ export function fanLanguageEvidenceOf(messages: readonly TranscriptMessage[]): A
 
 /**
  * One answer per id the client named, in the client's order, judged against
- * the transcript that served the generation:
+ * the transcript that served the generation. An id matches a window ref only
+ * as the same string, never as the same number:
  * - `included`: the served window holds it as a fan message;
  * - `deleted`: not in the window, and tombstoned in this conversation;
  * - `absent`: not in the window (never seen for this conversation, an id of
