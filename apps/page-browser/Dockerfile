@@ -12,8 +12,8 @@
 #   docker build --build-context vendor=<dir> \
 #     -t hub-page-browser:<chrome version>-<commit> apps/page-browser
 #
-# The operator, the CDP holder and the watchdog (PR 4) are not in this image
-# yet: it starts the egress rules, their kernel check and the screen; Chrome
+# s6 starts the egress rules, their kernel check, the screen, the CDP holder,
+# the operator and its watchdog (src/, run by Node's type stripping); Chrome
 # is a service that stays down until the operator starts it.
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 
@@ -59,10 +59,15 @@ RUN useradd -m -u 1001 -s /usr/sbin/nologin pb-chrome \
 
 COPY policies/hub.json /etc/opt/chrome/policies/managed/hub.json
 COPY s6/ /etc/s6-overlay/
+# The holder, the operator and the watchdog: TypeScript, run as it is
+# (Node's type stripping), no dependencies.
+COPY src/ /opt/page-browser/src/
 
 # A failed oneshot (the egress rules, their kernel check) stops the
 # container; Chrome gets its 5 s to exit on a stop (stage 1, amendment 28).
-ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
+ARG OPERATOR_VERSION=dev
+ENV PB_OPERATOR_VERSION=${OPERATOR_VERSION} \
+    S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=30000 \
     S6_SERVICES_GRACETIME=6000 \
     S6_KILL_GRACETIME=2000 \

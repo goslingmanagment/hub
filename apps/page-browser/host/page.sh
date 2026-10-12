@@ -14,8 +14,8 @@
 #
 # A page's files: $PB_BASE/pages/<page>/page.env (the Compose variables:
 # image and the previous one, profile, addresses, SOCKS5, zone, language)
-# and secrets/vnc_password (the owner's screen, made here once, root's
-# only). Its addresses in pb-control and pb-egress end in the same octet,
+# and secrets/ — vnc_password (the owner's screen) and rpc_token (the
+# operator's RPC), made here once, root's only. Its addresses in pb-control and pb-egress end in the same octet,
 # chosen once. The profile's volumes outlive the container: `down` keeps
 # them; `forget` drops a removed page's files, and `up --profile` then gives
 # its profile to another page. A profile belongs to one page at a time.
@@ -184,6 +184,11 @@ up() {
   install -d -m 700 "$dir" "$dir/secrets"
   if [[ ! -s "$dir/secrets/vnc_password" ]]; then
     (umask 077; openssl rand -hex 24 > "$dir/secrets/vnc_password")
+  fi
+  # The page's RPC token: the operator answers only an engine's hello that
+  # carries it (plan §4.13).
+  if [[ ! -s "$dir/secrets/rpc_token" ]]; then
+    (umask 077; openssl rand -hex 32 > "$dir/secrets/rpc_token")
   fi
   local next
   next="$(next_file)"

@@ -67,6 +67,9 @@ chmod 700 /data/profile
 chown pb-operator:pb-operator /data/buffer
 chmod 700 /data/buffer
 install -d -o root -g root -m 755 /run/pb
+# The operator's and the holder's own: the holder's socket, the heartbeat,
+# the RPC token's copy.
+install -d -o pb-operator -g pb-operator -m 700 /run/pb/operator
 printf '%s\n' "$SOCKS_IP" > /run/pb/socks-ip
 printf '%s\n' "$SOCKS_PORT" > /run/pb/socks-port
 echo "init-net: egress rules in place (SOCKS5 $SOCKS_IP:$SOCKS_PORT)"

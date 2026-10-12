@@ -1,8 +1,9 @@
 #!/bin/sh
 # The container's health (the image's HEALTHCHECK; page.sh waits for it):
-# the kernel check of the egress rules passed, and the X server — Chrome's
+# the kernel check of the egress rules passed; the X server — Chrome's
 # display and the owner's screen — has been up for 5 s at least, not
-# restarting. Chrome is the operator's to watch.
+# restarting; so has the operator, and the CDP holder runs. Chrome is the
+# operator's to watch.
 set -eu
 
 # up_for <service> <seconds>: the service is up, for that long at least.
@@ -17,3 +18,5 @@ up_for() {
 grep -q '"ok":true' /run/pb/net-selftest.json || exit 1
 up_for xvnc 5 || exit 1
 [ -S /tmp/.X11-unix/X99 ] || exit 1
+up_for operator 5 || exit 1
+up_for cdp-holder 0 || exit 1

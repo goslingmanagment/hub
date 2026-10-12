@@ -1,0 +1,7 @@
+#!/bin/sh
+# The operator's watchdog (plan §4.9; src/watchdog/), as root: an operator
+# whose heartbeat stopped for 5 s is killed through s6 — its proxy, and with
+# it the exit, dies with it — and s6 starts a new one.
+set -eu
+exec env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin \
+  node --no-warnings /opt/page-browser/src/watchdog/main.ts
