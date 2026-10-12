@@ -1,0 +1,185 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+// The page browser image and its deployment (Project Browser plan §3.1,
+// §4.5; stage 3, PR 2). Hub's CI never builds the image (Chrome is not in
+// it): these hold the image's safety properties in its files. The image
+// itself is checked on the stand (apps/page-browser/stand/image-check.sh).
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const app = path.join(root, "apps/page-browser");
+const read = (relative: string) => readFileSync(path.join(root, relative), "utf8");
+
+describe("Chrome's start", () => {
+  const run = read("apps/page-browser/s6/s6-rc.d/chrome/run");
+  const command = run.slice(run.indexOf("/usr/bin/google-chrome-stable"));
+  const flags = [...command.matchAll(/^\s+(--[a-z-]+)/gm)].map((match) => match[1]);
+
+  it("has the plan's flags and nothing that shows automation or drops the sandbox", () => {
+    expect(flags).toEqual(["--user-data-dir", "--remote-debugging-port", "--window-size", "--lang", "--no-first-run", "--ignore-gpu-blocklist"]);
+    for (const banned of ["--no-sandbox", "--enable-automation", "--headless", "--remote-debugging-pipe", "--disable-blink-features", "--remote-debugging-port=0"]) {
+      expect(command).not.toContain(banned);
+    }
+    expect(command).toContain("--remote-debugging-port=9222");
+  });
+
+  it("runs as pb-chrome with a clean environment", () => {
+    expect(run).toContain("/command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable");
+    expect(run).toMatch(/exec env -i HOME=\/home\/pb-chrome PATH=\/usr\/bin:\/bin DISPLAY=:99/);
+  });
+});
+
+describe("the services", () => {
+  const services = "apps/page-browser/s6/s6-rc.d";
+  const bundle = "apps/page-browser/s6/user-bundles.d/user/contents.d";
+
+  it("Chrome stays down until the operator starts it, and the operator may", () => {
+    expect(existsSync(path.join(root, bundle, "chrome"))).toBe(false);
+    for (const started of ["init-net", "net-selftest", "chrome-control", "xvnc"]) expect(existsSync(path.join(root, bundle, started))).toBe(true);
+    expect(read("apps/page-browser/s6/scripts/chrome-control")).toContain("s6-svperms -G pb-operator /run/service/chrome");
+    expect(read(`${services}/chrome/timeout-kill`).trim()).toBe("5000");
+  });
+
+  it("nothing starts before the egress rules and their kernel check", () => {
+    expect(existsSync(path.join(root, services, "net-selftest/dependencies.d/init-net"))).toBe(true);
+    expect(existsSync(path.join(root, services, "xvnc/dependencies.d/net-selftest"))).toBe(true);
+    expect(read("apps/page-browser/Dockerfile")).toContain("S6_BEHAVIOUR_IF_STAGE2_FAILS=2");
+  });
+});
+
+describe("the egress rules (init-net)", () => {
+  const initNet = read("apps/page-browser/s6/scripts/init-net");
+  const chain = (name: string) => {
+    const match = initNet.match(new RegExp(`chain ${name} \\{([\\s\\S]*?)\\n  \\}`));
+    return (match?.[1] ?? "").split("\n").map((line) => line.replace(/#.*/, "").trim()).filter(Boolean);
+  };
+
+  it("lets each user reach only its own way out, and refuses the rest", () => {
+    expect(initNet).toContain("flush ruleset");
+    expect(chain("output")).toEqual([
+      "type filter hook output priority 0; policy drop;",
+      "ct state established,related accept",
+      "oif lo meta skuid pb-chrome tcp dport 3128 accept",
+      "oif lo meta skuid pb-operator tcp dport 9222 accept",
+      "meta skuid pb-operator ip daddr $SOCKS_IP tcp dport $SOCKS_PORT accept",
+      "reject with icmpx admin-prohibited",
+    ]);
+  });
+
+  it("lets in only the engine's RPC and the API", () => {
+    expect(chain("input")).toEqual([
+      "type filter hook input priority 0; policy drop;",
+      "iif lo accept",
+      "ct state established,related accept",
+      "ip saddr $SYNC_IP tcp dport 7700 accept",
+      "ip saddr $API_IP tcp dport { 6901, 7700 } accept",
+    ]);
+  });
+
+  it("the kernel check expects a refusal for every way Chrome must not take", () => {
+    const selftest = read("apps/page-browser/s6/scripts/net-selftest.mjs");
+    const chromeRefused = [...selftest.matchAll(/user: "pb-chrome".*?what: "([^"]+)"/g)]
+      .filter((match) => match[0].includes('expect: "refused"'))
+      .map((match) => match[1]);
+    expect(chromeRefused).toEqual(["the internet", "the page's SOCKS5", "CDP", "the operator's RPC", "the screen", "DNS", "Docker's DNS"]);
+  });
+});
+
+describe("the seccomp profile", () => {
+  const profile = JSON.parse(read("apps/page-browser/security/seccomp-chrome.json")) as {
+    defaultAction: string;
+    syscalls: Array<{ names: string[]; action: string; comment?: string }>;
+  };
+
+  it("is Docker 29.9's default with one rule more: what Chrome's sandbox needs", () => {
+    const ours = profile.syscalls.filter((rule) => rule.comment?.startsWith("Project Browser"));
+    expect(ours).toHaveLength(1);
+    expect(ours[0]).toMatchObject({ names: ["clone", "unshare", "chroot"], action: "SCMP_ACT_ALLOW" });
+    // github.com/moby/profiles/seccomp/default.json as vendored by
+    // moby/moby docker-v29.9.0, sha256 of its JSON.stringify.
+    const upstream = { ...profile, syscalls: profile.syscalls.filter((rule) => rule !== ours[0]) };
+    expect(createHash("sha256").update(JSON.stringify(upstream)).digest("hex")).toBe("4dc1298afa7676147c1320afa42d72691fc55379ae762b392b56853574a7a38a");
+    expect(profile.defaultAction).toBe("SCMP_ACT_ERRNO");
+  });
+});
+
+describe("the AppArmor profile", () => {
+  const apparmor = read("apps/page-browser/security/apparmor-page-browser");
+
+  it("adds user namespaces to Docker's default rules", () => {
+    expect(apparmor).toMatch(/^abi <abi\/4\.0>,$/m);
+    expect(apparmor).toMatch(/^profile page-browser flags=\(attach_disconnected,mediate_deleted\) \{$/m);
+    for (const rule of ["userns,", "unix,", "deny mount,", "deny network vsock,", "deny @{PROC}/sysrq-trigger rwklx,", "deny /sys/kernel/security/** rwklx,"]) {
+      expect(apparmor).toContain(`\n  ${rule}`);
+    }
+  });
+});
+
+describe("the page's container (docker-compose.page-browser.yml)", () => {
+  const compose = read("docker-compose.page-browser.yml");
+
+  it("publishes nothing and gets no privileges", () => {
+    expect(compose).not.toMatch(/^\s+ports:/m);
+    expect(compose).not.toMatch(/privileged:\s*true/);
+    expect(compose).toMatch(/cap_drop: \[ALL\]/);
+    expect(compose).toMatch(/cap_add: \[CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_ADMIN\]/);
+    expect(compose).toContain("- no-new-privileges:true");
+    expect(compose).toContain("- seccomp=${PB_SECCOMP_PROFILE:?");
+    expect(compose).toContain("- apparmor=${PB_APPARMOR_PROFILE:-page-browser}");
+    expect(compose).not.toMatch(/(seccomp|apparmor)[:=]unconfined/);
+  });
+
+  it("joins only the two page networks and the profile's volumes, all made by the deploy script", () => {
+    expect(compose).toContain("\nnetworks:\n  pb-control:\n    external: true\n  pb-egress:\n    external: true\n");
+    expect(compose).toMatch(/name: pb-profile-\$\{PB_PROFILE_ID\}/);
+    expect(compose).toMatch(/name: pb-buffer-\$\{PB_PROFILE_ID\}/);
+    expect(compose).toContain("hostname: page-browser");
+  });
+
+  it("stays out of Hub's stack", () => {
+    expect(read("docker-compose.production.yml")).not.toContain("page-browser");
+  });
+});
+
+describe("the image", () => {
+  const dockerfile = read("apps/page-browser/Dockerfile");
+  const vendor = read("apps/page-browser/vendor.sha256");
+
+  it("pins its base and checks every vendored file before installing it", () => {
+    expect(dockerfile).toMatch(/^FROM node:22-bookworm-slim@sha256:[0-9a-f]{64}$/m);
+    expect(dockerfile).toContain('grep "  $f\\$" vendor.sha256 | sha256sum -c -');
+    const chrome = dockerfile.match(/^ARG CHROME_VERSION=(\S+)$/m)?.[1];
+    const kasm = dockerfile.match(/^ARG KASMVNC_VERSION=(\S+)$/m)?.[1];
+    for (const arch of ["amd64", "arm64"]) {
+      expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  google-chrome-stable_${chrome}_${arch}\\.deb$`, "m"));
+      expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  kasmvncserver_bookworm_${kasm}_${arch}\\.deb$`, "m"));
+    }
+    for (const s6 of ["noarch", "x86_64", "aarch64"]) expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  s6-overlay-${s6}\\.tar\\.xz$`, "m"));
+  });
+
+  it("Chrome's policies: only through the operator's proxy, nothing saved, no extension but ours", () => {
+    const policies = JSON.parse(read("apps/page-browser/policies/hub.json")) as Record<string, unknown>;
+    expect(policies).toMatchObject({
+      ProxySettings: { ProxyMode: "fixed_servers", ProxyServer: "127.0.0.1:3128" },
+      QuicAllowed: false,
+      WebRtcIPHandling: "disable_non_proxied_udp",
+      NetworkPredictionOptions: 2,
+      PasswordManagerEnabled: false,
+      PasswordLeakDetectionEnabled: false,
+      BrowserSignin: 0,
+      SyncDisabled: true,
+      DownloadRestrictions: 3,
+      RestoreOnStartup: 4,
+      RemoteDebuggingAllowed: true,
+      ExtensionSettings: { "*": { installation_mode: "blocked" } },
+    });
+  });
+
+  it("keeps the stand out of the build context", () => {
+    expect(readFileSync(path.join(app, ".dockerignore"), "utf8").split("\n")).toContain("stand");
+  });
+});

@@ -1,0 +1,89 @@
+# Project Browser — the browser container of one Fansly page (plan §3.1;
+# stage 3, PR 2). A Compose project of its own per page
+# (`page-browser-<page>`), apart from Hub's stack: a Hub deploy never touches
+# it, and the site's socket and the operator's buffer outlive one.
+#
+# Only scripts/deploy-page-browser.sh creates, recreates and removes these
+# containers, over SSH from the workstation, with the page's env file
+# (/opt/agency-hub/page-browser/pages/<page>/page.env). It also creates
+# what this file takes as given: the networks pb-control and pb-egress, the
+# page's profile and buffer volumes, its secrets, the seccomp and AppArmor
+# profiles.
+#
+# - pb-control (internal): the engine (`sync`) and the API reach the
+#   operator's RPC and the owner's screen here; Hub's own containers join it
+#   with fixed addresses (PR 3).
+# - pb-egress: the way out, to the page's SOCKS5 only — the container's own
+#   nftables rules (init-net) and the host's DOCKER-USER rules both hold it
+#   there. No port is published.
+name: page-browser-${PB_PAGE:?the page}
+
+services:
+  browser:
+    image: ${PB_IMAGE:?the image tag}
+    container_name: page-browser-${PB_PAGE}
+    # A constant host name: Chrome's profile lock names the host, and a
+    # recreated container must not take its own profile for another
+    # machine's (stage 1, amendment 33).
+    hostname: page-browser
+    restart: unless-stopped
+    stop_grace_period: 20s
+    networks:
+      pb-control:
+        ipv4_address: ${PB_CONTROL_IP:?the address in pb-control}
+      pb-egress:
+        ipv4_address: ${PB_EGRESS_IP:?the address in pb-egress}
+    # Root keeps what init-net and s6 need; Chrome, the X server and the
+    # operator run as their own users without capabilities.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_ADMIN]
+    security_opt:
+      - no-new-privileges:true
+      # Docker's default seccomp profile plus what Chrome's sandbox needs
+      # (apps/page-browser/security/seccomp-chrome.json).
+      - seccomp=${PB_SECCOMP_PROFILE:?the seccomp profile path}
+      # Docker's default AppArmor profile plus user namespaces
+      # (apps/page-browser/security/apparmor-page-browser).
+      - apparmor=${PB_APPARMOR_PROFILE:-page-browser}
+    # Chrome crashes with a small /dev/shm. Preliminary limits (plan §4.12).
+    shm_size: 1gb
+    mem_limit: 2g
+    cpus: 1
+    pids_limit: 1024
+    environment:
+      PB_PAGE: ${PB_PAGE}
+      PB_PROFILE_ID: ${PB_PROFILE_ID:?the profile id}
+      PB_SOCKS_IP: ${PB_SOCKS_IP:?the SOCKS5 address}
+      PB_SOCKS_PORT: ${PB_SOCKS_PORT:?the SOCKS5 port}
+      PB_SYNC_IP: ${PB_SYNC_IP:?the address of sync in pb-control}
+      PB_API_IP: ${PB_API_IP:?the address of api in pb-control}
+      PB_TZ: ${PB_TZ:-UTC}
+      PB_LANG: ${PB_LANG:-en-US}
+    secrets:
+      - vnc_password
+    volumes:
+      - profile:/data/profile
+      - buffer:/data/buffer
+    labels:
+      agency-hub.page-browser.page: ${PB_PAGE}
+      agency-hub.page-browser.profile: ${PB_PROFILE_ID}
+
+networks:
+  pb-control:
+    external: true
+  pb-egress:
+    external: true
+
+# Named by the profile, not the page: a profile that is ready moves to
+# another page without a copy (plan §3.1).
+volumes:
+  profile:
+    external: true
+    name: pb-profile-${PB_PROFILE_ID}
+  buffer:
+    external: true
+    name: pb-buffer-${PB_PROFILE_ID}
+
+secrets:
+  vnc_password:
+    file: ${PB_SECRETS_DIR:?the page's secrets directory}/vnc_password
