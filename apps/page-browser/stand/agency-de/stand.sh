@@ -52,8 +52,10 @@ guard_start() {
     echo "guard already running"
   else
     systemctl reset-failed "$GUARD_UNIT" >/dev/null 2>&1 || true
+    # CPUQuota at one core: at 10 % the guard's own forks were throttled
+    # for ~90 ms at a time, and that showed up as Hub's latency.
     systemd-run --unit="$GUARD_UNIT" --description="pb-stand guard (Project Browser stand)" \
-      -p Restart=always -p RestartSec=2 -p MemoryMax=64M -p CPUQuota=10% \
+      -p Restart=always -p RestartSec=2 -p MemoryMax=64M -p CPUQuota=100% \
       /bin/bash "$BASE/guard.sh" >/dev/null
   fi
   sleep 6
