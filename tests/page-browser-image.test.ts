@@ -118,6 +118,9 @@ describe("the host's layer (egress-rules.sh)", () => {
     expect(apply.indexOf('-I DOCKER-USER 1 -j "$NEW_FWD"')).toBeLessThan(apply.indexOf('-D DOCKER-USER -j "$chain"'));
     expect(apply.indexOf('-D DOCKER-USER -j "$chain"')).toBeLessThan(apply.indexOf('-F "$chain"'));
     expect(rules).toContain("trap drop_unhooked EXIT");
+    // Every state's allows before any page address's drops: while a page
+    // switches, both of its SOCKS5 pass (Astra's re-check of PR 2).
+    expect(apply.lastIndexOf("-j RETURN\n  done")).toBeLessThan(apply.indexOf('-s "$egress" -j DROP'));
     expect(read("scripts/deploy-page-browser.sh")).toContain("modprobe br_netfilter");
   });
 });

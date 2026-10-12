@@ -73,17 +73,29 @@ apply() {
 
   "${IPT[@]}" -A "$NEW_FWD" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   shopt -s nullglob
-  for env_file in "$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next; do
+  local states=("$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next)
+  for env_file in "${states[@]}"; do
+    [[ "$(sed -n 's/^PB_EGRESS_IP=//p' "$env_file")" =~ ^[0-9.]+$ \
+      && "$(sed -n 's/^PB_CONTROL_IP=//p' "$env_file")" =~ ^[0-9.]+$ \
+      && "$(sed -n 's/^PB_SOCKS_IP=//p' "$env_file")" =~ ^[0-9.]+$ \
+      && "$(sed -n 's/^PB_SOCKS_PORT=//p' "$env_file")" =~ ^[0-9]+$ ]] \
+      || fail "$env_file is incomplete"
+  done
+  # What each state may do comes first, the page addresses' drops after:
+  # while page.sh switches a page, both of its states (two SOCKS5) pass.
+  for env_file in "${states[@]}"; do
     egress="$(sed -n 's/^PB_EGRESS_IP=//p' "$env_file")"
     control="$(sed -n 's/^PB_CONTROL_IP=//p' "$env_file")"
     socks_ip="$(sed -n 's/^PB_SOCKS_IP=//p' "$env_file")"
     socks_port="$(sed -n 's/^PB_SOCKS_PORT=//p' "$env_file")"
-    [[ "$egress" =~ ^[0-9.]+$ && "$control" =~ ^[0-9.]+$ && "$socks_ip" =~ ^[0-9.]+$ && "$socks_port" =~ ^[0-9]+$ ]] \
-      || fail "$env_file is incomplete"
     "${IPT[@]}" -A "$NEW_FWD" -s "$egress" -d "$socks_ip" -p tcp --dport "$socks_port" -j RETURN
-    "${IPT[@]}" -A "$NEW_FWD" -s "$egress" -j DROP
     "${IPT[@]}" -A "$NEW_FWD" -s "$SYNC_IP" -d "$control" -p tcp --dport 7700 -j RETURN
     "${IPT[@]}" -A "$NEW_FWD" -s "$API_IP" -d "$control" -p tcp -m multiport --dports 6901,7700 -j RETURN
+  done
+  for env_file in "${states[@]}"; do
+    egress="$(sed -n 's/^PB_EGRESS_IP=//p' "$env_file")"
+    control="$(sed -n 's/^PB_CONTROL_IP=//p' "$env_file")"
+    "${IPT[@]}" -A "$NEW_FWD" -s "$egress" -j DROP
     "${IPT[@]}" -A "$NEW_FWD" -d "$control" -j DROP
     "${IPT[@]}" -A "$NEW_FWD" -s "$control" -j DROP
     pages=$((pages + 1))
