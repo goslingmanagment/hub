@@ -52,6 +52,7 @@ import {
   applyLiveTextContext,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
+  checkAiConversationPair,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
@@ -443,6 +444,17 @@ export async function prepareAiFeatureStream(
     });
   }
 
+  // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
+  // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
+  // A pair the page's capture contradicts is refused (409
+  // `conversation_fan_mismatch`) before any context loads; a pair the hub
+  // cannot vouch for yet is served, and the manifest and the context_v1 frame
+  // say `unverified`. The client-context lane (the released Fansly extension
+  // sends its own transcript) is not read here: its requests are unchanged.
+  const conversationPair = isFanslyRequest && body.clientContext === undefined
+    ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
+    : null;
+
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
   // SAME live flag + fail-closed page allowlist the voice-notes service admits
@@ -767,6 +779,9 @@ export async function prepareAiFeatureStream(
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
+  }
+  if (conversationPair !== null) {
+    contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
@@ -1144,6 +1159,7 @@ export async function prepareAiFeatureStream(
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
       ...(liveText !== undefined ? { live: liveText.live } : {}),
+      ...(conversationPair !== null ? { pair: conversationPair } : {}),
     });
   }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
