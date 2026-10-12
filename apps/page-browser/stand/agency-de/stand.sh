@@ -165,12 +165,22 @@ PB_SECRETS_DIR=$work/secrets
 EOF
   # The production page file, in the stand's networks, labelled for the
   # guard and never restarted by Docker.
+  # stand-route.sh: an on-link default route over the internal egress
+  # network before /init (see there).
+  [[ -x "$BASE/tools/busybox" ]] \
+    || docker run --rm --network none -v "$BASE/tools:/out" busybox:1.37-musl cp /bin/busybox /out/busybox
   cat > "$work/stand.yml" <<EOF
 services:
   browser:
     restart: "no"
     labels:
       agency.stand: pb-stand
+    entrypoint: ["/stand/busybox", "sh", "/stand/stand-route.sh"]
+    environment:
+      STAND_EGRESS_IP: 10.231.11.250
+    volumes:
+      - $BASE/tools/busybox:/stand/busybox:ro
+      - $BASE/stand-route.sh:/stand/stand-route.sh:ro
 networks:
   pb-control:
     name: $CONTROL_NET

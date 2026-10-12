@@ -32,7 +32,7 @@ git -C "$REPO" archive --format=tar "$proto:apps/page-browser" -- . ':(exclude)s
   | remote "rm -rf /opt/pb-stand/src/$proto && mkdir /opt/pb-stand/src/$proto && tar -xf - -C /opt/pb-stand/src/$proto"
 remote "cd /opt/pb-stand/src/$proto/stand/agency-de \
   && install -m 644 docker-compose.yml docker-proxy.mjs /opt/pb-stand/ \
-  && install -m 755 guard.sh stand.sh /opt/pb-stand/"
+  && install -m 755 guard.sh stand.sh stand-route.sh /opt/pb-stand/ && install -d -m 755 /opt/pb-stand/tools"
 
 git -C "$REPO" archive --format=tar "$pr2" apps/page-browser docker-compose.page-browser.yml \
   | remote "rm -rf /opt/pb-stand/ctx/$pr2 && mkdir /opt/pb-stand/ctx/$pr2 && tar -xf - -C /opt/pb-stand/ctx/$pr2 \
