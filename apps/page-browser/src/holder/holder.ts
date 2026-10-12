@@ -97,6 +97,7 @@ export class Holder {
   async start(): Promise<void> {
     await this.#listen();
     void this.#connectChrome().catch((error: unknown) => {
+      if (this.#exiting) return; // stopped while it waited for Chrome
       this.#log("cdp.connect_failed", { error: errorMessage(error) });
       this.#exit(1);
     });
