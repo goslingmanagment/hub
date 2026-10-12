@@ -133,8 +133,8 @@ what it was, so a client built before the frame never meets it.
 - Shape: the one frame that is not strict. A later key is dropped by an installed SDK instead of
   failing its stream, and the vocabularies are open strings. The known values are exported from the
   SDK (`AI_CONTEXT_SOURCES`, `CLIENT_COVERAGE_LEVELS`, `AI_KNOWN_FAN_MESSAGE_STATES`,
-  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`); a client reads an unknown one as
-  "unknown".
+  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`, `AI_CONTEXT_PAIR_STATES`); a client reads
+  an unknown one as "unknown".
 
 | Field | Meaning |
 |---|---|
@@ -148,6 +148,7 @@ what it was, so a client built before the frame never meets it.
 | `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
 | `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
+| `pair` | Fansly only, when the request names a `fanRef`: what the hub vouches for about the pair `conversationRef` (the group) ↔ `fanRef` (below). `verified`: the page's thread of the group has this fan. `unverified`: the page holds no thread of the group, or one whose fan the hub does not know yet. Absent on OnlyFans and without `fanRef`. |
 
 `knownFanMessageIds` (body, optional, 1 to 10 distinct numeric ids) names fan messages the client
 saw in the open chat before it asked. Ids only: no text travels, nothing is added to the prompt and
@@ -177,6 +178,28 @@ The frame is built from database reads only (the transcript loader, the coverage
 lookup): no platform request, no queued platform work and no change to a chat's unread state.
 Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
 generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
+
+### Feature-lane conversation pair on Fansly (chat-extension R20 HF-9)
+
+On Fansly a chat is a group with an id of its own. A request whose transcript the hub loads itself
+(no `clientContext`) names the group as `conversationRef` and the fan as `fanRef`: the hub reads
+the transcript by the one and the fan's spend, subscription, name and dossier by the other. Before
+any context loads, after the page was admitted, the hub reads the page's thread of the group
+(`page_dm_threads` by `platform_account_id` and `platform_conversation_id`, hidden threads
+included) and compares its fan (`partner_platform_user_id`) with `fanRef` as exact strings:
+
+| The page's thread of the group | Answer |
+|---|---|
+| has this fan | served; `pair: verified` |
+| has another fan | 409 `conversation_fan_mismatch`: nothing is generated, nothing is recorded |
+| none (a chat the hub has not captured yet), or its fan is not known | served; `pair: unverified` |
+
+The answer is recorded as `params.contextManifest.conversationPair` (`verified` or `unverified`) and
+rides the `context_v1` frame as `pair` for a caller that advertised `context-v1`. A failed read is
+not swallowed: the request fails as any failed context load does. Not checked, and answered exactly
+as before: a request with `clientContext` (the released Fansly extension sends its own transcript,
+with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
+`fanRef`.
 
 ### Feature-lane transcript depth (`messageCount`, full Recap)
 

@@ -75,6 +75,7 @@ export {
 // AI_NOTE_FIELD*: the caps of the body's `noteFields` (fan-notes-fill).
 export {
   AI_CONTEXT_LIVE_STATUSES,
+  AI_CONTEXT_PAIR_STATES,
   AI_CONTEXT_SOURCES,
   AI_FAN_LANGUAGE_EVIDENCE,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,

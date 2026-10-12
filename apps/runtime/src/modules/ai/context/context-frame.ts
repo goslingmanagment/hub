@@ -10,6 +10,7 @@ import type { AppContext } from "../../../bootstrap.ts";
 import type { AiFeatureContextFrameBody } from "../../../services/ai-gateway.ts";
 import { loadClientConversationCoverage } from "../../../services/client-coverage.ts";
 import { formatTranscript, type TranscriptMessage } from "../prompts/index.ts";
+import type { AiConversationPairState } from "./chat-access.ts";
 
 // chat-extension H-4b — the `context_v1` frame: which transcript snapshot
 // ACTUALLY served a generation. Everything here describes the transcript the
@@ -184,6 +185,9 @@ export function buildAiContextFrameBody(input: {
    *  when the request sent none. */
   live?: AiFeatureContextFrameBody["live"];
   fanLanguageEvidence: AiFanLanguageEvidence;
+  /** R20 HF-9: the checked pair of a Fansly request (`checkAiConversationPair`);
+   *  absent when no pair was checked. */
+  pair?: AiConversationPairState;
 }): AiFeatureContextFrameBody {
   return {
     source: input.served.source,
@@ -194,6 +198,7 @@ export function buildAiContextFrameBody(input: {
     ...(input.knownFanMessages !== undefined ? { knownFanMessages: input.knownFanMessages } : {}),
     live: input.live ?? { status: "not_sent", accepted: 0, rejected: 0 },
     fanLanguageEvidence: input.fanLanguageEvidence,
+    ...(input.pair !== undefined ? { pair: input.pair } : {}),
   };
 }
 
@@ -219,6 +224,8 @@ export async function loadAiContextFrameBody(
     knownFanMessageIds?: readonly string[];
     /** The frame's `live` block (applyLiveTextContext). */
     live?: AiFeatureContextFrameBody["live"];
+    /** The frame's `pair` (R20 HF-9); absent when no pair was checked. */
+    pair?: AiConversationPairState;
   },
 ): Promise<AiFeatureContextFrameBody> {
   const omitted = Math.min(Math.max(input.omittedByPromptBudget ?? 0, 0), input.served.window.length);
@@ -273,5 +280,6 @@ export async function loadAiContextFrameBody(
     ...(knownFanMessages !== undefined ? { knownFanMessages } : {}),
     ...(input.live !== undefined ? { live: input.live } : {}),
     fanLanguageEvidence: fanLanguageEvidenceOf(messages),
+    ...(input.pair !== undefined ? { pair: input.pair } : {}),
   });
 }
