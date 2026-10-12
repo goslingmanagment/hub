@@ -1119,7 +1119,7 @@ export const syncAttempts = pgTable(
     workId: bigint("work_id", { mode: "number" }),
     resource: text("resource").notNull(),
     subject: text("subject").notNull().default(""),
-    // 0269: a site or login attempt (Project Browser) has the class 'site'.
+    // 0270: a site or login attempt (Project Browser) has the class 'site'.
     class: text("class").$type<"urgent" | "requests" | "planned" | "site">().notNull(),
     slot: smallint("slot"),
     ownerGeneration: bigint("owner_generation", { mode: "bigint" }).notNull(),
@@ -1152,7 +1152,7 @@ export const syncAttempts = pgTable(
     // 0237 (I19): the route's and its family's intervals the admission applied.
     routeIntervalMs: integer("route_interval_ms"),
     familyIntervalMs: integer("family_interval_ms"),
-    // 0269 (Project Browser): whose request — a work's send, the page's own
+    // 0270 (Project Browser): whose request — a work's send, the page's own
     // site request, or an operation of the owner's manual login.
     origin: text("origin").$type<"engine" | "site" | "login">().notNull().default("engine"),
   },

@@ -898,7 +898,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # EXCLUSIVE, so the running engine's journal is never held for a scan. The
   # previous image never names `origin` and never writes the class 'site';
   # nothing writes a site attempt yet, so it runs unchanged after a rollback.
-  "0269_sync_attempts_origin.sql"
+  "0270_sync_attempts_origin.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

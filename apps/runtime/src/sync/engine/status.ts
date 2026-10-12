@@ -400,7 +400,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
       violationsLastDay: input.sends.violationsLastDay,
     },
     // The engine's classes, as the status contract names them; a page's own
-    // site requests (Project Browser, 0269) show under their resource only.
+    // site requests (Project Browser, 0270) show under their resource only.
     sendsLastHour: {
       urgent: input.sends.lastHour.urgent,
       requests: input.sends.lastHour.requests,

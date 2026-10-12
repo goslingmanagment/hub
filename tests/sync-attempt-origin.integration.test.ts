@@ -15,7 +15,7 @@ import {
 import { routeOfEngineOperation } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
-// sync_attempts.origin (0269; Project Browser plan §3.2, stage 3 PR 8): the
+// sync_attempts.origin (0270; Project Browser plan §3.2, stage 3 PR 8): the
 // site's own requests and the owner's login operations, journaled next to
 // the engine's sends with the class 'site' and no work, are seen by the
 // takeover floor, the route clocks and the send counts without code of
