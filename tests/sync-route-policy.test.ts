@@ -74,7 +74,9 @@ describe("the route catalogue", () => {
     }
     expect(FANSLY_ROUTES.get("ws.upgrade")).toMatchObject({ host: "ws" });
     expect(FANSLY_ROUTES.get("cdn.media")).toMatchObject({ host: "cdn" });
-    expect(routeOfEngineOperation("lists.items")).toBeNull();
+    // A site read of a legacy-only endpoint is journaled on its route
+    // (Project Browser, 0269): its clock counts there, not against every route.
+    expect(routeOfEngineOperation("lists.items")).toBe("lists.items");
     expect(routeOfEngineOperation("no.such")).toBeNull();
   });
 
