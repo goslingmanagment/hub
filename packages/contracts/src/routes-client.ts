@@ -1873,14 +1873,19 @@ const CLIENT_HEALTH_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.
 const healthInstant = z.string().max(40).regex(CLIENT_HEALTH_INSTANT_PATTERN);
 
 /**
- * The perf metrics and the fixed upper bounds (ms) of their buckets, as the
- * client froze them (`PERF_METRICS`, contracts v1.0.0): the client builds every
- * histogram from these, and the hub checks a histogram against them before it
- * merges one.
+ * The perf metrics and the fixed upper bounds (ms) of their buckets: the client
+ * builds every histogram from these, and the hub checks a histogram against
+ * them before it merges one. The first eleven are as the client froze them
+ * (`PERF_METRICS`, contracts v1.0.0); the hub holds the Fansly ones below first,
+ * and the client adopts the same names and bounds before it sends them.
  *
  * Buckets: a histogram with n bounds has n + 1 counts. counts[0] holds values
  * ≤ bounds[0]; counts[i] values in (bounds[i-1], bounds[i]]; counts[n] values
  * above bounds[n-1] (that bucket tops out at the histogram's `max`).
+ *
+ * A metric names no host: the intake keys every rollup row by the report's
+ * host kind and build, so one metric measured on two host pages is two rows
+ * and never one set of buckets.
  *
  * The bounds and meaning of one (metric, schemaVersion) never change: new
  * bounds or a new meaning are a new schemaVersion, and the registry is
@@ -1912,6 +1917,26 @@ export const CLIENT_HEALTH_PERF_METRICS = {
   eventLatencyMs: { unit: "ms", schemaVersion: 1, bounds: [8, 16, 24, 32, 50, 75, 100, 150, 250, 500, 1000] },
   /** Input delay in the host's composer with the extension on. */
   composerInputDelayMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250] },
+
+  // Fansly (chat-extension Project Unite R20, HF-13), reported from a
+  // `fansly-web` tab. Each set has an edge at every budget it is checked
+  // against, so the share within a budget and each overrun past it are read
+  // off the buckets, not guessed inside one: a frame parsed in ≤ 0.1 ms on
+  // average (the mean is sum / count, exact; the edges below 0.1 show where the
+  // mass lies), a response parsed in ≤ 2 ms per task, the snapshot step in
+  // ≤ 5 ms. Past a budget the edges run on to a 60 Hz frame (16 ms) and a long
+  // task (50 ms); the last bucket keeps the rest, topped by `max`.
+  /** One socket frame of the host page parsed by the client's tap in the page. */
+  frameParseMs: { unit: "ms", schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100] },
+  /** One XHR response of the host page parsed by the client's observer: one task, deferred or not. */
+  xhrParseMs: { unit: "ms", schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100] },
+  /** The generation snapshot's one synchronous step in the page. */
+  snapshotMs: { unit: "ms", schemaVersion: 1, bounds: [0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 8, 16, 32, 50, 100, 250] },
+  /** Click → the generation request ready, the snapshot's round trip through the page included. */
+  snapshotRoundTripMs: {
+    unit: "ms", schemaVersion: 1,
+    bounds: [1, 2, 5, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000],
+  },
 } as const satisfies Record<string, { unit: "ms"; schemaVersion: number; bounds: readonly number[] }>;
 
 export type ClientHealthPerfMetricName = keyof typeof CLIENT_HEALTH_PERF_METRICS;
