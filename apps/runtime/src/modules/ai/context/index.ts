@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import {
   ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
+  aiTranscriptRowCap,
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
   readDmLiveUnion,
@@ -155,9 +156,9 @@ export async function loadTranscriptContext(
     unionMode?: AiTranscriptUnionMode;
     /** Fansly pages only; the OnlyFans union mode never runs beside it. */
     liveOverlay?: AiTranscriptLiveOverlay;
-    /** chat-extension H-6: raises the row cap of the archive and union reads
-     * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
-     * The Fansly live overlay union never reads it and stays at its own cap. */
+    /** chat-extension H-6, R20 HF-6: raises the row cap of this load's reads
+     * (the deep features' deeper read, ai-transcript-depth.ts): the archive
+     * and union reads, and the Fansly live overlay union with its REST arm. */
     maxRows?: number;
     /** Arena "vanished chat" (plan §5): the chat has an established
      * unavailability episode (`readAiChatAccess`, read by the caller): its
@@ -184,13 +185,14 @@ export async function loadTranscriptContext(
         pageId: input.pageId,
         platformConversationId: input.conversationRef,
         store: "message_archive",
-        limit: Math.min(limit, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS),
+        limit: Math.min(limit, aiTranscriptRowCap(input.maxRows, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS)),
         readStore: async (notTombstoned) => {
           archiveRows = await listArchiveConversationMessagesForAi(app.db, {
             accountId: input.pageId,
             conversationRef: input.conversationRef,
             limit,
             notTombstoned,
+            maxRows: input.maxRows,
           });
           return archiveRows;
         },

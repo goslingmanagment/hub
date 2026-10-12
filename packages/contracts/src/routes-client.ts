@@ -331,7 +331,7 @@ export const CLIENT_FEED_DEFAULT_LIMIT = 50;
 /** The first page's summary reads this many of the newest messages unless the query says otherwise: the Ping window. */
 export const CLIENT_FEED_SUMMARY_WINDOW_DEFAULT = 100;
 export const CLIENT_FEED_SUMMARY_WINDOW_MIN = 5;
-/** The transcript readers' own cap. The deeper read (3000) is the full Recap's alone: a feed page never makes it. */
+/** The transcript readers' own cap. The deeper read (up to 5000) is the full Recap's and the notes fill's alone: a feed page never makes it. */
 export const CLIENT_FEED_SUMMARY_WINDOW_MAX = 1500;
 
 /** Known values of the feed's `source`. On the wire an open token. The AI
