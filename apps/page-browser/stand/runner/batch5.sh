@@ -47,7 +47,7 @@ case "$PART" in
   E)
     for s in expiry-site-tls expiry-hub-tls expiry-hub-page-stop; do run "$s" 50; done
     run expiry-site-tls-nogate 10; run expiry-hub-page-stop-nogate 10
-    run next-admission-expired 20; run next-admission-slow 20; run stale-after-limit 10
+    run next-admission-expired 20; run next-admission-slow 20; run stale-after-limit 10; run limit-from-send 5
     run cancel-next-admission 20; run cancel-next-admission-pending 20
     for s in document-replaced-site document-replaced-site-simple document-replaced-hub document-replaced-site-frame document-replaced-hub-frame; do run "$s" 10; done
     ;;
