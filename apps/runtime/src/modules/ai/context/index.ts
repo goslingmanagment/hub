@@ -459,3 +459,7 @@ export async function loadFanBio(
 // Fan-dossier context (Decision #136) — compiler + loader live in their own
 // file; re-exported here so consumers ride the module barrel.
 export * from "./fan-profile.ts";
+
+// Spend and subscription of a Fansly fan in the released extension's shape
+// (chat-extension R20 HF-7г); the two loaders above stay OnlyFans' own.
+export * from "./fansly-money.ts";
