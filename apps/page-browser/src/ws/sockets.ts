@@ -11,28 +11,33 @@
 // waits there — before a single byte goes to Fansly — for the engine.
 //
 // One socket at a time, for its whole life. A CONNECT is taken up only when
-// the one before it is accounted for; until then it waits (its wait counts
-// from its CONNECT). The one before is accounted for when:
-//  - its CONNECT never got a tunnel (refused, expired, gone), or its tunnel
-//    ended with no handshake request on it (the proxy's word): no socket
-//    could have spoken through it;
-//  - or its socket's life in CDP is over — closed, or its handshake failed
-//    — and what ends it in the stream is durable;
-//  - or Chrome went (endAll) — its sockets with it.
+// the one before it is accounted for — proven to carry nothing any more;
+// until then it waits (its wait counts from its CONNECT). Proven only so:
+//  - Chrome never had a connection for it: its CONNECT was never let go on,
+//    or its tunnel ended before the proxy wrote the 200 (a handshake starts
+//    only on an established connection). A tunnel that opened proves
+//    nothing by carrying no request: Chrome tells the page a handshake
+//    started before it writes it;
+//  - or the CDP socket bound to it ended by Chrome's own word — closed, or
+//    its handshake's error — and what ends it in the stream is durable;
+//  - or Chrome went (endAll; nothing is admitted until a new one starts).
 // So only one tunnel at a time can carry a handshake, and the CDP socket
 // whose handshake (webSocketWillSendHandshakeRequest) shows while the
 // current admission's tunnel is open is that admission's: bound for good,
-// with no guess and no clock. A socket that is not accounted for in time —
-// a handshake on the tunnel CDP does not show (`bindWaitMs`), a tunnel that
-// ended with CDP silent on its socket (`accountWaitMs`), a second handshake
-// while the current socket is bound, the handshake of a socket CDP did not
-// show being created while a tunnel waits — fails closed: the tunnel is
-// cut, the page stops (`ws_unaccounted`: the exit closed, Chrome goes and
-// the page starts again; operator.ts), and nothing is admitted until a new
-// Chrome starts. Normal behaviour of the site — one socket, CDP's events
-// soon after the network's — never comes to it. What CDP says of a socket
-// that is not bound (one whose CONNECT was refused, one of a Chrome before)
-// is dropped and counted: nothing of it can be kept.
+// with no guess and no clock. Whatever cannot be accounted for fails closed
+// — a handshake on the tunnel CDP does not show (`bindWaitMs`), a tunnel
+// that ended with CDP not telling its socket's end (`accountWaitMs`), a
+// second handshake (of the bound socket, of another, of one with no tunnel
+// open for it, of one CDP did not show being created while a tunnel is
+// open), frames of a socket no tunnel was bound to, more sockets of the
+// host alive at once than are kept: the tunnel is cut, the page stops
+// (`ws_unaccounted`: the exit closed, Chrome goes and the page starts
+// again; operator.ts), and nothing is admitted until a new Chrome starts.
+// Normal behaviour of the site — one socket, CDP's events soon after the
+// network's — never comes to it. Sockets of other hosts are none of this
+// path's (counted, never kept with the host's); a socket of the host is
+// forgotten only once its life is over; what CDP says of a socket of a
+// Chrome before is dropped and counted.
 //
 //  1. `wsAdmit` with a new connection id, the address and context CDP shows
 //     for the oldest socket of the host waiting to connect (a label only),
@@ -77,9 +82,11 @@
 //  - `gap` where frames may be missing (spec §6.1 reasons), from the last
 //    event of the socket saved before the break: `operator_start` at every
 //    start of the operator (from the last event saved before it);
-//    `chrome_restart` when the browser goes under an open connection —
-//    before the closes written for it, in their commit, from the last event
-//    saved before them (what CDP still had of it is dropped); `ws_reconnect`
+//    `chrome_restart` when the browser goes under an open connection, or
+//    under a socket whose end CDP had not shown (its 101 and frames may be
+//    on their way) — before the closes written for it, in their commit,
+//    from the last event saved before them (what CDP still had of it is
+//    dropped); `ws_reconnect`
 //    before a connection that opens after another one closed or one that
 //    was not kept. A buffer that fills up writes its own (`buffer_full`,
 //    `disk_full`).
@@ -261,6 +268,8 @@ interface Admission {
   waitTimer: NodeJS.Timeout | null;
   generation: number;
   attemptId: number | null;
+  /** Its CONNECT was let go on (the deadline given to the proxy). */
+  granted: boolean;
   /** The proxy opened its tunnel (Chrome got the 200). */
   tunnelOpened: boolean;
   /** The handshake request went up (the proxy's word). */
@@ -369,8 +378,12 @@ export class SiteSockets {
    *  A late answer to one that never was is closed under its id; a repeated
    *  answer to one that was does nothing twice. */
   readonly #gone = new Map<string, { why: string; attemptId: number | null }>();
-  /** CDP's sockets of this Chrome. */
+  /** CDP's sockets of this Chrome to the socket host, oldest first: only
+   *  ended ones ever make room for new ones. */
   readonly #sockets = new Map<string, CdpSocket>();
+  /** CDP's sockets of this Chrome to other hosts: known only to be none of
+   *  this path's (bounded on their own). */
+  readonly #others = new Map<string, true>();
   /** Connections open now (their ws.open written or on its way), by id. */
   readonly #open = new Map<string, CdpSocket>();
   /** Connections whose end is durable in the stream. */
@@ -514,6 +527,7 @@ export class SiteSockets {
       waitTimer: null,
       generation: 0,
       attemptId: null,
+      granted: false,
       tunnelOpened: false,
       handshake: null,
       tunnelEnded: null,
@@ -612,6 +626,7 @@ export class SiteSockets {
         this.#done(admission, { sent: false, status: null, error: `not used: the admission could not be kept (${durable.reason})` });
         return;
       }
+      admission.granted = true;
       admission.resolve(result.deadlineMono);
     });
   }
@@ -730,16 +745,21 @@ export class SiteSockets {
    *  one commit — and its sockets are forgotten: whatever CDP still says of
    *  them is dropped. Every socket is accounted for by Chrome's going. */
   #chromeGone(why: string): void {
+    // A socket that may have spoken through its tunnel and whose end CDP
+    // has not shown: what it carried is lost with Chrome, open in the
+    // stream or not (its 101 and frames may still be on their way).
+    const current = this.#current;
+    const lost = current !== null && current.tunnelOpened && !this.#cdpDone(current);
     for (const admission of this.#queue.splice(0)) this.#endAsk(admission, why);
     for (const admission of [...this.#admissions.values()]) {
       if (admission.stage === "asking") this.#endAsk(admission, why);
       else if (admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: admission.status, error: why });
     }
     const open = [...this.#open.values()];
-    if (open.length > 0) this.#closeAll(open, why);
+    if (open.length > 0 || lost) this.#closeAll(open, why, lost);
     for (const socket of this.#sockets.values()) socket.state = "ended";
     this.#sockets.clear();
-    const current = this.#current;
+    this.#others.clear();
     if (current !== null) this.#account(current, "its Chrome went");
   }
 
@@ -828,13 +848,13 @@ export class SiteSockets {
           this.#endAsk(admission, `the connection went before its admission (${event.result})`);
           return;
         }
-        if (admission.stage === "admitted" && !event.handshakeSent) {
-          this.#done(admission, { sent: false, status: null, error: `the tunnel ended before the handshake request (${event.result})` });
-          return;
-        }
-        if (this.#current === admission && event.handshakeSent && admission.socket?.state !== "ended") {
+        // No request went up: not sent. (Chrome may still have told the
+        // page the handshake started — it does so before it writes it.)
+        if (admission.stage === "admitted" && !event.handshakeSent) this.#done(admission, { sent: false, status: null, error: `the tunnel ended before the handshake request (${event.result})` });
+        if (this.#current === admission && !this.#cdpDone(admission)) {
           // CDP's word on the socket — its answer, its end — may still be on
-          // its way: the proxy's end and CDP's travel apart.
+          // its way: the proxy's end and CDP's travel apart. Without it the
+          // socket is not accounted for, whatever the proxy saw.
           this.#await(admission, this.#timings.accountWaitMs, "its tunnel ended and CDP did not say how its socket ended");
         }
         this.#settle(admission);
@@ -867,10 +887,8 @@ export class SiteSockets {
   #socket(event: CdpEvent): CdpSocket | "other" | "unknown" {
     if (this.#deps.targetType(event.sessionId ?? null) === null) return "other";
     const key = this.#key(event);
-    if (key === null) return "other";
-    const socket = this.#sockets.get(key);
-    if (socket === undefined) return "unknown";
-    return this.#socketHost(socket.host) ? socket : "other";
+    if (key === null || this.#others.has(key)) return "other";
+    return this.#sockets.get(key) ?? "unknown";
   }
 
   /** Something of a socket no connection is kept for (one ended, one never
@@ -884,11 +902,32 @@ export class SiteSockets {
   #onCreated(event: CdpEvent): Taken {
     if (this.#deps.targetType(event.sessionId ?? null) === null) return this.#drop("a socket of no target of this Chrome");
     const key = this.#key(event);
-    if (key === null || this.#sockets.has(key)) return null;
+    if (key === null || this.#sockets.has(key) || this.#others.has(key)) return null;
     const url = String((event.params as { url?: unknown }).url ?? "");
-    const socket: CdpSocket = { key, url, host: hostOf(url), context: contextOf(this.#deps.targetType(event.sessionId ?? null)), guessedBy: null, admission: null, state: "new" };
-    remember(this.#sockets, key, socket, MAX_SOCKETS);
+    const host = hostOf(url);
+    if (!this.#socketHost(host)) {
+      remember(this.#others, key, true, MAX_SOCKETS);
+      return this.#drop("a socket to another host");
+    }
+    if (this.#sockets.size >= MAX_SOCKETS && !this.#forgetOneEnded()) {
+      // Every one kept is alive: none may be forgotten.
+      this.#failClosed(this.#current, `more than ${MAX_SOCKETS} sockets of the host alive at once`);
+      return null;
+    }
+    const socket: CdpSocket = { key, url, host, context: contextOf(this.#deps.targetType(event.sessionId ?? null)), guessedBy: null, admission: null, state: "new" };
+    this.#sockets.set(key, socket);
     return null;
+  }
+
+  /** Makes room: the oldest socket whose life is over is forgotten (what
+   *  CDP says of it later is dropped as of no socket kept). False: none. */
+  #forgetOneEnded(): boolean {
+    for (const [key, socket] of this.#sockets) {
+      if (socket.state !== "ended") continue;
+      this.#sockets.delete(key);
+      return true;
+    }
+    return false;
   }
 
   /** The oldest socket of `host` still to connect, for `wsAdmit`'s label
@@ -910,30 +949,37 @@ export class SiteSockets {
     return current !== null && current.tunnelOpened && current.socket === null ? current : null;
   }
 
+  /** The current admission's tunnel is open (and not ended). */
+  #tunnelLive(): boolean {
+    const current = this.#current;
+    return current !== null && current.tunnelOpened && current.tunnelEnded === null;
+  }
+
   /** A handshake: only the current admission's tunnel can carry one, so
    *  the socket is that admission's. */
   #onWillSendHandshake(event: CdpEvent): Taken {
     const socket = this.#socket(event);
     const waiting = this.#waitingForHandshake();
     if (socket === "other") return null;
+    // Chrome goes anyway: nothing is bound until a new one.
+    if (this.#closedUntilChrome !== null) return this.#drop("a handshake while nothing is admitted");
     if (socket === "unknown") {
-      // Its host is not known: it could be the one the tunnel carries.
-      if (waiting !== null) this.#failClosed(waiting, "a handshake of a socket CDP did not show being created, while a tunnel waits for one");
+      // Its host is not known: it could be on the admitted tunnel.
+      if (this.#tunnelLive()) this.#failClosed(this.#current, "a handshake of a socket CDP did not show being created, while a tunnel is open");
       return this.#drop("a handshake of a socket CDP did not show being created");
     }
-    if (socket.state !== "new") return this.#drop("a second handshake of a socket");
+    if (socket.state !== "new") {
+      // A socket handshakes once: a second one cannot be told apart.
+      this.#failClosed(this.#current, "a second handshake of one socket");
+      return null;
+    }
     if (waiting === null) {
       const current = this.#current;
       // A tunnel carries one socket: a second handshake while the current
-      // one is bound cannot be told apart from it.
-      if (current !== null && current.tunnelOpened && current.socket !== null && current.tunnelEnded === null) {
-        this.#failClosed(current, "a second socket's handshake while the current one is bound");
-        return null;
-      }
-      // No tunnel is open for it: a socket whose CONNECT was refused, or one
-      // whose tunnel is gone — nothing of it can be kept.
-      socket.state = "ended";
-      return this.#drop("a handshake no tunnel is open for");
+      // one is bound cannot be told apart from it; one with no tunnel open
+      // for it cannot be either.
+      this.#failClosed(current, current?.socket ? "a second socket's handshake while the current one is bound" : "a handshake no admitted tunnel is open for");
+      return null;
     }
     socket.admission = waiting;
     socket.state = "handshaking";
@@ -956,10 +1002,10 @@ export class SiteSockets {
     admission.status = known;
     admission.extensions = extensionsOf(response?.headers);
     if (known !== 101) {
-      // Its handshake failed: the socket's life is over.
-      socket.state = "ended";
+      // Its handshake failed: its end is Chrome's word on it (the error, the
+      // close) that follows.
+      socket.state = "answered";
       this.#done(admission, { sent: true, status: known, error: `the handshake was answered ${String(known)}` });
-      this.#settle(admission);
       return null;
     }
     if (admission.stage !== "admitted" || admission.tunnelEnded !== null) {
@@ -1004,7 +1050,14 @@ export class SiteSockets {
 
   #onFrameReceived(event: CdpEvent): Taken {
     const socket = this.#socket(event);
-    if (typeof socket === "string" || socket.admission === null) return this.#drop("a frame of a socket not bound");
+    if (socket === "other") return null;
+    if (socket === "unknown" || (socket.admission === null && socket.state !== "ended")) {
+      // Frames of a socket no tunnel was bound to: a live connection the
+      // operator cannot account for (if a tunnel is open, it could be on it).
+      if (this.#closedUntilChrome === null && (socket !== "unknown" || this.#tunnelLive())) this.#failClosed(this.#current, "frames of a socket no admitted tunnel was bound to");
+      return this.#drop("a frame of a socket not bound");
+    }
+    if (socket.admission === null) return this.#drop("a frame of a socket not bound");
     if (socket.state !== "open") {
       if (socket.state === "answered") this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
       return this.#drop("a frame of a socket not kept");
@@ -1065,6 +1118,12 @@ export class SiteSockets {
       // Not bound: one whose CONNECT was refused (or waited in vain). Its
       // life is over; nothing of it was kept.
       socket.state = "ended";
+      return null;
+    }
+    if (socket.state === "answered") {
+      // Its answer told already: this is its end.
+      socket.state = "ended";
+      this.#settle(socket.admission);
       return null;
     }
     if (socket.state !== "handshaking") return null;
@@ -1149,11 +1208,11 @@ export class SiteSockets {
     return opening !== undefined && !opening.accepted ? opening.written : undefined;
   }
 
-  /** The browser goes under open connections: their closes, after the
-   *  browser's gap — from the last event of the socket saved before them,
-   *  once every write before them has settled — in one commit, after their
-   *  opens. */
-  #closeAll(sockets: CdpSocket[], why: string): void {
+  /** The browser goes under open connections, or under a socket that may
+   *  have spoken: the browser's gap — from the last event of the socket
+   *  saved before, once every write before it has settled — then the closes
+   *  of the open ones, in one commit, after their opens. */
+  #closeAll(sockets: CdpSocket[], why: string, lost: boolean): void {
     const stamp = { mono: monoMs(), wall: wallMs() };
     const mark: Mark = { seq: null, wall: stamp.wall };
     const ids: string[] = [];
@@ -1169,7 +1228,7 @@ export class SiteSockets {
       this.#log("socket.closed", { connectionId, why });
       this.#deps.journal({ connectionId, event: "closed", detail: why });
     }
-    if (ids.length === 0) return;
+    if (ids.length === 0 && !lost) return;
     this.#last = mark;
     this.#uncovered = mark;
     let from: { seq: number | null; wall: number | null } | null = null;
@@ -1331,7 +1390,7 @@ export class SiteSockets {
   #done(admission: Admission, outcome: Outcome): void {
     const done = this.#finish(admission, outcome);
     if (done === null) return;
-    if (admission.tunnelOpened && admission.tunnelEnded === null) this.#deps.cutTunnel(admission.id, `cut: ${outcome.error ?? "its admission ended"}`);
+    if (admission.granted && admission.tunnelEnded === null) this.#deps.cutTunnel(admission.id, `cut: ${outcome.error ?? "its admission ended"}`);
     this.#end(
       admission.id,
       [{ outcome: done }, { connection: { connectionId: admission.id, gone: true } }],
@@ -1404,13 +1463,16 @@ export class SiteSockets {
     if (this.#current !== admission || admission.stage !== "done") return;
     if (this.#ending.has(admission.id) || this.#writes.has(`open:${admission.id}`)) return;
     if (!this.#cdpDone(admission)) return;
-    this.#account(admission, this.#quiet(admission) ? "no socket spoke through its tunnel" : "its socket ended");
+    this.#account(admission, this.#quiet(admission) ? "Chrome never had a connection for it" : "its socket ended");
   }
 
-  /** No tunnel, or none that carried a handshake: no socket spoke through
-   *  it. */
+  /** Its CONNECT was never let go on, or its tunnel ended before the 200:
+   *  Chrome never had a connection for it, so no socket of CDP's can be its
+   *  (a handshake starts only on an established connection). Whether a
+   *  request went up on an open tunnel proves nothing: Chrome tells the page
+   *  the handshake started before it writes it. */
   #quiet(admission: Admission): boolean {
-    return !admission.tunnelOpened || (admission.tunnelEnded !== null && admission.handshake === null);
+    return !admission.granted || (admission.tunnelEnded !== null && !admission.tunnelOpened);
   }
 
   /** Nothing more is owed by CDP of this admission's socket: none spoke
@@ -1431,16 +1493,19 @@ export class SiteSockets {
    *  admission ends unopened, and the page stops — Chrome goes (whatever it
    *  still holds of that socket with it) and the page starts again; nothing
    *  is admitted until then. */
-  #failClosed(admission: Admission, why: string): void {
+  #failClosed(admission: Admission | null, why: string): void {
     if (this.#closedUntilChrome !== null) return;
     this.#closedUntilChrome = why;
     // What its socket carried is not in the stream: the next connection's
     // gap covers it.
     this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
-    this.#log("socket.unaccounted", { connectionId: admission.id, why });
-    this.#deps.journal({ connectionId: admission.id, event: "failed", detail: `not accounted for: ${why}` });
-    this.#deps.cutTunnel(admission.id, `cut: ${why}`);
-    if (admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: null, error: `not accounted for: ${why}` });
+    const connectionId = admission?.id ?? null;
+    this.#log("socket.unaccounted", { connectionId, why });
+    this.#deps.journal({ connectionId, event: "failed", detail: `not accounted for: ${why}` });
+    if (admission !== null) {
+      this.#deps.cutTunnel(admission.id, `cut: ${why}`);
+      if (admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: null, error: `not accounted for: ${why}` });
+    }
     for (const waiting of [...this.#queue]) this.#endAsk(waiting, `a socket before it was not accounted for: ${why}`);
     this.#deps.stop("ws_unaccounted", `a socket could not be accounted for: ${why}`, "kill");
   }

@@ -37,8 +37,9 @@ export type Step = (typeof STEPS)[number];
  *    amendment 17);
  *  - `ws_unaccounted` (PR 10): a site socket the operator could not account
  *    for — a handshake on its tunnel CDP did not show, a tunnel that ended
- *    with CDP silent on its socket, a second socket's handshake while one
- *    is current: what CDP says later could be taken for another socket's.
+ *    with CDP not telling its socket's end, a second handshake, frames of a
+ *    socket no tunnel was bound to: what CDP says later could be taken for
+ *    another socket's.
  *    The tunnel is cut, the exit closes, Chrome goes, and the page starts
  *    again (a failure); no socket is admitted until then. */
 export const STOP_REASONS = [

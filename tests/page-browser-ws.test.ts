@@ -120,6 +120,7 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
     sessionFingerprint: () => session.fingerprint,
     authorizationBytes: () => (session.token === null ? null : authorizationBytes(session.token)),
     targetType: (sessionId) => (sessionId === null ? null : (types.get(sessionId) ?? null)),
+    socketHost: (host) => classifyFanslyHost(host) === "ws",
     cutTunnel: (connectionId, reason) => egress.cutSocket(connectionId, reason),
     journal: (line) => journal.push(line),
     alarm: (kind, detail) => alarms.push({ kind, detail }),
@@ -131,6 +132,7 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
     log: makeLog("ws"),
   });
   const created = sockets;
+  cleanups.push(() => created.close());
   const answer: World["answer"] = (fields, connectionId) => {
     const id = connectionId ?? String(link.of("wsAdmit").at(-1)!.connectionId);
     const base = { type: "wsAdmitResult" as const, ownerGeneration: 1, connectionId: id };
@@ -396,6 +398,11 @@ describe("the handshake's outcome (wsDone)", () => {
     expect(w.events().filter((event) => event.kind === "ws.open")).toEqual([]);
     // No tunnel lives without its socket open (self-review of Astra's round 4).
     await until(() => w.records.some((record) => record.result === "cut: the handshake was answered 429"), 3000, "the tunnel cut");
+    // Its end is Chrome's word on it, not the answer (self-review of round 6).
+    expect(w.sockets.busy).toBe(true);
+    w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "Error during WebSocket handshake: Unexpected response code: 429" }, "S1");
+    await until(() => !w.sockets.busy, 3000, "accounted for");
+    expect(w.stops).toEqual([]);
   });
 
   it("a tunnel that ends after its request waits for CDP's status: the proxy's end and CDP's answer travel apart", async () => {
@@ -444,9 +451,14 @@ describe("the handshake's outcome (wsDone)", () => {
     w.sockets.endAll("ws_unaccounted");
     await w.sockets.chromeStarting();
     await opened(w, "WS3", 84);
-    await until(() => w.events().length === 2);
-    // What the first socket carried is not in the stream: a gap before the next.
-    expect(w.events()).toMatchObject([{ kind: "gap", reason: "ws_reconnect" }, { kind: "ws.open", attemptId: 84 }]);
+    await until(() => w.events().length === 3);
+    // What the first socket carried is not in the stream: the browser's gap
+    // when it went, and the reconnect's before the next.
+    expect(w.events()).toMatchObject([
+      { kind: "gap", reason: "chrome_restart", fromSeq: null },
+      { kind: "gap", reason: "ws_reconnect", fromSeq: 1 },
+      { kind: "ws.open", attemptId: 84 },
+    ]);
   });
 
   it("a second socket's handshake while the current one is bound fails closed: it cannot be told apart", async () => {
@@ -535,6 +547,117 @@ describe("the handshake's outcome (wsDone)", () => {
     await until(() => !w.sockets.busy, 3000, "accounted for");
     expect(w.events().map((event) => event.kind)).toEqual(["ws.open", "ws.close"]);
     client.destroy();
+  });
+
+  it("Astra's round 6: a tunnel that ended with no request on it is not accounted for until CDP shows its socket's end — the next CONNECT waits, and the late handshake is its own admission's", async () => {
+    const w = await world();
+    const connecting = siteOpens(w, "WS1");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 95, deadlineMono: monoMs() + 300 });
+    const client = await connecting;
+    await client.tls();
+    // No request before the deadline: the proxy cuts the tunnel. Chrome may
+    // have told the page the handshake started all the same.
+    client.socket.resume();
+    await until(() => w.outcome(95) !== null, 3000, "A's outcome");
+    expect(w.outcome(95)).toMatchObject({ sent: false, error: expect.stringContaining("the tunnel ended before the handshake request") });
+    const next = siteOpens(w, "WS2");
+    await until(() => w.sockets.pending === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(w.link.of("wsAdmit")).toHaveLength(1);
+    // A's handshake and its failure, late: they are A's, and A is accounted for.
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "net::ERR_CONNECTION_CLOSED" }, "S1");
+    await until(() => w.link.of("wsAdmit").length === 2, 3000, "B asked");
+    w.answer({ admit: false } as never);
+    expect((await next).status).toBe(403);
+    expect(w.stops).toEqual([]);
+    expect(w.outcome(95)).toMatchObject({ sent: false });
+  });
+
+  it("Astra's round 6: the same with CDP silent fails closed — nothing admitted after it until Chrome starts again", async () => {
+    const w = await world({ timings: { accountWaitMs: 200 } });
+    const connecting = siteOpens(w, "WS1");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 96, deadlineMono: monoMs() + 300 });
+    const client = await connecting;
+    await client.tls();
+    client.socket.resume();
+    const next = siteOpens(w, "WS2");
+    await until(() => w.stops.length === 1, 3000, "the stop");
+    expect(w.stops[0]).toMatchObject({ reason: "ws_unaccounted" });
+    // B was never asked for (its CONNECT went with the closed exit).
+    expect((await next).status).not.toBe(200);
+    expect(w.link.of("wsAdmit")).toHaveLength(1);
+  });
+
+  it("Astra's round 6: Chrome lost before the first 101 is told — the browser's gap covers what the socket carried, open in the stream or not", async () => {
+    const w = await world();
+    await w.sockets.afterRestart();
+    const connecting = siteOpens(w, "WS1");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 97 });
+    const client = await connecting;
+    await client.tls();
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    client.request();
+    await until(() => w.server.received().includes(SOCKET_FILL.request));
+    // Chrome goes before CDP tells the 101; what it tells later is dropped.
+    w.sockets.endAll("control lost");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"lost"}' } }, "S1");
+    await until(() => w.events().length === 2, 3000, "the browser's gap");
+    await w.sockets.chromeStarting();
+    client.destroy();
+    await opened(w, "WS2", 98);
+    await until(() => w.events().length === 4, 3000, "B's open");
+    expect(w.events().map((event) => `${String(event.kind)}${event.kind === "gap" ? `:${String(event.reason)}` : ""}`)).toEqual(["gap:operator_start", "gap:chrome_restart", "gap:ws_reconnect", "ws.open"]);
+    expect(w.events().filter((event) => event.kind === "ws.in")).toEqual([]);
+    expect(w.outcome(97)).toMatchObject({ sent: true, status: null });
+  });
+
+  it("Astra's round 6: the sockets kept never lose a live one — sockets of other hosts are not kept, ended ones make room; only live ones at the bound fail closed", async () => {
+    const w = await world();
+    await opened(w, "WS1", 99);
+    for (let n = 0; n < 1100; n++) w.cdp.emit("Network.webSocketCreated", { requestId: `X${n}`, url: `wss://other${n}.example/` }, "S1");
+    for (let n = 0; n < 1100; n++) {
+      w.cdp.emit("Network.webSocketCreated", { requestId: `R${n}`, url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketFrameError", { requestId: `R${n}`, errorMessage: "net::ERR_TUNNEL_CONNECTION_FAILED" }, "S1");
+    }
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"still"}' } }, "S1");
+    await until(() => w.events().length === 2, 3000, "the frame kept");
+    expect(w.events()[1]).toMatchObject({ kind: "ws.in", frame: '{"t":2,"d":"still"}' });
+    expect(w.stops).toEqual([]);
+    // Live ones only, up to the bound: fail closed.
+    for (let n = 0; n < 1000; n++) w.cdp.emit("Network.webSocketCreated", { requestId: `L${n}`, url: URL_WS }, "S1");
+    expect(w.stops).toMatchObject([{ reason: "ws_unaccounted", note: expect.stringContaining("sockets of the host alive at once") }]);
+  });
+
+  it("self-review: a handshake of a socket no admitted tunnel is open for fails closed", async () => {
+    const w = await world();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS9", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS9" }, "S1");
+    expect(w.stops).toMatchObject([{ reason: "ws_unaccounted", note: expect.stringContaining("a handshake no admitted tunnel is open for") }]);
+  });
+
+  it.each([
+    ["a second handshake of one socket", (w: World) => w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1")],
+    ["a handshake of a socket CDP did not show being created, while a tunnel is open", (w: World) => w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "NEVER-CREATED" }, "S1")],
+    [
+      "frames of a socket no admitted tunnel was bound to",
+      (w: World) => {
+        w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
+        w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS2", response: { opcode: 1, payloadData: '{"t":2,"d":"x"}' } }, "S1");
+      },
+    ],
+    ["frames of a socket no admitted tunnel was bound to", (w: World) => w.cdp.emit("Network.webSocketFrameReceived", { requestId: "NEVER-CREATED", response: { opcode: 1, payloadData: '{"t":2,"d":"x"}' } }, "S1")],
+  ])("self-review (round 6): %s fails closed — nothing of it is kept", async (why, act) => {
+    const w = await world();
+    await opened(w, "WS1", 86);
+    act(w);
+    expect(w.stops).toMatchObject([{ reason: "ws_unaccounted", note: expect.stringContaining(why) }]);
+    await w.buffer.flush();
+    expect(w.events().filter((event) => event.kind === "ws.in")).toEqual([]);
   });
 
   it("a tunnel that is not TLS is cut before anything goes", async () => {
@@ -686,6 +809,11 @@ describe("the end of the page", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(w.outcome(93)).toBeNull();
     expect(w.sockets.recoverState(12345)).toBeNull();
+    // Its tunnel opened: until CDP shows its socket's end (or Chrome goes),
+    // no other socket is admitted.
+    expect(w.sockets.busy).toBe(true);
+    w.sockets.endAll("a test");
+    await w.sockets.chromeStarting();
     const sent = await opened(w, "WS2", 94);
     expect(w.sockets.recoverState(94)).toBeNull();
     sent.destroy();
@@ -1049,6 +1177,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
       sessionFingerprint: () => FINGERPRINT,
       authorizationBytes: () => authorizationBytes(SESSION_TOKEN),
       targetType: () => "page",
+      socketHost: (host) => classifyFanslyHost(host) === "ws",
       cutTunnel: () => false,
       journal: () => undefined,
       alarm: () => undefined,
@@ -1232,7 +1361,9 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const buffer = openBuffer();
     cleanups.push(() => buffer.close());
     const stops: string[] = [];
-    const { cdp, sockets } = await operatorSide(holder, buffer, { timings: { bindWaitMs: 100 }, stop: (reason) => stops.push(reason) });
+    // A's worker is a target of the first Chrome ("W0"): gone with it.
+    let restarted = false;
+    const { cdp, sockets } = await operatorSide(holder, buffer, { timings: { bindWaitMs: 100 }, stop: (reason) => stops.push(reason), targetType: (sessionId) => (sessionId === "W0" && restarted ? null : "worker") });
     cleanups.push(() => cdp.close());
     const connectionA = await admitted(sockets, 81);
     // A's request up its tunnel; the worker's CDP events do not come.
@@ -1245,23 +1376,26 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     expect(sockets.admit("wsv3.fansly.com", 443)).toEqual(expect.stringContaining("nothing is admitted until Chrome starts again"));
     // The worker comes back: A's events, stamped now.
     const delivered = holder.holder!.stats.lastSeq;
-    chrome.event("Network.webSocketCreated", { requestId: "WS-A", url: URL_WS }, "S1");
-    chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-A", timestamp: monoMs() / 1000 }, "S1");
-    chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS-A", timestamp: monoMs() / 1000, response: { status: 101, headers: {} } }, "S1");
-    frame(chrome, "a-frame", "WS-A");
+    chrome.event("Network.webSocketCreated", { requestId: "WS-A", url: URL_WS }, "W0");
+    chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-A", timestamp: monoMs() / 1000 }, "W0");
+    chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS-A", timestamp: monoMs() / 1000, response: { status: 101, headers: {} } }, "W0");
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS-A", response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: "a-frame" }) } }, "W0");
     await until(() => holder.holder!.stats.lastSeq === delivered + 4 && stored() === 0, 3000, "A's late events taken");
     expect(eventsOf(buffer)).toEqual([]);
     // The page stopped (the browser went), a new Chrome starts: C is its own.
     sockets.endAll("ws_unaccounted");
     await sockets.chromeStarting();
-    frame(chrome, "a-frame-2", "WS-A");
+    restarted = true;
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS-A", response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: "a-frame-2" }) } }, "W0");
     const connectionC = await admitted(sockets, 83);
     handshake(chrome, "WS-C");
     answered(chrome, "WS-C");
     frame(chrome, "c-frame", "WS-C");
-    await until(() => eventsOf(buffer).length === 3, 3000, "C's open and frame");
-    // What A carried is not in the stream: the gap before C covers it.
+    await until(() => eventsOf(buffer).length === 4, 3000, "C's open and frame");
+    // What A carried is not in the stream: the browser's gap and the one
+    // before C cover it.
     expect(eventsOf(buffer).map((event) => [event.kind, event.connectionId ?? event.reason])).toEqual([
+      ["gap", "chrome_restart"],
       ["gap", "ws_reconnect"],
       ["ws.open", connectionC],
       ["ws.in", connectionC],
