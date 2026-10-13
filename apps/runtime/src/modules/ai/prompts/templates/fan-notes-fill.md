@@ -10,8 +10,8 @@ You are filling in a questionnaire note about one fan for a OnlyFans agency chat
 
 ## Fields
 
-- Характеристика: what the fan likes and what he pays for, in one line. You may combine the preferences he stated with what the spending data shows he pays for.
-- Медиа: what content he bought and what content he likes (types and themes), from the transcript and the spending data.
+- Характеристика: {noteFillCharacterField}
+- Медиа: {noteFillMediaField}
 - Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.{noteFillMergeFields}
 - Any other field: {noteFillOtherField}
 
