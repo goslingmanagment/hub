@@ -21,6 +21,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   CLIENT_FAN_LEASE_TTL_MS,
+  CLIENT_GREETING_SEND_RATE_LIMIT,
   CLIENT_PREVIEW_SEND_RATE_LIMIT,
   CLIENT_SEND_TICKET_TTL_MS,
 } from "@agency_hub_core/db";
@@ -184,6 +185,67 @@ describe("claim and custody contract", () => {
     }
   });
 
+  it("takes a manual greeting group (manual-greeting-v1) through the SDK's own schema, and nothing that would read as one", () => {
+    // R20 HF-3: the SDK the extension vendors validates with these very schemas.
+    const sdkBody = (sdk.routeSchemas as typeof routeSchemas).clientFanClaim.body;
+    expect(sdkBody).toBe(clientFanClaimBodySchema);
+    const fingerprint = createHash("sha256").update("Привет! Рада тебя видеть 💛", "utf8").digest("hex");
+    const manual = { kind: "manual", textFingerprint: fingerprint };
+    const dispatch = {
+      action: "dispatch", attemptId: ATTEMPT, instanceId: INSTANCE, purpose: "greeting", group: manual,
+      partIndex: 0, textRevision: 4, leaseToken: LEASE, flagRevision: 139,
+    };
+    // A Fansly fan and message id: 18 and 19 digits, beyond a double's exact integers.
+    const native = {
+      action: "registerNativeSend", attemptId: ATTEMPT, instanceId: INSTANCE, purpose: "greeting", group: manual,
+      partIndex: 0, platformMessageId: "1234567890123456789",
+    };
+    for (const body of [dispatch, native]) {
+      expect(sdkBody.parse(body), JSON.stringify(body)).toEqual(body);
+      // An extension that does not know the capability never lets one out.
+      expect(frozenBody.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+    expect(clientPageFanParamsSchema.parse({ pageLabel: "lora-fansly", fanRef: "512345678901234567" }))
+      .toEqual({ pageLabel: "lora-fansly", fanRef: "512345678901234567" });
+    expect(Number("1234567890123456789") === Number("1234567890123456790")).toBe(true);
+
+    const refused: unknown[] = [
+      // One part, a greeting's only.
+      { ...dispatch, partIndex: 1 },
+      { ...dispatch, purpose: "preview-reply", leaseToken: undefined },
+      { ...native, purpose: "preview-reply" },
+      // The fingerprint is a sha256 in lower-case hex, and the text never travels.
+      { ...dispatch, group: { ...manual, textFingerprint: fingerprint.toUpperCase() } },
+      { ...dispatch, group: { ...manual, textFingerprint: fingerprint.slice(1) } },
+      { ...dispatch, group: { ...manual, text: "Привет!" } },
+      { ...dispatch, group: { kind: "manual" } },
+      { ...dispatch, group: { kind: "ai", textFingerprint: fingerprint } },
+      // Neither half of one shape and half of the other.
+      { ...dispatch, group: { ...manual, variant: 0, partCount: 1 } },
+      { ...dispatch, group: { ...GROUP, kind: "manual" } },
+      { ...dispatch, group: { ...GROUP, textFingerprint: fingerprint } },
+      // An AI group never takes the manual groups' form of a ref.
+      { ...dispatch, group: { ...GROUP, generationRef: `manual:${fingerprint}` } },
+      { ...native, group: { generationRef: "manual:x", variant: 0, partCount: 1 } },
+    ];
+    for (const body of refused) {
+      expect(sdkBody.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+    expect(contracts.CLIENT_MANUAL_GROUP_REF_PREFIX).toBe("manual:");
+    expect(contracts.CLIENT_TEXT_FINGERPRINT_PATTERN.test(fingerprint)).toBe(true);
+    // What the hub answers for it: the stored form, which an installed SDK reads as any group.
+    const answered = {
+      greeting: { state: "confirmed", at: "2026-10-13T12:00:00.000Z", messageRef: "1234567890123456789", source: "preview-send" },
+      lease: { state: "none", leaseToken: null, expiresAt: null, heldBy: null },
+      group: { generationRef: `manual:${fingerprint}`, variant: 0, partCount: 1, sentParts: [0], heldParts: [] },
+      custody: { attemptId: ATTEMPT, state: "sent", ticket: null, ticketExpiresAt: "2026-10-13T12:00:10.000Z" },
+      serverNow: "2026-10-13T12:00:01.000Z",
+      flagRevision: 139,
+    };
+    expect(clientFanClaimResponseSchema.parse(answered)).toEqual(answered);
+    expect(frozenState.parse(answered)).toEqual(answered);
+  });
+
   it("answers a state the client's frozen schema reads, and an installed SDK keeps reading", () => {
     const none = {
       greeting: { state: "none", at: null, messageRef: null, source: null },
@@ -327,6 +389,18 @@ describe("claim and custody contract", () => {
     expect(CLIENT_BOOTSTRAP_LIMITS.claimLeaseSec * 1000).toBe(CLIENT_FAN_LEASE_TTL_MS);
     expect(CLIENT_BOOTSTRAP_LIMITS.dispatchTicketSec * 1000).toBe(CLIENT_SEND_TICKET_TTL_MS);
     expect(CLIENT_BOOTSTRAP_LIMITS.previewSendPerMinute).toBe(CLIENT_PREVIEW_SEND_RATE_LIMIT);
+    expect(CLIENT_BOOTSTRAP_LIMITS.previewSendPerMinute).toBe(6);
+    // R20 HF-3: a Fansly greeting's own rate, at least the old Fansly extension's peak of 29 a minute.
+    expect(CLIENT_BOOTSTRAP_LIMITS.greetingSendPerMinute).toBe(CLIENT_GREETING_SEND_RATE_LIMIT);
+    expect(CLIENT_BOOTSTRAP_LIMITS.greetingSendPerMinute).toBeGreaterThanOrEqual(30);
+  });
+
+  it("serves manual-greeting-v1, and exports the manual group's form through the SDK", () => {
+    expect(SERVED_CLIENT_CAPABILITIES).toContain("manual-greeting-v1");
+    expect(contracts.CLIENT_HUB_CAPABILITY_NAMES).toContain("manual-greeting-v1");
+    for (const name of ["CLIENT_MANUAL_GROUP_REF_PREFIX", "CLIENT_TEXT_FINGERPRINT_PATTERN"] as const) {
+      expect(sdk[name], name).toBe(contracts[name]);
+    }
   });
 
   it("every refusal has its own code and the status the client froze for it; only the rate limit carries advice", () => {

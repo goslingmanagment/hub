@@ -5,7 +5,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import { insertAuditEvent, isUniqueViolation } from "./auth.ts";
 import {
-  CLIENT_PREVIEW_SEND_RATE_LIMIT,
+  CLIENT_PREVIEW_SEND_RATE,
   CLIENT_PREVIEW_SEND_RATE_WINDOW_MS,
   custodyViewState,
   decideClaimTransition,
@@ -21,6 +21,7 @@ import {
   type ClientFanClaimView,
   type ClientGreetingRow,
   type ClientLeaseRow,
+  type ClientSendRate,
   type DesktopFollowerOutreach,
 } from "./client-claim-transition.ts";
 
@@ -195,6 +196,22 @@ export async function explainClientLastOwnDispatchQuery(
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
+/**
+ * The sends one rate counts, as a condition on `client_send_custody c`: the
+ * user's dispatches (a registered native send is not one) of the rate's
+ * purposes to pages of the same platform as `pageId`. Each platform keeps its
+ * own window: a chatter's Fansly greetings never hold back their OnlyFans
+ * sends from the preview, nor the other way round. The rate index
+ * (`client_send_custody_rate`, user and time) finds the window's rows; the page
+ * of each is one primary-key read.
+ */
+function sendRateScopeSql(input: { userId: number; pageId: number; rate: ClientSendRate }): SQL {
+  return sql`c.user_id = ${input.userId} and c.origin = 'preview-send'
+    and c.purpose = any(${sql.param([...input.rate.purposes])}::text[])
+    and (select p.platform from pages p where p.id = c.page_id)
+      = (select p.platform from pages p where p.id = ${input.pageId})`;
+}
+
 const LEASE_COLUMNS = sql`lease_id::text, page_id, fan_ref, user_id, instance_id::text, state, expires_at`;
 
 type LeaseDbRow = {
@@ -230,7 +247,8 @@ interface SnapshotRefs {
   attemptId: string | null;
   platformMessageId: string | null;
   requestGroup: ClientClaimGroup | null;
-  rateUserId: number | null;
+  /** A dispatch's: whose sends to count, and the rate whose scope they are counted in. */
+  rate: { userId: number; rate: ClientSendRate } | null;
   /** The status read: whose own last dispatched send to report while no send to the fan is open. */
   lastDispatchUserId: number | null;
 }
@@ -267,10 +285,10 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
       and variant = ${group.variant}
       and (state in ('dispatching', 'sent', 'resolved_sent') or attempt_id = ${greeting?.firstAttemptId ?? null}::uuid)`))
     .rows.map(custodyRow);
-  const recentPreviewSends = refs.rateUserId === null ? 0 : Number((await db.execute<{ n: number }>(sql`
-    select count(*)::int as n from client_send_custody
-    where user_id = ${refs.rateUserId} and origin = 'preview-send'
-      and created_at > ${new Date(now.getTime() - CLIENT_PREVIEW_SEND_RATE_WINDOW_MS)}`)).rows[0]?.n ?? 0);
+  const recentPreviewSends = refs.rate === null ? 0 : Number((await db.execute<{ n: number }>(sql`
+    select count(*)::int as n from client_send_custody c
+    where ${sendRateScopeSql({ userId: refs.rate.userId, pageId, rate: refs.rate.rate })}
+      and c.created_at > ${new Date(now.getTime() - CLIENT_PREVIEW_SEND_RATE_WINDOW_MS)}`)).rows[0]?.n ?? 0);
   return {
     pageId, fanRef, now,
     activeLease: leases.find((row) => row.pageId === pageId && row.fanRef === fanRef && row.state === "active") ?? null,
@@ -285,7 +303,7 @@ function snapshotRefs(request: ClientClaimRequest): SnapshotRefs {
     attemptId: "attemptId" in request ? request.attemptId : null,
     platformMessageId: "platformMessageId" in request ? request.platformMessageId : null,
     requestGroup: "group" in request ? request.group : null,
-    rateUserId: request.action === "dispatch" ? request.userId : null,
+    rate: request.action === "dispatch" ? { userId: request.userId, rate: request.rate ?? CLIENT_PREVIEW_SEND_RATE } : null,
     lastDispatchUserId: null,
   };
 }
@@ -495,7 +513,7 @@ export async function readClientFanClaimStatus(db: Database, input: {
   if (input.leaseToken !== null) assertShape(UUID.test(input.leaseToken), "leaseToken");
   const snapshot = await db.transaction(
     (transaction) => loadSnapshot(transaction as unknown as Database, input.pageId, input.fanRef, {
-      leaseToken: input.leaseToken, attemptId: null, platformMessageId: null, requestGroup: null, rateUserId: null,
+      leaseToken: input.leaseToken, attemptId: null, platformMessageId: null, requestGroup: null, rate: null,
       lastDispatchUserId: input.userId,
     }),
     { isolationLevel: "repeatable read", accessMode: "read only" },
@@ -623,19 +641,24 @@ export async function findClientSendCustodyItem(
 }
 
 /**
- * How long until the user's preview-send rate window frees a slot: the oldest
- * of the last CLIENT_PREVIEW_SEND_RATE_LIMIT sends leaves the window. 0 when a
- * slot is free already. Advice for a 429, read outside the dispatch's lock:
- * the dispatch itself counts again under the user's lock.
+ * How long until the user's rate window frees a slot in the scope of `rate`
+ * on the platform of `pageId`: the oldest of the last `rate.limit` sends leaves
+ * the window. 0 when a slot is free already. Advice for a 429, read outside the
+ * dispatch's lock: the dispatch itself counts again under the user's lock.
+ * Without `rate`, sending from the preview (CLIENT_PREVIEW_SEND_RATE).
  */
-export async function readClientPreviewSendRetryAfterMs(db: Database, userId: number): Promise<number> {
+export async function readClientPreviewSendRetryAfterMs(
+  db: Database,
+  input: { userId: number; pageId: number; rate?: ClientSendRate },
+): Promise<number> {
+  const rate = input.rate ?? CLIENT_PREVIEW_SEND_RATE;
   const row = (await db.execute<{ wait_ms: number }>(sql`
     select greatest(0, ceil(extract(epoch from (
-      created_at + make_interval(secs => ${CLIENT_PREVIEW_SEND_RATE_WINDOW_MS / 1000}) - clock_timestamp()
+      c.created_at + make_interval(secs => ${CLIENT_PREVIEW_SEND_RATE_WINDOW_MS / 1000}) - clock_timestamp()
     )) * 1000))::int as wait_ms
-    from client_send_custody
-    where user_id = ${userId} and origin = 'preview-send'
-    order by created_at desc
-    offset ${CLIENT_PREVIEW_SEND_RATE_LIMIT - 1} limit 1`)).rows[0];
+    from client_send_custody c
+    where ${sendRateScopeSql({ userId: input.userId, pageId: input.pageId, rate })}
+    order by c.created_at desc
+    offset ${rate.limit - 1} limit 1`)).rows[0];
   return row ? Number(row.wait_ms) : 0;
 }

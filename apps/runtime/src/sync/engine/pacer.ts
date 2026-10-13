@@ -272,6 +272,32 @@ export class Pacer {
   }
 
   /**
+   * The send check of an admission the page's browser sends (Project
+   * Browser: a site request), right before the browser is told it may send:
+   * every condition of `check` — one grant per admission, in flight, not
+   * stopping, ownership alive, within the send window, past the takeover
+   * floor and the pause — but no send mark. The browser sends later, within
+   * the window it is given; the send counts at the end it reports (its
+   * completion, the safe upper bound, until it reports the instant).
+   */
+  checkRemoteGrant(admission: Admission): FanslySendRefusedError | null {
+    if (admission.used) return this.#refuse(admission, "lease_used");
+    admission.used = true;
+    if (this.#st.inFlight !== admission) return this.#refuse(admission, "lease_inactive");
+    if (this.#stopping || !this.#deps.ownership.alive()) return this.#refuse(admission, "lease_inactive");
+    const now = this.#deps.clock.monoNow();
+    if (now >= admission.sendDeadlineMono) return this.#refuse(admission, "send_deadline_passed");
+    if (now < this.#st.floorMono) return this.#refuse(admission, "takeover_floor");
+    if (this.#st.lastCompletionMono !== null && now < this.#st.lastCompletionMono) {
+      return this.#refuse(admission, "pace");
+    }
+    if (this.#st.lastSendMono !== null && now - this.#st.lastSendMono < admission.pauseMs) {
+      return this.#refuse(admission, "pace");
+    }
+    return null;
+  }
+
+  /**
    * After the response body was read, or the request failed or was aborted.
    * A request that may have reached the wire without an `onRequestStart`
    * mark is counted as sent at this instant (the safe upper bound).

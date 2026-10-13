@@ -58,7 +58,8 @@ export interface AiTranscriptUnionInput {
   conversationRef: string;
   limit?: number;
   /** Raises the row cap of this read past AI_TRANSCRIPT_UNION_MAX_LIMIT, up to
-   * AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+   * AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the deep features pass it (the full Recap
+   * and the notes fill, ai-transcript-depth.ts). */
   maxRows?: number | undefined;
 }
 

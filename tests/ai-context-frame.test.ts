@@ -33,7 +33,7 @@ import {
   type TranscriptMessage,
   type TranscriptServedSnapshot,
 } from "../apps/runtime/src/modules/ai/index.ts";
-import { classifyClientCoverage } from "../apps/runtime/src/services/client-coverage.ts";
+import { classifyClientCoverage, classifyFanslyChainCoverage } from "../apps/runtime/src/services/client-coverage.ts";
 import * as sdk from "../packages/sdk/src/index.ts";
 
 // chat-extension H-4b: the `context_v1` frame of the AI feature stream and the
@@ -59,7 +59,7 @@ function frame(overrides: Record<string, unknown> = {}) {
 }
 
 function message(id: number, sender: "Fan" | "Model", text: string, createdAtMs = id): TranscriptMessage {
-  return { id, createdAtMs, sender, text, labels: [] };
+  return { id: String(id), createdAtMs, sender, text, labels: [] };
 }
 
 function sseFetch(frames: unknown[]): typeof fetch {
@@ -197,18 +197,10 @@ describe("knownFanMessageIds body field", () => {
 });
 
 describe("served window", () => {
-  it("names each transcript message by the ref its store keeps", () => {
-    const at = new Date("2026-10-04T05:00:00.000Z");
-    const rows = [
-      { messageRef: "9003", occurredAt: at },
-      // A second row of the same message never renames it: first wins.
-      { messageRef: "9003.0", occurredAt: at },
-      // Rows the transcript cannot shape are not candidates.
-      { messageRef: "9002", occurredAt: null },
-      { messageRef: "not-a-number", occurredAt: at },
-      { messageRef: "9001", occurredAt: at },
-    ];
-    const window = servedWindowOf(rows, [message(9001, "Fan", "hey", 1000), message(9003, "Model", "hi", 2000)]);
+  it("names each transcript message by the ref its store keeps: its own id", () => {
+    // Which rows the transcript can shape (a decimal ref, an event time) is
+    // the loader's rule (tests/ai-transcript-exact-ids.integration.test.ts).
+    const window = servedWindowOf([message(9001, "Fan", "hey", 1000), message(9003, "Model", "hi", 2000)]);
     expect(window).toEqual([
       { messageRef: "9001", occurredAt: new Date(1000), isFromFan: true },
       { messageRef: "9003", occurredAt: new Date(2000), isFromFan: false },
@@ -510,6 +502,30 @@ describe("context frame loader", () => {
       fanLanguageEvidence: "unknown",
     });
   });
+
+  it("asks the proof of the page's own platform: a Fansly chat its chain, an unknown platform nothing", async () => {
+    const chain = (historyState: string) => async () => ({ rows: [{ historyState }] });
+    const fansly = { ...request, platform: "fansly", conversationRef: "880003" };
+    const complete = stubApp([chain("complete")]);
+    expect(await loadAiContextFrameBody(complete.app, fansly)).toMatchObject({ coverage: "complete" });
+    expect(complete.calls()).toBe(1);
+    for (const state of ["partial", "unverified", "none"]) {
+      expect(await loadAiContextFrameBody(stubApp([chain(state)]).app, fansly)).toMatchObject({ coverage: "unknown" });
+    }
+    // No thread for this chat.
+    expect(await loadAiContextFrameBody(stubApp([noRows]).app, fansly)).toMatchObject({ coverage: "unknown" });
+    // A failed chain read fails open, like the OnlyFans one.
+    const failed = stubApp([failing]);
+    expect(await loadAiContextFrameBody(failed.app, fansly)).toMatchObject({ coverage: "unknown" });
+    expect(failed.warnings).toEqual(["ai context frame coverage lookup failed"]);
+
+    const other = stubApp([failing]);
+    expect(await loadAiContextFrameBody(other.app, { ...request, platform: "myspace" })).toMatchObject({
+      coverage: "unknown",
+    });
+    expect(other.calls()).toBe(0);
+    expect(other.warnings).toEqual([]);
+  });
 });
 
 describe("client coverage", () => {
@@ -543,5 +559,12 @@ describe("client coverage", () => {
     expect(classifyClientCoverage(null)).toBe("unknown");
     expect(classifyClientCoverage(proof({ revokedAt: new Date() }))).toBe("unknown");
     expect(classifyClientCoverage(proof({ proofPolicyVersion: "ofapi-proof-v0" }))).toBe("unknown");
+  });
+
+  it("reads a Fansly chat's chain: complete only when proven down to the first message (R20 HF-8д)", () => {
+    expect(classifyFanslyChainCoverage("complete")).toBe("complete");
+    for (const state of ["partial", "unverified", "none", null] as const) {
+      expect(classifyFanslyChainCoverage(state)).toBe("unknown");
+    }
   });
 });

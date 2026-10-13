@@ -1,12 +1,13 @@
-// chat-extension H-6: how deep the two AI transcript readers may read.
+// chat-extension H-6, R20 HF-6: how deep the two AI transcript readers may read.
 //
 // Both readers (the archive reader in message-archive.ts and the union reader
 // in ai-transcript-union.ts) clamp a requested window to a row cap of their
-// own, 1500. One caller reads deeper: the full Recap, which passes `maxRows`.
-// Every other caller passes nothing and keeps the cap it always had.
+// own, 1500. Two callers read deeper, the full Recap and the notes fill, and
+// they pass `maxRows`; so does the Fansly live overlay union for them. Every
+// other caller passes nothing and keeps the cap it always had.
 
 /** The deepest window either AI transcript reader serves, whoever asks. */
-export const AI_TRANSCRIPT_DEEP_MAX_ROWS = 3000;
+export const AI_TRANSCRIPT_DEEP_MAX_ROWS = 5000;
 
 /**
  * The row cap of one read: the reader's own cap, unless the caller raised it.

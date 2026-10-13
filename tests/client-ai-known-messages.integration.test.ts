@@ -293,6 +293,25 @@ describe("known fan message lookup (context_v1)", () => {
     });
     // The statement names the socket overlay only when the caller asks for it.
     expect(plan).not.toContain("dm_live_messages");
+
+    // R20 HF-8в: one generation may ask about 130 ids at once (10 known fan
+    // messages, 60 window ids and 60 deleted ids of the coverage check). The
+    // widest list is still probed by the unique keys, never scanned.
+    const wide = {
+      ...input,
+      messageRefs: Array.from({ length: AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS }, (_, n) => String(1_000_001 + n * 37)),
+    };
+    const widePlan = await explainAiKnownMessagesQuery(testDb.db, wide);
+    expect(widePlan).toContain("message_archive_account_id_platform_message_ref_key");
+    expect(widePlan).toContain("dm_message_archive_platform_account_message_uniq");
+    expect(widePlan).toContain("page_dm_messages_conversation_message_uniq");
+    for (const table of ["message_archive", "dm_message_archive", "page_dm_messages"]) {
+      expect(widePlan, table).not.toMatch(new RegExp(`Seq Scan on ${table}\\b`));
+    }
+    const wideStates = await lookupAiKnownMessages(testDb.db, wide);
+    expect(wideStates.size).toBe(AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS);
+    // 1000001 + 37n stays inside the fan's first 5000 archive rows for n < 135.
+    expect([...wideStates.values()].every((state) => state === "present")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("probes the socket overlay by its primary key", async (context) => {

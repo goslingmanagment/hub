@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import {
   ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
+  aiTranscriptRowCap,
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
   readDmLiveUnion,
@@ -18,6 +19,7 @@ import {
   formatFanSpendingData,
   formatFanSubscriptionData,
   formatTranscript,
+  isTranscriptMessageRef,
   normalizeTranscriptMessages,
   type FanSpendingData,
   type FanSubscriptionInput,
@@ -53,7 +55,9 @@ export * from "./ping-summary.ts";
 type Db = Pick<AppContext, "db">;
 
 /** Rebuild the OFAPI chat-message shape the migrated normalizer consumes —
- * archive rows were projected from those same vendor payloads. */
+ * archive rows were projected from those same vendor payloads. The id is the
+ * row's ref as the store keeps it, never a number (HF-8a, message-ref.ts); a
+ * ref that is not a decimal id, or a row without an event time, is not served. */
 function archiveRowToOfapiShape(row: {
   messageRef: string;
   textPlain: string;
@@ -67,16 +71,15 @@ function archiveRowToOfapiShape(row: {
   /** PPV purchase state — the union read supplies it (dm arm + hot-table
    * purchased_at upgrade); the archive read leaves it null → 'unknown'. */
   isOpened?: boolean | null;
-}): OfapiChatMessage | null {
-  const id = Number(row.messageRef);
-  if (!Number.isFinite(id) || row.occurredAt === null) {
+}): ShapedArchiveMessage | null {
+  if (!isTranscriptMessageRef(row.messageRef) || row.occurredAt === null) {
     return null;
   }
   const priceDollars = row.priceMills === null ? null : millsToDollarsNumber(row.priceMills);
   const tipDollars = millsToDollarsNumber(row.tipAmountMills);
   const media = row.mediaMetadata ?? [];
   return {
-    id,
+    id: row.messageRef,
     text: row.textPlain,
     isSentByMe: row.isSentByMe,
     createdAt: row.occurredAt.toISOString(),
@@ -90,8 +93,11 @@ function archiveRowToOfapiShape(row: {
       type: (media.type as string | null) ?? null,
       canView: (media.canView as boolean | null) ?? null,
     })),
-  } as OfapiChatMessage;
+  } as ShapedArchiveMessage;
 }
+
+/** A served row in the normalizer's input shape, keyed by its exact ref. */
+type ShapedArchiveMessage = OfapiChatMessage & { id: string };
 
 /** A Fansly live overlay row in the archive row shape the shaper reads: the
  * socket fields only. No price, tip or media: money is REST-only (owner
@@ -125,8 +131,9 @@ export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 export interface TranscriptContext {
   transcript: string;
   messages: TranscriptMessage[];
-  /** Per-message media ids of the served rows (image notes numbering). */
-  mediaByMessage: Map<number, OnlyFansMessageMedia>;
+  /** Per-message media ids of the served rows (image notes numbering), keyed
+   *  by the transcript's message id (the exact ref). */
+  mediaByMessage: Map<string, OnlyFansMessageMedia>;
   /** PR3: per-generation context manifest — counts/heads/timings only, no
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
@@ -149,9 +156,9 @@ export async function loadTranscriptContext(
     unionMode?: AiTranscriptUnionMode;
     /** Fansly pages only; the OnlyFans union mode never runs beside it. */
     liveOverlay?: AiTranscriptLiveOverlay;
-    /** chat-extension H-6: raises the row cap of the archive and union reads
-     * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
-     * The Fansly live overlay union never reads it and stays at its own cap. */
+    /** chat-extension H-6, R20 HF-6: raises the row cap of this load's reads
+     * (the deep features' deeper read, ai-transcript-depth.ts): the archive
+     * and union reads, and the Fansly live overlay union with its REST arm. */
     maxRows?: number;
     /** Arena "vanished chat" (plan §5): the chat has an established
      * unavailability episode (`readAiChatAccess`, read by the caller): its
@@ -178,13 +185,14 @@ export async function loadTranscriptContext(
         pageId: input.pageId,
         platformConversationId: input.conversationRef,
         store: "message_archive",
-        limit: Math.min(limit, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS),
+        limit: Math.min(limit, aiTranscriptRowCap(input.maxRows, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS)),
         readStore: async (notTombstoned) => {
           archiveRows = await listArchiveConversationMessagesForAi(app.db, {
             accountId: input.pageId,
             conversationRef: input.conversationRef,
             limit,
             notTombstoned,
+            maxRows: input.maxRows,
           });
           return archiveRows;
         },
@@ -231,14 +239,14 @@ export async function loadTranscriptContext(
     : serveUnion ? unionRows! : archiveRows;
   const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
-    .filter((row): row is OfapiChatMessage => row !== null);
+    .filter((row): row is ShapedArchiveMessage => row !== null);
 
   // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
   // page keeps its socket messages in the transcript, labelled: no REST read
   // will confirm them while the episode lasts. The transcript keys a message
-  // by Number(ref), so the labels do too.
+  // by its exact ref, so the labels do too.
   const unconfirmedIds = new Set(input.chatUnavailable === true && liveUnion !== null
-    ? liveUnion.flatMap((item) => item.source === "live" ? [Number(item.message.platformMessageId)] : [])
+    ? liveUnion.flatMap((item) => item.source === "live" ? [item.message.platformMessageId] : [])
     : []);
   const messages = normalizeTranscriptMessages(shaped).slice(-limit).map((message) => (
     unconfirmedIds.has(message.id)
@@ -286,7 +294,7 @@ export async function loadTranscriptContext(
     liveError,
   };
 
-  const mediaByMessage = new Map<number, OnlyFansMessageMedia>();
+  const mediaByMessage = new Map<string, OnlyFansMessageMedia>();
   for (const message of shaped) {
     const media = (message.media ?? []).flatMap((item) => (
       item.id === null || item.id === undefined ? [] : [{ id: String(item.id), type: item.type ?? null }]
@@ -303,7 +311,7 @@ export async function loadTranscriptContext(
 
   const served: TranscriptServedSnapshot = {
     source,
-    window: servedWindowOf(servedRows, messages),
+    window: servedWindowOf(messages),
     archiveHead: archiveHead === null
       ? null
       : {

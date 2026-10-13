@@ -43,6 +43,10 @@ import {
 // v6: preserve Fansly parent/root reply refs in the common material event,
 // including text replies. Replaying v5 rows emits new material fingerprints;
 // ordinary msg:<direction>:<id> events retain their original dedup identity.
+// Still v6 (R20 HF-7д0): the material head gained the automation markers with
+// their own presence, which an older head reads as unknown. No bump on
+// purpose: a bump would re-parse the whole DM journal at deploy (2026-10-13:
+// 162k observations, ~2.4M material events minted again).
 export const SYNC_PULL_CANONICALIZER_VERSION = 6;
 
 /** Per-run context: page -> own platform-native account id. Direction of a
@@ -834,6 +838,30 @@ function attachmentDrafts(
 }
 
 /**
+ * R20 HF-7д0: the automation markers of one Fansly message — the vendor's
+ * `type` (2 = the page's mass message) and `correlationId` ('0' = none) —
+ * read by the live overlay decoder's rule (`liveMessage` in
+ * packages/shared/src/fansly-ws-messages.ts), so the archive and the overlay
+ * hold the same values for the same message: a key the message carried is
+ * observed even when its value is unusable (then null); `type` must be an
+ * integer within int4, `correlationId` a native id (digits).
+ */
+function fanslyAutomationMarkers(message: Record<string, unknown>) {
+  const observesType = Object.hasOwn(message, "type");
+  const observesCorrelation = Object.hasOwn(message, "correlationId");
+  const type = message.type;
+  const correlationId = message.correlationId;
+  return {
+    observesType,
+    observesCorrelation,
+    messageType: observesType && typeof type === "number" && Number.isInteger(type)
+      && type >= -0x8000_0000 && type <= 0x7fff_ffff ? type : null,
+    correlationId: observesCorrelation && typeof correlationId === "string"
+      && /^[0-9]{1,32}$/.test(correlationId) ? correlationId : null,
+  };
+}
+
+/**
  * A17-4 VARIANT B: the archive learns about Fansly purchase material through
  * the channel it ALREADY understands. No archive column is added; the head
  * fills the existing ones (material head, media list, price_mills) exactly as
@@ -844,6 +872,11 @@ function attachmentDrafts(
  * time. A pre-2024 message therefore trips the driver's clamp — the event
  * falls back to receipt time with `occurredAtClamped` + `occurredAtRaw`, while
  * `head.messageCreatedAt` keeps the TRUE time and the archive dates from it.
+ *
+ * R20 HF-7д0 adds the two automation markers (`messageType`, `correlationId`)
+ * to the same head, into archive columns of their own. They change no other
+ * field and no message identity; observations parsed before them are not
+ * re-read (no version bump), so their rows stay unknown until re-observed.
  */
 function materialDrafts(
   observation: CanonicalizableObservation,
@@ -871,6 +904,7 @@ function materialDrafts(
     } : null;
     const senderRef = asString(message.senderId);
     const isSentByMe = senderRef !== null && ownRef !== null && senderRef === ownRef;
+    const markers = fanslyAutomationMarkers(message);
     const media = attachments.flatMap((attachment) => {
       const contentRef = asString(attachment.contentId);
       if (contentRef === null) {
@@ -921,14 +955,19 @@ function materialDrafts(
       reply,
       replyContractVersion: 1,
       media,
+      messageType: markers.messageType,
+      correlationId: markers.correlationId,
       // Fansly DM pages serve attachments and reply refs but no tip note —
       // the exact note lives in transaction_tip_contexts. Declaring tipText
       // unobserved keeps the archive's coalesce from wiping another
-      // producer's value.
+      // producer's value. The markers declare their own presence: a key the
+      // message did not carry is unknown and never wipes a stored marker.
       fieldPresence: {
         media: Array.isArray(message.attachments),
         reply: observesParent || observesRoot,
         tipText: false,
+        messageType: markers.observesType,
+        correlationId: markers.observesCorrelation,
       },
       vendorChangedAt: null,
       materialObservedAt: observation.receivedAt.toISOString(),
