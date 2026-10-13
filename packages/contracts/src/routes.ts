@@ -2085,6 +2085,11 @@ export const aiFeatureContextFrameSchema = z.object({
     status: clientOpenToken,
     accepted: z.number().int().nonnegative(),
     rejected: z.number().int().nonnegative(),
+    /** chat-extension R20 HF-8б: the client's items the hub's own transcript
+     *  already held, from the same sender (the hub's row served). Present
+     *  only when the hub merged the fresh text (`shadow`, `served`,
+     *  `rejected`); absent for `not_sent` and `disabled`. */
+    matched: z.number().int().nonnegative().optional(),
   }),
   /** AI_FAN_LANGUAGE_EVIDENCE. */
   fanLanguageEvidence: clientOpenToken.optional(),
@@ -2285,11 +2290,12 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // tests/contracts-coach-body.test.ts.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
 
-// chat-extension H-4c — the fresh text of the open OnlyFans chat: the last
-// confirmed messages the client reads off the page it is showing, for the
-// features that draft a message to the fan (Reply, Fix, Hi, Ping). The hub's
-// archive lags the page by seconds to minutes; these fill that gap for ONE
-// generation and are stored nowhere else (docs/ai-gateway-contract.md).
+// chat-extension H-4c — the fresh text of the open chat (OnlyFans; Fansly since
+// R20 HF-8б): the last confirmed messages the client reads off the page it is
+// showing, for the features that draft a message to the fan (Reply, Fix, Hi,
+// Ping). The hub's archive lags the page by seconds to minutes; these fill
+// that gap for ONE generation and are stored nowhere else
+// (docs/ai-gateway-contract.md).
 export const AI_LIVE_TEXT_MAX_ITEMS = 60;
 /** Per item, in UTF-16 code units. */
 export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
@@ -2433,10 +2439,11 @@ export const aiFeatureStreamBodySchema = z.object({
   // a caller that advertised both `context-v1` and `coverage-check-v1`, and
   // ignored otherwise, as `knownFanMessageIds` is without the frame.
   coverageCheck: aiCoverageCheckSchema.optional(),
-  // chat-extension H-4c: the fresh text of the open OnlyFans chat (above).
-  // Accepted only on fast-reply, improve-draft, hi-greeting and ping, only for
-  // an OnlyFans page, never beside clientContext, and only from a caller that
-  // advertised `context-v1`: anything else is a 400 with a machine reason.
+  // chat-extension H-4c: the fresh text of the open chat (above). Accepted
+  // only on fast-reply, improve-draft, hi-greeting and ping, never beside
+  // clientContext, and only from a caller that advertised `context-v1`:
+  // anything else is a 400 with a machine reason. Either platform (a Fansly
+  // page since R20 HF-8б).
   // Whether it is USED is the owner's switch (`aiLiveTextContextMode` and the
   // page's `freshText` flag); switched off, it is ignored and the `context_v1`
   // frame says `live.status: "disabled"`.

@@ -26,7 +26,8 @@ import {
 } from "../prompts/index.ts";
 import type { AiContextMessageRef, TranscriptServedSnapshot } from "./context-frame.ts";
 
-// chat-extension H-4c — the fresh text of the open OnlyFans chat.
+// chat-extension H-4c — the fresh text of the open chat: OnlyFans, and Fansly
+// since R20 HF-8б.
 //
 // The hub's archive trails the chat a chatter is looking at by seconds to
 // minutes. A client that reads the open page sends the last confirmed messages
@@ -66,22 +67,19 @@ export type AiLiveTextItem = AiLiveTextContext["items"][number];
  * is a 400 with a machine reason. The owner's switch is NOT here: switched
  * off, fresh text is ignored, never refused (resolveLiveTextMode).
  *
- * `isFanslyRequest` comes from the feature service's single platform-branch
- * site rather than a second one here.
+ * No platform is refused here (R20 HF-8б): where fresh text exists is the
+ * `freshText` flag's platforms (CLIENT_FEATURE_REQUIREMENTS), which the switch
+ * reads. A Fansly page takes it on the hub's own transcript only: the released
+ * Fansly extension sends its whole transcript as `clientContext`, and fresh
+ * text beside it is refused below, as it always was.
  */
 export function assertLiveTextRequestShape(input: {
   feature: OperationFeature;
-  isFanslyRequest: boolean;
   hasClientContext: boolean;
   capabilities: ReadonlySet<AiStreamCapability> | undefined;
 }): void {
   if (!(AI_LIVE_TEXT_FEATURES as readonly string[]).includes(input.feature)) {
     throw new BadRequestError(`${input.feature} does not accept liveTextContext`, {
-      reason: "live_text_not_allowed",
-    });
-  }
-  if (input.isFanslyRequest) {
-    throw new BadRequestError("liveTextContext is only accepted for OnlyFans pages", {
       reason: "live_text_not_allowed",
     });
   }
@@ -112,7 +110,8 @@ export interface LiveTextPage {
  * What the hub does with fresh text on this page right now: the owner's
  * `aiLiveTextContextMode`, and only where the page's `freshText` flag is on
  * (the same evaluation the bootstrap announces: master switch, flag, platform,
- * binding, served capability).
+ * binding, served capability). One mode for both platforms: an OnlyFans page
+ * and a Fansly page (R20 HF-8б) are told apart by their own flags only.
  *
  * Anything that is not a clear `shadow` or `serve` is `off`, a failed read
  * included: fresh text is an addition, so the safe answer is to leave it out
@@ -503,6 +502,9 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
         messageRefs: outside,
         // Other pages are read only as far as the caller may read them.
         otherPageIds: pageScopeFor(input.principal) ?? null,
+        // R20 HF-8б: the Fansly socket overlay, read where it served the
+        // transcript: its deletions, its groups, its senders and times.
+        liveOverlay: loaded.served.source === "live_union",
       });
     } catch (error) {
       stores = null;
@@ -538,7 +540,9 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
     ...loaded.contextManifest,
     liveText: liveTextManifest({ mode, status, sent: items.length, merge }),
   };
-  const live = { status, accepted: merge.accepted.length, rejected };
+  // `matched` (R20 HF-8б): the client's items the hub's transcript already
+  // held, so a client can account for every item it sent.
+  const live = { status, accepted: merge.accepted.length, rejected, matched: merge.matched };
   if (mode === "shadow") {
     return { transcript: { ...loaded, contextManifest }, live };
   }

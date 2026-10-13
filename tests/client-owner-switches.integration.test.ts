@@ -134,14 +134,18 @@ async function chatExtensionAuditIds(): Promise<number[]> {
 }
 
 /** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly
- *  alone, every other flag on OnlyFans alone. */
+ *  alone; fresh text (R20 HF-8б) on both; every other flag on OnlyFans alone. */
 const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
+const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
+const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
+  BOTH_PLATFORM_FLAGS.includes(flag) || (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on
+);
 /** Every flag off on a page of platform `on`: for `reason` where the flag
  *  exists, `platform_unsupported` where it does not. */
 const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") => Object.fromEntries(
   CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, {
     available: false,
-    reason: (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on ? reason : "platform_unsupported",
+    reason: flagExistsOn(flag, on) ? reason : "platform_unsupported",
   }]),
 );
 
