@@ -9,6 +9,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { clientConversationRecapRefs, resolveClientConversation } from "./client-conversation.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError } from "./errors.ts";
 
@@ -23,6 +24,9 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * - only `fan-summary` rows, only usable ones, never one with a `contextScope`
  *   (usableFanSummaryPredicate: the same two rows `aiRecapStatus` describes
  *   and Coach attaches);
+ * - only of one conversation of one fan: on OnlyFans the fan's chat; on
+ *   Fansly the group the request names, checked against the fan, and only the
+ *   rows stored about that fan (R20 HF-10, client-conversation.ts);
  * - only on a page granted to the caller, behind the owner's `recap` switch;
  * - only the recap's text and provenance: no prompt block, no author, no
  *   context manifest (getFreshestUsableRecapBodies names its columns).
@@ -82,7 +86,12 @@ export async function getClientConversationRecaps(
   app: AppContext,
   request: ClientFeatureRequest,
   principal: HumanAuthPrincipal,
-  input: { pageLabel: string; fanRef: string; personaDefinitionId: string | undefined },
+  input: {
+    pageLabel: string;
+    fanRef: string;
+    conversationRef: string | undefined;
+    personaDefinitionId: string | undefined;
+  },
 ): Promise<ClientConversationRecapsResponse> {
   // A cookie session → 403: the route is a client's, not the dashboard's.
   requireApiKeyUser(principal);
@@ -95,14 +104,14 @@ export async function getClientConversationRecaps(
   // caller, the feature exists on its platform, the owner's `recap` switch is
   // on for it, and the extension is not outdated (409 `client_feature_disabled`).
   const page = await requireClientFeature(app, request, principal, { id: stored.id }, RECAP_FLAG);
+  // R20 HF-10: the conversation, checked against its fan before anything is
+  // read. On OnlyFans the fan names it, as before; on Fansly the group does,
+  // and only recaps stored about this fan are selected.
+  const conversation = await resolveClientConversation(app, page, input);
 
   const found = await getFreshestUsableRecapBodies(app.db, {
     pageId: page.id,
-    // The feature exists only where the chat id IS the fan id (OnlyFans), so
-    // the fan names the conversation. A platform whose conversations have ids
-    // of their own needs the conversation in the request before it gets the
-    // feature.
-    conversationRefs: [input.fanRef],
+    ...clientConversationRecapRefs(conversation),
     ...(input.personaDefinitionId ? { personaDefinitionId: input.personaDefinitionId } : {}),
   });
   return {

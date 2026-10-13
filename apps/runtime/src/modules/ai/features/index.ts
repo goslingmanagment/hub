@@ -868,10 +868,16 @@ export async function prepareAiFeatureStream(
         body.conversationRef,
         ...(body.fanRef ? [body.fanRef] : []),
       ];
+      // R20 HF-10: with a pair the hub checked (HF-9: a Fansly request whose
+      // transcript the hub loads itself), only the recaps stored about its fan,
+      // as the client's recaps read selects them for the same pair. Every other
+      // request attaches what it did before.
+      const pairFanRef = conversationPair !== null ? body.fanRef ?? undefined : undefined;
       const found = await getFreshestUsableRecaps(app.db, {
         pageId,
         conversationRefs,
         personaDefinitionId: persona.definitionId,
+        ...(pairFanRef !== undefined ? { fanRef: pairFanRef } : {}),
       });
       const fullAt = found.full?.createdAt?.getTime() ?? null;
       const shortAt = found.short?.createdAt?.getTime() ?? null;

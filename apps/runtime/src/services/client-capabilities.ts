@@ -51,6 +51,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // `coverage-check-v1` in `x-kernel-ai-capabilities`. Ids only: nothing reaches
   // the prompt, nothing is stored.
   "coverage-check-v1",
+  // R20 HF-10: the reads by conversation. The shared recaps read, the dossier
+  // save from a generation and the archive feed take `conversationRef` (on
+  // Fansly the group, checked against the fan; client-conversation.ts). On
+  // OnlyFans the field equal to the fan changes nothing; nothing on Fansly is
+  // reachable through it until `recap` and `preview` exist there.
+  "conversation-recaps-v1",
 ];
 
 /**

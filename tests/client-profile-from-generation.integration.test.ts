@@ -960,6 +960,9 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
       [FAN, { generationRef, generatedAtMs: Date.now() }],
       [FAN, { generationRef, fanRef: OTHER_FAN }],
       [FAN, { generationRef, pageLabel: "mia-of" }],
+      // R20 HF-10: the conversation is a client id, in its one shape.
+      [FAN, { generationRef, conversationRef: "group-900" }],
+      [FAN, { generationRef, conversationRef: 777000777 }],
     ];
     for (const [fan, payload] of requests) {
       const response = await server.inject({ method: "POST", url: saveUrl("lora-of", fan), headers: bearer(grishaToken), payload: payload as object });

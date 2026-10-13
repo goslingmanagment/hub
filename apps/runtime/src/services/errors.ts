@@ -240,6 +240,10 @@ export class ContextConflictError extends AppError {
 // nothing is generated. 409: the request contradicts what the hub holds; the
 // same request is refused again, and the client resolves the chat's fan anew.
 // The message names neither id: never the fan the hub holds for the group.
+// R20 HF-10: a client read by conversation (recaps, the dossier save, the
+// feed) is refused the same way, before anything is read, for a Fansly group
+// of another fan, and on OnlyFans for a conversation that is not the fan's own
+// chat (client-conversation.ts).
 export class ConversationFanMismatchError extends AppError {
   constructor() {
     super(
