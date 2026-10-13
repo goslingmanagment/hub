@@ -347,7 +347,7 @@ describe("X34: a 5000-message full Recap on the Recap's model", () => {
       const body = heaviest(5000, feature);
       const chars = promptChars(body);
       const answer = buildAnthropicGatewayStreamRequest(body).max_tokens;
-      expect(answer, feature).toBe(feature === "fan-summary" ? 24_000 : 8_000);
+      expect(answer, feature).toBe(feature === "fan-summary" ? 24_000 : 16_000);
       // About 460k characters: the system part and the 5000 lines.
       expect(chars, feature).toBeGreaterThan(455_000);
       expect(chars, feature).toBeLessThan(465_000);
