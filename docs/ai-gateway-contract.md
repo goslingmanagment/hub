@@ -257,6 +257,34 @@ as before: a request with `clientContext` (the released Fansly extension sends i
 with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
 `fanRef`.
 
+### Voice identity on Fansly (chat-extension R20 HF-4а)
+
+A voice take is a `voice-script` generation, then a paid render of it
+(`POST /api/v1/pages/:pageLabel/voice-notes`). Both name the chat and the fan:
+
+| Request | Released Fansly extension (2.10.1) | New client |
+|---|---|---|
+| `voice-script` | `conversationRef` = `fanRef` = the fan's id, with `clientContext` | `conversationRef` = the group, `fanRef` = the fan, no `clientContext` |
+| render | `conversationRef` = the fan's id, no `fanRef` | `conversationRef` = the group, `fanRef` = the fan |
+
+- `voice-script` always needs a nonblank `fanRef` (`gate_voice_identity_required`). A
+  `conversationRef` other than `fanRef` is accepted only without `clientContext`, where the pair
+  check above ran: a contradicted pair is 409 `conversation_fan_mismatch` before any spend, an
+  unverified pair is served. With `clientContext` both refs still must match.
+- The render's source generation must be this principal's completed, untruncated `voice-script` on
+  this page, with the render's `conversationRef` and its fan: `fanRef`, or `conversationRef` when
+  the body has no `fanRef` (`voice_source_invalid`). A body with `fanRef` is then held to the pair
+  the page's capture knows now, by the same check: a group captured as another fan's chat since
+  the script is 409 `conversation_fan_mismatch`, before any row, budget reservation or provider
+  call. A body without `fanRef` is not checked and is admitted exactly as before.
+- `fanRef` is not part of the request hash (`pageId`, `conversationRef`, `sourceGenerationRef`,
+  canonical script; the client computes the same digest): the hashed source generation carries
+  its fan. A replay re-runs no admission gate, as before.
+- Erasure: the render's admission and its dispatch are fenced by a fan erasure of `fanRef` as well
+  as of `conversationRef`; a fan erasure deletes a render whose source generation it deletes (the
+  generation carries the fan), so a render of a group the hub never linked to the fan goes with
+  the fan.
+
 ### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
 
 `messageCount` is the window a request asks for (5 to 5000). The hub's two transcript readers (the

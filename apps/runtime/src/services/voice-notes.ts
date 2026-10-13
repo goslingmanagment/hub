@@ -44,6 +44,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { checkAiConversationPair } from "../modules/ai/index.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
@@ -154,6 +155,10 @@ class VoiceBudgetRefused extends Error {}
 export interface CreateVoiceNoteBody {
   clientRequestId: string;
   conversationRef: string;
+  /** chat-extension R20 HF-4а: the fan, named apart from the chat (the new
+   *  client's Fansly group). Absent: `conversationRef` is the fan's own id,
+   *  the released client's form, admitted exactly as before. */
+  fanRef?: string | undefined;
   sourceGenerationRef: string;
   script: string;
 }
@@ -282,6 +287,16 @@ export async function createVoiceNote(
   // so we reject at admission — before hashing — rather than sanitising.
   assertRefControlCharFree("conversationRef", body.conversationRef);
   assertRefControlCharFree("sourceGenerationRef", body.sourceGenerationRef);
+  // chat-extension R20 HF-4а: the fan the render is for. The new client names
+  // it apart from the chat (`conversationRef` is then the Fansly group); the
+  // released client names the fan as the chat itself. Not hashed (the hash
+  // format is frozen, and the client computes the same digest): the hashed
+  // source generation carries its fan, and admission below holds the fanRef
+  // to it, so one request hash still means one render.
+  if (body.fanRef !== undefined) {
+    assertRefControlCharFree("fanRef", body.fanRef);
+  }
+  const renderFanRef = body.fanRef ?? body.conversationRef;
 
   const canonicalScript = canonicalizeVoiceScript(body.script);
   const requestHash = computeVoiceRequestHash({
@@ -336,8 +351,8 @@ export async function createVoiceNote(
   const scriptChars = validation.chars;
 
   // Source generation: a terminal-success voice-script generation owned by the
-  // same principal on the same page and conversation (the restricted-capture
-  // row is the ledger).
+  // same principal on the same page, conversation and fan (the restricted-
+  // capture row is the ledger).
   const source = await getAiGenerationContentByRef(app.db, body.sourceGenerationRef);
   if (
     !source
@@ -345,7 +360,7 @@ export async function createVoiceNote(
     || source.generation.userId !== principal.user.id
     || source.generation.pageId !== page.id
     || source.generation.conversationRef !== body.conversationRef
-    || source.generation.fanRef !== body.conversationRef
+    || source.generation.fanRef !== renderFanRef
     || (source.generation.params as { outcome?: unknown }).outcome !== "completed"
   ) {
     throw new VoiceSourceInvalidError();
@@ -362,6 +377,19 @@ export async function createVoiceNote(
       `The source voice-script generation was truncated (stopReason "${stopReason}"); `
         + "regenerate a complete script before synthesis",
     );
+  }
+  // chat-extension R20 HF-4а: a request that names the fan apart is held to
+  // the pair the page's capture knows now, as its script was (HF-9): the
+  // group may have been captured as another fan's chat since. Contradicted:
+  // 409 `conversation_fan_mismatch`, before any row, budget or provider call.
+  // A pair the hub cannot vouch for yet is admitted. The released client's
+  // form names no fanRef and is not checked.
+  if (body.fanRef !== undefined) {
+    await checkAiConversationPair(app, {
+      pageId: page.id,
+      conversationRef: body.conversationRef,
+      fanRef: body.fanRef,
+    });
   }
   const originalScriptSha256 = sha256Hex(canonicalizeVoiceScript(source.generation.completion));
   const finalScriptSha256 = sha256Hex(canonicalScript);
@@ -416,7 +444,10 @@ export async function createVoiceNote(
         await isDmArchiveScopeFenced(tx, {
           pageId: page.id,
           platform: "fansly",
-          refs: [body.conversationRef],
+          // The chat and its fan (R20 HF-4а): a fan erasure fences the render
+          // of a group the erasure could not link to that fan. One ref in the
+          // released client's form, where the chat is the fan.
+          refs: [body.conversationRef, renderFanRef],
           materialAt: sourceMaterialAt,
         })
       ) {
@@ -484,6 +515,7 @@ export async function createVoiceNote(
       canonicalScript,
       now,
       sourceMaterialAt,
+      fanRef: renderFanRef,
     });
     return toStatusView(row);
   }
@@ -497,6 +529,7 @@ export async function createVoiceNote(
     canonicalScript,
     now,
     sourceMaterialAt,
+    fanRef: renderFanRef,
   }, permit);
   if (won) {
     return toStatusView({ ...row, state: "dispatched" });
@@ -516,6 +549,8 @@ async function grantVoiceNoteDispatch(
     canonicalScript: string;
     now: Date;
     sourceMaterialAt: Date;
+    /** The render's fan (admission's `renderFanRef`), fenced beside the chat. */
+    fanRef: string;
   },
   releasePermit: ReleaseVoiceSynthesisPermit,
 ): Promise<boolean> {
@@ -533,7 +568,7 @@ async function grantVoiceNoteDispatch(
         await isDmArchiveScopeFenced(tx, {
           pageId: input.row.platformAccountId,
           platform: "fansly",
-          refs: [input.row.conversationRef],
+          refs: [input.row.conversationRef, input.fanRef],
           materialAt: input.sourceMaterialAt,
         })
       ) {
@@ -604,6 +639,8 @@ async function dispatchVoiceNoteAfterPermit(
     canonicalScript: string;
     now: Date;
     sourceMaterialAt: Date;
+    /** The render's fan (admission's `renderFanRef`), fenced beside the chat. */
+    fanRef: string;
   },
 ): Promise<void> {
   let heartbeatInFlight = false;
@@ -833,7 +870,7 @@ function hasControlChar(value: string): boolean {
 }
 
 function assertRefControlCharFree(
-  field: "conversationRef" | "sourceGenerationRef",
+  field: "conversationRef" | "fanRef" | "sourceGenerationRef",
   value: string,
 ): void {
   if (hasControlChar(value)) {

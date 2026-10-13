@@ -474,7 +474,17 @@ export async function prepareAiFeatureStream(
         "gate_voice_unsupported_platform",
       );
     }
-    if (!body.fanRef?.trim() || body.conversationRef !== body.fanRef) {
+    // The script's record carries the fan (the render's source check and the
+    // fan's erasure read it), so the fan is always named. chat-extension R20
+    // HF-4а: a request whose transcript the hub loads itself may name the
+    // group (`conversationRef`) and the fan apart, because its pair was
+    // checked above (a contradicted pair is already 409). The client-context
+    // lane keeps the one form the released Fansly extension sends, the fan's
+    // id as both refs, and its refusal answers as before.
+    if (
+      !body.fanRef?.trim()
+      || (body.conversationRef !== body.fanRef && conversationPair === null)
+    ) {
       throw new ProductGateError(
         "voice-script requires matching, nonblank conversationRef and fanRef",
         "gate_voice_identity_required",
