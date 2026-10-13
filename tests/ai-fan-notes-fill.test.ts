@@ -248,9 +248,14 @@ describe("fan-notes-fill legacy mode (no noteValues)", () => {
 
   it("carries none of the merge mode's texts", () => {
     const user = buildPrompt(small()).user;
-    for (const text of ["## Current Values", "## Dates", "Quote lines", "Proposed fields", "+ Label: value", "- Локация:", "- График:", "- Другое:", "{noteFill"]) {
+    for (const text of ["## Current Values", "## Dates", "Quote lines", "Proposed fields", "+ Label: value", "Label: =", "- Локация:", "- График:", "- Другое:", "{noteFill", "or one the chatter recorded", "New facts come only"]) {
       expect(user, text).not.toContain(text);
     }
+    // The three sentences that say every value comes from the fan keep their
+    // E159 wording here.
+    expect(user).toContain("rereads it before writing to the fan, so every value must be a fact the fan himself gave. Read the whole conversation");
+    expect(user).toContain("- Use only what the fan actually stated about himself: in his own messages (the lines marked Fan:)");
+    expect(user).toContain("- Any other field: fill it only from explicit facts the fan stated about exactly that field.");
     expect(user).toContain("Fill in these fields, in this order:\n\n<note_fields>\nИмя\nЛокация\nДругое\n</note_fields>");
     expect(user).toContain("Output exactly 3 lines, one `Label: value` line per field in the order above, values in Russian, and nothing else.");
   });
@@ -282,15 +287,15 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
       "",
       "<note_fields>",
       "Имя: Ethan",
-      // The model reads, and echoes when it keeps the value, the escaped
-      // form; the client decodes `&lt; &gt; &amp;` before it compares.
+      // The model reads the escaped form, and may carry it into a rewrite;
+      // the client decodes `&lt; &gt; &amp;`.
       "Локация: Australia, Brisbane &amp; &lt;Gold Coast&gt;",
       "График:",
       "</note_fields>",
       "",
-      "Output exactly 3 field lines, one `Label: value` line per field in the order above, each followed by its quote lines, then at most two `+ Label: value` lines with their quote lines, and nothing else. Copy an unchanged value exactly as the list above gives it; write a new or rewritten value in Russian.",
+      "Output exactly 3 field lines, one per field in the order above: `Label: =` for a field that keeps its current value, otherwise `Label: value` with the new or rewritten value in Russian and its quote lines. Then at most two `+ Label: value` lines with their quote lines, and nothing else.",
     ].join("\n"));
-    expect(taskBlock.endsWith("write a new or rewritten value in Russian.\n")).toBe(true);
+    expect(taskBlock.endsWith("with their quote lines, and nothing else.\n")).toBe(true);
     // The values reach the task block only: the rest of the prompt is static
     // text and the conversation.
     for (const block of [...result.systemBlocks, ...result.userBlocks.slice(0, -1)]) {
@@ -314,12 +319,16 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
   it("states the merge rules, the dates, the new field definitions, quotes and proposed fields", () => {
     const user = buildPrompt(merge()).user;
     for (const rule of [
+      "rereads it before writing to the fan, so every value must be a fact the fan himself gave or one the chatter recorded. Read the whole conversation",
+      "- New facts come only from what the fan actually stated about himself: in his own messages (the lines marked Fan:)",
+      "- Any other field: add to it only explicit facts the fan stated about exactly that field.",
       "The note is already started: the task lists every field with the value the chatter has recorded in it.",
       "Write every new or rewritten value in Russian, in one line, as short as its facts allow",
       "When a field's current value is empty and nothing in the conversation answers it, leave it empty",
       "## Current Values",
       "it stays true unless the fan himself contradicts it later in the conversation.",
-      "output its current value exactly as the task lists it, character for character, even when it is not in Russian.",
+      "When the chat adds nothing to a field and nothing in it has to move to another field, answer it with a single `=` as its value: `Label: =`. The field then keeps its current value exactly as recorded, whatever its language. Never rewrite a field only to translate, reword, reorder or tidy it.",
+      "An empty field the chat says nothing about stays empty (`Label:`), never `=`.",
       "Otherwise rewrite the field in Russian: every fact of its current value, translated, plus the new facts from the chat.",
       "One that fits no listed field moves to «Другое», or stays in its field when «Другое» is not listed.",
       "nothing of a current value is dropped, except what the fan himself contradicted.",
@@ -334,10 +343,12 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
       "- График: when he works, sleeps and is free, as he told it (shifts, days off, hours).",
       "- Планы и даты: upcoming events and dates he mentioned (trips, birthday, interviews, holidays), with the date or period he gave.",
       "- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.",
-      "Label: value\n> «a fragment of one of his messages»\n+ Label: value\n> «a fragment of one of his messages»",
+      "`Label: =` for a field that keeps its current value, `Label: value` followed by its quote lines for a new or rewritten value, `Label:` for an empty field that stays empty.",
+      "Label: value\n> «a fragment of one of his messages»\nLabel: =\n+ Label: value\n> «a fragment of one of his messages»",
       "write zero to three quote lines `> «…»`",
       "one continuous piece of that message, in his language and never translated, at most 200 characters",
-      "Write no quote under a value you return unchanged, and none for a fact taken from the bio or the spending data",
+      "Write no quote under a `=` line or an empty one, and none for a fact taken from the bio or the spending data",
+      "The value follows the rules of every other new value and is never `=`.",
       "you may add at most two `+ Label: value` lines",
       "Russian, one to three words, at most 60 characters, no `:`, `<`, `>` or `&`, and different from every listed label in any letter case.",
       "no quotation marks of your own outside the quote lines.",
@@ -349,7 +360,7 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
       "- Характеристика: what the fan likes and what he pays for, in one line.",
       "- Медиа: what content he bought and what content he likes (types and themes), from the transcript and the spending data.",
       "- Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.\n- Локация:",
-      "- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.\n- Any other field: fill it only from explicit facts the fan stated about exactly that field.",
+      "- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.\n- Any other field: ",
       "Only `purchased` items count as bought.\n\n## Current Values\n\n",
       "If the fan contradicts himself, use his most recent statement.",
       "- Copy every label exactly as listed, character for character, then a colon, a space and the value.",
@@ -357,7 +368,18 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
       expect(user, kept).toContain(kept);
     }
     // The legacy wording that would contradict the merge is gone.
-    for (const legacy of ["a few words, never more than one line", "Fill in these fields, in this order:", "Output exactly 3 lines,", "no quotation marks, no markdown"]) {
+    for (const legacy of [
+      "a few words, never more than one line",
+      "Fill in these fields, in this order:",
+      "Output exactly 3 lines,",
+      "no quotation marks, no markdown",
+      "so every value must be a fact the fan himself gave.",
+      "Use only what the fan actually stated",
+      "fill it only from explicit facts",
+      // Nothing asks the model to echo a value it keeps.
+      "exactly as the task lists it",
+      "Copy an unchanged value",
+    ]) {
       expect(user, legacy).not.toContain(legacy);
     }
     expect(user).not.toMatch(/\{noteFill\w*\}/);

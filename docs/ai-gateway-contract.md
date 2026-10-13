@@ -1022,9 +1022,9 @@ chat. The client sends the labels; the hub assembles the prompt
   (`\r`, `\n`, U+2028, U+2029): a value is one line of the note. Any other
   character is allowed, `<`, `>` and `&` included; the prompt escapes them like
   all untrusted text (the transcript too), so the model reads `&lt;`, `&gt;`
-  and `&amp;` and writes that form back in a value it keeps and in a quote it
-  copies: the client decodes the three before it compares a value or locates a
-  quote. A value outside these rules, or a list of 0 or more than 30, is a
+  and `&amp;` and may write that form back in a rewritten value and in a quote
+  it copies: the client decodes the three before it compares a value, writes
+  it or locates a quote. A value outside these rules, or a list of 0 or more than 30, is a
   schema 400. A list whose length differs from `noteFields`
   is a 400 `bad_request` (`noteValues must hold exactly one value per
   noteFields label`); every other feature refuses the field (`<feature> does
@@ -1035,10 +1035,12 @@ chat. The client sends the labels; the hub assembles the prompt
   Present, even with every value empty (merge mode, the 2026-10-13 notes-fill
   spec): the task lists `Label: value` per field and the prompt adds the merge
   rules. A current value is the chatter's record and stays true unless the fan
-  later contradicts it; a field the chat adds nothing to comes back exactly as
-  listed; any other field is rewritten in Russian keeping every fact, a fact
-  that belongs elsewhere moving to the right listed field or to «Другое»;
-  markers it does not understand («Sexting 1») stay as written. Facts that go
+  later contradicts it; new facts still come only from the fan; a field the
+  chat adds nothing to comes back as `Label: =` (keep the value; nothing is
+  echoed, so the answer does not grow with the note); any other field is
+  rewritten in Russian keeping every fact, a fact that belongs elsewhere
+  moving to the right listed field or to «Другое»; markers it does not
+  understand («Sexting 1») stay as written. Facts that go
   stale carry the month they were said, `(MM.YYYY)`, read from the
   transcript's day lines `--- YYYY-MM-DD ---` (the client adds them in merge
   mode; they are the only source of dates). The prompt also defines «Локация»,
@@ -1056,16 +1058,17 @@ chat. The client sends the labels; the hub assembles the prompt
   in Russian; a label the chat says nothing about comes back as `Label: ` (the
   model may drop the trailing space). The client merges: an empty field takes
   the value, a filled one is never overwritten.
-- Answer, merge mode: one `Label: value` line per requested label, in order,
-  each followed by zero to three quote lines `> «…»`, then at most two proposed
+- Answer, merge mode: one line per requested label, in order: `Label: =` for a
+  field that keeps its current value, `Label:` for an empty field that stays
+  empty, otherwise `Label: value` with the new or rewritten value in Russian,
+  followed by zero to three quote lines `> «…»`. Then at most two proposed
   fields `+ Label: value` (a Russian label of one to three words, at most 60
   characters, no `:`, `<`, `>` or `&`, not equal to a listed label in any
-  case), each followed by its quote lines; nothing else. A value returned
-  unchanged is the listed value exactly as listed (escaped form included); a
-  new or rewritten value is in Russian. A quote follows only a new or changed
-  value: a verbatim fragment, at most 200 characters, of one of the fan's own
-  messages (a `Fan:` line, as escaped in the transcript), never translated;
-  none for a fact taken from the bio or the spending data. The prompt asks; the
+  case; the value is never `=`), each followed by its quote lines; nothing
+  else. A quote follows only a new or rewritten value, never a `=` line: a
+  verbatim fragment, at most 200 characters, of one of the fan's own messages
+  (a `Fan:` line, as escaped in the transcript), never translated; none for a
+  fact taken from the bio or the spending data. The prompt asks; the
   hub does not check the answer: the client parses it, locates each quote in
   the transcript it sent and shows rewrites of filled fields as suggestions.
 - Model: `anthropic:claude-sonnet-5-5` at `low` reasoning by default

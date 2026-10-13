@@ -79,9 +79,9 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // Voice notes: a spoken-message script is a single short line.
   "voice-script": 400,
   // Notes fill: up to 30 `Label: value` lines (mostly Cyrillic). In merge mode
-  // (noteValues) it echoes unchanged values and adds up to three `> «…»` fan
-  // quotes under each new or rewritten value and two proposed fields, so an
-  // 11-field note with most fields changed runs past 2000. 6000 clears a
+  // (noteValues) an unchanged field is `Label: =`, but each new or rewritten
+  // value carries up to three `> «…»` fan quotes and two proposed fields may
+  // follow, so an 11-field note with most fields changed runs past 2000. 6000 clears a
   // large, busy questionnaire; it is a ceiling, not a cost.
   "fan-notes-fill": 6000,
 };

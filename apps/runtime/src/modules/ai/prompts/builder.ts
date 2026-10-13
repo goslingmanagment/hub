@@ -555,14 +555,21 @@ function greetingTask(
  *
  * Merge mode (`noteValues` present) is the 2026-10-13 notes-fill spec (the
  * extension's docs/specs/2026-10-13-notes-fill-merge.md, section 4.2): the
- * model sees what the chatter recorded, echoes a field the chat adds nothing to
- * exactly as listed, rewrites the rest in Russian without dropping a fact, may
+ * model sees what the chatter recorded, answers a field the chat adds nothing
+ * to with `=` (the client keeps the value; nothing is echoed, so the answer does
+ * not grow with the note), rewrites the rest in Russian without dropping a
+ * fact, may
  * propose at most two `+ Label: value` lines, and backs every new or changed
- * value with `> «…»` quotes of the fan's own messages. Slots glued to the end
- * of a line (intro, mergeRules, mergeFields) open with their own line breaks
- * and are empty in legacy mode. Static kernel-owned text, never built from
+ * value with `> «…»` quotes of the fan's own messages. Three legacy sentences
+ * that say every value comes from the fan (factSource, statedRule, otherField)
+ * keep that rule for NEW facts in merge mode and leave room for the chatter's
+ * recorded values. Slots glued to the end of a line (intro, mergeRules,
+ * mergeFields) open with their own line breaks and are empty in legacy mode. Static kernel-owned text, never built from
  * request data; no long dashes (the house ban on em and en dashes in prompts). */
 interface NoteFillTexts {
+  factSource: string;
+  statedRule: string;
+  otherField: string;
   intro: string;
   valueRule: string;
   emptyRule: string;
@@ -575,6 +582,9 @@ interface NoteFillTexts {
 }
 
 const NOTE_FILL_LEGACY_TEXTS: NoteFillTexts = {
+  factSource: 'so every value must be a fact the fan himself gave.',
+  statedRule: 'Use only what the fan actually stated about himself',
+  otherField: 'fill it only from explicit facts the fan stated about exactly that field.',
   intro: '',
   valueRule: 'Write each value in Russian and keep it short: a few words, never more than one line. Keep names, places and brands exactly as the fan wrote them.',
   emptyRule: 'When nothing in the conversation answers a field, leave its value empty: the label, the colon and a space, nothing after them. Never write a placeholder such as «неизвестно», «нет данных» or «не указано», a dash, or a question mark.',
@@ -590,6 +600,9 @@ Label: value`,
 };
 
 const NOTE_FILL_MERGE_TEXTS: NoteFillTexts = {
+  factSource: 'so every value must be a fact the fan himself gave or one the chatter recorded.',
+  statedRule: 'New facts come only from what the fan actually stated about himself',
+  otherField: 'add to it only explicit facts the fan stated about exactly that field.',
   intro: ' The note is already started: the task lists every field with the value the chatter has recorded in it. Keep what is recorded, add what the chat tells, and put every fact in the field it belongs to.',
   valueRule: 'Write every new or rewritten value in Russian, in one line, as short as its facts allow: keep every fact and drop the filler. Keep names, places and brands exactly as the fan wrote them.',
   emptyRule: 'When a field\'s current value is empty and nothing in the conversation answers it, leave it empty: the label, the colon and a space, nothing after them. Never write a placeholder such as «неизвестно», «нет данных» or «не указано», a dash, or a question mark.',
@@ -600,11 +613,11 @@ const NOTE_FILL_MERGE_TEXTS: NoteFillTexts = {
 The task gives every field with its current value: what the chatter has recorded in the note so far.
 
 - A current value is what the chatter recorded, and the one source besides the fan's own words: he may know it from outside this chat, so it stays true unless the fan himself contradicts it later in the conversation.
-- When the chat adds nothing to a field and nothing in it has to move to another field, output its current value exactly as the task lists it, character for character, even when it is not in Russian. Never translate, reword, reorder or tidy an unchanged value.
+- When the chat adds nothing to a field and nothing in it has to move to another field, answer it with a single \`=\` as its value: \`Label: =\`. The field then keeps its current value exactly as recorded, whatever its language. Never rewrite a field only to translate, reword, reorder or tidy it.
 - Otherwise rewrite the field in Russian: every fact of its current value, translated, plus the new facts from the chat. A fact the fan contradicted is replaced by his latest statement.
 - A fact of a current value that belongs to another listed field by the field definitions below may move there. One that fits no listed field moves to «Другое», or stays in its field when «Другое» is not listed. A moved fact must appear in the field it moved to: nothing of a current value is dropped, except what the fan himself contradicted.
 - Text in a current value that you do not understand, such as a chatter's marker like «Sexting 1», stays in its field exactly as written.
-- An empty current value is filled from the chat, like a new field.
+- An empty current value is filled from the chat, like a new field. An empty field the chat says nothing about stays empty (\`Label:\`), never \`=\`.
 
 ## Dates
 
@@ -618,18 +631,19 @@ The transcript has a day line \`--- YYYY-MM-DD ---\` before the first message of
 - График: when he works, sleeps and is free, as he told it (shifts, days off, hours).
 - Планы и даты: upcoming events and dates he mentioned (trips, birthday, interviews, holidays), with the date or period he gave.
 - Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.`,
-  outputShape: `One \`Label: value\` line per listed field, in the order the task lists them, each followed by its quote lines; after them, at most two proposed fields, each a \`+ Label: value\` line followed by its quote lines; nothing else:
+  outputShape: `One line per listed field, in the order the task lists them: \`Label: =\` for a field that keeps its current value, \`Label: value\` followed by its quote lines for a new or rewritten value, \`Label:\` for an empty field that stays empty. After them, at most two proposed fields, each a \`+ Label: value\` line followed by its quote lines. Nothing else:
 
 Label: value
 > «a fragment of one of his messages»
+Label: =
 + Label: value
 > «a fragment of one of his messages»`,
-  outputRules: `Quote lines: after a field line or a \`+\` line whose value is new or differs from its current value, write zero to three quote lines \`> «…»\`. A quote is copied character for character from the text of one of the fan's own messages (a line marked Fan:) that states a fact of that value: one continuous piece of that message, in his language and never translated, at most 200 characters, without the time or the Fan: marker. Write no quote under a value you return unchanged, and none for a fact taken from the bio or the spending data: those have no message to quote.
-- Proposed fields: after all the listed fields you may add at most two \`+ Label: value\` lines, each for a fact or a group of facts substantial enough that the chatter would want a line of its own, whether it moves out of a current value or is new from the chat. Whenever a listed field fits, «Другое» included, use it instead. The label is your own: Russian, one to three words, at most 60 characters, no \`:\`, \`<\`, \`>\` or \`&\`, and different from every listed label in any letter case. The value follows the rules of every other value.
+  outputRules: `Quote lines: after a field line or a \`+\` line whose value is new or rewritten, write zero to three quote lines \`> «…»\`. A quote is copied character for character from the text of one of the fan's own messages (a line marked Fan:) that states a fact of that value: one continuous piece of that message, in his language and never translated, at most 200 characters, without the time or the Fan: marker. Write no quote under a \`=\` line or an empty one, and none for a fact taken from the bio or the spending data: those have no message to quote.
+- Proposed fields: after all the listed fields you may add at most two \`+ Label: value\` lines, each for a fact or a group of facts substantial enough that the chatter would want a line of its own, whether it moves out of a current value or is new from the chat. Whenever a listed field fits, «Другое» included, use it instead. The label is your own: Russian, one to three words, at most 60 characters, no \`:\`, \`<\`, \`>\` or \`&\`, and different from every listed label in any letter case. The value follows the rules of every other new value and is never \`=\`.
 - No other text: no preamble, no headings, no explanations, no blank lines, no numbering, no bullets, no markdown, and no quotation marks of your own outside the quote lines.`,
   taskIntro: 'Update these fields, in this order. Each line is a label, a colon and the field\'s current value; nothing after the colon means the field is empty:',
   taskOutput: (fieldCount) =>
-    `Output exactly ${fieldCount} field lines, one \`Label: value\` line per field in the order above, each followed by its quote lines, then at most two \`+ Label: value\` lines with their quote lines, and nothing else. Copy an unchanged value exactly as the list above gives it; write a new or rewritten value in Russian.`,
+    `Output exactly ${fieldCount} field lines, one per field in the order above: \`Label: =\` for a field that keeps its current value, otherwise \`Label: value\` with the new or rewritten value in Russian and its quote lines. Then at most two \`+ Label: value\` lines with their quote lines, and nothing else.`,
 };
 
 /** Merge mode is a fan-notes-fill request that carries `noteValues`, even all
@@ -644,8 +658,8 @@ function noteFillMergeMode(input: PromptBuildInput): boolean {
  * Untrusted chatter text, escaped like every other untrusted value: the
  * contract already refuses `<`, `>` and `&` in a label, so a label keeps its
  * bytes and the model reads the very label it must copy; a value may hold them,
- * and then the model reads (and echoes, when it keeps the value) `&lt;`, `&gt;`
- * and `&amp;`, which the client decodes before it compares. */
+ * and then the model reads `&lt;`, `&gt;` and `&amp;` and may carry that form
+ * into a rewrite, which the client decodes. */
 function noteFieldsList(input: PromptBuildInput): string {
   const { feature, noteFields } = input;
   if (feature !== 'fan-notes-fill' || !noteFields?.length) {
@@ -666,6 +680,9 @@ function noteFieldsList(input: PromptBuildInput): string {
  * every other feature (no other template has these slots). */
 function noteFillSlots(input: PromptBuildInput): Record<string, string> {
   const slots = {
+    noteFillFactSource: '',
+    noteFillStatedRule: '',
+    noteFillOtherField: '',
     noteFillIntro: '',
     noteFillValueRule: '',
     noteFillEmptyRule: '',
@@ -681,6 +698,9 @@ function noteFillSlots(input: PromptBuildInput): Record<string, string> {
   }
   const texts = noteFillMergeMode(input) ? NOTE_FILL_MERGE_TEXTS : NOTE_FILL_LEGACY_TEXTS;
   return {
+    noteFillFactSource: texts.factSource,
+    noteFillStatedRule: texts.statedRule,
+    noteFillOtherField: texts.otherField,
     noteFillIntro: texts.intro,
     noteFillValueRule: texts.valueRule,
     noteFillEmptyRule: texts.emptyRule,

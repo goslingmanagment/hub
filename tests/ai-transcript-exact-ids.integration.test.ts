@@ -463,7 +463,7 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
         "onlyfans coach-chat preset": "6dfb2b2b49dae628cda7806fe46f505b0e52d15ef3371e5eee62fed2e565b5e6",
         "onlyfans coach-chat question": "2719c981d83713be214e7e42ee1ad5b9bbca139724f92c35381c5af029255fa2",
         "onlyfans fan-notes-fill": "1c5e81470cd319a7570820947cc3a834b0a4e644a890782d413f0fbb74dda306",
-        "onlyfans fan-notes-fill merge": "955f12bfc87c25d0e3bda0f1512d1d525a7fe999e9fbb98bb818107c4ed6e253",
+        "onlyfans fan-notes-fill merge": "ff8536f4278a7b5fc0fb636a9b94816e3daa70de6e3fc737f317fb7ad39924a7",
         "onlyfans fan-summary": "336a4ea99a2f46b25b0cb186986803ab64b928657df359fc1b78ab85132a482b",
         "onlyfans fan-summary short": "5ac45b123db389b66f15199d09d4c9566b397c35343ada052a9b88b360500e84",
         "onlyfans fast-reply flirty": "d3a48bb14bf2a9f819edb37a3d432e56391a99ba5d3d29e84d15a0f072fc665a",
