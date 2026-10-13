@@ -97,6 +97,7 @@ export class Egress {
     this.gate = options.gate ?? new ApiGate();
     this.gate.cut = (reason) => this.cutClass("api", reason);
     this.gate.cutHeld = (reason) => this.#cutWhere((tunnel) => tunnel.record.cls === "api" && tunnel.heldBytes > 0, reason);
+    this.gate.cutTunnel = (id, reason) => this.#cutWhere((tunnel) => tunnel.record.cls === "api" && tunnel.record.id === id, reason) > 0;
   }
 
   get exitOpen(): boolean {

@@ -35,6 +35,10 @@
 //   API tunnels are cut.
 // - A big record still held when the next window opens was never admitted:
 //   its tunnel is cut, never flushed.
+// - A connection opened in a window that its request never went up is cut
+//   when the window closes: Chrome finishes such a connection later, and it
+//   would take the next window's one new connection — or pass for that
+//   window's request (stage 1, amendment 21).
 //
 // What stays open (spec §9, owner decisions №10 and №1б): a request Chrome
 // releases by itself in the very moment a window opens can take the window's
@@ -68,7 +72,7 @@ export type GatePhase = "closed" | "open" | "holding" | "responding";
 export type RecordVerdict = "up" | "hold";
 
 export interface GateEvent {
-  kind: "first_bytes" | "held" | "unadmitted_cut" | "no_response" | "expired" | "announced";
+  kind: "first_bytes" | "held" | "unadmitted_cut" | "no_response" | "expired" | "announced" | "unused_cut";
   window: string | null;
   detail: Record<string, string | number | boolean | null>;
 }
@@ -103,6 +107,8 @@ export class ApiGate {
   cut: (reason: string) => number = () => 0;
   /** Cut the API tunnels that hold bytes; returns how many. */
   cutHeld: (reason: string) => number = () => 0;
+  /** Cut one API tunnel; returns whether it was there. */
+  cutTunnel: (tunnel: number, reason: string) => boolean = () => false;
   onEvent: (event: GateEvent) => void = () => undefined;
 
   readonly #now: () => number;
@@ -233,10 +239,14 @@ export class ApiGate {
 
   /** The request finished (or its operation was closed). */
   close(id: string): void {
-    if (this.#window?.id !== id) return;
+    const w = this.#window;
+    if (w?.id !== id) return;
     this.#clearTimers();
     this.#phase = "closed";
     this.#window = null;
+    if (w.newTunnel !== null && w.used <= this.#setupRecords(w) && this.cutTunnel(w.newTunnel, "gate: a connection its window's request never went up")) {
+      this.onEvent({ kind: "unused_cut", window: id, detail: { tunnel: w.newTunnel } });
+    }
   }
 
   /** The exit closed or control was lost: no window any more. */
