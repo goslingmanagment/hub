@@ -1,11 +1,10 @@
 import type { ClientFeatureFlagName } from "@agency_hub_core/contracts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { clientFeatureExistsOn, clientVersionRefusal } from "./client-features.ts";
-import { loadClientSwitches, requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
+import { loadClientSwitches, requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError } from "./errors.ts";
 
 /**
@@ -83,12 +82,8 @@ export async function requireClientTokenAiFeature(
   }
   const flag = clientAiFeatureFlag(input.feature, input.platform);
   if (flag !== null) {
-    const page = await findPageSummaryByLabel(app.db, input.pageLabel);
-    if (!page) {
-      // A missing page answers like one not granted: the refusal reveals nothing.
-      throw new ClientFeatureDisabledError(flag, "not_granted");
-    }
-    await requireClientFeature(app, request, principal, { id: page.id }, flag);
+    // A missing page answers like one not granted: the refusal reveals nothing.
+    await requireClientFeatureOnLabel(app, request, principal, input.pageLabel, flag);
     return;
   }
   const switches = await loadClientSwitches(app);

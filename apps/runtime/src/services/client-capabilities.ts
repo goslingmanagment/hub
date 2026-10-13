@@ -63,6 +63,13 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // for a caller that advertises `hi-start-proof-v1` in
   // `x-kernel-ai-capabilities` and sends no `clientContext`.
   "hi-start-proof-v1",
+  // R20 HF-4б: the voice notes in the narrow token. The three voice-note routes
+  // (create, status, audio) behind the page's `voice` flag; the render's body
+  // takes `fanRef`, the fan apart from the Fansly group (R20 HF-4а); and the
+  // bootstrap's `voice` reads `lane_off` on a page the voice-notes lane does
+  // not serve. With it the hub serves all of `voice`; the owner's switches and
+  // the lane decide from here on.
+  "voice-notes-v1",
 ];
 
 /**

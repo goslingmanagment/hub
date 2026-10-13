@@ -155229,7 +155229,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
+        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "requestBody": {
           "required": true,
           "content": {
@@ -155619,7 +155619,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident switch is off.",
+        "description": "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident switch is off. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "parameters": [
           {
             "schema": {
@@ -155826,6 +155826,41 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -155836,7 +155871,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, cache-control private/no-store, x-content-type-options nosniff). The content-type is honest because setVoiceProfile constrains output_format to an MP3-only allowlist (non-MP3 ElevenLabs formats are rejected at profile-set time). The handler writes the body directly; server OpenAPI generation rewrites the 200 media type to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category — clients match the structured body code (the existing gate-code pattern), and 410 stays category `validation` in the SDK taxonomy.",
+        "description": "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, cache-control private/no-store, x-content-type-options nosniff). The content-type is honest because setVoiceProfile constrains output_format to an MP3-only allowlist (non-MP3 ElevenLabs formats are rejected at profile-set time). The handler writes the body directly; server OpenAPI generation rewrites the 200 media type to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category — clients match the structured body code (the existing gate-code pattern), and 410 stays category `validation` in the SDK taxonomy. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "parameters": [
           {
             "schema": {
@@ -155947,6 +155982,41 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {

@@ -9,10 +9,12 @@ import {
   clientBootstrapFlags,
   evaluateClientPageFeatures,
   hostBindingFitsPlatform,
+  type ClientFeatureLane,
   type ClientFeatureSettings,
 } from "./client-features.ts";
 import { CLIENT_BOOTSTRAP_LIMITS } from "./client-limits.ts";
 import { CLIENT_BOOTSTRAP_CONFIG_KEYS, loadClientSwitches } from "./client-switches.ts";
+import { loadVoiceLane, type VoiceLanePage } from "./voice-lane.ts";
 
 /** The bootstrap protocol this hub speaks; a client that does not speak it asks the chatter to update. */
 export const CLIENT_BOOTSTRAP_PROTOCOL = 1;
@@ -34,10 +36,29 @@ export interface ClientBootstrapCaller {
   tokenClient: string | null;
 }
 
+const NO_LANES: ReadonlySet<ClientFeatureLane> = new Set();
+const VOICE_NOTES_LANE: ReadonlySet<ClientFeatureLane> = new Set(["voice-notes"]);
+
+/**
+ * The hub lanes that serve a page now (R20 HF-4б): the voice notes. A lookup
+ * that fails serves none, so the bootstrap still answers and offers no voice:
+ * the same fail-safe as the released clients' hint on GET /api/v1/pages.
+ */
+async function loadClientLanes(app: AppContext): Promise<(page: VoiceLanePage) => ReadonlySet<ClientFeatureLane>> {
+  try {
+    const voice = await loadVoiceLane(app);
+    return (page) => (voice(page) ? VOICE_NOTES_LANE : NO_LANES);
+  } catch (error) {
+    app.logger.warn({ err: error }, "voice-notes lane lookup failed; the bootstrap offers no voice");
+    return () => NO_LANES;
+  }
+}
+
 function toBootstrapPage(
   row: ClientBootstrapPageRow,
   settings: ClientFeatureSettings,
   served: readonly string[],
+  lanes: ReadonlySet<ClientFeatureLane>,
 ): ClientBootstrapPage {
   const displayName = row.displayName?.trim();
   return {
@@ -51,6 +72,7 @@ function toBootstrapPage(
       settings,
       page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
       served,
+      lanes,
     }),
   };
 }
@@ -77,10 +99,12 @@ function bindingsForCaller(
  * work.
  *
  * Every feature, flag and limit follows the owner's live switches
- * (client-switches.ts). The revision is read BEFORE the switches: a change that
- * lands between the two reads is then served under the older revision, and the
- * client's next bootstrap sees the revision move. The other order could pair a
- * newer revision with older switches, and the client would keep them.
+ * (client-switches.ts), and a feature that runs on a hub lane follows that
+ * lane's live state too (`voice`: the voice-notes lane, R20 HF-4б). The
+ * revision is read BEFORE the switches and the lanes: a change that lands
+ * between the reads is then served under the older revision, and the client's
+ * next bootstrap sees the revision move. The other order could pair a newer
+ * revision with older switches, and the client would keep them.
  */
 export async function buildClientBootstrap(
   app: AppContext,
@@ -93,6 +117,7 @@ export async function buildClientBootstrap(
   // transcript readers.
   const deepMax = await loadAiTranscriptDeepMaxRows(app);
   const served = SERVED_CLIENT_CAPABILITIES;
+  const lanes = await loadClientLanes(app);
   const rows = await listClientBootstrapPages(app.db, caller.pageIds);
   return {
     protocol: CLIENT_BOOTSTRAP_PROTOCOL,
@@ -106,7 +131,7 @@ export async function buildClientBootstrap(
       role: caller.user.role,
       tokenClient: caller.tokenClient,
     },
-    pages: rows.map((row) => toBootstrapPage(row, switches.settings, served)),
+    pages: rows.map((row) => toBootstrapPage(row, switches.settings, served, lanes(row))),
     bindingsByHost: bindingsForCaller(switches.settings.hostBindings, rows),
     flags: clientBootstrapFlags(switches.settings),
     limits: { ...CLIENT_BOOTSTRAP_LIMITS, deepMax, previewSendReceiptProfiles: [...switches.receiptProfiles] },
