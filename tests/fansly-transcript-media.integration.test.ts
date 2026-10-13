@@ -2,10 +2,16 @@ import { createHash } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { insertObservation, upsertFans } from "@agency_hub_core/db";
+import {
+  insertObservation,
+  listConversationFeedPage,
+  readConversationFeedSnapshot,
+  upsertFans,
+} from "@agency_hub_core/db";
 
 import { loadTranscriptContext } from "../apps/runtime/src/modules/ai/index.ts";
 import { resetCanonicalizeSweepRuntime, runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { loadFeedFanslyCaptions, toClientFeedItem } from "../apps/runtime/src/services/conversation-feed.ts";
 import { runMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -170,6 +176,47 @@ describe("[AI-147] Fansly media in the hub-loaded transcript (chat-extension R20
     } finally {
       await testDb.pool.query("alter table message_media_offers rename column offer_type_moved to offer_type");
     }
+  });
+
+  it("the archive feed captions a Fansly row's media as its transcript labels them, without price or purchase state", async () => {
+    // R20 HF-10 made the feed reachable on Fansly; its captions read the
+    // row's stored list the OnlyFans way until this change (a photo, and a
+    // tip's attachment, were `[Media]`).
+    const f = await fixture();
+    await f.restPage(DM_PAGE);
+    await f.mediaPlane();
+
+    const snapshot = await readConversationFeedSnapshot(f.app.db, { pageId: f.page.id });
+    const page = await listConversationFeedPage(f.app.db, {
+      source: "archive", pageId: f.page.id, conversationRef: GROUP, snapshot, limit: 50,
+    });
+    const captions = await loadFeedFanslyCaptions(f.app.db, { pageId: f.page.id, platform: "fansly", rows: page.rows });
+    const items = page.rows.map((row) => toClientFeedItem(row, captions));
+    expect(Object.fromEntries(items.map((item) => [item.messageId.slice(-2), item.attachmentLabels]))).toEqual({
+      "12": [],
+      "11": ["[Photo]", "[Photo]"],
+      "10": ["[Photo]"],
+      // A story reply's and a tip's attachments are not media.
+      "09": [],
+      "08": ["[Media Bundle]"],
+      "07": ["[Media]"],
+      "06": [],
+      "05": ["[Audio]"],
+      // The message's order; the price is the item's own field.
+      "04": ["[Video]", "[Media Bundle: 2 Photos]"],
+      "03": ["[Video]"],
+      "02": ["[Media Bundle: 2 Photos, 1 Video]"],
+      "01": ["[Photo]"],
+    });
+    expect(items.find((item) => item.messageId.endsWith("04"))).toMatchObject({ priceMills: 20_000 });
+    expect(items.find((item) => item.messageId.endsWith("06"))).toMatchObject({ tipMills: 5_000 });
+    // The same words the transcript reads, the marks aside.
+    const { lines } = await f.transcript();
+    expect(lines[3]).toBe("[10:03] Model: [Video - PPV $20.00, unknown] [Media Bundle: 2 Photos] two things");
+
+    // OnlyFans rows keep their own reading: no Fansly read at all.
+    expect(await loadFeedFanslyCaptions(f.app.db, { pageId: f.page.id, platform: "onlyfans", rows: page.rows })).toBeNull();
+    expect(toClientFeedItem(page.rows.find((row) => row.messageRef.endsWith("01"))!, null).attachmentLabels).toEqual(["[Media]"]);
   });
 
   it("the live overlay labels a socket message's attachments from the files the hub knows; its REST copy reads the same", async () => {

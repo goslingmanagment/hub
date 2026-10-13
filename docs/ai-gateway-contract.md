@@ -415,9 +415,9 @@ label per attachment, in the message's order, before the text. `[Photo]`, `[Vide
 `[Media]` for a media of no known kind or one the page never served; `[Media Bundle: 2 Photos,
 1 Video]` for a bundle, counting the photos and videos among its members the page served
 (`[Media Bundle]` when there are none). An attachment that is not media (a tip's, a story reply's)
-has no label; a tip reads `[Tip: $X.XX]` as before. A paid message's suffix (` - PPV $X.XX, state`)
-goes on its first label: the archive keeps one price per message, its first priced attachment's.
-The state stays `unknown` until the hub reads Fansly purchases into the transcript.
+has no label; a tip reads `[Tip: $X.XX]` as before. Each paid attachment carries its own purchase
+mark (R20 HF-7в, below); a message whose attachments the media plane has not recorded yet keeps one
+suffix (` - PPV $X.XX, unknown`) on its first label, because the archive keeps one price per message.
 
 The labels come from the hub's stores: the archive row's `media_metadata` (what each attachment is:
 its MIME type, a bundle, or `other`) and the media plane of the same observations
@@ -430,6 +430,37 @@ without media labels and `params.contextManifest.fanslyMediaError` is `true`.
 
 Unchanged: a request with `clientContext` (its transcript is the client's), and OnlyFans (the
 archive reader shapes its rows without their media list, as before; the union reads OFAPI's).
+
+The conversation feed (`clientConversationFeed`) captions a Fansly row's media with the same words
+(`[Photo]`, `[Media Bundle: 2 Photos]`, nothing for a tip's attachment), without price or purchase
+state: those are the item's `priceMills` and `tipMills`. An OnlyFans row's captions are read from its
+own media list, as before.
+
+### Feature-lane PPV purchase state on Fansly (chat-extension R20 HF-7в)
+
+On the same lane each paid attachment of a Fansly message is marked on its own label, as the
+released extension marks it: `[Video - PPV $20.00, purchased] [Photo] [Media Bundle: 1 Photo, 1 Video
+- PPV $30.00, unknown]`. An attachment is paid when a permission row the page served for its media or
+bundle has the PPV bit (`flags & 1`); its price is that row's `price`, else the price inside its
+`metadata`, else none (` - PPV, state`). The state is the chat's fan's (the fan the page's capture
+names for the group, `page_dm_threads`; unknown fan: every state `unknown`):
+
+- `purchased`: an order of the fan for that media or bundle in `media_orders` (a single media's own
+  order of type 1 or of no type; a bundle's order);
+- `not purchased`: no such order, and the hub has read the target's whole order history: its latest
+  Sync Engine walk (`purchases.targets`, one per media or bundle) closed on an empty page or on an
+  order its previous whole walk saw, every page its walks read is canonicalized, and no order of the
+  fan waits above the media plane's watermark;
+- `unknown`: everything else — a target never walked (the engine walks a target when an order of it
+  is seen, so a PPV nobody bought stays `unknown`), a walk open or closed on a refusal, an order not
+  projected yet, a failed read.
+
+The released extension asks Fansly on every generation instead (`/media/orderhistory` per paid
+attachment, filtered by the fan); where the hub has no complete walk it says `unknown` where the
+extension could say `not purchased`. `params.contextManifest.fanslyPpv` counts the paid attachments
+and their states (`{ paid, purchased, notPurchased, unknown }`, only when one is paid); a failed
+purchase read leaves every mark `unknown` and sets `fanslyPpvError: true`. A socket message (live
+overlay) carries no price and no mark.
 
 ### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
 
