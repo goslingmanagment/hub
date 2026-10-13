@@ -1278,14 +1278,17 @@ chat. The client sends the labels; the hub assembles the prompt
   is what the fan likes and pays for, «Медиа» what he bought and likes. Merge
   mode: «Характеристика» is what kind of fan he is and how to talk to him, in
   his own stated terms (the agency chatters' own use of the field), never his
-  purchases, prices, subscription, content tastes or fetishes; «Медиа» is what
-  content he bought (by the transcript's `purchased` tags and the spending and
-  subscription data) and what content he says he likes, and the one place for
-  purchases, prices and the subscription. One «Current Values» rule goes with
-  them: a fact is stated in one field, the one whose definition fits it best,
-  and a fact a current value already holds, in any field, is not added again.
-  How much the mode writes is unchanged (the owner's ruling: the output is not
-  to get shorter), and so are the request and the answer format.
+  purchases, prices, content tastes, fetishes or subscription; «Медиа» is what
+  content he bought (by the transcript's `purchased` tags and the spending
+  data) and what content he says he likes, and the one place for purchases and
+  prices. The fan's subscription (its tier, price, dates and renewal) is
+  recorded in no field (2026-10-14: the owner saw it written into «Медиа» and
+  called it useless); the subscription data still reaches the prompt. One
+  «Current Values» rule goes with the definitions: a fact is stated in one
+  field, the one whose definition fits it best, and a fact a current value
+  already holds, in any field, is not added again. How much the mode writes is
+  unchanged (the owner's ruling: the output is not to get shorter), and so are
+  the request and the answer format.
 - Context as for a full Recap: on Fansly the client sends `clientContext` with
   the whole conversation it read (`transcriptCoverage` usually
   `full-history`), the spending and subscription blocks and the bio, plus

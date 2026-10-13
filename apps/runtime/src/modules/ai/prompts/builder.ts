@@ -574,10 +574,12 @@ function greetingTask(
  * So the «Характеристика» and «Медиа» definitions are slots too
  * (characterField, mediaField): legacy mode keeps the template's original two
  * lines; merge mode defines «Характеристика» as who the fan is and makes
- * «Медиа» the one place for purchases, prices and the subscription, and one
+ * «Медиа» the one place for purchases and prices, and one
  * «Current Values» bullet forbids stating a fact in two fields or adding one a
  * current value already holds. How much the merge mode writes is unchanged
- * (owner's ruling: the output is not to get shorter). */
+ * (owner's ruling: the output is not to get shorter). The subscription (tier,
+ * price, dates, renewal) is recorded in no field: the owner saw it written
+ * into «Медиа» and called it useless (2026-10-14). */
 interface NoteFillTexts {
   factSource: string;
   statedRule: string;
@@ -643,8 +645,8 @@ The transcript has a day line \`--- YYYY-MM-DD ---\` before the first message of
 - Facts that go stale (where he lives or stays, his job, his schedule, his plans) carry the month and year he said them, in parentheses: «Флорида (08.2026)». Take them from the day line above the message that states the fact. With no day line above it, write no date; never guess one.
 - When the fan restates a dated fact later, the fact takes the later date.
 - A date alone is no reason to rewrite a field: an undated fact of a current value gets its date only when you rewrite its field anyway.`,
-  characterField: 'what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices, subscription or content tastes (those are «Медиа») and never his fetishes (those are «Фетиши»).',
-  mediaField: 'what content he bought, as the transcript\'s `purchased` tags and the spending and subscription data show it, and what content he says he likes (types and themes). Purchases, prices and his subscription are recorded here and nowhere else.',
+  characterField: 'what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices or content tastes (those are «Медиа»), never his fetishes (those are «Фетиши») and never his subscription.',
+  mediaField: 'what content he bought, as the transcript\'s `purchased` tags and the spending data show it, and what content he says he likes (types and themes). Purchases and prices are recorded here and nowhere else. His subscription (its tier, price, dates and renewal) is not content: record it in no field.',
   mergeFields: `
 - Локация: where he lives or stays, as «город, штат или регион, страна», as far as he said it.
 - График: when he works, sleeps and is free, as he told it (shifts, days off, hours).
