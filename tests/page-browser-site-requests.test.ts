@@ -413,6 +413,18 @@ describe("a CORS preflight (owner decision №1)", () => {
     expect(done).toMatchObject({ sent: true, status: 429, body: "not_platform_data", error: null });
     expect(siteResponses(w.buffer)).toEqual([]);
   });
+
+  it("a request whose session is not the one its admission was asked under is not released: the session changed between the preflight and the request", async () => {
+    const w = await world();
+    // The live session when the preflight asks.
+    w.session.note({ method: "GET", url: `${API}/account/me`, headers: siteHeaders("/api/v1/account/me") });
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message", "fansly-token-AnotherLogin000111222"), script: { preflight: 204 } });
+    const [done] = await doneOf(w);
+    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ sessionFingerprint: FINGERPRINT });
+    expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight"]);
+    expect(request.outcome).toBe("failed");
+    expect(done).toMatchObject({ sent: true, status: null, error: { afterSendStart: true, message: "its request did not go: the session changed between the admission and the request" } });
+  });
 });
 
 describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", () => {
@@ -505,6 +517,13 @@ describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", (
     await doneOf(w);
     expect(w.engine.of("siteAdmit")[0]).toMatchObject({ route: "site.other", sessionFingerprint: null });
     expect(siteResponses(w.buffer)[0]).toMatchObject({ route: "site.other", complete: true, sessionFingerprint: NO_SESSION });
+  });
+
+  it("a 429 with Retry-After: the status and the header go to the engine, the answer is kept as it came", async () => {
+    const w = await world();
+    const done = await run(w, "/messaging/groups", { status: 429, headers: [{ name: "Retry-After", value: "17" }, { name: "content-type", value: "application/json" }], chunks: [Buffer.from('{"success":false}')] });
+    expect(done).toMatchObject({ sent: true, status: 429, retryAfter: "17", error: null, body: "buffered" });
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ route: "messaging.groups", status: 429, complete: true, headers: { "retry-after": "17" } });
   });
 
   it("a route without platform data (the device id) is admitted, its answer not kept", async () => {

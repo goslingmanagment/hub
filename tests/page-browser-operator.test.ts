@@ -1377,6 +1377,30 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(s.lines.join("\n")).not.toContain("owner@example.test");
   });
 
+  it("waits for the engine: a new connection is asked again by the same id; the wait is the engine's parameter, and past it the request fails (Failed)", async () => {
+    const s = await setUp({ params: { siteAdmitWaitMs: 1500 } });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const waiting = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    const first = await s.engine.waitFor("siteAdmit");
+    expect((first.waitDeadlineMono as number) - (first.pausedMono as number)).toBe(1500);
+    // The engine's connection goes (a deploy of sync) and comes back.
+    const next = new FakeEngine();
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    expect(waiting.outcome).toBe("paused");
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, { siteAdmitWaitMs: 1500 }));
+    await next.waitFor("helloResult");
+    const again = await next.waitFor("siteAdmit");
+    expect(again).toEqual(first);
+    // Nobody admits it: failed once its wait is over.
+    await until(() => waiting.outcome === "failed", 5000, "the wait to end");
+    expect(waiting.failReason).toBe("Failed");
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: "no admission within 1500 ms" }));
+  });
+
   it("the page's proxy fails: what waited for an admission is failed, nothing is asked again, the page fails and starts again", async () => {
     const s = await setUp({ params: { restartBackoffMs: [300] } });
     await started(s);
