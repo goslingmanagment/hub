@@ -1,0 +1,42 @@
+#!/command/with-contenv sh
+# The page's Chrome (plan §3.1). Down until the operator starts it with
+# `s6-svc -u /run/service/chrome`; on `-d` it gets SIGTERM and 5 s
+# (timeout-kill) before SIGKILL (stage 1, amendment 28).
+#
+# No automation flags: --enable-automation, --headless,
+# --remote-debugging-pipe and port 0 turn on navigator.webdriver. The
+# sandbox stays on — the container's seccomp and AppArmor profiles let
+# Chrome create its user namespaces; --no-sandbox is never used.
+set -eu
+
+# The page's time zone and language (plan §4.1, step 2): the container's
+# settings until the operator passes its own (PR 5).
+TIME_ZONE="${PB_TZ:-UTC}"
+LANG_TAG="${PB_LANG:-en-US}"
+printf '%s' "$TIME_ZONE" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$' || { echo "chrome: PB_TZ is malformed" >&2; exit 1; }
+printf '%s' "$LANG_TAG" | grep -Eq '^[a-z]{2,3}(-[A-Z]{2})?$' || { echo "chrome: PB_LANG is malformed" >&2; exit 1; }
+
+i=0
+while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+[ -S /tmp/.X11-unix/X99 ] || { echo "chrome: no X server" >&2; exit 1; }
+
+# The profile's lock (Singleton*) stays: the container's host name is the
+# profile's own, so Chrome itself takes over the lock of a Chrome that is
+# gone (stage 1, amendment 33), and still refuses a profile another Chrome
+# holds.
+
+# On Linux Chrome takes its UI language and navigator.language from the
+# environment, not from --lang (stage 1, amendment 10).
+exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin DISPLAY=:99 \
+  TZ="$TIME_ZONE" LANGUAGE="$LANG_TAG" LANG="$(printf '%s' "$LANG_TAG" | tr - _).UTF-8" \
+  /command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable \
+  --user-data-dir=/data/profile \
+  --remote-debugging-port=9222 \
+  --window-size=1920,1080 \
+  --lang="$LANG_TAG" \
+  --no-first-run \
+  --ignore-gpu-blocklist \
+  about:blank
