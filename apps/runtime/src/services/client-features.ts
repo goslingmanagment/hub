@@ -35,11 +35,12 @@ export interface ClientFeatureRequirement {
 
 const ONLYFANS: readonly Platform[] = ["onlyfans"];
 const FANSLY: readonly Platform[] = ["fansly"];
+const ONLYFANS_AND_FANSLY: readonly Platform[] = ["onlyfans", "fansly"];
 
 /**
  * Every flag the extension knows, with what it needs. The pilot is OnlyFans
  * only; the flags of Fansly's own AI generations (R20 HF-12) exist on Fansly
- * alone.
+ * alone, and fresh text (R20 HF-8б) on both.
  */
 export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName, ClientFeatureRequirement>> = {
   // Client-only: the hub has no action behind these.
@@ -54,7 +55,9 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // AI features the narrow token's AI switch checks.
   review: { platforms: ONLYFANS, capabilities: [] },
   coach: { platforms: ONLYFANS, capabilities: [] },
-  freshText: { platforms: ONLYFANS, capabilities: ["live-text-v1"] },
+  // R20 HF-8б: the fresh text of the open chat on Fansly too, by the same
+  // switch (`aiLiveTextContextMode` and the page's flag, live-text.ts).
+  freshText: { platforms: ONLYFANS_AND_FANSLY, capabilities: ["live-text-v1"] },
   splitAll: { platforms: ONLYFANS, capabilities: ["split-all-v1"] },
   recap: { platforms: ONLYFANS, capabilities: ["shared-recaps-v1", "recap-profile-v1"] },
   preview: { platforms: ONLYFANS, capabilities: ["archive-feed-v1"] },

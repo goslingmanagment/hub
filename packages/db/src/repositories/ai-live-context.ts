@@ -30,6 +30,8 @@
 
 import { sql, type SQL } from "drizzle-orm";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 
 /** `present`: held for this conversation and not deleted. `deleted`: held for
@@ -209,6 +211,40 @@ export async function explainAiKnownMessagesQuery(
 // id leaves the answer open, the row decides nothing (SQL's three-valued `not`
 // drops it): a wrong refusal costs a generation, a missed one costs nothing
 // the caller could not have typed into the draft.
+//
+// That is the OnlyFans chat, where a conversation ref names the OTHER account
+// (the fan). A Fansly conversation ref is the group id, which names the chat
+// itself, the same id for every account in it (chat-extension R20 HF-8б):
+// another page's row under this very group is this chat seen from that page,
+// and a row under any other group is another chat. Which of the two a
+// platform's refs are is CONVERSATION_REF_NAMES below.
+//
+// chat-extension R20 HF-8б: Fansly's socket overlay (dm_live_messages, the
+// account socket of the page, which carries every chat of the account) holds
+// a message seconds after it was sent, and holds deletions no REST read will
+// ever show. With `liveOverlay` the lookup reads it too, by its primary key
+// (page_id, platform_message_id), for this page only, and only when the
+// caller says the overlay served the transcript: a page whose readers do not
+// read the overlay (`fanslyLiveOverlayReadPages`) is not judged by it here
+// either, exactly like the lookup above. From the overlay:
+//   - a deletion mark counts whatever group the row names, a stub without a
+//     create included: the live union hides a message on that mark alone;
+//   - a row under another group is another chat's message (`foreign`), a
+//     deletion stub that names a group included;
+//   - a create under this group places the message in it, and names its
+//     sender (`is_sent_by_page`, null where the socket did not know the
+//     page's own account) and its time, after both archives: a message the
+//     archive holds keeps the archive's time, as the live union keeps the REST
+//     row over the overlay's.
+
+/** What a platform's conversation ref names, for the cross-page "same chat"
+ *  rule above: the other account of the chat (`partner`: an OnlyFans fan id,
+ *  so every page has its own chat with that fan), or the chat itself (`chat`:
+ *  a Fansly group id, one for every account in it). */
+const CONVERSATION_REF_NAMES: Readonly<Record<Platform, "partner" | "chat">> = Object.freeze({
+  onlyfans: "partner",
+  fansly: "chat",
+});
 
 export interface AiLiveTextStoreState {
   /** The hub holds the id under another chat. */
@@ -221,14 +257,16 @@ export interface AiLiveTextStoreState {
   isSentByMe: boolean | null;
   /** When the message was sent, by the same stores: message_archive first (the
    *  time every reader orders by), dm_message_archive where the archive does
-   *  not hold the message yet. null = no store holds its content with a time. */
+   *  not hold the message yet, then the Fansly socket overlay (`liveOverlay`).
+   *  null = no store holds its content with a time. */
   occurredAt: Date | null;
 }
 
 export interface AiLiveTextLookupInput {
   pageId: number;
-  /** The page's platform: part of message_archive's unique key. */
-  platform: string;
+  /** The page's platform: part of message_archive's unique key, and what its
+   *  conversation refs name (CONVERSATION_REF_NAMES). */
+  platform: Platform;
   conversationRef: string;
   messageRefs: readonly string[];
   /** Other pages whose archives are read for the same ids: `null` = every
@@ -236,6 +274,10 @@ export interface AiLiveTextLookupInput {
    *  exactly those. EMPTY = none: reading "no ids" as "no filter" is how a
    *  scope clamp turns into an unfiltered read. */
   otherPageIds: readonly number[] | null;
+  /** R20 HF-8б: the transcript was served by the live union (`source:
+   *  "live_union"`): read this page's socket overlay too. Off by default, and
+   *  then the statement does not name the overlay (every OnlyFans lookup). */
+  liveOverlay?: boolean;
 }
 
 function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
@@ -248,9 +290,14 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
   const otherPages = sql`o.platform = ${input.platform}
         and o.id <> ${input.pageId}
         ${otherPageIds === null ? sql`` : sql`and o.id = any(${sql.param(otherPageIds)}::bigint[])`}`;
-  // The same chat seen from its other side (the header above). Three-valued:
-  // with an account unknown the row decides nothing.
-  const mirrored = (conversation: SQL) => sql`(
+  // The same chat seen from its other side (the header above). Where a ref
+  // names the other account it is three-valued: with an account unknown the
+  // row decides nothing. Where it names the chat itself, the same ref is the
+  // same chat.
+  const live = input.liveOverlay === true;
+  const mirrored = CONVERSATION_REF_NAMES[input.platform] === "chat"
+    ? (conversation: SQL) => sql`(${conversation} = ${input.conversationRef})`
+    : (conversation: SQL) => sql`(
           (o.external_page_id = ${input.conversationRef} and ${conversation} = page.external_page_id)
           or (o.external_page_id = page.external_page_id and ${conversation} = ${input.conversationRef})
         )`;
@@ -294,6 +341,17 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
         and t.platform_conversation_id = ${input.conversationRef}
         and m.platform_message_id = any(${refs})
     ),
+    ${live ? sql`live_rows as (
+      select l.platform_message_id as message_ref,
+             l.platform_conversation_id as conversation_ref,
+             l.is_sent_by_page as is_sent_by_me,
+             l.deleted_at,
+             l.created_at as event_time,
+             (l.sender_platform_user_id is null) as is_stub
+      from dm_live_messages l
+      where l.page_id = ${input.pageId}
+        and l.platform_message_id = any(${refs})
+    ),` : sql``}
     ${others ? sql`other_rows as (
       select ma.message_ref
       from pages o
@@ -326,6 +384,10 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
       select d.message_ref, d.is_sent_by_me, d.event_time, 1 as store_rank
       from dm_rows d
       where d.on_page and d.conversation_ref = ${input.conversationRef} and not d.is_stub
+      ${live ? sql`union all
+      select l.message_ref, l.is_sent_by_me, l.event_time, 2 as store_rank
+      from live_rows l
+      where l.conversation_ref = ${input.conversationRef} and not l.is_stub` : sql``}
     )
     select w.message_ref,
            (exists (select 1 from archive_rows a
@@ -337,13 +399,19 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
                           and d.on_page
                           and d.conversation_ref is not null
                           and d.conversation_ref <> ${input.conversationRef})
+             ${live ? sql`or exists (select 1 from live_rows l
+                        where l.message_ref = w.message_ref
+                          and l.conversation_ref is not null
+                          and l.conversation_ref <> ${input.conversationRef})` : sql``}
              ${others ? sql`or exists (select 1 from other_rows o where o.message_ref = w.message_ref)` : sql``}) as foreign_chat,
            (exists (select 1 from archive_rows a
                     where a.message_ref = w.message_ref and a.deleted_at is not null)
              or exists (select 1 from dm_rows d
                         where d.message_ref = w.message_ref and d.deleted_at is not null)
              or exists (select 1 from hot_rows h
-                        where h.message_ref = w.message_ref and h.deleted_at is not null)) as tombstoned,
+                        where h.message_ref = w.message_ref and h.deleted_at is not null)
+             ${live ? sql`or exists (select 1 from live_rows l
+                        where l.message_ref = w.message_ref and l.deleted_at is not null)` : sql``}) as tombstoned,
            exists (select 1 from content c
                    where c.message_ref = w.message_ref and c.is_sent_by_me) as sent_by_page,
            exists (select 1 from content c

@@ -153,7 +153,7 @@ what it was, so a client built before the frame never meets it.
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
 | `coverageCheck` | `{ window, deleted }`: one `{ id, state }` per id of the body's `coverageCheck.window` and `coverageCheck.deletedIds`, each list in the body's order (below). Only for a caller that advertised `coverage-check-v1` and sent the field; absent otherwise. |
 | `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
-| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
+| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected, matched? }`. `matched` (chat-extension R20 HF-8б): the client's items the hub's own transcript already held, from the same sender; present only when the hub merged the text (`shadow`, `served`, `rejected`), absent for `not_sent` and `disabled`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
 | `pair` | Fansly only, when the request names a `fanRef`: what the hub vouches for about the pair `conversationRef` (the group) ↔ `fanRef` (below). `verified`: the page's thread of the group has this fan. `unverified`: the page holds no thread of the group, or one whose fan the hub does not know yet. Absent on OnlyFans and without `fanRef`. |
 
@@ -320,9 +320,11 @@ byte of its text were a token. A request that names another `model` carries that
 ### Feature-lane fresh text (`liveTextContext`)
 
 The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
-reads the open OnlyFans chat sends its last confirmed messages with the request, and the hub merges
-them into the transcript it loaded itself, for that one generation
-(`apps/runtime/src/modules/ai/context/live-text.ts`).
+reads the open chat sends its last confirmed messages with the request, and the hub merges them
+into the transcript it loaded itself, for that one generation
+(`apps/runtime/src/modules/ai/context/live-text.ts`). OnlyFans since H-4c; Fansly since
+chat-extension R20 HF-8б, on the hub's own transcript only (the released Fansly extension sends
+its whole transcript as `clientContext`, and fresh text beside it is refused).
 
 Body field (optional, strict):
 
@@ -351,7 +353,6 @@ Refused before any context loads, after the page was admitted (a client bug, nev
 | Case | Answer |
 |---|---|
 | a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
-| a page that is not OnlyFans | 400 `bad_request`, reason `live_text_not_allowed` |
 | together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
 | no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
 
@@ -365,7 +366,10 @@ generations. Two conditions, both read per generation:
 - `aiLiveTextContextMode` (`off` | `shadow` | `serve`, rests `off`; stepped up one mode at a time,
   rolled back freely, like `aiTranscriptFreshUnionMode`);
 - the page's `freshText` flag in `chatExtensionFeatures`, by the evaluation the bootstrap announces
-  (master switch, flag, platform, binding, the `live-text-v1` capability).
+  (master switch, flag, platform, binding, the `live-text-v1` capability). The flag exists on
+  OnlyFans and on Fansly (R20 HF-8б; before it a Fansly page was refused with
+  `live_text_not_allowed`); one mode serves both, and a page reads its flag like every other
+  flag (its own row, else the `"*"` row).
 
 | `live.status` | Meaning |
 |---|---|
@@ -385,10 +389,20 @@ The merge, in `serve` and `shadow` alike:
   names message ids only. "Another chat" is another conversation of the same page, or a chat of
   another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
   each other archive the same message under both; that is the same chat from its other side, not a
-  conflict. A page the caller cannot read is not consulted. Another page is read in both of its
-  message stores (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is
-  refused even when it is made only of messages seconds old.
+  conflict: on OnlyFans each page archives it with the other page's account as the conversation,
+  on Fansly both archive it under the one group id (a group names the chat itself, so the same
+  group on another page is this chat and any other group is another chat). A page the caller
+  cannot read is not consulted. Another page is read in both of its message stores
+  (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is refused even
+  when it is made only of messages seconds old.
 - A tombstone is never restored: an id deleted in any store of the page is rejected.
+- Fansly (R20 HF-8б): where the socket overlay served the transcript (`source: "live_union"`), the
+  page's overlay (`dm_live_messages`) is one more store of the page. Its deletion mark rejects an
+  item whatever group the mark names, a deletion that only the socket knows included; a row under
+  another group of the page is another chat (a conflict); a row under this group places the
+  message in it with its sender and time, after both archives. Where the overlay did not serve
+  (the page is not in `fanslyLiveOverlayReadPages`, or that switch could not be read), it is not
+  consulted, exactly as for the frame's answers.
 - A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
   as an archive row does (tags and entities out). An item whose text is empty after that, whose id
   or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
@@ -403,8 +417,10 @@ The merge, in `serve` and `shadow` alike:
   as if it were new stays before the window and is cut (`outsideWindow`), and a message only the
   webhook store holds joins at the place the hub's own reader would give it. Such an item still
   carries the client's text, and a generation that served it is scoped like any other.
-- `accepted` counts the client's items the served window holds. Items cut by the window are neither
-  accepted nor rejected.
+- `accepted` counts the client's items the served window holds; `matched` (the frame, R20 HF-8б)
+  counts the items the hub's transcript already held. Items cut by the window are neither accepted
+  nor rejected nor matched: `sent = accepted + rejected + matched + outsideWindow`, the last one in
+  the manifest only.
 
 Where the client's text lives: in the restricted record of that one generation
 (`ai_generation_content.prompt_blocks`), and nowhere else. It is written to no message archive, no
@@ -422,8 +438,8 @@ client reads are the ids the hub archives; `matched: 0` beside a non-empty archi
 not, and `serve` must wait.
 
 The store lookup (`lookupAiLiveTextMessages`, `packages/db/src/repositories/ai-live-context.ts`) is
-one statement of point lookups on the stores' unique keys, for the ids the transcript does not
-hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
+one statement of point lookups on the stores' unique keys (the Fansly overlay by its primary key),
+for the ids the transcript does not hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
 (`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
 reads only: no platform request, no queued platform work, no change to a chat's unread state.
 
