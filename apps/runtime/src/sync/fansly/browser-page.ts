@@ -19,10 +19,11 @@ import {
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import { TAKEOVER_FACTOR } from "../engine/pacer.ts";
 import type { Clock, Metrics, PageTransport } from "../engine/ports.ts";
-import type { EngineRegistry } from "../engine/resource.ts";
+import type { DemandSignal, EngineRegistry } from "../engine/resource.ts";
 import { BrowserBufferIntake, type BrowserIntakeTiming } from "./browser-intake.ts";
 import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { createBrowserPageTransport, type BrowserPageTransportOptions } from "./browser-transport.ts";
+import { BrowserWsGuard, type BrowserWsGuardTiming } from "./ws/browser-guard.ts";
 import { BrowserWsSource } from "./ws/browser-source.ts";
 import { SYNC_WS_APPLY_DRAIN_MS } from "./ws/source.ts";
 import { routeFanslyWsReceiptDemand } from "./ws/route-receipt.ts";
@@ -38,7 +39,10 @@ import { routeFanslyWsReceiptDemand } from "./ws/route-receipt.ts";
 // - the site socket's connection rows (`ws/browser-source.ts`), the page's
 //   socket owner as `ws.connect` sees it;
 // - the buffer's intake (`browser-intake.ts`, PR 13) — frames to the live
-//   overlay as the engine's own socket's (the applier, the post-ack routing).
+//   overlay as the engine's own socket's (the applier, the post-ack routing);
+// - the site socket's guard and down timer (`ws/browser-guard.ts`): its row
+//   renewed while the stream says it is open, `dm-conversations.ws-down`
+//   after two minutes without one.
 //
 // The hand-over (plan §4.7): the operator answers this owner's hello with
 // `quiesced` once the earlier owners' requests are over. Until then nothing
@@ -74,6 +78,7 @@ export interface BrowserPageOverrides {
   rpcTiming?: Partial<PageBrowserRpcTiming>;
   transportTiming?: BrowserPageTransportOptions["timing"];
   intakeTiming?: Partial<BrowserIntakeTiming>;
+  guardTiming?: Partial<BrowserWsGuardTiming>;
   cdnUrlAllowed?: (url: URL) => boolean;
   leaveWaitMs?: number;
 }
@@ -94,6 +99,9 @@ export interface BrowserPageDeps {
   settingMs: number;
   /** The slot's pacer: the floor learnt from the operator's `quiesced`. */
   raiseTakeoverFloor(atMono: number): void;
+  /** The page's demand under the slot's generation (the socket's
+   *  `dm-conversations.ws-down`). Rejects when it was not written. */
+  enqueue(signals: readonly DemandSignal[]): Promise<void>;
   overrides?: BrowserPageOverrides;
 }
 
@@ -105,7 +113,9 @@ export interface BrowserPage {
   readonly site: BrowserSiteAdmission;
   readonly socket: BrowserWsSource;
   readonly intake: BrowserBufferIntake;
-  /** The intake runs (the link was started with the transport). */
+  readonly guard: BrowserWsGuard;
+  /** The intake and the socket's guard run (the link was started with the
+   *  transport). */
   start(): void;
   /** The page leaves its browser: `stopPage` (null: not answered). */
   leave(): Promise<CommandResult | null>;
@@ -198,6 +208,18 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     applyLive: (observationId) => applier.enqueue(observationId),
     ...(overrides.intakeTiming === undefined ? {} : { timing: overrides.intakeTiming }),
   });
+  const guard = new BrowserWsGuard({
+    db,
+    pageId,
+    clock: deps.clock,
+    metrics,
+    logger,
+    link: client,
+    intake,
+    socket,
+    enqueue: deps.enqueue,
+    ...(overrides.guardTiming === undefined ? {} : { timing: overrides.guardTiming }),
+  });
   let stopped: Promise<void> | null = null;
   return {
     profileId,
@@ -207,8 +229,10 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     site,
     socket,
     intake,
+    guard,
     start() {
       intake.start();
+      guard.start();
     },
     async leave() {
       const waitMs = overrides.leaveWaitMs ?? BROWSER_LEAVE_WAIT_MS;
@@ -223,6 +247,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     },
     stop() {
       stopped ??= (async () => {
+        await guard.stop();
         await intake.stop();
         await applier.drain(SYNC_WS_APPLY_DRAIN_MS);
         socket.stop();

@@ -96,7 +96,8 @@ sync/
     public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`);
-                             a browser page's socket is the site's, its connection rows `browser-source.ts`
+                             a browser page's socket is the site's, its connection rows `browser-source.ts`, their
+                             guard and the down timer `browser-guard.ts`
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
                              media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
                              resources use (step 4 moved them here; what is left of the legacy executor takes only
@@ -1002,7 +1003,12 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   frames, `recover`. Its types mirror the operator's (`services/egress/page-browser-protocol.ts`); the engine never
   loads the page-browser app, and tests/page-browser-protocol-drift.test.ts keeps the two the same.
 - **The site's socket** (`fansly/ws/browser-source.ts`): the connection rows (`fansly_ws_connections.origin =
-  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`.
+  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`. Their guard and the down timer
+  (`fansly/ws/browser-guard.ts`, PR 14), as the engine's own socket has them: while the link to the operator is up,
+  the intake is subscribed and the stream says a connection is open, its row is renewed every 5 s (a quiet socket is
+  not a dead one — the alerts and `socketUp` read the renewal); no verified, renewed connection for two minutes — from
+  the slot's start or from a close — raises `dm-conversations.ws-down` once per outage (a refused demand is written
+  again at the next check).
 - **The buffer's intake** (PR 13, `fansly/browser-intake.ts`): the operator's event stream — `events.subscribe` with
   the buffer id and the last number committed (`page_browsers.events_*`, 0276), each batch committed in ONE
   transaction with its new position under the page's owner generation, `ack` only after that commit (the next

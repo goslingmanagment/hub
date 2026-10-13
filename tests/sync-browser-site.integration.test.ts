@@ -124,6 +124,7 @@ async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: n
         ownRef: HARNESS_OWN_REF,
         settingMs: options.floorSettingMs ?? options.settingMs ?? 40,
         raiseTakeoverFloor: (at) => pacer.raiseTakeoverFloor(at),
+        enqueue: async () => undefined,
         overrides: { url: () => r.operator.url, rpcTiming: RPC_TIMING, transportTiming: { unavailableRetryMs: 100, resultWaitMs: 5_000 } },
       });
       browser.start();
