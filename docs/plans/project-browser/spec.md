@@ -210,7 +210,9 @@ type SiteRequestId = string;  // UUID; оператор пишет его в б�
 type ConnectionId = string;   // UUID подключения сокета сайта; в буфер до wsAdmit
 type CommandId = string; type BufferId = string; type BodyId = string;  // UUID
 // Тело — двоичные кадры: 16 байт bodyId | 4 байта номер части | 1 байт «последняя» | до 1 МиБ данных.
-// Пустое тело — тоже один кадр, последний (PR 9).
+// Пустое тело — тоже один кадр, последний. Флаг 2 «брошено» (без данных) отменяет уже присланные части
+// тела после ошибки чтения: исход остаётся в буфере до следующей доставки. Часть 0 начинает тело
+// заново — тела повторяются при каждой доставке исходов (PR 9).
 interface BodyRef { bodyId: BodyId; decodedBytes: number; sha256: Sha256Hex }  // части приходят раньше JSON
 type Mode = "automation" | "manual_login";  // «автоматика», «ручной вход»
 type Step = "exit_closed" | "env_applied" | "chrome_started" | "control_attached" | "selftest_passed"
