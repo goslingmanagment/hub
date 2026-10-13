@@ -225,17 +225,28 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
     .argument("<page>", "the Fansly page")
     .argument("<transport>", "node or browser")
     .option("--prepare", "with node: the page waits under a credentials hold for the owner's session, checked through Node", false)
+    .option(
+      "--browser-stopped",
+      "with node: the page's browser container is stopped (its leave is confirmed without its operator; its buffer is marked not drained)",
+      false,
+    )
     .option("--note <text>", "why (stored with the audit row)")
-    .action(async (pageLabel: string, transport: string, options: { prepare: boolean; note?: string }) => {
+    .action(async (pageLabel: string, transport: string, options: { prepare: boolean; browserStopped: boolean; note?: string }) => {
       await withContext(deps, async ({ db }) => {
         const result = await changeSyncPageTransport(db, {
           pageLabel,
           to: transport,
           prepare: options.prepare,
+          browserStopped: options.browserStopped,
           actor: cliActor(),
           ...(options.note === undefined ? {} : { note: options.note }),
         });
-        deps.print(json({ ...result, follows: "the sync host takes the page again within 2 s, after the request in flight" }));
+        deps.print(json({
+          ...result,
+          follows: result.pendingLeave !== null
+            ? "the sync host stops the page's browser, takes what it kept, then Node takes the page"
+            : "the sync host takes the page again within 2 s, after the request in flight",
+        }));
       });
     });
 

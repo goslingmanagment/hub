@@ -289,10 +289,14 @@ describe("I17: source pins", () => {
     expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-page.ts"), path.join("sync", "fansly", "browser-transport.ts")]);
     const host = read("apps/runtime/src/sync/engine/host.ts");
     expect(host).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
-    // One call, in the browser branch of the acquisition; the node branch is
-    // the undici transport and the engine's own socket, as before.
-    expect(host.match(/\bopenBrowserPage\(/g)).toHaveLength(1);
+    // Two calls: the browser branch of the acquisition, and the leave of a
+    // page's browser (no actor); the node branch is the undici transport and
+    // the engine's own socket, as before.
+    expect(host.match(/\bopenBrowserPage\(/g)).toHaveLength(2);
     expect(host).toContain('if (sender === "browser") {\n        browser = await openBrowserPage({');
+    const leave = host.slice(host.indexOf("async #startLeave("), host.indexOf("async #runLeave("));
+    expect(leave).toContain("browser = await openBrowserPage({");
+    expect(leave).not.toMatch(/new SyncActor\(|createPageTransport\(/);
     expect(host).toContain('const ws = sender === "node" ? this.#createWsSource(page, generation) : null;');
     const openers: string[] = [];
     const walkOpeners = (dir: string) => {

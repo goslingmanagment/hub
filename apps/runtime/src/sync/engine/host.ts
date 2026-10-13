@@ -2,18 +2,22 @@ import { sql } from "drizzle-orm";
 
 import {
   acquireSyncPageOwnership,
+  clearPageBrowserUndrained,
+  confirmBrowserLeave,
   ensureFanslySyncPages,
   getSyncPage,
-  getSyncPageTransport,
+  hasOpenBrowserWsConnection,
   heartbeatSyncPageOwner,
   listSyncPages,
-  listSyncPageTransports,
+  listSyncPageSenders,
   lockOwnedPage,
+  OwnershipLostError,
   paceFloorFromDb,
   upsertDemands,
   writeSafeRelease,
   type Database,
   type FanslySendHolderIdentity,
+  type SyncPageBrowserLeave,
   type SyncPageOwnerRecord,
   type SyncPageRow,
   type SyncPageTransport,
@@ -37,6 +41,7 @@ import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
   errorName,
   type CaptureCodec,
+  type CommitDeps,
   type ChatUnavailableHook,
   type ObservationCanonicalizer,
   type SyncFaultHook,
@@ -44,6 +49,7 @@ import {
   type ThreadChainChangedHook,
   type WorkClosedHook,
 } from "./commit.ts";
+import { HELD_RECOVER_WAIT_MS, reconcileHeldOutcomesOf, takeLateHeldOutcomes } from "./held-outcomes.ts";
 import { PgOwnershipSession, PgWake } from "./host-ports.ts";
 import { createPacer, type Pacer, type PacerDeps } from "./pacer.ts";
 import {
@@ -104,9 +110,23 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // transport changed has its slot ended (the request in flight finishes, its
 // safe release) and is taken again with the other one — a new owner
 // generation and the takeover floor (I5). No admission of the sender it left
-// commits after the change (`lockOwnedPage` with the slot's transport). A
-// page leaving its browser has its operator stop it (exit closed, Chrome
-// stopped); a shutdown leaves the browser running.
+// commits after the change (`lockOwnedPage` with the slot's transport).
+//
+// Leaving the browser (Astra's review of PR 14): the change records a pending
+// leave (0278), and Node does not take the page before it is confirmed. While
+// it is pending the host runs a leave instead of a slot — the page taken under
+// a new generation, a link to its operator, no actor: the operator's
+// `quiesced` (the earlier owners' work is over), `stopPage` until the operator
+// says it stopped (its exit closed first, then Chrome), the earlier owners'
+// outcomes it kept taken as theirs (`reconcileHeldOutcomesOf`), the rest of
+// its buffer taken (late outcomes, the stream) until a state after the stop
+// says it keeps nothing and no site socket is open — then the leave is
+// confirmed under that generation's fence, and the next pass takes the page
+// with Node. A page whose operator cannot be reached waits
+// (`browser_leave_unconfirmed`, alert 1 after its bound) until it can, or
+// until the owner says its container is stopped (`--browser-stopped`). A
+// host that starts again finds the leave pending and runs it before
+// anything else. A shutdown leaves the browser running.
 
 /** The live loop runs only when this is true (flipped at step 3, S3-05).
  *  Still no page sends without its `live` row, the engine's guard row and the
@@ -132,6 +152,11 @@ export const SHUTDOWN_ACTOR_BUDGET_MS = 30_000;
 /** Shutdown: after a hard abort of what is left (the request, the drains).
  *  30 + 5 s and the releases sit inside the container's 45 s stop grace. */
 export const SHUTDOWN_ABORT_BUDGET_MS = 5_000;
+/** A leave of a page's browser tries again this often (the operator's stop
+ *  not confirmed, its kept outcomes not asked about). */
+export const BROWSER_LEAVE_RETRY_MS = 2_000;
+/** A leave looks at whether the browser's buffer is drained this often. */
+export const BROWSER_LEAVE_DRAIN_CHECK_MS = 250;
 
 export type HostPageState =
   | { kind: "running"; generation: bigint }
@@ -234,6 +259,20 @@ interface PageSlot {
   done: Promise<void>;
 }
 
+/** A pending leave of a page's browser being confirmed (no actor). */
+interface LeaveRun {
+  page: SyncPageRow;
+  pageId: number;
+  generation: bigint;
+  /** The pending leave it confirms (`sync_pages.browser_leave_generation`). */
+  leaveGeneration: bigint;
+  browser: BrowserPage;
+  stop: AbortController;
+  heartbeat: ReturnType<typeof setInterval>;
+  done: Promise<void>;
+  confirmed: boolean;
+}
+
 interface Waiting {
   reason: string;
   sinceMono: number;
@@ -255,6 +294,7 @@ export class SyncEngineHost {
   readonly #wake: Wake & { start?(): Promise<void>; close?(): Promise<void> };
   readonly #liveLoopEnabled: boolean;
   readonly #slots = new Map<number, PageSlot>();
+  readonly #leaves = new Map<number, LeaveRun>();
   readonly #waiting = new Map<number, Waiting>();
   readonly #pendingRelease = new Map<number, bigint>();
   readonly #handover = new Set<number>();
@@ -342,6 +382,11 @@ export class SyncEngineHost {
         slot.stop.abort();
         void slot.ws?.stop("disabled");
       }
+      // A leave in progress stops where it is: still pending, the next host
+      // resumes it.
+      const leaves = [...this.#leaves.values()];
+      for (const run of leaves) run.stop.abort();
+      await settleWithin(Promise.all(leaves.map((run) => run.done)), SHUTDOWN_ACTOR_BUDGET_MS);
       const finished = await settleWithin(Promise.all(slots.map((slot) => slot.done)), SHUTDOWN_ACTOR_BUDGET_MS);
       if (!finished) {
         for (const slot of this.#slots.values()) {
@@ -386,13 +431,14 @@ export class SyncEngineHost {
     const session = await this.#ensureSession();
     pass.progress("list_pages");
     const pages = await listSyncPages(this.#o.db);
-    const transports = await listSyncPageTransports(this.#o.db);
+    const senders = await listSyncPageSenders(this.#o.db);
     for (const page of pages) {
       if (this.#stopping !== null) return;
       pass.progress("page");
       const slot = this.#slots.get(page.pageId);
       const run = this.#runs(page);
-      const sender = transports.get(page.pageId) ?? "node";
+      const sender = senders.get(page.pageId)?.transport ?? "node";
+      const leave = senders.get(page.pageId)?.leave ?? null;
       if (slot !== undefined) {
         if (!run) {
           // Left `live`: finish the step in flight and release. `handover`
@@ -407,6 +453,13 @@ export class SyncEngineHost {
             "Fansly sync host: the page's transport changed; its slot ends and the page is taken again");
           slot.stop.abort();
         }
+        continue;
+      }
+      const leaving = this.#leaves.get(page.pageId);
+      if (leaving !== undefined) {
+        // The leave ends once it is confirmed, or no longer asked for (the
+        // owner's word, the page back on its browser, out of `live`).
+        if (!run || sender !== "node" || leave === null || leave.generation !== leaving.leaveGeneration) leaving.stop.abort();
         continue;
       }
       if (page.mode === "handover") {
@@ -430,6 +483,11 @@ export class SyncEngineHost {
       }
       if (session === null) {
         this.#markWaiting(page, "ownership_session_unavailable", 0);
+        continue;
+      }
+      if (sender === "node" && leave !== null) {
+        // Node takes the page only once its browser's leave is confirmed.
+        await this.#startLeave(session, page, leave);
         continue;
       }
       await this.#acquire(session, page, sender);
@@ -777,17 +835,9 @@ export class SyncEngineHost {
     // J6: the socket is closed and its lock session ended BEFORE the safe
     // release (bounded; a lost ownership does not drain).
     await slot.ws?.stop(exit.kind === "ownership_lost" ? "ownership_lost" : "disabled");
-    if (slot.browser !== null) {
-      // The page left its browser: its operator closes the exit and stops
-      // Chrome (plan §3.2), while this owner's link is still its — unless the
-      // transport came back to the browser meanwhile (a stopped page starts
-      // again only on the owner's word).
-      if (slot.leaving) {
-        const now = await getSyncPageTransport(this.#o.db, slot.pageId).catch(() => null);
-        if (now !== "browser") await slot.browser.leave().catch(() => null);
-      }
-      await slot.browser.stop();
-    }
+    // A page that left its browser: the leave that follows stops it (a
+    // pending leave, confirmed before Node takes the page).
+    await slot.browser?.stop();
     await slot.transport.close().catch(() => undefined);
     const foreign = exit.kind === "ownership_lost" && exit.foreign;
     if (!foreign) {
@@ -811,6 +861,199 @@ export class SyncEngineHost {
         alerted: false,
       });
     }
+  }
+
+  /** The page's commit dependencies under `generation` (a leave's: no actor). */
+  #commitDeps(pageId: number, generation: bigint, ownRef: string | null): CommitDeps {
+    return {
+      db: this.#o.db,
+      pageId,
+      ownRef,
+      generation,
+      registry: this.#o.registry,
+      clock: this.#clock,
+      rng: this.#rng,
+      alerts: this.#alerts,
+      metrics: this.#metrics,
+      logger: this.#o.logger,
+      ...(this.#o.capture === undefined ? {} : { capture: this.#o.capture }),
+      ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
+      ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
+      ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
+      ...(this.#o.onChatUnavailable === undefined ? {} : { onChatUnavailable: this.#o.onChatUnavailable }),
+      ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
+      secrets: createSyncWorkSecretBox(this.#o.config),
+    };
+  }
+
+  /** A pending leave of the page's browser: the page taken under a new
+   *  generation, its operator's link opened, the leave run (no actor). */
+  async #startLeave(session: PgOwnershipSession, page: SyncPageRow, leave: SyncPageBrowserLeave): Promise<void> {
+    const { db, logger } = this.#o;
+    const pageId = page.pageId;
+    const waiting = this.#waiting.get(pageId);
+    if (waiting !== undefined && this.#clock.monoNow() < waiting.nextTryMono) {
+      this.#markWaiting(page, waiting.reason, waiting.nextTryMono - this.#clock.monoNow());
+      return;
+    }
+    if (!(await session.tryLock(pageId))) {
+      this.#markWaiting(page, "lock_held_elsewhere", UNCONFIRMED_RETRY_MS);
+      return;
+    }
+    const acquired = await acquireSyncPageOwnership(db, {
+      pageId,
+      owner: this.#identity,
+      judgePreviousOwner: (previous) => this.#judge(previous),
+    }).catch((error: unknown) => {
+      logger.warn({ pageId, err: errorName(error) }, "Fansly sync host: acquire for the browser's leave failed");
+      return { kind: "error" as const };
+    });
+    if (acquired.kind !== "acquired") {
+      await session.unlock(pageId).catch(() => undefined);
+      this.#markWaiting(page, acquired.kind === "unconfirmed" ? "previous_owner_unconfirmed" : acquired.kind, UNCONFIRMED_RETRY_MS);
+      return;
+    }
+    const generation = acquired.generation;
+    let browser: BrowserPage;
+    let ownRef: string | null;
+    try {
+      ownRef = await readOwnRef(db, pageId);
+      browser = await openBrowserPage({
+        db,
+        config: this.#o.config,
+        logger,
+        metrics: this.#metrics,
+        registry: this.#o.registry,
+        clock: this.#clock,
+        pageId,
+        generation,
+        ownRef,
+        settingMs: FANSLY_PAUSE_MIN_MS,
+        // No request goes from a leave: no floor to raise, no demand.
+        raiseTakeoverFloor: () => undefined,
+        enqueue: async () => undefined,
+        ...(this.#o.browserOverrides === undefined ? {} : { overrides: this.#o.browserOverrides }),
+      });
+    } catch (error) {
+      if (!(await this.#release(pageId, generation))) this.#pendingRelease.set(pageId, generation);
+      await session.unlock(pageId).catch(() => undefined);
+      this.#markWaiting(page, "browser_leave_unconfirmed", UNCONFIRMED_RETRY_MS);
+      logger.warn({ pageId, err: errorName(error) },
+        "Fansly sync host: the page left its browser, which cannot be reached to confirm it stopped; Node waits (or: sync page transport … node --browser-stopped)");
+      return;
+    }
+    const run: LeaveRun = {
+      page,
+      pageId,
+      generation,
+      leaveGeneration: leave.generation,
+      browser,
+      stop: new AbortController(),
+      heartbeat: setInterval(() => void this.#heartbeatLeave(run), OWNER_HEARTBEAT_INTERVAL_MS),
+      done: Promise.resolve(),
+      confirmed: false,
+    };
+    run.heartbeat.unref?.();
+    this.#leaves.set(pageId, run);
+    this.#markWaiting(page, "browser_leave_unconfirmed", UNCONFIRMED_RETRY_MS);
+    logger.info({ pageId, pageLabel: page.pageLabel, generation: generation.toString(), leaving: leave.generation.toString() },
+      "Fansly sync host: the page left its browser; its leave is being confirmed before Node takes it");
+    browser.start();
+    const stall = this.#o.watchdog?.track({ component: "actor", pageId, generation }, "recover") ?? noStallTracker;
+    run.done = this.#runLeave(run, this.#commitDeps(pageId, generation, ownRef), stall)
+      .catch((error: unknown) => {
+        logger.warn({ pageId, err: errorName(error) }, "Fansly sync host: the browser's leave stopped; it is tried again");
+      })
+      .then(() => this.#endLeave(run, session))
+      .finally(() => stall.done());
+  }
+
+  /**
+   * The leave: the operator's `quiesced`, its confirmed stop, the earlier
+   * owners' outcomes it kept, the rest of its buffer — then the leave is
+   * confirmed under this generation's fence. Returns when it is confirmed or
+   * the run is stopped.
+   */
+  async #runLeave(run: LeaveRun, d: CommitDeps, stall: StallTracker): Promise<void> {
+    const { browser } = run;
+    const client = browser.client;
+    const held = browser.transport.held!;
+    const signal = run.stop.signal;
+    const sleep = (ms: number) => this.#clock.sleep(ms, signal).catch(() => undefined);
+    let states = 0;
+    const unlisten = client.onState(() => {
+      states += 1;
+    });
+    try {
+      // 1. The earlier owners' work at the operator is over.
+      stall.progress("gate");
+      while (!signal.aborted && client.quiesced === null) await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
+      // 2. Its exit closed, then Chrome stopped: confirmed by the operator.
+      let stoppedAt = Number.POSITIVE_INFINITY;
+      while (!signal.aborted) {
+        stall.progress("send");
+        const result = await browser.leave();
+        if (result?.ok === true) {
+          stoppedAt = states;
+          break;
+        }
+        await sleep(BROWSER_LEAVE_RETRY_MS);
+      }
+      // 3. The earlier owners' outcomes it kept, taken as theirs before Node's
+      //    recovery could close them unknown.
+      while (!signal.aborted) {
+        stall.progress("recover");
+        const reconciled = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
+        if (reconciled.reached) break;
+        await sleep(BROWSER_LEAVE_RETRY_MS);
+      }
+      // 4. The rest of its buffer: late outcomes and the stream, until a
+      //    state after the stop says it keeps nothing, and no site socket of
+      //    the page is open.
+      while (!signal.aborted) {
+        stall.progress("applies");
+        await takeLateHeldOutcomes(d, held);
+        const state = client.state;
+        if (state !== null && states > stoppedAt && !state.exitOpen && state.step === "exit_closed" && state.buffer.bytes === 0
+          && browser.intake.stopReason === null && !(await hasOpenBrowserWsConnection(this.#o.db, run.pageId))) break;
+        await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
+      }
+      if (signal.aborted) return;
+      // 5. Confirmed, under this generation's fence.
+      stall.progress("commit");
+      run.confirmed = await this.#o.db.transaction(async (raw) => {
+        const tx = raw as unknown as Database;
+        await lockOwnedPage(tx, { pageId: run.pageId, generation: run.generation, lock: "no_key_update" });
+        const confirmed = await confirmBrowserLeave(tx, { pageId: run.pageId, leaveGeneration: run.leaveGeneration, generation: run.generation });
+        if (confirmed) await clearPageBrowserUndrained(tx, { profileId: browser.profileId });
+        return confirmed;
+      });
+      this.#o.logger.info({ pageId: run.pageId, generation: run.generation.toString(), confirmed: run.confirmed },
+        "Fansly sync host: the page's browser is stopped, its kept outcomes taken and its buffer drained; Node takes the page");
+    } catch (error) {
+      if (error instanceof OwnershipLostError) return;
+      throw error;
+    } finally {
+      unlisten();
+    }
+  }
+
+  async #endLeave(run: LeaveRun, session: PgOwnershipSession): Promise<void> {
+    clearInterval(run.heartbeat);
+    await run.browser.stop();
+    await run.browser.transport.close().catch(() => undefined);
+    if (!(await this.#release(run.pageId, run.generation))) this.#pendingRelease.set(run.pageId, run.generation);
+    await session.unlock(run.pageId).catch(() => undefined);
+    if (this.#leaves.get(run.pageId) === run) this.#leaves.delete(run.pageId);
+    // Confirmed: the next pass takes the page with Node at once (and
+    // resolves the alert the wait may have opened).
+    this.#markWaiting(run.page, run.confirmed ? "browser_left" : "browser_leave_unconfirmed", run.confirmed ? 0 : UNCONFIRMED_RETRY_MS);
+  }
+
+  async #heartbeatLeave(run: LeaveRun): Promise<void> {
+    if (run.stop.signal.aborted) return;
+    const owned = await heartbeatSyncPageOwner(this.#o.db, { pageId: run.pageId, generation: run.generation }).catch(() => true);
+    if (!owned) run.stop.abort();
   }
 
   async #release(pageId: number, generation: bigint): Promise<boolean> {

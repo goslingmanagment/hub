@@ -213,8 +213,15 @@ session follows (below).
   a new session: send the session of your own browser through the credentials change (Settings → the page's
   connection). Only a session of the page's own account is stored, and the page starts working on Node after the
   engine verified it.
-- Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays). Coming back to it does not start
-  it again.
+- Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
+  after the browser confirmed it stopped, with no socket open and everything it kept taken. Until then the page waits
+  (`browser_leave_unconfirmed`, alert 1 after two minutes). Coming back to the browser does not start it again.
+- The browser cannot confirm (its container is down or does not answer): take it off for good with
+  `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
+  gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and
+  the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained.
+- A rollback of the Hub to an image from before the page transport is refused by the deploy while a page is on its
+  browser or leaving it: move such pages to Node first.
 - A deploy's `sync ownership confirm-stopped` waits, for a page on its browser, until the browser confirms the new
   owner took over (`browser_page … quiesced true`); `false` after a minute means the new owner still sends nothing
   through it — look at the page's browser.

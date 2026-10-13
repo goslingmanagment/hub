@@ -3,7 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  assertBrowserLeft,
   bindPageBrowser,
+  clearPageBrowserUndrained,
+  confirmBrowserLeave,
+  getSyncPageBrowserLeave,
+  listSyncPageSenders,
+  lockOwnedPage,
+  markPageBrowserUndrained,
   findPageBrowser,
   findPageBrowserByPage,
   getSyncPageTransport,
@@ -31,6 +38,7 @@ import {
   sealPageBrowserSecrets,
 } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { runRollbackBrowserGate } from "./helpers/deploy-browser-rollback-gate.ts";
 import { HARNESS_ENCRYPTION_KEY, HARNESS_OWN_REF, harnessConfig, seedHarnessPage } from "./helpers/sync-engine.ts";
 
 // The data of PR 12 (Project Browser plan §3.4; 0272–0275): send_mark's
@@ -247,7 +255,7 @@ describe("sync_pages.transport and the hand-over mark (0277)", () => {
       await listener.query("listen fansly_sync_work");
       listener.on("notification", (message) => woken.push(message.payload ?? ""));
       const changed = await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" }));
-      expect(changed).toEqual({ kind: "changed", from: "node", to: "browser" });
+      expect(changed).toEqual({ kind: "changed", from: "node", to: "browser", leave: null });
       expect(await getSyncPageTransport(db(), pageId)).toBe("browser");
       expect(await listSyncPageTransports(db())).toEqual(new Map([[pageId, "browser"]]));
       await expect.poll(() => woken).toContain(String(pageId));
@@ -256,9 +264,10 @@ describe("sync_pages.transport and the hand-over mark (0277)", () => {
     }
 
     expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" })))
-      .toEqual({ kind: "unchanged", transport: "browser" });
+      .toEqual({ kind: "unchanged", transport: "browser", leave: null });
+    // Leaving the browser records a pending leave at the page's owner generation (0278).
     expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "node" })))
-      .toEqual({ kind: "changed", from: "browser", to: "node" });
+      .toEqual({ kind: "changed", from: "browser", to: "node", leave: 0n });
     expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId: 999_999, to: "browser" })))
       .toEqual({ kind: "no_page" });
     await expect(setSyncPageTransport(db(), { pageId, to: "carrier-pigeon" as never })).rejects.toThrow(/Unknown Fansly sync page transport/);
@@ -322,5 +331,89 @@ describe("sync_pages.transport and the hand-over mark (0277)", () => {
     expect(await recordPageBrowserHandover(db(), { profileId, generation: 8n, lastSendAt: null })).toBe(true);
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ handoverGeneration: 8n, handoverLastSendAt: null });
     expect(await recordPageBrowserHandover(db(), { profileId: "00000000-0000-4000-8000-00000000dead", generation: 1n, lastSendAt: null })).toBe(false);
+  });
+});
+
+describe("a leave of a page's browser (0278)", () => {
+  const transport = (pageId: number, to: "node" | "browser") => db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to }));
+
+  it("is pending from the switch until its operator confirms it under the owner's fence — the pending one only", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("leave-page");
+    await testDb.pool.query("update sync_pages set owner_generation = 4 where page_id = $1", [pageId]);
+    await transport(pageId, "browser");
+    expect(await getSyncPageBrowserLeave(db(), pageId)).toBeNull();
+    expect(await transport(pageId, "node")).toMatchObject({ leave: 4n });
+    expect(await getSyncPageBrowserLeave(db(), pageId)).toMatchObject({ generation: 4n });
+    expect((await listSyncPageSenders(db())).get(pageId)).toMatchObject({ transport: "node", leave: { generation: 4n } });
+    // The leave's owner took the page: generation 5.
+    await testDb.pool.query("update sync_pages set owner_generation = 5 where page_id = $1", [pageId]);
+    const confirm = (leaveGeneration: bigint, generation: bigint) => db().transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation: 5n, lock: "no_key_update" });
+      return confirmBrowserLeave(tx, { pageId, leaveGeneration, generation });
+    });
+    // Another leave than the pending one, or an owner that is not the page's: nothing.
+    expect(await confirm(3n, 5n)).toBe(false);
+    expect(await confirm(4n, 6n)).toBe(false);
+    expect(await confirm(4n, 5n)).toBe(true);
+    expect(await getSyncPageBrowserLeave(db(), pageId)).toBeNull();
+    const row = (await testDb.pool.query("select browser_left_by as by, browser_left_generation::text as g from sync_pages where page_id = $1", [pageId])).rows[0];
+    expect(row).toEqual({ by: "operator", g: "5" });
+    // Back on the browser: a pending leave is dropped.
+    await transport(pageId, "browser");
+    expect(await transport(pageId, "node")).toMatchObject({ leave: 5n });
+    await transport(pageId, "browser");
+    expect(await getSyncPageBrowserLeave(db(), pageId)).toBeNull();
+  });
+
+  it("the owner's word confirms the pending leave; the buffer is marked not drained until the operator keeps nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("owner-leave-page");
+    const profileId = await profile(pageId, "page-browser-owner-leave-page");
+    expect(await db().transaction(async (tx) => assertBrowserLeft(tx as unknown as Database, { pageId }))).toBeNull();
+    await transport(pageId, "browser");
+    await transport(pageId, "node");
+    expect(await db().transaction(async (tx) => assertBrowserLeft(tx as unknown as Database, { pageId }))).toBe(0n);
+    expect(await getSyncPageBrowserLeave(db(), pageId)).toBeNull();
+    expect((await testDb.pool.query("select browser_left_by as by from sync_pages where page_id = $1", [pageId])).rows[0]).toEqual({ by: "owner" });
+    expect(await markPageBrowserUndrained(db(), { pageId })).toBe(true);
+    const since = (await findPageBrowser(db(), profileId))!.bufferUndrainedSince;
+    expect(since).toBeInstanceOf(Date);
+    // Marked again: its first instant is kept.
+    await markPageBrowserUndrained(db(), { pageId });
+    expect((await findPageBrowser(db(), profileId))!.bufferUndrainedSince?.getTime()).toBe(since!.getTime());
+    expect(await clearPageBrowserUndrained(db(), { profileId })).toBe(true);
+    expect(await clearPageBrowserUndrained(db(), { profileId })).toBe(false);
+    expect((await findPageBrowser(db(), profileId))!.bufferUndrainedSince).toBeNull();
+    // The check: a pending leave has its instant; a confirmation names who.
+    await expect(testDb.pool.query("update sync_pages set browser_leave_generation = 1 where page_id = $1", [pageId])).rejects.toThrow(/sync_pages_browser_leave_check/);
+    await expect(testDb.pool.query("update sync_pages set browser_left_by = 'robot' where page_id = $1", [pageId])).rejects.toThrow(/sync_pages_browser_leave_check/);
+  });
+
+  it("the deploy's rollback gate counts, read-only, every page on its browser or leaving it", async (context) => {
+    if (!testDb) return context.skip();
+    const sql = runRollbackBrowserGate({ applied: ["0276_page_browser_intake.sql"], answer: "0" }).sql!;
+    const count = async () => {
+      const client = await testDb!.pool.connect();
+      try {
+        const results = (await client.query(sql)) as unknown as Array<{ rows: Array<{ count: string }> }>;
+        return Number(results.find((result) => result.rows.length === 1)!.rows[0]!.count);
+      } finally {
+        client.release();
+      }
+    };
+    const seed = (label: string, ownRef: string) => seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: "live", proxyUrl: "socks5://127.0.0.1:1080", label, ownRef });
+    const plain = await seed("gate-node", "300000000000000011");
+    const onBrowser = await seed("gate-browser", "300000000000000012");
+    const leaving = await seed("gate-leaving", "300000000000000013");
+    expect(await count()).toBe(0);
+    await transport(onBrowser.pageId, "browser");
+    await transport(leaving.pageId, "browser");
+    await transport(leaving.pageId, "node");
+    expect(await count()).toBe(2);
+    await db().transaction(async (tx) => assertBrowserLeft(tx as unknown as Database, { pageId: leaving.pageId }));
+    expect(await count()).toBe(1);
+    void plain;
   });
 });

@@ -109,6 +109,7 @@ function facts(overrides: {
       unconfirmed: { count: 0, oldestVisibleAt: null },
       unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
       bufferHalted: null,
+      bufferUndrainedSince: null,
       ...overrides.live,
     },
     chats: {
@@ -259,6 +260,9 @@ describe("alert rules (design §9.6)", () => {
     // A page browser's buffer nothing is taken of (Project Browser PR 13).
     expect(evaluate(facts({ live: { bufferHalted: { bufferId: "b", reason: "ahead", at: at(-MINUTE) } } })))
       .toEqual({ live_degraded: "browser_buffer_halted" });
+    // A page that left its browser on the owner's word, its buffer not
+    // drained (Project Browser PR 14, Astra P1).
+    expect(evaluate(facts({ live: { bufferUndrainedSince: at(-MINUTE) } }))).toEqual({ live_degraded: "browser_buffer_undrained" });
     const quarantined = evaluatePageAlerts(facts({ journal: { quarantined: { "dm-messages.head": 2 } } }), registry);
     expect(quarantined).toEqual([expect.objectContaining({
       subKey: "live_degraded",

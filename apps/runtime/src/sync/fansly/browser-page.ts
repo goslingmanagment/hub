@@ -1,4 +1,4 @@
-import { recordPageBrowserHandover, type Database } from "@agency_hub_core/db";
+import { clearPageBrowserUndrained, recordPageBrowserHandover, type Database } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { createFanslyWsLiveApplier } from "../../services/fansly-ws/live-apply.ts";
@@ -154,6 +154,24 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     ...(overrides.rpcTiming === undefined ? {} : { timing: overrides.rpcTiming }),
   });
   client.onQuiesced((quiesced) => onQuiesced(quiesced));
+  if (read.profile.bufferUndrainedSince !== null) {
+    // The owner said the container stopped before its buffer was drained
+    // (0278): drained once the operator says it keeps nothing.
+    let clearing = false;
+    const unlisten = client.onState((state) => {
+      if (clearing || state.buffer.bytes !== 0) return;
+      clearing = true;
+      void clearPageBrowserUndrained(db, { profileId }).then(
+        () => {
+          unlisten();
+          logger.info({ pageId }, "Fansly sync browser page: the browser's buffer is drained");
+        },
+        () => {
+          clearing = false;
+        },
+      );
+    });
+  }
 
   function onQuiesced(quiesced: Quiesced): void {
     if (quiesced.lastSendMono !== null) {

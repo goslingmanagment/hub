@@ -896,6 +896,7 @@ describe("production deploy behavior without production access", () => {
         }
         capture_remote_schema_migrations() { cp "$SCHEMA_BEFORE_FILE" "$1"; }
         verify_remote_legacy_onlyfans_dm_messages_retired() { return "$TEST_DM_RETIRED_STATUS"; }
+        verify_rollback_target_runs_no_browser_page() { return "$TEST_BROWSER_PAGES_STATUS"; }
         restore_remote_release_files() { printf 'restore release files\n' >> "$TEST_COMMAND_LOG"; ROLLBACK_RELEASE_FILES_RESTORED=1; }
         wait_for_api_health() { printf 'api health\n' >> "$TEST_COMMAND_LOG"; return "$TEST_API_HEALTH_STATUS"; }
         ROLLBACK_IMAGE_AVAILABLE=1 SCHEMA_BASELINE_CAPTURED=1 ROLLBACK_RELEASE_FILES_RESTORED="$TEST_RELEASE_FILES_RESTORED"
@@ -906,7 +907,7 @@ describe("production deploy behavior without production access", () => {
       `, {
         RECREATE_SERVICES: "api worker scheduler", TEST_RELEASE_SERVICES: "postgres api scheduler worker sync",
         TEST_API_HEALTH_STATUS: "0", TEST_SYNC_STATUSES: "starting healthy",
-        TEST_DM_RETIRED_STATUS: "0", TEST_RELEASE_FILES_RESTORED: "1", ...overrides,
+        TEST_DM_RETIRED_STATUS: "0", TEST_BROWSER_PAGES_STATUS: "0", TEST_RELEASE_FILES_RESTORED: "1", ...overrides,
       });
     }
 
@@ -1025,6 +1026,8 @@ describe("production deploy behavior without production access", () => {
     it.each([
       ["a pre-recreate migration forbids it", { ROLLBACK_FORBIDDEN: "1" }],
       ["the legacy dm_messages retirement is not proven", { TEST_DM_RETIRED_STATUS: "1" }],
+      // Project Browser PR 14: the image predates the page transport and a page is on its browser.
+      ["a page is on its browser under an image that predates the page transport", { TEST_BROWSER_PAGES_STATUS: "1" }],
     ])("archives nothing when the rollback is skipped: %s", (_label, overrides) => {
       const result = rollback(overrides);
       expect(result.status, result.stderr).toBe(0);

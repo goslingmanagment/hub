@@ -33,6 +33,8 @@ import {
   setResourceHold,
   setSyncPageMode,
   setSyncPageTransport,
+  confirmBrowserLeave,
+  assertBrowserLeft,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncPages,
   trustSyncPageCredentials,
@@ -254,6 +256,7 @@ const UPDATES = [
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
   "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode", "setSyncPageTransport",
+  "confirmBrowserLeave", "assertBrowserLeft",
 ];
 
 /** Run every function that updates a page row over a live page (the engine's
@@ -333,6 +336,19 @@ async function runEveryPageRowUpdate(
     // The page's transport (Project Browser, 0277), the owner's lever.
     ["setSyncPageTransport", pageId, async () => expect(await db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" })))
       .toMatchObject({ kind: "changed", from: "node", to: "browser" })],
+    // Leaving it (0278): a pending leave, confirmed by the operator under the
+    // owner's fence; again, confirmed by the owner's word.
+    ["setSyncPageTransport", pageId, async () => expect(await db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "node" })))
+      .toMatchObject({ kind: "changed", from: "browser", to: "node", leave: generation })],
+    ["confirmBrowserLeave", pageId, async () => expect(await db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
+      return confirmBrowserLeave(tx, { pageId, leaveGeneration: generation, generation });
+    })).toBe(true)],
+    ["setSyncPageTransport", pageId, () => db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" }))],
+    ["setSyncPageTransport", pageId, () => db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "node" }))],
+    ["assertBrowserLeft", pageId, async () => expect(await db.transaction(async (tx) => assertBrowserLeft(tx as unknown as Database, { pageId })))
+      .toBe(generation)],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 

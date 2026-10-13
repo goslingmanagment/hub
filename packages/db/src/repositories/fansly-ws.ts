@@ -225,6 +225,16 @@ export async function verifyBrowserWsConnection(tx: Database, input: {
   return result.rows.length === 1;
 }
 
+/** A site socket's connection of the page still open by the engine's rows
+ *  (Project Browser PR 14: a leave of the browser is confirmed only once
+ *  none is). */
+export async function hasOpenBrowserWsConnection(db: Database, pageId: number): Promise<boolean> {
+  const result = await db.execute<{ open: boolean }>(sql`select exists (
+      select 1 from fansly_ws_connections where page_id = ${pageId} and origin = 'browser' and closed_at is null
+    ) as open`);
+  return result.rows[0]?.open === true;
+}
+
 /** The operator's `ws.close` of a site socket (0273): the row closes at the
  * instant the operator saw it close (never before it opened, never after the
  * database's clock), once. False: no open row of that connection. */

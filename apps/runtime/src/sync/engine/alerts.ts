@@ -344,6 +344,11 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   if (live.bufferHalted !== null) {
     degraded.push({ detail: "browser_buffer_halted", since: live.bufferHalted.at, context: { ...live.bufferHalted } });
   }
+  // A page that left its browser on the owner's word, before what the
+  // browser kept was taken (PR 14): it waits in the buffer until drained.
+  if (live.bufferUndrainedSince !== null) {
+    degraded.push({ detail: "browser_buffer_undrained", since: live.bufferUndrainedSince });
+  }
   const quarantined = Object.entries(journal.quarantined);
   if (quarantined.length > 0) {
     const byResource = Object.fromEntries(quarantined);
@@ -514,6 +519,7 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
     unconfirmed: { count: 0, oldestVisibleAt: null },
     unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
     bufferHalted: null,
+    bufferUndrainedSince: null,
   },
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,

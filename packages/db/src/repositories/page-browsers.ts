@@ -51,13 +51,17 @@ export interface PageBrowserRow {
   handoverQuiescedAt: Date | null;
   /** The browser's last send as it named it (null: it knows of none). */
   handoverLastSendAt: Date | null;
+  /** The owner said the container stopped before the operator's buffer was
+   *  drained (0278): what it kept waits there. Null: drained. */
+  bufferUndrainedSince: Date | null;
 }
 
 type SqlRow = Omit<
   PageBrowserRow,
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
-  | "pinnedExitIpAt"
+  | "pinnedExitIpAt" | "bufferUndrainedSince"
 > & {
+  bufferUndrainedSince: Date | string | null;
   pinnedExitIpAt: Date | string | null;
   pageId: string | null;
   selftestAt: Date | string | null;
@@ -98,7 +102,8 @@ const columns = sql`
   b.env,
   b.handover_generation::text as "handoverGeneration",
   b.handover_quiesced_at as "handoverQuiescedAt",
-  b.handover_last_send_at as "handoverLastSendAt"
+  b.handover_last_send_at as "handoverLastSendAt",
+  b.buffer_undrained_since as "bufferUndrainedSince"
 `;
 
 function dateOf(value: Date | string | null): Date | null {
@@ -122,6 +127,7 @@ function rowOf(row: SqlRow): PageBrowserRow {
     handoverGeneration: row.handoverGeneration === null ? null : BigInt(row.handoverGeneration),
     handoverQuiescedAt: dateOf(row.handoverQuiescedAt),
     handoverLastSendAt: dateOf(row.handoverLastSendAt),
+    bufferUndrainedSince: dateOf(row.bufferUndrainedSince),
   };
 }
 
@@ -347,4 +353,28 @@ export async function listBrowserPageHandovers(db: Database, input: { pageIds?: 
       quiesced: ownerGeneration > 0n && handoverGeneration === ownerGeneration,
     };
   });
+}
+
+/** The owner said the page's browser container is stopped before its
+ *  operator's buffer was drained (0278): the mark stays until the operator
+ *  says it keeps nothing. Its first instant is kept. False: no profile. */
+export async function markPageBrowserUndrained(db: Database, input: { pageId: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers
+       set buffer_undrained_since = coalesce(buffer_undrained_since, clock_timestamp()), updated_at = clock_timestamp()
+     where page_id = ${input.pageId}::bigint
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/** The operator keeps nothing any more: the buffer is drained. True: a mark
+ *  was cleared. */
+export async function clearPageBrowserUndrained(db: Database, input: { profileId: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers set buffer_undrained_since = null, updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid and buffer_undrained_since is not null
+    returning profile_id
+  `);
+  return result.rows.length === 1;
 }

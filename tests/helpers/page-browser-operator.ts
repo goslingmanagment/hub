@@ -229,6 +229,7 @@ export class FakeOperator {
   holdQuiesce: Promise<void> | null = null;
   /** The last send `quiesced` names (null: the last physical one, if any). */
   lastSendMono: number | null = null;
+  #statePushes: ReturnType<typeof setInterval> | null = null;
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -264,7 +265,7 @@ export class FakeOperator {
       handlers: {
         onHello: (hello) => {
           this.hellos.push(hello);
-          return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.state };
+          return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.#current() };
         },
         quiesce: async () => {
           if (this.holdQuiesce !== null) await this.holdQuiesce;
@@ -491,10 +492,26 @@ export class FakeOperator {
 
   pushState(patch: Partial<State> = {}): void {
     this.state = { ...this.state, ...patch };
-    this.server.send(this.state);
+    this.server.send(this.#current());
+  }
+
+  /** The state as the operator says it: its buffer counts what it keeps —
+   *  outcomes until their resultAck, events until their ack — as the real
+   *  buffer's bytes do (nothing kept: 0). */
+  #current(): State {
+    const kept = this.held.size + this.heldEnds.size + this.buffer.kept.length;
+    return { ...this.state, buffer: { bytes: kept * 100, oldestAgeMs: kept === 0 ? 0 : 1 } };
+  }
+
+  /** The state every `everyMs`, as the real operator sends it every 5 s. */
+  startStatePushes(everyMs: number): void {
+    this.#statePushes ??= setInterval(() => this.server.send(this.#current()), everyMs);
+    this.#statePushes.unref?.();
   }
 
   async close(): Promise<void> {
+    if (this.#statePushes !== null) clearInterval(this.#statePushes);
+    this.#statePushes = null;
     await this.server.close();
   }
 

@@ -1,6 +1,8 @@
 import {
+  assertBrowserLeft,
   findPageById,
   insertAuditEvent,
+  markPageBrowserUndrained,
   setPageHold,
   setSyncPageTransport,
   SYNC_PAGE_TRANSPORTS,
@@ -42,6 +44,14 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //   (`saveVerifiedFanslyCredentials`). The verify of what is stored then
 //   lifts the hold (A3), and ordinary work begins on Node. A stored session
 //   is never tried under it: the hold names its digest as refused.
+// - Leaving `browser` records a pending leave: Node takes the page only once
+//   it is confirmed — by the operator (the host's leave: exit closed, Chrome
+//   stopped, no socket, its kept outcomes and buffer taken), or by
+//   `--browser-stopped`: the owner's word that the page's container is
+//   stopped (`scripts/deploy-page-browser.sh to-node` says it right after it
+//   removed the container). Then what the operator kept was not taken: the
+//   page's browser buffer is marked not drained (alert 2,
+//   `browser_buffer_undrained`) until its operator says it keeps nothing.
 
 export const SYNC_PAGE_TRANSPORT_AUDIT_EVENT = "admin.sync_page_transport";
 
@@ -50,6 +60,12 @@ export interface SyncPageTransportChange {
   from: SyncPageTransport;
   to: SyncPageTransport;
   changed: boolean;
+  /** The pending leave of the page's browser after the change: the
+   *  generation it leaves at (null: none — or confirmed by the owner). */
+  pendingLeave: bigint | null;
+  /** `--browser-stopped`: the leave the owner confirmed (its generation),
+   *  the buffer marked not drained. */
+  browserStopped: { leftGeneration: bigint; bufferUndrained: boolean } | null;
   /** `--prepare`: the credentials hold written, and the stored digest it
    *  names as refused (null: no Node session stored). */
   prepared: { hold: "auth"; refusedDigest: string | null } | null;
@@ -57,7 +73,7 @@ export interface SyncPageTransportChange {
 
 export async function changeSyncPageTransport(
   db: Database,
-  input: { pageLabel: string; to: string; prepare: boolean; actor: string; note?: string | null },
+  input: { pageLabel: string; to: string; prepare: boolean; browserStopped?: boolean; actor: string; note?: string | null },
 ): Promise<SyncPageTransportChange> {
   if (!(SYNC_PAGE_TRANSPORTS as readonly string[]).includes(input.to)) {
     throw new SyncOwnerLeverError(`a page's transport is one of ${SYNC_PAGE_TRANSPORTS.join(", ")} (asked: ${input.to})`);
@@ -65,6 +81,10 @@ export async function changeSyncPageTransport(
   const to = input.to as SyncPageTransport;
   if (input.prepare && to !== "node") {
     throw new SyncOwnerLeverError("--prepare goes with node: it readies a page's way back from its browser");
+  }
+  const browserStopped = input.browserStopped === true;
+  if (browserStopped && to !== "node") {
+    throw new SyncOwnerLeverError("--browser-stopped goes with node: it confirms a page's leave of its browser");
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
   const label = input.pageLabel;
@@ -95,6 +115,13 @@ export async function changeSyncPageTransport(
       });
       prepared = { hold: "auth", refusedDigest };
     }
+    let stopped: SyncPageTransportChange["browserStopped"] = null;
+    if (browserStopped) {
+      const leftGeneration = await assertBrowserLeft(tx, { pageId: page.pageId });
+      if (leftGeneration === null) throw new SyncOwnerLeverError(`${label}: no leave of its browser is pending: nothing to confirm`);
+      stopped = { leftGeneration, bufferUndrained: await markPageBrowserUndrained(tx, { pageId: page.pageId }) };
+    }
+    const pendingLeave = stopped !== null ? null : changed.leave;
     const from = changed.kind === "changed" ? changed.from : changed.transport;
     await insertAuditEvent(tx, {
       platformAccountId: page.pageId,
@@ -107,10 +134,13 @@ export async function changeSyncPageTransport(
         to,
         changed: changed.kind === "changed",
         prepare: input.prepare,
+        browserStopped,
+        pendingLeave: pendingLeave === null ? null : pendingLeave.toString(),
+        ...(stopped === null ? {} : { leftGeneration: stopped.leftGeneration.toString() }),
         ...(prepared === null ? {} : { refusedDigest: prepared.refusedDigest }),
         ...(input.note === undefined || input.note === null ? {} : { note: input.note }),
       },
     });
-    return { page: label, from, to, changed: changed.kind === "changed", prepared };
+    return { page: label, from, to, changed: changed.kind === "changed", pendingLeave, browserStopped: stopped, prepared };
   });
 }

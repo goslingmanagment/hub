@@ -379,9 +379,18 @@ export async function listSyncPages(
 // ── transport ─────────────────────────────────────────────────────────────────
 
 export type SetSyncPageTransportResult =
-  | { kind: "changed"; from: SyncPageTransport; to: SyncPageTransport }
-  | { kind: "unchanged"; transport: SyncPageTransport }
+  /** `leave`: the pending leave of the page's browser after the change
+   *  (0278) — the generation it leaves at, or null. */
+  | { kind: "changed"; from: SyncPageTransport; to: SyncPageTransport; leave: bigint | null }
+  | { kind: "unchanged"; transport: SyncPageTransport; leave: bigint | null }
   | { kind: "no_page" };
+
+/** A pending leave of a page's browser (0278): the owner generation the
+ *  page's transport left `browser` at, and when. */
+export interface SyncPageBrowserLeave {
+  generation: bigint;
+  since: Date;
+}
 
 /**
  * The page's transport (0277), changed under its row lock — FOR NO KEY
@@ -391,6 +400,12 @@ export type SetSyncPageTransportResult =
  * with it. The host follows on its next pass (≤ 2 s): it ends the page's slot
  * and takes the page again with the other transport — a new owner generation
  * and the takeover floor (I5). Wakes the page's actor.
+ *
+ * Leaving `browser` records a pending leave (0278: the page's owner
+ * generation now, the last that may have run the browser): Node does not
+ * take the page before it is confirmed (`confirmBrowserLeave`,
+ * `assertBrowserLeft`). Coming back to `browser` drops a pending one: the
+ * browser's own slot takes what it kept.
  */
 export async function listSyncPageTransports(db: Database): Promise<Map<number, SyncPageTransport>> {
   const result = await db.execute<{ pageId: string; transport: SyncPageTransport }>(sql`
@@ -414,20 +429,105 @@ export async function setSyncPageTransport(
   if (!(SYNC_PAGE_TRANSPORTS as readonly string[]).includes(input.to)) {
     throw new Error(`Unknown Fansly sync page transport: ${String(input.to)}`);
   }
-  const current = await tx.execute<{ transport: SyncPageTransport }>(sql`
-    select transport from sync_pages where page_id = ${input.pageId} for no key update
+  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null }>(sql`
+    select transport, browser_leave_generation::text as leave from sync_pages where page_id = ${input.pageId} for no key update
   `);
-  const from = current.rows[0]?.transport;
-  if (from === undefined) return { kind: "no_page" };
-  if (from === input.to) return { kind: "unchanged", transport: from };
-  await tx.execute(sql`
+  const row = current.rows[0];
+  if (row === undefined) return { kind: "no_page" };
+  const from = row.transport;
+  if (from === input.to) return { kind: "unchanged", transport: from, leave: row.leave === null ? null : BigInt(row.leave) };
+  const updated = await tx.execute<{ leave: string | null }>(sql`
     update sync_pages
        set transport = ${input.to},
+           browser_leave_generation = case when ${input.to} = 'node' then owner_generation else null end,
+           browser_leave_requested_at = case when ${input.to} = 'node' then clock_timestamp() else null end,
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
+    returning browser_leave_generation::text as leave
   `);
   await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return { kind: "changed", from, to: input.to };
+  const leave = updated.rows[0]?.leave ?? null;
+  return { kind: "changed", from, to: input.to, leave: leave === null ? null : BigInt(leave) };
+}
+
+/** Every page's transport and its pending leave of the browser (the host's
+ *  pass). */
+export async function listSyncPageSenders(db: Database): Promise<Map<number, { transport: SyncPageTransport; leave: SyncPageBrowserLeave | null }>> {
+  const result = await db.execute<{ pageId: string; transport: SyncPageTransport; leave: string | null; since: Date | string | null }>(sql`
+    select page_id::text as "pageId", transport, browser_leave_generation::text as leave, browser_leave_requested_at as since
+      from sync_pages
+  `);
+  return new Map(result.rows.map((row) => [Number(row.pageId), {
+    transport: row.transport,
+    leave: row.leave === null ? null : { generation: BigInt(row.leave), since: toRequiredDate(row.since!) },
+  }]));
+}
+
+/** The page's pending leave of its browser (null: none, or no page). */
+export async function getSyncPageBrowserLeave(db: Database, pageId: number): Promise<SyncPageBrowserLeave | null> {
+  const result = await db.execute<{ leave: string | null; since: Date | string | null }>(sql`
+    select browser_leave_generation::text as leave, browser_leave_requested_at as since from sync_pages where page_id = ${pageId}
+  `);
+  const row = result.rows[0];
+  return row === undefined || row.leave === null ? null : { generation: BigInt(row.leave), since: toRequiredDate(row.since!) };
+}
+
+/**
+ * The page's operator confirmed the leave (over the link of owner
+ * `generation`, which the caller's transaction holds by `lockOwnedPage`):
+ * the exit closed, Chrome stopped, no site socket, nothing kept. Only the
+ * pending leave of `leaveGeneration` is confirmed — a leave asked since
+ * stays. True: confirmed.
+ */
+export async function confirmBrowserLeave(
+  tx: Database,
+  input: { pageId: number; leaveGeneration: bigint; generation: bigint },
+): Promise<boolean> {
+  const result = await tx.execute(sql`
+    update sync_pages
+       set browser_leave_generation = null,
+           browser_leave_requested_at = null,
+           browser_left_at = clock_timestamp(),
+           browser_left_by = 'operator',
+           browser_left_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+       and browser_leave_generation = ${generationParam(input.leaveGeneration)}
+       and owner_generation = ${generationParam(input.generation)}
+  `);
+  if ((result.rowCount ?? 0) === 0) return false;
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return true;
+}
+
+/**
+ * The owner's word that the page's browser container is stopped
+ * (`sync page transport … node --browser-stopped`): the pending leave is
+ * confirmed without the operator. Returns the generation it left at (null:
+ * no leave was pending). Wakes the page's actor.
+ */
+export async function assertBrowserLeft(tx: Database, input: { pageId: number }): Promise<bigint | null> {
+  const result = await tx.execute<{ leave: string }>(sql`
+    with pending as (
+      select page_id, browser_leave_generation from sync_pages
+       where page_id = ${input.pageId} and browser_leave_generation is not null
+         for no key update
+    )
+    update sync_pages sp
+       set browser_leave_generation = null,
+           browser_leave_requested_at = null,
+           browser_left_at = clock_timestamp(),
+           browser_left_by = 'owner',
+           browser_left_generation = pending.browser_leave_generation,
+           updated_at = clock_timestamp()
+      from pending
+     where sp.page_id = pending.page_id
+    returning pending.browser_leave_generation::text as leave
+  `);
+  const leave = result.rows[0]?.leave;
+  if (leave === undefined) return null;
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return BigInt(leave);
 }
 
 // ── mode ──────────────────────────────────────────────────────────────────────
