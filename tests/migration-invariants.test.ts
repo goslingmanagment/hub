@@ -487,4 +487,20 @@ describe("database migration invariants", () => {
       expect(compatible, file).toContain(`"${file}"`);
     }
   });
+
+  it("keeps the buffer intake's position (Project Browser PR 13) brief, nullable or constant-default, and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const intake = statementsOf(await readFile("packages/db/migrations/0276_page_browser_intake.sql", "utf8"));
+    expect(intake).toContain("set local lock_timeout = '5s';");
+    expect(intake).toContain("add column if not exists events_acked_seq bigint not null default 0");
+    for (const column of ["events_buffer_id uuid", "events_last_wall timestamptz", "events_gap_since timestamptz", "events_updated_at timestamptz"]) {
+      expect(intake).toContain(`add column if not exists ${column}`);
+      // Nullable without a default: catalog only.
+      expect(intake.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
+    }
+    // The read role sees the new columns (page_browsers is granted by column).
+    expect(intake).toMatch(/grant select \(events_buffer_id, events_acked_seq, events_last_wall, events_gap_since, events_updated_at\)/);
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0276_page_browser_intake.sql"');
+  });
 });

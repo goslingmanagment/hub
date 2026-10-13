@@ -932,6 +932,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # writes a row before the page browsers' deploy script makes profiles, so
   # it runs unchanged after a rollback.
   "0275_page_browsers.sql"
+  # Project Browser PR 13: page_browsers gains the engine's intake position
+  # (events_buffer_id, events_acked_seq with a constant default, events_last_wall,
+  # events_gap_since, events_updated_at) and their check — a tiny table, under
+  # a 5 s lock_timeout. The previous image never names the columns and
+  # updates the table by named columns; nothing takes a page's buffer before
+  # the transport switch (PR 14), so it runs unchanged after a rollback.
+  "0276_page_browser_intake.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

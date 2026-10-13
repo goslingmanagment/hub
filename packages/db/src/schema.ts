@@ -428,6 +428,13 @@ export const pageBrowsers = pgTable("page_browsers", {
   encryptedApiToken: text("encrypted_api_token").notNull(),
   encryptedVncPassword: text("encrypted_vnc_password").notNull(),
   keyVersion: integer("key_version").notNull(),
+  // 0276 (Project Browser PR 13): where the engine's intake of the operator's
+  // buffer stands (`repositories/page-browser-intake.ts`).
+  eventsBufferId: uuid("events_buffer_id"),
+  eventsAckedSeq: bigint("events_acked_seq", { mode: "number" }).notNull().default(0),
+  eventsLastWall: timestamp("events_last_wall", { withTimezone: true }),
+  eventsGapSince: timestamp("events_gap_since", { withTimezone: true }),
+  eventsUpdatedAt: timestamp("events_updated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
