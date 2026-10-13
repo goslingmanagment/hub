@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import {
+  browserWsFrameKey,
   captureBrowserWsFrame,
   findPageById,
   getSyncPage,
@@ -60,7 +63,8 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   buffer that cannot be opened — again once the operator's state says it
 //   opened; a subscription ahead of the buffer (a file restored from before)
 //   — that buffer is halted for good (`page_browsers.events_halted_*`, alert
-//   2 `browser_buffer_halted`): its numbers are not this history's, and
+//   2 `browser_buffer_halted`; until the halt is written nothing at all is
+//   subscribed, its write tried again): its numbers are not this history's, and
 //   once they grew past the position a subscription would acknowledge events
 //   never taken; only another buffer of the operator is taken again; an ack
 //   before the subscription or past what it sent — subscribe again from the
@@ -83,8 +87,10 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   frame (`fansly_ws_decode_receipts`, the live applier, the worker timer).
 //   A frame that cannot be kept — not JSON, or one the business traversal
 //   refuses (more children than it reads) — is never acknowledged as if it
-//   were: its connection's gap is open again (`markBrowserWsLoss`) and the
-//   repair asked for, in the same transaction.
+//   were: its loss is marked (`fansly.ws.frame.v1:refused`), its connection's
+//   gap open again (`markBrowserWsLoss`, its `loss_since`) — or, its
+//   connection unknown, the page's connection still open and the next one's
+//   gap — and the repair asked for, in the same transaction.
 // - `gap`: the operator lost or could not keep events from `fromWall` (plan
 //   §4.4, step 6). The engine's own machinery backfills a socket's gap: the
 //   next connection's `gap_since` (0196) is where its `repair.ws-gap` reads
@@ -101,11 +107,13 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   verified, its repair is asked for at once.
 // - `site.response`: the site's answer, journaled in `observations`
 //   (`browser_site`) by `browser-site-capture.ts`; a body the operator could
-//   not take whole leaves a mark there, and the reads that backfill it are
-//   asked for (`#backfillOf`: the chat's messages for `/message`, the post's
-//   reply walk for its replies, the polls of any other route). A body that
-//   did not arrive whole over the link is not taken: the batch is cut before
-//   it, and the operator sends it again.
+//   not take whole leaves a mark there, and — of the session the engine
+//   trusts only — the reads that backfill it are asked for (`#backfillOf`:
+//   the chat's head read for a head page — an older page is history, read
+//   only for a request (I12), so its mark stays; the reply walk of a post of
+//   the page's own; the polls of any other route). A body that did not
+//   arrive whole over the link is not taken: the batch is cut before it, and
+//   the operator sends it again.
 
 /** The intake's timing. Production always uses the defaults; tests scale
  *  them. */
@@ -126,8 +134,9 @@ export const BROWSER_INTAKE_TIMING: Readonly<BrowserIntakeTiming> = Object.freez
 export const BROWSER_INTAKE_RECENT_BATCHES = 32;
 
 /** Where a test may break the intake: inside the batch's transaction before
- *  its commit (it rolls back), or after the commit before the ack. */
-export type BrowserIntakeFaultPoint = "in_batch" | "after_commit";
+ *  its commit (it rolls back), after the commit before the ack, or the write
+ *  of a halt (a plain error there is a write that failed). */
+export type BrowserIntakeFaultPoint = "in_batch" | "after_commit" | "halt_write";
 export type BrowserIntakeFaultHook = (point: BrowserIntakeFaultPoint) => void | Promise<void>;
 
 /** Thrown by a test's fault hook: the intake stops as a process that died
@@ -232,6 +241,9 @@ export class BrowserBufferIntake {
   /** A buffer nothing is taken of (as persisted; kept here too should the
    *  write fail). */
   #halted: string | null = null;
+  /** A halt not written yet: nothing is subscribed until it is (fail
+   *  closed — a restart reads the position without it). */
+  #haltUnwritten: { bufferId: string; reason: string } | null = null;
   readonly #unlisten: Array<() => void> = [];
   #recent: BrowserIntakeBatch[] = [];
   #committedBatches = 0;
@@ -338,6 +350,8 @@ export class BrowserBufferIntake {
     const { client, pageId, logger } = this.#d;
     if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
+    // A halt is written before anything else is asked of the operator.
+    if (!(await this.#persistHalt())) return;
     if (!client.up) return;
     let stored;
     try {
@@ -393,6 +407,28 @@ export class BrowserBufferIntake {
     if (!client.subscribe(bufferId, afterSeq)) this.#sub = null;
   }
 
+  /** The halt written, or — while it cannot be — nothing subscribed at all,
+   *  the write tried again on the retry ladder. True: nothing to write. */
+  async #persistHalt(): Promise<boolean> {
+    const unwritten = this.#haltUnwritten;
+    if (unwritten === null) return true;
+    const { pageId, logger } = this.#d;
+    try {
+      if (this.#d.faults !== undefined) await this.#d.faults("halt_write");
+      await haltPageBrowserIntake(this.#d.db, { pageId, bufferId: unwritten.bufferId, reason: unwritten.reason });
+      if (this.#haltUnwritten === unwritten) this.#haltUnwritten = null;
+      return true;
+    } catch (error) {
+      if (error instanceof BrowserIntakeCrash) throw error;
+      this.#d.metrics.increment("sync_browser_halt_unwritten", { pageId });
+      logger.error({ pageId, bufferId: unwritten.bufferId, err: errorName(error) },
+        "Fansly sync browser intake: the halt is not written; nothing is subscribed until it is");
+      this.#sub = null;
+      this.#retryLater();
+      return false;
+    }
+  }
+
   #retryLater(ms?: number): void {
     if (this.#stopped || this.#retryTimer !== null) return;
     const ladder = this.#timing.retryMs;
@@ -442,14 +478,11 @@ export class BrowserBufferIntake {
         this.#sub = null;
         this.#startOver = null;
         this.#halted = refused.bufferId;
+        this.#haltUnwritten = { bufferId: refused.bufferId, reason: "ahead" };
         metrics.increment("sync_browser_buffer_ahead", { pageId });
         logger.error({ pageId, bufferId: refused.bufferId, givenSeq: refused.givenSeq },
           "Fansly sync browser intake: the operator's buffer is behind what the engine committed of it; halted, nothing of it is taken");
-        try {
-          await haltPageBrowserIntake(this.#d.db, { pageId, bufferId: refused.bufferId, reason: "ahead" });
-        } catch (error) {
-          logger.warn({ pageId, err: errorName(error) }, "Fansly sync browser intake: the halt was not written; it holds in this process");
-        }
+        await this.#persistHalt();
         return;
       }
       case "not_subscribed":
@@ -539,6 +572,12 @@ export class BrowserBufferIntake {
       // None while the page exists (no proxy for a moment): the batch waits —
       // a connection of the page is never let go for a setting.
       for (const event of events) {
+        if (event.kind === "site.response" && !event.complete) {
+          // The session an incomplete answer came under: only the engine's
+          // trusted one's asks for a backfill.
+          generations.set(event.seq, await d.source.generationOf(event.sessionFingerprint));
+          continue;
+        }
         if (event.kind !== "ws.open") continue;
         const generation = await d.source.generationOf(event.sessionFingerprint);
         if (generation === null && await findPageById(d.db, pageId) !== null) throw new Error("page_browser_generation_unreadable");
@@ -606,15 +645,34 @@ export class BrowserBufferIntake {
                 }
                 if (business === null) {
                   // Not a frame the journal can keep (not JSON, more children
-                  // than the traversal reads): what it carried is a loss on
-                  // its connection — its gap open again, its repair asked for
-                  // — never an acknowledgement of nothing.
+                  // than the traversal reads): never an acknowledgement of
+                  // nothing. Its loss is marked (a fact without the frame,
+                  // `fansly.ws.frame.v1:refused`) and repaired: its
+                  // connection's gap opens again — or, its connection
+                  // unknown (its `ws.open` lost), the page's connection still
+                  // open, and the next one's gap starts no later.
                   batch.lost += 1;
                   metrics.increment("sync_browser_frames_lost", { pageId, kind });
-                  logger.warn({ pageId, seq: event.seq, kind }, "Fansly sync browser intake: a frame the journal cannot keep; its connection's gap is repaired");
-                  const loss = await markBrowserWsLoss(tx, { pageId, browserConnectionId: event.connectionId, since: at });
+                  logger.warn({ pageId, seq: event.seq, kind }, "Fansly sync browser intake: a frame the journal cannot keep; its loss is marked and repaired");
+                  const mark = { connectionId: event.connectionId, seq: event.seq, class: kind, chars: event.frame.length, disposition: "not_kept_loss_repaired" };
+                  await insertObservation(tx, {
+                    source: "fansly_ws",
+                    producer: "fansly:browser",
+                    platform: "fansly",
+                    accountId: pageId,
+                    nativeAccountRef: d.ownRef,
+                    kind: "fansly.ws.frame.v1:refused",
+                    payload: mark,
+                    payloadHash: createHash("sha256").update(JSON.stringify(mark)).digest(),
+                    idempotencyKey: browserWsFrameKey(sub.bufferId, event.seq),
+                    receivedAt: at,
+                  });
+                  let loss = await markBrowserWsLoss(tx, { pageId, browserConnectionId: event.connectionId, since: at });
+                  if (loss === null) {
+                    gapSince = minDate(gapSince, at);
+                    loss = await markBrowserWsLoss(tx, { pageId, browserConnectionId: null, since: at });
+                  }
                   if (loss?.verified === true) signals.push({ resource: "repair.ws-gap", demand: { reason: "browser_frame_lost" } });
-                  else if (loss === null) batch.fenced += 1;
                   break;
                 }
                 const frame = await captureBrowserWsFrame(tx, {
@@ -672,12 +730,16 @@ export class BrowserBufferIntake {
               batch.siteResponses += 1;
               metrics.increment("sync_browser_site_responses", { pageId, as: observation.as });
               if (observation.as === "incomplete") {
-                const backfill = await this.#backfillOf(tx, event);
-                if (backfill.length === 0) {
-                  metrics.increment("sync_browser_site_unbackfilled", { pageId, route: event.route });
-                  logger.warn({ pageId, route: event.route, seq: event.seq }, "Fansly sync browser intake: a site answer not kept whole has no read that backfills it; its mark stays");
+                // Nothing is done for a session the engine does not trust:
+                // what its request names may not be the page's.
+                const trusted = trustedGeneration !== null && generations.get(event.seq) === trustedGeneration;
+                const backfill = trusted ? await this.#backfillOf(tx, event) : { signals: [], why: "untrusted_session" };
+                if (backfill.signals.length === 0) {
+                  metrics.increment("sync_browser_site_unbackfilled", { pageId, route: event.route, why: backfill.why });
+                  logger.warn({ pageId, route: event.route, seq: event.seq, why: backfill.why },
+                    "Fansly sync browser intake: a site answer not kept whole is not backfilled; its mark stays");
                 }
-                signals.push(...backfill);
+                signals.push(...backfill.signals);
               }
               break;
             }
@@ -727,29 +789,36 @@ export class BrowserBufferIntake {
   }
 
   /** The reads whose own request backfills a site answer the operator
-   *  could not keep, by its route, path and query: a chat's `/message` page
-   *  — the chat's messages (`dm-messages.head` from its head, `.catchup` for
-   *  an older page); a post's replies — the post's reply walk, its row of
-   *  the queue dirty; any other route — the polls that read it. */
-  async #backfillOf(tx: Database, event: Extract<BufferEvent, { kind: "site.response" }>): Promise<DemandSignal[]> {
+   *  could not keep (of the trusted session), by its route, path and query:
+   *  a chat's head page — the chat's head read (`dm-messages.head`, down to
+   *  the chain it knows); an older page of a chat (`before`) — none: the
+   *  engine reads a chat's history only for a history request (I12, owner
+   *  decision №2), so its mark stays, said so; a post's replies — the post's
+   *  reply walk, only for a post of the page's own its queue holds; any
+   *  other route — the polls that read it. */
+  async #backfillOf(tx: Database, event: Extract<BufferEvent, { kind: "site.response" }>): Promise<{ signals: DemandSignal[]; why: string }> {
     const wire = isFanslyRoute(event.route) ? FANSLY_ROUTES.get(event.route)?.wire ?? null : null;
-    if (wire === null) return [];
+    if (wire === null) return { signals: [], why: "no_route" };
     const reason = "browser_site_incomplete";
     const query = new URLSearchParams(event.query.startsWith("?") ? event.query.slice(1) : event.query);
     if (wire === "messages.page") {
       const groupId = query.get("groupId");
-      if (groupId === null || groupId === "") return [];
-      return [{ resource: query.has("before") ? "dm-messages.catchup" : "dm-messages.head", subject: groupId, demand: { reason } }];
+      if (groupId === null || groupId === "") return { signals: [], why: "no_chat" };
+      if (query.has("before")) return { signals: [], why: "history_read_by_request_only" };
+      return { signals: [{ resource: "dm-messages.head", subject: groupId, demand: { reason } }], why: "head" };
     }
     if (wire === "post.replies") {
       const postId = /\/post\/([^/?#]+)\/replies/.exec(event.path)?.[1];
-      if (postId === undefined) return [];
-      await markPostRepliesDirty(tx, { pageId: this.#d.pageId, subjectRef: decodeURIComponent(postId), reason });
-      return [{ resource: "post-replies.walk", demand: { reason } }];
+      if (postId === undefined) return { signals: [], why: "no_post" };
+      if (!(await markPostRepliesDirty(tx, { pageId: this.#d.pageId, subjectRef: decodeURIComponent(postId), reason }))) {
+        return { signals: [], why: "not_a_post_of_the_page" };
+      }
+      return { signals: [{ resource: "post-replies.walk", demand: { reason } }], why: "post_replies" };
     }
-    return this.#d.registry.specs
+    const polls = this.#d.registry.specs
       .filter((spec) => spec.kind === "poll" && spec.operations?.includes(wire) === true)
       .map((spec) => ({ resource: spec.key, demand: { reason } }));
+    return { signals: polls, why: polls.length === 0 ? "no_poll_reads_it" : "polls" };
   }
 
   async #upsertDemands(tx: Database, signals: readonly DemandSignal[], now: Date): Promise<void> {

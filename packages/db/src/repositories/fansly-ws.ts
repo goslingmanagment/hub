@@ -169,9 +169,10 @@ export async function captureBrowserWsFrame(tx: Database, input: {
  * A loss on a site socket's connection the engine knows of (PR 13): a frame
  * the engine could not keep (one the business traversal refuses), events the
  * operator no longer has. The connection — `browserConnectionId`, or the
- * page's newest browser row still open — has its gap start no later than
- * `since` and is unreconciled again, so the socket's repair (`repair.ws-gap`,
- * `readFanslyWsGapPass`) reads it back. Null: no such connection (the next
+ * page's newest browser row still open — keeps the loss (`loss_since`, its
+ * earliest) and is unreconciled again, so the socket's repair
+ * (`repair.ws-gap`, `readFanslyWsGapPass`) reads it back from the loss's own
+ * time, whatever the connection's age. Null: no such connection (the next
  * one's gap takes it); `verified`: the repair can run now.
  */
 export async function markBrowserWsLoss(tx: Database, input: {
@@ -183,7 +184,8 @@ export async function markBrowserWsLoss(tx: Database, input: {
     : sql`(select c.id from fansly_ws_connections c where c.page_id=${input.pageId}
         and c.browser_connection_id=${input.browserConnectionId}::uuid)`;
   const result = await tx.execute<{ verified: boolean }>(sql`update fansly_ws_connections
-      set gap_since=least(gap_since, ${input.since.toISOString()}::timestamptz), state_reconciled_at=null
+      set loss_since=least(coalesce(loss_since, ${input.since.toISOString()}::timestamptz), ${input.since.toISOString()}::timestamptz),
+        state_reconciled_at=null
     where id=${target}
     returning verified_at is not null as verified`);
   const row = result.rows[0];

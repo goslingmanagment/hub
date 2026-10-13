@@ -29,20 +29,28 @@ export interface FanslyWsGapPass {
 
 /**
  * The connections a new repair pass reconciles (read-only): verified, not yet
- * reconciled, started within the last day — a page browser's within the week
- * its buffer may replay — and the instant the pass reads back to: the
- * earliest gap they record, 60 s earlier.
+ * reconciled, and the instant the pass reads back to — the earliest gap they
+ * record, 60 s earlier. A connection's gap is the one it opened with
+ * (`gap_since`: started within the last day — a page browser's within the
+ * week its buffer may replay) and, on a page's browser, a loss found on it
+ * since (`loss_since`, 0276: within the week, whatever the connection's
+ * age). A connection whose opening gap was reconciled before
+ * (`transient_unknown` set) reads back from its loss alone.
  */
 export async function readFanslyWsGapPass(db: Database, input: { pageId: number }): Promise<FanslyWsGapPass> {
+  const browserCutoff = sql`clock_timestamp() - ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS}::double precision * interval '1 hour'`;
   const result = await db.execute<{ targets: string[] | null; since: Date | string | null }>(sql`
     select array_agg(c.id::text order by c.started_at, c.id) as targets,
-           min(c.gap_since) - ${SYNC_WS_GAP_MARGIN_MS}::double precision * interval '1 millisecond' as since
+           min(case when c.transient_unknown is not null and c.loss_since is not null then c.loss_since
+                    else least(c.gap_since, coalesce(c.loss_since, c.gap_since)) end)
+             - ${SYNC_WS_GAP_MARGIN_MS}::double precision * interval '1 millisecond' as since
       from fansly_ws_connections c
      where c.page_id = ${input.pageId}
        and c.verified_at is not null
        and c.state_reconciled_at is null
-       and c.started_at > clock_timestamp() - (case when c.origin = 'browser'
-             then ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS} else ${SYNC_WS_GAP_LOOKBACK_HOURS} end)::double precision * interval '1 hour'
+       and (c.started_at > clock_timestamp() - (case when c.origin = 'browser'
+              then ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS} else ${SYNC_WS_GAP_LOOKBACK_HOURS} end)::double precision * interval '1 hour'
+            or c.loss_since > ${browserCutoff})
   `);
   const row = result.rows[0];
   return { targets: row?.targets ?? [], since: toDate(row?.since ?? null) };
@@ -53,7 +61,10 @@ export async function readFanslyWsGapPass(db: Database, input: { pageId: number 
  * `transient_unknown` = [the connection's gap (or the pass's start), its
  * verification) — a message created and deleted inside that interval is not
  * recoverable (plan §8). A connection stamped by an earlier pass is left as
- * it is. Returns how many rows it stamped.
+ * it is. A loss found on a page browser's connection (`loss_since`) is
+ * reconciled with it — unless it is older than what the pass read back to
+ * (a loss marked after the pass was planned): that row waits for the next.
+ * Returns how many rows it stamped.
  */
 export async function stampFanslyWsGapReconciled(
   db: Database,
@@ -63,11 +74,13 @@ export async function stampFanslyWsGapReconciled(
   const result = await db.execute(sql`
     update fansly_ws_connections c
        set state_reconciled_at = clock_timestamp(),
-           transient_unknown = tstzrange(least(coalesce(c.gap_since, ${timestampParam(input.since)}), c.verified_at), c.verified_at)
+           transient_unknown = tstzrange(least(coalesce(c.gap_since, ${timestampParam(input.since)}), c.verified_at), c.verified_at),
+           loss_since = null
      where c.page_id = ${input.pageId}
        and c.id::text = any(${textArrayParam(input.targets)})
        and c.verified_at is not null
        and c.state_reconciled_at is null
+       and (c.loss_since is null or c.loss_since >= ${timestampParam(input.since)})
   `);
   return result.rowCount ?? 0;
 }

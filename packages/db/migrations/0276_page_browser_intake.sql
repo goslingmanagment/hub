@@ -30,13 +30,21 @@
 --                       operator names another buffer (alert `live_degraded`
 --                       `browser_buffer_halted`)
 --
+-- fansly_ws_connections.loss_since: a loss the intake found on a site
+-- socket's connection after it opened (a frame the journal could not keep,
+-- events the operator no longer has). The socket's repair reads back from
+-- it, bounded by the loss's own time — not by the connection's age — and
+-- clears it once reconciled.
+--
 -- LOCKING: page_browsers is tiny (one row per browser profile). The columns
 -- are nullable or carry a constant default (catalog only, no rewrite); the
--- check reads the few rows once. lock_timeout keeps the wait brief: if the
--- lock is not had in 5 s the migration aborts and the deploy rolls back.
+-- check reads the few rows once. fansly_ws_connections is small but written
+-- every few seconds by the running engine: a nullable column without a
+-- default (catalog only). lock_timeout keeps each wait brief: if a lock is
+-- not had in 5 s the migration aborts and the deploy rolls back.
 --
 -- Rollback-compatible: the previous image never names these columns and
--- updates page_browsers by named columns only; nothing takes a page's buffer
+-- updates page_browsers and fansly_ws_connections by named columns only; nothing takes a page's buffer
 -- before the transport switch (PR 14), so it runs unchanged after a rollback.
 
 set local lock_timeout = '5s';
@@ -60,6 +68,10 @@ alter table page_browsers
 
 comment on column page_browsers.events_buffer_id is
   'Project Browser (0276): the operator buffer the engine takes events of; null until its first committed batch.';
+alter table fansly_ws_connections add column if not exists loss_since timestamptz;
+
+comment on column fansly_ws_connections.loss_since is
+  'Project Browser (0276): a loss found on a site socket''s connection after it opened; its repair reads back from it, then clears it.';
 comment on column page_browsers.events_acked_seq is
   'Project Browser (0276): the last event number of events_buffer_id the engine committed (the afterSeq of its next events.subscribe).';
 comment on column page_browsers.events_last_wall is

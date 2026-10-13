@@ -4,9 +4,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   acquireSyncPageOwnership,
+  ensurePostRepliesWalkRow,
   insertPageBrowser,
+  markBrowserWsLoss,
   readFanslyWsGapPass,
   readSyncLivePathFacts,
+  stampFanslyWsGapReconciled,
   type Database,
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
@@ -735,7 +738,12 @@ describe("the site's answers", () => {
 describe("the review of PR 13", () => {
   /** The repair of the page's socket ran: its rows reconciled, its work gone. */
   async function repaired(pageId: number): Promise<void> {
-    await testDb!.pool.query("update fansly_ws_connections set state_reconciled_at = now() where page_id = $1", [pageId]);
+    // As the repair stamps them (`stampFanslyWsGapReconciled`).
+    await testDb!.pool.query(
+      `update fansly_ws_connections set state_reconciled_at = now(), transient_unknown = tstzrange(least(gap_since, verified_at), verified_at)
+        where page_id = $1 and verified_at is not null`,
+      [pageId],
+    );
     await testDb!.pool.query("delete from sync_work where page_id = $1 and resource = 'repair.ws-gap'", [pageId]);
   }
 
@@ -783,20 +791,34 @@ describe("the review of PR 13", () => {
     expect(pass.since!.getTime()).toBeLessThanOrEqual(taken.atWall - 60_000);
   }, 60_000);
 
-  it("an incomplete chat page or reply page asks for the read that backfills it: the chat's messages, the post's reply walk", async (context) => {
+  /** A post of the page's own, queued for its reply walk by the projector. */
+  async function ownPost(pageId: number, postId: string): Promise<void> {
+    await testDb!.pool.query(
+      `insert into creator_posts (account_id, platform, platform_post_id, text_plain, published_at, first_observed_at, last_observed_at,
+         content_hash, attachment_count, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', $2, 'a post', now() - interval '1 day', now() - interval '1 day', now(), repeat('d', 64), 0, 1, 1, 1)`,
+      [pageId, postId],
+    );
+    await ensurePostRepliesWalkRow(db(), { pageId, subjectRef: postId, dueAt: new Date(Date.now() + 86_400_000) });
+  }
+
+  async function backfills(pageId: number): Promise<Array<{ resource: string; subject: string }>> {
+    const work = await testDb!.pool.query<{ resource: string; subject: string }>(
+      "select resource, subject from sync_work where page_id = $1 and resource <> 'account.verify' order by resource, subject",
+      [pageId],
+    );
+    return work.rows;
+  }
+
+  it("an incomplete chat head page or reply page asks for the read that backfills it: the chat's head, the walk of a post of the page's own", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
+    await ownPost(r.page.pageId, "555000000000000001");
     await r.start();
     r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000001&limit=25&ngsw-bypass=true", complete: false, body: "" });
-    r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000002&before=1&limit=25", complete: false, body: "" });
     const last = r.operator.siteResponse({ route: "post.replies", path: "/api/v1/post/555000000000000001/replies", query: "ngsw-bypass=true", complete: false, body: "" });
     await committedUpTo(r.page.pageId, last.seq);
-    const work = await testDb.pool.query<{ resource: string; subject: string }>(
-      "select resource, subject from sync_work where page_id = $1 and resource <> 'account.verify' order by resource, subject",
-      [r.page.pageId],
-    );
-    expect(work.rows).toEqual([
-      { resource: "dm-messages.catchup", subject: "800000000000000002" },
+    expect(await backfills(r.page.pageId)).toEqual([
       { resource: "dm-messages.head", subject: "800000000000000001" },
       { resource: "post-replies.walk", subject: "" },
     ]);
@@ -806,6 +828,130 @@ describe("the review of PR 13", () => {
       [r.page.pageId],
     );
     expect(queue.rows).toEqual([{ refreshClass: "dirty", dirtyReason: "browser_site_incomplete" }]);
+  }, 60_000);
+
+  it("an incomplete OLDER chat page is no head read: the engine reads history only for a request (I12), so its mark stays, said so", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const engine = await r.start();
+    const last = r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000002&before=456&limit=25", complete: false, body: "" });
+    await committedUpTo(r.page.pageId, last.seq);
+    expect(await backfills(r.page.pageId)).toEqual([]);
+    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "history_read_by_request_only" })).toBe(1);
+    const marks = await testDb.pool.query<{ payload: Record<string, unknown> }>(
+      "select payload from observations where account_id = $1 and kind = 'dm_messages:incomplete'",
+      [r.page.pageId],
+    );
+    expect(marks.rows[0]!.payload).toMatchObject({ query: "groupId=800000000000000002&before=456&limit=25", disposition: "incomplete_not_captured" });
+  }, 60_000);
+
+  it("an incomplete reply page of a post that is not the page's own (or of a session the engine does not trust) queues nothing under the page", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const engine = await r.start();
+    // A post the page does not have: never queued under it.
+    const foreignPost = r.operator.siteResponse({ route: "post.replies", path: "/api/v1/post/999000000000000001/replies", complete: false, body: "" });
+    await committedUpTo(r.page.pageId, foreignPost.seq);
+    // The page's own post, but the answer came under another session.
+    await ownPost(r.page.pageId, "555000000000000002");
+    r.operator.live = SESSION_B;
+    const foreignSession = r.operator.siteResponse({ route: "post.replies", path: "/api/v1/post/555000000000000002/replies", complete: false, body: "" });
+    const chat = r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000003", complete: false, body: "" });
+    await committedUpTo(r.page.pageId, chat.seq);
+    expect(foreignSession.seq).toBeLessThan(chat.seq);
+    expect(await backfills(r.page.pageId)).toEqual([]);
+    const queued = await testDb.pool.query<{ subjectRef: string; refreshClass: string }>(
+      `select subject_ref as "subjectRef", refresh_class as "refreshClass" from subject_refresh_state where page_id = $1 and plane = 'post_replies' order by subject_ref`,
+      [r.page.pageId],
+    );
+    expect(queued.rows).toEqual([{ subjectRef: "555000000000000002", refreshClass: "fresh" }]);
+    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "not_a_post_of_the_page" })).toBe(1);
+    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "untrusted_session" })).toBe(2);
+  }, 60_000);
+
+  it("a refused frame of a connection the page has no row of is still a loss: marked, the page's open connection repaired, the next connection's gap from it", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await r.start();
+    const big = () => wrapped(10001, Array.from({ length: 4_097 }, () => '{"t":10000,"d":"{}"}'));
+    // No connection open: the next one's gap starts at the refused frame.
+    const lone = frame(r.operator, randomUUID(), big(), Date.now() - 30_000);
+    const opened = open(r.operator, randomUUID(), Date.now() - 20_000);
+    const connectionId = (opened as Extract<BufferEvent, { kind: "ws.open" }>).connectionId;
+    const verified = frame(r.operator, connectionId, WS_SESSION_FRAME, Date.now() - 19_000);
+    await committedUpTo(r.page.pageId, verified.seq);
+    expect((await connections(r.page.pageId))[0]!.gapSince.getTime()).toBe(lone.atWall);
+    expect(await frames(r.page.pageId, "fansly.ws.frame.v1:refused")).toHaveLength(1);
+    await repaired(r.page.pageId);
+    // An open, verified connection: its repair is asked for at once.
+    const other = frame(r.operator, randomUUID(), big(), Date.now() - 10_000);
+    await committedUpTo(r.page.pageId, other.seq);
+    expect(await frames(r.page.pageId, "fansly.ws.frame.v1:refused")).toHaveLength(2);
+    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
+    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+    expect(pass.targets).toHaveLength(1);
+    expect(pass.since!.getTime()).toBe(other.atWall - 60_000);
+  }, 60_000);
+
+  it("a loss found on a connection opened long ago is read back from the loss, not excluded by the connection's age; its repair clears it", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const id = randomUUID();
+    const browserConnectionId = randomUUID();
+    // Opened eight days ago, its opening gap repaired long since.
+    await testDb.pool.query(
+      `insert into fansly_ws_connections (id, page_id, generation, origin, browser_connection_id, started_at, last_guard_at, verified_at, gap_since,
+         state_reconciled_at, transient_unknown)
+       values ($1, $2, $3, 'browser', $4, now() - interval '8 days', now(), now() - interval '8 days', now() - interval '8 days 1 hour',
+               now() - interval '8 days', tstzrange(now() - interval '8 days 1 hour', now() - interval '8 days'))`,
+      [id, r.page.pageId, "c".repeat(64), browserConnectionId],
+    );
+    const lostAt = new Date(Date.now() - 48 * 3_600_000);
+    await db().transaction(async (tx) => markBrowserWsLoss(tx as unknown as Database, { pageId: r.page.pageId, browserConnectionId, since: lostAt }));
+    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+    expect(pass.targets).toEqual([id]);
+    expect(pass.since!.getTime()).toBe(lostAt.getTime() - 60_000);
+    expect(await stampFanslyWsGapReconciled(db(), { pageId: r.page.pageId, targets: pass.targets, since: pass.since! })).toBe(1);
+    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toEqual([]);
+    const row = await testDb.pool.query<{ lossSince: Date | null }>("select loss_since as \"lossSince\" from fansly_ws_connections where id = $1", [id]);
+    expect(row.rows[0]!.lossSince).toBeNull();
+  }, 60_000);
+
+  it("a halt whose write fails keeps the intake closed until it is written; a restart then finds it, however the buffer grew", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const connectionId = randomUUID();
+    open(r.operator, connectionId);
+    const last = frame(r.operator, connectionId, WS_NOOP_FRAME);
+    const first = await r.start();
+    await committedUpTo(r.page.pageId, last.seq);
+    await until(async () => r.operator.buffer.acknowledged === last.seq, 5_000, "the ack");
+    await first.crash();
+    await testDb.pool.query("update page_browsers set events_acked_seq = 10 where page_id = $1", [r.page.pageId]);
+    const halted = r.operator.buffer.id;
+    let failWrites = 3;
+    const second = await r.start({ faults: (point) => {
+      if (point === "halt_write" && failWrites > 0) {
+        failWrites -= 1;
+        throw new Error("the database is away for a moment");
+      }
+    } });
+    await until(async () => r.operator.refusals.some((refused) => refused.reason === "ahead"), 5_000, "the refusal");
+    const subscriptions = r.operator.subscriptions.length;
+    // A new hello while the halt is not written: nothing is subscribed.
+    r.operator.server.protocolError("a test breaks the link while the halt is not written");
+    await until(async () => (await position(r.page.pageId)).haltedBufferId === halted, 10_000, "the halt written at last");
+    expect(failWrites).toBe(0);
+    expect(r.operator.subscriptions.slice(subscriptions)).toEqual([]);
+    // The restored buffer grows past the position; the engine restarts.
+    for (let i = 0; i < 12; i++) frame(r.operator, connectionId, serviceFrame({ type: 99, n: i }, 99));
+    await second.crash();
+    const third = await r.start();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await third.intake.idle();
+    expect(r.operator.subscriptions.slice(subscriptions)).toEqual([]);
+    expect(r.operator.buffer.acknowledged).toBe(last.seq);
+    expect(third.intake.committedBatches).toBe(0);
   }, 60_000);
 
   it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h); the engine's own socket's a day", async (context) => {

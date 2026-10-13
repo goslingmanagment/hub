@@ -972,7 +972,7 @@ tests/sync-live-gate.integration.test.ts.
   it, or a lost ack, duplicates nothing); a batch of another buffer or an earlier connection is never taken nor
   acknowledged; another buffer (a volume made anew) is taken from its first event, its predecessor's untaken tail
   a gap; a subscription ahead of the buffer halts that buffer for good (`events_halted_*`, alert 2
-  `browser_buffer_halted`) — only another buffer is taken. Nothing is acknowledged unless it is kept in full, or a
+  `browser_buffer_halted`; nothing is subscribed until the halt is written) — only another buffer is taken. Nothing is acknowledged unless it is kept in full, or a
   loss boundary and its repair are committed with it. Frames by event id (`browser:<buffer id>:<number>`,
   `captureBrowserWsFrame`), fenced by the page and the session — the row its `ws.open` opened, open or not — then
   the receipt and the live overlay as the engine's own socket's; a frame of a session the engine does not trust, or
@@ -981,11 +981,13 @@ tests/sync-live-gate.integration.test.ts.
   session's confirmation verifies the row and asks for `repair.ws-gap`; the socket's refusal asks for
   `account.verify`. A `gap` of any reason lowers the next connection's `gap_since` (where the repair reads back
   from) to its boundary — one the operator cannot name is the last event the engine took, of any buffer; a loss the
-  intake finds itself also reopens the gap of the connection still open, repaired at once when verified, and the
-  repair reads a browser connection's gap back a week (`SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS`). The site's answers go
+  intake finds itself also reopens the connection still open (`loss_since`, read back from the loss's own time),
+  repaired at once when verified, and the repair reads a browser connection's gap back a week
+  (`SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS`). The site's answers go
   to `observations` (`browser_site`, `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through
-  the codec (`browser-site-capture.ts`), complete; one the operator could not keep whole leaves a mark and asks for
-  the read that backfills it (the chat's messages, the post's reply walk, the polls of its route).
+  the codec (`browser-site-capture.ts`), complete; one the operator could not keep whole leaves a mark and — of the
+  trusted session only — asks for the read that backfills it (a chat's head read; the reply walk of a post of the
+  page's own; the polls of its route). An older chat page is history, read only for a request (I12): its mark stays.
 - **Kept outcomes** (PR 13, `engine/held-outcomes.ts`, `PageTransport.held`): before `recoverUnfinished` closes the
   attempts left unfinished `unknown`, the operator is asked about them (`recover`): its outcome, resent, is captured
   and applied as the attempt's own (a CDN reply captured but not applied gets its bytes to the handoff) — unless it
