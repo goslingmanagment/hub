@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-import { findPageBrowserByPage, findPageById, type Database } from "@agency_hub_core/db";
+import { findPageBrowserByPage, findPageById, pageBrowserEnvOf, type Database, type PageBrowserRow } from "@agency_hub_core/db";
 import {
   decryptJsonWithKeyVersion,
   encryptJson,
@@ -74,6 +74,23 @@ export class PageBrowserNotConfiguredError extends Error {
     super(`Page ${pageId} has no usable browser: ${why}`);
     this.name = "PageBrowserNotConfiguredError";
   }
+}
+
+/**
+ * The settings of the page's browser that Hub keeps on its profile (0277):
+ * the pinned exit IP and the environment — or why they cannot be had (no
+ * profile bound to the page, nothing pinned, no well-formed environment).
+ */
+export async function readPageBrowserPageSettings(
+  db: Database,
+  pageId: number,
+): Promise<{ profile: PageBrowserRow; settings: PageBrowserPageSettings } | { problem: string }> {
+  const profile = await findPageBrowserByPage(db, pageId);
+  if (profile === null) return { problem: "no browser profile is bound to the page" };
+  if (profile.pinnedExitIp === null) return { problem: "its browser has no pinned exit IP" };
+  const env = pageBrowserEnvOf(profile.env);
+  if (env === null) return { problem: "its browser has no environment (time zone, languages, geolocation)" };
+  return { profile, settings: { pinnedExitIp: profile.pinnedExitIp, env } };
 }
 
 /** The page's browser profile and its RPC address (null: the page has none). */

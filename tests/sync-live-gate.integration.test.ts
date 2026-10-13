@@ -269,10 +269,11 @@ describe("I17: source pins", () => {
     expect(builders.sort()).toEqual([path.join("sync", "engine", "host.ts"), path.join("sync", "fansly", "transport.ts")]);
   });
 
-  it("the browser transport is built nowhere yet: no page selects it before the transport switch (PR 14)", () => {
+  it("the browser transport is built in one place, a browser page's slot, and nothing builds that slot yet", () => {
     // Project Browser stage 3 PR 12: `createBrowserPageTransport` and the
-    // socket source of a browser page exist, but the host builds the undici
-    // transport for every page until `sync_pages.transport` chooses (PR 14).
+    // socket source of a browser page; PR 14: the slot that builds them with
+    // the link and the intake (`fansly/browser-page.ts`). The host builds the
+    // undici transport for every page until `sync_pages.transport` chooses.
     const root = path.resolve("apps/runtime/src");
     const builders: string[] = [];
     const walk = (dir: string) => {
@@ -285,8 +286,8 @@ describe("I17: source pins", () => {
       }
     };
     walk(root);
-    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-transport.ts")]);
-    expect(read("apps/runtime/src/sync/engine/host.ts")).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
+    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-page.ts"), path.join("sync", "fansly", "browser-transport.ts")]);
+    expect(read("apps/runtime/src/sync/engine/host.ts")).not.toMatch(/browser-transport|browser-source|page-browser-rpc|browser-page/);
   });
 
   it("the production runtime passes none of the host's test-only options", () => {

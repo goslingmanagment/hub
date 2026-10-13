@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { Agent, WebSocket, type MessageEvent } from "undici";
 
@@ -14,6 +14,8 @@ import {
   type BufferEvent,
   type Check,
   type CheckResult,
+  type CommandKind,
+  type CommandResult,
   type EngineToOperator,
   type EventsRefused,
   type Hello,
@@ -26,8 +28,10 @@ import {
   type Result,
   type Send,
   type Sent,
+  type SiteAdmitResult,
   type SiteDone,
   type State,
+  type WsAdmitResult,
   type WsDone,
 } from "./page-browser-protocol.ts";
 
@@ -69,10 +73,14 @@ import {
 //   the bodies its site responses name (their frames come before the batch,
 //   reassembled and checked as a result's), `events.refused` to its own.
 // - `state`, `alarm`, `quiesced`: kept and told to listeners. Messages of the
-//   site path (siteAdmit, wsAdmit, siteDone, wsDone, commandResult) go to a
-//   listener when one is registered — a `siteDone`/`wsDone` without one is
-//   an outcome nobody waits for (`onUnclaimedOutcome`) — and are dropped
-//   otherwise: the operator's own waits refuse what nobody admits.
+//   site path (siteAdmit, wsAdmit) go to a listener when one is registered
+//   (`onOtherMessage`), and are dropped otherwise: the operator's own waits
+//   refuse what nobody admits. Their answers (`answerSiteAdmit`,
+//   `answerWsAdmit`) go only on the connection they were asked on. A
+//   `siteDone`/`wsDone` goes to the site path's claim (`onEnd`, PR 14); one
+//   it does not claim is an outcome nobody waits for (`onUnclaimedOutcome`).
+// - `command` (PR 14): one id each, its `commandResult` awaited; a link that
+//   goes before the result answers null (whether it ran is not known).
 
 /** What one hello of a page carries besides the generation (spec §6.1). */
 export interface PageBrowserLinkSettings {
@@ -241,7 +249,10 @@ export interface PageBrowserRpcOptions {
   monoNow?: () => number;
 }
 
-type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" | "events" | "events.refused" }>;
+type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" | "events" | "events.refused" | "commandResult" }>;
+
+/** `Omit` over each member of a union. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 interface Assembly {
   parts: Buffer[];
@@ -296,6 +307,10 @@ export class PageBrowserRpcClient {
   #events: ((delivered: DeliveredEvents) => void) | null = null;
   #eventsRefused: ((refused: EventsRefused) => void) | null = null;
   #other: ((message: OtherMessage) => void) | null = null;
+  #endClaim: ((end: SiteDone | WsDone) => boolean) | null = null;
+  readonly #quiescedListeners = new Set<(quiesced: Quiesced) => void>();
+  /** Commands awaiting their result, by id. */
+  readonly #commands = new Map<string, (result: CommandResult | null) => void>();
 
   constructor(options: PageBrowserRpcOptions) {
     const url = new URL(options.url);
@@ -395,9 +410,57 @@ export class PageBrowserRpcClient {
     this.#eventsRefused = listener;
   }
 
-  /** The site path's messages (later PRs). */
+  /** The site path's messages: `siteAdmit`, `wsAdmit` (PR 14). */
   onOtherMessage(listener: ((message: OtherMessage) => void) | null): void {
     this.#other = listener;
+  }
+
+  /** A site request's or a site socket's end, offered to the site path
+   *  first (PR 14): true — it is the site path's (an admission it waits
+   *  for); false — an outcome nobody waits for (`onUnclaimedOutcome`). */
+  onEnd(claim: ((end: SiteDone | WsDone) => boolean) | null): void {
+    this.#endClaim = claim;
+  }
+
+  /** The operator's `quiesced` for this owner (plan §4.7): told once it
+   *  comes; `quiesced` keeps it. */
+  onQuiesced(listener: (quiesced: Quiesced) => void): () => void {
+    this.#quiescedListeners.add(listener);
+    return () => this.#quiescedListeners.delete(listener);
+  }
+
+  /** A command of this owner (spec §6.1 `command`): its result, or null when
+   *  it could not be sent, the link went before the result, or none came
+   *  within `waitMs` — whether it ran is then not known. `notAfterMono` is
+   *  the operator's clock (CLOCK_MONOTONIC): later, it is not executed. */
+  command(kind: CommandKind, notAfterMono: number, waitMs: number): Promise<CommandResult | null> {
+    const commandId = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(null), waitMs);
+      timer.unref?.();
+      const settle = (result: CommandResult | null) => {
+        if (!this.#commands.has(commandId)) return;
+        this.#commands.delete(commandId);
+        clearTimeout(timer);
+        resolve(result);
+      };
+      this.#commands.set(commandId, settle);
+      if (!this.#write({ type: "command", ownerGeneration: this.#generation, commandId, notAfterMono, command: { kind } })) settle(null);
+    });
+  }
+
+  /** The answer to a `siteAdmit` asked on the connection of `epoch` (PR 14).
+   *  False: that connection is gone — the operator refuses every admission
+   *  asked on it — or nothing could be written. */
+  answerSiteAdmit(epoch: number, answer: DistributiveOmit<SiteAdmitResult, "type" | "ownerGeneration">): boolean {
+    if (epoch !== this.#epoch) return false;
+    return this.#write({ ...answer, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
+  }
+
+  /** The answer to a `wsAdmit` asked on the connection of `epoch` (PR 14). */
+  answerWsAdmit(epoch: number, answer: DistributiveOmit<WsAdmitResult, "type" | "ownerGeneration">): boolean {
+    if (epoch !== this.#epoch) return false;
+    return this.#write({ ...answer, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
   }
 
   start(): void {
@@ -606,6 +669,8 @@ export class PageBrowserRpcClient {
     const asked = this.#recover;
     this.#recover = null;
     asked?.reject(new PageBrowserLinkError(reason));
+    // A command's result never comes on another connection.
+    for (const settle of [...this.#commands.values()]) settle(null);
     if (wasUp) this.#log.info({ url: this.#o.url, reason }, "page browser link: down");
   }
 
@@ -667,7 +732,14 @@ export class PageBrowserRpcClient {
       case "quiesced":
         this.#quiesced = message;
         this.#log.info({ url: this.#o.url, previousGeneration: message.previousGeneration }, "page browser link: the previous owner's work is over");
+        for (const listener of this.#quiescedListeners) safely(() => listener(message));
         return;
+      case "commandResult": {
+        const settle = this.#commands.get(message.commandId);
+        if (settle !== undefined) settle(message);
+        else this.#log.debug({ url: this.#o.url, commandId: message.commandId }, "page browser link: a command result nobody waits for");
+        return;
+      }
       case "state":
         this.#state = message;
         for (const listener of this.#stateListeners) safely(() => listener(message));
@@ -709,6 +781,19 @@ export class PageBrowserRpcClient {
   #onEnd(message: SiteDone | WsDone): void {
     const recovering = this.#recover;
     if (recovering !== null && recovering.ids.has(message.attemptId)) recovering.ends.set(message.attemptId, message);
+    if (this.#endClaim !== null) {
+      const claim = this.#endClaim;
+      let claimed = false;
+      safely(() => {
+        claimed = claim(message);
+      });
+      if (claimed) return;
+      if (this.#unclaimedEnd !== null) {
+        const listener = this.#unclaimedEnd;
+        safely(() => listener(message));
+        return;
+      }
+    }
     if (this.#other === null && this.#unclaimedEnd !== null) {
       const listener = this.#unclaimedEnd;
       safely(() => listener(message));

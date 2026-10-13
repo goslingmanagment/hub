@@ -459,4 +459,7 @@ export interface SiteAdmissionPort {
   refuse(id: string, reason: SiteRefusalReason): void;
   /** The end of an admitted request; never throws for an outcome. */
   end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
+  /** The end of `id` (its attempt `attemptId`) is committed: a browser that
+   *  keeps the end until it is acknowledged may drop it now. Never throws. */
+  settled?(id: string, attemptId: number): void;
 }

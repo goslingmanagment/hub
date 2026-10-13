@@ -10,13 +10,18 @@ import {
   type Ack,
   type BufferEvent,
   type CheckResult,
+  type Command,
   type EventsRefused,
   type EventsSubscribe,
   type Hello,
   type Result,
   type Send,
+  type SiteAdmit,
+  type SiteAdmitResult,
   type SiteDone,
   type State,
+  type WsAdmit,
+  type WsAdmitResult,
   type WsDone,
 } from "../../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer } from "../../apps/page-browser/src/rpc/server.ts";
@@ -41,6 +46,13 @@ import type { PageBrowserLinkSettings } from "../../apps/runtime/src/services/eg
 // the way (`dropAcks`). A site response's body goes as binary frames before
 // the batch that names it. The ends of the site path (`siteDone`,
 // `wsDone`) are kept like results (`holdEnd`).
+//
+// The site path (PR 14): a test asks the engine for a site request
+// (`siteAdmit`) or a site socket (`wsAdmit`), reads its answers
+// (`siteAnswers`, `wsAnswers`) and reports its end (`siteDone`, `wsDone`,
+// kept until `resultAck`). The engine's commands are recorded (`commands`);
+// `stopPage` stops the page (the state says so). `quiesced` can be held back
+// (`holdQuiesce`) and can name a last send (`lastSendMono`).
 
 /** An event as a test appends it: the buffer numbers and stamps it. */
 export type AppendedEvent = BufferEvent extends infer E ? (E extends unknown ? Omit<E, "seq" | "atMono" | "atWall"> : never) : never;
@@ -208,6 +220,15 @@ export class FakeOperator {
   /** The session a result reports (null: the one its send named) — another
    *  session's answer. */
   resultSession: string | null = null;
+  /** The engine's answers to the site path (PR 14). */
+  readonly siteAnswers: SiteAdmitResult[] = [];
+  readonly wsAnswers: WsAdmitResult[] = [];
+  /** The engine's commands, in order. */
+  readonly commands: Command[] = [];
+  /** `quiesced` waits for this (null: at once). */
+  holdQuiesce: Promise<void> | null = null;
+  /** The last send `quiesced` names (null: the last physical one, if any). */
+  lastSendMono: number | null = null;
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -245,8 +266,22 @@ export class FakeOperator {
           this.hellos.push(hello);
           return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.state };
         },
-        quiesce: async () => ({ lastSendMono: this.physical.at(-1)?.sentMono ?? null, lastSendWall: null }),
-        onCommand: async () => ({ ok: false, detail: "not in this fake" }),
+        quiesce: async () => {
+          if (this.holdQuiesce !== null) await this.holdQuiesce;
+          return { lastSendMono: this.lastSendMono ?? this.physical.at(-1)?.sentMono ?? null, lastSendWall: null };
+        },
+        onCommand: async (command) => {
+          this.commands.push(command);
+          if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
+          this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
+          return { ok: true, detail: "the page is stopped" };
+        },
+        onSite: (message) => {
+          this.siteAnswers.push(message);
+        },
+        onSocket: (message) => {
+          this.wsAnswers.push(message);
+        },
         onBuffer: (message) => {
           if (message.type === "events.subscribe") {
             this.subscriptions.push(message);
@@ -360,6 +395,81 @@ export class FakeOperator {
    *  delivered to every new connection and on `recover`. */
   holdEnd(end: SiteDone | WsDone): void {
     this.heldEnds.set(end.attemptId, end);
+  }
+
+  /** A request of the site, held paused, asks the engine (`siteAdmit`). */
+  siteAdmit(input: Partial<Omit<SiteAdmit, "type">> & { path: string }): SiteAdmit {
+    const now = monoMs();
+    const message: SiteAdmit = {
+      type: "siteAdmit",
+      siteRequestId: input.siteRequestId ?? randomUUID(),
+      method: input.method ?? "GET",
+      host: input.host ?? "apiv3.fansly.com",
+      path: input.path,
+      query: input.query ?? "",
+      resourceType: input.resourceType ?? "XHR",
+      route: input.route ?? "site.other",
+      operation: input.operation ?? "read",
+      sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
+      pausedMono: input.pausedMono ?? now,
+      waitDeadlineMono: input.waitDeadlineMono ?? now + 60_000,
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** The site socket's CONNECT asks the engine (`wsAdmit`). */
+  wsAdmit(input: Partial<Omit<WsAdmit, "type">> = {}): WsAdmit {
+    const now = monoMs();
+    const message: WsAdmit = {
+      type: "wsAdmit",
+      connectionId: input.connectionId ?? randomUUID(),
+      url: input.url ?? "wss://wsv3.fansly.com/?v=3",
+      context: input.context ?? "page",
+      sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
+      requestedMono: input.requestedMono ?? now,
+      waitDeadlineMono: input.waitDeadlineMono ?? now + 60_000,
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** The end of an admitted site request, kept until its resultAck. */
+  siteDone(answer: SiteAdmitResult & { admit: true }, end: Partial<Omit<SiteDone, "type" | "siteRequestId" | "attemptId">> = {}): SiteDone {
+    const sentMono = end.sentMono === undefined ? monoMs() : end.sentMono;
+    const done: SiteDone = {
+      type: "siteDone",
+      siteRequestId: answer.siteRequestId,
+      attemptId: answer.attemptId,
+      sent: end.sent ?? true,
+      sentMono,
+      sentWall: end.sentWall ?? Date.now(),
+      connectionReused: end.connectionReused ?? false,
+      status: end.status === undefined ? 200 : end.status,
+      retryAfter: end.retryAfter ?? null,
+      error: end.error ?? null,
+      body: end.body ?? "buffered",
+    };
+    this.holdEnd(done);
+    this.server.send(done);
+    return done;
+  }
+
+  /** The end of an admitted site socket's handshake, kept until its resultAck. */
+  wsDone(answer: WsAdmitResult & { admit: true }, end: Partial<Omit<WsDone, "type" | "connectionId" | "attemptId">> = {}): WsDone {
+    const done: WsDone = {
+      type: "wsDone",
+      connectionId: answer.connectionId,
+      attemptId: answer.attemptId,
+      sent: end.sent ?? true,
+      sentMono: end.sentMono === undefined ? monoMs() : end.sentMono,
+      status: end.status === undefined ? 101 : end.status,
+      error: end.error ?? null,
+      ...(end.fate === undefined ? {} : { fate: end.fate }),
+    };
+    this.holdEnd(done);
+    this.server.send(done);
+    return done;
   }
 
   static async start(options: FakeOperatorOptions = {}): Promise<FakeOperator> {

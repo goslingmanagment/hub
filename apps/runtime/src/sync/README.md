@@ -87,6 +87,10 @@ sync/
                              the outcomes it keeps (`held`)
     browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
                              event id, gaps, the site's answers (`browser-site-capture.ts`); built by nothing yet
+    browser-site.ts          the site path over the operator's RPC (PR 14): `siteAdmit`/`wsAdmit` as PR 8's pending
+                             requests, the answers on the link they were asked on, `siteDone`/`wsDone` as their ends
+    browser-page.ts          a browser page's slot (PR 14): the link, the transport, the site path, the socket rows,
+                             the intake; the operator's `quiesced`; `stopPage` when the page leaves its browser
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
