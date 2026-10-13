@@ -695,7 +695,8 @@ load, quota reservation or provider call (`services/client-ai-switch.ts`). `coac
 (`requireClientFeature`). On Fansly (R20 HF-12; the request's `platform`, which the route holds to
 the page's own before any context load) `fast-reply`, `improve-draft`, `hi-greeting` and `ping` run
 the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-notes-fill` of
-`notesFill`: three flags that exist on Fansly alone. Every other feature, and on OnlyFans those six,
+`notesFill`: three flags that exist on Fansly alone (`voice` also opens the voice-note routes the
+script feeds to the narrow token, R20 HF-4б). Every other feature, and on OnlyFans those six,
 needs `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
 above `chatExtensionMinVersion`. A refusal is `409 client_feature_disabled` with its `reason`. The
 check runs once, when the generation is asked for: an owner's change while it streams holds from the

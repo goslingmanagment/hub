@@ -759,6 +759,16 @@ export const voiceNoteCreateBodySchema = z.object({
   script: z.string().min(1).max(8000),
 });
 
+// chat-extension R20 HF-4б: what the three voice-note routes say of the chat
+// extension's narrow device token (client-token-scopes.ts).
+const NARROW_TOKEN_VOICE_NOTE =
+  "A narrow chat-extension device token reaches this route behind its page's `voice` flag, "
+  + "checked first on every call like every flagged client route: 409 client_feature_disabled "
+  + "with its `reason`. The flag decides whether the extension uses voice on the page at all, "
+  + "never what a clientRequestId already admitted: a refused replay admits nothing, and the "
+  + "same id replays the same render once the flag is back. The voice-notes lane's own "
+  + "switches answer after it, with their own codes. A full device token is not asked.";
+
 export const voiceNoteStateSchema = z.enum([
   "queued",
   "dispatched",
@@ -6869,7 +6879,8 @@ const baseRouteSchemas = {
       + "fence). Quota refusal writes no render "
       + "row and consumes no character budget. The same clientRequestId remains "
       + "a 429 while the budget is exhausted, but may be admitted after capacity "
-      + "is restored; a concurrent already-admitted winner is replayed.",
+      + "is restored; a concurrent already-admitted winner is replayed. "
+      + NARROW_TOKEN_VOICE_NOTE,
     params: pageParamsSchema,
     body: voiceNoteCreateBodySchema,
     response: {
@@ -6890,13 +6901,15 @@ const baseRouteSchemas = {
     description:
       "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an "
       + "indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident "
-      + "switch is off.",
+      + "switch is off. "
+      + NARROW_TOKEN_VOICE_NOTE,
     params: voiceNoteParamsSchema,
     response: {
       200: voiceNoteStatusSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
   voiceNoteAudio: {
@@ -6913,7 +6926,8 @@ const baseRouteSchemas = {
       + "Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact "
       + "is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category "
       + "— clients match the structured body code (the existing gate-code pattern), and "
-      + "410 stays category `validation` in the SDK taxonomy.",
+      + "410 stays category `validation` in the SDK taxonomy. "
+      + NARROW_TOKEN_VOICE_NOTE,
     params: voiceNoteParamsSchema,
     response: {
       // The handler sets audio/mpeg and writes the bytes directly; OpenAPI
@@ -6923,6 +6937,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      409: errorResponseSchema,
       410: errorResponseSchema,
     },
   },

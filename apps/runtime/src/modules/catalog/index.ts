@@ -14,7 +14,6 @@ import {
   getSyncStreamsForPlatform,
   listAdminModels,
   listAdminPages,
-  listVoiceProfiles,
   ModelHasPagesError,
   pausePageSync,
   updateModelBySlug,
@@ -35,7 +34,6 @@ import {
   requireOwner,
 } from "../../services/auth.ts";
 import { updatePageCredentials } from "../../services/connections.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import {
   BadRequestError,
@@ -52,6 +50,7 @@ import {
 import { requestPageSync } from "../../services/sync-control.ts";
 import { isLegacyExecutorPlatform } from "../../sync/onlyfans/boundary.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
+import { loadVoiceLane } from "../../services/voice-lane.ts";
 import { checkFanslyIdentityWithoutPage } from "../../sync/fansly/identity-without-page.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -102,35 +101,15 @@ function serializeAssignedPage(page: {
   };
 }
 
-// The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
-// Mirrors isPageAllowlisted in @agency_hub_core/shared (its
-// canonical home) — kept a local copy so the two never drift on the
-// empty-means-none rule.
-function parseVoiceAllowlist(csv: string | undefined): Set<string> {
-  if (!csv) {
-    return new Set();
-  }
-  return new Set(
-    csv
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
-}
-
-// Capability membership, not a new platform branch: Voice is Fansly-only for
-// this pilot, and the platform-branch ratchet keeps dispatch logic centralized.
-const VOICE_NOTE_CAPABILITY_PLATFORMS = new Set<Platform>(["fansly"]);
-
 /**
  * Attach the OPTIONAL `capabilities.voiceNotes` UI hint to each assigned page.
- * The field appears ONLY when all four hold: the live voiceNotesEnabled switch
- * is on, the TTS provider is constructed (ELEVENLABS_API_KEY + complete service
- * proxy configured), the page label is in the (fail-closed) allowlist, AND a
- * voice profile exists for the page. Any of them false → the field is omitted
- * entirely (a missing field reads as disabled — old-kernel forward-compat).
- * Gating on the provider keeps the hint from ever showing a button that would
- * 503 voice_provider_unavailable.
+ * The field appears ONLY where the voice-notes lane serves the page
+ * (voice-lane.ts, the rule the chat extension's bootstrap reads too): the live
+ * voiceNotesEnabled switch is on, the TTS provider is constructed
+ * (ELEVENLABS_API_KEY + complete service proxy configured), the page label is
+ * in the (fail-closed) allowlist, a voice profile exists for the page, and the
+ * page is a Fansly page. Otherwise the field is omitted entirely (a missing
+ * field reads as disabled — old-kernel forward-compat).
  * This is a hint only; `POST …/voice-notes` remains the authoritative admission
  * gate. The profile lookups are batched into a single query.
  */
@@ -145,24 +124,8 @@ async function attachVoiceNoteCapabilities(
   // fault, or migration) logs a warn and returns the pages unchanged, mirroring
   // the fan-dossier fail-open in modules/ai/features/index.ts.
   try {
-    const effective = await loadEffectiveConfig(app.db, app.config);
-    if (effective.voiceNotesEnabled !== true || app.voiceTtsProvider == null) {
-      return pages;
-    }
-    const allowlist = parseVoiceAllowlist(effective.voiceNotesPageAllowlist);
-    if (allowlist.size === 0) {
-      return pages;
-    }
-    const profiledPageIds = new Set(
-      (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
-    );
-    return pages.map((page) =>
-      VOICE_NOTE_CAPABILITY_PLATFORMS.has(page.platform)
-        && allowlist.has(page.label)
-        && profiledPageIds.has(page.id)
-        ? { ...page, capabilities: { voiceNotes: true } }
-        : page,
-    );
+    const serves = await loadVoiceLane(app);
+    return pages.map((page) => (serves(page) ? { ...page, capabilities: { voiceNotes: true } } : page));
   } catch (error) {
     app.logger.warn({ err: error }, "voice-note capability hint lookup failed; omitting the field");
     return pages;

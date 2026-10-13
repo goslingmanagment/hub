@@ -96,6 +96,18 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     }
   });
 
+  it("[R20 HF-4б] holds the three voice-note routes, page-scoped; the released clients' page list stays off", () => {
+    for (const key of ["voiceNoteCreate", "voiceNoteStatus", "voiceNoteAudio"]) {
+      expect(operations, key).toContain(key);
+      expect(schemas[key]!.auth, key).toEqual({ kind: "apiKey", scope: "page" });
+      expect(paths[key]!.path, key).toMatch(/^\/api\/v1\/pages\/:pageLabel\/voice-notes(\/|$)/);
+    }
+    // `capabilities.voiceNotes` on GET /api/v1/pages is the released clients'
+    // hint; the narrow token reads the bootstrap's `voice` instead.
+    expect(operations).not.toContain("pages");
+    expect(clientTokenRouteRefusal("pages", principal({ clientProfile: "chat-extension" }))).toBeInstanceOf(ForbiddenError);
+  });
+
   it("captures only ai_acceptance, a journaled kind, and client_health, which is never journaled", () => {
     expect(clientTokenIngestKinds("chat-extension")).toEqual(["ai_acceptance", "client_health"]);
     // Every kind of the profile has a home: the journal's allowlist, or the

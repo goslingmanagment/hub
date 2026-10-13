@@ -21,6 +21,7 @@ import {
   evaluateClientFeature,
   evaluateClientPageFeatures,
   hostBindingFitsPlatform,
+  type ClientFeatureLane,
   type ClientFeaturePage,
   type ClientFeatureSettings,
 } from "../apps/runtime/src/services/client-features.ts";
@@ -43,6 +44,9 @@ const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
 const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
 const EVERY_CAPABILITY: readonly string[] = CLIENT_HUB_CAPABILITY_NAMES;
 const NO_BINDINGS = {};
+/** The hub lanes that serve a page (R20 HF-4б): none, or the voice notes. */
+const NO_LANES: ReadonlySet<ClientFeatureLane> = new Set();
+const VOICE_LANE: ReadonlySet<ClientFeatureLane> = new Set(["voice-notes"]);
 
 function settings(input: Partial<ClientFeatureSettings>): ClientFeatureSettings {
   return { enabled: true, features: {}, hostBindings: NO_BINDINGS, ...input };
@@ -63,8 +67,8 @@ describe("chat-extension feature evaluation", () => {
 
   it("with the code defaults every feature is off: disabled where it exists, platform_unsupported elsewhere", () => {
     const served = SERVED_CLIENT_CAPABILITIES;
-    const onlyFans = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: OF_PAGE, served });
-    const fansly = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: FANSLY_PAGE, served });
+    const onlyFans = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: OF_PAGE, served, lanes: VOICE_LANE });
+    const fansly = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: FANSLY_PAGE, served, lanes: VOICE_LANE });
     for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
       const onOnlyFans = !FANSLY_ONLY_FLAGS.includes(flag);
       const onFansly = FANSLY_ONLY_FLAGS.includes(flag) || BOTH_PLATFORM_FLAGS.includes(flag);
@@ -149,11 +153,20 @@ describe("chat-extension feature evaluation", () => {
       settings({ features: { "*": { recap: true, coach: true } } }),
     ]) {
       for (const page of [OF_PAGE, FANSLY_PAGE, UNBOUND_OF_PAGE]) {
-        for (const result of Object.values(evaluateClientPageFeatures({ settings: input, page, served: [] }))) {
+        for (const result of Object.values(evaluateClientPageFeatures({ settings: input, page, served: [], lanes: NO_LANES }))) {
           if (result.reason !== undefined) reasons.add(result.reason);
         }
       }
     }
+    // A feature its hub lane does not serve (R20 HF-4б).
+    const voice = evaluateClientPageFeatures({
+      settings: settings({ features: { "lora-1": { voice: true } } }),
+      page: BOUND_FANSLY_PAGE,
+      served: SERVED_CLIENT_CAPABILITIES,
+      lanes: NO_LANES,
+    }).voice;
+    expect(voice).toEqual({ available: false, reason: "lane_off" });
+    reasons.add(voice.reason!);
     reasons.add(clientVersionRefusal("1.0.0", undefined)!);
     for (const reason of reasons) {
       expect(CLIENT_FEATURE_UNAVAILABLE_REASONS).toContain(reason);
@@ -177,9 +190,10 @@ describe("[R20 HF-12] the flags of Fansly's own AI generations", () => {
       expect(evaluate(settings({ features: { "lora-2": { [flag]: true } } }), flag), flag)
         .toEqual({ available: false, reason: "flag_off" });
       expect(evaluate(row, flag), flag).toEqual({ available: true });
-      // Nothing the hub must serve first: the owner's row alone decides.
+      // Nothing the hub must serve first for drafts and notesFill: the owner's
+      // row alone decides. Voice needs the voice-note routes (R20 HF-4б).
       expect(evaluateClientFeature({ settings: row, page: BOUND_FANSLY_PAGE, flag, served: [] }), flag)
-        .toEqual({ available: true });
+        .toEqual(flag === "voice" ? { available: false, reason: "hub_not_ready" } : { available: true });
     }
     // One flag does not open another.
     expect(evaluate(settings({ features: { "lora-1": { drafts: true } } }), "voice"))
@@ -209,11 +223,13 @@ describe("[R20 HF-12] the flags of Fansly's own AI generations", () => {
     const available = { available: true };
     const flagOff = { available: false, reason: "flag_off" };
     const unsupported = { available: false, reason: "platform_unsupported" };
-    for (const page of [
+    const pilotPages: ClientFeaturePage[] = [
       { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },
       { label: "lora-vip-of", platform: "onlyfans", platformAccountId: "100000002" },
-    ] satisfies ClientFeaturePage[]) {
-      expect(evaluateClientPageFeatures({ settings: switches.settings, page, served }), page.label).toEqual({
+    ];
+    // R20 HF-4б: whether the voice-notes lane serves changes nothing on OnlyFans.
+    for (const [page, lanes] of pilotPages.flatMap((page) => [NO_LANES, VOICE_LANE].map((lanes) => [page, lanes] as const))) {
+      expect(evaluateClientPageFeatures({ settings: switches.settings, page, served, lanes }), page.label).toEqual({
         // Before HF-12, unchanged.
         insertion: available,
         freshText: available,
@@ -239,6 +255,88 @@ describe("[R20 HF-12] the flags of Fansly's own AI generations", () => {
     }
     // No top-level flag moves: the rows are per page.
     expect(Object.values(clientBootstrapFlags(switches.settings)).every((on) => on === false)).toBe(true);
+  });
+});
+
+describe("[R20 HF-4б] voice: the voice-note routes and the voice-notes lane", () => {
+  const served = SERVED_CLIENT_CAPABILITIES;
+  const row = settings({ features: { "lora-1": { voice: true } } });
+  const pageVoice = (input: ClientFeatureSettings, lanes: ReadonlySet<ClientFeatureLane>, page = BOUND_FANSLY_PAGE) =>
+    evaluateClientPageFeatures({ settings: input, page, served, lanes }).voice;
+
+  it("needs voice-notes-v1, which this hub serves, and runs on the voice-notes lane", () => {
+    expect(CLIENT_FEATURE_REQUIREMENTS.voice).toEqual({
+      platforms: ["fansly"],
+      capabilities: ["voice-notes-v1"],
+      lane: "voice-notes",
+    });
+    expect(SERVED_CLIENT_CAPABILITIES).toContain("voice-notes-v1");
+    expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("voice-notes-v1");
+    expect(CLIENT_FEATURE_UNAVAILABLE_REASONS).toContain("lane_off");
+    // No other flag runs on a lane.
+    expect(Object.entries(CLIENT_FEATURE_REQUIREMENTS).filter(([, requirement]) => requirement.lane !== undefined)
+      .map(([flag]) => flag)).toEqual(["voice"]);
+    // Without the capability the hub is not ready, whatever the owner's row says.
+    expect(evaluateClientFeature({ settings: row, page: BOUND_FANSLY_PAGE, flag: "voice", served: [] }))
+      .toEqual({ available: false, reason: "hub_not_ready" });
+  });
+
+  it("the page's features: available with the flag on a page the lane serves, lane_off on one it does not", () => {
+    expect(pageVoice(row, VOICE_LANE)).toEqual({ available: true });
+    expect(pageVoice(row, NO_LANES)).toEqual({ available: false, reason: "lane_off" });
+    // The server's check of a call does not ask the lane: the lane's own admission answers there.
+    expect(evaluateClientFeature({ settings: row, page: BOUND_FANSLY_PAGE, flag: "voice", served }))
+      .toEqual({ available: true });
+  });
+
+  it("the lane is asked last: every other reason comes first, and the lane opens nothing by itself", () => {
+    for (const lanes of [NO_LANES, VOICE_LANE]) {
+      expect(pageVoice({ ...row, enabled: false }, lanes)).toEqual({ available: false, reason: "disabled" });
+      expect(pageVoice(settings({}), lanes)).toEqual({ available: false, reason: "flag_off" });
+      expect(pageVoice(settings({ features: { "lora-1": { voice: false } } }), lanes))
+        .toEqual({ available: false, reason: "flag_off" });
+      expect(pageVoice(settings({ features: { "lora-1": { drafts: true, notesFill: true } } }), lanes))
+        .toEqual({ available: false, reason: "flag_off" });
+      expect(pageVoice(settings({ features: { "lora-fansly": { voice: true } } }), lanes, FANSLY_PAGE))
+        .toEqual({ available: false, reason: "binding_missing" });
+      expect(pageVoice(settings({ features: { "*": { voice: true }, "lora-of": { voice: true } } }), lanes, OF_PAGE))
+        .toEqual({ available: false, reason: "platform_unsupported" });
+    }
+    expect(evaluateClientPageFeatures({ settings: row, page: BOUND_FANSLY_PAGE, served: [], lanes: NO_LANES }).voice)
+      .toEqual({ available: false, reason: "hub_not_ready" });
+  });
+
+  it("no other flag on any page reads the lane", () => {
+    const everything = settings({
+      features: { "*": Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, true])) },
+    });
+    for (const input of [CLIENT_FEATURE_CODE_DEFAULTS, settings({}), everything]) {
+      for (const page of [OF_PAGE, FANSLY_PAGE, UNBOUND_OF_PAGE, BOUND_FANSLY_PAGE]) {
+        const off = evaluateClientPageFeatures({ settings: input, page, served, lanes: NO_LANES });
+        const on = evaluateClientPageFeatures({ settings: input, page, served, lanes: VOICE_LANE });
+        for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
+          // Each flag is the per-flag evaluation, the server's own, but for voice where its lane is off.
+          expect(on[flag], `${page.label} ${flag}`)
+            .toEqual(evaluateClientFeature({ settings: input, page, flag, served }));
+          if (flag !== "voice") {
+            expect(off[flag], `${page.label} ${flag}`).toEqual(on[flag]);
+          }
+        }
+      }
+    }
+  });
+
+  it("the owner's rows on prod (2026-10-13) give no page voice: nothing turns on at merge", () => {
+    const pilotRow = {
+      insertion: true, spenders: true, fanPanel: true, sound: true, wsTap: true, review: true, coach: true,
+      recap: true, preview: true, stats: true, newcomers: true, freshText: true, splitAll: true,
+    };
+    const { switches } = readClientSwitches({
+      chatExtensionEnabled: true,
+      chatExtensionFeatures: JSON.stringify({ "lora-vip-of": pilotRow, "lora-of": pilotRow }),
+    });
+    expect(pageVoice(switches.settings, VOICE_LANE)).toEqual({ available: false, reason: "flag_off" });
+    expect(pageVoice(switches.settings, VOICE_LANE, OF_PAGE)).toEqual({ available: false, reason: "platform_unsupported" });
   });
 });
 
@@ -471,7 +569,7 @@ describe("chat-extension switches from the effective config", () => {
     });
   });
 
-  it("the bootstrap revision covers the five switches, the health switch and the two settings later PRs add", () => {
+  it("the bootstrap revision covers the five switches, the health switch, the two settings later PRs add and the voice lane's two", () => {
     expect(CLIENT_BOOTSTRAP_CONFIG_KEYS).toEqual([
       "chatExtensionEnabled",
       "chatExtensionFeatures",
@@ -481,7 +579,13 @@ describe("chat-extension switches from the effective config", () => {
       "aiLiveTextContextMode",
       "aiTranscriptDeepMaxRows",
       "chatExtensionHealthIngestEnabled",
+      // R20 HF-4б: the bootstrap's `voice` reads the voice-notes lane.
+      "voiceNotesEnabled",
+      "voiceNotesPageAllowlist",
     ]);
+    for (const key of ["voiceNotesEnabled", "voiceNotesPageAllowlist"]) {
+      expect(getDescriptor(key)?.runtimeApply, key).toBe("live");
+    }
     for (const key of CLIENT_BOOTSTRAP_CONFIG_KEYS.slice(0, 5)) {
       const descriptor = getDescriptor(key);
       expect(descriptor?.editability, key).toBe("editable");

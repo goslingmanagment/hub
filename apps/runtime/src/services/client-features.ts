@@ -19,11 +19,20 @@ import {
  * `pages[].features`, and the server-side check of every client route and AI
  * call that a later PR puts behind a flag. It is also the only place that asks
  * about a page's platform for these features, so a new platform is one table
- * edit, not a branch in every handler.
+ * edit, not a branch in every handler. The bootstrap then asks one thing more,
+ * the hub lane a feature runs on (evaluateClientPageFeatures, R20 HF-4б).
  *
  * The owner's switches it reads come from client-switches.ts, which also holds
  * `requireClientFeature`, the server-side check every client route runs.
  */
+
+/**
+ * A lane of the hub with switches of its own that a feature runs on: the
+ * voice notes (`voiceNotesEnabled`, the synthesis provider, the page allowlist,
+ * the page's voice profile; voice-lane.ts). Whether it serves a page is live
+ * state, not a capability this hub build serves.
+ */
+export type ClientFeatureLane = "voice-notes";
 
 /** What a feature needs before the hub can offer it. */
 export interface ClientFeatureRequirement {
@@ -31,6 +40,13 @@ export interface ClientFeatureRequirement {
   platforms: readonly Platform[];
   /** Hub capabilities that must be served (SERVED_CLIENT_CAPABILITIES). */
   capabilities: readonly ClientHubCapabilityName[];
+  /**
+   * The hub lane the feature runs on, if any (R20 HF-4б). The bootstrap's
+   * page `features` read `lane_off` where the lane does not serve the page;
+   * a call is answered by the lane's own admission instead (see
+   * evaluateClientPageFeatures).
+   */
+  lane?: ClientFeatureLane;
 }
 
 const ONLYFANS: readonly Platform[] = ["onlyfans"];
@@ -69,7 +85,10 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // behind `notesFill` (client-ai-switch.ts). On OnlyFans these flags do not
   // exist and those generations keep the master switch and the version.
   drafts: { platforms: FANSLY, capabilities: [] },
-  voice: { platforms: FANSLY, capabilities: [] },
+  // R20 HF-4б: `voice` also opens the voice-note routes to the narrow token
+  // (`voice-notes-v1`, modules/voice), and the bootstrap offers it only on a
+  // page the voice-notes lane serves.
+  voice: { platforms: FANSLY, capabilities: ["voice-notes-v1"], lane: "voice-notes" },
   notesFill: { platforms: FANSLY, capabilities: [] },
 };
 
@@ -164,7 +183,8 @@ export function clientFeatureExistsOn(flag: ClientFeatureFlagName, platform: Pla
  * The reasons, in the order they are checked: the feature does not exist on the
  * page's platform; the master switch is off; the flag is off for the page; the
  * extension has no way to bind a host account to the page; the hub does not
- * serve what the feature needs yet.
+ * serve what the feature needs yet. (The bootstrap then asks the feature's
+ * hub lane, evaluateClientPageFeatures.)
  */
 export function evaluateClientFeature(input: {
   settings: ClientFeatureSettings;
@@ -194,16 +214,34 @@ export function evaluateClientFeature(input: {
   return { available: true };
 }
 
-/** A page's `features`: every known flag, evaluated. */
+/**
+ * A page's `features` (the bootstrap): every known flag, evaluated, and then,
+ * for a feature that the evaluation offers and that runs on a hub lane, that
+ * lane: `lane_off` when it does not serve the page right now (R20 HF-4б). The
+ * owner's flag on a page whose voice-notes lane is off reads unavailable, so
+ * the extension offers no voice there.
+ *
+ * Only the bootstrap asks about the lane. A call is decided by the evaluation
+ * above (requireClientFeature) and then by the lane's own admission, which
+ * re-reads each of its switches live and answers with its own codes; and a
+ * render the lane already admitted stays readable while its spend switch is
+ * off, as the lane intends.
+ */
 export function evaluateClientPageFeatures(input: {
   settings: ClientFeatureSettings;
   page: ClientFeaturePage;
   served: readonly string[];
+  /** The hub lanes that serve this page right now. */
+  lanes: ReadonlySet<ClientFeatureLane>;
 }): Record<ClientFeatureFlagName, ClientFeatureAvailability> {
-  return Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [
-    flag,
-    evaluateClientFeature({ ...input, flag }),
-  ])) as Record<ClientFeatureFlagName, ClientFeatureAvailability>;
+  return Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => {
+    const availability = evaluateClientFeature({ ...input, flag });
+    const lane = CLIENT_FEATURE_REQUIREMENTS[flag].lane;
+    return [
+      flag,
+      availability.available && lane !== undefined && !input.lanes.has(lane) ? unavailable("lane_off") : availability,
+    ];
+  })) as Record<ClientFeatureFlagName, ClientFeatureAvailability>;
 }
 
 /** The bootstrap's top-level `flags`: a flag is on only with the master switch on and `"*"` on. */

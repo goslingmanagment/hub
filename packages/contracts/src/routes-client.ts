@@ -93,8 +93,9 @@ const positive = z.number().int().positive();
  * `drafts`, `voice` and `notesFill` exist on Fansly only (R20 HF-12): the
  * narrow token's Reply, Fix, Hi and Ping, its voice script and its notes fill
  * on a Fansly page. On OnlyFans those generations need no flag of their own.
- * `freshText` exists on both (Fansly since R20 HF-8б); every other flag on
- * OnlyFans only.
+ * `voice` also opens the voice-note routes to the narrow token (R20 HF-4б,
+ * `voice-notes-v1`). `freshText` exists on both (Fansly since R20 HF-8б);
+ * every other flag on OnlyFans only.
  */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
@@ -106,17 +107,24 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
-  "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1",
+  "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1", "voice-notes-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
  * owner's minimum, or unreadable) is answered by the server-side check of
  * client routes and AI calls (H-2b/H-3), never by the bootstrap; it is listed
  * from the first vendored SDK on so a client never meets it as unknown.
+ *
+ * `lane_off` (R20 HF-4б) is the other way round: the bootstrap's alone. The
+ * feature runs on a lane of the hub with switches of its own, and that lane
+ * does not serve the page right now (for `voice`, the voice-notes lane: its
+ * live switch, its synthesis provider, its page allowlist and the page's voice
+ * profile). A call is answered by the lane's own admission and its own codes
+ * (`voice_disabled`, `voice_not_allowlisted`, ...), never by this reason.
  */
 export const CLIENT_FEATURE_UNAVAILABLE_REASONS = [
   "disabled", "flag_off", "platform_unsupported", "binding_missing", "hub_not_ready", "not_granted",
-  "client_outdated",
+  "client_outdated", "lane_off",
 ] as const;
 /** The platforms and roles this hub knows today (`pages[].platform`, `identity.role`). */
 export const CLIENT_KNOWN_PLATFORMS = platforms;

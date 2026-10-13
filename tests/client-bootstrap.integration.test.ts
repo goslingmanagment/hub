@@ -246,7 +246,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     // lease and send custody (H-7b), the "new subscribers" list (H-7c), the
     // manual greeting group with the custody's admission by platform (R20 HF-3),
     // the AI stream's window coverage check (R20 HF-8в), the reads by
-    // conversation (R20 HF-10) and Hi on Fansly by the start proof (R20 HF-5).
+    // conversation (R20 HF-10), Hi on Fansly by the start proof (R20 HF-5) and
+    // the voice notes in the narrow token (R20 HF-4б).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -263,6 +264,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "coverage-check-v1",
       "conversation-recaps-v1",
       "hi-start-proof-v1",
+      "voice-notes-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 
