@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
@@ -7,7 +8,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
 import { MAX_WAITING, REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
+import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
+import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
+import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import {
@@ -27,6 +31,7 @@ import {
   SOCKS_PASSWORD,
   SOCKS_USER,
   tempDir,
+  tlsLikeServer,
   until,
   writeNetSelftest,
   wsFrame,
@@ -945,4 +950,154 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
       ],
     });
   }, 30_000);
+});
+
+describe("Hub requests through the page (PR 9; plan §4.2)", () => {
+  const TOKEN = "fansly-token-OpErAtOr0123456789xyz";
+  const CLIENT_ID = "720167541418230001";
+  const SESSION_ID = "720167541418230002";
+  const FINGERPRINT = sessionFingerprint(TOKEN, CLIENT_ID);
+  const ME = "/api/v1/account/me";
+
+  function sendOf(engine: FakeEngine, attemptId: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const now = monoMs();
+    return {
+      type: "send",
+      ownerGeneration: engine.generation,
+      attemptId,
+      route: "account.me",
+      credentialsGeneration: "c".repeat(64),
+      sessionFingerprint: FINGERPRINT,
+      method: "GET",
+      url: `https://apiv3.fansly.com${ME}?ngsw-bypass=true`,
+      headers: {},
+      kind: "api",
+      maxBodyBytes: 32 * 1024 * 1024,
+      sendDeadlineMono: now + 15_000,
+      requestDeadlineMono: now + 20_000,
+      ...overrides,
+    };
+  }
+
+  async function again(s: SetUp, previous: FakeEngine): Promise<FakeEngine> {
+    previous.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    const engine = new FakeEngine();
+    await engine.connect(s.rpcPort());
+    cleanups.push(() => engine.close());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    return engine;
+  }
+
+  it("before the site is loaded: answered, never started; kept until its resultAck; a repeated id does nothing twice", async () => {
+    const s = await setUp();
+    await started(s);
+    const send = sendOf(s.engine, 9001);
+    s.engine.send(send);
+    const result = await s.engine.waitFor("result", (message) => message.attemptId === 9001);
+    expect(result).toEqual({ type: "result", attemptId: 9001, sessionFingerprint: FINGERPRINT, outcome: { kind: "transport_error", sent: false, message: "the page is not ready: the site is not loaded in the work tab" } });
+    s.engine.send(send);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.engine.of("result")).toHaveLength(1);
+    expect(s.chrome.sent("Runtime.callFunctionOn").filter((command) => command.params.functionDeclaration === ISSUE)).toEqual([]);
+    expect(s.operator.buffer.stats().outcomes).toBe(1);
+    s.engine.send({ type: "resultAck", ownerGeneration: 1, attemptId: 9001 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    // Acknowledged, and asked again: still nothing.
+    s.engine.send(send);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.engine.of("result")).toHaveLength(1);
+  });
+
+  it("end to end: the session from the site's own request, the check, the real proxy and gate, the body in frames before its result, no secret anywhere", async () => {
+    const s = await setUp();
+    const server = await tlsLikeServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("apiv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!;
+    s.model.navigate(tab.sessionId, "https://fansly.com/");
+    await until(() => s.operator.control.workTab?.url === "https://fansly.com/", 3000, "the tab at the site");
+    // The site's own API request: failed (no admitting path for it yet), its session learned.
+    const siteHeaders = {
+      Accept: "application/json, text/plain, */*",
+      authorization: TOKEN,
+      "fansly-client-check": fanslyClientCheck(ME, CLIENT_ID),
+      "fansly-client-id": CLIENT_ID,
+      "fansly-client-ts": String(Date.now()),
+      "fansly-session-id": SESSION_ID,
+      "User-Agent": "Mozilla/5.0",
+    };
+    const site = s.model.pause(`https://apiv3.fansly.com${ME}?ngsw-bypass=true`, "GET", tab.sessionId, "XHR", siteHeaders);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === FINGERPRINT);
+    await until(() => site.outcome === "failed", 3000, "the site's request to fail");
+    s.engine.onMessage = (message) => {
+      if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+    };
+    s.engine.send(sendOf(s.engine, 9100));
+    const result = await s.engine.waitFor("result", (message) => message.attemptId === 9100, 10_000);
+    const outcome = result.outcome as { kind: string; status: number; headers: Record<string, string>; body: { bodyId: string; decodedBytes: number; sha256: string }; source: string; sentMono: number; sendMark: string };
+    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { "content-type": "application/json", "content-length": String(s.model.hubBody.length) }, source: "network", sentMono: 777_125 + 1.5, sendMark: "transport_reported" });
+    expect(outcome.headers).not.toHaveProperty("set-cookie");
+    expect(s.engine.of("check")).toEqual([{ type: "check", attemptId: 9100, pausedMono: expect.any(Number), liveSessionFingerprint: FINGERPRINT }]);
+    // `sent`: the gate saw the request's first bytes, on a new connection.
+    expect(s.engine.of("sent")).toEqual([{ type: "sent", attemptId: 9100, sentMono: expect.any(Number), sentWall: expect.any(Number), connectionReused: false }]);
+    // What reached the server: the connection's records and the request, once.
+    expect(server.received().length).toBe(300 + 58 + 70 + 90);
+    // The body: one frame, the last, before the result that names it.
+    expect(s.engine.frames).toHaveLength(1);
+    const frame = decodeBodyFrame(s.engine.frames[0]!);
+    expect(frame).toMatchObject({ bodyId: outcome.body.bodyId, part: 0, last: true });
+    expect(frame.data.equals(s.model.hubBody)).toBe(true);
+    expect(outcome.body).toEqual({ bodyId: frame.bodyId, decodedBytes: s.model.hubBody.length, sha256: createHash("sha256").update(s.model.hubBody).digest("hex") });
+    expect(s.engine.order.indexOf("binary")).toBeLessThan(s.engine.order.indexOf("result"));
+    // The journal: the Hub request by its real host and path, nothing more.
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: "hub attempt 9100", decision: "continued", result: "released under its admission" }));
+    // A new connection gets it again, the body first.
+    const next = await again(s, s.engine);
+    await next.waitFor("result", (message) => message.attemptId === 9100);
+    expect(next.order.indexOf("binary")).toBeLessThan(next.order.indexOf("result"));
+    // Its resultAck: the outcome and its body's file go.
+    next.send({ type: "resultAck", ownerGeneration: 1, attemptId: 9100 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    await until(() => readdirSync(join(s.dir, "buffer", "bodies")).length === 0, 3000, "the body's file to go");
+    // No secret in any log line or journal.
+    await s.operator.journals.flushed();
+    const journals = readdirSync(s.logDir).map((name) => readFileSync(join(s.logDir, name), "utf8")).join("\n");
+    for (const secret of [TOKEN, CLIENT_ID, SESSION_ID, fanslyClientCheck(ME, CLIENT_ID), "model-cookie-secret", '"success":true']) {
+      expect(s.lines.join("\n"), secret).not.toContain(secret);
+      expect(journals, secret).not.toContain(secret);
+    }
+  });
+
+  it("recover: not_sent of a request the buffer says was never released, unknown of one that was", async () => {
+    const s = await setUp({
+      prepare: ({ bufferDir, stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        const buffer = new EventBuffer({ dir: bufferDir, idFile: join(stateDir, "buffer-id"), minFreeBytes: 0, log: quiet });
+        buffer.markAttempt(7001, "issued");
+        buffer.markAttempt(7002, "issued");
+        buffer.markAttempt(7002, "released");
+        void buffer.flush();
+        void buffer.close();
+      },
+    });
+    s.engine.send({ type: "recover", ownerGeneration: 1, attemptIds: [7001, 7002, 7003] });
+    expect((await s.engine.waitFor("recoverResult")).attempts).toEqual([
+      { attemptId: 7001, state: "not_sent" },
+      { attemptId: 7002, state: "unknown" },
+      { attemptId: 7003, state: "unknown" },
+    ]);
+    // A repeated send of either: what is known, never a request.
+    s.engine.send(sendOf(s.engine, 7001));
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 7001)).outcome).toEqual({ kind: "transport_error", sent: false, message: "the operator restarted before the request was released" });
+    expect(s.chrome.sent("Runtime.callFunctionOn").filter((command) => command.params.functionDeclaration === ISSUE)).toEqual([]);
+  });
+
+  it("parses a send and a check's answer strictly: a malformed one closes the connection", async () => {
+    const s = await setUp();
+    s.engine.send({ ...sendOf(s.engine, 1), kind: "document" });
+    await until(() => s.engine.closed !== null, 3000, "the connection to close");
+  });
 });

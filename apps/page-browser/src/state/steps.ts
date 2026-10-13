@@ -17,13 +17,19 @@ export const STEPS = [
 ] as const;
 export type Step = (typeof STEPS)[number];
 
-/** Spec §6.1's reasons, and two more, to be added there before an engine
+/** Spec §6.1's reasons, and three more, to be added there before an engine
  *  reads these:
  *  - `env_mismatch` (PR 5): the page's environment could not be handed to
  *    Chrome, or the browser does not show it (plan §4.1, step 2; spec §10);
  *  - `buffer_unavailable` (PR 11): the buffer could not be opened — locked,
  *    a failing disk, a corrupt file, a format newer than the operator. The
- *    page stands with the exit closed until it opens (spec §5). */
+ *    page stands with the exit closed until it opens (spec §5);
+ *  - `request_unended` (PR 9): a released request Chrome did not report the
+ *    end of — no answer and no end within its limit — or one the page
+ *    cancelled before its answer. Chrome may still hold it and write it in a
+ *    later admission's window, which the gate cannot tell from that
+ *    admission's own: the request dies with the browser (stage 1,
+ *    amendments 23, 32; spec §9). */
 export const STOP_REASONS = [
   "selftest_failed",
   "env_mismatch",
@@ -35,6 +41,7 @@ export const STOP_REASONS = [
   "buffer_full",
   "disk_full",
   "buffer_unavailable",
+  "request_unended",
   "chrome_crashed",
   "unknown_ws_message",
   "header_mismatch",

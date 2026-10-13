@@ -161,4 +161,24 @@ describe("the process log", () => {
     const line = JSON.parse(lines[0]!) as Record<string, unknown>;
     expect(line).toMatchObject({ c: "operator", e: "hello", note: "the [secret] leaked into a field" });
   });
+
+  it("never carries a session's header, a cookie or a bearer credential, registered or not (PR 9)", async () => {
+    const lines: string[] = [];
+    setLogSink((line) => lines.push(line));
+    makeLog("hub")("oops", {
+      headers: { Authorization: "never-seen-before-token", cookie: "sid=1; f=2", "Set-Cookie": "a=b", "fansly-session-id": "71234", "fansly-client-id": "70001", "fansly-client-check": "abc123", accept: "application/json" },
+      note: "sent with Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig and more",
+      password: 'pa"ss',
+    });
+    const line = JSON.parse(lines[0]!) as { headers: Record<string, string>; note: string; password: string };
+    expect(line.headers).toEqual({ Authorization: "[secret]", cookie: "[secret]", "Set-Cookie": "[secret]", "fansly-session-id": "[secret]", "fansly-client-id": "[secret]", "fansly-client-check": "[secret]", accept: "application/json" });
+    expect(line.note).toBe("sent with Bearer [secret] and more");
+    expect(line.password).toBe("[secret]");
+    // The journals go through the same scrubber.
+    const logDir = dir();
+    const journals = new Journals({ dir: logDir, now: () => Date.parse("2026-10-13T10:00:00Z"), log: quiet });
+    journals.request({ method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", resourceType: "XHR", admission: "hub attempt 1", decision: "failed", result: "Aborted: Bearer abcdefgh12345678 slipped in" });
+    await journals.close();
+    expect(readFileSync(join(logDir, "requests-2026-10-13.jsonl"), "utf8")).not.toContain("abcdefgh12345678");
+  });
 });
