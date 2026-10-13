@@ -1038,7 +1038,9 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     s.engine.send(sendOf(s.engine, 9100));
     const result = await s.engine.waitFor("result", (message) => message.attemptId === 9100, 10_000);
     const outcome = result.outcome as { kind: string; status: number; headers: Record<string, string>; body: { bodyId: string; decodedBytes: number; sha256: string }; source: string; sentMono: number; sendMark: string };
-    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { "content-type": "application/json", "content-length": String(s.model.hubBody.length) }, source: "network", sentMono: 777_125 + 1.5, sendMark: "transport_reported" });
+    // Chrome's moment of the send, never earlier than the gate's.
+    const gateSent = s.engine.of("sent")[0]!.sentMono as number;
+    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { "content-type": "application/json", "content-length": String(s.model.hubBody.length) }, source: "network", sentMono: Math.max(777_125 + 1.5, gateSent), sendMark: "transport_reported" });
     expect(outcome.headers).not.toHaveProperty("set-cookie");
     expect(s.engine.of("check")).toEqual([{ type: "check", attemptId: 9100, pausedMono: expect.any(Number), liveSessionFingerprint: FINGERPRINT }]);
     // `sent`: the gate saw the request's first bytes, on a new connection.

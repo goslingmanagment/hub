@@ -49,6 +49,8 @@ export interface StoredOutcome {
   /** The body the outcome names (bodies.ts), or null. */
   bodyId: string | null;
   bodyBytes: number;
+  /** The order it was stored in (schema.ts, v2). */
+  seq: number;
 }
 
 export interface NewEventRow {
@@ -191,11 +193,14 @@ export class BufferStore {
   readonly #attempt: StatementSync;
   readonly #purgeAttempts: StatementSync;
   readonly #bodyIds: StatementSync;
+  readonly #outcomeSeqSizes: StatementSync;
+  readonly #outcomeSeqRange: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
   readonly #nowWall: () => number;
   #lastSeq: number;
   #lastWall: number | null;
+  #lastOutcomeSeq: number;
   #closed = false;
 
   constructor(options: StoreOptions) {
@@ -237,8 +242,9 @@ export class BufferStore {
       this.#lastSeq = Number(meta("last_seq"));
       const lastWall = meta("last_wall");
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
+      this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
       this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
-      this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?)`);
+      this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes, seq) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?, ?)`);
       this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
       this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
       this.#deleteUpTo = db.prepare("DELETE FROM events WHERE seq <= ?");
@@ -247,9 +253,11 @@ export class BufferStore {
       this.#readRange = db.prepare("SELECT seq, bytes, json FROM events WHERE seq > ? AND seq <= ? ORDER BY seq");
       this.#first = db.prepare("SELECT seq, at_wall FROM events ORDER BY seq LIMIT 1");
       this.#oldestOutcome = db.prepare("SELECT min(at_wall) AS at_wall FROM outcomes");
-      this.#outcome = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes FROM outcomes WHERE attempt_id = ?");
+      this.#outcome = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes, seq FROM outcomes WHERE attempt_id = ?");
       this.#outcomeSizes = db.prepare("SELECT attempt_id, bytes FROM outcomes WHERE attempt_id > ? ORDER BY attempt_id LIMIT ?");
-      this.#outcomeRange = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes FROM outcomes WHERE attempt_id > ? AND attempt_id <= ? ORDER BY attempt_id");
+      this.#outcomeRange = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes, seq FROM outcomes WHERE attempt_id > ? AND attempt_id <= ? ORDER BY attempt_id");
+      this.#outcomeSeqSizes = db.prepare("SELECT seq, bytes FROM outcomes WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?");
+      this.#outcomeSeqRange = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes, seq FROM outcomes WHERE seq > ? AND seq <= ? ORDER BY seq");
       this.#mark = db.prepare(
         "INSERT INTO hub_attempts (attempt_id, at_wall, issued, released, acked) VALUES (?, ?, ?, ?, 0) ON CONFLICT (attempt_id) DO UPDATE SET issued = max(issued, excluded.issued), released = max(released, excluded.released)",
       );
@@ -277,6 +285,11 @@ export class BufferStore {
     return this.#lastWall;
   }
 
+  /** The last outcome's order number (0: none yet); it never goes back. */
+  get lastOutcomeSeq(): number {
+    return this.#lastOutcomeSeq;
+  }
+
   get closed(): boolean {
     return this.#closed;
   }
@@ -292,6 +305,7 @@ export class BufferStore {
       if (fault) throw fault;
       let lastSeq = this.#lastSeq;
       let lastWall = this.#lastWall;
+      let lastOutcomeSeq = this.#lastOutcomeSeq;
       for (const event of batch.events) {
         if (event.seq !== lastSeq + 1) throw new Error(`event ${event.seq} does not follow ${lastSeq}`);
         this.#insertEvent.run(event.seq, event.atWall, event.kind, event.bytes, event.json);
@@ -300,10 +314,12 @@ export class BufferStore {
         result.addedBytes += event.bytes;
       }
       for (const outcome of batch.outcomes) {
-        if (Number(this.#insertOutcome.run(outcome.attemptId, outcome.atWall, outcome.type, outcome.bytes, outcome.json, outcome.bodyId, outcome.bodyBytes).changes) === 0) continue;
+        if (Number(this.#insertOutcome.run(outcome.attemptId, outcome.atWall, outcome.type, outcome.bytes, outcome.json, outcome.bodyId, outcome.bodyBytes, lastOutcomeSeq + 1).changes) === 0) continue;
+        lastOutcomeSeq += 1;
         result.insertedOutcomes.push(outcome);
         result.addedBytes += outcome.bytes;
       }
+      if (lastOutcomeSeq !== this.#lastOutcomeSeq) this.#setMeta.run(String(lastOutcomeSeq), "last_outcome_seq");
       for (const mark of batch.marks ?? []) {
         this.#mark.run(mark.attemptId, mark.atWall, mark.step === "received" ? 0 : 1, mark.step === "released" ? 1 : 0);
       }
@@ -329,6 +345,7 @@ export class BufferStore {
       db.exec("COMMIT");
       this.#lastSeq = lastSeq;
       this.#lastWall = lastWall;
+      this.#lastOutcomeSeq = lastOutcomeSeq;
       return result;
     } catch (error) {
       try {
@@ -346,6 +363,7 @@ export class BufferStore {
     this.#lastSeq = Number(value("last_seq"));
     const lastWall = value("last_wall");
     this.#lastWall = lastWall === "" ? null : Number(lastWall);
+    this.#lastOutcomeSeq = Number(value("last_outcome_seq") || "0");
   }
 
   /** Events after `afterSeq` in order: at most `maxEvents`, and no more
@@ -386,6 +404,22 @@ export class BufferStore {
       upto = size.attempt_id;
     }
     return (this.#outcomeRange.all(afterAttemptId, upto) as Array<Record<string, unknown>>).map(storedOutcome);
+  }
+
+  /** Outcomes stored after `afterSeq` and up to `uptoSeq`, in the order
+   *  they were stored: at most `maxCount`, no more than `maxBytes` — but
+   *  always the first. */
+  outcomesBySeq(afterSeq: number, uptoSeq: number, maxCount: number, maxBytes: number): StoredOutcome[] {
+    const sizes = this.#outcomeSeqSizes.all(afterSeq, uptoSeq, Math.max(1, Math.floor(maxCount))) as Array<{ seq: number; bytes: number }>;
+    if (sizes.length === 0) return [];
+    let upto = sizes[0]!.seq;
+    let bytes = sizes[0]!.bytes;
+    for (const size of sizes.slice(1)) {
+      bytes += size.bytes;
+      if (bytes > maxBytes) break;
+      upto = size.seq;
+    }
+    return (this.#outcomeSeqRange.all(afterSeq, upto) as Array<Record<string, unknown>>).map(storedOutcome);
   }
 
   /** What the buffer knows of a Hub attempt, or null. */
@@ -464,6 +498,7 @@ function storedOutcome(found: Record<string, unknown>): StoredOutcome {
     bytes: Number(found.bytes),
     bodyId: typeof found.body_id === "string" ? found.body_id : null,
     bodyBytes: Number(found.body_bytes ?? 0),
+    seq: Number(found.seq ?? 0),
   };
 }
 

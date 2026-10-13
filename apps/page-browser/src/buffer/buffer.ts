@@ -59,7 +59,7 @@ import { join } from "node:path";
 
 import type { BufferEvent, Result, SiteDone, WsDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
-import { BodyFiles, type BodyWriter } from "./bodies.ts";
+import { BodyFiles, type BodyReader, type BodyWriter } from "./bodies.ts";
 import type { Migration } from "./schema.ts";
 import {
   BufferStore,
@@ -148,6 +148,8 @@ export interface BufferOptions {
   commitFault?: (batch: Commit) => Error | null;
   /** Tests: an error for the first read after an open (store.ts). */
   totalsFault?: () => Error | null;
+  /** Tests: an error for a read of a body's part (bodies.ts). */
+  bodyReadFault?: (bodyId: string, part: number) => Error | null;
   /** The pauses before a failed open is tried again (locked, I/O). */
   openRetryMs?: readonly number[];
   /** The pauses before a failed commit is tried again. */
@@ -460,7 +462,7 @@ export class EventBuffer {
       this.#walDirty = true;
       // What a crash left between a body's seal and its outcome's commit, or
       // between a deletion and its file, goes now.
-      const bodies = new BodyFiles(join(options.dir, "bodies"));
+      const bodies = new BodyFiles(join(options.dir, "bodies"), options.bodyReadFault);
       const swept = bodies.sweep(new Set(store.bodyIds()));
       this.#log("opened", { bufferId: store.id, schema: store.schema.version, created: store.schema.created, lastSeq: store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes, bodiesSwept: swept });
       this.#store = store;
@@ -587,6 +589,31 @@ export class EventBuffer {
     } catch (error) {
       this.#log("body.unwritable", { error: errorMessage(error) });
       return null;
+    }
+  }
+
+  /** A stored body, open for one transmission (bodies.ts), or null when it
+   *  is not there. Other failures throw. */
+  openBody(bodyId: string): BodyReader | null {
+    return this.#bodies?.open(bodyId) ?? null;
+  }
+
+  /** The order number of the last outcome stored (0: none): what a
+   *  delivery round goes up to (replay.ts). */
+  get lastOutcomeSeq(): number {
+    return this.#store?.lastOutcomeSeq ?? 0;
+  }
+
+  /** Stored outcomes after `afterSeq` and up to `uptoSeq`, in the order
+   *  they were stored, a page at a time (replay.ts). */
+  outcomesBySeq(afterSeq: number, uptoSeq: number, maxCount: number, maxBytes: number): StoredOutcome[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.outcomesBySeq(afterSeq, uptoSeq, maxCount, maxBytes);
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
     }
   }
 

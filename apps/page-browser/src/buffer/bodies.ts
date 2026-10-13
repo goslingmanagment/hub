@@ -8,8 +8,12 @@
 //   and syncs the directory — the outcome that names it is committed only
 //   after that. A body that is not whole is never sealed: its part file
 //   goes.
-// - A body is sent in parts of up to 1 MiB (`read`), read from the file each
-//   time: what is in memory is one part.
+// - A body is sent in parts of up to 1 MiB through one open descriptor
+//   (`open`) for the whole transmission: a resultAck that deletes the file
+//   meanwhile (an earlier delivery's) does not tear the body — the
+//   descriptor keeps reading what the file held. What is in memory is one
+//   part. A part that cannot be read (an I/O error, a short read) fails the
+//   transmission, never the next body's.
 // - At the buffer's open, `sweep` removes every part file and every body no
 //   stored outcome names — what a crash left between a seal and its commit,
 //   or between a deletion's commit and its file.
@@ -118,12 +122,73 @@ export class BodyWriter {
   }
 }
 
+/** One sealed body, open for one transmission: its size as it was opened,
+ *  read part by part, closed at the end. */
+export class BodyReader {
+  readonly bodyId: string;
+  readonly size: number;
+  #fd: number | null;
+  readonly #fault: ((bodyId: string, part: number) => Error | null) | undefined;
+
+  constructor(bodyId: string, fd: number, fault?: (bodyId: string, part: number) => Error | null) {
+    this.bodyId = bodyId;
+    this.#fd = fd;
+    this.#fault = fault;
+    this.size = fstatSync(fd).size;
+  }
+
+  /** Part `part` (`partBytes` a part); throws when it cannot be read whole. */
+  read(part: number, partBytes: number): Buffer {
+    const fd = this.#fd;
+    if (fd === null) throw new Error("the body is closed");
+    const fault = this.#fault?.(this.bodyId, part);
+    if (fault) throw fault;
+    const start = part * partBytes;
+    const length = Math.max(0, Math.min(partBytes, this.size - start));
+    const out = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, out, read, length - read, start + read);
+      if (n === 0) throw new Error(`the body ended at ${start + read} bytes of ${this.size}`);
+      read += n;
+    }
+    return out;
+  }
+
+  close(): void {
+    if (this.#fd !== null) closeQuietly(this.#fd);
+    this.#fd = null;
+  }
+}
+
 export class BodyFiles {
   readonly dir: string;
+  readonly #readFault: ((bodyId: string, part: number) => Error | null) | undefined;
 
-  constructor(dir: string) {
+  /** `readFault`: tests — an error for a read of a body's part. */
+  constructor(dir: string, readFault?: (bodyId: string, part: number) => Error | null) {
     this.dir = dir;
+    this.#readFault = readFault;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+
+  /** A sealed body open for one transmission; null when it is not there (its
+   *  outcome acknowledged, or the file lost). Other failures throw. */
+  open(bodyId: string): BodyReader | null {
+    if (!NAME.test(bodyId)) return null;
+    let fd: number;
+    try {
+      fd = openSync(join(this.dir, bodyId), "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      return new BodyReader(bodyId, fd, this.#readFault);
+    } catch (error) {
+      closeQuietly(fd);
+      throw error;
+    }
   }
 
   begin(): BodyWriter {

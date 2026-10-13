@@ -382,8 +382,9 @@ export class Operator {
       onOpened: () => this.#onBufferOpened(),
       onCommitted: ({ events, outcomes }) => {
         if (events > 0) this.stream.pump();
-        // As attempts end: sent as they come, each after its body.
-        this.replay.live(outcomes);
+        // As attempts end: one more delivery round, each outcome after its
+        // body, read from the file (replay.ts).
+        if (outcomes.length > 0) this.replay.live(outcomes);
       },
     });
     this.stream = new EventStream(this.buffer, (json) => this.rpc.sendRaw(json), {

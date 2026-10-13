@@ -68,6 +68,10 @@ CREATE INDEX outcomes_by_age ON outcomes (at_wall);
  *  - outcomes.body_id, body_bytes: the body a result names (BodyRef), a
  *    file of the buffer volume's bodies/ directory (bodies.ts); its bytes
  *    count in the outcome's `bytes`, and so in the caps.
+ *  - outcomes.seq: the order outcomes were stored in (meta
+ *    `last_outcome_seq`), so their delivery follows the file with a cursor
+ *    (replay.ts), not a queue in memory; outcomes from before take their
+ *    attempt id (unique, and below every later number).
  *  - hub_attempts: what the operator did with each Hub attempt it was sent
  *    — received, the request issued in the page, released to the network,
  *    its outcome acknowledged — written before the step it stands for. A
@@ -80,6 +84,10 @@ CREATE INDEX outcomes_by_age ON outcomes (at_wall);
 const V2 = `
 ALTER TABLE outcomes ADD COLUMN body_id TEXT;
 ALTER TABLE outcomes ADD COLUMN body_bytes INTEGER;
+ALTER TABLE outcomes ADD COLUMN seq INTEGER;
+UPDATE outcomes SET seq = attempt_id;
+CREATE UNIQUE INDEX outcomes_by_seq ON outcomes (seq);
+INSERT OR REPLACE INTO meta (key, value) SELECT 'last_outcome_seq', CAST(coalesce(max(attempt_id), 0) AS TEXT) FROM outcomes;
 CREATE TABLE hub_attempts (
   attempt_id INTEGER PRIMARY KEY,
   at_wall INTEGER NOT NULL,

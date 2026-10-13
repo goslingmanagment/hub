@@ -30,7 +30,8 @@
 //  6. The send: `sent` when the gate sees the first bytes (the sender's
 //     word, amendment 20), with whether the connection was a new one; the
 //     result's moment is Chrome's (`timing.requestTime/sendStart`, the same
-//     clock), or the gate's, or the completion's (`completion_fallback`).
+//     clock) but never earlier than the gate's first bytes of that request
+//     — or the completion's (`completion_fallback`).
 //  7. The response stops at its headers. A redirect is not followed: the
 //     page gets it as final, the engine gets it with its Location
 //     (amendment 16). A declared size over the limit (API 32 MiB, media
@@ -239,6 +240,14 @@ export function engineHeaders(headers: Array<{ name: string; value: string }>): 
     out[lower] = lower in out ? `${out[lower]}, ${value}` : value;
   }
   return out;
+}
+
+/** When a physical request left: Chrome's moment (its timing), never
+ *  earlier than the gate's first bytes of it; null when neither is known. */
+function sendMoment(phys: Physical | null): number | null {
+  if (phys === null) return null;
+  const known = [phys.timingMono, phys.firstBytesMono].filter((mono): mono is number => mono !== null);
+  return known.length > 0 ? Math.max(...known) : null;
 }
 
 export class HubRequests {
@@ -1015,9 +1024,12 @@ export class HubRequests {
       this.#finish(attempt, { kind: "transport_error", sent: true, message: "the response could not be kept" });
       return;
     }
-    const moments = [attempt.preflight?.timingMono, attempt.main?.timingMono].filter((mono): mono is number => typeof mono === "number");
-    const gateMoments = [attempt.preflight?.firstBytesMono, attempt.main?.firstBytesMono].filter((mono): mono is number => typeof mono === "number");
-    const sentMono = moments.length > 0 ? Math.min(...moments) : gateMoments.length > 0 ? Math.min(...gateMoments) : null;
+    // Each physical request's moment is the later of Chrome's and the
+    // gate's: Chrome may write into the local socket while the operator
+    // stands, and the request leaves only when the proxy forwards it. The
+    // operation's is its first request's.
+    const moments = [sendMoment(attempt.preflight), sendMoment(attempt.main)].filter((mono): mono is number => mono !== null);
+    const sentMono = moments.length > 0 ? Math.min(...moments) : null;
     const outcome: Outcome = {
       kind: "response",
       status: phys.status,

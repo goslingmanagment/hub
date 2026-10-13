@@ -189,7 +189,7 @@ describe("a Hub request (plan §4.2)", () => {
   it("is one physical request per admission: asked about at its pause, released with its real address, its body kept, then told", async () => {
     const w = await world();
     const body = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "1", username: "page" } } }));
-    const message = send(w, {}, { chunks: [body.subarray(0, 10), body.subarray(10)], headers: [{ name: "Content-Type", value: "application/json" }, { name: "Set-Cookie", value: "a=b" }, { name: "X-Dup", value: "1" }, { name: "x-dup", value: "2" }], timing: { requestTime: 5000.25, sendStart: 3.5 } });
+    const message = send(w, {}, { chunks: [body.subarray(0, 10), body.subarray(10)], headers: [{ name: "Content-Type", value: "application/json" }, { name: "Set-Cookie", value: "a=b" }, { name: "X-Dup", value: "1" }, { name: "x-dup", value: "2" }], timing: { requestTime: (monoMs() + 60_000) / 1000, sendStart: 3.5 } });
     const outcome = await outcomeOf(w, message.attemptId);
     // Started in the page from its placeholder address, with the live
     // session's headers in the site's order, its own time and check.
@@ -223,7 +223,7 @@ describe("a Hub request (plan §4.2)", () => {
       body: { bodyId: w.outcomes.get(message.attemptId)!.bodyId, decodedBytes: body.length, sha256: sha256(body) },
       encodedBytes: body.length + 200,
       source: "network",
-      sentMono: 5000.25 * 1000 + 3.5,
+      sentMono: (w.chrome.scripts.get(message.attemptId)!.timing!.requestTime * 1000) + 3.5,
       sendMark: "transport_reported",
     });
     expect(bodyOf(w, message.attemptId).equals(body)).toBe(true);
@@ -290,10 +290,22 @@ describe("a Hub request (plan §4.2)", () => {
     expect(w.faults).toEqual([]);
   });
 
-  it("takes its send moment from Chrome's timing, else the gate's first bytes; media without either fall back to the completion", async () => {
+  it("takes its send moment from Chrome's timing, never earlier than the gate's first bytes; media without either fall back to the completion", async () => {
     const w = await world();
-    const timed = send(w, {}, { timing: { requestTime: 12_345.5, sendStart: 0.75 } });
-    expect(await outcomeOf(w, timed.attemptId)).toMatchObject({ sentMono: 12_345_500.75, sendMark: "transport_reported" });
+    const later = (monoMs() + 60_000) / 1000;
+    const timed = send(w, {}, { timing: { requestTime: later, sendStart: 0.75 } });
+    expect(await outcomeOf(w, timed.attemptId)).toMatchObject({ sentMono: later * 1000 + 0.75, sendMark: "transport_reported" });
+    // Astra's review of PR 9, 1: Chrome wrote the request into the local
+    // socket 5 s before the operator forwarded it (it stood meanwhile): the
+    // send is the gate's moment, not Chrome's earlier one.
+    const early = send(w, {}, { timing: { requestTime: (monoMs() - 5000) / 1000, sendStart: 0 } });
+    const outcome = await outcomeOf(w, early.attemptId);
+    const gate = w.engine.of("sent").find((sent) => sent.attemptId === early.attemptId)!.sentMono as number;
+    expect(outcome).toMatchObject({ sentMono: gate, sendMark: "transport_reported" });
+    // With a preflight: its own request's moments, the first of the two.
+    const preflighted = send(w, {}, { preflight: 204, timing: { requestTime: (monoMs() - 5000) / 1000, sendStart: 0 } });
+    const both = await outcomeOf(w, preflighted.attemptId);
+    expect(both).toMatchObject({ sentMono: w.engine.of("sent").find((sent) => sent.attemptId === preflighted.attemptId)!.sentMono });
     const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/abc/1.jpg?Policy=p&Signature=s&Key-Pair-Id=k", maxBodyBytes: MEDIA_BODY_LIMIT }, { timing: null, noResponseReceived: true });
     expect(await outcomeOf(w, media.attemptId)).toMatchObject({ kind: "response", sentMono: null, sendMark: "completion_fallback", source: "cache_unconfirmed" });
   });

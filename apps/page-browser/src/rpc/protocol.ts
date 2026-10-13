@@ -37,7 +37,11 @@
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
-// big-endian), 1 byte "last", then up to 1 MiB of the body.
+// big-endian), 1 byte of flag — 0 more to come, 1 the last part — then up
+// to 1 MiB of the body. Additions to spec §6.1 (PR 9): part 0 starts a
+// body anew (a body is sent again on every delivery); the flag 2, with no
+// data, abandons the body — the parts of it sent before are void (a part
+// that could not be read), and no JSON names it.
 
 import { isIP } from "node:net";
 
@@ -642,10 +646,18 @@ export function encodeBodyFrame(bodyId: BodyId, part: number, last: boolean, dat
   return frame;
 }
 
+/** The frame that abandons a body whose transmission failed after
+ *  `part` parts: those parts are void. */
+export function encodeBodyAbandon(bodyId: BodyId, part: number): Buffer {
+  const frame = encodeBodyFrame(bodyId, part, false, Buffer.alloc(0));
+  frame[20] = 2;
+  return frame;
+}
+
 /** The engine's side of `encodeBodyFrame` (tests, tools). */
-export function decodeBodyFrame(frame: Buffer): { bodyId: BodyId; part: number; last: boolean; data: Buffer } {
+export function decodeBodyFrame(frame: Buffer): { bodyId: BodyId; part: number; last: boolean; abandoned: boolean; data: Buffer } {
   if (frame.length < BODY_FRAME_HEAD) throw new Error("a body frame shorter than its head");
   const hex = frame.subarray(0, 16).toString("hex");
   const bodyId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  return { bodyId, part: frame.readUInt32BE(16), last: frame[20] === 1, data: frame.subarray(BODY_FRAME_HEAD) };
+  return { bodyId, part: frame.readUInt32BE(16), last: frame[20] === 1, abandoned: frame[20] === 2, data: frame.subarray(BODY_FRAME_HEAD) };
 }

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { GenerationStore } from "../apps/page-browser/src/rpc/generation.ts";
 import type { CommandOutcome } from "../apps/page-browser/src/rpc/ledger.ts";
-import { decodeBodyFrame, encodeBodyFrame, parseEngineMessage, type BufferMessage, type Command, type Hello, type HubMessage, type State } from "../apps/page-browser/src/rpc/protocol.ts";
+import { decodeBodyFrame, encodeBodyAbandon, encodeBodyFrame, parseEngineMessage, type BufferMessage, type Command, type Hello, type HubMessage, type State } from "../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer, tokenMatches } from "../apps/page-browser/src/rpc/server.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { FakeEngine, hello, quiet, RPC_TOKEN, tempDir, until } from "./helpers/page-browser-fakes.ts";
@@ -425,7 +425,11 @@ describe("a Hub request's messages (PR 9)", () => {
     expect(frame.subarray(0, 16).toString("hex")).toBe(id.replaceAll("-", ""));
     expect(frame.readUInt32BE(16)).toBe(3);
     expect(frame[20]).toBe(1);
-    expect(decodeBodyFrame(frame)).toEqual({ bodyId: id, part: 3, last: true, data: Buffer.from("tail") });
+    expect(decodeBodyFrame(frame)).toEqual({ bodyId: id, part: 3, last: true, abandoned: false, data: Buffer.from("tail") });
+    // A body whose transmission failed after 2 parts: void, no data.
+    const abandon = encodeBodyAbandon(id, 2);
+    expect(abandon.length).toBe(21);
+    expect(decodeBodyFrame(abandon)).toEqual({ bodyId: id, part: 2, last: false, abandoned: true, data: Buffer.alloc(0) });
     expect(() => encodeBodyFrame("not-a-uuid", 0, false, Buffer.alloc(0))).toThrow();
     expect(() => encodeBodyFrame(id, 0, false, Buffer.alloc(1024 * 1024 + 1))).toThrow();
     const { engine, server } = await setUp();

@@ -711,6 +711,12 @@ describe("the format (plan §4.10)", () => {
     expect(buffer.lastSeq).toBe(7);
     expect(buffer.stats()).toMatchObject({ events: 2, outcomes: 1 });
     expect(outcomesOf(buffer)[0]!.json).toBe(JSON.stringify(hubResult(99)));
+    // Its outcomes take their place in the delivery order (schema v2):
+    // their attempt id, and the next ones after it.
+    expect(outcomesOf(buffer)[0]!.seq).toBe(99);
+    expect(buffer.lastOutcomeSeq).toBe(99);
+    await written(buffer.putOutcome(hubResult(5)));
+    expect(buffer.outcomesBySeq(99, buffer.lastOutcomeSeq, 10, 1_000_000).map((outcome) => [outcome.attemptId, outcome.seq])).toEqual([[5, 100]]);
     stream.subscribe(subscribe(buffer.id, 5));
     expect(seqs()).toEqual([6, 7]);
     expect(await seqOf(buffer.append(wsFrame(8)))).toBe(8);
@@ -798,7 +804,7 @@ describe("bodies and Hub attempts (PR 9)", () => {
     const result = withBody(31, sealed);
     await written(buffer.putOutcome(result, { bodyId: sealed.bodyId, bytes: sealed.bytes }));
     const json = JSON.stringify(result);
-    expect(outcomesOf(buffer)).toEqual([{ attemptId: 31, json, bytes: Buffer.byteLength(json) + 11, bodyId: sealed.bodyId, bodyBytes: 11 }]);
+    expect(outcomesOf(buffer)).toEqual([{ attemptId: 31, json, bytes: Buffer.byteLength(json) + 11, bodyId: sealed.bodyId, bodyBytes: 11, seq: 1 }]);
     expect(buffer.stats().bytes).toBe(Buffer.byteLength(json) + 11);
     expect(buffer.bodySize(sealed.bodyId)).toBe(11);
     expect([0, 1, 2, 3].map((part) => buffer.readBody(sealed.bodyId, part, 4)?.toString())).toEqual(["hell", "o wo", "rld", ""]);
@@ -932,5 +938,151 @@ describe("bodies and Hub attempts (PR 9)", () => {
     await until(() => order.length === 2, 5000, "the replay");
     expect(order).toEqual(["result:61", "result:62"]);
     expect(json[0]).toEqual({ type: "result", attemptId: 61, sessionFingerprint: "a".repeat(64), outcome: { kind: "transport_error", sent: true, message: "the operator lost the response's body" } });
+  });
+});
+
+describe("the replay under pressure (Astra's review of PR 9)", () => {
+  const PART = 1024 * 1024;
+
+  /** A link whose socket fills after the first frame until `release`. */
+  function stalledLink(stallAfterFrames = 1) {
+    const order: string[] = [];
+    const frames: Buffer[] = [];
+    const json: Array<Record<string, unknown>> = [];
+    let backlog = 0;
+    let stalls = 0;
+    let wake: () => void = () => undefined;
+    const link = {
+      epoch: () => 1,
+      send: (text: string) => {
+        const message = JSON.parse(text) as Record<string, unknown>;
+        json.push(message);
+        order.push(`${String(message.type)}:${String(message.attemptId ?? "")}`);
+        return true;
+      },
+      sendBinary: (frame: Buffer) => {
+        frames.push(frame);
+        order.push("binary");
+        if (frames.length === stallAfterFrames && stalls++ === 0) backlog = 10 * 1024 * 1024;
+        return true;
+      },
+      backlog: () => backlog,
+      drained: () => new Promise<void>((resolve) => (wake = resolve)),
+    };
+    const release = () => {
+      backlog = 0;
+      wake();
+    };
+    return { link, order, frames, json, release, stall: () => (backlog = 10 * 1024 * 1024) };
+  }
+
+  async function sealedBody(buffer: EventBuffer, attemptId: number, data: Buffer): Promise<{ bodyId: string; bytes: number; sha256: string }> {
+    const writer = buffer.beginBody()!;
+    writer.write(data);
+    const sealed = writer.seal()!;
+    const result = hubResult(attemptId);
+    if (result.outcome.kind === "response") result.outcome.body = { bodyId: sealed.bodyId, decodedBytes: sealed.bytes, sha256: sealed.sha256 };
+    await written(buffer.putOutcome(result, { bodyId: sealed.bodyId, bytes: sealed.bytes }));
+    return sealed;
+  }
+
+  it("2: an earlier delivery's resultAck in the middle of a re-sent body does not tear it; recover claims outcome_resent only of what went whole", async () => {
+    const root = dir();
+    const buffer = open(root);
+    const body = Buffer.alloc(2.5 * PART, 5);
+    const big = await sealedBody(buffer, 81, body);
+    await sealedBody(buffer, 83, Buffer.from("small"));
+    const { link, order, frames, json, release } = stalledLink();
+    const replay = new OutcomeReplay(buffer, link, { log: quiet });
+    replay.recover([81, 83]);
+    // Part 0 of 81 is out; the socket is full.
+    await until(() => frames.length === 1, 3000, "the first part");
+    // The engine acknowledges both from an earlier delivery: rows and files go.
+    buffer.acknowledgeOutcome(81);
+    buffer.acknowledgeOutcome(83);
+    await buffer.flush();
+    expect(readdirSync(join(root, "store", "bodies"))).toEqual([]);
+    release();
+    await until(() => json.some((message) => message.type === "recoverResult"), 5000, "the answer");
+    // 81 went whole, from the descriptor it was opened with; 83 was gone
+    // before its turn: nothing of it, and not claimed.
+    const parts = frames.map((frame) => decodeBodyFrame(frame));
+    expect(parts.map((part) => [part.bodyId, part.part, part.last])).toEqual([
+      [big.bodyId, 0, false],
+      [big.bodyId, 1, false],
+      [big.bodyId, 2, true],
+    ]);
+    expect(Buffer.concat(parts.map((part) => part.data)).equals(body)).toBe(true);
+    expect(order).toEqual(["binary", "binary", "binary", "result:81", "recoverResult:"]);
+    expect(json.at(-1)).toEqual({ type: "recoverResult", attempts: [{ attemptId: 81, state: "outcome_resent" }, { attemptId: 83, state: "unknown" }] });
+  });
+
+  it("3: a slow engine and outcomes stored without pause: one delivery round waits at most, each ends at its bound, a recover is answered", async () => {
+    const root = dir();
+    let replay: OutcomeReplay | null = null;
+    const buffer = open(root, { batchMs: 1, onCommitted: ({ outcomes }) => replay?.live(outcomes) });
+    await written(buffer.putOutcome(hubResult(1)));
+    const { link, json, release, stall } = stalledLink();
+    const sends: number[] = [];
+    replay = new OutcomeReplay(buffer, { ...link, send: (text) => (sends.push(Number((JSON.parse(text) as { attemptId?: number }).attemptId ?? -1)), link.send(text)) }, { log: quiet });
+    stall();
+    replay.connected();
+    // A thousand outcomes stored one by one; the engine acknowledges each
+    // copy it already has, so the file holds one at a time.
+    for (let id = 2; id <= 1001; id++) {
+      await written(buffer.putOutcome(hubResult(id)));
+      buffer.acknowledgeOutcome(id - 1);
+    }
+    await buffer.flush();
+    expect(replay.queued).toBeLessThanOrEqual(1);
+    expect(buffer.stats().outcomes).toBeLessThanOrEqual(2);
+    replay.recover([1001]);
+    expect(replay.queued).toBeLessThanOrEqual(2);
+    release();
+    await until(() => json.some((message) => message.type === "recoverResult"), 5000, "the answer");
+    expect(json.find((message) => message.type === "recoverResult")).toEqual({ type: "recoverResult", attempts: [{ attemptId: 1001, state: "outcome_resent" }] });
+    await until(() => replay.queued === 0 && sends.filter((id) => id === 1001).length >= 2, 5000, "the last round");
+    // Only what was still stored went out: the rest was acknowledged before its turn.
+    expect(new Set(sends.filter((id) => id !== -1))).toEqual(new Set([1001]));
+  });
+
+  it("4: a body that cannot be read (EISDIR from the disk) drops neither the other outcomes nor the recover's answer", async () => {
+    const root = dir();
+    const buffer = open(root);
+    const bad = await sealedBody(buffer, 91, Buffer.from("will not read"));
+    const good = await sealedBody(buffer, 92, Buffer.from("fine"));
+    await written(buffer.putOutcome(hubResult(93)));
+    // The disk fails the body's reads.
+    const file = join(root, "store", "bodies", bad.bodyId);
+    rmSync(file);
+    mkdirSync(file);
+    const { link, order, frames, json } = stalledLink(Number.MAX_SAFE_INTEGER);
+    const replay = new OutcomeReplay(buffer, link, { log: quiet, stateOf: () => "unknown" });
+    replay.connected();
+    await until(() => order.includes("result:93"), 3000, "the other outcomes");
+    expect(order).toEqual(["binary", "result:92", "result:93"]);
+    expect(decodeBodyFrame(frames[0]!).bodyId).toBe(good.bodyId);
+    replay.recover([91, 92, 94]);
+    await until(() => json.some((message) => message.type === "recoverResult"), 3000, "the answer");
+    expect(json.at(-1)).toEqual({ type: "recoverResult", attempts: [{ attemptId: 91, state: "unknown" }, { attemptId: 92, state: "outcome_resent" }, { attemptId: 94, state: "unknown" }] });
+    // 91 stays for the next delivery: held, not lost.
+    expect(buffer.outcomes([91])).toHaveLength(1);
+  });
+
+  it("4: a part that cannot be read after others went abandons the body: a frame voids its parts, no JSON names it", async () => {
+    const root = dir();
+    let failing = "";
+    const buffer = open(root, { bodyReadFault: (bodyId, part) => (bodyId === failing && part === 1 ? Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }) : null) });
+    failing = (await sealedBody(buffer, 95, Buffer.alloc(2.5 * PART, 1))).bodyId;
+    await written(buffer.putOutcome(hubResult(96)));
+    const { link, order, frames } = stalledLink(Number.MAX_SAFE_INTEGER);
+    const replay = new OutcomeReplay(buffer, link, { log: quiet });
+    replay.connected();
+    await until(() => order.includes("result:96"), 3000, "the next outcome");
+    expect(order).toEqual(["binary", "binary", "result:96"]);
+    const [first, abandon] = frames.map((frame) => decodeBodyFrame(frame));
+    expect(first).toMatchObject({ bodyId: failing, part: 0, last: false, abandoned: false });
+    expect(abandon).toMatchObject({ bodyId: failing, part: 1, last: false, abandoned: true });
+    expect(abandon!.data.length).toBe(0);
   });
 });
