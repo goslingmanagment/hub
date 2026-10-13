@@ -548,8 +548,9 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", halted: false, retryAtWall: expect.any(Number) });
     const failure = journal(s.logDir, "states").find((line) => line.stopReason === "env_mismatch");
     expect(String(failure?.note)).toContain(reason);
+    // The engine is told (its socket may still be delivering it).
+    await s.engine.waitFor("state", (state) => state.stopReason === "env_mismatch");
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
-    expect(s.engine.last("state")).toMatchObject({ stopReason: "env_mismatch" });
     // No self-test, no exit IP: the start stopped at the check.
     expect(s.socks.connects).toEqual([]);
     expect(s.control.calls).toContain("kill");
