@@ -291,3 +291,63 @@ export interface LivePageSocket {
 
 /** The live page's socket owner now, or null (none in this process). */
 export type LivePageSocketRef = () => LivePageSocket | null;
+
+// ── a page's own site requests (Project Browser, plan §3.2, spec §3) ────────
+
+/** A request of the page's own site that waits for the engine's admission:
+ *  the page's browser holds it paused until the engine grants or refuses it
+ *  (`siteAdmit` of the operator, spec §6). */
+export interface PendingSiteRequest {
+  /** The operator's id of the request (`siteRequestId`). */
+  id: string;
+  method: string;
+  /** The class of its host: the API, the socket, the media CDN. */
+  host: "api" | "ws" | "cdn";
+  /** Its URL's path (a query is ignored; the journal keeps parameter names
+   *  only). */
+  path: string;
+  /** When the engine heard of it (this process's monotonic clock). */
+  askedMono: number;
+  /** The operator is in its manual-login mode: the owner logs in. Only then
+   *  does a login operation pass, and only then do the site's requests pass
+   *  the page's pause, its credentials hold and checks-only (plan §3.2). */
+  manualLogin: boolean;
+}
+
+/** How an admitted site request ended, as the operator reports it. */
+export type SiteRequestEnd =
+  | { kind: "response"; status: number; retryAfterMs: number | null }
+  | { kind: "transport_error"; sent: boolean; message: string }
+  | { kind: "aborted_before_send"; reason: string };
+
+/** Why the engine refused a site request (`siteAdmitResult`). */
+export type SiteRefusalReason =
+  | "waited_too_long"
+  | "write"
+  | "method"
+  | "not_api_path"
+  | "not_a_route"
+  | "mode"
+  | "paused"
+  | "credentials"
+  | "held"
+  | "route_held"
+  | "hour_ceiling"
+  /** The admission's final check refused the grant (ownership lost, the send
+   *  window passed, the pause): nothing may be sent. */
+  | "lease";
+
+/** The page browser's side of the site admission: its pending requests, the
+ *  engine's answers, the end of an admitted request. Absent on a page without
+ *  a browser: nothing of the site path runs there. */
+export interface SiteAdmissionPort {
+  /** The requests waiting now, oldest first. */
+  pending(): readonly PendingSiteRequest[];
+  /** Admit one: the browser may send it within `sendWithinMs` from now (the
+   *  admission's send window left), under the attempt `attemptId`. */
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void;
+  /** Refuse one: it is failed in the browser, nothing is sent. */
+  refuse(id: string, reason: SiteRefusalReason): void;
+  /** The end of an admitted request; never throws for an outcome. */
+  end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
+}
