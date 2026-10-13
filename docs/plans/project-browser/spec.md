@@ -302,6 +302,11 @@ interface EventsSubscribe extends FromEngine { type: "events.subscribe"; bufferI
 interface Events { type: "events"; bufferId: BufferId; events: BufferEvent[] }  // ≤ 500 событий или 1 МБ
 /** Только непрерывная зафиксированная часть; чужой bufferId оператор отвергает. */
 interface Ack extends FromEngine { type: "ack"; bufferId: BufferId; uptoSeq: number }
+/** Отказ на подписку или подтверждение: чужой буфер, номер впереди буфера, ack без подписки или дальше
+ *  отправленного. Называет ID буфера оператора — движок начинает с него заново (PR 11). */
+interface EventsRefused { type: "events.refused"; of: "events.subscribe" | "ack";
+  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent"; bufferId: BufferId;
+  givenBufferId: BufferId; givenSeq: number }
 type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
   | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
   | { kind: "ws.in"; connectionId: ConnectionId; frame: string }  // текстовый кадр как есть
@@ -320,7 +325,8 @@ interface Command extends FromEngine {
 interface CommandResult { type: "commandResult"; commandId: CommandId; ok: boolean; detail: string | null }
 interface Alarm { type: "alarm"; atWall: WallMs; detail: Record<string, string | number | boolean>;  // без секретов
   kind: "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost"
-    | "fallback_release" | "late_send" }  // два последних — только при запасных правилах №10 и №16
+    | "fallback_release" | "late_send"  // эти два — только при запасных правилах №10 и №16
+    | "buffer" }  // 50 % и 80 % потолка буфера, его заполнение (§5)
 // ── форма входа: API → оператор, свой токен API (план §4.8) ──
 type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
 type LoginRequest = { callId: string; token: string } & ({ type: "login.state" } | { type: "login.screenshot" }
@@ -333,7 +339,7 @@ type LoginReply = { callId: string } & (
 type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover
   | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command;
 type OperatorToEngine = HelloResult | Quiesced | State | PingPong | Check | Sent | Result | RecoverResult
-  | SiteAdmit | SiteDone | WsAdmit | WsDone | Events | CommandResult | Alarm;
+  | SiteAdmit | SiteDone | WsAdmit | WsDone | Events | EventsRefused | CommandResult | Alarm;
 ```
 
 ### 6.2 Что добавлено к таблице плана §4.13
