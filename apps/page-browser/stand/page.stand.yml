@@ -1,0 +1,69 @@
+# One page of the stand: the production page file
+# (docker-compose.page-browser.yml — its image, users, capabilities,
+# seccomp and AppArmor profiles, CPU, memory, /dev/shm and process limits)
+# with this over it, by stand.sh only:
+#
+# - the stand's networks instead of pb-control and pb-egress, and the
+#   stand's labels, so the guard and `stand.sh down` find it;
+# - no restart by Docker (a reboot leaves the stand down);
+# - the stand's entry in front of /init (inside/entry.sh): the route the
+#   internal network lacks, and the trust of the stand's CA for Chrome and
+#   the operator's exit-IP check — the image itself is production's;
+# - a capture in the page's network namespace (capture/capture.sh): what
+#   left the container at the OS level, apart from the operator's journal.
+services:
+  browser:
+    container_name: ${PB_SUITE_PROJECT:?}-page-${PB_SUITE_PAGE:?}
+    restart: "no"
+    labels:
+      agency.stand: pb-suite
+      agency.stand.name: ${PB_SUITE_PROJECT}
+    entrypoint: ["/bin/sh", "/stand/inside/entry.sh"]
+    environment:
+      STAND_EGRESS_IP: ${PB_EGRESS_IP}
+    memswap_limit: 2g
+    volumes:
+      - ${PB_SUITE_SRC:?}/stand/inside:/stand/inside:ro
+      - tools:/stand/tools:ro
+      - ca:/stand/ca:ro
+
+  capture:
+    image: ${PB_SUITE_TOOLS_IMAGE:?}
+    container_name: ${PB_SUITE_PROJECT}-capture-${PB_SUITE_PAGE}
+    network_mode: service:browser
+    depends_on: [browser]
+    restart: "no"
+    labels:
+      agency.stand: pb-suite
+      agency.stand.name: ${PB_SUITE_PROJECT}
+    # tcpdump opens the capture as root, then drops to its own user.
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, SETUID, SETGID]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PB_SUITE_CAPTURE_NAME: ${PB_SUITE_PAGE}
+    volumes:
+      - ${PB_SUITE_SRC}/stand/capture:/stand/capture:ro
+      - ${PB_SUITE_WORK:?}/results:/stand/results
+    command: ["sh", "/stand/capture/capture.sh"]
+    cpus: 0.2
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
+
+networks:
+  pb-control:
+    name: ${PB_SUITE_PROJECT}_control
+    external: true
+  pb-egress:
+    name: ${PB_SUITE_PROJECT}_egress
+    external: true
+
+volumes:
+  tools:
+    name: ${PB_SUITE_PROJECT}_tools
+    external: true
+  ca:
+    name: ${PB_SUITE_PROJECT}_ca
+    external: true

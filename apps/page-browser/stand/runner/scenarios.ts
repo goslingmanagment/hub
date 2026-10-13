@@ -1,0 +1,507 @@
+// The failure scenarios of plan §5, stage 2 (§4.9's table, §8 №14's stand),
+// against the production operator and image. Each run: the page is up, the
+// engine keeps issuing Hub requests (each an attempt resolved exactly once),
+// the fault comes at the run's random moment, the page must react as §4.9
+// says and come back. The common criteria (series.ts) are checked on every
+// run besides each scenario's own.
+//
+// What a scenario needs that the operator in main does not do yet is
+// declared (`needs`) and the scenario is skipped, with the reason, until the
+// operator does it: PR 6 — the rules extension in the image; PR 7 — the
+// operator loads the site (the stand's fansly.com) and admits its requests,
+// which is also what brings the site's socket (its session comes from the
+// site's API requests) and Hub requests that actually leave (they go from
+// the site's tab).
+
+import { atLeast } from "../../src/state/steps.ts";
+import type { SiteBehaviour } from "../fansly/front.ts";
+import { STAND_EXIT_IP, STAND_OTHER_EXIT_IP, STAND_SOCKS_USER, mono, sleep } from "../shared.ts";
+import { Activity, waitFor, type Ctx, type Page, type ScenarioOutcome } from "./context.ts";
+import { exitClosedWithin, gapCommitted, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type SeenTransition } from "./criteria.ts";
+import type { StandEngine } from "./engine.ts";
+import { leak } from "./leak.ts";
+
+export type Need = "PR6" | "PR7";
+
+/** The site the stand's fansly.com page plays (fansly/front.ts) once the
+ *  operator loads it (PR 7). */
+export type SiteTraffic = SiteBehaviour;
+
+export interface Scenario {
+  name: string;
+  /** What a pass proves, in one line (README.md lists them). */
+  proves: string;
+  needs: Need[];
+  /** The page it runs on: the main one, or the one whose buffer volume is
+   *  a small fixed-size tmpfs (disk-full). */
+  page: "main" | "disk";
+  /** The fault's moment: uniform in [min, max] ms after the activity began. */
+  moment: [number, number];
+  /** A control: every run must show each of these violations. */
+  control?: string[];
+  /** The site's traffic for the run (PR 7). */
+  site?: SiteTraffic;
+  run: (ctx: Ctx) => Promise<ScenarioOutcome>;
+}
+
+const SITE_TRAFFIC: SiteTraffic = { readEveryMs: 700, writeEveryMs: 0, socket: true, forbiddenWs: false };
+
+// ── levers ───────────────────────────────────────────────────────────────
+
+function inPage(ctx: Ctx, cmd: string[], user: "root" | "pb-operator" | "pb-chrome" = "root", page: Page = ctx.page): Promise<string> {
+  return ctx.docker.run(page.info.container, cmd, user);
+}
+
+async function servicePid(ctx: Ctx, service: string): Promise<number> {
+  const pid = Number((await inPage(ctx, ["/command/s6-svstat", "-o", "pid", `/run/service/${service}`])).trim());
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no pid of ${service}`);
+  return pid;
+}
+
+const CDP_BREAK = "pb-suite-cdp-break";
+const BYPASS = "pb-suite-bypass";
+
+/** Breaks the DevTools connection between the holder and Chrome with every
+ *  process alive: the next packet either way gets a TCP reset. The resets
+ *  themselves go out through the same chain, so they are let through
+ *  (`tcp flags & rst == 0`): otherwise the rule drops its own reset, and
+ *  the connection only stalls. */
+async function breakCdp(ctx: Ctx): Promise<void> {
+  for (const port of ["dport", "sport"]) {
+    await inPage(ctx, ["nft", "insert", "rule", "inet", "pb", "output", "tcp", port, "9222", "tcp", "flags", "&", "rst", "==", "0", "reject", "with", "tcp", "reset", "comment", `"${CDP_BREAK}"`]);
+  }
+}
+
+async function dropRules(ctx: Ctx, comment: string): Promise<void> {
+  await inPage(ctx, ["sh", "-c", `for h in $(nft -a list chain inet pb output | sed -n 's/.*"${comment}".*# handle \\([0-9][0-9]*\\)$/\\1/p'); do nft delete rule inet pb output handle "$h"; done; ! nft list chain inet pb output | grep -q '${comment}'`]);
+}
+
+function transitions(page: Page): SeenTransition[] {
+  return page.enginesOfRun
+    .flatMap((engine) => engine.states)
+    .map(({ atMono, state }) => ({ atMono, exitOpen: state.exitOpen, step: state.step, stopReason: state.stopReason, retryAtWall: state.retryAtWall }))
+    .sort((a, b) => a.atMono - b.atMono);
+}
+
+function closures(page: Page): number[] {
+  return page.enginesOfRun.flatMap((engine) => engine.closures);
+}
+
+function isUp(engine: StandEngine): boolean {
+  const state = engine.state;
+  return state !== null && state.exitOpen && atLeast(state.step, "exit_open");
+}
+
+/** The committed gaps of the run so far, once one of `reason` is there. */
+async function waitGap(ctx: Ctx, reason: string, sinceMono: number, timeoutMs = 15_000): Promise<string[]> {
+  let gaps: Array<{ reason: string | null; committedMono: number }> = [];
+  await waitFor(async () => {
+    gaps = (await ctx.store.eventsOfRun(ctx.page.engine.run)).filter((event) => event.kind === "gap");
+    return gapCommitted(gaps, sinceMono, reason).length === 0;
+  }, timeoutMs, 250);
+  ctx.notes.gaps = gaps.map((gap) => gap.reason);
+  return gapCommitted(gaps, sinceMono, reason);
+}
+
+/** The run's background and its fault at the random moment. */
+async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>): Promise<{ activity: Activity; faultMono: number }> {
+  const activity = new Activity(ctx.page);
+  activity.start();
+  await sleep(ctx.momentMs);
+  ctx.arm();
+  const faultMono = mono();
+  await fault(activity);
+  return { activity, faultMono };
+}
+
+/** After a stop that holds: it holds for `holdMs`, then the engine starts
+ *  the page and it comes up. */
+async function standsThenStarts(ctx: Ctx, fromMono: number, holdMs: number, what: string): Promise<Record<string, string[]>> {
+  await sleep(holdMs);
+  const stood = stoodBetween(transitions(ctx.page), fromMono, mono(), what);
+  const restart = mono();
+  const engine = ctx.page.engine;
+  const result = await engine.command("restartBrowser");
+  const up = result.ok ? await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 60_000, restart) : null;
+  return { stands: stood, startsOnCommand: up ? [] : [`restartBrowser did not bring the page up: ${result.detail ?? ""}`] };
+}
+
+// ── the operator's process ───────────────────────────────────────────────
+
+/** The operator killed (SIGKILL) or hung (SIGSTOP, then the watchdog). */
+function operatorLoss(how: "kill" | "hang"): Scenario["run"] {
+  return async (ctx) => {
+    const engine = ctx.page.engine;
+    const pid = await servicePid(ctx, "operator");
+    const { activity, faultMono } = await atMoment(ctx, () => inPage(ctx, ["kill", how === "kill" ? "-KILL" : "-STOP", String(pid)]).then(() => undefined));
+    // The connection to the engine goes with the process (the watchdog's
+    // kill, for a hung one: 5 s without a heartbeat).
+    const dropped = await engine.waitClosed(how === "kill" ? 5000 : 12_000);
+    ctx.notes.droppedAfterMs = Math.round(mono() - faultMono);
+    activity.stop();
+    const checks: Record<string, string[]> = { linkDropped: dropped ? [] : ["the engine's connection outlived the operator"] };
+    checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, how === "kill" ? 1000 : 9000);
+    const replaced = await waitFor(async () => {
+      try {
+        return (await servicePid(ctx, "operator")) !== pid;
+      } catch {
+        return false;
+      }
+    }, 20_000, 200);
+    if (!replaced) checks.replaced = ["s6 did not start a new operator in 20 s"];
+    ctx.notes.replacedAfterMs = Math.round(mono() - faultMono);
+    await engine.reconnect(40_000);
+    const back = mono();
+    ctx.notes.reconnectedAfterMs = Math.round(back - faultMono);
+    // An operator that starts again stands until the engine starts the page
+    // (stage 1, amendment 17); its start writes the operator_start gap.
+    Object.assign(checks, await standsThenStarts(ctx, back, 3000, "after the operator started again"));
+    ctx.notes.upAfterMs = Math.round(mono() - faultMono);
+    checks.gap = await waitGap(ctx, "operator_start", faultMono);
+    return { faultMono, checks, attempts: activity.issued };
+  };
+}
+
+/** Control of Chrome lost: the holder killed, Chrome killed, or the
+ *  DevTools connection broken with every process alive. The exit closes,
+ *  Chrome goes, and the page starts again by itself. */
+function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
+  return async (ctx) => {
+    const engine = ctx.page.engine;
+    const fault = async () => {
+      if (how === "holder") await inPage(ctx, ["/command/s6-svc", "-k", "/run/service/cdp-holder"]);
+      else if (how === "chrome") await inPage(ctx, ["kill", "-KILL", String(await servicePid(ctx, "chrome"))]);
+      else await breakCdp(ctx);
+    };
+    const { activity, faultMono } = await atMoment(ctx, fault);
+    const checks: Record<string, string[]> = {};
+    const closed = await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
+    // The broken connection is mended before the next Chrome connects.
+    if (how === "cdp-break") await dropRules(ctx, CDP_BREAK);
+    activity.stop();
+    checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, how === "cdp-break" ? 3000 : 1000);
+    if (closed) checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, how === "chrome" ? ["chrome_crashed"] : ["cdp_lost", "chrome_crashed"], false);
+    const alarm = engine.alarms.find(({ atMono, alarm: a }) => atMono >= faultMono && a.kind === "cdp_lost");
+    checks.alarm = alarm ? [] : ["no cdp_lost alarm"];
+    if (alarm) ctx.notes.alarm = alarm.alarm.detail;
+    await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 40_000, faultMono);
+    checks.upByItself = upWithin(transitions(ctx.page), faultMono, 40_000, "after the control loss");
+    return { faultMono, checks, attempts: activity.issued };
+  };
+}
+
+// ── the page's proxy ─────────────────────────────────────────────────────
+
+function proxyFault(how: "down" | "auth"): Scenario["run"] {
+  return async (ctx) => {
+    const engine = ctx.page.engine;
+    const { activity, faultMono } = await atMoment(ctx, () => ctx.stand.socks(how === "down" ? { down: true } : { refuseAuth: true }));
+    const checks: Record<string, string[]> = {};
+    // The exit IP is checked every 2 s on the stand (engine.ts STAND_PARAMS).
+    await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
+    checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 3500);
+    checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, how === "down" ? ["proxy_unavailable"] : ["proxy_auth"], false);
+    const outageMs = 2500 + Math.round(ctx.random() * 2000);
+    await sleep(outageMs);
+    checks.stoodWhileDown = stoodBetween(transitions(ctx.page), faultMono + 3500, mono(), "while the proxy failed");
+    const recovered = mono();
+    await ctx.stand.socks(how === "down" ? { down: false } : { refuseAuth: false });
+    activity.stop();
+    await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 40_000, recovered);
+    // Back with the same IP: the work resumes by itself (plan §4.5).
+    checks.upByItself = upWithin(transitions(ctx.page), recovered, 40_000, "after the proxy came back");
+    const upAt = transitions(ctx.page).find((state) => state.atMono >= recovered && state.exitOpen)?.atMono ?? mono();
+    ctx.notes.outageMs = outageMs;
+    ctx.notes.upAfterMs = Math.round(upAt - recovered);
+    // What waited when the proxy failed was cancelled, never sent after
+    // (vacuous until the site's requests wait for admissions — PR 7).
+    checks.cancelledStayCancelled = sentAfterRecovery(await ctx.stand.journal(ctx.journalSince), ctx.page.enginesOfRun.flatMap((engine) => engine.grants), faultMono, upAt);
+    return { faultMono, checks, attempts: activity.issued };
+  };
+}
+
+/** The exit IP changed: the page stands until the owner decides — the
+ *  engine's restartBrowser — even when the IP comes back (plan §4.5). */
+async function exitIpChange(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const { activity, faultMono } = await atMoment(ctx, () => ctx.stand.config({ exitIp: STAND_OTHER_EXIT_IP }));
+  const checks: Record<string, string[]> = {};
+  await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
+  activity.stop();
+  checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 3500);
+  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["exit_ip_changed"], true);
+  await ctx.stand.config({ exitIp: STAND_EXIT_IP });
+  const restored = mono();
+  // Two checks and the longest retry would have passed: it still stands.
+  Object.assign(checks, await standsThenStarts(ctx, restored, 6000, "after the IP came back"));
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+// ── the engine ───────────────────────────────────────────────────────────
+
+/** The engine goes silent (no pong, nothing): after 5 s the operator counts
+ *  the link lost and closes it; the page stays up; the engine connects
+ *  again and gets every outcome it had not acknowledged. */
+async function engineLinkLoss(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    await engine.drop("silent");
+  });
+  activity.stop();
+  const checks: Record<string, string[]> = {};
+  const dropped = await engine.waitClosed(10_000);
+  const droppedAt = engine.closedAtMono;
+  if (!dropped || droppedAt === null) checks.linkLoss = ["the operator did not count the silent link lost in 10 s"];
+  else {
+    const after = droppedAt - faultMono;
+    ctx.notes.lostAfterMs = Math.round(after);
+    // The operator's 5 s (plan §4.13), counted from the last thing heard.
+    checks.linkLoss = after >= 3500 && after <= 7500 ? [] : [`the link was counted lost ${Math.round(after)} ms after the engine went silent (expected 5 s)`];
+  }
+  await engine.reconnect(20_000);
+  const back = engine.state;
+  // A lost engine is no reason to stop the page (plan §4.9: sockets and the
+  // buffer go on; only admissions stop).
+  checks.pageStayedUp = back !== null && back.exitOpen && back.stopReason === null ? [] : [`the page was not up when the engine came back: ${JSON.stringify(back)}`];
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+/** The engine restarts (a Hub deploy): a new owner generation says hello;
+ *  the operator answers `quiesced` once the previous owner's work is over;
+ *  the new engine asks `recover` about what it issued and has no outcome
+ *  of; the page stays up. */
+async function engineRestart(ctx: Ctx): Promise<ScenarioOutcome> {
+  const before = ctx.page.engine;
+  const { activity, faultMono } = await atMoment(ctx, async (running) => {
+    running.stop();
+  });
+  const previousGeneration = before.generation;
+  const engine = await ctx.page.restartEngine();
+  await engine.connectRetrying(20_000);
+  const checks: Record<string, string[]> = {};
+  const quiesced = await waitFor(() => engine.quiesced.length > 0, 10_000);
+  checks.quiesced = quiesced && engine.quiesced[0]!.previousGeneration === previousGeneration ? [] : [`no quiesced for generation ${previousGeneration}: ${JSON.stringify(engine.quiesced)}`];
+  ctx.notes.quiesced = engine.quiesced[0] ?? null;
+  // What the previous engine issued and has no committed outcome of.
+  const issued = activity.issued;
+  const committed = new Set((await ctx.store.outcomes(ctx.page.info.name, issued)).map((row) => row.attemptId));
+  const open = issued.filter((id) => !committed.has(id));
+  ctx.notes.recovered = open.length;
+  engine.recover(open);
+  const answered = await waitFor(() => engine.recoverResults.length > 0, 10_000);
+  checks.recoverAnswered = answered ? [] : ["no recoverResult in 10 s"];
+  const state = engine.state;
+  checks.pageStayedUp = state !== null && isUp(engine) ? [] : [`a new owner stopped the page: ${JSON.stringify(state)}`];
+  return { faultMono, checks, attempts: issued };
+}
+
+// ── the database, the disk, the container ────────────────────────────────
+
+/** The stand's Postgres stops: the engine commits nothing, acknowledges
+ *  nothing; the operator's buffer keeps it all and the page stays up; once
+ *  the database is back, everything is committed once. */
+async function databaseDown(ctx: Ctx): Promise<ScenarioOutcome> {
+  const postgres = process.env.STAND_POSTGRES_CONTAINER ?? "";
+  if (!postgres) throw new Error("STAND_POSTGRES_CONTAINER is not set");
+  const engine = ctx.page.engine;
+  const failuresBefore = engine.commitFailures;
+  const { activity, faultMono } = await atMoment(ctx, () => ctx.docker.action(postgres, "stop", 2));
+  const checks: Record<string, string[]> = {};
+  const downMs = 3000 + Math.round(ctx.random() * 3000);
+  await sleep(downMs);
+  await ctx.docker.action(postgres, "start");
+  const back = await ctx.store.reachable(30_000);
+  activity.stop();
+  checks.databaseBack = back ? [] : ["the stand's database did not come back in 30 s"];
+  ctx.notes.downMs = downMs;
+  ctx.notes.commitFailures = engine.commitFailures - failuresBefore;
+  // The page did not stop for it (plan §4.9).
+  const stops = transitions(ctx.page).filter((state) => state.atMono >= faultMono && (!state.exitOpen || state.stopReason !== null));
+  checks.pageStayedUp = stops.length === 0 && isUp(engine) ? [] : [`the page stopped while the database was down: ${JSON.stringify(stops[0] ?? engine.state)}`];
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+/** The buffer's disk fills up (only the disk page's small fixed-size tmpfs
+ *  volume): the page stops with `disk_full`, an alarm; the room comes back,
+ *  a `disk_full` gap is written first, and the page starts by itself. */
+async function diskFull(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const fill = "/data/buffer/pb-suite-fill";
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    const out = await inPage(ctx, ["sh", "-c", `free=$(df -B1 --output=avail /data/buffer | tail -1); size=$((free - 150 * 1024 * 1024)); [ "$size" -gt 0 ] && fallocate -l "$size" ${fill} && echo "$size"`]);
+    ctx.notes.filledBytes = Number(out.trim());
+  });
+  const checks: Record<string, string[]> = {};
+  await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
+  checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 2500);
+  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["disk_full"], false);
+  const alarm = engine.alarms.find(({ atMono, alarm: a }) => atMono >= faultMono && a.kind === "buffer" && a.detail.full === true);
+  checks.alarm = alarm ? [] : ["no buffer alarm saying full"];
+  const fullMs = 2500 + Math.round(ctx.random() * 2000);
+  await sleep(fullMs);
+  checks.stoodWhileFull = stoodBetween(transitions(ctx.page), faultMono + 2500, mono(), "while the disk was full");
+  const freed = mono();
+  await inPage(ctx, ["rm", "-f", fill]);
+  activity.stop();
+  await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 40_000, freed);
+  checks.upByItself = upWithin(transitions(ctx.page), freed, 40_000, "after the room came back");
+  checks.gap = await waitGap(ctx, "disk_full", faultMono);
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+/** The page's container restarts with its volumes: the profile and the
+ *  buffer are the same, the owner generation is remembered (an older one is
+ *  refused), and the page stands until the engine starts it. */
+async function containerRestart(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const profileInode = (await inPage(ctx, ["stat", "-c", "%i", "/data/profile/Default"])).trim();
+  const bufferId = engine.bufferId;
+  const { activity, faultMono } = await atMoment(ctx, () => ctx.docker.action(ctx.page.info.container, "restart", 10));
+  activity.stop();
+  await ctx.docker.action(ctx.page.info.capture, "restart", 1).catch((error: unknown) => (ctx.notes.captureRestart = String(error)));
+  const checks: Record<string, string[]> = {};
+  await engine.reconnect(90_000);
+  const back = mono();
+  checks.sameBuffer = engine.bufferId === bufferId ? [] : [`the buffer is another after the restart (${bufferId} → ${engine.bufferId})`];
+  Object.assign(checks, await standsThenStarts(ctx, back, 3000, "after the container restarted"));
+  const after = (await inPage(ctx, ["stat", "-c", "%i", "/data/profile/Default"])).trim();
+  checks.sameProfile = after === profileInode ? [] : [`the profile is another after the restart (inode ${profileInode} → ${after})`];
+  // The owner generation outlived the restart: an older owner is refused.
+  const stale = ctx.page.newEngine();
+  stale.generation = engine.generation - 1;
+  const refused = await stale.connect(10_000, false).then(
+    () => false,
+    (error: unknown) => String(error).includes("generation_stale"),
+  );
+  await stale.drop("clean");
+  checks.olderOwnerRefused = refused || engine.generation <= 1 ? [] : ["a hello of an older generation was taken after the restart"];
+  checks.gap = await waitGap(ctx, "operator_start", faultMono);
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+/** stopPage: the exit closes before CDP goes (plan §4.1); the page holds
+ *  until restartBrowser. */
+async function plannedStop(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    const result = await engine.command("stopPage");
+    if (!result.ok) throw new Error(`stopPage: ${result.detail ?? ""}`);
+  });
+  activity.stop();
+  const checks: Record<string, string[]> = {};
+  checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 1000);
+  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["owner_stop"], true);
+  Object.assign(checks, await standsThenStarts(ctx, mono(), 3000, "after stopPage"));
+  return { faultMono, checks, attempts: activity.issued };
+}
+
+// ── controls: each must show its violation in every run ──────────────────
+
+async function controlLeak(ctx: Ctx): Promise<ScenarioOutcome> {
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    ctx.notes.leak = await leak({ ip: ctx.topology.socksIp, port: ctx.topology.socksPort, username: STAND_SOCKS_USER, password: ctx.topology.socksPassword }, ctx.topology.caFile, `leak-${Math.floor(ctx.random() * 1e9)}`);
+  });
+  activity.stop();
+  return { faultMono, checks: {}, attempts: activity.issued };
+}
+
+async function controlBypass(ctx: Ctx): Promise<ScenarioOutcome> {
+  const target = ctx.topology.socksIp;
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    await inPage(ctx, ["nft", "insert", "rule", "inet", "pb", "output", "meta", "skuid", "pb-chrome", "ip", "daddr", target, "tcp", "dport", "443", "accept", "comment", `"${BYPASS}"`]);
+    try {
+      ctx.notes.bypass = (
+        await ctx.docker.exec(ctx.page.info.container, ["node", "-e", `const s=require("net").connect(443,${JSON.stringify(target)},()=>{s.write("pb-suite bypass");setTimeout(()=>{s.destroy();console.log("connected")},300)});s.on("error",(e)=>console.log(e.code))`], "pb-chrome")
+      ).output.trim();
+    } finally {
+      await dropRules(ctx, BYPASS);
+    }
+  });
+  activity.stop();
+  return { faultMono, checks: {}, attempts: activity.issued };
+}
+
+/** An engine that commits outcomes with no key and acknowledges late,
+ *  dropped between the two: the operator delivers again, and the naive
+ *  table holds the outcome twice. */
+async function controlDuplicate(ctx: Ctx): Promise<ScenarioOutcome> {
+  const naive = await ctx.page.restartEngine({ naive: true });
+  await naive.connectRetrying(20_000);
+  const issued = await naive.sendHub(3);
+  ctx.arm();
+  const faultMono = mono();
+  // Committed (naive) on arrival, acknowledged 1.5 s later: drop between.
+  await waitFor(async () => (await ctx.store.outcomes(ctx.page.info.name, issued, true)).length >= issued.length, 5000);
+  await naive.drop("clean");
+  await naive.connectRetrying(20_000);
+  await sleep(2500);
+  const normal = await ctx.page.restartEngine();
+  await normal.connectRetrying(20_000);
+  return { faultMono, checks: {}, attempts: issued, naive: true };
+}
+
+// ── what needs the site (PR 7) ───────────────────────────────────────────
+
+/** The site's own traffic for a run, once the operator loads the site: the
+ *  common criteria then judge real admissions, and this checks there was
+ *  traffic to judge. */
+function withSite(base: Scenario["run"]): Scenario["run"] {
+  return async (ctx) => {
+    const outcome = await base(ctx);
+    const grants = ctx.page.enginesOfRun.flatMap((engine) => engine.grants);
+    outcome.checks.siteTraffic = grants.some((grant) => grant.kind === "site") ? [] : ["the site sent nothing to admit: the run proves nothing about it"];
+    ctx.notes.grants = { hub: grants.filter((grant) => grant.kind === "hub").length, site: grants.filter((grant) => grant.kind === "site").length, ws: grants.filter((grant) => grant.kind === "ws").length };
+    return outcome;
+  };
+}
+
+/** The site works for a while, no fault: every request it made, and every
+ *  socket it opened, went under its own admission. */
+/** The site sends a socket message spec §2.6 does not allow: it never
+ *  leaves (the common criteria), and the page stops for it. */
+async function siteForbidden(ctx: Ctx): Promise<ScenarioOutcome> {
+  const engine = ctx.page.engine;
+  const { activity, faultMono } = await atMoment(ctx, async () => undefined);
+  const stopped = await engine.waitState((state) => state.stopReason === "unknown_ws_message", 30_000, faultMono);
+  activity.stop();
+  return { faultMono, checks: { stopped: stopped ? [] : ["the page did not stop for the forbidden message"] }, attempts: activity.issued };
+}
+
+async function siteSteady(ctx: Ctx): Promise<ScenarioOutcome> {
+  const { activity, faultMono } = await atMoment(ctx, async () => undefined);
+  await ctx.stand.config({ wsPush: { perMinute: 120, bytes: 400 } });
+  await sleep(15_000);
+  await ctx.stand.config({ wsPush: { perMinute: 0 } });
+  activity.stop();
+  const frames = (await ctx.store.eventsOfRun(ctx.page.engine.run)).filter((event) => event.frame !== null);
+  ctx.notes.framesCommitted = frames.length;
+  return { faultMono, checks: { frames: frames.length > 0 ? [] : ["no frame of the site's socket reached the engine"] }, attempts: activity.issued };
+}
+
+export const SCENARIOS: Scenario[] = [
+  { name: "loss-operator-kill", proves: "the operator killed (SIGKILL): the exit dies with it, s6 brings a new one that stands until restartBrowser, an operator_start gap is written, every attempt resolved once", needs: [], page: "main", moment: [0, 1500], run: operatorLoss("kill") },
+  { name: "loss-operator-hang", proves: "the operator hung (SIGSTOP): the watchdog kills it within its 5 s, then as loss-operator-kill", needs: [], page: "main", moment: [0, 1500], run: operatorLoss("hang") },
+  { name: "loss-holder-kill", proves: "the CDP holder killed: the exit closes at once, cdp_lost alarm, Chrome goes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("holder") },
+  { name: "loss-chrome-kill", proves: "Chrome killed: chrome_crashed, the exit closes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("chrome") },
+  { name: "loss-cdp-break", proves: "the DevTools connection broken with every process alive (TCP reset): cdp_lost, the exit closes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("cdp-break") },
+  { name: "loss-planned-stop", proves: "stopPage: the exit closes, the page holds (owner_stop) until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: plannedStop },
+  { name: "proxy-down", proves: "the page's SOCKS5 gone: proxy_unavailable, the exit closes, the page stands while it is gone and resumes by itself when it is back with the same IP", needs: [], page: "main", moment: [0, 1500], run: proxyFault("down") },
+  { name: "proxy-auth", proves: "the SOCKS5 refuses the login: proxy_auth, the exit closes, resumes by itself once the login is taken again", needs: [], page: "main", moment: [0, 1500], run: proxyFault("auth") },
+  { name: "exit-ip-change", proves: "the exit IP changed: exit_ip_changed, a halt that holds even when the IP comes back, until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: exitIpChange },
+  { name: "engine-link-loss", proves: "the engine silent for 5 s mid-request: the operator counts the link lost and closes it, the page stays up, the outcomes come again on the next connection, each committed once", needs: [], page: "main", moment: [300, 1500], run: engineLinkLoss },
+  { name: "engine-restart", proves: "the engine restarts mid-request (a new owner generation): quiesced, recover answered, the page stays up, every attempt resolved once", needs: [], page: "main", moment: [300, 1500], run: engineRestart },
+  { name: "db-unavailable", proves: "the stand's Postgres down: nothing acknowledged, the page stays up, the buffer keeps it, everything committed once after", needs: [], page: "main", moment: [0, 1500], run: databaseDown },
+  { name: "disk-full", proves: "the buffer's disk full (a fixed-size tmpfs volume): disk_full, the exit closes, an alarm; room back: a disk_full gap first, then the page starts by itself", needs: [], page: "disk", moment: [0, 1500], run: diskFull },
+  { name: "container-restart", proves: "the page's container restarts: the same profile and buffer, the owner generation remembered, the page stands until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: containerRestart },
+  { name: "control-leak", proves: "control: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — the criteria must catch all three", needs: [], page: "main", moment: [0, 500], control: ["arrived without any admission", "a closed write reached Fansly", "a forbidden socket message reached Fansly", "a socket opened"], run: controlLeak },
+  { name: "control-bypass", proves: "control: a hole in the page's rules and a connection past the proxy — the OS capture and the direct listener must catch it", needs: [], page: "main", moment: [0, 500], control: ["traffic past the proxy", "a connection past the proxy reached the stand directly"], run: controlBypass },
+  { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — the exactly-once check must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: ["committed 2 times"], run: controlDuplicate },
+  { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
+  { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },
+  { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },
+  { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome")) },
+  { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: none of them goes after the proxy is back (plan §4.5)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(proxyFault("down")) },
+  { name: "site-engine-restart", proves: "as engine-restart with Hub requests released: recover says unknown or resends, never not_sent of one that left", needs: ["PR7"], page: "main", moment: [300, 1500], site: SITE_TRAFFIC, run: withSite(engineRestart) },
+  { name: "site-closed-writes", proves: "the site's closed writes (message/ack) never reach Fansly: the rules extension and the operator both refuse them", needs: ["PR6", "PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, writeEveryMs: 2000 }, run: withSite(siteSteady) },
+  { name: "site-forbidden-ws", proves: "a forbidden socket message never leaves: the page stops with unknown_ws_message", needs: ["PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, forbiddenWs: true }, run: withSite(siteForbidden) },
+];
