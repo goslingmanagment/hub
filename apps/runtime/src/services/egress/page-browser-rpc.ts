@@ -729,11 +729,16 @@ export class PageBrowserRpcClient {
         return;
       case "pong":
         return;
-      case "quiesced":
+      case "quiesced": {
+        // The operator says it again on every connection of this owner (a
+        // connection may go before it is delivered): taken once.
+        const first = this.#quiesced === null;
         this.#quiesced = message;
+        if (!first) return;
         this.#log.info({ url: this.#o.url, previousGeneration: message.previousGeneration }, "page browser link: the previous owner's work is over");
         for (const listener of this.#quiescedListeners) safely(() => listener(message));
         return;
+      }
       case "commandResult": {
         const settle = this.#commands.get(message.commandId);
         if (settle !== undefined) settle(message);

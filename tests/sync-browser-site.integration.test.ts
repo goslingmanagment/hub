@@ -246,6 +246,24 @@ describe("the site path over the operator's RPC", () => {
 });
 
 describe("the hand-over: the operator's quiesced", () => {
+  it("a link that goes before quiesced is delivered does not stall the page: the reconnect of the same owner gets it (Astra PR 14, P1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    let release!: () => void;
+    r.operator.holdQuiesce = new Promise<void>((resolve) => (release = resolve));
+    const { browser } = await actorOn(r, { withRead: true });
+    await until(async () => browser.client.up, 5_000, "the link");
+    // The link goes and comes back with the same generation; the previous
+    // owner's work ends only afterwards.
+    browser.client.reconnect("a blip");
+    await until(async () => r.operator.links.filter((up) => up).length >= 2 && browser.client.up, 5_000, "the second connection");
+    expect(r.operator.hellos.map((hello) => hello.ownerGeneration)).toEqual([1, 1]);
+    expect(browser.client.quiesced).toBeNull();
+    release();
+    await until(async () => r.operator.physical.length >= 1, 15_000, "the first request after the hand-over");
+    expect(browser.client.quiesced).not.toBeNull();
+  }, 60_000);
+
   it("nothing goes before it; the pause counts from the last send it names; its owner is recorded on the profile", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

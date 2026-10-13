@@ -6,7 +6,12 @@
 //   time; then the protocol's major; then the owner generation: a lower one
 //   than the operator has accepted is refused, a higher one supersedes the
 //   current connection, and the new one gets `quiesced` once the previous
-//   generation's work has ended (plan §4.7).
+//   generation's work has ended (plan §4.7). The hand-over is the
+//   generation's, not the connection's: every accepted hello of that
+//   generation gets its `quiesced` again (a connection that went before it
+//   was delivered loses nothing — the engine sends nothing before it), and
+//   an operator that started again, knowing no hand-over of the generation
+//   it remembers, ends what came before and says so.
 // - Every later message carries the connection's generation; a lower one is
 //   refused, any other change of it is a protocol error.
 // - ping/pong both ways every second; nothing heard from the engine for 5 s
@@ -107,6 +112,10 @@ export class RpcServer {
   readonly #ledger = new CommandLedger();
   /** The page of the last accepted hello. */
   #pageId: number | null = null;
+  /** The hand-over of the current generation (plan §4.7): its `quiesced`,
+   *  once the earlier generations' work has ended — delivered to every
+   *  accepted hello of the generation. */
+  #handover: { pageId: number; generation: number; previousGeneration: number; done: Promise<{ lastSendMono: number | null; lastSendWall: number | null }> } | null = null;
   #server: Server | null = null;
   #active: Conn | null = null;
   /** Changes with the active connection. */
@@ -368,15 +377,25 @@ export class RpcServer {
     conn.ws.sendText(JSON.stringify(result));
     this.#log("link.up", { generation: conn.generation, superseded: hello.ownerGeneration > previous ? previous : null });
     this.#options.handlers.onLink(true, "hello");
-    if (hello.ownerGeneration > previous) {
-      void this.#options.handlers.quiesce(previous).then(
-        (last) => {
-          if (this.#active !== conn) return;
-          conn.ws.sendText(JSON.stringify({ type: "quiesced", previousGeneration: previous, lastSendMono: last.lastSendMono, lastSendWall: last.lastSendWall }));
-        },
-        (error: unknown) => this.#log("quiesce.failed", { error: errorMessage(error) }),
-      );
+    let handover = this.#handover;
+    if (handover === null || handover.pageId !== hello.pageId || handover.generation !== hello.ownerGeneration) {
+      // A new generation — or one this operator remembers but whose
+      // hand-over it does not know (it started again): what came before ends.
+      handover = { pageId: hello.pageId, generation: hello.ownerGeneration, previousGeneration: previous, done: this.#options.handlers.quiesce(previous) };
+      this.#handover = handover;
     }
+    const current = handover;
+    void current.done.then(
+      (last) => {
+        if (this.#active !== conn) return;
+        conn.ws.sendText(JSON.stringify({ type: "quiesced", previousGeneration: current.previousGeneration, lastSendMono: last.lastSendMono, lastSendWall: last.lastSendWall }));
+      },
+      (error: unknown) => {
+        // Asked again by the next hello of the generation.
+        if (this.#handover === current) this.#handover = null;
+        this.#log("quiesce.failed", { error: errorMessage(error) });
+      },
+    );
   }
 
   #onMessage(conn: Conn, value: unknown): void {
