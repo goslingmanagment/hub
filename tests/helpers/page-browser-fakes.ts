@@ -935,8 +935,9 @@ export class FakeCdpPort implements CdpPort {
     this.#listeners.set(method, [...(this.#listeners.get(method) ?? []), handler]);
   }
 
-  ack(seq: number): void {
+  ack(seq: number, _now?: boolean, written?: () => void): void {
     this.acks.push(seq);
+    written?.();
   }
 
   /** Methods a path took the acknowledgement of over. */

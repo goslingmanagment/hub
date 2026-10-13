@@ -690,20 +690,44 @@ describe("the site socket's events (PR 10)", () => {
     await buffer.close();
   });
 
-  it("opens and closes a socket's row in the commit of its ws.open and ws.close", async () => {
+  it("keeps a receipt past its event: the engine's ack deletes the event, not the receipt; it goes once forgotten, or with every other", async () => {
     const root = dir();
     let buffer = open(root);
-    const connection = { connectionId: "conn-a", attemptId: 7 };
-    await written(buffer.append({ kind: "ws.open", connectionId: "conn-a", attemptId: 7, sessionFingerprint: "f".repeat(64) }, undefined, { socket: { key: "S1|WS1", open: connection } }));
-    expect(buffer.socketOf("S1|WS1")).toEqual(connection);
+    await seqOf(buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" }));
+    await seqOf(buffer.append(wsFrame(2), undefined, { origin: "S1|WS1#42" }));
+    buffer.acknowledge(2);
+    await buffer.flush();
+    expect(all(buffer)).toEqual([]);
+    // Delivered again after the engine had both: not written again.
+    expect(await seqOf(buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" }))).toBe(1);
     buffer = await reopen(buffer, root);
-    expect(buffer.openSockets()).toEqual([{ key: "S1|WS1", ...connection }]);
-    // Not committed yet: still open in the file.
-    const closing = buffer.append({ kind: "ws.close", connectionId: "conn-a", code: null, reason: null }, undefined, { socket: { key: "S1|WS1", open: null } });
-    expect(buffer.socketOf("S1|WS1")).toEqual(connection);
+    expect(await seqOf(buffer.append(wsFrame(2), undefined, { origin: "S1|WS1#42" }))).toBe(2);
+    expect(all(buffer)).toEqual([]);
+    buffer.forgetReceipts(["S1|WS1#41"]);
+    await buffer.flush();
+    expect(await seqOf(buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" }))).toBe(3);
+    buffer.purgeReceipts();
+    await buffer.flush();
+    expect(await seqOf(buffer.append(wsFrame(2), undefined, { origin: "S1|WS1#42" }))).toBe(4);
+    await buffer.close();
+  });
+
+  it("keeps a site socket's connection: admitted, tied, opened with its ws.open, gone with its ws.close — each in its commit", async () => {
+    const root = dir();
+    let buffer = open(root);
+    await written(buffer.changeConnection({ connectionId: "conn-a", admitted: { attemptId: 7, fingerprint: "f".repeat(64) } }));
+    expect(buffer.connections()).toEqual([{ connectionId: "conn-a", attemptId: 7, fingerprint: "f".repeat(64), socketKey: null, opened: false }]);
+    await written(buffer.changeConnection({ connectionId: "conn-a", tied: "S1|WS1" }));
+    expect(buffer.connectionBySocket("S1|WS1")).toMatchObject({ connectionId: "conn-a", opened: false });
+    await written(buffer.append({ kind: "ws.open", connectionId: "conn-a", attemptId: 7, sessionFingerprint: "f".repeat(64) }, undefined, { connection: { connectionId: "conn-a", opened: true } }));
+    buffer = await reopen(buffer, root);
+    expect(buffer.connectionBySocket("S1|WS1")).toMatchObject({ connectionId: "conn-a", opened: true });
+    // Not committed yet: still there in the file.
+    const closing = buffer.append({ kind: "ws.close", connectionId: "conn-a", code: null, reason: null }, undefined, { connection: { connectionId: "conn-a", gone: true } });
+    expect(buffer.connections()).toHaveLength(1);
     await written(closing);
-    expect(buffer.socketOf("S1|WS1")).toBeNull();
-    expect(buffer.openSockets()).toEqual([]);
+    expect(buffer.connections()).toEqual([]);
+    expect(buffer.connectionBySocket("S1|WS1")).toBeNull();
     await buffer.close();
   });
 });

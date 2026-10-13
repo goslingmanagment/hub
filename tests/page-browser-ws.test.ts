@@ -822,24 +822,24 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
   });
 });
 
-describe("the holder's acknowledgement and its replay (Astra's review of PR 10, P1)", () => {
+describe("the holder's acknowledgement and its replay (Astra's reviews of PR 10)", () => {
   const CONNECTION = "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
   const SOCKET_KEY = "S1|WS1";
 
   /** The site socket's writes as a SocketBuffer over the real one, a slow
    *  disk or a crash in between: `holding` keeps their durability back until
-   *  `release`; a frame whose text has a `lose` marker is lost before its
-   *  commit (the operator died first). */
+   *  `release`; an event `lose` says is lost before its commit (the operator
+   *  died first). */
   class ControlledBuffer implements SocketBuffer {
     readonly inner: EventBuffer;
     holding = false;
-    readonly lose = new Set<string>();
+    lose: (event: Parameters<SocketBuffer["append"]>[0]) => boolean = () => false;
     readonly held: Array<() => void> = [];
     constructor(inner: EventBuffer) {
       this.inner = inner;
     }
     append(...[event, at, options]: Parameters<SocketBuffer["append"]>): ReturnType<SocketBuffer["append"]> {
-      if (event.kind === "ws.in" && [...this.lose].some((marker) => event.frame.includes(marker))) return { ok: true, durable: new Promise(() => undefined) };
+      if (this.lose(event)) return { ok: true, durable: new Promise(() => undefined) };
       const appended = this.inner.append(event, at, options);
       if (!appended.ok || !this.holding) return appended;
       return { ok: true, durable: appended.durable.then((durable) => new Promise((resolve) => this.held.push(() => resolve(durable)))) };
@@ -853,11 +853,20 @@ describe("the holder's acknowledgement and its replay (Astra's review of PR 10, 
     putOutcome(...args: Parameters<SocketBuffer["putOutcome"]>): ReturnType<SocketBuffer["putOutcome"]> {
       return this.inner.putOutcome(...args);
     }
-    socketOf(key: string): ReturnType<SocketBuffer["socketOf"]> {
-      return this.inner.socketOf(key);
+    changeConnection(...args: Parameters<SocketBuffer["changeConnection"]>): ReturnType<SocketBuffer["changeConnection"]> {
+      return this.inner.changeConnection(...args);
     }
-    openSockets(): ReturnType<SocketBuffer["openSockets"]> {
-      return this.inner.openSockets();
+    forgetReceipts(origins: readonly string[]): void {
+      this.inner.forgetReceipts(origins);
+    }
+    purgeReceipts(): void {
+      this.inner.purgeReceipts();
+    }
+    connectionBySocket(key: string): ReturnType<SocketBuffer["connectionBySocket"]> {
+      return this.inner.connectionBySocket(key);
+    }
+    connections(): ReturnType<SocketBuffer["connections"]> {
+      return this.inner.connections();
     }
     flush(): Promise<void> {
       return this.inner.flush();
@@ -884,12 +893,12 @@ describe("the holder's acknowledgement and its replay (Astra's review of PR 10, 
     return { chrome, holder, openBuffer, stored };
   }
 
-  async function operatorSide(holder: HolderUnderS6, buffer: SocketBuffer): Promise<{ cdp: Cdp; sockets: SiteSockets }> {
+  async function operatorSide(holder: HolderUnderS6, buffer: SocketBuffer, link = new FakeSocketLink()): Promise<{ cdp: Cdp; sockets: SiteSockets; link: FakeSocketLink }> {
     const cdp = new Cdp({ socketPath: holder.socketPath, commandTimeoutMs: 500, log: quiet });
     const sockets = new SiteSockets({
       cdp,
       buffer,
-      link: new FakeSocketLink(),
+      link,
       notAdmitting: () => null,
       sessionFingerprint: () => FINGERPRINT,
       authorizationBytes: () => authorizationBytes(SESSION_TOKEN),
@@ -902,20 +911,23 @@ describe("the holder's acknowledgement and its replay (Astra's review of PR 10, 
     });
     await cdp.connect();
     await cdp.replayEnded;
-    return { cdp, sockets };
+    return { cdp, sockets, link };
   }
 
   /** A connection open in the stream, as an earlier operator left it. */
   async function openConnection(buffer: EventBuffer): Promise<void> {
-    buffer.append({ kind: "ws.open", connectionId: CONNECTION, attemptId: 7, sessionFingerprint: FINGERPRINT }, undefined, { socket: { key: SOCKET_KEY, open: { connectionId: CONNECTION, attemptId: 7 } } });
+    buffer.changeConnection({ connectionId: CONNECTION, admitted: { attemptId: 7, fingerprint: FINGERPRINT } });
+    buffer.changeConnection({ connectionId: CONNECTION, tied: SOCKET_KEY });
+    buffer.append({ kind: "ws.open", connectionId: CONNECTION, attemptId: 7, sessionFingerprint: FINGERPRINT }, undefined, { connection: { connectionId: CONNECTION, opened: true } });
     await buffer.flush();
   }
 
-  function frame(chrome: FakeChrome, text: string): void {
-    chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: text }) } }, "S1");
+  function frame(chrome: FakeChrome, text: string, requestId = "WS1"): void {
+    chrome.event("Network.webSocketFrameReceived", { requestId, timestamp: monoMs() / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: text }) } }, "S1");
   }
 
   const kinds = (buffer: EventBuffer) => buffer.readEvents(0, 1000, 10_000_000).map((event) => JSON.parse(event.json) as Record<string, unknown>);
+  const framesOf = (events: Array<Record<string, unknown>>) => events.filter((event) => event.kind === "ws.in").map((event) => (JSON.parse(String(event.frame)) as { d: string }).d);
 
   it("a frame is acknowledged to the holder only once it is durable", async () => {
     const { chrome, holder, openBuffer, stored } = await holderWorld();
@@ -943,7 +955,7 @@ describe("the holder's acknowledgement and its replay (Astra's review of PR 10, 
     await openConnection(first);
     // The first operator: two frames kept and acknowledged...
     const controlled = new ControlledBuffer(first);
-    controlled.lose.add("lost-3");
+    controlled.lose = (event) => event.kind === "ws.in" && event.frame.includes("lost-3");
     const a = await operatorSide(holder, controlled);
     frame(chrome, "frame-1");
     frame(chrome, "frame-2");
@@ -969,14 +981,151 @@ describe("the holder's acknowledgement and its replay (Astra's review of PR 10, 
     await b.sockets.afterRestart();
     await second.flush();
     const events = kinds(second);
-    const frames = events.filter((event) => event.kind === "ws.in").map((event) => JSON.parse(String(event.frame)).d as string);
-    expect(frames.sort()).toEqual(["frame-1", "frame-2", "frame-4", "lost-3"]);
+    expect(framesOf(events).sort()).toEqual(["frame-1", "frame-2", "frame-4", "lost-3"]);
     expect(events.slice(-2)).toMatchObject([
       { kind: "ws.close", connectionId: CONNECTION, code: null, reason: null },
       { kind: "gap", reason: "operator_start" },
     ]);
     expect(events.every((event) => event.kind !== "ws.in" || event.connectionId === CONNECTION)).toBe(true);
-    // The replayed frame keeps the time Chrome saw it, not the restart's.
-    expect(second.openSockets()).toEqual([]);
+    expect(second.connections()).toEqual([]);
+  });
+
+  it("a crash before ws.open's commit: the restarted operator rebuilds the open (and its wsDone) from the kept admission, and writes the frames delivered again after it (Astra's re-review, 2)", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const first = openBuffer();
+    // The first operator admits a socket and ties it: both kept before the
+    // CONNECT goes on and before the tie is acknowledged.
+    const controlled = new ControlledBuffer(first);
+    const a = await operatorSide(holder, controlled);
+    const ticket = a.sockets.admit("wsv3.fansly.com", 443);
+    if (typeof ticket === "string") throw new Error(ticket);
+    a.sockets.onAdmitResult({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ticket.id, admit: true, deadlineMono: monoMs() + 5000, attemptId: 77 });
+    expect(await ticket.granted).toBeGreaterThan(monoMs());
+    chrome.event("Network.webSocketCreated", { requestId: "WS1", url: "wss://wsv3.fansly.com/?v=3" }, "S1");
+    chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    await until(() => first.connectionBySocket(SOCKET_KEY) !== null && stored() === 0, 3000, "the tie kept and acknowledged");
+    // The 101 and two frames: the operator dies before their commit.
+    controlled.lose = (event) => event.kind === "ws.open" || event.kind === "ws.in";
+    chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101, headers: {} } }, "S1");
+    frame(chrome, "after-101-1");
+    frame(chrome, "after-101-2");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    a.cdp.close();
+    expect(stored()).toBe(3);
+    await first.close();
+    // The next operator.
+    const second = openBuffer();
+    cleanups.push(() => second.close());
+    const b = await operatorSide(holder, second);
+    cleanups.push(() => b.cdp.close());
+    await until(() => stored() === 0, 3000, "what was kept written and acknowledged");
+    await b.sockets.afterRestart();
+    await second.flush();
+    const events = kinds(second);
+    expect(events.map((event) => (event.kind === "gap" ? `gap:${String(event.reason)}` : event.kind))).toEqual(["ws.open", "ws.in", "ws.in", "ws.close", "gap:operator_start"]);
+    expect(events[0]).toMatchObject({ connectionId: ticket.id, attemptId: 77, sessionFingerprint: FINGERPRINT });
+    expect(framesOf(events)).toEqual(["after-101-1", "after-101-2"]);
+    expect(JSON.parse(second.outcomes([77])[0]!.json)).toMatchObject({ type: "wsDone", connectionId: ticket.id, attemptId: 77, sent: true, status: 101 });
+  });
+
+  it("a frame delivered again that no kept connection can take is not acknowledged: the holder keeps it", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const first = openBuffer();
+    const controlled = new ControlledBuffer(first);
+    controlled.lose = () => true;
+    const a = await operatorSide(holder, controlled);
+    // A frame of a socket the buffer knows nothing of, delivered live: lost
+    // (a lost socket's), acknowledged; delivered again: kept.
+    frame(chrome, "orphan", "WS9");
+    await until(() => holder.holder!.stats.lastSeq === 1 && stored() === 0, 3000, "the live one acknowledged");
+    a.cdp.close();
+    await first.close();
+    // Delivered again: the holder must still have something to replay.
+    const second = openBuffer();
+    cleanups.push(() => second.close());
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS9", response: { opcode: 1, payloadData: "{}" } }, "S1");
+    await until(() => stored() === 1, 3000, "a message kept while no operator reads");
+    const b = await operatorSide(holder, second);
+    cleanups.push(() => b.cdp.close());
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(stored()).toBe(1);
+    expect(kinds(second)).toEqual([]);
+  });
+
+  it("the engine's ack deletes an event, not its receipt: a frame durable but not acknowledged to the holder, acknowledged by the engine, is not written again when the holder delivers it (Astra's re-review, 3)", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const first = openBuffer();
+    await openConnection(first);
+    const controlled = new ControlledBuffer(first);
+    const a = await operatorSide(holder, controlled);
+    controlled.holding = true;
+    frame(chrome, "once");
+    await until(() => controlled.held.length === 1, 3000, "the frame's write");
+    await first.flush();
+    a.cdp.close();
+    controlled.release();
+    await first.close();
+    // The restarted operator: the engine takes the stream and acknowledges
+    // it before the holder's delivery comes.
+    const second = openBuffer();
+    cleanups.push(() => second.close());
+    expect(framesOf(kinds(second))).toEqual(["once"]);
+    second.acknowledge(second.lastSeq);
+    await second.flush();
+    expect(kinds(second)).toEqual([]);
+    const b = await operatorSide(holder, second);
+    cleanups.push(() => b.cdp.close());
+    await until(() => stored() === 0, 3000, "the delivery acknowledged");
+    await second.flush();
+    expect(kinds(second)).toEqual([]);
+    // Its acknowledgement reached the holder: the receipt goes.
+    await until(() => (void second.flush(), second.receiptCount() === 0), 3000, "the receipt forgotten");
+  });
+
+  it("a receipt goes once its acknowledgement reached the holder, and every receipt when a new Chrome starts", async () => {
+    const { chrome, holder, openBuffer } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    await openConnection(buffer);
+    const { cdp, sockets } = await operatorSide(holder, buffer);
+    cleanups.push(() => cdp.close());
+    frame(chrome, "r-1");
+    frame(chrome, "r-2");
+    await until(() => framesOf(kinds(buffer)).length === 2, 3000, "two frames");
+    await until(() => (void buffer.flush(), buffer.receiptCount() === 0), 3000, "the receipts forgotten");
+    // One whose acknowledgement could not go (the link down): kept until a new Chrome.
+    buffer.append({ kind: "ws.in", connectionId: CONNECTION, frame: "x" }, undefined, { origin: "S9|WS9#9" });
+    await buffer.flush();
+    expect(buffer.receiptCount()).toBe(1);
+    await sockets.chromeStarting();
+    await buffer.flush();
+    expect(buffer.receiptCount()).toBe(0);
+  });
+});
+
+describe("a connection's one terminal close (Astra's re-review of PR 10, 4)", () => {
+  it("what CDP still says of a connection after the page stopped is dropped: frames before, exactly one close, nothing after", async () => {
+    const w = await world();
+    await opened(w);
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"before"}' } }, "S1");
+    // The open and the frame are committed: the kept connection says open.
+    await w.buffer.flush();
+    expect(w.buffer.connectionBySocket("S1|WS1")).toMatchObject({ opened: true });
+    w.sockets.endAll("control lost");
+    // The browser goes, and CDP still speaks of the socket for a moment.
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"after"}' } }, "S1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, "S1");
+    await w.buffer.flush();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"later"}' } }, "S1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
+    await w.buffer.flush();
+    const events = w.events();
+    expect(events.map((event) => event.kind)).toEqual(["ws.open", "ws.in", "ws.close"]);
+    expect(events[1]).toMatchObject({ frame: '{"t":2,"d":"before"}' });
+    expect(w.buffer.connections()).toEqual([]);
+    // Every one of them acknowledged to the holder, none kept.
+    expect(w.cdp.acks.length).toBeGreaterThanOrEqual(5);
   });
 });

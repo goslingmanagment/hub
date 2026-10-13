@@ -35,8 +35,11 @@ export type EventHandler = (event: CdpEvent) => void;
 export interface CdpPort {
   send<T = Record<string, unknown>>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T>;
   on(method: string, handler: EventHandler): void;
-  /** Acknowledge a message to the holder; `now`: at once, not batched. */
-  ack(seq: number, now?: boolean): void;
+  /** Acknowledge a message to the holder; `now`: at once, not batched;
+   *  `written`: called once the acknowledgement is handed to the holder's
+   *  socket (the holder gets it even if the operator dies then), never if
+   *  the link went first. */
+  ack(seq: number, now?: boolean, written?: () => void): void;
   /** Events of this method are acknowledged by their handler (`ack`), not
    *  once it ran. */
   holdAcks(method: string): void;
@@ -96,6 +99,7 @@ export class Cdp implements CdpPort {
   /** Methods whose events their handler acknowledges. */
   readonly #heldAcks = new Set<string>(["Fetch.requestPaused"]);
   #ackBatch: number[] = [];
+  #ackWritten: Array<() => void> = [];
   #ackTimer: NodeJS.Timeout | null = null;
   #cdpUp = false;
   #lastSeq = 0;
@@ -222,8 +226,9 @@ export class Cdp implements CdpPort {
 
   /** Acknowledge a message to the holder (batched, ≤ 20 ms; `now`: written
    *  to the link at once, with whatever waits). */
-  ack(seq: number, now = false): void {
+  ack(seq: number, now = false, written?: () => void): void {
     this.#ackBatch.push(seq);
+    if (written) this.#ackWritten.push(written);
     if (now) {
       this.flushAcks();
       return;
@@ -241,8 +246,21 @@ export class Cdp implements CdpPort {
     this.#ackTimer = null;
     if (this.#ackBatch.length === 0) return;
     const seqs = this.#ackBatch;
+    const written = this.#ackWritten;
     this.#ackBatch = [];
-    this.#socket?.write(encodeMessage(JSON.stringify({ t: "ack", seqs })));
+    this.#ackWritten = [];
+    const socket = this.#socket;
+    if (!socket) return;
+    socket.write(encodeMessage(JSON.stringify({ t: "ack", seqs })), (error) => {
+      if (error) return;
+      for (const done of written) {
+        try {
+          done();
+        } catch (failure) {
+          this.#log("ack.written_failed", { error: (failure as Error).message });
+        }
+      }
+    });
   }
 
   /** A message of the holder's own protocol (exit.closed; stand faults). */
@@ -254,6 +272,7 @@ export class Cdp implements CdpPort {
     if (this.#ackTimer) clearTimeout(this.#ackTimer);
     this.#ackTimer = null;
     this.#ackBatch = [];
+    this.#ackWritten = [];
   }
 
   close(): void {

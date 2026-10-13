@@ -50,12 +50,15 @@
 // goes with the outcome's resultAck.
 //
 // The site's socket (PR 10) gives each of its events the Chrome message it
-// was made of (`origin`): an event whose origin is already here — written,
-// or waiting for its commit — is not written again, so a message the holder
-// delivers again after an operator restart lands once. Its ws.open and
-// ws.close also open and close the socket's row (`socket`, schema.ts v3) in
-// the same commit: a restarted operator finds the connection of a frame
-// delivered again, and the connections the previous Chrome left open.
+// was made of (`origin`): its receipt is written in the event's commit, and
+// an event whose origin has a receipt — or waits for its commit — is not
+// written again, so a message the holder delivers again after an operator
+// restart lands once. A receipt outlives its event (the engine's ack deletes
+// the event, not the receipt): it goes when the socket's path says its
+// acknowledgement reached the holder (`forgetReceipts`), or with every
+// other when a new Chrome — a new holder — starts (`purgeReceipts`). The
+// socket's connections are kept too (`changeConnection`, or with an event:
+// schema.ts v3): admitted, tied to Chrome's socket, opened, gone.
 //
 // Hub attempts (PR 9) leave their steps here too (`markAttempt`: received,
 // issued in the page, released to the network), each written before it is
@@ -76,15 +79,16 @@ import {
   type AttemptRecord,
   type AttemptStep,
   type Commit,
+  type ConnectionChange,
   type NewEventRow,
-  type SocketRow,
+  type StoredConnection,
   type NewOutcomeRow,
   type OpenCause,
   type StoredEvent,
   type StoredOutcome,
 } from "./store.ts";
 
-export type { AttemptRecord, AttemptStep };
+export type { AttemptRecord, AttemptStep, ConnectionChange, StoredConnection };
 
 /** Why a write is refused: a cap (`buffer_full`), the disk (`disk_full`),
  *  or a buffer that could not be opened (`buffer_unavailable`). */
@@ -232,17 +236,16 @@ interface PendingEvent {
   /** A gap mark: its "from" is the event before it, unless given. */
   gap?: { reason: GapReason; from: { seq: number | null; wall: number | null } | null };
   origin?: string;
-  socket?: { key: string; open: { connectionId: string; attemptId: number } | null };
+  connection?: ConnectionChange;
 }
 
 /** What a producer says of an event besides the event itself (PR 10). */
 export interface AppendOptions {
-  /** The Chrome message it was made of: an event of an origin already
-   *  written, or waiting for its commit, is not written again. */
+  /** The Chrome message it was made of: an event of an origin with a
+   *  receipt, or waiting for its commit, is not written again. */
   origin?: string;
-  /** The site socket it opens (its connection) or closes (null), written
-   *  in the same commit. */
-  socket?: { key: string; open: { connectionId: string; attemptId: number } | null };
+  /** A change of the site socket's connection, in the same commit. */
+  connection?: ConnectionChange;
 }
 
 interface PendingOutcome {
@@ -263,7 +266,15 @@ interface PendingMark {
   resolve: (durable: Durable) => void;
 }
 
-type Pending = PendingEvent | PendingOutcome | PendingMark;
+interface PendingConnection {
+  type: "connection";
+  change: ConnectionChange;
+  atWall: number;
+  bytes: number;
+  resolve: (durable: Durable) => void;
+}
+
+type Pending = PendingEvent | PendingOutcome | PendingMark | PendingConnection;
 
 function defaultDiskFree(dir: string): number {
   const stats = statfsSync(dir);
@@ -316,6 +327,9 @@ export class EventBuffer {
   #pendingMarks = new Map<number, AttemptStep[]>();
   /** Events of an origin waiting for their commit. */
   #pendingOrigins = new Map<string, PendingEvent>();
+  /** Receipts to forget, every receipt to go, with the next commit. */
+  #forgetReceipts = new Set<string>();
+  #purgeReceipts = false;
   #lastPurge = 0;
   #purgeDue = false;
   #unavailable: BufferUnavailable | null = null;
@@ -546,7 +560,7 @@ export class EventBuffer {
       const store = this.#store;
       if (!this.#closed && store !== null) {
         try {
-          const seq = store.originSeq(origin);
+          const seq = store.receiptSeq(origin);
           if (seq !== null) return { ok: true, durable: Promise.resolve({ ok: true, seq }) };
         } catch (error) {
           this.#storageFailed(error, "read");
@@ -557,31 +571,64 @@ export class EventBuffer {
     const body = JSON.stringify(event);
     const item: PendingEvent = { type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
     if (origin !== undefined) item.origin = origin;
-    if (options.socket !== undefined) item.socket = options.socket;
+    if (options.connection !== undefined) item.connection = options.connection;
     const appended = this.#accept(item);
     if (appended.ok && origin !== undefined) this.#pendingOrigins.set(origin, item);
     return appended;
   }
 
-  /** The connection a site socket opened in the stream, if it is open there
-   *  (committed). */
-  socketOf(key: string): { connectionId: string; attemptId: number } | null {
+  /** A change of the site socket's connection on its own (admitted, tied),
+   *  durable when its promise says so. */
+  changeConnection(change: ConnectionChange): Appended {
+    return this.#accept({ type: "connection", change, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+  }
+
+  /** The acknowledgement of these messages reached the holder: their
+   *  receipts go with the next commit. */
+  forgetReceipts(origins: readonly string[]): void {
+    if (this.#store === null || origins.length === 0) return;
+    for (const origin of origins) this.#forgetReceipts.add(origin);
+    this.#schedule();
+  }
+
+  /** A new Chrome, a new holder: no message from before can come again. */
+  purgeReceipts(): void {
+    if (this.#store === null) return;
+    this.#purgeReceipts = true;
+    this.#forgetReceipts.clear();
+    this.#schedule();
+  }
+
+  /** Receipts kept (diagnostics, tests); 0 while the buffer is not open. */
+  receiptCount(): number {
+    const store = this.#store;
+    if (this.#closed || store === null) return 0;
+    try {
+      return store.receiptCount();
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return 0;
+    }
+  }
+
+  /** The connection tied to a Chrome socket (committed), if any. */
+  connectionBySocket(key: string): StoredConnection | null {
     const store = this.#store;
     if (this.#closed || store === null) return null;
     try {
-      return store.socketOf(key);
+      return store.connectionBySocket(key);
     } catch (error) {
       this.#storageFailed(error, "read");
       return null;
     }
   }
 
-  /** Every site socket open in the stream (committed), oldest first. */
-  openSockets(): Array<{ key: string; connectionId: string; attemptId: number }> {
+  /** Every connection kept (committed), oldest first. */
+  connections(): StoredConnection[] {
     const store = this.#store;
     if (this.#closed || store === null) return [];
     try {
-      return store.openSockets();
+      return store.connections();
     } catch (error) {
       this.#storageFailed(error, "read");
       return [];
@@ -873,8 +920,9 @@ export class EventBuffer {
 
   #oldestAgeMs(): number {
     const walls = [this.#oldestEventWall, this.#oldestOutcomeWall].filter((wall): wall is number => wall !== null);
-    // Marks of Hub attempts are no record of their own: they do not age.
-    for (const item of this.#pending) if (item.type !== "mark") walls.push(item.atWall);
+    // Marks of Hub attempts and connection changes are no record of their
+    // own: they do not age.
+    for (const item of this.#pending) if (item.type !== "mark" && item.type !== "connection") walls.push(item.atWall);
     if (walls.length === 0) return 0;
     return Math.max(0, this.#now() - Math.min(...walls));
   }
@@ -988,7 +1036,11 @@ export class EventBuffer {
     const deleteTo = this.#ackedUpTo > 0 && this.#firstSeq !== null && this.#firstSeq <= this.#ackedUpTo ? Math.min(this.#ackedUpTo, this.#firstSeq + DELETE_CHUNK - 1) : null;
     const deleteOutcomes = [...this.#outcomeAcks];
     const purge = this.#purgeDue ? { ackedBefore: this.#now() - ATTEMPT_ACKED_KEEP_MS, before: this.#now() - ATTEMPT_KEEP_MS } : null;
-    if (items.length === 0 && deleteTo === null && deleteOutcomes.length === 0 && purge === null) return true;
+    const forgetReceipts = [...this.#forgetReceipts];
+    const purgeReceipts = this.#purgeReceipts;
+    if (items.length === 0 && deleteTo === null && deleteOutcomes.length === 0 && purge === null && forgetReceipts.length === 0 && !purgeReceipts) return true;
+    this.#forgetReceipts.clear();
+    this.#purgeReceipts = false;
     this.#pending = [];
     this.#pendingBytes = 0;
     this.#pendingOutcomes.clear();
@@ -1002,7 +1054,8 @@ export class EventBuffer {
     const events: NewEventRow[] = [];
     const outcomes: NewOutcomeRow[] = [];
     const marks: AttemptMark[] = [];
-    const sockets: SocketRow[] = [];
+    const receipts: NonNullable<Commit["receipts"]> = [];
+    const connections: NonNullable<Commit["connections"]> = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
     let seq = store.lastSeq;
     let previousWall = store.lastWall;
@@ -1017,23 +1070,31 @@ export class EventBuffer {
         settled.push({ item, seq: null });
         continue;
       }
+      if (item.type === "connection") {
+        connections.push({ ...item.change, atWall: item.atWall });
+        settled.push({ item, seq: null });
+        continue;
+      }
       let body = item.body;
       if (item.gap && item.gap.from === null) {
         body = JSON.stringify({ kind: "gap", fromSeq: seq === 0 ? null : seq, fromWall: seq === 0 ? null : previousWall, reason: item.gap.reason });
       }
       seq += 1;
       const json = `{"seq":${seq},"atMono":${item.atMono},"atWall":${item.atWall},${body.slice(1)}`;
-      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json), origin: item.origin ?? null });
-      if (item.socket) sockets.push({ key: item.socket.key, open: item.socket.open, atWall: item.atWall });
+      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json) });
+      if (item.origin !== undefined) receipts.push({ origin: item.origin, seq, atWall: item.atWall });
+      if (item.connection) connections.push({ ...item.connection, atWall: item.atWall });
       settled.push({ item, seq });
       previousWall = item.atWall;
     }
 
     let committed;
     try {
-      committed = store.commit({ events, outcomes, marks, sockets, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
+      committed = store.commit({ events, outcomes, marks, receipts, forgetReceipts, purgeReceipts, connections, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
+      for (const origin of forgetReceipts) this.#forgetReceipts.add(origin);
+      if (purgeReceipts) this.#purgeReceipts = true;
       if (purge !== null) this.#purgeDue = true;
       for (const { item } of settled) item.resolve({ ok: false, reason: "disk_full" });
       this.#storageFailed(error, "write");

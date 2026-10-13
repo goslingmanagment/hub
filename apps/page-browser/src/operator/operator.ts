@@ -696,8 +696,9 @@ export class Operator {
         check();
         this.control.reset();
         this.guard.reset();
-        // A connection of the previous Chrome is gone (plan §4.4, step 6).
-        this.sockets.chromeStarting();
+        // A connection of the previous Chrome is gone (plan §4.4, step 6),
+        // and so is its holder.
+        await this.sockets.chromeStarting();
         this.#controlExpected = true;
         await this.chrome.start();
       });

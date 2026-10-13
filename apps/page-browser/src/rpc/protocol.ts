@@ -40,7 +40,11 @@
 //   an admission that finds its socket gone gets `wsDone` with `sent:
 //   false`. Every connection that opened is closed in the stream: by CDP's
 //   word, when the browser goes under it, or — after a restart of the
-//   operator — before its `operator_start` gap. `alarm.detail` of
+//   operator — before its `operator_start` gap. A ws.open that died with
+//   the previous operator is rebuilt by the next one from the connection it
+//   kept, with its `wsDone` (`sentMono` null: that moment died with it); one
+//   that never opened gets `wsDone` with the handshake's fate unknown
+//   (`sent` true once tied, `status` null). `alarm.detail` of
 //   `unknown_ws_message` says where it was caught: `left: false` and `at:
 //   "proxy"` for a record the socket gate held, `left: true` for one CDP
 //   says left.

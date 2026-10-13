@@ -579,6 +579,8 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.operator.page.snapshot.stopReason === "env_mismatch", 10_000, "the failure");
     expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", halted: false, retryAtWall: expect.any(Number) });
+    // The journal is written through a stream: its line may lag the state.
+    await until(() => journal(s.logDir, "states").some((line) => line.stopReason === "env_mismatch"), 3000, "the journal's line");
     const failure = journal(s.logDir, "states").find((line) => line.stopReason === "env_mismatch");
     expect(String(failure?.note)).toContain(reason);
     // The engine is told (its socket may still be delivering it).
