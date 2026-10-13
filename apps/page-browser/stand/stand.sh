@@ -278,7 +278,9 @@ in_runner() {
   local cmd="node --no-warnings /pb/stand/runner/$script --name $name"
   for arg in "$@"; do cmd="$cmd $(printf '%q' "$arg")"; done
   if [[ "$wait" == yes ]]; then
-    docker exec "$(runner)" sh -c "$cmd 2>&1 | tee /stand/results/$script-$name.log"
+    # The run's own exit status, not tee's (series: 0; load: 0 passed, 1
+    # failed, 3 incomplete).
+    docker exec "$(runner)" bash -o pipefail -c "$cmd 2>&1 | tee /stand/results/$script-$name.log"
   else
     docker exec -d "$(runner)" sh -c "$cmd > /stand/results/$script-$name.log 2>&1"
     if [[ "$script" == series.ts ]]; then
