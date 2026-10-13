@@ -19,14 +19,16 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { mono, sleep } from "../shared.ts";
-import { pastTheProxy, readCapture } from "./capture.ts";
+import { siteVariant } from "../fansly/front.ts";
+import { mono } from "../shared.ts";
+import { captureCovers, pastTheProxy, readCapture, sendSentinel, sentinelPorts } from "./capture.ts";
 import { Page, loadTopology, waitFor, type Ctx, type PageInfo, type ScenarioOutcome, type Topology } from "./context.ts";
-import { closedWrites, contiguous, directArrivals, exactlyOnce, forbiddenSocketMessages, unadmittedArrivals, type Resolution } from "./criteria.ts";
+import { closedWrites, directArrivals, eventsComplete, exactlyOnce, forbiddenSocketMessages, unadmittedArrivals, variantLoaded, type BufferBounds, type PagesByAddress, type Resolution } from "./criteria.ts";
 import { Docker } from "./docker.ts";
 import { StandFansly, type JournalEvent } from "./fansly.ts";
 import { SCENARIOS, type Need, type Scenario } from "./scenarios.ts";
 import { Store } from "./store.ts";
+import { judge, SETUP_FAILURE, violationsOf, type Checks, type COMMON_CHECKS, type Control } from "./verdict.ts";
 
 export interface RunRecord {
   scenario: string;
@@ -36,7 +38,7 @@ export interface RunRecord {
   ok: boolean;
   invalid: boolean;
   violations: string[];
-  checks: Record<string, string[]>;
+  checks: Checks;
   notes: Record<string, unknown>;
   startedWall: number;
   durationMs: number;
@@ -52,7 +54,7 @@ export interface ScenarioRecord {
   invalid: number;
   /** Why it did not run (a PR it needs), or null. */
   skipped: string | null;
-  control: string[] | null;
+  control: Control | null;
   page: string;
   runs: Array<Pick<RunRecord, "run" | "seed" | "momentMs" | "ok" | "invalid" | "violations">>;
 }
@@ -108,6 +110,11 @@ export interface Stand {
   pages: Map<string, Page>;
 }
 
+/** The stand's pages by the address the SOCKS5 sees them from. */
+export function pagesByAddress(topology: Topology): PagesByAddress {
+  return new Map(topology.pages.map((info) => [info.egressIp, info.name]));
+}
+
 export async function openStand(): Promise<Stand> {
   const topology = loadTopology();
   const store = new Store(process.env.STAND_PG_HOST ?? "postgres");
@@ -151,12 +158,27 @@ async function notReady(needs: readonly Need[], page: Page, stand: StandFansly, 
   return reasons.length === 0 ? null : reasons.join("; ");
 }
 
+interface RunEvidence {
+  label: string;
+  outcome: ScenarioOutcome | null;
+  journal: JournalEvent[];
+  fromWall: number;
+  toWall: number;
+  /** The engine's committed position in each buffer when the run began. */
+  positions: ReadonlyMap<string, number>;
+  /** The run's capture sentinels (ports) sent to the page. */
+  sentinels: number[];
+}
+
 /** The common criteria of every run (plan §5, stage 2). */
-async function commonChecks(s: Stand, page: Page, label: string, outcome: ScenarioOutcome | null, journal: JournalEvent[], fromWall: number, toWall: number, positions: ReadonlyMap<string, number>): Promise<Record<string, string[]>> {
+async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Checks> {
+  const { journal } = run;
   const grants = [...s.pages.values()].flatMap((p) => p.enginesOfRun.flatMap((engine) => engine.grants));
-  const capture = readCapture(join(s.topology.results, "capture", page.info.name), fromWall, toWall);
-  const attempts = await s.store.attemptsOfRun(label);
-  const outcomes = await s.store.outcomes(page.info.name, attempts.map((attempt) => attempt.attemptId), outcome?.naive === true);
+  // The run's own interval, exactly: its sentinels are sent inside it, and
+  // what the run before let out is that run's.
+  const capture = readCapture(join(s.topology.results, "capture", page.info.name), run.fromWall, run.toWall);
+  const attempts = await s.store.attemptsOfRun(run.label);
+  const outcomes = await s.store.outcomes(page.info.name, attempts.map((attempt) => attempt.attemptId), run.outcome?.naive === true);
   const recovered = new Map<number, "outcome_resent" | "not_sent" | "unknown">();
   for (const engine of page.enginesOfRun) for (const result of engine.recoverResults) for (const answer of result.attempts) recovered.set(answer.attemptId, answer.state);
   const arrivedRids = new Set(journal.filter((event) => event.type === "req").map((event) => /[?&]rid=([^&]+)/.exec(String(event.path))?.[1] ?? "").filter(Boolean));
@@ -166,24 +188,33 @@ async function commonChecks(s: Stand, page: Page, label: string, outcome: Scenar
     recovered: recovered.get(attempt.attemptId) ?? null,
     arrived: attempt.rid !== null && arrivedRids.has(attempt.rid),
   }));
-  const buffers = new Set(page.enginesOfRun.map((engine) => engine.bufferId).filter(Boolean));
-  // From where the engine stood when the run began: what came before was
-  // judged by its own run.
-  const seqs = new Map<string, number[]>();
-  for (const bufferId of buffers) {
-    const from = positions.get(bufferId) ?? 0;
-    seqs.set(bufferId, (await s.store.seqsOf(bufferId)).filter((seq) => seq >= from));
+  // Each buffer the run touched, between its bounds: where the engine stood
+  // when the run began (0 for a buffer it had never seen), and the highest
+  // number the operator sent on the wire during the run.
+  const bounds: BufferBounds[] = [];
+  for (const bufferId of new Set(page.enginesOfRun.map((engine) => engine.bufferId).filter(Boolean))) {
+    const start = run.positions.get(bufferId) ?? 0;
+    bounds.push({ bufferId, start, wireMax: Math.max(0, ...page.enginesOfRun.map((engine) => engine.wireMax.get(bufferId) ?? 0)), stored: (await s.store.seqsOf(bufferId)).filter((seq) => seq > start) });
   }
-  return {
-    "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants),
+  const past = pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort });
+  const checks: Record<(typeof COMMON_CHECKS)[number], string[]> = {
+    "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants, pagesByAddress(s.topology)),
     "C2 no closed write": closedWrites(journal),
     "C3 no forbidden socket message": forbiddenSocketMessages(journal),
-    "C4 no traffic past the proxy (OS capture)": capture.files === 0 ? [`no capture of ${page.info.name}: the OS-level check could not run`] : pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort }),
+    // No sentinel, no evidence: an empty capture says nothing.
+    "C4 no traffic past the proxy (OS capture)": [...captureCovers(capture.packets, page.info.controlIp, s.topology.engineIp, run.sentinels), ...past],
     "C5 nothing reached the stand past the proxy": directArrivals(journal),
     "C6 every attempt resolved exactly once": exactlyOnce(resolutions),
-    "C7 no event deleted before it was committed": contiguous(seqs),
+    "C7 no event deleted before it was committed": eventsComplete(bounds),
     "C8 the stand's Fansly had no error": journal.filter((event) => event.type === "server.error").map((event) => `stand error: ${String(event.error).slice(0, 200)}`),
   };
+  return checks;
+}
+
+/** The capture's last lines are on disk once the run's last sentinel is. */
+async function awaitSentinel(s: Stand, page: Page, port: number, fromWall: number): Promise<void> {
+  const dir = join(s.topology.results, "capture", page.info.name);
+  await waitFor(() => captureCovers(readCapture(dir, fromWall - 2000, Date.now() + 2000).packets, page.info.controlIp, s.topology.engineIp, [port]).length === 0, 4000, 250);
 }
 
 /** After the fault: the attempts of the run get their outcomes; those still
@@ -243,13 +274,33 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
     const started = mono();
     let journalSince = 0;
     const positions = new Map<string, number>();
+    const ports = sentinelPorts(seed);
+    const sentinels: number[] = [];
     try {
       await s.stand.reset();
-      if (scenario.site) await s.stand.config({ site: scenario.site });
+      await startPage(s.docker, info);
+      if (scenario.site) {
+        // The browser must run the page variant this scenario configures: a
+        // setting changes only what the next load gets, so the page is
+        // loaded anew, and says which variant it is.
+        await s.stand.config({ site: scenario.site });
+        const before = await s.stand.mark();
+        const reloaded = mono();
+        const restarted = await page.engine.command("restartBrowser");
+        if (!restarted.ok) throw new Error(`restartBrowser: ${restarted.detail ?? ""}`);
+        const variant = siteVariant(scenario.site);
+        let loaded: string[] = ["not asked yet"];
+        await waitFor(async () => (loaded = variantLoaded(await s.stand.journal(before), info.egressIp, variant, 0)).length === 0, 60_000, 500);
+        if (loaded.length > 0) throw new Error(loaded[0]);
+        await page.engine.waitState((state) => state.exitOpen, 60_000, reloaded);
+      }
       await page.engine.ensureUp(90_000);
       await page.engine.settled();
       journalSince = await s.stand.mark();
+      for (const engine of page.enginesOfRun) engine.wireMax.clear();
       if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
+      await sendSentinel(info.controlIp, ports.start);
+      sentinels.push(ports.start);
       const ctx: Ctx = {
         page,
         pages: s.pages,
@@ -260,6 +311,7 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
         momentMs,
         journalSince,
         random,
+        pagesByAddress: pagesByAddress(s.topology),
         log: (event, fields) => log(event, { scenario: scenario.name, run, ...fields }),
         arm: () => {
           armed = true;
@@ -272,19 +324,23 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
     } catch (caught) {
       error = caught instanceof Error ? (caught.stack ?? caught.message) : String(caught);
     }
-    await sleep(500);
+    if (sentinels.length > 0) {
+      await sendSentinel(info.controlIp, ports.end);
+      sentinels.push(ports.end);
+      await awaitSentinel(s, page, ports.end, startedWall);
+    }
     const toWall = Date.now();
-    let checks: Record<string, string[]> = {};
+    let checks: Checks = {};
     let invalid = false;
     if (error !== null && !armed) {
       invalid = true;
-      checks = { "the stand could not set the run up": [error] };
+      checks = { [SETUP_FAILURE]: [error] };
     } else {
       if (error !== null) checks["the run itself"] = [`an error after the fault: ${error}`];
       for (const [name, found] of Object.entries(outcome?.checks ?? {})) checks[name] = found;
       try {
         const journal = await s.stand.journal(journalSince);
-        Object.assign(checks, await commonChecks(s, page, label, outcome, journal, startedWall, toWall, positions));
+        Object.assign(checks, await commonChecks(s, page, { label, outcome, journal, fromWall: startedWall, toWall, positions, sentinels }));
         notes.journal = { events: journal.length, api: journal.filter((event) => event.type === "req" && event.role === "api").length, socks: journal.filter((event) => event.type === "socks.connect").length, ipify: journal.filter((event) => event.type === "ipify").length };
         notes.redeliveries = await s.store.redeliveries(label);
         const attempts = await s.store.attemptsOfRun(label);
@@ -294,8 +350,8 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
         checks["the evidence"] = [`could not be read: ${caught instanceof Error ? caught.message : String(caught)}`];
       }
     }
-    const violations = Object.entries(checks).flatMap(([name, found]) => found.map((violation) => `${name}: ${violation}`));
-    const ok = scenario.control ? scenario.control.every((wanted) => violations.some((violation) => violation.includes(wanted))) : violations.length === 0;
+    const violations = violationsOf(checks);
+    const ok = !invalid && judge(checks, scenario.control ?? null).ok;
     const result: RunRecord = { scenario: scenario.name, run, seed, momentMs, ok, invalid, violations, checks, notes, startedWall, durationMs: Math.round(mono() - started) };
     writeFileSync(join(dir, scenario.name, `run-${run}.json`), `${JSON.stringify(result, null, 2)}\n`);
     record.runs.push({ run, seed, momentMs, ok, invalid, violations });

@@ -36,8 +36,8 @@ function json(host: string, port: number, method: string, path: string, body?: u
 export interface StandState {
   mono: number;
   config: FrontConfig;
-  socks: { down: boolean; refuseAuth: boolean; connectDelayMs: number; open: number };
-  sockets: Array<{ wsId: string; socksId: number | null; received: number }>;
+  socks: { down: boolean; refuseAuth: boolean; connectDelayMs: number; hold: { host: string; ms: number } | null; open: number };
+  sockets: Array<{ wsId: string; socksId: number | null; from: string | null; received: number }>;
   lastSeq: number;
 }
 
@@ -85,7 +85,7 @@ export class StandFansly {
     await json(this.host, this.port, "POST", "/config", settings);
   }
 
-  async socks(fault: { down?: boolean; refuseAuth?: boolean; connectDelayMs?: number }): Promise<void> {
+  async socks(fault: { down?: boolean; refuseAuth?: boolean; connectDelayMs?: number; hold?: { host: string; ms: number } | null; extraLogin?: { username: string; password: string } | null }): Promise<void> {
     await json(this.host, this.port, "POST", "/socks", fault);
   }
 

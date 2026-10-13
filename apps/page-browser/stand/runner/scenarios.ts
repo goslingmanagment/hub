@@ -13,13 +13,17 @@
 // site's API requests) and Hub requests that actually leave (they go from
 // the site's tab).
 
+import { randomBytes } from "node:crypto";
+
+import { FANSLY_HOSTS } from "../../src/egress/hosts.ts";
 import { atLeast } from "../../src/state/steps.ts";
 import type { SiteBehaviour } from "../fansly/front.ts";
 import { STAND_EXIT_IP, STAND_OTHER_EXIT_IP, STAND_SOCKS_USER, mono, sleep } from "../shared.ts";
 import { Activity, waitFor, type Ctx, type Page, type ScenarioOutcome } from "./context.ts";
-import { exitClosedWithin, gapCommitted, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type SeenTransition } from "./criteria.ts";
+import { closedWriteAttempted, exitClosedWithin, gapCommitted, heldPastDeadline, inFlightAtRestart, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type SeenTransition, type WaitingRequest } from "./criteria.ts";
 import type { StandEngine } from "./engine.ts";
 import { leak } from "./leak.ts";
+import type { Control } from "./verdict.ts";
 
 export type Need = "PR6" | "PR7";
 
@@ -37,8 +41,9 @@ export interface Scenario {
   page: "main" | "disk";
   /** The fault's moment: uniform in [min, max] ms after the activity began. */
   moment: [number, number];
-  /** A control: every run must show each of these violations. */
-  control?: string[];
+  /** A control: the checks every run must trip, each with the violations
+   *  it must show; every other check must hold (verdict.ts). */
+  control?: Control;
   /** The site's traffic for the run (PR 7). */
   site?: SiteTraffic;
   run: (ctx: Ctx) => Promise<ScenarioOutcome>;
@@ -196,10 +201,18 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
 
 // ── the page's proxy ─────────────────────────────────────────────────────
 
-function proxyFault(how: "down" | "auth"): Scenario["run"] {
+/** `site`: the scenario is about the site's requests that waited when the
+ *  proxy failed (PR 7) — there must have been some. */
+function proxyFault(how: "down" | "auth", site = false): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
-    const { activity, faultMono } = await atMoment(ctx, () => ctx.stand.socks(how === "down" ? { down: true } : { refuseAuth: true }));
+    let waiting: WaitingRequest[] = [];
+    const { activity, faultMono } = await atMoment(ctx, async () => {
+      // What waits right now — asked an admission and not given one, or
+      // admitted and not ended — is cancelled by the failure, for good.
+      waiting = engine.waiting().map((request) => ({ page: ctx.page.info.name, method: request.method, target: request.target }));
+      await ctx.stand.socks(how === "down" ? { down: true } : { refuseAuth: true });
+    });
     const checks: Record<string, string[]> = {};
     // The exit IP is checked every 2 s on the stand (engine.ts STAND_PARAMS).
     await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
@@ -217,9 +230,15 @@ function proxyFault(how: "down" | "auth"): Scenario["run"] {
     const upAt = transitions(ctx.page).find((state) => state.atMono >= recovered && state.exitOpen)?.atMono ?? mono();
     ctx.notes.outageMs = outageMs;
     ctx.notes.upAfterMs = Math.round(upAt - recovered);
-    // What waited when the proxy failed was cancelled, never sent after
-    // (vacuous until the site's requests wait for admissions — PR 7).
-    checks.cancelledStayCancelled = sentAfterRecovery(await ctx.stand.journal(ctx.journalSince), ctx.page.enginesOfRun.flatMap((engine) => engine.grants), faultMono, upAt);
+    ctx.notes.waitingAtFailure = waiting.length;
+    if (site) {
+      // Long enough for a cancelled request to come back, if it would.
+      await sleep(8000);
+      checks.waitedAtFailure = waiting.length > 0 ? [] : ["no request of the site waited when the proxy failed: the run proves nothing about their cancellation"];
+    }
+    // None of them goes after the recovery, whatever admission it is given
+    // then (plan §4.5; nothing waits until the site's requests do — PR 7).
+    checks.cancelledStayCancelled = sentAfterRecovery(await ctx.stand.journal(ctx.journalSince), waiting, ctx.pagesByAddress, recovered);
     return { faultMono, checks, attempts: activity.issued };
   };
 }
@@ -280,38 +299,54 @@ async function engineLinkLoss(ctx: Ctx): Promise<ScenarioOutcome> {
 /** The engine restarts (a Hub deploy): a new owner generation says hello;
  *  the operator answers `quiesced` once the previous owner's work is over;
  *  the new engine asks `recover` about what it issued and has no outcome
- *  of; the page stays up. */
-async function engineRestart(ctx: Ctx): Promise<ScenarioOutcome> {
-  const before = ctx.page.engine;
-  let burst: number[] = [];
-  let engine = before;
-  const { activity, faultMono } = await atMoment(ctx, async (running) => {
-    running.stop();
-    // Requests in flight when the engine goes: its process ends right after
-    // their sends.
-    burst = await before.issueHub(5);
-    before.sendIssued(burst);
-    engine = await ctx.page.restartEngine();
-  });
-  const previousGeneration = before.generation;
-  await engine.connectRetrying(20_000);
-  const checks: Record<string, string[]> = {};
-  const quiesced = await waitFor(() => engine.quiesced.length > 0, 10_000);
-  checks.quiesced = quiesced && engine.quiesced[0]!.previousGeneration === previousGeneration ? [] : [`no quiesced for generation ${previousGeneration}: ${JSON.stringify(engine.quiesced)}`];
-  ctx.notes.quiesced = engine.quiesced[0] ?? null;
-  // What the previous engine issued and has no committed outcome of.
-  const issued = [...activity.issued, ...burst];
-  const committed = new Set((await ctx.store.outcomes(ctx.page.info.name, issued)).map((row) => row.attemptId));
-  const open = issued.filter((id) => !committed.has(id));
-  ctx.notes.recovered = open.length;
-  engine.recover(open);
-  const answered = await waitFor(() => engine.recoverResults.length > 0, 10_000);
-  checks.recoverAnswered = answered ? [] : ["no recoverResult in 10 s"];
-  const state = engine.state;
-  checks.pageStayedUp = state !== null && isUp(engine) ? [] : [`a new owner stopped the page: ${JSON.stringify(state)}`];
-  await sleep(1000);
-  ctx.notes.redelivered = (await ctx.store.redeliveries(engine.run)).outcomes;
-  return { faultMono, checks, attempts: issued };
+ *  of; the page stays up.
+ *
+ *  `inFlight` (needs the site, PR 7): the restart comes inside a confirmed
+ *  window — the stand's Fansly holds its answer for 8 s, the run waits until
+ *  that very request has arrived there, and only then the engine goes. So a
+ *  request that left is really among what `recover` is asked about, and
+ *  "not sent" of it is caught (C6). */
+function engineRestart(inFlight: boolean): Scenario["run"] {
+  return async (ctx) => {
+    const before = ctx.page.engine;
+    let burst: number[] = [];
+    let engine = before;
+    let restartMono = 0;
+    const { activity, faultMono } = await atMoment(ctx, async (running) => {
+      running.stop();
+      burst = await before.issueHub(inFlight ? 2 : 5);
+      before.sendIssued(burst, "/api/v1/account/me", inFlight ? "delayMs=8000" : "");
+      if (inFlight) {
+        const rids = burst.map((id) => before.ridOf(id));
+        await waitFor(async () => (await ctx.stand.journal(ctx.journalSince)).some((event) => event.type === "req" && event.role === "api" && event.method !== "OPTIONS" && rids.includes(String(event.rid))), 25_000, 150);
+      }
+      restartMono = mono();
+      engine = await ctx.page.restartEngine();
+    });
+    const previousGeneration = before.generation;
+    await engine.connectRetrying(20_000);
+    const checks: Record<string, string[]> = {};
+    const quiesced = await waitFor(() => engine.quiesced.length > 0, inFlight ? 40_000 : 10_000);
+    checks.quiesced = quiesced && engine.quiesced[0]!.previousGeneration === previousGeneration ? [] : [`no quiesced for generation ${previousGeneration}: ${JSON.stringify(engine.quiesced)}`];
+    ctx.notes.quiesced = engine.quiesced[0] ?? null;
+    // What the previous engine issued and has no committed outcome of.
+    const issued = [...activity.issued, ...burst];
+    const committed = new Set((await ctx.store.outcomes(ctx.page.info.name, issued)).map((row) => row.attemptId));
+    const open = issued.filter((id) => !committed.has(id));
+    ctx.notes.recovered = open.length;
+    engine.recover(open);
+    const answered = await waitFor(() => engine.recoverResults.length > 0, 10_000);
+    checks.recoverAnswered = answered ? [] : ["no recoverResult in 10 s"];
+    const state = engine.state;
+    checks.pageStayedUp = state !== null && isUp(engine) ? [] : [`a new owner stopped the page: ${JSON.stringify(state)}`];
+    await sleep(1000);
+    ctx.notes.redelivered = (await ctx.store.redeliveries(engine.run)).outcomes;
+    if (inFlight) {
+      await sleep(9000);
+      checks.inFlightAtRestart = inFlightAtRestart(await ctx.stand.journal(ctx.journalSince), burst.map((id) => before.ridOf(id)), restartMono);
+    }
+    return { faultMono, checks, attempts: issued };
+  };
 }
 
 // ── the database, the disk, the container ────────────────────────────────
@@ -472,7 +507,8 @@ async function controlDuplicate(ctx: Ctx): Promise<ScenarioOutcome> {
 
 /** An engine that acknowledges events before it commits them, with its
  *  database down while the operator's start writes its gap: the operator
- *  deletes what the engine never kept, and the numbers have a hole. */
+ *  deletes what the engine never kept. Nothing comes after it — the lost
+ *  event is the tail, and only the bound recorded off the wire shows it. */
 async function controlHole(ctx: Ctx): Promise<ScenarioOutcome> {
   const postgres = process.env.STAND_POSTGRES_CONTAINER ?? "";
   if (!postgres) throw new Error("STAND_POSTGRES_CONTAINER is not set");
@@ -497,15 +533,39 @@ async function controlHole(ctx: Ctx): Promise<ScenarioOutcome> {
     await ctx.docker.action(postgres, "start");
     await ctx.store.reachable(30_000);
   }
-  // Once more, with the database back: the next gap is committed after the hole.
   const normal = await ctx.page.restartEngine();
   await normal.connectRetrying(20_000);
-  await inPage(ctx, ["kill", "-KILL", String(await servicePid(ctx, "operator"))]);
-  await normal.waitClosed(5000);
-  await normal.reconnect(40_000);
-  await waitGap(ctx, "operator_start", faultMono + 1);
   await normal.ensureUp(60_000);
   return { faultMono, checks: {}, attempts: [] };
+}
+
+/** One socket is admitted; two are opened under it — from the page's own
+ *  address, through its SOCKS5, past the operator. C1 must see the second
+ *  as a repeat: an admission is one socket. */
+async function controlDoubleOpen(ctx: Ctx): Promise<ScenarioOutcome> {
+  const socket = `wss://${FANSLY_HOSTS.ws[0]}/?v=3`;
+  const login = { username: "pb-suite-control", password: randomBytes(16).toString("hex") };
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    await ctx.stand.socks({ extraLogin: login });
+    try {
+      ctx.page.engine.journalGrant("ws", "control-double-open", socket);
+      const request = { socks: { ip: ctx.topology.socksIp, port: ctx.topology.socksPort, ...login }, host: FANSLY_HOSTS.ws[0], path: "/?v=3", opens: 2, ca: "/stand/ca/ca.crt" };
+      ctx.notes.opens = (await inPage(ctx, ["node", "--no-warnings", "/opt/page-browser/stand/inside/open-sockets.ts", JSON.stringify(request)])).trim();
+    } finally {
+      await ctx.stand.socks({ extraLogin: null });
+    }
+  });
+  activity.stop();
+  return { faultMono, checks: {}, attempts: activity.issued };
+}
+
+/** The capture stops in the middle of the run: with no live capture there
+ *  is no evidence of what left, and C4 must say so — not pass on silence. */
+async function controlNoCapture(ctx: Ctx): Promise<ScenarioOutcome> {
+  const { activity, faultMono } = await atMoment(ctx, () => ctx.docker.action(ctx.page.info.capture, "stop", 1));
+  await sleep(1000);
+  activity.stop();
+  return { faultMono, checks: {}, attempts: activity.issued };
 }
 
 // ── what needs the site (PR 7) ───────────────────────────────────────────
@@ -523,22 +583,54 @@ function withSite(base: Scenario["run"]): Scenario["run"] {
   };
 }
 
-/** The admission runs out while its connection is being set up (plan §5,
+/** An admission runs out while its connection is being set up (plan §5,
  *  stage 2: "истечение срока допуска во время установления соединения с
- *  последующим снятием задержки"): every connection is dropped, the SOCKS5
- *  answers a CONNECT only after 20 s — past the 15 s of an admission — and
- *  then the delay goes. Nothing admitted may arrive after its deadline (C1
- *  judges each arrival against its own window). */
-async function admissionExpiry(ctx: Ctx): Promise<ScenarioOutcome> {
-  const { activity, faultMono } = await atMoment(ctx, async () => {
-    await ctx.stand.socks({ connectDelayMs: 20_000 });
-    await ctx.stand.drop();
-  });
-  await sleep(25_000);
-  await ctx.stand.socks({ connectDelayMs: 0 });
-  await sleep(10_000);
+ *  последующим снятием задержки"). The engine's admissions last 6 s here;
+ *  every connection is dropped and the SOCKS5 holds the next CONNECT of the
+ *  API host for 10 s — past the admission, but inside the 15 s after which
+ *  the operator's own SOCKS5 client gives up, so that it is the deadline
+ *  that must stop the request, not that timeout — and then lets it go.
+ *  Nothing admitted may arrive after its deadline (C1 judges each arrival
+ *  against its own window), and the run must show the held CONNECT and the
+ *  admission that ran out over it.
+ *
+ *  `late`: the control. The operator is given 14 s while the engine journals
+ *  6 s: it sends when the CONNECT is let go, rightly by what it was told —
+ *  and exactly as an operator would that did not check the deadline. C1
+ *  must show that late send. */
+function admissionExpiry(late: boolean): Scenario["run"] {
+  return async (ctx) => {
+    const engine = ctx.page.engine;
+    const api = FANSLY_HOSTS.api[0];
+    engine.windowMs = late ? 14_000 : 6000;
+    engine.journalWindowMs = late ? 6000 : null;
+    try {
+      const { activity, faultMono } = await atMoment(ctx, async () => {
+        await ctx.stand.socks({ hold: { host: api, ms: 10_000 } });
+        await ctx.stand.drop();
+      });
+      await sleep(14_000);
+      await ctx.stand.socks({ hold: null });
+      await sleep(8000);
+      activity.stop();
+      const journal = await ctx.stand.journal(ctx.journalSince);
+      const grants = ctx.page.enginesOfRun.flatMap((owner) => owner.grants);
+      return { faultMono, checks: { heldPastDeadline: heldPastDeadline(journal, grants, ctx.page.info.name, ctx.page.info.egressIp, api) }, attempts: activity.issued };
+    } finally {
+      engine.windowMs = 15_000;
+      engine.journalWindowMs = null;
+      await ctx.stand.socks({ hold: null });
+    }
+  };
+}
+
+/** The site's closed writes: it tries them (its own reports say so), the
+ *  browser cancels each, none reaches Fansly (C2). */
+async function siteClosedWrites(ctx: Ctx): Promise<ScenarioOutcome> {
+  const { activity, faultMono } = await atMoment(ctx, async () => undefined);
+  await sleep(12_000);
   activity.stop();
-  return { faultMono, checks: {}, attempts: activity.issued };
+  return { faultMono, checks: { closedWriteAttempted: closedWriteAttempted(await ctx.stand.journal(ctx.journalSince), ctx.page.info.egressIp) }, attempts: activity.issued };
 }
 
 /** The site works for a while, no fault: every request it made, and every
@@ -568,28 +660,31 @@ export const SCENARIOS: Scenario[] = [
   { name: "loss-operator-kill", proves: "the operator killed (SIGKILL): the exit dies with it, s6 brings a new one that stands until restartBrowser, an operator_start gap is written, every attempt resolved once", needs: [], page: "main", moment: [0, 1500], run: operatorLoss("kill") },
   { name: "loss-operator-hang", proves: "the operator hung (SIGSTOP): the watchdog kills it within its 5 s, then as loss-operator-kill", needs: [], page: "main", moment: [0, 1500], run: operatorLoss("hang") },
   { name: "loss-holder-kill", proves: "the CDP holder killed: the exit closes at once, cdp_lost alarm, Chrome goes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("holder") },
-  { name: "loss-chrome-kill", proves: "Chrome killed: chrome_crashed, the exit closes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("chrome") },
+  { name: "loss-chrome-kill", proves: "Chrome killed: chrome_crashed (or cdp_lost), the exit closes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("chrome") },
   { name: "loss-cdp-break", proves: "the DevTools connection broken with every process alive (TCP reset): cdp_lost, the exit closes, the page starts again by itself", needs: [], page: "main", moment: [0, 1500], run: controlLoss("cdp-break") },
   { name: "loss-planned-stop", proves: "stopPage: the exit closes, the page holds (owner_stop) until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: plannedStop },
   { name: "proxy-down", proves: "the page's SOCKS5 gone: proxy_unavailable, the exit closes, the page stands while it is gone and resumes by itself when it is back with the same IP", needs: [], page: "main", moment: [0, 1500], run: proxyFault("down") },
   { name: "proxy-auth", proves: "the SOCKS5 refuses the login: proxy_auth, the exit closes, resumes by itself once the login is taken again", needs: [], page: "main", moment: [0, 1500], run: proxyFault("auth") },
   { name: "exit-ip-change", proves: "the exit IP changed: exit_ip_changed, a halt that holds even when the IP comes back, until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: exitIpChange },
-  { name: "engine-link-loss", proves: "the engine silent for 5 s mid-request: the operator counts the link lost and closes it, the page stays up, the outcomes come again on the next connection, each committed once", needs: [], page: "main", moment: [300, 1500], run: engineLinkLoss },
-  { name: "engine-restart", proves: "the engine restarts mid-request (a new owner generation): quiesced, recover answered, the page stays up, every attempt resolved once", needs: [], page: "main", moment: [300, 1500], run: engineRestart },
+  { name: "engine-link-loss", proves: "the engine silent for 5 s with outcomes on their way: the operator counts the link lost and closes it, the page stays up, the outcomes come again on the next connection, each committed once", needs: [], page: "main", moment: [300, 1500], run: engineLinkLoss },
+  { name: "engine-restart", proves: "the engine restarts with outcomes on their way (a new owner generation): quiesced, recover answered, the page stays up, every attempt resolved once", needs: [], page: "main", moment: [300, 1500], run: engineRestart(false) },
   { name: "db-unavailable", proves: "the stand's Postgres down: nothing acknowledged, the page stays up, the buffer keeps it, everything committed once after", needs: [], page: "main", moment: [0, 1500], run: databaseDown },
   { name: "disk-full", proves: "the buffer's disk full (a fixed-size tmpfs volume): disk_full, the exit closes, an alarm; room back: a disk_full gap first, then the page starts by itself", needs: [], page: "disk", moment: [0, 1500], run: diskFull },
   { name: "container-restart", proves: "the page's container restarts: the same profile and buffer, the owner generation remembered, the page stands until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: containerRestart },
-  { name: "control-leak", proves: "control: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — the criteria must catch all three", needs: [], page: "main", moment: [0, 500], control: ["arrived without any admission", "a closed write reached Fansly", "a forbidden socket message reached Fansly", "a socket opened"], run: controlLeak },
-  { name: "control-bypass", proves: "control: a hole in the page's rules and a connection past the proxy — the OS capture and the direct listener must catch it", needs: [], page: "main", moment: [0, 500], control: ["traffic past the proxy", "a connection past the proxy reached the stand directly"], run: controlBypass },
-  { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — the exactly-once check must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: ["committed 2 times"], run: controlDuplicate },
-  { name: "control-hole", proves: "control: an engine that acknowledges events before it commits them, its database down — C7 must catch the hole", needs: [], page: "main", moment: [0, 500], control: ["were never committed"], run: controlHole },
+  { name: "control-leak", proves: "control: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — C1, C2 and C3 must catch them", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived without any admission", "a socket ("], C2: ["a closed write reached Fansly"], C3: ["a forbidden socket message reached Fansly"] }, run: controlLeak },
+  { name: "control-bypass", proves: "control: a hole in the page's rules and a connection past the proxy — the OS capture (C4) and the direct listener (C5) must catch it", needs: [], page: "main", moment: [0, 500], control: { C4: ["traffic past the proxy"], C5: ["a connection past the proxy reached the stand directly"] }, run: controlBypass },
+  { name: "control-no-capture", proves: "control: the capture stops during the run — C4 must say there is no evidence, not pass on silence", needs: [], page: "main", moment: [0, 500], control: { C4: ["no live capture of the page covers the run"] }, run: controlNoCapture },
+  { name: "control-double-open", proves: "control: one socket admitted, two opened under it from the page's address — C1 must catch the repeat", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived again under one admission"] }, run: controlDoubleOpen },
+  { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: { C6: ["committed 2 times"] }, run: controlDuplicate },
+  { name: "control-hole", proves: "control: an engine that acknowledges events before it commits them, its database down — C7 must catch the lost tail", needs: [], page: "main", moment: [0, 500], control: { C7: ["were never committed (the tail"] }, run: controlHole },
   { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
   { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },
   { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },
   { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome")) },
-  { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: none of them goes after the proxy is back (plan §4.5)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(proxyFault("down")) },
-  { name: "site-admission-expiry", proves: "an admission runs out while its connection is set up (CONNECT held 20 s past a 15 s admission), then the delay goes: nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry) },
-  { name: "site-engine-restart", proves: "as engine-restart with Hub requests released: recover says unknown or resends, never not_sent of one that left", needs: ["PR7"], page: "main", moment: [300, 1500], site: SITE_TRAFFIC, run: withSite(engineRestart) },
-  { name: "site-closed-writes", proves: "the site's closed writes (message/ack) never reach Fansly: the rules extension and the operator both refuse them", needs: ["PR6", "PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, writeEveryMs: 2000 }, run: withSite(siteSteady) },
+  { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: what waited at the failure never goes after the proxy is back, whatever admission it gets then (plan §4.5)", needs: ["PR7"], page: "main", moment: [3000, 6000], site: SITE_TRAFFIC, run: withSite(proxyFault("down", true)) },
+  { name: "site-admission-expiry", proves: "an admission (6 s) runs out while its CONNECT is held 10 s — inside the operator's 15 s SOCKS5 timeout — then the hold goes: nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry(false)) },
+  { name: "control-site-late-send", proves: "control: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like, and C1 must catch it", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, control: { C1: ["arrived outside its admission window"] }, run: admissionExpiry(true) },
+  { name: "site-engine-restart", proves: "the engine restarts while a Hub request that reached Fansly waits for its answer (the answer held 8 s, the arrival confirmed first): recover never says not_sent of it", needs: ["PR7"], page: "main", moment: [300, 1500], site: SITE_TRAFFIC, run: withSite(engineRestart(true)) },
+  { name: "site-closed-writes", proves: "the site tries its closed writes (message/ack; its own reports say so) and none reaches Fansly: the rules extension and the operator both refuse them", needs: ["PR6", "PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, writeEveryMs: 2000 }, run: withSite(siteClosedWrites) },
   { name: "site-forbidden-ws", proves: "a forbidden socket message never leaves: the page stops with unknown_ws_message", needs: ["PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, forbiddenWs: true }, run: withSite(siteForbidden) },
 ];

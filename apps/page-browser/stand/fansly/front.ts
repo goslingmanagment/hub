@@ -22,6 +22,7 @@
 // that (`direct.connect`) — except the stand's own trust check, which asks
 // it on purpose from a container without those rules (stand.sh trust-check).
 
+import { createHash } from "node:crypto";
 import { createServer as createHttpServer, ServerResponse, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createHttp2Server, type Http2Server, type Http2ServerRequest, type Http2ServerResponse } from "node:http2";
 import type { Socket } from "node:net";
@@ -78,9 +79,23 @@ export interface SiteBehaviour {
 /** The stand site's session: Fansly-shaped, nobody's. */
 export const STAND_SESSION = { token: "pb-suite-stand-token-0123456789abcdef0123456789abcdef", clientId: "pb-suite-client-000000000001", sessionId: "pb-suite-session-000000000001" } as const;
 
+/** Which page a browser has loaded: the behaviour it was served with. The
+ *  page says it once it runs (`GET /stand/hello?variant=…`), so a run can
+ *  tell that the browser has the variant it configured, not an earlier one. */
+export function siteVariant(site: SiteBehaviour | null): string {
+  return site === null ? "idle" : createHash("sha256").update(JSON.stringify([site.readEveryMs, site.writeEveryMs, site.socket, site.forbiddenWs])).digest("hex").slice(0, 12);
+}
+
+export const HELLO_PATH = "/stand/hello";
+export const REPORT_PATH = "/stand/report";
+
 /** The stand's fansly.com: as Fansly's client does it — its API requests by
  *  XMLHttpRequest with the session's headers (fansly-client-check computed
- *  as the site's bundle does), its socket authorized and pinging. */
+ *  as the site's bundle does), its socket authorized and pinging. It tells
+ *  the stand, by plain requests to its own host, which variant it is and
+ *  how each of its writes ended (`/stand/report?what=write-failed` when the
+ *  browser cancelled it, `write-done` when an answer came): a closed write
+ *  that was never attempted proves nothing about the closure. */
 export function sitePage(site: SiteBehaviour | null): string {
   const script =
     site === null
@@ -92,9 +107,12 @@ export function sitePage(site: SiteBehaviour | null): string {
   var session = ${JSON.stringify(STAND_SESSION)};
   var KEY = ${JSON.stringify(FANSLY_CHECK_KEY)};
   var cyrb53 = ${cyrb53.toString()};
+  function tell(path) { new Image().src = "https://fansly.com" + path + "&t=" + Date.now(); }
+  tell(${JSON.stringify(HELLO_PATH)} + "?variant=" + ${JSON.stringify(siteVariant(site))});
   function call(method, path) {
     var rid = "site-" + Math.random().toString(36).slice(2, 12);
     var x = new XMLHttpRequest();
+    if (method !== "GET") x.onloadend = function () { tell(${JSON.stringify(REPORT_PATH)} + "?what=" + (x.status === 0 ? "write-failed" : "write-done") + "&rid=" + rid); };
     x.open(method, "https://apiv3.fansly.com" + path + (path.indexOf("?") < 0 ? "?" : "&") + "rid=" + rid);
     x.withCredentials = true;
     x.setRequestHeader("accept", "application/json, text/plain, */*");
@@ -141,6 +159,8 @@ interface OpenSocket {
   wsId: string;
   ws: WsConnection;
   socksId: number | null;
+  /** The page it belongs to (the client's address at the SOCKS5). */
+  from: string | null;
   received: number;
 }
 
@@ -257,6 +277,7 @@ export class Front {
       pathname: url.pathname,
       proto,
       socksId: meta?.socksId ?? null,
+      from: meta?.from ?? null,
       streamId: streamId ?? null,
       rid,
       headers: Object.keys(req.headers).filter((name) => !name.startsWith(":")),
@@ -271,7 +292,7 @@ export class Front {
         if (res instanceof ServerResponse) res.writeHead(status, { ...headers, "content-length": String(data.length) });
         else res.writeHead(status, { ...headers, "content-length": String(data.length) });
         res.end(data, () => {
-          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null });
+          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
         });
       };
       const delayMs = intParam(params, "delayMs", 60_000);
@@ -318,34 +339,34 @@ export class Front {
     const meta = this.#options.metaOf(req.socket.remotePort);
     const path = req.url ?? "/";
     if (roleOf(host) !== "ws") {
-      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
+      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, from: meta?.from ?? null, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
       socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
       return;
     }
     const wsId = `ws-${this.#nextWs++}`;
     const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
     if (ws === null) {
-      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null });
+      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
       return;
     }
-    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, received: 0 };
+    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, from: meta?.from ?? null, received: 0 };
     this.#sockets.set(wsId, open);
-    journal.log("ws.open", { wsId, host, path, socksId: open.socksId, origin: String(req.headers.origin ?? "") });
+    journal.log("ws.open", { wsId, host, path, url: `wss://${host}${path}`, socksId: open.socksId, from: open.from, origin: String(req.headers.origin ?? "") });
     ws.onText = (payload) => {
       open.received += 1;
       const text = payload.toString("utf8");
       // The message as it came — the stand's own traffic carries no secret —
       // cut to what a criterion needs to tell its kind.
-      journal.log("ws.in", { wsId, socksId: open.socksId, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
+      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
       if (/^\{"t":1,/.test(text)) ws.sendText(JSON.stringify({ t: 1, d: JSON.stringify({ session: { id: "pb-suite-stand", accountId: this.#options.config.accountId } }) }));
     };
     ws.onBinary = (payload) => {
       open.received += 1;
-      journal.log("ws.in", { wsId, socksId: open.socksId, n: open.received, bytes: payload.length, binary: true, text: "" });
+      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, n: open.received, bytes: payload.length, binary: true, text: "" });
     };
     ws.onClose = (reason) => {
       this.#sockets.delete(wsId);
-      journal.log("ws.close", { wsId, socksId: open.socksId, reason, received: open.received });
+      journal.log("ws.close", { wsId, socksId: open.socksId, from: open.from, reason, received: open.received });
     };
   }
 
@@ -358,7 +379,7 @@ export class Front {
       const frame = this.#nextFrame++;
       const body = JSON.stringify({ standFrame: frame, wsId: open.wsId, pad: "x".repeat(Math.max(0, bytes - 64)) });
       if (!open.ws.sendText(JSON.stringify({ t: 0, d: body })) && open.ws.closed) continue;
-      this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, frame, bytes: body.length });
+      this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, from: open.from, frame, bytes: body.length });
       sent += 1;
     }
     return sent;
@@ -402,8 +423,8 @@ export class Front {
     this.#pushTimer = setInterval(() => this.push(bytes), Math.max(5, Math.round(60_000 / perMinute)));
   }
 
-  get openSockets(): Array<{ wsId: string; socksId: number | null; received: number }> {
-    return [...this.#sockets.values()].map(({ wsId, socksId, received }) => ({ wsId, socksId, received }));
+  get openSockets(): Array<{ wsId: string; socksId: number | null; from: string | null; received: number }> {
+    return [...this.#sockets.values()].map(({ wsId, socksId, from, received }) => ({ wsId, socksId, from, received }));
   }
 
   close(): void {

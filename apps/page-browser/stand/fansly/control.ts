@@ -6,7 +6,8 @@
 //   GET  /state                             settings, faults, open connections
 //   POST /config  { exitIp?, accountId?, corsMaxAge?, wsPush?: { perMinute, bytes },
 //                   site?: { readEveryMs, writeEveryMs, socket, forbiddenWs } | null }
-//   POST /socks   { down?, refuseAuth?, connectDelayMs? }      the faults
+//   POST /socks   { down?, refuseAuth?, connectDelayMs?, hold?: { host, ms } | null,
+//                   extraLogin?: { username, password } | null }                    the faults
 //   POST /reset                             no fault, the settings of the start
 //   POST /drop                              every connection of the front dropped
 //   POST /ws/push { text? | bytes?, wsId? } a frame into the open sockets
@@ -60,7 +61,7 @@ function state(deps: ControlDeps): Record<string, unknown> {
   return {
     mono: mono(),
     config: deps.config,
-    socks: { down: deps.socks.down, refuseAuth: deps.socks.refuseAuth, connectDelayMs: deps.socks.connectDelayMs, open: deps.socks.open },
+    socks: { down: deps.socks.down, refuseAuth: deps.socks.refuseAuth, connectDelayMs: deps.socks.connectDelayMs, hold: deps.socks.hold, open: deps.socks.open },
     sockets: deps.front.openSockets,
     lastSeq: deps.journal.lastSeq,
   };
@@ -106,17 +107,29 @@ async function handle(deps: ControlDeps, req: IncomingMessage): Promise<unknown>
     }
     case "POST /socks": {
       const body = await readJson(req);
-      for (const key of Object.keys(body)) if (!["down", "refuseAuth", "connectDelayMs"].includes(key)) throw new HttpError(400, `an unknown fault ${key}`);
+      for (const key of Object.keys(body)) if (!["down", "refuseAuth", "connectDelayMs", "hold", "extraLogin"].includes(key)) throw new HttpError(400, `an unknown fault ${key}`);
+      if (body.hold !== undefined) {
+        const hold = body.hold as { host?: unknown; ms?: unknown } | null;
+        if (hold !== null && typeof hold.host !== "string") throw new HttpError(400, "hold.host is not a name");
+        socks.hold = hold === null ? null : { host: String(hold.host), ms: count(hold.ms, "hold.ms", 120_000) };
+      }
+      if (body.extraLogin !== undefined) {
+        const extra = body.extraLogin as { username?: unknown; password?: unknown } | null;
+        if (extra !== null && (typeof extra.username !== "string" || typeof extra.password !== "string" || extra.password.length < 16)) throw new HttpError(400, "extraLogin needs a username and a password of 16 characters or more");
+        socks.extraLogin = extra === null ? null : { username: String(extra.username), password: String(extra.password) };
+      }
       let cut = 0;
       if (body.refuseAuth !== undefined) socks.refuseAuth = body.refuseAuth === true;
       if (body.connectDelayMs !== undefined) socks.connectDelayMs = count(body.connectDelayMs, "connectDelayMs", 120_000);
       if (body.down !== undefined) cut = await socks.setDown(body.down === true);
-      journal.log("stand.fault", { down: socks.down, refuseAuth: socks.refuseAuth, connectDelayMs: socks.connectDelayMs, cut });
+      journal.log("stand.fault", { down: socks.down, refuseAuth: socks.refuseAuth, connectDelayMs: socks.connectDelayMs, hold: socks.hold, cut });
       return state(deps);
     }
     case "POST /reset": {
       socks.refuseAuth = false;
       socks.connectDelayMs = 0;
+      socks.hold = null;
+      socks.extraLogin = null;
       await socks.setDown(false);
       Object.assign(config, structuredClone(deps.defaults));
       front.applyPush();

@@ -23,46 +23,49 @@ const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** Forwarding between the operator's proxy (the sender) and the stand. */
 export const ARRIVAL_SLACK_MS = 50;
 
-function samePlace(target: string | null, host: string, path: string): boolean {
-  return target !== null && target === `${host}${path}`;
-}
+/** The stand's pages by the address they come from at the SOCKS5. */
+export type PagesByAddress = ReadonlyMap<string, string>;
 
 /** No API request and no socket reached Fansly without an admission in
- *  force — and one admission is one operation: one request and at most one
- *  preflight (owner decision №1). */
-export function unadmittedArrivals(events: readonly JournalEvent[], grants: readonly Grant[], slackMs = ARRIVAL_SLACK_MS): string[] {
+ *  force — its own: the page's, for that address, inside its window. And one
+ *  admission is one operation: one request and at most one preflight
+ *  (owner decision №1), or one socket — a second arrival under it is a
+ *  repeat, whatever came first. An arrival that is no page's (it did not come
+ *  from a page's address) has no admission at all. */
+export function unadmittedArrivals(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress, slackMs = ARRIVAL_SLACK_MS): string[] {
   const violations: string[] = [];
   const used = new Map<Grant, { preflight: number; main: number }>();
+  const inWindow = (grant: Grant, event: JournalEvent) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs;
   for (const event of events) {
-    if (event.type === "req" && event.role === "api") {
-      const host = String(event.host);
-      const path = String(event.path);
-      const method = String(event.method);
-      const what = `${method} ${host}${path}`;
-      const own = grants.filter((grant) => (grant.kind === "hub" || grant.kind === "site") && samePlace(grant.target, host, path));
-      if (own.length === 0) {
-        violations.push(`${what} arrived without any admission`);
-        continue;
-      }
-      const inWindow = own.filter((grant) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs);
-      if (inWindow.length === 0) {
-        violations.push(`${what} arrived outside its admission window (ms after the deadline: ${own.map((grant) => Math.round(event.mono - grant.deadlineMono)).join(", ")})`);
-        continue;
-      }
-      const role = method === "OPTIONS" ? "preflight" : "main";
-      const grant = inWindow.find((candidate) => (role === "preflight" || candidate.method === null || candidate.method === method) && (used.get(candidate)?.[role] ?? 0) === 0);
-      if (!grant) {
-        violations.push(`${what} arrived again under one admission: a repeat`);
-        continue;
-      }
-      const count = used.get(grant) ?? { preflight: 0, main: 0 };
-      count[role] += 1;
-      used.set(grant, count);
+    const api = event.type === "req" && event.role === "api";
+    if (!api && event.type !== "ws.open") continue;
+    const page = pages.get(String(event.from ?? ""));
+    const what = api ? `${String(event.method)} ${String(event.host)}${String(event.path)}` : `a socket (${String(event.wsId)}, ${String(event.url)})`;
+    if (page === undefined) {
+      violations.push(`${what} arrived without any admission: it came from ${String(event.from ?? "?")}, which is no page of the stand`);
+      continue;
     }
-    if (event.type === "ws.open") {
-      const inWindow = grants.filter((grant) => grant.kind === "ws" && event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs);
-      if (inWindow.length === 0) violations.push(`a socket opened (${String(event.wsId)}) without an admission in force`);
+    const target = api ? `${String(event.host)}${String(event.path)}` : String(event.url);
+    const own = grants.filter((grant) => grant.page === page && (api ? grant.kind === "hub" || grant.kind === "site" : grant.kind === "ws") && grant.target === target);
+    if (own.length === 0) {
+      violations.push(`${what} arrived without any admission of ${page} for it`);
+      continue;
     }
+    const live = own.filter((grant) => inWindow(grant, event));
+    if (live.length === 0) {
+      violations.push(`${what} arrived outside its admission window (ms after the deadline: ${own.map((grant) => Math.round(event.mono - grant.deadlineMono)).join(", ")})`);
+      continue;
+    }
+    const method = String(event.method ?? "");
+    const role = api && method === "OPTIONS" ? "preflight" : "main";
+    const grant = live.find((candidate) => (!api || role === "preflight" || candidate.method === null || candidate.method === method) && (used.get(candidate)?.[role] ?? 0) === 0);
+    if (!grant) {
+      violations.push(`${what} arrived again under one admission: a repeat`);
+      continue;
+    }
+    const count = used.get(grant) ?? { preflight: 0, main: 0 };
+    count[role] += 1;
+    used.set(grant, count);
   }
   return violations;
 }
@@ -107,15 +110,23 @@ export function directArrivals(events: readonly JournalEvent[]): string[] {
   return events.filter((event) => event.type === "direct.connect").map((event) => `a connection past the proxy reached the stand directly from ${String(event.from)}`);
 }
 
+export interface WaitingRequest {
+  page: string;
+  method: string;
+  /** host + path + query, as the operator asked its admission for. */
+  target: string;
+}
+
 /** No request of the browser that was waiting when the proxy failed went
- *  after it came back (plan §4.5): a grant given before the fault is never
- *  used after the recovery. */
-export function sentAfterRecovery(events: readonly JournalEvent[], grants: readonly Grant[], faultMono: number, recoveredMono: number): string[] {
-  const before = grants.filter((grant) => grant.grantedMono < faultMono && (grant.kind === "site" || grant.kind === "hub"));
+ *  after it came back (plan §4.5): cancelled then, it stays cancelled —
+ *  whatever admission it may be given afterwards. `waiting` is what waited
+ *  right before the failure: asked an admission and not given one, or
+ *  admitted and not ended. */
+export function sentAfterRecovery(events: readonly JournalEvent[], waiting: readonly WaitingRequest[], pages: PagesByAddress, recoveredMono: number): string[] {
   return events
     .filter((event) => event.type === "req" && event.role === "api" && event.mono >= recoveredMono)
-    .filter((event) => before.some((grant) => samePlace(grant.target, String(event.host), String(event.path))))
-    .map((event) => `${String(event.method)} ${String(event.host)}${String(event.path)} was admitted before the proxy failed and went after it came back`);
+    .filter((event) => waiting.some((request) => request.page === pages.get(String(event.from ?? "")) && request.target === `${String(event.host)}${String(event.path)}`))
+    .map((event) => `${String(event.method)} ${String(event.host)}${String(event.path)} waited when the proxy failed and went after it came back`);
 }
 
 export interface Resolution {
@@ -144,13 +155,36 @@ export function exactlyOnce(resolutions: readonly Resolution[]): string[] {
   return violations;
 }
 
-/** The numbers each buffer gave the engine have no holes: no event was
- *  deleted before the engine committed it. */
-export function contiguous(seqsByBuffer: ReadonlyMap<string, readonly number[]>): string[] {
+export interface BufferBounds {
+  bufferId: string;
+  /** The last number the engine had committed when the run began (0: none
+   *  — a buffer that is new to the engine starts at 1). */
+  start: number;
+  /** The highest number the operator sent during the run, as the engine saw
+   *  it on the wire — recorded apart from what was stored. */
+  wireMax: number;
+  /** The numbers in the stand's Postgres. */
+  stored: readonly number[];
+}
+
+/** No event was deleted before the engine committed it: every number from
+ *  the run's start bound to its end bound is stored — the head of a new
+ *  buffer, the middle, and the tail the operator sent last. The bounds are
+ *  recorded apart from the store (the position before the run; what came on
+ *  the wire), so a tail that was acknowledged and never stored shows. */
+export function eventsComplete(buffers: readonly BufferBounds[]): string[] {
   const violations: string[] = [];
-  for (const [bufferId, seqs] of seqsByBuffer) {
-    for (let i = 1; i < seqs.length; i++) {
-      if (seqs[i]! !== seqs[i - 1]! + 1) violations.push(`buffer ${bufferId}: events ${seqs[i - 1]! + 1}…${seqs[i]! - 1} were never committed`);
+  for (const { bufferId, start, wireMax, stored } of buffers) {
+    const have = new Set(stored);
+    const end = Math.max(wireMax, ...stored.filter((seq) => seq > start), start);
+    let from: number | null = null;
+    for (let seq = start + 1; seq <= end + 1; seq++) {
+      const missing = seq <= end && !have.has(seq);
+      if (missing && from === null) from = seq;
+      if (!missing && from !== null) {
+        violations.push(`buffer ${bufferId}: events ${from}…${seq - 1} were never committed${seq - 1 === end ? " (the tail the operator sent last)" : from === 1 ? " (the start of the buffer)" : ""}`);
+        from = null;
+      }
     }
   }
   return violations;
@@ -203,4 +237,100 @@ export function stoppedFor(states: readonly SeenTransition[], fromMono: number, 
 /** A gap of the reason was committed after `fromMono`. */
 export function gapCommitted(gaps: ReadonlyArray<{ reason: string | null; committedMono: number }>, fromMono: number, reason: string): string[] {
   return gaps.some((gap) => gap.reason === reason && gap.committedMono >= fromMono) ? [] : [`no "${reason}" gap was committed after the fault`];
+}
+
+// ── evidence that a run met what it is about ──────────────────────────────
+// A scenario that needs the site (PR 7) must show that the thing it tests
+// happened in the run; without it the run proves nothing, and fails.
+
+/** The browser has the page variant the run configured: its hello came from
+ *  the page's address after `sinceMono`. */
+export function variantLoaded(events: readonly JournalEvent[], pageAddress: string, variant: string, sinceMono: number): string[] {
+  const hellos = events.filter((event) => event.type === "req" && event.role === "site" && event.pathname === "/stand/hello" && event.from === pageAddress && event.mono >= sinceMono);
+  const last = hellos.at(-1);
+  if (!last) return [`the site's page did not load after it was configured (no hello from ${pageAddress})`];
+  const loaded = /[?&]variant=([^&]+)/.exec(String(last.path))?.[1] ?? "?";
+  return loaded === variant ? [] : [`the browser runs page variant ${loaded}, the run configured ${variant}`];
+}
+
+/** The site did try a closed write, and the browser cancelled it: the
+ *  page's own report of how its write ended. */
+export function closedWriteAttempted(events: readonly JournalEvent[], pageAddress: string): string[] {
+  const reports = events.filter((event) => event.type === "req" && event.role === "site" && event.pathname === "/stand/report" && event.from === pageAddress).map((event) => /[?&]what=([^&]+)/.exec(String(event.path))?.[1] ?? "");
+  const violations: string[] = [];
+  if (!reports.includes("write-failed")) violations.push("the site attempted no closed write in the run (no write-failed report): the run proves nothing about the closure");
+  const done = reports.filter((what) => what === "write-done").length;
+  if (done > 0) violations.push(`${done} closed write(s) got an answer: the page says they went through`);
+  return violations;
+}
+
+/** An admission ran out while its connection was held: a CONNECT of the API
+ *  host from the page began inside an admission's window and was let go
+ *  only after its deadline. */
+export function heldPastDeadline(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, apiHost: string): string[] {
+  const holds = events.filter((event) => event.type === "socks.hold" && event.host === apiHost && event.from === pageAddress);
+  const releases = new Map(events.filter((event) => event.type === "socks.release").map((event) => [Number(event.socksId), event.mono]));
+  const found = holds.some((hold) => {
+    const released = releases.get(Number(hold.socksId));
+    return released !== undefined && grants.some((grant) => grant.page === page && grant.kind !== "ws" && hold.mono >= grant.grantedMono && hold.mono <= grant.deadlineMono && released > grant.deadlineMono);
+  });
+  return found ? [] : [`no admission of ${page} ran out while its CONNECT was held (${holds.length} held): the run proves nothing about the deadline`];
+}
+
+/** A request was in flight when the engine restarted: one of `rids` had
+ *  reached Fansly before `restartMono`, and its answer was not written yet. */
+export function inFlightAtRestart(events: readonly JournalEvent[], rids: readonly string[], restartMono: number): string[] {
+  const arrived = events.filter((event) => event.type === "req" && event.role === "api" && event.method !== "OPTIONS" && typeof event.rid === "string" && rids.includes(event.rid) && event.mono < restartMono);
+  const answered = new Map(events.filter((event) => event.type === "res").map((event) => [Number(event.req), event.mono]));
+  const inFlight = arrived.filter((event) => (answered.get(event.seq) ?? Infinity) > restartMono);
+  return inFlight.length > 0 ? [] : [`no request was in flight at the engine's restart (${arrived.length} of ${rids.length} had arrived, none still unanswered): the run proves nothing about recovery after a send`];
+}
+
+// ── the load test's thresholds (spec §4) ──────────────────────────────────
+// A threshold holds only on a measured load: with nothing to measure it is
+// "not measured" (null), never held.
+
+export interface RatePhase {
+  what: string;
+  fromMono: number;
+  toMono: number;
+  /** Frames per minute each page must get in the phase. */
+  perMinute: number;
+}
+
+export interface RateFinding {
+  page: string;
+  phase: string;
+  perMinute: number;
+  target: number;
+}
+
+/** Threshold 3: every page got its socket frames at the rate asked, in the
+ *  background and in each burst — measured on what the stand pushed to that
+ *  page, not on one frame somewhere. */
+export function frameRates(pushed: ReadonlyArray<{ mono: number; page: string | undefined }>, pages: readonly string[], phases: readonly RatePhase[], tolerance = 0.95): { held: boolean | null; rates: RateFinding[]; why: string | null } {
+  if (pushed.length === 0) return { held: null, rates: [], why: "no frame was pushed: no site socket was open (PR 7)" };
+  const rates: RateFinding[] = [];
+  for (const page of pages) {
+    for (const phase of phases) {
+      const minutes = (phase.toMono - phase.fromMono) / 60_000;
+      if (minutes <= 0) continue;
+      const count = pushed.filter((frame) => frame.page === page && frame.mono >= phase.fromMono && frame.mono < phase.toMono).length;
+      rates.push({ page, phase: phase.what, perMinute: Math.round((count / minutes) * 10) / 10, target: phase.perMinute });
+    }
+  }
+  const low = rates.filter((rate) => rate.perMinute < rate.target * tolerance);
+  return { held: low.length === 0 && rates.length > 0, rates, why: low.length === 0 ? null : `below the asked rate: ${low.map((rate) => `${rate.page} ${rate.phase} ${rate.perMinute}/min of ${rate.target}`).join("; ")}` };
+}
+
+/** Threshold 7: events did pile up while the engine was away — on every
+ *  page — and every one of them is stored afterwards, once. An outage in
+ *  which nothing accumulated shows nothing about the offload. */
+export function outageBacklog(pushedDuringOutage: ReadonlyMap<string, readonly number[]>, pages: readonly string[], stored: ReadonlySet<number>, duplicates: number): { held: boolean | null; why: string | null; backlog: Record<string, number>; lost: number } {
+  const backlog = Object.fromEntries(pages.map((page) => [page, pushedDuringOutage.get(page)?.length ?? 0]));
+  const empty = pages.filter((page) => backlog[page] === 0);
+  const lost = pages.flatMap((page) => pushedDuringOutage.get(page) ?? []).filter((frame) => !stored.has(frame)).length;
+  if (empty.length > 0) return { held: null, why: `nothing accumulated during the outage on ${empty.join(", ")}: the offload was not measured`, backlog, lost };
+  if (lost > 0 || duplicates > 0) return { held: false, why: `${lost} event(s) of the outage were never stored, ${duplicates} stored more than once`, backlog, lost };
+  return { held: true, why: null, backlog, lost };
 }

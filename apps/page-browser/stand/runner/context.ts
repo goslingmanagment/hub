@@ -163,6 +163,8 @@ export interface Ctx {
   momentMs: number;
   /** The stand's journal number where the run began. */
   journalSince: number;
+  /** The stand's pages by the address the SOCKS5 sees them from. */
+  pagesByAddress: ReadonlyMap<string, string>;
   /** A number in [0, 1) from the run's seed. */
   random: () => number;
   log: (event: string, fields?: Record<string, unknown>) => void;

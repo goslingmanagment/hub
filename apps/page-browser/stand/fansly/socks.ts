@@ -11,7 +11,11 @@
 //   down        — the listener closes and every connection is cut: the
 //                 proxy is gone;
 //   refuseAuth  — every login is refused (connections already open stay);
-//   connectDelayMs — the answer to CONNECT waits.
+//   connectDelayMs — the answer to every CONNECT waits;
+//   hold        — the answer to a CONNECT of one name waits `ms`, then goes:
+//                 journaled when it began and when it was let go
+//                 (`socks.hold`, `socks.release`), so a run can show that a
+//                 connection was held past an admission's deadline.
 
 import { connect as tcpConnect, createServer, type Server, type Socket } from "node:net";
 
@@ -21,6 +25,8 @@ export interface SocksMeta {
   socksId: number;
   host: string;
   port: number;
+  /** The client's address: which page of the stand it is. */
+  from: string;
 }
 
 export interface SocksOptions {
@@ -48,6 +54,11 @@ export class StandSocks {
   #down = false;
   refuseAuth = false;
   connectDelayMs = 0;
+  /** A CONNECT of this name is answered only after `ms`. */
+  hold: { host: string; ms: number } | null = null;
+  /** A second login, taken while a control runs (control.ts): a one-time
+   *  one, so the page's own never leaves the runner and the operator. */
+  extraLogin: { username: string; password: string } | null = null;
 
   constructor(options: SocksOptions) {
     this.#options = options;
@@ -135,7 +146,8 @@ export class StandSocks {
         const username = buffered.subarray(2, 2 + userLength).toString("utf8");
         const password = buffered.subarray(3 + userLength, 3 + userLength + passLength).toString("utf8");
         buffered = buffered.subarray(3 + userLength + passLength);
-        const known = username === this.#options.username && password === this.#options.password;
+        const extra = this.extraLogin !== null && username === this.extraLogin.username && password === this.extraLogin.password;
+        const known = extra || (username === this.#options.username && password === this.#options.password);
         const ok = known && !this.refuseAuth;
         // Never the login or the password themselves.
         journal.log("socks.login", { socksId, ok, known, from: socket.remoteAddress ?? "", ...(ok ? {} : { why: known ? "the stand refuses every login now" : "a wrong login or password" }) });
@@ -170,22 +182,23 @@ export class StandSocks {
         target = `${host}:${port}`;
         const local = this.#options.route(host, port);
         if (local === null) {
-          journal.log("socks.refused", { socksId, host, port, why: "not a name of the stand: the stand connects nowhere else" });
+          journal.log("socks.refused", { socksId, host, port, from: socket.remoteAddress ?? "", why: "not a name of the stand: the stand connects nowhere else" });
           socket.end(reply(REPLY_NOT_ALLOWED));
           return;
         }
         step = "relay";
         socket.off("data", onData);
         socket.pause();
+        const from = socket.remoteAddress ?? "";
         const go = () => {
           if (socket.destroyed) return;
           const upstream = tcpConnect({ host: "127.0.0.1", port: local });
           upstream.setNoDelay(true);
           upstream.once("connect", () => {
-            const meta: SocksMeta = { socksId, host, port };
+            const meta: SocksMeta = { socksId, host, port, from };
             const localPort = upstream.localPort;
             if (localPort !== undefined) this.#upstreams.set(localPort, meta);
-            journal.log("socks.connect", { socksId, host, port });
+            journal.log("socks.connect", { socksId, host, port, from });
             socket.write(reply(REPLY_OK));
             if (rest.length > 0) {
               up += rest.length;
@@ -215,7 +228,14 @@ export class StandSocks {
           });
           socket.on("close", () => upstream.destroy());
         };
-        if (this.connectDelayMs > 0) setTimeout(go, this.connectDelayMs);
+        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
+        if (hold > 0) {
+          journal.log("socks.hold", { socksId, host, port, from, ms: hold });
+          setTimeout(() => {
+            journal.log("socks.release", { socksId, host, port, from, gone: socket.destroyed });
+            go();
+          }, hold);
+        } else if (this.connectDelayMs > 0) setTimeout(go, this.connectDelayMs);
         else go();
       }
     };

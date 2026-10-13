@@ -19,11 +19,11 @@ and are not part of the suites.
 | `runner/scenarios.ts` | The scenarios (below) |
 | `runner/criteria.ts` | The plan's criteria as pure checks over a run's evidence (unit tests: `tests/page-browser-stand.test.ts`) |
 | `runner/series.ts` | A series: N valid runs per scenario, the fault at a random moment drawn from a recorded seed, a result file per run |
-| `runner/verify.ts` | The verdict of a finished series, from its files alone |
+| `runner/verdict.ts`, `runner/verify.ts` | A run's verdict from its checks; the verdict of a finished series, worked out again from each run's own file |
 | `runner/load.ts` | The common load test and spec §4's thresholds |
-| `runner/isolation.ts` | Before anything runs: no route out, the SOCKS5 connects only the stand's names, the stand's certificate is trusted only with the stand's CA |
+| `runner/isolation.ts` | Before anything runs: no route out, no way to the host through the stand's bridges, the SOCKS5 connects only the stand's names, the stand's certificate is trusted only with the stand's CA |
 | `capture/` | tcpdump in each page container's network namespace: what left it at the OS level |
-| `inside/entry.sh` | The stand's entry in front of the image's `/init` (see "Seams") |
+| `inside/` | What the stand runs inside a page container: `entry.sh` in front of the image's `/init` (see "Seams"), `open-sockets.ts` for a control |
 | `docker-compose.yml`, `page.stand.yml` | The stand's infrastructure; the stand's override of the production page file |
 | `docker-proxy.ts` | The runner's only way to Docker: exec, start/stop/restart, inspect, stats — of the stand's own containers |
 | `stand.sh`, `guard.sh`, `push.sh` | Build, up, series, load, verify, down; the server's guard; the upload to the server |
@@ -33,11 +33,12 @@ and are not part of the suites.
 
 | Condition | How |
 |---|---|
-| Own Compose project, network and Postgres | Project `pb-suite-<stand>`; two **internal** networks (no route out; `isolation.ts` checks it); the stand's own `postgres:16`, trusting only its network — no password anywhere |
+| Own Compose project, network and Postgres | Project `pb-suite-<stand>`; two networks, **internal and isolated** (Docker's gateway mode `isolated`: the bridges have no address on the host, so neither the internet nor the host's own listeners — sshd, Hub's Caddy — are reachable; `stand.sh up` checks the options as created, and `isolation.ts` checks from inside that `.1` of each subnet does not even refuse on 22, 80, 443); the stand's own `postgres:16`, trusting only its network — no password anywhere |
 | CPU and memory limits on every container, no swap, no restart by itself | Every service has `cpus`, `mem_limit` = `memswap_limit`, `pids_limit`, `restart: "no"`; the page containers keep the production file's limits (2 GiB, 1 CPU, `/dev/shm` 1 GiB) |
 | Disk fill only on a fixed-size separate volume | The `disk` page's buffer volume is a 640 MiB tmpfs; `disk-full` fills only that, from inside the page container |
 | DB unavailable only on the stand's DB | `db-unavailable` stops `pb-suite-<stand>-postgres-1`; the Docker proxy passes nothing else |
-| Stop at once if prod Hub slows or memory runs out | `guard.sh` (systemd unit `pb-suite-guard`): Hub's `/api/v1/health` every 5 s — one answer over 500 ms, 30 s average over 50 ms, MemAvailable under 4 GiB or load over 6 stops every container labelled `agency.stand=pb-suite`; `TRIPPED` holds until `stand.sh clear-trip`; `stand.sh` refuses to build, start or run while the guard is not measuring |
+| Stop at once if prod Hub slows or memory runs out | `guard.sh` (systemd unit `pb-suite-guard`): Hub's `/api/v1/health` every 5 s — one answer over 500 ms, 30 s average over 50 ms, MemAvailable under 4 GiB or load over 6 stops every container labelled `agency.stand=pb-suite` and the builds' BuildKit container; `TRIPPED` holds until `stand.sh clear-trip`; `stand.sh` refuses to build, start or run while the guard is not measuring |
+| Nothing of the stand runs unwatched | The builds' BuildKit container (`buildx_buildkit_pb-suite-builder0`; buildx gives it no label, so it goes by name) is stopped on any exit of a build — done, failed, interrupted —, by `guard-stop` before the guard goes (which refuses to go while anything of the stand runs), and by the guard's trip (`tests/page-browser-stand-scripts.test.ts`) |
 | Never touch other containers | Everything of a stand carries `agency.stand=pb-suite` and `agency.stand.name=pb-suite-<stand>`; `stand.sh` filters by them; the runner sees no Docker socket |
 
 ## Run it on the workstation (Docker Desktop)
@@ -60,6 +61,13 @@ self-test, with the rules extension, passes under the stand's names and CA). Ser
 `--except a,b`. A run that could not be set up before its fault is not
 counted and is replaced (at most N + 2 more).
 
+`verify` does not take the summary's word: it works each run's verdict out
+again from the checks in the run's own file (every common check must be
+there), and the file's `ok`, the record's `ok` and counts must say the same;
+a run number counted twice, a run file the record does not name, a failed
+run marked "not set up" are problems. A control passes only when each check
+it exists for shows each of its violations and no other check fails.
+
 ## Run a series on the server
 
 On the workstation, from a commit:
@@ -79,7 +87,8 @@ $R/stand.sh series s1 de-<rev> -- --runs 20      # in the background; log in /op
 $R/stand.sh status s1
 $R/stand.sh verify s1 de-<rev>     # PASSED / NOT PASSED with every problem; skipped scenarios listed with their reason
 $R/stand.sh down s1
-$R/stand.sh guard-stop
+$R/stand.sh guard-stop             # stops what is left of the stand and the builder first; refuses to go while any of it runs
+$R/stand.sh builder-remove         # the BuildKit builder itself, when no more builds are needed
 ```
 
 Results: `/opt/pb-suite/stands/<stand>/results/series/<name>/` — `series.json`
@@ -95,14 +104,20 @@ server without the owner's approval (stage 2 report §5).
 
 | | Check | Over |
 |---|---|---|
-| C1 | No API request and no socket reached Fansly without an admission in force; one admission is one operation (a request and at most one preflight) | the stand's journal against the engine's grants |
+| C1 | No API request and no socket reached Fansly without an admission in force — the page's own (by the address it comes from at the SOCKS5), for that URL, inside its window; one admission is one operation (a request and at most one preflight) or one socket: a second arrival under it is a repeat | the stand's journal against the engine's grants |
 | C2 | No closed write (anything but the login's) | the stand's journal |
 | C3 | No forbidden socket message (only the authorization and `p`) | the stand's journal |
-| C4 | No traffic past the proxy: only the SOCKS5 and the RPC's answers leave the page container | the OS capture |
+| C4 | No traffic past the proxy: only the SOCKS5 and the RPC's answers leave the page container — and the capture is evidence at all: the runner sends the page a sentinel datagram when the run begins and when it ends, and both must be in the capture (a stopped tcpdump, or one in a namespace the page has left, shows nothing and proves nothing) | the OS capture, the run's interval exactly |
 | C5 | Nothing reached the stand's direct listener | the stand's journal |
 | C6 | Every attempt the engine issued resolved exactly once (one committed outcome or a recover answer); "not sent" never of a request that arrived | the stand's Postgres, the journal |
-| C7 | No event deleted before the engine committed it (no hole in a buffer's numbers) | the stand's Postgres |
+| C7 | No event deleted before the engine committed it: every number between the run's bounds is stored — from the engine's position when the run began (1 for a buffer new to it) to the highest number the operator sent on the wire, the tail included | the stand's Postgres against bounds recorded apart from it |
 | C8 | The stand's Fansly had no error | the stand's journal |
+
+C7's end bound is what came on the wire: the operator's buffer file is its
+own while it runs (`locking_mode=EXCLUSIVE`), and the stand does not open
+it. An event the operator dropped before ever sending it would show only as
+a hole before a later one; each scenario that must produce an event (a gap
+mark) checks for that event itself.
 
 Each scenario adds its own: the exit seen closed within a bound, the stop
 reason (a failure with a retry, or a halt), back up by itself or only on
@@ -118,6 +133,15 @@ stand's `fansly.com` page then plays the site (reads with the session's
 headers and `fansly-client-check`, its socket, pings, a closed write or a
 forbidden message when asked). "PR 6" waits for the rules extension in the
 image (the self-test no longer reports `dnr_*` as not installed).
+
+A setting of the stand's site changes only what the next load gets, so every
+run of a site scenario loads the page anew (`restartBrowser`) after
+configuring it and waits for the page's own word on which variant it is
+(`/stand/hello?variant=…`); a run on another variant is not counted. And each
+site scenario asks its run for evidence of what it is about (requests the
+site did send, a write it did try, a CONNECT that was held past a deadline,
+a request in flight at the restart): without it the run fails — it would
+prove nothing.
 
 | Scenario | Needs | A pass proves |
 |---|---|---|
@@ -137,14 +161,17 @@ image (the self-test no longer reports `dnr_*` as not installed).
 | `container-restart` | — | the page's container restarts with its volumes: the same profile and buffer, the owner generation remembered (an older hello is refused), the page stands until `restartBrowser` |
 | `control-leak` | — | **control**: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — C1, C2 and C3 must catch them, in every run |
 | `control-bypass` | — | **control**: a hole in the page's rules and a connection past the proxy — C4 and C5 must catch it |
+| `control-no-capture` | — | **control**: the capture stops during the run — C4 must say there is no evidence, not pass on silence |
+| `control-double-open` | — | **control**: one socket admitted, two opened under it from the page's own address (through its SOCKS5, with a one-time login) — C1 must catch the repeat |
 | `control-duplicate` | — | **control**: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate |
-| `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — C7 must catch the hole |
+| `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — the lost event is the tail, and C7 must catch it |
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |
-| `site-proxy-down` | PR 7 | what waited when the proxy failed is never sent after it is back (plan §4.5) |
-| `site-admission-expiry` | PR 7 | an admission runs out while its connection is set up (the SOCKS5 holds the CONNECT 20 s, the admission is 15 s), then the delay goes: nothing arrives after its deadline (condition №2) |
-| `site-engine-restart` | PR 7 | `recover` with Hub requests released: never `not_sent` of one that left |
-| `site-closed-writes` | PR 6, PR 7 | the site's closed writes never reach Fansly |
+| `site-proxy-down` | PR 7 | the site's requests that waited when the proxy failed — asked an admission and not given one, or admitted and not ended; recorded right before the failure, and there must be some — never go after it is back, whatever admission they get then (plan §4.5) |
+| `site-admission-expiry` | PR 7 | an admission of 6 s runs out while the SOCKS5 holds its CONNECT 10 s — inside the 15 s after which the operator's own SOCKS5 client would give up, so it is the deadline that must stop the request — then the hold goes: nothing arrives after its deadline (condition №2); the run must show the held CONNECT and the admission that ran out over it |
+| `control-site-late-send` | PR 7 | **control**: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like; C1 must catch it |
+| `site-engine-restart` | PR 7 | the engine restarts while a Hub request that reached Fansly waits for its answer (the stand holds the answer 8 s; the run waits for that request's arrival first, and must show it was unanswered at the restart): `recover` never says `not_sent` of it |
+| `site-closed-writes` | PR 6, PR 7 | the site tries its closed writes — its own reports say a write was cancelled, and there must be one — and none reaches Fansly |
 | `site-forbidden-ws` | PR 7 | a forbidden socket message never leaves; the page stops with `unknown_ws_message` |
 
 What main's operator does in these runs, so a pass is read right: until
@@ -160,13 +187,28 @@ own checks — the page's reaction to each fault — carry most of the weight.
 `load.ts` starts the stand's pages at once, keeps each page's engine at the
 ceiling (one request in flight, the next after S × (1 + u)), pushes socket
 frames at 246 a minute per page with bursts at 492, takes the engine away for
-`--outage-minutes`, and measures the offload; cgroup counters every 5 s.
-`results/load/<name>/report.json` holds spec §4's thresholds — 1 pages at
-once, 2 requests per hour, 3 frames, 4 frame → Postgres p95, 5 the browser's
-addition, 6 the buffer's age, 7 the outage, 8 resources, 9 Hub and Postgres —
-each with its value and whether it held, or why it was not measured: until
-PR 7 no request leaves and no socket opens (2–5 wait for it), and 9 is about
-Hub's own queries, which are not on the stand.
+`--outage-minutes`, and measures the offload; cgroup counters every 5 s, a
+capture sentinel to every page every 30 s. `results/load/<name>/report.json`
+holds spec §4's thresholds, each `held` true, false, or null — not measured,
+with the reason:
+
+| | Threshold | Held only if |
+|---|---|---|
+| 1 | pages at once | the run had 7 profiles |
+| 2 | requests per hour per page | every page's own requests in the stand's journal reach 1240 an hour |
+| 3 | socket frames | every page got at least 95 % of the asked rate in the background and in each burst (what the stand pushed to that page, phase by phase) |
+| 4 | frame → Postgres p95 | measured on frames committed before the outage |
+| 5 | the browser's addition | (needs requests that leave: PR 7) |
+| 6 | the buffer's age p95 | under 2 s over the states received |
+| 7 | the outage | a backlog did pile up during it on every page, every event of it is stored afterwards, once, within 10 min |
+| 8 | resources | peak memory ≤ 90 % of the limit, no OOM, at least half of the 5 s samples taken |
+| 9 | Hub and Postgres | not on the stand (Hub's own queries are not here): reported, never part of the verdict |
+
+The verdict is `PASSED` only if every threshold of the stand held and no
+criterion (C1–C5, C7, per page) was violated; `FAILED` if one did not;
+`INCOMPLETE` if nothing failed but something was not measured — never a
+pass (exit 0, 1, 3). Until PR 7 no request leaves and no socket opens, so a
+run against main is `INCOMPLETE` by construction: 2–5 and 7 wait for it.
 
 ## Seams (the stand changes nothing of the image)
 
@@ -189,4 +231,7 @@ Hub's own queries, which are not on the stand.
 - **Faults from inside.** Signals and `s6-svc` for the processes; for the CDP
   break, two `nft` rules in the page's own table that reset port 9222 (the
   resets themselves let through); for `control-bypass`, a hole for
-  `pb-chrome`; the disk fill with `fallocate` on the disk page's volume.
+  `pb-chrome`; the disk fill with `fallocate` on the disk page's volume; for
+  `control-double-open`, `inside/open-sockets.ts` as the operator's user,
+  with a login the stand's SOCKS5 takes only while that control runs (the
+  page's own never leaves the runner and the operator).

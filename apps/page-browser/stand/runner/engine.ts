@@ -44,8 +44,15 @@ import type { Store, StoredEvent } from "./store.ts";
 /** Plan §4.14: the send window of an admission. */
 export const SEND_WINDOW_MS = 15_000;
 
+/** host + path + query of a site request, as the stand's journal has it. */
+export function siteTarget(request: Pick<SiteAdmit, "host" | "path" | "query">): string {
+  return `${request.host}${request.path}${request.query ? `?${request.query.replace(/^\?/, "")}` : ""}`;
+}
+
 export interface Grant {
   kind: "hub" | "site" | "ws";
+  /** The page the admission was given for. */
+  page: string;
   attemptId: number;
   /** The site request's or the socket's id; the Hub attempt's own. */
   ref: string;
@@ -116,6 +123,18 @@ export class StandEngine {
   commitFailures = 0;
   /** Events received on the stream (committed or not). */
   eventsReceived = 0;
+  /** The highest number of each buffer seen on the wire — what the operator
+   *  sent, whatever became of it here: the end bound the stored numbers are
+   *  checked against (criteria.ts, eventsComplete). */
+  readonly wireMax = new Map<string, number>();
+  /** An admission's length (plan §4.14: 15 s); a scenario may shorten it. */
+  windowMs = SEND_WINDOW_MS;
+  /** A control: the deadline the engine journals is this much after the
+   *  admission, while the operator is told `windowMs` — an operator that let
+   *  a request go after its admission ran out looks exactly like that. */
+  journalWindowMs: number | null = null;
+  /** Every site request the operator asked an admission for. */
+  readonly siteAsked: Array<{ siteRequestId: string; method: string; target: string; atMono: number }> = [];
   /** ackEarly: events acknowledged whose commit failed. */
   eventsLost = 0;
   /** How long each commit to the stand's Postgres took, ms. */
@@ -136,7 +155,7 @@ export class StandEngine {
   #acked = new Map<string, number>();
   #subscribed = false;
   #stalled = false;
-  #inFlight: { ref: string; kind: "site" | "ws" } | null = null;
+  #inFlight: { ref: string; kind: "site" | "ws"; method: string; target: string } | null = null;
   #lastEndMono = 0;
   #siteQueue: SiteAdmit[] = [];
   #helloResolve: ((ok: boolean, reason: string) => void) | null = null;
@@ -379,6 +398,7 @@ export class StandEngine {
       case "sent":
         return;
       case "siteAdmit":
+        this.siteAsked.push({ siteRequestId: message.siteRequestId, method: message.method, target: siteTarget(message), atMono: at });
         this.#siteQueue.push(message);
         this.#pump();
         return;
@@ -429,6 +449,7 @@ export class StandEngine {
 
   async #onEvents(bufferId: string, events: BufferEvent[]): Promise<void> {
     this.eventsReceived += events.length;
+    for (const event of events) this.wireMax.set(bufferId, Math.max(this.wireMax.get(bufferId) ?? 0, event.seq));
     if (this.#stalled || events.length === 0) return;
     if (this.options.ackEarly) {
       const last = events.at(-1)!.seq;
@@ -496,11 +517,26 @@ export class StandEngine {
 
   // ── admissions ─────────────────────────────────────────────────────────
 
+  /** Journals the admission and returns the deadline the operator gets. */
   #grant(kind: Grant["kind"], ref: string, attemptId: number, method: string | null, target: string | null): number {
     const now = mono();
-    const deadline = now + SEND_WINDOW_MS;
-    this.grants.push({ kind, attemptId, ref, method, target, grantedMono: now, deadlineMono: deadline, generation: this.generation });
+    const deadline = now + this.windowMs;
+    this.grants.push({ kind, page: this.options.page, attemptId, ref, method, target, grantedMono: now, deadlineMono: now + (this.journalWindowMs ?? this.windowMs), generation: this.generation });
     return deadline;
+  }
+
+  /** A control's admission: journaled as given, without the operator having
+   *  asked (control-double-open). */
+  journalGrant(kind: Grant["kind"], ref: string, target: string): void {
+    const now = mono();
+    this.grants.push({ kind, page: this.options.page, attemptId: 0, ref, method: null, target, grantedMono: now, deadlineMono: now + this.windowMs, generation: this.generation });
+  }
+
+  /** The site's requests that wait now: asked an admission and not given
+   *  one yet, or admitted and not ended. */
+  waiting(): Array<{ siteRequestId: string; method: string; target: string }> {
+    const queued = this.#siteQueue.map((next) => ({ siteRequestId: next.siteRequestId, method: next.method, target: siteTarget(next) }));
+    return this.#inFlight?.kind === "site" ? [{ siteRequestId: this.#inFlight.ref, method: this.#inFlight.method, target: this.#inFlight.target }, ...queued] : queued;
   }
 
   #onCheck(attemptId: number): void {
@@ -524,10 +560,10 @@ export class StandEngine {
         setTimeout(() => this.#pump(), wait);
         return;
       }
-      this.#inFlight = { ref: next.siteRequestId, kind: "site" };
-      void this.options.store.issue(this.options.page, this.run, "site", [`${next.method} ${next.path}`]).then(
+      const target = siteTarget(next);
+      this.#inFlight = { ref: next.siteRequestId, kind: "site", method: next.method, target };
+      void this.options.store.issue(this.options.page, this.run, "site", [/[?&]rid=([^&]+)/.exec(target)?.[1] ?? null]).then(
         ([attemptId]) => {
-          const target = `${next.host}${next.path}${next.query ? `?${next.query.replace(/^\?/, "")}` : ""}`;
           const deadlineMono = this.#grant("site", next.siteRequestId, attemptId!, next.method, target);
           this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: next.siteRequestId, admit: true, deadlineMono, attemptId });
         },
@@ -569,10 +605,10 @@ export class StandEngine {
   }
 
   /** The `send` of attempts issued before. */
-  sendIssued(ids: readonly number[], path = "/api/v1/account/me"): void {
+  sendIssued(ids: readonly number[], path = "/api/v1/account/me", query = ""): void {
     const live = this.state?.sessionFingerprint ?? createHash("sha256").update("pb-suite: no live session").digest("hex");
     for (const attemptId of ids) {
-      const target = `apiv3.fansly.com${path}?rid=${this.#rids.get(attemptId) ?? `hub-${attemptId}`}`;
+      const target = `apiv3.fansly.com${path}?rid=${this.ridOf(attemptId)}${query ? `&${query}` : ""}`;
       this.#hubTargets.set(attemptId, target);
       const now = mono();
       this.#send({
@@ -587,10 +623,15 @@ export class StandEngine {
         headers: { accept: "application/json, text/plain, */*" },
         kind: "api",
         maxBodyBytes: 1024 * 1024,
-        sendDeadlineMono: now + SEND_WINDOW_MS,
-        requestDeadlineMono: now + 20_000,
+        sendDeadlineMono: now + this.windowMs,
+        requestDeadlineMono: now + this.windowMs + 20_000,
       });
     }
+  }
+
+  /** The request id (in the URL) of a Hub attempt this engine issued. */
+  ridOf(attemptId: number): string {
+    return this.#rids.get(attemptId) ?? `hub-${attemptId}`;
   }
 
   /** Hub requests (`send`), one per attempt id, recorded as issued first. */

@@ -18,12 +18,14 @@ services:
     labels:
       agency.stand: pb-suite
       agency.stand.name: ${PB_SUITE_PROJECT}
-    entrypoint: ["/bin/sh", "/stand/inside/entry.sh"]
+    entrypoint: ["/bin/sh", "/opt/page-browser/stand/inside/entry.sh"]
     environment:
       STAND_EGRESS_IP: ${PB_EGRESS_IP}
     memswap_limit: 2g
     volumes:
-      - ${PB_SUITE_SRC:?}/stand/inside:/stand/inside:ro
+      # Next to the image's own src/, so the stand's levers inside the page
+      # container use the image's code by the same relative paths as here.
+      - ${PB_SUITE_SRC:?}/stand/inside:/opt/page-browser/stand/inside:ro
       - tools:/stand/tools:ro
       - ca:/stand/ca:ro
 

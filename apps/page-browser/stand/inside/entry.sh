@@ -1,5 +1,6 @@
 #!/bin/sh
-# The stand's entry in front of the page image's /init (page.stand.yml). The
+# The stand's entry in front of the page image's /init (page.stand.yml
+# mounts this directory at /opt/page-browser/stand/inside). The
 # image is production's, untouched; this only prepares its container for
 # the stand, as root, before s6 starts anything:
 #
