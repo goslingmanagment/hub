@@ -216,7 +216,8 @@ type Step = "exit_closed" | "env_applied" | "chrome_started" | "control_attached
   | "exit_ip_verified" | "exit_open" | "site_loaded" | "session_confirmed" | "ready";  // план §4.1
 type StopReason = "selftest_failed" | "exit_ip_changed" | "proxy_unavailable" | "proxy_auth" | "cdp_lost"
   | "holder_overflow" | "buffer_full" | "disk_full" | "chrome_crashed" | "unknown_ws_message"
-  | "header_mismatch" | "login_required" | "owner_stop";
+  | "header_mismatch" | "login_required" | "owner_stop"
+  | "env_mismatch";  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
 type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
 type Refusal = "lease_inactive" | "lease_used" | "send_deadline_passed" | "pace" | "takeover_floor"
   | "generation_stale" | "session_mismatch";  // первые пять — packages/fansly/src/send-guard.ts:126-131
@@ -233,6 +234,8 @@ interface Hello extends FromEngine {
   pageId: number; expectedAccountId: string; pinnedExitIp: string; params: OperatorParams;
   socks5: { ip: string; port: number; username: string; password: string };
   env: { timeZone: string; languages: string[]; geolocation: { latitude: number; longitude: number; accuracyM: number } };
+  // languages — полный список, как его показывает Chrome: после ForcedLanguages он дописывает свои
+  // (de-DE, de → de-DE, de, en-US, en); сверка точная, поэтому заметит и смену после обновления Chrome
 }
 type HelloResult = { type: "helloResult" } & (
   | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State }
