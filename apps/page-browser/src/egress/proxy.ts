@@ -23,19 +23,30 @@
 //   anything else is held, the tunnel is cut and the page stops. A tunnel
 //   that is not TLS, or whose TLS the gate cannot measure, is cut before its
 //   request goes.
+// - Every other host the site loads goes through as a plain tunnel: Fansly's
+//   page, static files and media, and third-party hosts as any browser's
+//   would (owner decision №2); the hosts the map of operations closes are
+//   refused (policy/operations.ts, spec §2.1). A third-party name is
+//   resolved by the page's SOCKS5, not here: the refusal of local and
+//   private destinations holds for the address in the request.
 // - Each tunnel is one line of the connection journal: host, port, opened,
 //   closed, bytes both ways, what was held, the result.
 //
-// The rules extension's files (PR 6) will be served on this port too;
-// until then a plain HTTP request is refused.
+// On this port the operator also serves the rules extension's package to
+// Chrome's policy (extension-files.ts, PR 6): a direct request for one of
+// its two files. Any other plain HTTP request — Chrome's proxied http:// —
+// is refused: the page leaves only over TLS. Chrome's policy upgrades every
+// http:// navigation to https (HttpsOnlyMode), and a plain subresource of
+// an https page is Chrome's own mixed-content block (spec §2.1).
 
-import { createServer as createHttpServer, type IncomingMessage, type Server } from "node:http";
-import { isIP, type Socket } from "node:net";
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 
 import { ApiGate, controlRecordLimit, readServerHello } from "./gate.ts";
-import type { HostClass, HostClassifier } from "./hosts.ts";
+import { refusedClass, type HostClass, type HostClassifier } from "./hosts.ts";
 import { recordOverhead, SocketRecordGate, type SocketRules } from "./socket-gate.ts";
 import { SocksError, socksConnect, type SocksConfig, type SocksFailure } from "./socks5.ts";
+import { isLocalAddress } from "../policy/operations.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 
 export interface TunnelRecord {
@@ -86,6 +97,9 @@ export interface EgressOptions {
   onRecord?: (record: TunnelRecord) => void;
   /** The page's SOCKS5 failed us (not the destination). */
   onSocksFailure?: (kind: Exclude<SocksFailure, "refused">, message: string) => void;
+  /** Answers a plain request the proxy serves itself (the rules
+   *  extension's package); false — it is refused. */
+  serve?: (req: IncomingMessage, res: ServerResponse) => boolean;
   /** A tunnel holding more of Chrome's bytes than this is cut. */
   heldLimitBytes?: number;
   socksTimeoutMs?: number;
@@ -209,6 +223,11 @@ export class Egress {
 
   listen(port: number, host = "127.0.0.1"): Promise<number> {
     const server = createHttpServer((req, res) => {
+      try {
+        if (this.#options.serve?.(req, res)) return;
+      } catch (error) {
+        this.#log("plain.serve_failed", { error: errorMessage(error) });
+      }
       this.#log("plain.refused", { method: req.method ?? "", url: (req.url ?? "").startsWith("/") ? (req.url ?? "").split(/[?#]/)[0] : urlForLogLine(req.url ?? "") });
       res.writeHead(403, { "content-length": "0", connection: "close" }).end();
     });
@@ -496,8 +515,14 @@ export class Egress {
     };
     const socks = this.#socks;
     if (!this.#exitOpen || socks === null) return this.#refuse(record, client, "refused: exit closed");
+    // Local and private addresses are refused as the request names them — a
+    // name or a literal (policy/operations.ts `LOCAL`). A name goes to the
+    // page's SOCKS5 as it is and is resolved there (plan §4.5): what it
+    // resolves to is not seen here, and need not be — a private address
+    // behind the page's proxy is its provider's network, not Hub's, and this
+    // container reaches nothing but that proxy (init-net; spec §2.1).
     if (local) return this.#refuse(record, client, "refused: local or private address");
-    if (cls === "denied") return this.#refuse(record, client, "refused: host not allowed");
+    if (refusedClass(cls)) return this.#refuse(record, client, cls === "closed" ? "refused: host closed by the map" : "refused: special-use name");
     // Each socket of the site is its own tunnel, admitted by the engine.
     let ticket: SocketTicket | null = null;
     if (cls === "ws") {
@@ -600,13 +625,10 @@ export class Egress {
 }
 
 /** Local and private destinations (plan §4.5): refused even with the exit
- *  open, and anything that is not a valid port. */
+ *  open, and anything that is not a valid port. The addresses are the map's
+ *  (policy/operations.ts `LOCAL`), the ones the rules extension blocks;
+ *  special-use names are refused by their class ("denied"). */
 export function localOrPrivate(host: string, port: number): boolean {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return true;
-  if (host === "" || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return true;
-  const kind = isIP(host);
-  if (kind === 4) return /^(0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|22[4-9]\.|2[3-5]\d\.)/.test(host);
-  if (kind === 6) return /^(::1?$|::ffff:|fc|fd|fe[89ab]|ff)/i.test(host);
-  // A bare name without a dot is a local one.
-  return !host.includes(".");
+  return isLocalAddress(host);
 }
