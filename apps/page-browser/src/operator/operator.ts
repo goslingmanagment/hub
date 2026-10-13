@@ -622,6 +622,8 @@ export class Operator {
   /** What runs in the page ends: Hub's requests, the site's, the socket's
    *  admissions and connections (the exit is closed already). */
   #endWork(note: string): void {
+    // The session goes with the browser, and what was confirmed of it.
+    this.#identity = null;
     this.hub.endAll(note);
     this.site.endAll(note);
     this.sockets.endAll(note);
@@ -1136,7 +1138,7 @@ export class Operator {
         this.journals.request({ ...line, admission: admitted, decision: "failed", result: `${decision.reason}: ${decision.why}` });
         return;
       case "fulfill":
-        this.journals.request({ ...line, admission: admitted ?? "environment check (answered here, not sent)", decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
+        this.journals.request({ ...line, admission: admitted ?? (this.envCheck.isCheckPage(request) ? "environment check (answered here, not sent)" : null), decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
         return;
       case "continueResponse":
         this.journals.request({ ...line, admission: admitted, decision: "continued", result: "the answer went on to the page" });

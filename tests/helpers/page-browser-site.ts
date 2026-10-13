@@ -76,6 +76,9 @@ export class SiteChrome {
   readonly wire: SiteWire[] = [];
   /** What the page read of each answer (the bytes it got). */
   readonly pageRead = new Map<string, Buffer>();
+  /** Preflights continued without their answer handed on by fulfill (what
+   *  Chrome 155 may kill its network service on). */
+  unfulfilledPreflights = 0;
   #n = 0;
   #tunnels = 100;
 
@@ -191,6 +194,12 @@ export class SiteChrome {
   /** The request's records through the gate: "up", "held", or "refused"
    *  (no new tunnel in this window). */
   #write(request: SiteModelRequest): "up" | "held" | "refused" {
+    // Only the API's tunnels are under the gate.
+    if (new URL(request.url).hostname !== "apiv3.fansly.com") {
+      request.sendCount += 1;
+      this.wire.push({ role: request.role, method: request.method, url: request.url });
+      return "up";
+    }
     let tunnel = request.tunnel ?? 1;
     if (request.script.newTunnel && request.tunnel === null) {
       if (!this.gate.admitsTunnel()) return "refused";
@@ -232,6 +241,24 @@ export class SiteChrome {
     if (then === "hang_after_send" && request.role === "main") return;
     if (then === "fail_after_send" && request.role === "main") return this.#end(request, "net::ERR_CONNECTION_RESET", false);
     if (then === "cancel_after_send" && request.role === "main") return this.#end(request, "net::ERR_ABORTED", true);
+    if (!request.interceptResponse) {
+      // Not asked to stop at its headers: the answer goes straight on.
+      if (request.role === "preflight") {
+        request.outcome = "continued";
+        request.ended = true;
+        this.unfulfilledPreflights += 1;
+        this.#responseReceived(request, script.preflight ?? 204);
+        setImmediate(() => {
+          this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 120 }, request.session);
+          if (request.main) this.#pause(request.main, (request.main as SiteModelRequest & { resourceType?: string }).resourceType ?? "XHR");
+        });
+        return;
+      }
+      request.stage = "response";
+      this.#responseReceived(request, script.status ?? 200);
+      void this.#body(request);
+      return;
+    }
     request.stage = "response";
     if (request.role === "preflight") {
       this.cdp.emit("Fetch.requestPaused", {

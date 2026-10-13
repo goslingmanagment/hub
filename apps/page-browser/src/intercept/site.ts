@@ -8,7 +8,11 @@
 //  - pass: the page, its static files, Fansly's other hosts, the CDN's
 //    pictures, third-party hosts the site loads — on at once, unpaced; the
 //    journal has the host, path, size and time. Only while the page is up:
-//    before its exit opens nothing goes (plan §4.1).
+//    before its exit opens nothing goes (plan §4.1). A CORS preflight among
+//    them goes on with its answer to stop at its headers, and is handed on
+//    with Fetch.fulfillRequest — as every preflight under this interception
+//    is (stage 1, amendment 3: continued, Chrome 155 may kill its network
+//    service).
 //  - refuse: what the map closes (closed rows, writes but the login, other
 //    hosts the map closes, local and special-use addresses) — failed
 //    (BlockedByClient) and journaled. The rules extension cancels these
@@ -310,6 +314,8 @@ export class SiteRequests {
    *  is armed). */
   readonly #sessionOf = new Map<string, string>();
   readonly #sessionWaiters = new Map<string, Array<() => void>>();
+  /** Preflights that passed: their answers are handed on by fulfill. */
+  readonly #passedPreflights = new Map<string, true>();
   /** Requests that passed, for the journal's line at their end. */
   readonly #passed = new Map<string, { line: Omit<RequestLine, "decision" | "result" | "admission">; startMono: number }>();
   /** Ids of operations that ended, for the late answers. */
@@ -351,6 +357,11 @@ export class SiteRequests {
    *  the engine. At the response stage: one of this path's, or null. */
   decide(request: PausedRequest): PausedDecision | null {
     if (request.stage === "response") {
+      if (request.networkId !== null && this.#passedPreflights.delete(request.networkId)) {
+        const response = request.response;
+        if (response === null || response.status === null) return { action: "fail", reason: "Failed", why: `a passed preflight's network error: ${response?.errorReason ?? "?"}` };
+        return { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a passed request's preflight answer, handed on", ...(response.statusText ? { phrase: response.statusText } : {}) };
+      }
       const op = this.#opOf(request.networkId);
       if (op === null) return null;
       if (op.done) return { action: "fail", reason: "Aborted", why: "the response of a site request that ended" };
@@ -366,7 +377,7 @@ export class SiteRequests {
     if (!preflight && this.#hostClass(request.url) === "api") this.#deps.session.note(request);
     switch (verdict.action) {
       case "pass":
-        return this.#pass(request, verdict);
+        return this.#pass(request, verdict, preflight);
       case "refuse":
         return { action: "fail", reason: "BlockedByClient", why: `${verdict.why} (${verdict.rule})` };
       case "socket":
@@ -387,6 +398,8 @@ export class SiteRequests {
     }
     const notUp = this.#notAdmitting();
     if (notUp !== null) return { action: "fail", reason: "Failed", why: `no admission: ${notUp}` };
+    // Its answer and its end are Chrome's to report by this id.
+    if (request.networkId === null) return { action: "fail", reason: "Failed", why: "no admission: Chrome gave the request no network id to follow it by" };
     this.#begin(request, preflight ? "preflight" : "main", method, verdict);
     return { action: "hold" };
   }
@@ -528,6 +541,7 @@ export class SiteRequests {
       this.#byNetwork.clear();
       this.#sessionOf.clear();
       this.#passed.clear();
+      this.#passedPreflights.clear();
       for (const waiters of this.#sessionWaiters.values()) for (const wake of waiters) wake();
       this.#sessionWaiters.clear();
     }
@@ -587,14 +601,18 @@ export class SiteRequests {
     return refusal === null ? null : `the buffer takes no writes (${refusal})`;
   }
 
-  #pass(request: PausedRequest, verdict: Extract<MapDecision, { action: "pass" }>): PausedDecision {
+  #pass(request: PausedRequest, verdict: Extract<MapDecision, { action: "pass" }>, preflight: boolean): PausedDecision {
     const notUp = this.#deps.notUp();
     if (notUp !== null) return { action: "fail", reason: "BlockedByClient", why: `not now: ${notUp}` };
     if (request.networkId !== null) {
       const { host, path } = hostAndPath(request.url);
       remember(this.#passed, request.networkId, { line: { method: request.method, host, path, resourceType: request.resourceType }, startMono: this.#now() });
     }
-    this.#log("pass", { rule: verdict.rule });
+    this.#log("pass", { rule: verdict.rule, preflight });
+    if (preflight && request.networkId !== null) {
+      remember(this.#passedPreflights, request.networkId, true);
+      return { action: "continue", params: { interceptResponse: true } };
+    }
     return { action: "continue" };
   }
 
@@ -1158,9 +1176,14 @@ export class SiteRequests {
     const unkept = (reason: string) => {
       if (body !== null) this.#deps.buffer.removeBody(body.bodyId);
       this.#log("end.unkept", { siteRequestId: op.id, attemptId: op.attemptId, reason });
-      // The engine hears from memory; the request's end is written later.
-      this.#deps.link.send(keep ? { ...done, body: "incomplete" } : done);
-      this.#write(`gone:${op.id}`, () => [gone], null);
+      // The engine hears from memory at once. What is written later, once
+      // the buffer takes writes: the end, and — the body gone with the
+      // refusal — the answer as a mark, never as a fact.
+      const told: SiteDone = keep ? { ...done, body: "incomplete" } : done;
+      this.#deps.link.send(told);
+      const first = items[0];
+      const mark: GroupItem[] = keep && first !== undefined && "event" in first ? [{ event: { ...first.event, body: { bodyId: randomUUID(), decodedBytes: 0, sha256: EMPTY_SHA256 }, complete: false } as typeof first.event }] : [];
+      this.#retryLater(`end:${op.id}`, () => [...mark, { outcome: told }, gone]);
     };
     if (!appended.ok) return unkept(appended.reason);
     void appended.durable.then((durable) => {
