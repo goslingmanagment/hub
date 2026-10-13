@@ -854,31 +854,57 @@ describe("the released Fansly extension (fansly-chat 2.10.1, clientContext) is a
     fanSpendingData: REFERENCE_SPENDING_DEEP,
     fanSubscriptionData: REFERENCE_SUBSCRIPTIONS.activeNoRenew.block,
   };
-  const forms: Array<{ name: string; feature: string; body: Record<string, unknown> }> = [
+  // Its real request forms (fansly-chat ff30d00, src/background/operations.ts
+  // buildConversationRefs, kernel-feature-gateway.ts, followers-service.ts).
+  // The new-follower Hi reads no earnings and sends the two blocks empty.
+  const forms: Array<{ name: string; feature: string; blocks: boolean; body: Record<string, unknown> }> = [
     {
       name: "group/fan coach-chat",
       feature: "coach-chat",
+      blocks: true,
       body: { conversationRef: FS_GROUP, fanRef: FS_FAN, chatterQuestion: "what next?", isRegeneration: false, clientContext },
     },
     {
       name: "group/fan fan-summary (full)",
       feature: "fan-summary",
+      blocks: true,
       body: { conversationRef: FS_GROUP, fanRef: FS_FAN, messageCount: 1500, isRegeneration: false, clientContext: { ...clientContext, transcriptCoverage: "window" } },
+    },
+    {
+      name: "group/fan fan-summary (short)",
+      feature: "fan-summary",
+      blocks: true,
+      body: { conversationRef: FS_GROUP, fanRef: FS_FAN, summaryMode: "short", isRegeneration: false, clientContext },
     },
     {
       name: "group/fan fan-notes-fill",
       feature: "fan-notes-fill",
+      blocks: true,
       body: { conversationRef: FS_GROUP, fanRef: FS_FAN, noteFields: ["Имя", "Возраст"], isRegeneration: false, clientContext },
     },
     {
       name: "fan fast-reply",
       feature: "fast-reply",
+      blocks: true,
       body: { conversationRef: FS_FAN, replyTone: "flirty", replyMode: "default", isRegeneration: false, clientContext },
     },
     {
-      name: "fan/fan fast-reply",
+      name: "group fast-reply (fan not resolved)",
       feature: "fast-reply",
-      body: { conversationRef: FS_FAN, fanRef: FS_FAN, isRegeneration: false, clientContext },
+      blocks: true,
+      body: { conversationRef: FS_GROUP, isRegeneration: false, clientContext },
+    },
+    {
+      name: "fan/fan hi-greeting (New Followers)",
+      feature: "hi-greeting",
+      blocks: false,
+      body: {
+        conversationRef: FS_FAN,
+        fanRef: FS_FAN,
+        variantCount: 1,
+        isRegeneration: false,
+        clientContext: { ...clientContext, messageCount: 2, fanUsername: "charles", personalMessageCount: 0, fanSpendingData: "", fanSubscriptionData: "" },
+      },
     },
   ];
 
@@ -917,8 +943,10 @@ describe("the released Fansly extension (fansly-chat 2.10.1, clientContext) is a
           payload: { clientRequestId: randomUUID(), pageLabel: "money-fs", platform: "fansly", ...form.body },
         });
         expect(response.statusCode, `${form.name}, ${state.name}: ${response.body}`).toBe(200);
-        expect(section(userText(), "fan_spending_data"), form.name).toBe(REFERENCE_SPENDING_DEEP);
-        expect(section(userText(), "fan_subscription_data"), form.name).toBe(REFERENCE_SUBSCRIPTIONS.activeNoRenew.block);
+        expect(section(userText(), "fan_spending_data"), form.name)
+          .toBe(form.blocks ? REFERENCE_SPENDING_DEEP : null);
+        expect(section(userText(), "fan_subscription_data"), form.name)
+          .toBe(form.blocks ? REFERENCE_SUBSCRIPTIONS.activeNoRenew.block : null);
         const list = answers.get(form.name) ?? [];
         list.push({ raw: comparable(response.body), prompt: JSON.stringify(provider.input!.body.prompt) });
         answers.set(form.name, list);
