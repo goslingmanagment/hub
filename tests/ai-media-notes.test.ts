@@ -157,14 +157,14 @@ describe("Fansly image notes rendering", () => {
 
 describe("OnlyFans image notes", () => {
   const messages = [
-    { id: 1, createdAtMs: Date.parse("2026-09-28T10:00:00Z"), sender: "Fan" as const, text: "look", labels: ["[Photo]"] },
-    { id: 2, createdAtMs: Date.parse("2026-09-28T10:01:00Z"), sender: "Fan" as const, text: "more", labels: ["[Media Bundle: 2 Photos]"] },
-    { id: 3, createdAtMs: Date.parse("2026-09-28T10:02:00Z"), sender: "Model" as const, text: "buy", labels: ["[Photo - PPV $5.00, unknown]"] },
+    { id: "1", createdAtMs: Date.parse("2026-09-28T10:00:00Z"), sender: "Fan" as const, text: "look", labels: ["[Photo]"] },
+    { id: "2", createdAtMs: Date.parse("2026-09-28T10:01:00Z"), sender: "Fan" as const, text: "more", labels: ["[Media Bundle: 2 Photos]"] },
+    { id: "3", createdAtMs: Date.parse("2026-09-28T10:02:00Z"), sender: "Model" as const, text: "buy", labels: ["[Photo - PPV $5.00, unknown]"] },
   ];
   const mediaByMessage = new Map([
-    [1, { messageId: 1, sender: "fan" as const, paid: false, media: [{ id: "501", type: "photo" }] }],
-    [2, { messageId: 2, sender: "fan" as const, paid: false, media: [{ id: "502", type: "photo" }, { id: "503", type: "photo" }] }],
-    [3, { messageId: 3, sender: "model" as const, paid: true, media: [{ id: "504", type: "photo" }] }],
+    ["1", { messageId: "1", sender: "fan" as const, paid: false, media: [{ id: "501", type: "photo" }] }],
+    ["2", { messageId: "2", sender: "fan" as const, paid: false, media: [{ id: "502", type: "photo" }, { id: "503", type: "photo" }] }],
+    ["3", { messageId: "3", sender: "model" as const, paid: true, media: [{ id: "504", type: "photo" }] }],
   ]);
 
   it("numbers fan media, skips PPV bodies and fills notes", () => {

@@ -14,8 +14,37 @@ export const CLIENT_SEND_TICKET_TTL_MS = 10_000;
 /** At most this many preview sends per user in the window (per-user lock). */
 export const CLIENT_PREVIEW_SEND_RATE_LIMIT = 6;
 export const CLIENT_PREVIEW_SEND_RATE_WINDOW_MS = 60_000;
+/**
+ * At most this many greetings per user in the window where a greeting has a
+ * rate of its own (chat-extension R20 HF-3: Fansly's «Новые»). The old Fansly
+ * extension greeted at most 29 fans in a minute (p99 21): the hub must not be
+ * the slower one.
+ */
+export const CLIENT_GREETING_SEND_RATE_LIMIT = 30;
 
 export type ClientClaimPurpose = "greeting" | "preview-reply";
+
+/**
+ * The rate one dispatch counts toward: at most `limit` dispatches by the user
+ * in the window, counted over the user's dispatches of these purposes to pages
+ * of the dispatch's own platform. Which rate a send has is the platform's
+ * admission (apps/runtime services/client-claim-admission.ts).
+ */
+export interface ClientSendRate {
+  limit: number;
+  purposes: readonly ClientClaimPurpose[];
+}
+
+/** Sending from the preview (X8, OnlyFans): greetings and replies together. */
+export const CLIENT_PREVIEW_SEND_RATE: ClientSendRate = Object.freeze({
+  limit: CLIENT_PREVIEW_SEND_RATE_LIMIT,
+  purposes: Object.freeze(["greeting", "preview-reply"] as const),
+});
+/** A greeting that has a rate of its own (Fansly). */
+export const CLIENT_GREETING_SEND_RATE: ClientSendRate = Object.freeze({
+  limit: CLIENT_GREETING_SEND_RATE_LIMIT,
+  purposes: Object.freeze(["greeting"] as const),
+});
 export type ClientLeaseState = "active" | "released" | "expired";
 export type ClientCustodyStoredState = "dispatching" | "sent" | "failed" | "resolved_sent" | "resolved_not_sent";
 export type ClientCustodyViewState =
@@ -111,7 +140,10 @@ export interface ClientFanClaimSnapshot {
    */
   group: ClientClaimGroup | null;
   groupParts: ClientCustodyRow[];
-  /** The user's preview sends inside the rate window (dispatch only). */
+  /**
+   * The user's sends inside the rate window, in the dispatch's rate scope
+   * (its `rate`, CLIENT_PREVIEW_SEND_RATE when it names none). Dispatch only.
+   */
   recentPreviewSends: number;
   /**
    * The viewer's own last send to this fan dispatched from the preview, in
@@ -133,6 +165,8 @@ export type ClientClaimRequest = ActorFields & (
     action: "dispatch"; attemptId: string; instanceId: string; purpose: ClientClaimPurpose;
     group: ClientClaimGroup; partIndex: number; textRevision: number; leaseToken: string | null;
     flagRevision: number | null; requestHash: string;
+    /** The rate it counts toward; CLIENT_PREVIEW_SEND_RATE when absent. Not part of the request's hash. */
+    rate?: ClientSendRate;
   }
   | { action: "sent"; attemptId: string; instanceId: string; platformMessageId: string }
   | {
@@ -312,8 +346,10 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       if (request.partIndex >= request.group.partCount) return reject("invalid_request");
       // 1. A repeat only reads: no second ticket once the first could have reached the page.
       if (snapshot.attempt) return snapshot.attempt.requestHash === request.requestHash ? apply() : reject("attempt_conflict");
-      // 3. Rate, counted under the user's lock.
-      if (snapshot.recentPreviewSends >= CLIENT_PREVIEW_SEND_RATE_LIMIT) return reject("preview_send_rate_limited");
+      // 3. Rate, counted under the user's lock, in the dispatch's own rate scope.
+      if (snapshot.recentPreviewSends >= (request.rate ?? CLIENT_PREVIEW_SEND_RATE).limit) {
+        return reject("preview_send_rate_limited");
+      }
       // 4. Nobody's send to this fan is unresolved.
       if (snapshot.openCustody) return reject("custody_held");
       let leaseId: string | null = null;

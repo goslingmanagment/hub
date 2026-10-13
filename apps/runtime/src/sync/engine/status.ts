@@ -399,7 +399,14 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
       minGapLastHourMs: input.sends.minGapLastHourMs,
       violationsLastDay: input.sends.violationsLastDay,
     },
-    sendsLastHour: input.sends.lastHour,
+    // The engine's classes, as the status contract names them; a page's own
+    // site requests (Project Browser, 0271) show under their resource only.
+    sendsLastHour: {
+      urgent: input.sends.lastHour.urgent,
+      requests: input.sends.lastHour.requests,
+      planned: input.sends.lastHour.planned,
+      byResource: input.sends.lastHour.byResource,
+    },
     queue: summarizeQueue(input.works, page, input.runtime, now),
     holds: {
       page: hold === null

@@ -27,6 +27,7 @@ import {
   FANSLY_ROUTES,
   familyOfRoute,
   intervalMsOf,
+  isFanslySiteRoute,
   routeBudget,
   routeOfEngineOperation,
   routeOfLegacyOperation,
@@ -73,14 +74,33 @@ describe("the route catalogue", () => {
     }
     expect(FANSLY_ROUTES.get("ws.upgrade")).toMatchObject({ host: "ws" });
     expect(FANSLY_ROUTES.get("cdn.media")).toMatchObject({ host: "cdn" });
-    expect(routeOfEngineOperation("lists.items")).toBeNull();
+    // A site read of a legacy-only endpoint is journaled on its route
+    // (Project Browser, 0271): its clock counts there, not against every route.
+    expect(routeOfEngineOperation("lists.items")).toBe("lists.items");
     expect(routeOfEngineOperation("no.such")).toBeNull();
   });
 
   it("one route per endpoint: no two routes share a host and a path template", () => {
     const endpoints = [...FANSLY_ROUTES.values()].map((route) => `${route.method} ${route.host} ${route.template}`);
     expect(new Set(endpoints).size).toBe(endpoints.length);
-    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 7);
+    // The wire routes, 7 legacy-only and 3 of the site's own requests.
+    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 7 + 3);
+  });
+
+  it("has the routes of a page's own site requests (Project Browser, owner decision №3)", () => {
+    expect(FANSLY_ROUTES.get("site.other")).toMatchObject({ method: "GET", host: "api", wire: null });
+    expect(FANSLY_ROUTES.get("auth.login")).toEqual({ route: "auth.login", method: "POST", host: "api", template: "/login", wire: null });
+    expect(FANSLY_ROUTES.get("auth.twofa")).toEqual({ route: "auth.twofa", method: "POST", host: "api", template: "/login/twofa", wire: null });
+    // The site's reads outside the catalogue share the family `site`, 20 a
+    // minute; the login operations have the default budget and no family.
+    expect(familyOfRoute("site.other")).toBe("site");
+    expect(FAMILY_BUDGETS.site).toEqual({ ceilingPerMin: 20, currentPerMin: 20 });
+    expect(familyOfRoute("auth.login")).toBeNull();
+    expect(routeBudget("auth.twofa")).toEqual(DEFAULT_ROUTE_BUDGET);
+    // A site or login attempt of sync_attempts counts on its route.
+    for (const route of ["site.other", "auth.login", "auth.twofa"] as const) expect(routeOfEngineOperation(route)).toBe(route);
+    expect(isFanslySiteRoute("site.other")).toBe(true);
+    expect(isFanslySiteRoute("account.me")).toBe(false);
   });
 
   it("the families are routes, each route in one family at most", () => {
@@ -190,6 +210,8 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
       messaging: { ceilingPerMin: 15, currentPerMin: 15 },
       earnings: { ceilingPerMin: 17, currentPerMin: 17 },
       creator_stats: { ceilingPerMin: 12, currentPerMin: 5 },
+      // Owner decision №3: the site's own reads outside the catalogue.
+      site: { ceilingPerMin: 20, currentPerMin: 20 },
     });
     expect(routeBudget("messages.page")).toEqual(DEFAULT_ROUTE_BUDGET);
     expect(routeBudget("stats.summary")).toEqual(DEFAULT_ROUTE_BUDGET);
@@ -206,7 +228,8 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    expect(ROUTE_POLICY_HASH).toBe("83f306f5bb015298cd49dc9e99d65cffd71bd9c3fb8bc11c429736854c0f3495");
+    // 3 routes of the site's own requests and the family `site` (owner decision №3).
+    expect(ROUTE_POLICY_HASH).toBe("fbda8fec773e66d91cf1ab8abd5f831edb6bfa9fe019ce6c69772d30201b9b28");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);
@@ -401,7 +424,7 @@ describe("the admission at the pick", () => {
     expect(heldView.routeOpensAt("messaging.groups")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
     const status = routeStatusView(clocks, null, NOW);
     expect(status.policyHash).toBe(ROUTE_POLICY_HASH);
-    expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings", "family:creator_stats"]);
+    expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings", "family:creator_stats", "family:site"]);
     expect(status.routes[0]).toEqual({
       name: "messaging.groups", family: "messaging", ceilingPerMin: 12, currentPerMin: 12, effectivePerMin: 12, intervalMs: 5_000,
       lastSendAt: at(-1_000).toISOString(), holdUntil: null, ladderStep: null, last429At: null, revision: null, opensAt: at(4_000).toISOString(),

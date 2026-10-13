@@ -5,7 +5,11 @@ import {
   CLIENT_FEED_MAX_LIMIT,
   type ClientBootstrapLimits,
 } from "@agency_hub_core/contracts";
-import { ARCHIVE_AI_TRANSCRIPT_MAX_ROWS } from "@agency_hub_core/db";
+import {
+  ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
+  CLIENT_GREETING_SEND_RATE,
+  CLIENT_PREVIEW_SEND_RATE,
+} from "@agency_hub_core/db";
 
 /**
  * The chat extension's limits as the bootstrap announces them. The routes that
@@ -22,15 +26,19 @@ export const CLIENT_BOOTSTRAP_LIMITS: Readonly<Omit<ClientBootstrapLimits, "prev
   // The cap of `limit` in the archive feed's query schema.
   feedMax: CLIENT_FEED_MAX_LIMIT,
   // The AI transcript readers' row cap: the resting value. The bootstrap
-  // announces the owner's `aiTranscriptDeepMaxRows` in its place, the depth a
-  // full Recap may read (ai-transcript-depth.ts).
+  // announces the owner's `aiTranscriptDeepMaxRows` in its place (1500, 3000
+  // or 5000), the depth a full Recap may read on either platform
+  // (ai-transcript-depth.ts).
   deepMax: ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
   // The widest window of the "new subscribers" list, as its query schema bounds it.
   audienceWindowHours: CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
   claimLeaseSec: 120,
   claimRenewSec: 40,
   claimActivityWindowSec: 120,
-  previewSendPerMinute: 6,
+  // The custody's rates (client-claim-admission.ts says which send counts
+  // toward which): sending from the preview on OnlyFans, and Fansly's greetings.
+  previewSendPerMinute: CLIENT_PREVIEW_SEND_RATE.limit,
+  greetingSendPerMinute: CLIENT_GREETING_SEND_RATE.limit,
   navInsertTimeoutSec: 20,
   dispatchTicketSec: 10,
 };

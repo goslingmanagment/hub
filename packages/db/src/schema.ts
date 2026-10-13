@@ -1119,7 +1119,8 @@ export const syncAttempts = pgTable(
     workId: bigint("work_id", { mode: "number" }),
     resource: text("resource").notNull(),
     subject: text("subject").notNull().default(""),
-    class: text("class").$type<"urgent" | "requests" | "planned">().notNull(),
+    // 0271: a site or login attempt (Project Browser) has the class 'site'.
+    class: text("class").$type<"urgent" | "requests" | "planned" | "site">().notNull(),
     slot: smallint("slot"),
     ownerGeneration: bigint("owner_generation", { mode: "bigint" }).notNull(),
     demandRevision: bigint("demand_revision", { mode: "number" }),
@@ -1151,6 +1152,9 @@ export const syncAttempts = pgTable(
     // 0237 (I19): the route's and its family's intervals the admission applied.
     routeIntervalMs: integer("route_interval_ms"),
     familyIntervalMs: integer("family_interval_ms"),
+    // 0271 (Project Browser): whose request — a work's send, the page's own
+    // site request, or an operation of the owner's manual login.
+    origin: text("origin").$type<"engine" | "site" | "login">().notNull().default("engine"),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),
@@ -4394,6 +4398,12 @@ export const messageArchive = pgTable(
     materialObservedAt: timestamp("material_observed_at", { withTimezone: true }),
     replyParentObservedAt: timestamp("reply_parent_observed_at", { withTimezone: true }),
     replyRootObservedAt: timestamp("reply_root_observed_at", { withTimezone: true }),
+    // R20 HF-7д0 (0270): Fansly's automation markers and which of them any
+    // applied material head carried (FANSLY_WS_LIVE_FIELD bits, as
+    // dm_live_messages.field_mask); null mask = unknown.
+    messageType: integer("message_type"),
+    correlationId: text("correlation_id"),
+    markerFieldMask: integer("marker_field_mask"),
     vendorChangedAt: timestamp("vendor_changed_at", { withTimezone: true }),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }),
     servingContractVersion: integer("serving_contract_version").default(0).notNull(),
