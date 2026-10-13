@@ -397,3 +397,31 @@ describe("the image", () => {
     expect(readFileSync(path.join(app, ".dockerignore"), "utf8").split("\n")).toContain("stand");
   });
 });
+
+describe("the stand's checks of the image", () => {
+  const imageCheck = read("apps/page-browser/stand/image-check.sh");
+  const rulesCheckSh = read("apps/page-browser/stand/rules-check.sh");
+  const rulesCheck = read("apps/page-browser/stand/rules-check.mjs");
+
+  it("run in a container as the operator's user: the image's, then the rules extension's (PR 6)", () => {
+    expect(imageCheck).toContain("for script in image-check.mjs rules-check.mjs; do");
+    expect(imageCheck).toContain('docker exec "page-browser-$PAGE" /command/s6-setuidgid pb-operator node --no-warnings "/tmp/$script"');
+    // In a page container that exists: only a page's, and only as pb-operator.
+    expect(rulesCheckSh).toContain('[[ "$CONTAINER" == page-browser-* ]]');
+    expect(rulesCheckSh).toContain('exec docker exec "$CONTAINER" /command/s6-setuidgid pb-operator node --no-warnings /tmp/rules-check.mjs');
+    for (const script of ["image-check.sh", "rules-check.sh"]) expect(spawnSync("bash", ["-n", path.join(app, "stand", script)]).status, script).toBe(0);
+    for (const script of ["image-check.mjs", "rules-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
+  });
+
+  it("the rules check asks the image's own map for what must be cancelled, and never a container whose Chrome runs unasked", () => {
+    expect(rulesCheck).toContain("await import(`${SRC}/policy/operations.ts`)");
+    expect(rulesCheck).toContain('const SRC = process.env.PB_SRC ?? "/opt/page-browser/src";');
+    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS) for (const method of row.methods)");
+    expect(rulesCheck).toContain("for (const closure of GENERAL_CLOSURES)");
+    expect(rulesCheck).toContain('if (!chromeGone() && !takeOver) throw new Error("Chrome is running');
+    // It leaves the page as a standing one, whatever happened.
+    const last = rulesCheck.slice(rulesCheck.indexOf("} finally {"));
+    expect(last).toContain('svc("-d", CHROME)');
+    expect(last).toContain('if (operatorStopped) svc("-u", OPERATOR)');
+  });
+});
