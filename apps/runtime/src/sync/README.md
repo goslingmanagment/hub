@@ -945,8 +945,9 @@ tests/sync-live-gate.integration.test.ts.
   ends `aborted_before_send` / `transport_unavailable`, and an operator out of reach makes `prepare` throw
   `PageTransportUnavailableError`: nothing is admitted, no network hold — the operator is not Fansly. An outcome is
   acknowledged to the operator (`resultAck`) only once what it carried is committed (`PageTransport.settled`): the
-  raw answer by the capture, a CDN hop's bytes by the apply that puts them in the describer's handoff — an apply that
-  fails leaves it with the operator. An answer the server did not confirm is journaled as rejected (`unconfirmed`)
+  raw answer by the capture, a CDN hop's bytes by the apply that puts them in the describer's handoff, as the
+  attempt's persisted state proves (a capture repeated after a lost COMMIT acknowledgement proves nothing) — an apply
+  that did not commit leaves it with the operator. An answer the server did not confirm is journaled as rejected (`unconfirmed`)
   and acknowledged after that commit.
 - **One credentials generation**: the digest of the page, its account, the browser's session fingerprint (the
   operator's `state`) and the proxy — on every request (`credentialsGeneration`) and from `storedCredentialsGeneration`

@@ -131,9 +131,9 @@ async function rig(options: { verified?: boolean; settingMs?: number; startOpera
   return { page, operator, transport, client };
 }
 
-async function actor(r: Rig, settingMs = 60, options: { registry?: ReturnType<typeof registry>; faults?: SyncFaultHook } = {}) {
+async function actor(r: Rig, settingMs = 60, options: { registry?: ReturnType<typeof registry>; faults?: SyncFaultHook; db?: Database } = {}) {
   const made = await makeTestActor({
-    db: db(),
+    db: options.db ?? db(),
     pageId: r.page.pageId,
     registry: options.registry ?? registry(),
     transport: r.transport,
@@ -434,6 +434,51 @@ describe("the review of PR 12", () => {
     expect((await attempts(r.page.pageId)).find((row) => row.id === attemptId)).toMatchObject({ outcome: "response" });
     expect(await handoffs(r.page.pageId)).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(r.operator.acks).not.toContain(attemptId);
+    expect(r.operator.held.has(attemptId)).toBe(true);
+  }, 60_000);
+
+  it("a capture repeated after its lost COMMIT acknowledgement proves nothing: a CDN hop not applied stays with the operator", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    // The database commits the capture, and the connection breaks before the
+    // acknowledgement of its COMMIT comes back: the actor captures again,
+    // which finds the attempt settled and decides nothing.
+    let loseNextCommitAck = false;
+    let lostAcks = 0;
+    const real = db();
+    const flaky = new Proxy(real, {
+      get(target, property) {
+        if (property === "transaction") {
+          return async (...args: Parameters<Database["transaction"]>) => {
+            const result = await target.transaction(...args);
+            if (loseNextCommitAck) {
+              loseNextCommitAck = false;
+              lostAcks += 1;
+              throw new Error("the connection broke before the COMMIT's acknowledgement");
+            }
+            return result;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    }) as Database;
+    r.operator.respond = () => {
+      // The next transaction of the actor is this answer's capture.
+      loseNextCommitAck = true;
+      return { status: 200, headers: { "content-type": "image/jpeg" }, body: JPEG };
+    };
+    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/c.jpg" });
+    const made = await actor(r, 60, { registry: mediaRegistry(), db: flaky });
+    await runActorUntil(made, async () => lostAcks === 1 && (await attempts(r.page.pageId)).some((row) => row.outcome === "response"), 20_000, "the capture");
+    const attemptId = r.operator.physical[0]!.attemptId;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const state = await testDb.pool.query<{ applyState: string }>("select apply_state as \"applyState\" from sync_attempts where id = $1", [attemptId]);
+    // Captured, never applied: the bytes are not in the handoff ...
+    expect(state.rows[0]!.applyState).not.toBe("applied");
+    expect(await handoffs(r.page.pageId)).toBe(0);
+    // ... so the operator keeps the answer for its replay.
     expect(r.operator.acks).not.toContain(attemptId);
     expect(r.operator.held.has(attemptId)).toBe(true);
   }, 60_000);

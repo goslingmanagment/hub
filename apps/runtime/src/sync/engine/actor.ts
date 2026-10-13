@@ -1,5 +1,6 @@
 import {
   ensurePollRows,
+  getSyncAttempt,
   getSyncPage,
   LiveGateClosedError,
   lockOwnedPage,
@@ -632,16 +633,18 @@ export class SyncActor {
     // browser, plan §4.2) may drop this one once what it carried is
     // committed: the raw answer, by the capture — or, for a route the
     // journal does not keep (a CDN hop: its bytes reach the describer's
-    // handoff in the apply), by the apply. An apply that did not commit
-    // leaves it with the sender.
+    // handoff in the apply), by the apply, as the attempt's persisted state
+    // says (a capture repeated after a lost COMMIT acknowledgement decides
+    // nothing, so its `applyNow: false` proves nothing). Otherwise the
+    // sender keeps it, and delivers it again.
     const inMemoryOnly = isAnswerInMemory(admission.request.spec);
-    if (!inMemoryOnly || !captured.value.applyNow) this.#settled(admission.attemptId);
+    if (!inMemoryOnly) this.#settled(admission.attemptId);
     this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
-      const applied = await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
-      if (inMemoryOnly && applied === "applied") this.#settled(admission.attemptId);
+      await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
     }
+    if (inMemoryOnly && await this.#answerCommitted(admission.attemptId)) this.#settled(admission.attemptId);
     await this.#fault("after_apply");
     return null;
   }
@@ -664,6 +667,20 @@ export class SyncActor {
       }
     }
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
+  }
+
+  /** An answer the journal does not keep is committed whole: its attempt is
+   *  settled, and applied — or nothing of it was to be applied (an answer
+   *  that is not one to apply). A read that fails: not proven. */
+  async #answerCommitted(attemptId: number): Promise<boolean> {
+    try {
+      const attempt = await getSyncAttempt(this.#d.db, attemptId);
+      if (attempt === null || attempt.outcome === "admitted" || attempt.outcome === "sent") return false;
+      return attempt.applyState === "applied" || attempt.applyState === "none";
+    } catch (error) {
+      this.#d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: an attempt's state did not read; its answer stays with the sender");
+      return false;
+    }
   }
 
   /** Tell the transport an attempt's outcome is committed (never throws). */
