@@ -28,6 +28,18 @@
 //   one binary frame, the last. Headers of a response leave out
 //   `set-cookie`.
 //
+// - PR 7 (the site's own requests; spec §6.4): no shape changes. `siteAdmit`
+//   of an operation with a CORS preflight is asked at the preflight's pause
+//   with its request's method; its `sessionFingerprint` is the request's own
+//   session, the live one for a preflight, null when there is none. The
+//   `sessionFingerprint` of a `site.response` to a request without a
+//   session is the empty session's (sha256 of "fansly-session/1\n\n"); one
+//   with `complete: false` names an empty body no frames carry.
+//   `siteDone.body` is `not_platform_data` also when there is nothing to
+//   keep (no answer, a preflight's answer). An operator that starts again
+//   sends `siteDone` for what the previous one admitted: `sent` — whether
+//   it was released — and no status.
+//
 // - PR 10: no `wsAdmit` before the site's live session is known (its
 //   `sessionFingerprint` is never null from this operator): the socket gate
 //   lets the authorization go only at the live token's size. The stop
@@ -55,18 +67,6 @@
 //   `unknown_ws_message` says where it was caught: `left: false` and `at:
 //   "proxy"` for a record the socket gate held, `left: true` for one CDP
 //   says left.
-//
-// - PR 7 (the site's own requests; spec §6.4): no shape changes. `siteAdmit`
-//   of an operation with a CORS preflight is asked at the preflight's pause
-//   with its request's method; its `sessionFingerprint` is the request's own
-//   session, the live one for a preflight, null when there is none. The
-//   `sessionFingerprint` of a `site.response` to a request without a
-//   session is the empty session's (sha256 of "fansly-session/1\n\n"); one
-//   with `complete: false` names an empty body no frames carry.
-//   `siteDone.body` is `not_platform_data` also when there is nothing to
-//   keep (no answer, a preflight's answer). An operator that starts again
-//   sends `siteDone` for what the previous one admitted: `sent` — whether
-//   it was released — and no status.
 //
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
