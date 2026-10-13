@@ -996,7 +996,15 @@ export async function capture(
   // the apply right after (design S3-04 item 3; owner decision №17).
   const journaled = wireSpec.kind === null || wireSpec.capture !== undefined ? null : wireSpec.kind;
   let observationPayload: { kind: string; payload: unknown } | null = null;
-  if (outcome.kind === "response" && read !== null && journaled !== null) {
+  if (outcome.kind === "response" && outcome.unconfirmed !== undefined && journaled !== null) {
+    // A page browser's answer the server did not confirm: kept, under its
+    // own kind and with its disposition, never as the route's answer — the
+    // apply never sees it, the work is read again.
+    observationPayload = {
+      kind: `${journaled}:unconfirmed`,
+      payload: { ...failedBody(outcome), source: outcome.unconfirmed, disposition: "rejected_not_applied" },
+    };
+  } else if (outcome.kind === "response" && read !== null && journaled !== null) {
     observationPayload = read.kind === "accepted" || read.kind === "contract_violation"
       ? {
         kind: journaled,

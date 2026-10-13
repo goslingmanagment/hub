@@ -64,6 +64,18 @@ describe("sync errors: classification of one outcome", () => {
     expect(classify(answer(408, "")).errorClass).toBe("network");
   });
 
+  it("an answer the server did not confirm (a page browser's cache, a service worker) is never read: unconfirmed, the network's consequences", () => {
+    for (const source of ["cache_unconfirmed", "service_worker"] as const) {
+      const bodyText = JSON.stringify(ok);
+      const classified = classify({ kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported", sentMono: 1, unconfirmed: source });
+      expect(classified).toEqual({ errorClass: "unconfirmed", httpStatus: 200, retryAfterMs: null, read: null });
+    }
+    const decision = onOutcome(input("unconfirmed", { page: pageState({ networkFailureStreak: 2 }) }));
+    expect(decision.networkFailureStreak).toBe(3);
+    expect(decision.pageHold).toMatchObject({ action: "set", kind: "network" });
+    expect(decision.work).not.toEqual({ action: "apply" });
+  });
+
   it("a 2xx success envelope the contract accepts is ok; the read is returned", () => {
     const classified = classify(answer(200, ok));
     expect(classified.errorClass).toBe("ok");

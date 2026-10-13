@@ -269,6 +269,26 @@ describe("I17: source pins", () => {
     expect(builders.sort()).toEqual([path.join("sync", "engine", "host.ts"), path.join("sync", "fansly", "transport.ts")]);
   });
 
+  it("the browser transport is built nowhere yet: no page selects it before the transport switch (PR 14)", () => {
+    // Project Browser stage 3 PR 12: `createBrowserPageTransport` and the
+    // socket source of a browser page exist, but the host builds the undici
+    // transport for every page until `sync_pages.transport` chooses (PR 14).
+    const root = path.resolve("apps/runtime/src");
+    const builders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts") && /\bcreateBrowserPageTransport\(|\bnew BrowserWsSource\(|\bnew PageBrowserRpcClient\(/.test(readFileSync(full, "utf8"))) {
+          builders.push(path.relative(root, full));
+        }
+      }
+    };
+    walk(root);
+    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-transport.ts")]);
+    expect(read("apps/runtime/src/sync/engine/host.ts")).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
+  });
+
   it("the production runtime passes none of the host's test-only options", () => {
     const main = read("apps/runtime/src/sync/main.ts");
     for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "liveSocket", "faults", "minSettingMs", "routeTimeScale"]) {

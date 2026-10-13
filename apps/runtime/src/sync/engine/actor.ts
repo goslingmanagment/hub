@@ -1,5 +1,6 @@
 import {
   ensurePollRows,
+  getSyncAttempt,
   getSyncPage,
   LiveGateClosedError,
   lockOwnedPage,
@@ -31,6 +32,7 @@ import {
   drainDueApplies,
   ensureCredentialsVerify,
   errorName,
+  isAnswerInMemory,
   markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
@@ -47,6 +49,7 @@ import { CREDENTIALS_CHECK_KEYS, isResourceHoldExempt, resourceFileOf } from "./
 import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import {
   CredentialsGenerationChangedError,
+  PageTransportUnavailableError,
   UnsendableRequestError,
   type LivePageSocketRef,
   type OwnershipSession,
@@ -204,6 +207,8 @@ export class SyncActor {
   /** The diagnostic of the unreadable hold rows last logged (null: the hold
    *  set reads). */
   #holdSetProblem: string | null = null;
+  /** Why the transport last could not take a request (null: it could). */
+  #transportProblem: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -406,6 +411,17 @@ export class SyncActor {
         await this.#credentialsUnverified(error, signals.stop);
         return null;
       }
+      if (error instanceof PageTransportUnavailableError) {
+        // The transport cannot take a request now (a page's browser without
+        // its operator): not the platform's failure — nothing is admitted,
+        // no hold is written; the actor asks again after the transport's
+        // own wait (Project Browser plan §3.2).
+        d.metrics.increment("sync_transport_unavailable", { pageId: d.pageId });
+        this.#transportUnavailable(error.reason);
+        this.#phase("idle");
+        await this.#sleep(Math.max(0, Math.min(error.retryInMs, LIVE_GATE_RECHECK_MS)), signals.stop);
+        return null;
+      }
       if (!(error instanceof UnsendableRequestError)) throw error;
       // Nothing can ever send it (no secret, a host the engine never calls):
       // the work closes with that answer, nothing is admitted.
@@ -413,6 +429,7 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, { kind: "done", reason: error.reason, result: error.result });
       return null;
     }
+    this.#transportProblem = null;
     // The send window starts BEFORE the admission commit (SK16).
     const issuedMono = d.clock.monoNow();
     let admission: AdmissionRecord | null;
@@ -547,8 +564,8 @@ export class SyncActor {
       this.#phase("send");
       end = await siteEnd(site, classified.request.id, signals.abort);
     }
-    // The browser reports no send instant yet (PR 12): a request that may
-    // have gone out counts as sent at its completion, the safe upper bound.
+    // The send counts at the instant the browser reported (PR 12), else at
+    // the completion when it may have gone out (the safe upper bound).
     d.pacer.complete(armed, transportOutcomeOfSite(end));
     this.#phase("commit");
     const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, armed, end, classified }));
@@ -576,11 +593,21 @@ export class SyncActor {
           }
           return refusal;
         },
-      }, abort);
+        // A sender outside the process (a page's browser): the same check
+        // without the send mark — the pacer marks the send at the instant
+        // the transport reports, or at the completion (I1).
+        grant: () => d.pacer.checkRemoteGrant(armed),
+      }, abort, {
+        attemptId: armed.attemptId,
+        ownerGeneration: d.generation,
+        issuedMono: armed.issuedMono,
+        sendDeadlineMono: armed.sendDeadlineMono,
+      });
     } catch (error) {
       // Transports report outcomes, they do not throw; a throw is treated as a
-      // failure that may have reached the wire if the check passed.
-      return { kind: "transport_error", sent: armed.sentMono !== null, message: errorName(error) };
+      // failure that may have reached the wire if the check (or the grant)
+      // passed.
+      return { kind: "transport_error", sent: armed.sentMono !== null || armed.grantedMono !== null, message: errorName(error) };
     }
   }
 
@@ -594,6 +621,7 @@ export class SyncActor {
     if (outcome.kind === "aborted_before_send") {
       const settled = await this.#committed(() => settleNotSent(d, admission, outcome));
       if (!settled.ok) await this.#markCommitFailed(admission, settled.exit);
+      else this.#settled(admission.attemptId);
       return exitOf(settled);
     }
     const captured = await this.#committed(() => capture(d, admission, armed, outcome, module));
@@ -601,11 +629,22 @@ export class SyncActor {
       await this.#markCommitFailed(admission, captured.exit);
       return captured.exit;
     }
+    // A sender that keeps outcomes until they are acknowledged (a page's
+    // browser, plan §4.2) may drop this one once what it carried is
+    // committed: the raw answer, by the capture — or, for a route the
+    // journal does not keep (a CDN hop: its bytes reach the describer's
+    // handoff in the apply), by the apply, as the attempt's persisted state
+    // says (a capture repeated after a lost COMMIT acknowledgement decides
+    // nothing, so its `applyNow: false` proves nothing). Otherwise the
+    // sender keeps it, and delivers it again.
+    const inMemoryOnly = isAnswerInMemory(admission.request.spec);
+    if (!inMemoryOnly) this.#settled(admission.attemptId);
     this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
       await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
     }
+    if (inMemoryOnly && await this.#answerCommitted(admission.attemptId)) this.#settled(admission.attemptId);
     await this.#fault("after_apply");
     return null;
   }
@@ -628,6 +667,36 @@ export class SyncActor {
       }
     }
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
+  }
+
+  /** An answer the journal does not keep is committed whole: its attempt is
+   *  settled, and applied — or nothing of it was to be applied (an answer
+   *  that is not one to apply). A read that fails: not proven. */
+  async #answerCommitted(attemptId: number): Promise<boolean> {
+    try {
+      const attempt = await getSyncAttempt(this.#d.db, attemptId);
+      if (attempt === null || attempt.outcome === "admitted" || attempt.outcome === "sent") return false;
+      return attempt.applyState === "applied" || attempt.applyState === "none";
+    } catch (error) {
+      this.#d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: an attempt's state did not read; its answer stays with the sender");
+      return false;
+    }
+  }
+
+  /** Tell the transport an attempt's outcome is committed (never throws). */
+  #settled(attemptId: number): void {
+    try {
+      this.#d.transport.settled?.(attemptId);
+    } catch (error) {
+      this.#d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: the transport's settle failed");
+    }
+  }
+
+  /** The transport cannot take a request now: one log line per reason. */
+  #transportUnavailable(reason: string): void {
+    if (this.#transportProblem === reason) return;
+    this.#transportProblem = reason;
+    this.#d.logger.warn({ pageId: this.#d.pageId, reason }, "Fansly sync actor: the page transport cannot take a request now; nothing is admitted");
   }
 
   /** The actor gives up on a commit after the request (`failed`): the attempt

@@ -125,6 +125,7 @@ export async function admitSite(
         siteRequestId: classified.request.id,
         manualLogin: manual,
       },
+      browserRequestId: classified.request.id,
       settingMs: grant.settingMs,
       jitterU: grant.jitterU,
       pauseMs: grant.pauseMs,

@@ -587,8 +587,11 @@ export function pageHoldCheck(
   let streak = 0;
   let networkHolds = 0;
   for (const row of answered) {
-    streak = row.errorClass === "network" ? streak + 1 : 0;
-    if (row.errorClass === "network" && streak >= ACCEPTANCE_RULES.networkFailuresToHold && inWindow(row.doneAt, window)) networkHolds += 1;
+    // An unconfirmed answer of a page's browser counts as the network
+    // failure it stands for (`engine/errors.ts`).
+    const network = row.errorClass === "network" || row.errorClass === "unconfirmed";
+    streak = network ? streak + 1 : 0;
+    if (network && streak >= ACCEPTANCE_RULES.networkFailuresToHold && inWindow(row.doneAt, window)) networkHolds += 1;
   }
   const current = holds.find((hold) => hold.until.getTime() > window.start.getTime()
     && (hold.since === null || hold.since.getTime() < window.observedUntil.getTime())) ?? null;

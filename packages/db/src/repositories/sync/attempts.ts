@@ -46,7 +46,9 @@ export type SyncApplyState = (typeof SYNC_APPLY_STATES)[number];
  *  a fresh read instead (`requeueQuarantinedWork`). */
 export const SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE = "payload_unavailable:";
 
-export const SYNC_SEND_MARKS = ["request_start", "completion_fallback", "shadow"] as const;
+/** `transport_reported` (0272, Project Browser): the instant a page's
+ *  browser reported the request left. */
+export const SYNC_SEND_MARKS = ["request_start", "completion_fallback", "transport_reported", "shadow"] as const;
 export type SyncSendMark = (typeof SYNC_SEND_MARKS)[number];
 
 /** Admission issue → onRequestStart; a later send is refused (design §3.3).
@@ -314,6 +316,9 @@ export interface InsertSiteAdmissionInput {
   /** Request shape without secrets: method, host class, path, the
    *  operator's request id. */
   request: unknown;
+  /** The operator's id of the request (`siteRequestId`, a socket's
+   *  `connectionId`; 0272 `browser_request_id`). */
+  browserRequestId?: string | null;
   settingMs: number;
   jitterU: number;
   pauseMs: number;
@@ -343,14 +348,15 @@ export async function insertSiteAdmission(
     )
     insert into sync_attempts (
       page_id, work_id, resource, subject, class, slot, owner_generation, demand_revision,
-      setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms, origin
+      setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms, origin,
+      browser_request_id
     )
     select page.page_id, null, 'site', '', 'site', null,
            ${generationParam(input.generation)}, null,
            ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
            ${input.operation}::text, ${jsonParam(input.request)}, false,
            ${boundedInt(input.routeIntervalMs)}::integer, ${boundedInt(input.familyIntervalMs)}::integer,
-           ${input.origin}::text
+           ${input.origin}::text, ${input.browserRequestId ?? null}::text
       from page
     returning id::text as "attemptId", admitted_at as "admittedAt"
   `);
@@ -430,9 +436,10 @@ export interface CaptureAttemptInput {
   outcome: "response" | "transport_error" | "timeout";
   /** Whether the request reached onRequestStart (or the completion fallback). */
   sent: boolean;
-  /** Wall clock of the send; for `completion_fallback` the completion instant. */
+  /** Wall clock of the send; for `completion_fallback` the completion instant,
+   *  for `transport_reported` the instant the page's browser reported. */
   sentAt: Date | null;
-  sendMark: "request_start" | "completion_fallback" | null;
+  sendMark: "request_start" | "completion_fallback" | "transport_reported" | null;
   /** Monotonic admission issue → send. */
   sendMonoOffsetMs?: number | null;
   /** Monotonic gap to this owner's previous send of the page. */

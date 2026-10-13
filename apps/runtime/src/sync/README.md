@@ -80,10 +80,13 @@ sync/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
+    browser-transport.ts     the same port through a page's browser (Project Browser; built by nothing until
+                             the transport switch, PR 14): RPC to the page's operator, the grant at its check
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
-    ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`)
+    ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`);
+                             a browser page's socket is the site's, its connection rows `browser-source.ts`
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
                              media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
                              resources use (step 4 moved them here; what is left of the legacy executor takes only
@@ -884,9 +887,9 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 
 | # | Invariant | Enforced in |
 |---|---|---|
-| I1 | Between the actual sends of any two requests of one page: gap ≥ `S × (1 + u)`, `S` = the owner's setting read at the admission of the later request, `u ∈ [0, 0.2)`. A strict minimum, never an average. "Actual send" = undici `onRequestStart`, on the monotonic clock; without that mark, the completion instant. | `engine/pacer.ts` (`waitForSlot`, the synchronous `check`) |
+| I1 | Between the actual sends of any two requests of one page: gap ≥ `S × (1 + u)`, `S` = the owner's setting read at the admission of the later request, `u ∈ [0, 0.2)`. A strict minimum, never an average. "Actual send" = undici `onRequestStart`, on the monotonic clock — or, through a page's browser, the instant the browser reported (`transport_reported`: Chrome's timing, never before the gate's first bytes, moved to the engine's clock by one constant shift and rounded up; never before the engine's grant, never after the completion); without either mark, the completion instant. | `engine/pacer.ts` (`waitForSlot`, the synchronous `check` and `checkRemoteGrant`, `complete`) |
 | I2 | At most one request of a page in flight; the next admission only after the previous completion. | `engine/actor.ts` (sequential loop) + `engine/pacer.ts` (`inFlight`) |
-| I3 | One physical request per admission; no transport retry; no redirect follow (a 3xx is an answer). | `packages/fansly/src/wire/send.ts` |
+| I3 | One physical request per admission; no transport retry; no redirect follow (a 3xx is an answer). Through a page's browser: one admission is one grant at the operator's `check` (a second is refused, `lease_used`); a CORS preflight and its request are one operation (owner decision №1); Chrome's own re-sends are held at the operator's gate (spec §9, mandatory condition №2); a redirect goes back as the answer. | `packages/fansly/src/wire/send.ts`; through a browser `engine/pacer.ts` (one grant) and the operator's gate (`apps/page-browser/src/egress/gate.ts`) |
 | I4 | `S` is re-read before every admission; `S < 2000 ms` is impossible (the test-only `minSettingMs` is never passed by the host). | `engine/ports.ts` `PauseSource` + `engine/pacer.ts` |
 | I5 | First send after a takeover ≥ `1.2 × S` after the latest of: the takeover, the last send recorded in the database, unfinished attempts of the last 10 min + the send window, the legacy guard's last completion. | `engine/host.ts` + `pacer.initTakeover` |
 | I6 | No automatic takeover from a live old process: an unconfirmed stop leaves the page `ownership_unconfirmed`; a lost lock session is never a confirmation, the owner's own safe release is. | `engine/host.ts` |
@@ -896,7 +899,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |
-| I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission), the identity check of a session without a page (journaled, owner decision №4) and — the third — the session-less public account reader (arena "vanished chat" R5, `fansly/public-lookup.ts`): a `credentials: none` spec built by `buildFanslyPublicWireRequest` alone (no session, no cookie; a session-bearing spec is refused before anything is built, and the page's builder refuses a session-less one), sent only through the `fansly_public` egress — its own proxy, never a page's, Fansly's API host only — journaled in `fansly_send_log` with `page_id` null, source `public_lookup`. The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts` + `fansly/public-lookup.ts` + `packages/fansly/src/wire/public.ts` + `services/egress/fansly-public.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts, tests/fansly-public-wire.test.ts |
+| I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission), the identity check of a session without a page (journaled, owner decision №4) and — the third — the session-less public account reader (arena "vanished chat" R5, `fansly/public-lookup.ts`): a `credentials: none` spec built by `buildFanslyPublicWireRequest` alone (no session, no cookie; a session-bearing spec is refused before anything is built, and the page's builder refuses a session-less one), sent only through the `fansly_public` egress — its own proxy, never a page's, Fansly's API host only — journaled in `fansly_send_log` with `page_id` null, source `public_lookup`. The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. A page's request through its browser (Project Browser) leaves from the browser, not the process: the browser transport's RPC `send` (`fansly/browser-transport.ts` over `services/egress/page-browser-rpc.ts`), released by the operator only on the engine's grant answered at its `check` from the page's lease and pacer — the RPC client refuses every check no waiting attempt claims. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts` + `fansly/public-lookup.ts` + `packages/fansly/src/wire/public.ts` + `services/egress/fansly-public.ts` + `fansly/browser-transport.ts` + `services/egress/page-browser-rpc.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts, tests/fansly-public-wire.test.ts |
 | I14 | Shadow mode is gone (step 4 S4-23): an actor runs a `live` page only, nothing writes a row with `shadow = true` or the outcome `shadow`, and no reader of a page's queue or journal sees the rows it left. (Until S4-23: shadow never sent and never wrote observations, domain tables, receipts or the overlay.) | `engine/host.ts` (`#runs`) + `engine/actor.ts` (`#ownershipExit`) + `repositories/sync/work.ts`, `attempts.ts` (`not shadow`); tests/sync-registry-coverage.test.ts, tests/sync-engine-core.integration.test.ts |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
@@ -905,7 +908,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
-| I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
+| I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. On a browser page (Project Browser) the engine opens no Fansly socket at all: the site opens its own in the browser, its tunnel waiting for the engine's admission (`wsAdmit`, the site path, route `ws.upgrade`); the page's source (`fansly/ws/browser-source.ts`) only takes the operator's events and sends nothing. The engine's one other socket is its RPC to the page's operator (`ws:` on pb-control, never Fansly). | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts` + `fansly/ws/browser-source.ts`; tests/fansly-send-guard-boundary.test.ts |
 | I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 | I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refuses the drop under an image older than it (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `scripts/deploy-production.sh` (`verify_running_images_run_without_old_hold_columns`); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
 | I25 | A chat's unavailability episode has one writer, the page's actor: only a head read (no `before`) of `dm-messages.head`/`.catchup`/`.history` that Fansly refuses with its own error envelope counts; it is established at its own 5th refusal, never by the work's breaker; while it is established no key reads the chat's head before `retry_not_before`, every head read that went out and does not end it moves that boundary and settles its own work (one demand, one read; only a work row settles itself — another row decides in its own plan), and no background read is planned; an applied head read ends it. The capture is never lost to it (savepoint). | `fansly/resources/dm-messages.ts` (`outcomeInCapture`, the plan's wait, the apply's end) + `repositories/sync/chat-unavailability.ts`; tests/sync-chat-unavailability.integration.test.ts |
@@ -916,7 +919,49 @@ second, so raising `S` lengthens a wait in progress. The send check refuses — 
 dispatch of one admission (`lease_used`), a dispatch after ownership was lost or the process began stopping
 (`lease_inactive`), after the 15 s send window measured from before the admission commit (`send_deadline_passed`),
 before the takeover floor (`takeover_floor`), or closer than the pause (`pace`, a belt that fires only on a bug).
-Any doubt — an unreadable setting, a pacer without a takeover floor — throws, and nothing is admitted.
+Any doubt — an unreadable setting, a pacer without a takeover floor — throws, and nothing is admitted. A sender outside
+the process (a page's browser) is asked the same check as a grant (`checkRemoteGrant`): no send mark there, since the
+browser connects, sends its preflight — or does not send at all — after it; `complete` marks the send at the instant
+the browser reported, else at the completion when the request may have gone out.
+
+## A page's browser (Project Browser, stage 3)
+
+Plan: `docs/plans/project-browser/plan.md` (§3.2, §4.2, §4.13), the protocol in `spec.md` §6. A page may send through
+its own browser (Chrome in its container, driven by our operator) instead of undici. Nothing selects it yet: the host
+builds the undici transport for every page until `sync_pages.transport` chooses (PR 14), pinned by
+tests/sync-live-gate.integration.test.ts.
+
+- **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
+  browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
+  and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the
+  operator's id in `browser_request_id`).
+- **The engine's requests** (PR 12, `fansly/browser-transport.ts`): the same `PageTransport`. `prepare` builds the
+  registry's request without Chrome's and the session's headers (the operator puts the live session's in). `send` is
+  the RPC `send` with the admission context (`SendAdmission`: the attempt, the owner generation, the absolute send
+  deadline); the operator's `check` is answered by `hooks.grant` with the deadline on CLOCK_MONOTONIC — after the
+  page's stored account and proxy and the settings of the link's hello are read again: if they moved since `prepare`,
+  nothing is granted (`credentials_changed`) and the next `prepare` says hello again with the new SOCKS5. The browser
+  reports when the request left and the pacer counts the pause from there (I1). A request the browser could not take
+  ends `aborted_before_send` / `transport_unavailable`, and an operator out of reach makes `prepare` throw
+  `PageTransportUnavailableError`: nothing is admitted, no network hold — the operator is not Fansly. An outcome is
+  acknowledged to the operator (`resultAck`) only once what it carried is committed (`PageTransport.settled`): the
+  raw answer by the capture, a CDN hop's bytes by the apply that puts them in the describer's handoff, as the
+  attempt's persisted state proves (a capture repeated after a lost COMMIT acknowledgement proves nothing) — an apply
+  that did not commit leaves it with the operator. An answer the server did not confirm is journaled as rejected (`unconfirmed`)
+  and acknowledged after that commit.
+- **One credentials generation**: the digest of the page, its account, the browser's session fingerprint (the
+  operator's `state`) and the proxy — on every request (`credentialsGeneration`) and from `storedCredentialsGeneration`
+  alike, so the identity proof makes it the trusted one and a new login or a new proxy (a new hello) puts the page
+  back in checks-only until the next proof. The fingerprint also travels in each `send`: the operator never releases a
+  request under another live session, and the engine refuses such a check (`session_mismatch`).
+- **The RPC client** (`services/egress/page-browser-rpc.ts`): hello with the page's token and generation, ping/pong
+  and link loss, reconnects, a newer owner superseding an older one for good, bodies reassembled from their binary
+  frames, `recover`. Its types mirror the operator's (`services/egress/page-browser-protocol.ts`); the engine never
+  loads the page-browser app, and tests/page-browser-protocol-drift.test.ts keeps the two the same.
+- **The site's socket** (`fansly/ws/browser-source.ts`): the connection rows (`fansly_ws_connections.origin =
+  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`. The events themselves, frames
+  by event id, the site's answers into `observations` (`browser_site`) and the recovery against the operator's buffer
+  are the buffer's intake (PR 13).
 
 ## Classes
 
@@ -972,6 +1017,7 @@ A retry after an error is always a new attempt through the same admission.
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted); a DM head read Fansly refuses with its own error envelope also counts toward the chat's unavailability episode (above) |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
+| an answer the server did not confirm (a page's browser: its unrevalidated cache, the site's service worker) | `unconfirmed` | journaled as `<kind>:unconfirmed` with its disposition, never applied; as `network` otherwise |
 | refused before sending | `not_sent` | nothing learned: the work is admitted again |
 
 An apply that fails (`engine/commit.ts`, `classifyApplyError`) never stops the actor. A deferral (erasure fence busy,

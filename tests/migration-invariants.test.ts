@@ -450,4 +450,41 @@ describe("database migration invariants", () => {
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
       .toContain('"0263_notification_outbox_reported_in.sql"');
   });
+
+  it("keeps the browser transport's migrations (Project Browser PR 12) brief on the hot tables and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    // sync_attempts is the running engine's journal: the 0271 pattern — a
+    // nullable column without a default, the check swapped NOT VALID under a
+    // 1 s lock wait (retried), validated apart.
+    const attempts = await readFile("packages/db/migrations/0272_sync_attempts_browser_send.sql", "utf8");
+    expect(attempts.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    const attemptStatements = statementsOf(attempts);
+    expect(attemptStatements).toContain("alter table sync_attempts add column if not exists browser_request_id text;");
+    expect(attemptStatements).not.toMatch(/browser_request_id text[^;]*(not null|default)/i);
+    expect(attemptStatements).toContain("send_mark is null or send_mark in ('request_start', 'completion_fallback', 'transport_reported', 'shadow')");
+    expect(attemptStatements).toContain(") not valid;");
+    expect(attemptStatements).toContain("alter table sync_attempts validate constraint sync_attempts_send_mark_check;");
+    expect(attemptStatements.match(/set local lock_timeout = '1s';/g)).toHaveLength(2);
+
+    // observations is partitioned and written all the time: swapped NOT
+    // VALID (as 0196), never scanned under the lock.
+    const observations = await readFile("packages/db/migrations/0274_observations_source_browser_site.sql", "utf8");
+    expect(observations.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    const observationStatements = statementsOf(observations);
+    expect(observationStatements).toContain("'fansly_ws', 'browser_site'");
+    expect(observationStatements).toContain(") not valid;");
+    expect(observationStatements).not.toMatch(/validate constraint/);
+
+    // The small tables: one transaction under a 5 s lock wait.
+    for (const file of ["0273_fansly_ws_connections_browser.sql", "0275_page_browsers.sql"]) {
+      const text = statementsOf(await readFile(`packages/db/migrations/${file}`, "utf8"));
+      expect(text, file).toContain("set local lock_timeout = '5s';");
+    }
+
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    const compatible = deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0];
+    for (const file of ["0272_sync_attempts_browser_send.sql", "0273_fansly_ws_connections_browser.sql", "0274_observations_source_browser_site.sql", "0275_page_browsers.sql"]) {
+      expect(compatible, file).toContain(`"${file}"`);
+    }
+  });
 });

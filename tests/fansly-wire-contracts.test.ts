@@ -305,9 +305,10 @@ describe("the answers of the routes that journal nothing (step 3)", () => {
 });
 
 describe("the send refusal vocabulary", () => {
-  it("carries the engine pacer's reasons beside every lease's", () => {
+  it("carries the engine pacer's and a page browser's reasons beside every lease's", () => {
     const reasons: FanslySendRefusalReason[] = [
       "lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor",
+      "session_mismatch", "credentials_changed", "generation_stale", "transport_unavailable",
     ];
     for (const reason of reasons) {
       const refusal = new FanslySendRefusedError(reason);

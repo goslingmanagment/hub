@@ -164,6 +164,17 @@ describe("the pacer's final check before a grant", () => {
     expect(admission.sendMark).toBe("completion_fallback");
     expect(admission.sentMono).toBe(clock.monoNow());
   });
+
+  it("the send counts at the instant the browser reported, when it reported one (PR 12)", () => {
+    const { clock, pacer, admission } = armed();
+    expect(pacer.checkRemoteGrant(admission)).toBeNull();
+    clock.advance(150);
+    const leftAt = clock.monoNow();
+    clock.advance(400);
+    pacer.complete(admission, transportOutcomeOfSite({ kind: "response", status: 200, retryAfterMs: null, sentMono: leftAt }));
+    expect(admission.sendMark).toBe("transport_reported");
+    expect(admission.sentMono).toBe(leftAt);
+  });
 });
 
 describe("an answer to a site request", () => {
@@ -180,5 +191,9 @@ describe("an answer to a site request", () => {
     expect(transportOutcomeOfSite({ kind: "response", status: 200, retryAfterMs: null })).toMatchObject({ kind: "response", status: 200, sendMark: "completion_fallback" });
     expect(transportOutcomeOfSite({ kind: "transport_error", sent: false, message: "x" })).toEqual({ kind: "transport_error", sent: false, message: "x" });
     expect(transportOutcomeOfSite({ kind: "aborted_before_send", reason: "x" })).toMatchObject({ kind: "aborted_before_send" });
+    // The instant the browser reported, when it did (PR 12).
+    expect(transportOutcomeOfSite({ kind: "response", status: 200, retryAfterMs: null, sentMono: 5 })).toMatchObject({ sendMark: "transport_reported", sentMono: 5 });
+    expect(transportOutcomeOfSite({ kind: "transport_error", sent: true, message: "x", sentMono: 5 })).toEqual({ kind: "transport_error", sent: true, message: "x", sentMono: 5 });
+    expect(transportOutcomeOfSite({ kind: "transport_error", sent: false, message: "x", sentMono: 5 })).toEqual({ kind: "transport_error", sent: false, message: "x" });
   });
 });

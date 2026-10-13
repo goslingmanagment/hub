@@ -180,9 +180,41 @@ export type SendRefusal = FanslySendRefusalReason;
 
 /** The hooks of one admission. `check` is synchronous and runs at undici's
  *  `onRequestStart`, immediately before the request headers are written; a
- *  non-null result aborts the dispatch and writes nothing. */
+ *  non-null result aborts the dispatch and writes nothing. Passing it IS the
+ *  send.
+ *
+ *  `grant` is the same check for a sender outside the process (a page's
+ *  browser, Project Browser plan §3.2): every condition of `check`, asked
+ *  synchronously right before the sender is told it may send, but no send
+ *  mark — the sender may still not send (a session that changed, a deadline
+ *  passed on its side), and the send counts at the instant it reports
+ *  (`transport_reported`) or at the completion. A transport asks one of the
+ *  two, once per admission: a second ask is refused (`lease_used`). */
 export interface SendHooks {
   check: FanslySendCheck;
+  grant: FanslySendCheck;
+}
+
+/**
+ * What a transport knows of the admission it sends under (Project Browser,
+ * plan §3.2): a sender outside the process is told the attempt, the owner it
+ * belongs to and the deadline it must send by, and refuses a request of an
+ * earlier owner or past that deadline on its own side too.
+ */
+export interface SendAdmission {
+  /** `sync_attempts.id`: the sender keeps its outcome under it. */
+  attemptId: number;
+  /** The page's owner generation (`sync_pages.owner_generation`). */
+  ownerGeneration: bigint;
+  /** When the admission was issued (taken before its transaction), on the
+   *  engine's monotonic clock (`Clock.monoNow`). */
+  issuedMono: number;
+  /** The absolute deadline of the send (issue + `SEND_WINDOW_MS`), on the
+   *  engine's monotonic clock — never a remainder. `Clock.monoNow` is the
+   *  kernel's CLOCK_MONOTONIC shifted by a constant (`performance.now()`), so
+   *  a transport that hands it to another process converts it by that one
+   *  shift (`services/egress/page-browser-rpc.ts` `kernelMonoBridge`). */
+  sendDeadlineMono: number;
 }
 
 /** What one physical request came to: the wire layer's outcomes
@@ -195,10 +227,18 @@ export type TransportOutcome = FanslyWireOutcome;
 export interface PageTransport {
   /** The request of one plan, built right before its admission; `context`
    *  names the work it is for (a CDN hop reads the work's secret URL). Throws
-   *  `UnsendableRequestError` for a request that can never be sent. */
+   *  `UnsendableRequestError` for a request that can never be sent, and
+   *  `PageTransportUnavailableError` while the transport cannot take one now
+   *  (nothing is admitted either way). */
   prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
-  /** At most one physical request. */
-  send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+  /** At most one physical request, under `admission`; the transport asks
+   *  `hooks.check` (it writes the request itself) or `hooks.grant` (a sender
+   *  outside the process writes it), never both. */
+  send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome>;
+  /** The outcome of `attemptId` is committed (captured, or settled as not
+   *  sent): a sender that keeps outcomes until they are acknowledged (a
+   *  page's browser keeps them on disk) may drop it now. Never throws. */
+  settled?(attemptId: number): void;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
    *  compares it with the trusted digest (checks-only, G2) and with the
@@ -234,6 +274,17 @@ export class CredentialsGenerationChangedError extends Error {
         : `Fansly sync page ${pageId}: the stored credentials changed since the last identity check`,
     );
     this.name = "CredentialsGenerationChangedError";
+  }
+}
+
+/** The transport cannot take a request now (a page's browser: no link to its
+ *  operator, the operator not ready, a backoff after it could not take one):
+ *  thrown by `prepare` before anything is admitted. Not the platform's
+ *  failure — no network hold, no breaker: the actor waits and asks again. */
+export class PageTransportUnavailableError extends Error {
+  constructor(readonly reason: string, readonly retryInMs: number) {
+    super(`The page transport cannot take a request now: ${reason}`);
+    this.name = "PageTransportUnavailableError";
   }
 }
 
@@ -314,10 +365,12 @@ export interface PendingSiteRequest {
   manualLogin: boolean;
 }
 
-/** How an admitted site request ended, as the operator reports it. */
+/** How an admitted site request ended, as the operator reports it.
+ *  `sentMono`: when it left, as the browser reported it, on the engine's
+ *  monotonic clock (absent or null: not reported — the completion counts). */
 export type SiteRequestEnd =
-  | { kind: "response"; status: number; retryAfterMs: number | null }
-  | { kind: "transport_error"; sent: boolean; message: string }
+  | { kind: "response"; status: number; retryAfterMs: number | null; sentMono?: number | null }
+  | { kind: "transport_error"; sent: boolean; message: string; sentMono?: number | null }
   | { kind: "aborted_before_send"; reason: string };
 
 /** Why the engine refused a site request (`siteAdmitResult`). */

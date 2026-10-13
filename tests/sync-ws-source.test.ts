@@ -78,6 +78,9 @@ function hooks(check: () => FanslySendRefusedError | null): SendHooks & { calls:
       state.calls += 1;
       return check();
     },
+    grant: () => {
+      throw new Error("the socket's Upgrade is written in this process: its check, never a grant");
+    },
   };
 }
 
