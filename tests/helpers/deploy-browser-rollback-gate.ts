@@ -5,10 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The rollback gate of deploy-production.sh for pages on their browser
-// (Project Browser PR 14, Astra's review), run for real in bash: its remote
-// command runs in a local bash against a `docker` that runs the command it is
-// given inside the "postgres container" (here: the same bash), where `psql`
-// writes the SQL it was given and answers with a scripted count.
+// (Project Browser PR 14, Astra's reviews), run for real in bash: its remote
+// commands run in a local bash against a `docker` that answers
+// `docker image inspect` of the rollback target with a scripted label (or
+// fails), and runs the command it is given inside the "postgres container"
+// (here: the same bash), where `psql` writes the SQL it was given and answers
+// with a scripted count.
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 export const DEPLOY_SCRIPT = readFileSync(path.join(repoRoot, "scripts/deploy-production.sh"), "utf8");
@@ -31,9 +33,16 @@ const stubs = [
   "}",
 ].join("\n");
 
+// `docker image inspect --format <template> <tag>`: the target's label.
 // `docker compose … exec -T postgres sh -c '<script>'`: the script runs here.
 const fakeDocker = [
   "#!/usr/bin/env bash",
+  "if [[ \"$1\" == \"image\" ]]; then",
+  "  printf '%s\\n' \"$*\" >> \"$TEST_IMAGE_LOG\"",
+  "  if [[ \"$TEST_IMAGE_FAILS\" == \"1\" ]]; then printf 'Error: No such image\\n' >&2; exit 1; fi",
+  "  printf '%s\\n' \"$TEST_IMAGE_LABEL\"",
+  "  exit 0",
+  "fi",
   "script=\"${@: -1}\"",
   "POSTGRES_PASSWORD=pw POSTGRES_USER=hub POSTGRES_DB=hub PATH=\"$TEST_BIN:$PATH\" sh -c \"$script\"",
   "",
@@ -52,13 +61,27 @@ export interface GateRun {
   stderr: string;
   /** The remote commands it ran. */
   commands: string[];
+  /** The `docker image …` calls it made (their arguments). */
+  images: string[];
   /** The SQL psql was given (null: none ran). */
   sql: string | null;
 }
 
-/** Run the gate: `applied` is the schema baseline before the deploy, `after`
- *  the schema the rollback captured (default: `applied` and 0277, 0278). */
-export function runRollbackBrowserGate(options: { applied: string[]; after?: string[]; answer?: string; remoteFails?: boolean }): GateRun {
+/** The rollback target of the runs: the image the deploy tagged before it
+ *  replaced it. */
+export const ROLLBACK_IMAGE = "example/hub:production-rollback-fixture";
+
+/**
+ * Run the gate. `applied`: the schema baseline before the deploy; `after`:
+ * the schema the rollback captured (default: `applied` and 0277, 0278);
+ * `label`: what the rollback image says in `agency-hub.sync-page-transport`
+ * (default "": an image from before the label); `imageFails`: the image
+ * cannot be inspected; `answer`: the count the database gives; `remoteFails`:
+ * no remote command runs at all.
+ */
+export function runRollbackBrowserGate(
+  options: { applied: string[]; after?: string[]; label?: string; imageFails?: boolean; answer?: string; remoteFails?: boolean },
+): GateRun {
   const root = mkdtempSync(path.join(tmpdir(), "hub rollback browser gate "));
   try {
     const bin = path.join(root, "bin");
@@ -71,8 +94,10 @@ export function runRollbackBrowserGate(options: { applied: string[]; after?: str
     const after = path.join(root, "schema-after.txt");
     writeFileSync(after, [...(options.after ?? [...options.applied, "0277_sync_pages_transport.sql", "0278_sync_pages_browser_leave.sql"]), ""].join("\n"));
     const commandLog = path.join(root, "commands.log");
+    const imageLog = path.join(root, "images.log");
     const sqlFile = path.join(root, "query.sql");
     writeFileSync(commandLog, "");
+    writeFileSync(imageLog, "");
     const result = spawnSync("bash", ["-c", [stubs, rollbackBrowserGateFunction(), ROLLBACK_BROWSER_GATE, 'log "gate passed"'].join("\n")], {
       encoding: "utf8",
       timeout: 10_000,
@@ -80,6 +105,10 @@ export function runRollbackBrowserGate(options: { applied: string[]; after?: str
         ...process.env,
         SCHEMA_BEFORE_FILE: baseline,
         SCHEMA_AFTER_FILE: after,
+        ROLLBACK_IMAGE_TAG: ROLLBACK_IMAGE,
+        TEST_IMAGE_LOG: imageLog,
+        TEST_IMAGE_LABEL: options.label ?? "",
+        TEST_IMAGE_FAILS: options.imageFails === true ? "1" : "0",
         REMOTE_APP_DIR_ESCAPED: `'${path.join(root, "app")}'`,
         REMOTE_COMPOSE: "docker compose --env-file .env.production -f docker-compose.production.yml",
         TEST_COMMAND_LOG: commandLog,
@@ -100,6 +129,7 @@ export function runRollbackBrowserGate(options: { applied: string[]; after?: str
       stdout: result.stdout,
       stderr: result.stderr,
       commands: readFileSync(commandLog, "utf8").split("\n--\n").filter((command) => command.trim().length > 0),
+      images: readFileSync(imageLog, "utf8").split("\n").filter((line) => line.length > 0),
       sql,
     };
   } finally {

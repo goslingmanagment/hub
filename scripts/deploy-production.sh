@@ -953,8 +953,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # their check NOT VALID then validated over a handful of rows), and
   # page_browsers.buffer_undrained_since, under a 5 s lock_timeout. The
   # previous image never names them; the rollback below refuses to go back to
-  # an image older than 0277 while a page is on its browser, or older than
-  # this one while a leave is pending
+  # an image that does not know the page transport (its own label says) while
+  # a page is on its browser or a leave is pending
   # (verify_rollback_target_runs_no_browser_page).
   "0278_sync_pages_browser_leave.sql"
 )
@@ -1537,37 +1537,46 @@ SQL'")" || return 1
   [[ "$unsafe_count" == "0" ]]
 }
 
-# Project Browser (stage 3 PR 14, Astra's review): an image older than 0277
-# knows no page transport. Run on a page whose transport is its browser, it
-# would send through Node beside the browser — whose site socket outlives the
-# engine's link and keeps its frames going. An image older than 0278 knows the
-# transport but not a pending leave of the browser: it would take such a page
-# with Node before the browser's stop is confirmed. The rollback goes back to
-# the image that ran before this deploy; what that image predates is what
-# this deploy applied (in the schema now, not in the baseline), and the
-# rollback is refused while a page stands where that image would send beside
-# its browser: on its browser (0277), a leave pending (0278). The columns it
-# names are those this deploy added, so the schema has them. Read-only; fails
-# closed.
+# Project Browser (stage 3 PR 14, Astra's reviews): an image whose engine does
+# not read sync_pages.transport runs every page through Node. On a page whose
+# transport is its browser, or whose leave of the browser is still pending, it
+# would send beside the browser — whose site socket outlives the engine's link
+# and keeps its frames going.
+#
+# What the rollback target can do is read from the image itself, never
+# inferred from the schema's history: the migrations stay applied after a
+# failed deploy that rolled back, so on the next deploy they are in the
+# baseline while the image that would be restored is still the old one. The
+# runtime image says it in a label (Dockerfile):
+#   agency-hub.sync-page-transport=<level>
+#   1 — the engine reads the page's transport and takes a page off its browser
+#       only once the leave is confirmed.
+# A target without the label, or with a level below the one this release
+# needs, is refused while any page is not plainly on Node. The columns the
+# count names are those the schema has now (the rollback captured it): none
+# before 0277 — no page can stand off Node — the transport with 0277, a
+# pending leave with 0278. Read-only; fails closed (the image or the count
+# cannot be read: no rollback).
 verify_rollback_target_runs_no_browser_page() {
+  local label="agency-hub.sync-page-transport"
+  local needed=1
+  if ! grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_AFTER_FILE"; then
+    return 0
+  fi
+  local level
+  if ! level="$(run_remote "set -euo pipefail; docker image inspect --format '{{ index .Config.Labels \"${label}\" }}' $(printf '%q' "$ROLLBACK_IMAGE_TAG")")"; then
+    printf '[deploy] The rollback image %s cannot be read: whether its engine knows the page transport is unknown.\n' "$ROLLBACK_IMAGE_TAG" >&2
+    return 1
+  fi
+  if [[ "$level" =~ ^[0-9]+$ ]] && (( 10#$level >= needed )); then
+    log "The rollback image knows the page transport (${label}=${level}): it may run a page on its browser"
+    return 0
+  fi
   # A quote of the SQL, as the remote sh -c '…' below needs it written.
   local quote="'\\''"
-  local or=$'\n   OR '
-  local conditions="" predates=""
-  if ! grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_BEFORE_FILE" && grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_AFTER_FILE"; then
-    conditions="transport <> ${quote}node${quote}"
-    predates="the page transport (0277)"
-  fi
-  if ! grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_BEFORE_FILE" && grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_AFTER_FILE"; then
-    if [[ -z "$conditions" ]]; then
-      conditions="browser_leave_generation IS NOT NULL"
-      predates="the confirmed leave of a page's browser (0278)"
-    else
-      conditions="${conditions}${or}browser_leave_generation IS NOT NULL"
-    fi
-  fi
-  if [[ -z "$conditions" ]]; then
-    return 0
+  local conditions="transport <> ${quote}node${quote}"
+  if grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_AFTER_FILE"; then
+    conditions="${conditions}"$'\n   OR browser_leave_generation IS NOT NULL'
   fi
   local pages
   pages="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
@@ -1583,8 +1592,8 @@ SQL'")" || return 1
 
   if [[ "$pages" != "0" ]]; then
     printf '[deploy] %s page(s) are on their browser, or leaving it (sync_pages.transport, browser_leave_generation).\n' "$pages" >&2
-    printf '[deploy] The image this rollback would return to predates %s: it would send\n' "$predates" >&2
-    printf '[deploy] through Node beside the page'\''s browser. Move the page back to Node and confirm its leave\n' >&2
+    printf '[deploy] The image this rollback would return to does not know the page transport (no label %s at level %s):\n' "$label" "$needed" >&2
+    printf '[deploy] it would send through Node beside the page'\''s browser. Move the page back to Node and confirm its leave\n' >&2
     printf '[deploy] (sync page transport <page> node; scripts/deploy-page-browser.sh to-node) before any rollback.\n' >&2
     return 1
   fi
@@ -1686,7 +1695,7 @@ rollback_remote_stack() {
   fi
 
   if ! verify_rollback_target_runs_no_browser_page; then
-    log "Rollback skipped; the previous image predates the page transport or its confirmed leave (0277, 0278), and a page is on its browser or leaving it"
+    log "Rollback skipped; the previous image does not know the page transport (or cannot be read), and a page is on its browser or leaving it"
     log "An old image would send through Node beside the page's browser; inspect sync_pages.transport before choosing a manual rollback"
     return 0
   fi

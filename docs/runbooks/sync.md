@@ -220,8 +220,9 @@ session follows (below).
   `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
   gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and
   the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained.
-- A rollback of the Hub to an image from before the page transport is refused by the deploy while a page is on its
-  browser or leaving it: move such pages to Node first.
+- A rollback of the Hub to an image from before the page transport (one without the label
+  `agency-hub.sync-page-transport`) is refused by the deploy while a page is on its browser or leaving it: move such
+  pages to Node first.
 - A deploy's `sync ownership confirm-stopped` waits, for a page on its browser, until the browser confirms the new
   owner took over (`browser_page … quiesced true`); `false` after a minute means the new owner still sends nothing
   through it — look at the page's browser.

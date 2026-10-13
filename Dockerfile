@@ -110,6 +110,13 @@ ARG APP_SOURCE_REVISION=unknown
 
 LABEL agency-hub.dependency-checksum="${APP_DEPENDENCY_CHECKSUM}"
 LABEL agency-hub.source-revision="${APP_SOURCE_REVISION}"
+# What this image's sync engine does with a page whose transport is its
+# browser (Project Browser PR 14): 1 — it reads sync_pages.transport and
+# takes a page off its browser only once the leave is confirmed. The deploy's
+# rollback reads it from its target (scripts/deploy-production.sh,
+# verify_rollback_target_runs_no_browser_page): an image without it runs
+# every page through Node, and is no target while a page is on its browser.
+LABEL agency-hub.sync-page-transport="1"
 # The build identity every role reports in its heartbeat
 # (`runtime_instances.image_tag`) and the CLI inside the api compares with the
 # sync role's (the step-3 switch precondition "same build").
