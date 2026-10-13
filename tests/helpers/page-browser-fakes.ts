@@ -372,22 +372,36 @@ export function proxyConnect(proxyPort: number, target: string): Promise<{ statu
 /** The engine's end of the RPC. */
 export class FakeEngine {
   readonly messages: Array<Record<string, unknown>> = [];
+  /** Binary frames (bodies' parts), in order. */
+  readonly frames: Buffer[] = [];
+  /** Every message's type in order, "binary" for a frame. */
+  readonly order: string[] = [];
   ws: WebSocket | null = null;
   closed: { code: number } | null = null;
   answerPings = true;
+  /** Every JSON message as it comes (an engine that answers checks). */
+  onMessage: (message: Record<string, unknown>) => void = () => undefined;
 
   connect(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`);
+      ws.binaryType = "arraybuffer";
       this.ws = ws;
       this.closed = null;
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error("the RPC connection failed"));
       ws.onclose = (event) => (this.closed = { code: event.code });
       ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          this.frames.push(Buffer.from(event.data));
+          this.order.push("binary");
+          return;
+        }
         const message = JSON.parse(String(event.data)) as Record<string, unknown>;
         this.messages.push(message);
+        this.order.push(String(message.type));
         if (message.type === "ping" && this.answerPings) this.send({ type: "pong", n: message.n, ownerGeneration: this.generation });
+        this.onMessage(message);
       };
     });
   }

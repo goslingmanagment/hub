@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,11 +7,12 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal, type BufferUnavailable, type Durable } from "../apps/page-browser/src/buffer/buffer.ts";
+import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal, type BufferUnavailable, type CommittedOutcome, type Durable } from "../apps/page-browser/src/buffer/buffer.ts";
+import { OutcomeReplay } from "../apps/page-browser/src/buffer/replay.ts";
 import { BufferVersionError, MIGRATIONS, type Migration } from "../apps/page-browser/src/buffer/schema.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { EventStream } from "../apps/page-browser/src/buffer/stream.ts";
-import type { EventsRefused } from "../apps/page-browser/src/rpc/protocol.ts";
+import { decodeBodyFrame, type EventsRefused, type Result } from "../apps/page-browser/src/rpc/protocol.ts";
 import { hubResult, quiet, tempDir, until, wsFrame } from "./helpers/page-browser-fakes.ts";
 
 // The operator's buffer (Project Browser plan §4.4, §4.10, §4.14; spec §5;
@@ -201,7 +203,7 @@ describe("writes", () => {
   });
 
   it("tell the producers only once the batch is durable, and say what was committed", async () => {
-    const committed: Array<{ events: number; outcomes: string[] }> = [];
+    const committed: Array<{ events: number; outcomes: CommittedOutcome[] }> = [];
     const buffer = open(dir(), { batchMs: 10, onCommitted: (batch) => committed.push(batch) });
     let settled = false;
     const appended = buffer.append(wsFrame(1));
@@ -211,7 +213,7 @@ describe("writes", () => {
     expect(settled).toBe(false);
     expect(committed).toEqual([]);
     await written(appended);
-    expect(committed).toEqual([{ events: 1, outcomes: [JSON.stringify(hubResult(7))] }]);
+    expect(committed).toEqual([{ events: 1, outcomes: [{ attemptId: 7, json: JSON.stringify(hubResult(7)), bodyId: null }] }]);
   });
 });
 
@@ -715,10 +717,11 @@ describe("the format (plan §4.10)", () => {
     expect(buffer.integrity()).toBe("ok");
   });
 
-  const V2: Migration = {
-    version: 2,
+  /** A next version after the real ones, additive. */
+  const NEXT: Migration = {
+    version: MIGRATIONS.length + 1,
     readableFrom: 1,
-    up: (db) => db.exec("CREATE TABLE bodies (body_id TEXT NOT NULL, part INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (body_id, part)) STRICT"),
+    up: (db) => db.exec("CREATE TABLE later_things (id INTEGER PRIMARY KEY) STRICT"),
   };
 
   it("migrates an older buffer forward once, keeping what it holds", async () => {
@@ -727,32 +730,33 @@ describe("the format (plan §4.10)", () => {
     for (let n = 1; n <= 3; n++) buffer.append(wsFrame(n));
     await written(buffer.putOutcome(hubResult(5)));
     const id = buffer.id;
-    buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, V2] });
+    buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, NEXT] });
     expect(buffer.id).toBe(id);
     expect(all(buffer).map((event) => event.seq)).toEqual([1, 2, 3]);
     expect(outcomesOf(buffer)).toHaveLength(1);
     // Opened again: version 2 is not applied twice.
-    buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, V2] });
+    buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, NEXT] });
     expect(await seqOf(buffer.append(wsFrame(4)))).toBe(4);
     await buffer.close();
     const db = new DatabaseSync(join(root, "store", DB_FILE));
     expect(db.prepare("SELECT version, readable_from FROM schema_version ORDER BY version").all().map((row) => ({ ...row }))).toEqual([
       { version: 1, readable_from: 1 },
-      { version: 2, readable_from: 1 },
+      { version: 2, readable_from: 2 },
+      { version: 3, readable_from: 1 },
     ]);
     db.close();
   });
 
   it("lets an older operator (an image rolled back) use a newer buffer only when the newer one allows it", async () => {
     const additive = dir();
-    let buffer = open(additive, { migrations: [...MIGRATIONS, V2] });
+    let buffer = open(additive, { migrations: [...MIGRATIONS, NEXT] });
     await seqOf(buffer.append(wsFrame(1)));
     buffer = await reopen(buffer, additive, { migrations: MIGRATIONS });
     expect(await seqOf(buffer.append(wsFrame(2)))).toBe(2);
     await buffer.close();
 
     const breaking = dir();
-    buffer = open(breaking, { migrations: [...MIGRATIONS, { ...V2, readableFrom: 2 }] });
+    buffer = open(breaking, { migrations: [...MIGRATIONS, { ...NEXT, readableFrom: NEXT.version }] });
     await seqOf(buffer.append(wsFrame(1)));
     await buffer.close();
     const before = readFileSync(join(breaking, "store", DB_FILE));
@@ -760,7 +764,7 @@ describe("the format (plan §4.10)", () => {
     const older = open(breaking, { migrations: MIGRATIONS, openRetryMs: [10], onUnavailable: (reason) => unavailable.push(reason) });
     older.start();
     expect(unavailable).toEqual([expect.objectContaining({ cause: "too_new", recoverable: false })]);
-    expect(unavailable[0]!.detail).toMatch(/schema version 2, readable from 2/);
+    expect(unavailable[0]!.detail).toMatch(/schema version 3, readable from 3/);
     expect(await older.ready()).toMatchObject({ ok: false, reason: "buffer_unavailable" });
     // Not tried again, and the file is as it was: it is the owner's.
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -768,5 +772,165 @@ describe("the format (plan §4.10)", () => {
     await older.close();
     expect(readFileSync(join(breaking, "store", DB_FILE)).equals(before)).toBe(true);
     expect(new BufferVersionError("x")).toBeInstanceOf(Error);
+  });
+});
+
+describe("bodies and Hub attempts (PR 9)", () => {
+  const sha = (data: Buffer) => createHash("sha256").update(data).digest("hex");
+  const bodiesOf = (root: string) => readdirSync(join(root, "store", "bodies")).sort();
+
+  function withBody(attemptId: number, sealed: { bodyId: string; bytes: number; sha256: string }): Result {
+    const result = hubResult(attemptId);
+    if (result.outcome.kind === "response") result.outcome.body = { bodyId: sealed.bodyId, decodedBytes: sealed.bytes, sha256: sealed.sha256 };
+    return result;
+  }
+
+  it("keep a body only sealed whole, count it in the caps, read it in parts, and drop it with its outcome's resultAck", async () => {
+    const root = dir();
+    const buffer = open(root);
+    const writer = buffer.beginBody()!;
+    expect(writer.write(Buffer.from("hello "))).toBe(true);
+    writer.write(Buffer.from("world"));
+    expect(bodiesOf(root)).toEqual([`${writer.bodyId}.part`]);
+    const sealed = writer.seal()!;
+    expect(sealed).toEqual({ bodyId: writer.bodyId, bytes: 11, sha256: sha(Buffer.from("hello world")) });
+    expect(bodiesOf(root)).toEqual([sealed.bodyId]);
+    const result = withBody(31, sealed);
+    await written(buffer.putOutcome(result, { bodyId: sealed.bodyId, bytes: sealed.bytes }));
+    const json = JSON.stringify(result);
+    expect(outcomesOf(buffer)).toEqual([{ attemptId: 31, json, bytes: Buffer.byteLength(json) + 11, bodyId: sealed.bodyId, bodyBytes: 11 }]);
+    expect(buffer.stats().bytes).toBe(Buffer.byteLength(json) + 11);
+    expect(buffer.bodySize(sealed.bodyId)).toBe(11);
+    expect([0, 1, 2, 3].map((part) => buffer.readBody(sealed.bodyId, part, 4)?.toString())).toEqual(["hell", "o wo", "rld", ""]);
+    buffer.acknowledgeOutcome(31);
+    await buffer.flush();
+    expect(bodiesOf(root)).toEqual([]);
+    expect(buffer.stats()).toMatchObject({ bytes: 0, outcomes: 0 });
+    // Not whole, or not wanted: nothing stays.
+    const dropped = buffer.beginBody()!;
+    dropped.write(Buffer.from("half"));
+    dropped.abandon();
+    expect(bodiesOf(root)).toEqual([]);
+    expect(dropped.seal()).toBeNull();
+  });
+
+  it("are swept at the open: part files, and bodies no stored outcome names", async () => {
+    const root = dir();
+    const buffer = open(root);
+    const kept = buffer.beginBody()!;
+    kept.write(Buffer.from("kept"));
+    const keptSealed = kept.seal()!;
+    await written(buffer.putOutcome(withBody(41, keptSealed), { bodyId: keptSealed.bodyId, bytes: keptSealed.bytes }));
+    const orphan = buffer.beginBody()!;
+    orphan.write(Buffer.from("crash between the seal and its commit"));
+    orphan.seal();
+    const partial = buffer.beginBody()!;
+    partial.write(Buffer.from("cut short"));
+    expect(bodiesOf(root)).toHaveLength(3);
+    const again = await reopen(buffer, root);
+    partial.abandon();
+    expect(bodiesOf(root)).toEqual([keptSealed.bodyId]);
+    expect(again.readBody(keptSealed.bodyId, 0, 1024)?.toString()).toBe("kept");
+  });
+
+  it("are refused, with their outcome, past the cap", async () => {
+    const root = dir();
+    const buffer = open(root, { caps: { bytes: 4096 } });
+    const writer = buffer.beginBody()!;
+    writer.write(Buffer.alloc(5000, 1));
+    const sealed = writer.seal()!;
+    expect(buffer.putOutcome(withBody(51, sealed), { bodyId: sealed.bodyId, bytes: sealed.bytes })).toEqual({ ok: false, reason: "buffer_full" });
+  });
+
+  it("an attempt's steps are durable, seen before their commit, never undone, and kept a day past the resultAck", async () => {
+    const root = dir();
+    let now = 1_791_800_000_000;
+    let buffer = open(root, { now: () => now });
+    expect(buffer.attempt(5)).toBeNull();
+    const issued = buffer.markAttempt(5, "issued");
+    expect(buffer.attempt(5)).toEqual({ issued: true, released: false, acked: false, outcome: false });
+    expect(await written(issued)).toEqual({ ok: true, seq: null });
+    buffer.markAttempt(5, "released");
+    buffer.markAttempt(5, "received");
+    await buffer.flush();
+    expect(buffer.attempt(5)).toEqual({ issued: true, released: true, acked: false, outcome: false });
+    buffer = await reopen(buffer, root, { now: () => now });
+    expect(buffer.attempt(5)).toEqual({ issued: true, released: true, acked: false, outcome: false });
+    await written(buffer.putOutcome(hubResult(5)));
+    expect(buffer.attempt(5)).toMatchObject({ outcome: true });
+    buffer.acknowledgeOutcome(5);
+    await buffer.flush();
+    expect(buffer.attempt(5)).toEqual({ issued: true, released: true, acked: true, outcome: false });
+    // An attempt that never got an outcome (a crash) stays a week.
+    buffer.markAttempt(6, "issued");
+    await buffer.flush();
+    now += 25 * 3600_000;
+    buffer = await reopen(buffer, root, { now: () => now });
+    buffer.check();
+    await buffer.flush();
+    expect(buffer.attempt(5)).toBeNull();
+    expect(buffer.attempt(6)).toMatchObject({ issued: true });
+    now += 7 * 24 * 3600_000;
+    buffer = await reopen(buffer, root, { now: () => now });
+    buffer.check();
+    await buffer.flush();
+    expect(buffer.attempt(6)).toBeNull();
+  });
+
+  it("the replay sends a body's frames before the outcome that names it, 1 MiB a part; a lost body's outcome goes as a transport error", async () => {
+    const root = dir();
+    const buffer = open(root);
+    const body = Buffer.alloc(2.5 * 1024 * 1024, 3);
+    const writer = buffer.beginBody()!;
+    writer.write(body);
+    const sealed = writer.seal()!;
+    await written(buffer.putOutcome(withBody(61, sealed), { bodyId: sealed.bodyId, bytes: sealed.bytes }));
+    await written(buffer.putOutcome(hubResult(62)));
+    const order: string[] = [];
+    const frames: Buffer[] = [];
+    const json: Array<Record<string, unknown>> = [];
+    const replay = new OutcomeReplay(
+      buffer,
+      {
+        epoch: () => 1,
+        send: (text) => {
+          const message = JSON.parse(text) as Record<string, unknown>;
+          json.push(message);
+          order.push(`${String(message.type)}:${String(message.attemptId ?? "")}`);
+          return true;
+        },
+        sendBinary: (frame) => {
+          frames.push(frame);
+          order.push("binary");
+          return true;
+        },
+        backlog: () => 0,
+        drained: async () => undefined,
+      },
+      { log: quiet, stateOf: (attemptId) => (attemptId === 70 ? "not_sent" : "unknown") },
+    );
+    replay.connected();
+    await until(() => order.length === 5, 5000, "the replay");
+    expect(order).toEqual(["binary", "binary", "binary", "result:61", "result:62"]);
+    const parts = frames.map((frame) => decodeBodyFrame(frame));
+    expect(parts.map((part) => [part.bodyId, part.part, part.last, part.data.length])).toEqual([
+      [sealed.bodyId, 0, false, 1024 * 1024],
+      [sealed.bodyId, 1, false, 1024 * 1024],
+      [sealed.bodyId, 2, true, 512 * 1024],
+    ]);
+    expect(Buffer.concat(parts.map((part) => part.data)).equals(body)).toBe(true);
+    // Recover: the outcomes it has, then what the Hub requests know.
+    order.length = 0;
+    replay.recover([61, 70, 71]);
+    await until(() => order.includes("recoverResult:"), 5000, "the answer");
+    expect(json.at(-1)).toEqual({ type: "recoverResult", attempts: [{ attemptId: 61, state: "outcome_resent" }, { attemptId: 70, state: "not_sent" }, { attemptId: 71, state: "unknown" }] });
+    // The body's file is lost: the outcome goes as a transport error.
+    rmSync(join(root, "store", "bodies", sealed.bodyId));
+    order.length = 0;
+    json.length = 0;
+    replay.connected();
+    await until(() => order.length === 2, 5000, "the replay");
+    expect(order).toEqual(["result:61", "result:62"]);
+    expect(json[0]).toEqual({ type: "result", attemptId: 61, sessionFingerprint: "a".repeat(64), outcome: { kind: "transport_error", sent: true, message: "the operator lost the response's body" } });
   });
 });

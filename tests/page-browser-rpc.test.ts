@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { GenerationStore } from "../apps/page-browser/src/rpc/generation.ts";
 import type { CommandOutcome } from "../apps/page-browser/src/rpc/ledger.ts";
-import { parseEngineMessage, type BufferMessage, type Command, type Hello, type State } from "../apps/page-browser/src/rpc/protocol.ts";
+import { decodeBodyFrame, encodeBodyFrame, parseEngineMessage, type BufferMessage, type Command, type Hello, type HubMessage, type State } from "../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer, tokenMatches } from "../apps/page-browser/src/rpc/server.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { FakeEngine, hello, quiet, RPC_TOKEN, tempDir, until } from "./helpers/page-browser-fakes.ts";
@@ -42,6 +42,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
   const executed: Command[] = [];
   const quiesced: number[] = [];
   const buffered: BufferMessage[] = [];
+  const hubbed: HubMessage[] = [];
   const temp = tempDir();
   cleanups.push(temp.remove);
   const server = new RpcServer({
@@ -65,6 +66,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
         return options.execute ? options.execute(command) : { ok: true, detail: command.command.kind };
       },
       onBuffer: (message) => buffered.push(message),
+      onHub: (message) => hubbed.push(message),
       onLink: (up, reason) => links.push([up, reason]),
     },
   });
@@ -79,7 +81,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
     cleanups.push(() => fake.close());
     return fake;
   };
-  return { server, port, hellos, links, executed, quiesced, buffered, engine, storeDir: temp.dir };
+  return { server, port, hellos, links, executed, quiesced, buffered, hubbed, engine, storeDir: temp.dir };
 }
 
 const command = (generation: number, commandId: string, kind: string, notAfterMono = monoMs() + 10_000) => ({ type: "command", ownerGeneration: generation, commandId, notAfterMono, command: { kind } });
@@ -285,7 +287,7 @@ describe("commands", () => {
     const fake = await engine();
     fake.send(hello());
     await fake.waitFor("helloResult");
-    fake.send({ type: "send", ownerGeneration: 1, attemptId: 1 });
+    fake.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: "s", admit: false, reason: "paused" });
     await until(() => fake.closed !== null);
   });
 });
@@ -354,5 +356,85 @@ describe("the protocol's messages", () => {
     expect(parseEngineMessage(JSON.stringify({ type: "recover", ownerGeneration: 1, attemptIds: [1, 2] }))).toMatchObject({ ok: true });
     expect(parseEngineMessage(JSON.stringify({ type: "recover", ownerGeneration: 1, attemptIds: Array.from({ length: 10_001 }, (_, n) => n) }))).toMatchObject({ ok: false });
     expect(parseEngineMessage(JSON.stringify({ type: "recover", attemptIds: [] }))).toMatchObject({ ok: false });
+  });
+});
+
+describe("a Hub request's messages (PR 9)", () => {
+  const send = (overrides: Record<string, unknown> = {}) => ({
+    type: "send",
+    ownerGeneration: 2,
+    attemptId: 41,
+    route: "account.me",
+    credentialsGeneration: "a".repeat(64),
+    sessionFingerprint: "b".repeat(64),
+    method: "GET",
+    url: "https://apiv3.fansly.com/api/v1/account/me",
+    headers: { "x-route": "1" },
+    kind: "api",
+    maxBodyBytes: 1024,
+    sendDeadlineMono: 1000.5,
+    requestDeadlineMono: 2000,
+    ...overrides,
+  });
+
+  it("go to the operator — a send of an earlier owner too, to be refused there; a check's answer of the connection's owner only", async () => {
+    const { engine, hubbed } = await setUp();
+    const fake = await engine(2);
+    fake.send(hello({ ownerGeneration: 2 }));
+    await fake.waitFor("helloResult");
+    fake.send(send());
+    fake.send(send({ ownerGeneration: 1, attemptId: 42 }));
+    fake.send({ type: "checkResult", ownerGeneration: 2, attemptId: 41, admit: true, deadlineMono: 1500.25 });
+    fake.send({ type: "checkResult", ownerGeneration: 1, attemptId: 42, admit: false, reason: "pace" });
+    fake.send({ type: "ping", n: 1, ownerGeneration: 2 });
+    await fake.waitFor("pong");
+    expect(hubbed).toEqual([
+      send(),
+      send({ ownerGeneration: 1, attemptId: 42 }),
+      { type: "checkResult", ownerGeneration: 2, attemptId: 41, admit: true, deadlineMono: 1500.25 },
+    ]);
+    expect(fake.closed).toBeNull();
+  });
+
+  it("are parsed strictly: a malformed one is a protocol error", () => {
+    expect(parseEngineMessage(JSON.stringify(send()))).toEqual({ ok: true, message: send() });
+    expect(parseEngineMessage(JSON.stringify({ type: "checkResult", ownerGeneration: 1, attemptId: 3, admit: false, reason: "session_mismatch" }))).toMatchObject({ ok: true });
+    for (const bad of [
+      send({ method: "POST" }),
+      send({ kind: "document" }),
+      send({ attemptId: 0 }),
+      send({ sessionFingerprint: "B".repeat(64) }),
+      send({ credentialsGeneration: "short" }),
+      send({ headers: { "bad name": "x" } }),
+      send({ headers: { ok: "line\r\nbreak" } }),
+      send({ headers: Object.fromEntries(Array.from({ length: 65 }, (_, n) => [`h${n}`, "x"])) }),
+      send({ route: "" }),
+      send({ maxBodyBytes: -1 }),
+      send({ sendDeadlineMono: "soon" }),
+      { type: "checkResult", ownerGeneration: 1, attemptId: 3, admit: true },
+      { type: "checkResult", ownerGeneration: 1, attemptId: 3, admit: false, reason: "because" },
+      { type: "checkResult", ownerGeneration: 1, attemptId: 3, admit: "yes", deadlineMono: 1 },
+    ]) {
+      expect(parseEngineMessage(JSON.stringify(bad)), JSON.stringify(bad).slice(0, 80)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("bodies go as binary frames: 16 bytes of id, 4 of part, 1 of last, then the data", async () => {
+    const id = "0123abcd-4567-4890-8abc-def012345678";
+    const frame = encodeBodyFrame(id, 3, true, Buffer.from("tail"));
+    expect(frame.subarray(0, 16).toString("hex")).toBe(id.replaceAll("-", ""));
+    expect(frame.readUInt32BE(16)).toBe(3);
+    expect(frame[20]).toBe(1);
+    expect(decodeBodyFrame(frame)).toEqual({ bodyId: id, part: 3, last: true, data: Buffer.from("tail") });
+    expect(() => encodeBodyFrame("not-a-uuid", 0, false, Buffer.alloc(0))).toThrow();
+    expect(() => encodeBodyFrame(id, 0, false, Buffer.alloc(1024 * 1024 + 1))).toThrow();
+    const { engine, server } = await setUp();
+    expect(server.sendBinary(frame)).toBe(false);
+    const fake = await engine();
+    fake.send(hello());
+    await fake.waitFor("helloResult");
+    expect(server.sendBinary(frame)).toBe(true);
+    await until(() => fake.frames.length === 1);
+    expect(fake.frames[0]!.equals(frame)).toBe(true);
   });
 });

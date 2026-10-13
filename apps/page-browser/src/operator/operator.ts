@@ -360,8 +360,8 @@ export class Operator {
       onOpened: () => this.#onBufferOpened(),
       onCommitted: ({ events, outcomes }) => {
         if (events > 0) this.stream.pump();
-        // A few at a time, as attempts end: sent as they come.
-        for (const json of outcomes) this.rpc.sendRaw(json);
+        // As attempts end: sent as they come, each after its body.
+        this.replay.live(outcomes);
       },
     });
     this.stream = new EventStream(this.buffer, (json) => this.rpc.sendRaw(json), {
@@ -371,6 +371,7 @@ export class Operator {
     this.replay = new OutcomeReplay(this.buffer, {
       epoch: () => this.rpc.epoch,
       send: (json) => this.rpc.sendRaw(json),
+      sendBinary: (frame) => this.rpc.sendBinary(frame),
       backlog: () => this.rpc.backlog(),
       drained: () => this.rpc.drained(),
     });
