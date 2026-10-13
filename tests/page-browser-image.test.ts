@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { builtinModules, stripTypeScriptTypes } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -40,12 +41,12 @@ describe("the services", () => {
 
   it("Chrome stays down until the operator starts it, and the operator may", () => {
     expect(existsSync(path.join(root, bundle, "chrome"))).toBe(false);
-    for (const started of ["init-net", "net-selftest", "chrome-control", "xvnc"]) expect(existsSync(path.join(root, bundle, started))).toBe(true);
+    for (const started of ["init-net", "net-selftest", "chrome-control", "xvnc", "cdp-holder", "operator", "watchdog"]) expect(existsSync(path.join(root, bundle, started))).toBe(true);
     expect(read("apps/page-browser/s6/scripts/chrome-control")).toContain("s6-svperms -G pb-operator /run/service/chrome");
     expect(read(`${services}/chrome/timeout-kill`).trim()).toBe("5000");
   });
 
-  it("the container is healthy only with the kernel check passed and the X server up", () => {
+  it("the container is healthy only with the kernel check passed, and the X server, the operator and the holder up", () => {
     expect(read("apps/page-browser/Dockerfile")).toContain('CMD ["/etc/s6-overlay/scripts/health"]');
     const health = read("apps/page-browser/s6/scripts/health");
     const checks = health.split("\n").filter((line) => /\|\| exit 1$/.test(line));
@@ -53,6 +54,8 @@ describe("the services", () => {
       `grep -q '"ok":true' /run/pb/net-selftest.json || exit 1`,
       "up_for xvnc 5 || exit 1",
       "[ -S /tmp/.X11-unix/X99 ] || exit 1",
+      "up_for operator 5 || exit 1",
+      "up_for cdp-holder 0 || exit 1",
     ]);
     expect(health).toContain('s6-svstat -o up,updownfor "/run/service/$1"');
   });
@@ -65,19 +68,106 @@ describe("the services", () => {
       .replace('/command/s6-svstat -o up,updownfor "/run/service/$1"', 'svstat "$1"')
       .replace(/^grep .*$/m, "true || exit 1")
       .replace(/^\[ -S .*$/m, "true || exit 1");
-    const status = (xvnc: string) => {
-      const svstat = `svstat() { case "$1" in xvnc) echo "${xvnc}" ;; *) echo "true 9" ;; esac; }`;
+    const status = (xvnc: string, operator: string) => {
+      const svstat = `svstat() { case "$1" in xvnc) echo "${xvnc}" ;; operator) echo "${operator}" ;; *) echo "true 9" ;; esac; }`;
       return spawnSync("sh", ["-c", `set -eu\n${svstat}\n${checks}`]).status;
     };
-    expect(status("true 10")).toBe(0);
-    expect(status("false 0")).toBe(1);
-    expect(status("true 3")).toBe(1);
+    expect(status("true 10", "true 10")).toBe(0);
+    expect(status("false 0", "true 10")).toBe(1);
+    expect(status("true 3", "true 10")).toBe(1);
+    expect(status("true 10", "true 2")).toBe(1);
   });
 
   it("nothing starts before the egress rules and their kernel check", () => {
     expect(existsSync(path.join(root, services, "net-selftest/dependencies.d/init-net"))).toBe(true);
     expect(existsSync(path.join(root, services, "xvnc/dependencies.d/net-selftest"))).toBe(true);
     expect(read("apps/page-browser/Dockerfile")).toContain("S6_BEHAVIOUR_IF_STAGE2_FAILS=2");
+  });
+});
+
+describe("the operator's services (PR 4)", () => {
+  const services = "apps/page-browser/s6/s6-rc.d";
+  const dependencies = (service: string) => readdirSync(path.join(root, services, service, "dependencies.d")).sort();
+
+  it("run the holder, the operator and its watchdog as pb-operator, from the image's src", () => {
+    for (const [service, main] of [
+      ["cdp-holder", "holder"],
+      ["operator", "operator"],
+      ["watchdog", "watchdog"],
+    ]) {
+      const run = read(`${services}/${service}/run`);
+      expect(read(`${services}/${service}/type`).trim()).toBe("longrun");
+      expect(run).toContain(`/command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/${main}/main.ts`);
+      expect(run).toMatch(/exec env -i HOME=\/home\/pb-operator PATH=\/usr\/local\/bin:\/usr\/bin:\/bin/);
+    }
+    // The watchdog kills a hung operator through s6, which lets pb-operator
+    // control that service and Chrome's, nothing else.
+    const control = read("apps/page-browser/s6/scripts/chrome-control");
+    expect(control.match(/s6-svperms -G pb-operator \S+/g)).toEqual(["s6-svperms -G pb-operator /run/service/chrome", "s6-svperms -G pb-operator /run/service/operator"]);
+    expect(read("apps/page-browser/Dockerfile")).toContain("COPY src/ /opt/page-browser/src/");
+    for (const main of ["holder", "operator", "watchdog"]) expect(existsSync(path.join(app, "src", main, "main.ts"))).toBe(true);
+  });
+
+  it("start after the egress rules, their kernel check and Chrome's control; the operator after the holder", () => {
+    expect(dependencies("cdp-holder")).toEqual(["chrome-control", "net-selftest"]);
+    expect(dependencies("operator")).toEqual(["cdp-holder", "chrome-control", "net-selftest"]);
+    expect(dependencies("watchdog")).toEqual(["operator"]);
+  });
+
+  it("give the operator the page's RPC token from a secret only root reads, and no token means no operator", () => {
+    const run = read(`${services}/operator/run`);
+    expect(run).toContain("[ -s /run/secrets/rpc_token ] || {");
+    expect(run).toContain("install -o pb-operator -g pb-operator -m 400 /run/secrets/rpc_token /run/pb/operator/rpc_token");
+    expect(read("apps/page-browser/s6/scripts/init-net")).toContain("install -d -o pb-operator -g pb-operator -m 700 /run/pb/operator");
+    const compose = read("docker-compose.page-browser.yml");
+    expect(compose).toContain("      - vnc_password\n      - rpc_token\n");
+    expect(compose).toContain("  rpc_token:\n    file: ${PB_SECRETS_DIR:?the page's secrets directory}/rpc_token");
+    expect(read("apps/page-browser/host/page.sh")).toContain('(umask 077; openssl rand -hex 32 > "$dir/secrets/rpc_token")');
+    expect(read("apps/page-browser/stand/image-check.sh")).toContain('openssl rand -hex 32 > "$WORK/secrets/rpc_token"');
+  });
+});
+
+describe("the operator's code (apps/page-browser/src)", () => {
+  const src = path.join(app, "src");
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const full = path.join(dir, name);
+      return statSync(full).isDirectory() ? files(full) : [full];
+    });
+  const sources = files(src);
+
+  it("is TypeScript Node runs as it is: erasable syntax only", () => {
+    expect(sources.length).toBeGreaterThan(20);
+    for (const file of sources) {
+      expect(file.endsWith(".ts"), file).toBe(true);
+      expect(() => stripTypeScriptTypes(readFileSync(file, "utf8")), path.relative(root, file)).not.toThrow();
+    }
+  });
+
+  it("imports Node's built-ins and its own files only, each by its .ts name", () => {
+    expect(existsSync(path.join(app, "package.json"))).toBe(false);
+    const builtins = new Set(builtinModules);
+    for (const file of sources) {
+      for (const match of readFileSync(file, "utf8").matchAll(/^(?:import|export)\s[^"';]*?from\s+"([^"]+)"/gm)) {
+        const specifier = match[1]!;
+        const where = `${path.relative(root, file)}: ${specifier}`;
+        if (specifier.startsWith(".")) {
+          expect(specifier.endsWith(".ts"), where).toBe(true);
+          const target = path.resolve(path.dirname(file), specifier);
+          expect(target.startsWith(src + path.sep) && existsSync(target), where).toBe(true);
+        } else {
+          expect(specifier.startsWith("node:") && builtins.has(specifier.slice(5)), where).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("loads in plain Node (type stripping, no bundler)", () => {
+    const modules = sources.filter((file) => !file.endsWith(`${path.sep}main.ts`));
+    const script = `${modules.map((file) => `await import(${JSON.stringify(pathToFileURL(file).href)});`).join("\n")}\nconsole.log("loaded");`;
+    const result = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 60_000 });
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe("loaded");
   });
 });
 

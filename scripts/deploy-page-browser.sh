@@ -168,7 +168,7 @@ build() {
     install -d -m 700 \"\$dir\"
     tar -xf - -C \"\$dir\"
     tar -xf \"\$dir/context.tar\" -C \"\$dir\"
-    docker build --build-context vendor=\"\$dir/vendor\" --label agency-hub.page-browser.revision=${revision} -t ${tag} \"\$dir/context\"
+    docker build --build-context vendor=\"\$dir/vendor\" --label agency-hub.page-browser.revision=${revision} --build-arg OPERATOR_VERSION=${revision} -t ${tag} \"\$dir/context\"
     rm -rf \"\$dir\"")"
   log "built $tag"
 }
