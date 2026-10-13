@@ -1887,6 +1887,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["sync_holds", "page_id"],
     ["sync_alert_evaluations", "page_id"],
     ["sync_pages", "page_id"],
+    // Project Browser (0275): the page's browser — its account, session
+    // fingerprint and sealed secrets go with the page's sync rows.
+    ["page_browsers", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
