@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { DEPLOY_SCRIPT, ROLLBACK_BROWSER_GATE, rollbackBrowserGateFunction, runRollbackBrowserGate } from "./helpers/deploy-browser-rollback-gate.ts";
 
 // The deploy's rollback refuses to return to an image older than the page
-// transport (0277) while a page is on its browser or leaving it (Project
+// transport (0277) while a page is on its browser or leaving it, and to one
+// older than the confirmed leave (0278) while a leave is pending (Project
 // Browser PR 14, Astra's review, P1): such an image would send through Node
 // beside the page's browser, whose site socket outlives the engine's link.
 // The gate runs for real in bash (tests/helpers/deploy-browser-rollback-gate.ts);
@@ -12,11 +13,23 @@ import { DEPLOY_SCRIPT, ROLLBACK_BROWSER_GATE, rollbackBrowserGateFunction, runR
 const BEFORE_0277 = ["0275_page_browsers.sql", "0276_page_browser_intake.sql"];
 
 describe("deploy rollback gate: no page on its browser under an image that predates the page transport", () => {
-  it("a rollback target that knows the transport (0277 was applied before this deploy) is not asked", () => {
-    const run = runRollbackBrowserGate({ applied: [...BEFORE_0277, "0277_sync_pages_transport.sql"], answer: "3" });
+  it("a rollback target that knows the transport and the leave (both applied before this deploy) is not asked", () => {
+    const run = runRollbackBrowserGate({ applied: [...BEFORE_0277, "0277_sync_pages_transport.sql", "0278_sync_pages_browser_leave.sql"], answer: "3" });
     expect(run.status).toBe(0);
     expect(run.commands).toEqual([]);
     expect(run.stderr).toContain("gate passed");
+  });
+
+  it("a rollback target that knows the transport but not the leave (0277 before this deploy, 0278 by it): asked for pending leaves only", () => {
+    const applied = [...BEFORE_0277, "0277_sync_pages_transport.sql"];
+    const none = runRollbackBrowserGate({ applied, after: [...applied, "0278_sync_pages_browser_leave.sql"], answer: "0" });
+    expect(none.status).toBe(0);
+    expect(none.sql).toBe("BEGIN READ ONLY;\nSELECT count(*)\nFROM sync_pages\nWHERE browser_leave_generation IS NOT NULL;\nCOMMIT;\n");
+    const pending = runRollbackBrowserGate({ applied, after: [...applied, "0278_sync_pages_browser_leave.sql"], answer: "1" });
+    expect(pending.status).toBe(1);
+    expect(pending.stderr).toContain("predates the confirmed leave of a page's browser (0278)");
+    // Neither applied by this deploy: nothing to ask.
+    expect(runRollbackBrowserGate({ applied, after: applied, answer: "1" }).commands).toEqual([]);
   });
 
   it("a rollback to an image older than 0277: asked read-only; no page on its browser or leaving it — the rollback goes on", () => {
@@ -40,6 +53,7 @@ describe("deploy rollback gate: no page on its browser under an image that preda
     const run = runRollbackBrowserGate({ applied: BEFORE_0277, answer: "2" });
     expect(run.status).toBe(1);
     expect(run.stderr).toContain("2 page(s) are on their browser, or leaving it");
+    expect(run.stderr).toContain("predates the page transport (0277)");
     expect(run.stderr).not.toContain("gate passed");
   });
 
@@ -55,7 +69,7 @@ describe("deploy rollback gate: no page on its browser under an image that preda
     const gate = body.indexOf(`if ! ${ROLLBACK_BROWSER_GATE}; then`);
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(body.indexOf('log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"'));
-    expect(body.slice(gate, body.indexOf("fi", gate))).toContain("return 0");
+    expect(body.slice(gate, body.indexOf("\n  fi\n", gate))).toContain("return 0");
     // The baseline it reads is the one the rollback decision reads.
     expect(rollbackBrowserGateFunction()).toContain('grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_BEFORE_FILE"');
   });

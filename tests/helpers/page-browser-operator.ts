@@ -230,6 +230,9 @@ export class FakeOperator {
   /** The last send `quiesced` names (null: the last physical one, if any). */
   lastSendMono: number | null = null;
   #statePushes: ReturnType<typeof setInterval> | null = null;
+  /** After a stopPage: what the operator had written but not yet committed
+   *  when it said its state (its buffer's batch), `afterMs` later. */
+  lateAfterStop: { afterMs: number; run: () => void } | null = null;
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -275,6 +278,10 @@ export class FakeOperator {
           this.commands.push(command);
           if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
           this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
+          if (this.lateAfterStop !== null) {
+            const late = this.lateAfterStop;
+            setTimeout(() => late.run(), late.afterMs).unref?.();
+          }
           return { ok: true, detail: "the page is stopped" };
         },
         onSite: (message) => {

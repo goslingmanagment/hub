@@ -953,8 +953,9 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # their check NOT VALID then validated over a handful of rows), and
   # page_browsers.buffer_undrained_since, under a 5 s lock_timeout. The
   # previous image never names them; the rollback below refuses to go back to
-  # an image older than 0277 while a page is on its browser or a leave is
-  # pending (verify_rollback_target_runs_no_browser_page).
+  # an image older than 0277 while a page is on its browser, or older than
+  # this one while a leave is pending
+  # (verify_rollback_target_runs_no_browser_page).
   "0278_sync_pages_browser_leave.sql"
 )
 
@@ -1537,27 +1538,36 @@ SQL'")" || return 1
 }
 
 # Project Browser (stage 3 PR 14, Astra's review): an image older than 0277
-# knows no page transport. Run on a page whose transport is its browser, or
-# one whose leave of the browser is still pending, it would send through Node
-# beside the browser — whose site socket outlives the engine's link and keeps
-# its frames going. The rollback goes back to the image that ran before this
-# deploy; when this deploy is the one that applied 0277 (it is not in the
-# schema baseline), that image predates it, and the rollback is refused while
-# any page is not plainly on Node. The columns it names are those the schema
-# has now (the rollback captured it): none before 0277 — no page can be on its
-# browser — the transport with 0277, a pending leave with 0278. Read-only;
-# fails closed.
+# knows no page transport. Run on a page whose transport is its browser, it
+# would send through Node beside the browser — whose site socket outlives the
+# engine's link and keeps its frames going. An image older than 0278 knows the
+# transport but not a pending leave of the browser: it would take such a page
+# with Node before the browser's stop is confirmed. The rollback goes back to
+# the image that ran before this deploy; what that image predates is what
+# this deploy applied (in the schema now, not in the baseline), and the
+# rollback is refused while a page stands where that image would send beside
+# its browser: on its browser (0277), a leave pending (0278). The columns it
+# names are those this deploy added, so the schema has them. Read-only; fails
+# closed.
 verify_rollback_target_runs_no_browser_page() {
-  if grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_BEFORE_FILE"; then
-    return 0
+  # A quote of the SQL, as the remote sh -c '…' below needs it written.
+  local quote="'\\''"
+  local or=$'\n   OR '
+  local conditions="" predates=""
+  if ! grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_BEFORE_FILE" && grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_AFTER_FILE"; then
+    conditions="transport <> ${quote}node${quote}"
+    predates="the page transport (0277)"
   fi
-  if ! grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_AFTER_FILE"; then
-    log "The page transport (0277) is not applied: no page can be on its browser"
-    return 0
+  if ! grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_BEFORE_FILE" && grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_AFTER_FILE"; then
+    if [[ -z "$conditions" ]]; then
+      conditions="browser_leave_generation IS NOT NULL"
+      predates="the confirmed leave of a page's browser (0278)"
+    else
+      conditions="${conditions}${or}browser_leave_generation IS NOT NULL"
+    fi
   fi
-  local leave_filter=""
-  if grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_AFTER_FILE"; then
-    leave_filter=$'\n   OR browser_leave_generation IS NOT NULL'
+  if [[ -z "$conditions" ]]; then
+    return 0
   fi
   local pages
   pages="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
@@ -1566,14 +1576,14 @@ psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''S
 BEGIN READ ONLY;
 SELECT count(*)
 FROM sync_pages
-WHERE transport <> '\''node'\''${leave_filter};
+WHERE ${conditions};
 COMMIT;
 SQL'")" || return 1
   [[ "$pages" =~ ^[0-9]+$ ]] || return 1
 
   if [[ "$pages" != "0" ]]; then
     printf '[deploy] %s page(s) are on their browser, or leaving it (sync_pages.transport, browser_leave_generation).\n' "$pages" >&2
-    printf '[deploy] The image this rollback would return to predates the page transport (0277): it would send\n' >&2
+    printf '[deploy] The image this rollback would return to predates %s: it would send\n' "$predates" >&2
     printf '[deploy] through Node beside the page'\''s browser. Move the page back to Node and confirm its leave\n' >&2
     printf '[deploy] (sync page transport <page> node; scripts/deploy-page-browser.sh to-node) before any rollback.\n' >&2
     return 1
@@ -1676,7 +1686,7 @@ rollback_remote_stack() {
   fi
 
   if ! verify_rollback_target_runs_no_browser_page; then
-    log "Rollback skipped; the previous image predates the page transport (0277), and a page is on its browser or leaving it"
+    log "Rollback skipped; the previous image predates the page transport or its confirmed leave (0277, 0278), and a page is on its browser or leaving it"
     log "An old image would send through Node beside the page's browser; inspect sync_pages.transport before choosing a manual rollback"
     return 0
   fi

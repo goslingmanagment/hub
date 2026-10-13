@@ -125,6 +125,14 @@ export interface BrowserPage {
   stop(): Promise<void>;
 }
 
+/** Why the page's browser cannot be linked to (no profile bound to the page,
+ *  no pinned exit IP or environment), or null: what `openBrowserPage` would
+ *  refuse with `BrowserPageNotReadyError`, asked before the page is taken. */
+export async function browserPageProblem(db: Database, pageId: number): Promise<string | null> {
+  const read = await readPageBrowserPageSettings(db, pageId);
+  return "problem" in read ? read.problem : null;
+}
+
 /**
  * Build a browser page's slot. Throws `BrowserPageNotReadyError` when the
  * page's browser has no profile or no settings: nothing was started then.

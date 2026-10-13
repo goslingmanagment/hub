@@ -215,7 +215,7 @@ session follows (below).
   engine verified it.
 - Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
   after the browser confirmed it stopped, with no socket open and everything it kept taken. Until then the page waits
-  (`browser_leave_unconfirmed`, alert 1 after two minutes). Coming back to the browser does not start it again.
+  (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser does not start it again.
 - The browser cannot confirm (its container is down or does not answer): take it off for good with
   `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
   gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and

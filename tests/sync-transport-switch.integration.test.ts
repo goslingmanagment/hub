@@ -31,6 +31,7 @@ import {
 import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import type { StallSubject, StallTracking } from "../apps/runtime/src/sync/engine/watchdog.ts";
 import { openBrowserPage, type BrowserPage } from "../apps/runtime/src/sync/fansly/browser-page.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
@@ -154,7 +155,7 @@ async function rig(options: { first?: FakeRoute[]; session?: string | null } = {
   return { server, proxy, operator, page, profileId, config, identityTokens };
 }
 
-async function startHost(r: Rig): Promise<SyncEngineHost> {
+async function startHost(r: Rig, extra: { watchdog?: StallTracking } = {}): Promise<SyncEngineHost> {
   const host = new SyncEngineHost({
     ...harnessHostOptions({
       db: db(),
@@ -164,6 +165,7 @@ async function startHost(r: Rig): Promise<SyncEngineHost> {
       rng: harnessRng(11),
       registry: harnessIdentityRegistry(),
     }),
+    ...(extra.watchdog === undefined ? {} : { watchdog: extra.watchdog }),
     browserOverrides: {
       url: () => r.operator.url,
       // The harness proxy is a CONNECT one: the hello's SOCKS5 is the fake's.
@@ -234,6 +236,13 @@ function sendsOf(rows: AttemptRow[], generation: bigint): AttemptRow[] {
   return rows.filter((row) => row.generation === generation.toString() && row.sentAt !== null);
 }
 
+/** The send marks of the sends whose answer was captured: a request still in
+ *  flight has its instant (written at its start, best effort) and no mark
+ *  yet. */
+function marksOf(sends: AttemptRow[]): Array<string | null> {
+  return [...new Set(sends.filter((row) => row.outcome !== "sent").map((row) => row.sendMark))];
+}
+
 describe("the switch, both ways, with a request in flight", () => {
   it("node → browser: the request in flight finishes on Node; nothing more goes through Node; the browser's first send is ≥ 1.2 × S later", async (context) => {
     if (!testDb) return context.skip();
@@ -277,7 +286,7 @@ describe("the switch, both ways, with a request in flight", () => {
     // senders is the takeover floor's.
     const browserSends = sendsOf(rows, g2);
     expect(browserSends.length).toBeGreaterThanOrEqual(3);
-    expect(browserSends.every((row) => row.sendMark === "transport_reported")).toBe(true);
+    expect(marksOf(browserSends)).toEqual(["transport_reported"]);
     const browserAdmissions = new Set(rows.filter((row) => row.generation === g2.toString()).map((row) => row.id));
     expect(physical.every((request) => browserAdmissions.has(request.attemptId))).toBe(true);
     expect(physical.map((request) => request.attemptId)).toEqual(expect.arrayContaining(browserSends.map((row) => row.id)));
@@ -330,7 +339,7 @@ describe("the switch, both ways, with a request in flight", () => {
     expect(r.operator.checkResults.filter((result) => result.admit)).toHaveLength(grantsAtSwitch);
     const inFlightRow = rows.find((row) => row.id === inFlight)!;
     expect(inFlightRow).toMatchObject({ generation: g1.toString(), outcome: "response", sendMark: "transport_reported" });
-    expect(r.operator.physical.some((request) => request.attemptId === inFlight)).toBe(true);
+    expect(r.operator.physical.map((request) => request.attemptId)).toContain(inFlight);
     // The operator was told to stop the page, by the leave, after the
     // request in flight.
     expect(r.operator.commands.map((command) => command.command.kind)).toEqual(["stopPage"]);
@@ -340,7 +349,7 @@ describe("the switch, both ways, with a request in flight", () => {
     expect(lastBrowser.id).toBe(inFlight);
     const nodeSends = sendsOf(rows, g2);
     expect(nodeSends[0]!.resource).toBe("account.verify");
-    expect(nodeSends.every((row) => row.sendMark === "request_start")).toBe(true);
+    expect(marksOf(nodeSends)).toEqual(["request_start"]);
     expect(nodeSends[0]!.sentAt!.getTime() - lastBrowser.sentAt!.getTime()).toBeGreaterThanOrEqual(1.2 * FLOOR_S);
     expect(await trusted(r.page.pageId)).toBe(await nodeGeneration(r.page));
   }, 90_000);
@@ -360,6 +369,35 @@ describe("the switch, both ways, with a request in flight", () => {
     // Without a transport (no slot's sender named): as before.
     await expect(lock()).resolves.toMatchObject({ mode: "live" });
   }, 30_000);
+});
+
+describe("a page on its browser, which is not ready", () => {
+  it("is not taken: no owner generation is spent on it, nothing is linked or sent; ready again, it runs", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
+    await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1",
+      [r.page.pageId, await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)]);
+    // The pin is gone: the hello has no settings to carry.
+    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: null });
+    const owner = async () => (await testDb!.pool.query<{ generation: string; beat: Date | null }>(
+      "select owner_generation::text as generation, owner_heartbeat_at as beat from sync_pages where page_id = $1", [r.page.pageId],
+    )).rows[0]!;
+    const before = await owner();
+    const host = await startHost(r);
+    await until(async () => host.state(r.page.pageId).kind === "waiting", 10_000, "the page waiting");
+    // Longer than the host's retry (5 s): every try would have taken the page.
+    await sleep(6_500);
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_not_ready" });
+    // No owner beats (alert 1 after its bound), and nothing reached the operator or Fansly.
+    expect(await owner()).toEqual(before);
+    expect(r.operator.hellos).toEqual([]);
+    expect(r.server.arrivals).toEqual([]);
+
+    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.7" });
+    await until(async () => r.operator.physical.length >= 1, 30_000, "the page running on its browser");
+    expect(r.server.arrivals).toEqual([]);
+  }, 90_000);
 });
 
 describe("leaving the browser is confirmed before Node takes the page (Astra PR 14, P1)", () => {
@@ -384,6 +422,10 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     expect(r.server.arrivals).toEqual([]);
     expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_leave_unconfirmed" });
     expect((await leftBy(r.page.pageId)).pending).toBe(switched.pendingLeave!.toString());
+    // What the alert evaluator reads: the pending leave, since the switch
+    // (alert 2 `browser_leave_unconfirmed` after its bound).
+    const liveFacts = () => readSyncLivePathFacts(db(), { pageId: r.page.pageId, decodeWindowMs: 60_000, unconfirmedAfterMs: 60_000 });
+    expect((await liveFacts()).browserLeaveSince).toBeInstanceOf(Date);
 
     // The owner says the container is stopped (scripts/deploy-page-browser.sh to-node).
     const asserted = await changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, browserStopped: true, actor: "test" });
@@ -391,8 +433,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page running on Node");
     expect(await leftBy(r.page.pageId)).toMatchObject({ by: "owner", pending: null });
     expect((await findPageBrowserByPage(db(), r.page.pageId))!.bufferUndrainedSince).toBeInstanceOf(Date);
-    const facts = await readSyncLivePathFacts(db(), { pageId: r.page.pageId, decodeWindowMs: 60_000, unconfirmedAfterMs: 60_000 });
+    const facts = await liveFacts();
     expect(facts.bufferUndrainedSince).toBeInstanceOf(Date);
+    expect(facts.browserLeaveSince).toBeNull();
     expect(await audits(r.page.pageId)).toEqual([
       expect.objectContaining({ to: "node", browserStopped: false }),
       expect.objectContaining({ to: "node", browserStopped: true, leftGeneration: switched.pendingLeave!.toString() }),
@@ -400,6 +443,53 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     // Nothing more to confirm: refused.
     await expect(changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, browserStopped: true, actor: "test" }))
       .rejects.toBeInstanceOf(SyncOwnerLeverError);
+  }, 90_000);
+
+  it("a state said right after the stop does not confirm the leave: what the operator commits after it is taken first", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    await startHost(r);
+    await until(async () => r.operator.physical.length >= 1, 20_000, "the page running on its browser");
+    // The stopping browser's last event reaches the operator's buffer after
+    // the state that says the page stopped (its commit batch, stretched).
+    let late: { seq: number } | null = null;
+    r.operator.lateAfterStop = { afterMs: 600, run: () => void (late = r.operator.gap("operator_start", null)) };
+    await changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, actor: "test" });
+    await until(async () => (await leftBy(r.page.pageId)).by === "operator", 30_000, "the leave confirmed");
+    expect(late).not.toBeNull();
+    expect(r.operator.buffer.acknowledged).toBe(late!.seq);
+    expect(r.operator.buffer.kept).toEqual([]);
+  }, 90_000);
+
+  it("an operator out of reach for long: the leave keeps telling the watchdog it goes on — the process is not taken for stalled", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    // What the host tells the process's stall watchdog.
+    const tracked: Array<{ subject: StallSubject; phases: string[] }> = [];
+    const watchdog: StallTracking = {
+      track(subject, phase) {
+        const entry = { subject, phases: [phase] };
+        tracked.push(entry);
+        return { progress: (next) => void entry.phases.push(next), done: () => undefined };
+      },
+    };
+    const host = await startHost(r, { watchdog });
+    await until(async () => r.operator.physical.length >= 1, 20_000, "the page running on its browser");
+    await r.operator.close();
+    const switched = await changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, actor: "test" });
+    // The leave runs under the generation after the one the page left at.
+    const leave = () => tracked.find((entry) => entry.subject.component === "actor" && entry.subject.generation === switched.pendingLeave! + 1n);
+    await until(async () => leave() !== undefined, 20_000, "the leave running");
+    const looks = leave()!.phases.length;
+    await sleep(2_000);
+    // Waiting for the operator is no stall: every look is told to the
+    // watchdog (it stops the process after 120 s without one).
+    expect(leave()!.phases.length - looks).toBeGreaterThanOrEqual(4);
+    expect(leave()!.phases.at(-1)).toBe("gate");
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_leave_unconfirmed" });
+    expect(r.server.arrivals).toEqual([]);
   }, 90_000);
 
   it("the engine died after the browser sent; the page goes to Node meanwhile: a host that starts again stops the browser and takes its kept outcome before Node sends (Astra PR 14, P1 ×2)", async (context) => {

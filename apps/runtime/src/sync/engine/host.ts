@@ -32,7 +32,13 @@ import {
   type FanslySendOsProbe,
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
-import { BrowserPageNotReadyError, openBrowserPage, type BrowserPage, type BrowserPageOverrides } from "../fansly/browser-page.ts";
+import {
+  browserPageProblem,
+  BrowserPageNotReadyError,
+  openBrowserPage,
+  type BrowserPage,
+  type BrowserPageOverrides,
+} from "../fansly/browser-page.ts";
 import { createPageTransport } from "../fansly/transport.ts";
 import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
 import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
@@ -119,12 +125,14 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // `quiesced` (the earlier owners' work is over), `stopPage` until the operator
 // says it stopped (its exit closed first, then Chrome), the earlier owners'
 // outcomes it kept taken as theirs (`reconcileHeldOutcomesOf`), the rest of
-// its buffer taken (late outcomes, the stream) until a state after the stop
-// says it keeps nothing and no site socket is open — then the leave is
-// confirmed under that generation's fence, and the next pass takes the page
-// with Node. A page whose operator cannot be reached waits
-// (`browser_leave_unconfirmed`, alert 1 after its bound) until it can, or
-// until the owner says its container is stopped (`--browser-stopped`). A
+// its buffer taken (late outcomes, the stream) until a state said after the
+// stop settled (`BROWSER_LEAVE_SETTLE_MS`) says it keeps nothing and no site
+// socket is open — then the leave is confirmed under that generation's
+// fence, and the next pass takes the page with Node. A page whose operator
+// cannot be reached waits (`browser_leave_unconfirmed`; the alert evaluator
+// reads the pending leave itself: alert 2 after its bound) until it can, or
+// until the owner says its container is stopped (`--browser-stopped`). The
+// wait is no stall: every look is reported to the process's watchdog. A
 // host that starts again finds the leave pending and runs it before
 // anything else. A shutdown leaves the browser running.
 
@@ -157,6 +165,11 @@ export const SHUTDOWN_ABORT_BUDGET_MS = 5_000;
 export const BROWSER_LEAVE_RETRY_MS = 2_000;
 /** A leave looks at whether the browser's buffer is drained this often. */
 export const BROWSER_LEAVE_DRAIN_CHECK_MS = 250;
+/** Only a state the operator said this long after it confirmed the stop
+ *  counts as "it keeps nothing": its buffer counts what it committed, and a
+ *  commit follows an append by its batch (≤ 20 ms) — a state said at once
+ *  could miss the last thing the stopping browser wrote. */
+export const BROWSER_LEAVE_SETTLE_MS = 1_000;
 
 export type HostPageState =
   | { kind: "running"; generation: bigint }
@@ -458,7 +471,10 @@ export class SyncEngineHost {
       const leaving = this.#leaves.get(page.pageId);
       if (leaving !== undefined) {
         // The leave ends once it is confirmed, or no longer asked for (the
-        // owner's word, the page back on its browser, out of `live`).
+        // owner's word, the page back on its browser, out of `live`). While
+        // it goes on the page waits; the alert evaluator says so from the
+        // pending leave itself (alert 2 `browser_leave_unconfirmed`) — the
+        // page's owner beats meanwhile, so its alert 1 has nothing to see.
         if (!run || sender !== "node" || leave === null || leave.generation !== leaving.leaveGeneration) leaving.stop.abort();
         continue;
       }
@@ -569,6 +585,7 @@ export class SyncEngineHost {
       this.#markWaiting(page, waiting.reason, waiting.nextTryMono - this.#clock.monoNow());
       return;
     }
+    if (sender === "browser" && !(await this.#browserReady(page, "browser_not_ready"))) return;
     if (!(await session.tryLock(pageId))) {
       this.#markWaiting(page, "lock_held_elsewhere", UNCONFIRMED_RETRY_MS);
       return;
@@ -886,6 +903,30 @@ export class SyncEngineHost {
     };
   }
 
+  /**
+   * Whether the page's browser can be linked to at all (a profile bound to
+   * the page, its hello's settings), asked before the page is taken: a
+   * browser that is not ready is no sender, and no owner generation is spent
+   * on finding that out every few seconds. The page waits under `reason`;
+   * with no owner beating, its wait is alert 1's after its bound.
+   */
+  async #browserReady(page: SyncPageRow, reason: "browser_not_ready" | "browser_leave_unconfirmed"): Promise<boolean> {
+    const { db, logger } = this.#o;
+    let why: string;
+    try {
+      const problem = await browserPageProblem(db, page.pageId);
+      if (problem === null) return true;
+      why = problem;
+    } catch (error) {
+      why = errorName(error);
+    }
+    this.#markWaiting(page, reason, UNCONFIRMED_RETRY_MS);
+    logger.warn({ pageId: page.pageId, why }, reason === "browser_not_ready"
+      ? "Fansly sync host: the page's transport is its browser, which is not ready; nothing is sent"
+      : "Fansly sync host: the page left its browser, which cannot be linked to; Node waits (or: sync page transport … node --browser-stopped)");
+    return false;
+  }
+
   /** A pending leave of the page's browser: the page taken under a new
    *  generation, its operator's link opened, the leave run (no actor). */
   async #startLeave(session: PgOwnershipSession, page: SyncPageRow, leave: SyncPageBrowserLeave): Promise<void> {
@@ -896,6 +937,7 @@ export class SyncEngineHost {
       this.#markWaiting(page, waiting.reason, waiting.nextTryMono - this.#clock.monoNow());
       return;
     }
+    if (!(await this.#browserReady(page, "browser_leave_unconfirmed"))) return;
     if (!(await session.tryLock(pageId))) {
       this.#markWaiting(page, "lock_held_elsewhere", UNCONFIRMED_RETRY_MS);
       return;
@@ -980,21 +1022,26 @@ export class SyncEngineHost {
     const held = browser.transport.held!;
     const signal = run.stop.signal;
     const sleep = (ms: number) => this.#clock.sleep(ms, signal).catch(() => undefined);
-    let states = 0;
+    // When the operator last said its state (null: not since this run began).
+    let stateMono: number | null = null;
     const unlisten = client.onState(() => {
-      states += 1;
+      stateMono = this.#clock.monoNow();
     });
     try {
-      // 1. The earlier owners' work at the operator is over.
-      stall.progress("gate");
-      while (!signal.aborted && client.quiesced === null) await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
+      // 1. The earlier owners' work at the operator is over. An operator out
+      //    of reach is waited for as long as it takes: every look is progress
+      //    (a wait that goes on is no stall of the process).
+      while (!signal.aborted && client.quiesced === null) {
+        stall.progress("gate");
+        await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
+      }
       // 2. Its exit closed, then Chrome stopped: confirmed by the operator.
-      let stoppedAt = Number.POSITIVE_INFINITY;
+      let stoppedMono = Number.POSITIVE_INFINITY;
       while (!signal.aborted) {
         stall.progress("send");
         const result = await browser.leave();
         if (result?.ok === true) {
-          stoppedAt = states;
+          stoppedMono = this.#clock.monoNow();
           break;
         }
         await sleep(BROWSER_LEAVE_RETRY_MS);
@@ -1008,13 +1055,14 @@ export class SyncEngineHost {
         await sleep(BROWSER_LEAVE_RETRY_MS);
       }
       // 4. The rest of its buffer: late outcomes and the stream, until a
-      //    state after the stop says it keeps nothing, and no site socket of
-      //    the page is open.
+      //    state said after the stop settled says it keeps nothing, and no
+      //    site socket of the page is open.
       while (!signal.aborted) {
         stall.progress("applies");
         await takeLateHeldOutcomes(d, held);
         const state = client.state;
-        if (state !== null && states > stoppedAt && !state.exitOpen && state.step === "exit_closed" && state.buffer.bytes === 0
+        const settled = stateMono !== null && stateMono - stoppedMono >= BROWSER_LEAVE_SETTLE_MS;
+        if (state !== null && settled && !state.exitOpen && state.step === "exit_closed" && state.buffer.bytes === 0
           && browser.intake.stopReason === null && !(await hasOpenBrowserWsConnection(this.#o.db, run.pageId))) break;
         await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
       }

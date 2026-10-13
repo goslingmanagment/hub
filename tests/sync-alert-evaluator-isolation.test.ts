@@ -111,7 +111,7 @@ beforeEach(() => {
   fake.live.mockImplementation(async (_db, { pageId }) => ({
     socket: { up: pageId !== 2, lastAliveAt: pageId === 2 ? ago(6 * MINUTE) : now },
     decode: { receipts: 1, debt: 0 }, unconfirmed: { count: 0, oldestVisibleAt: null },
-    unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null }, bufferHalted: null, bufferUndrainedSince: null,
+    unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null }, bufferHalted: null, bufferUndrainedSince: null, browserLeaveSince: null,
   }));
   fake.chats.mockResolvedValue({ unavailable: 0, refused: { chats: 0, firstOpenedAt: null } });
   fake.steps.mockResolvedValue(steps);
@@ -181,7 +181,7 @@ describe("the alert evaluator's failure boundaries (bug hunt Д11)", () => {
       unconfirmed: pageId === 1 ? { count: 1, oldestVisibleAt: ago(20 * MINUTE) } : { count: 0, oldestVisibleAt: null },
       unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
       bufferHalted: null,
-      bufferUndrainedSince: null,
+      bufferUndrainedSince: null, browserLeaveSince: null,
     }));
     const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
     expect(result!.opened).toEqual([{ pageId: 1, subKey: "freshness", detail: "message_unconfirmed" }]);

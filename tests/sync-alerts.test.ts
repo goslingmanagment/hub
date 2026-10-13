@@ -110,6 +110,7 @@ function facts(overrides: {
       unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
       bufferHalted: null,
       bufferUndrainedSince: null,
+      browserLeaveSince: null,
       ...overrides.live,
     },
     chats: {
@@ -263,6 +264,12 @@ describe("alert rules (design §9.6)", () => {
     // A page that left its browser on the owner's word, its buffer not
     // drained (Project Browser PR 14, Astra P1).
     expect(evaluate(facts({ live: { bufferUndrainedSince: at(-MINUTE) } }))).toEqual({ live_degraded: "browser_buffer_undrained" });
+    // A page whose leave of its browser is not confirmed: Node does not take
+    // it. After the ownership bound; named before the socket it keeps down.
+    expect(evaluate(facts({ live: { browserLeaveSince: at(-SYNC_OWNERSHIP_UNCONFIRMED_MS + 1_000) } }))).toEqual({});
+    expect(evaluate(facts({ live: { browserLeaveSince: at(-SYNC_OWNERSHIP_UNCONFIRMED_MS - 1_000) } }))).toEqual({ live_degraded: "browser_leave_unconfirmed" });
+    expect(evaluate(facts({ live: { browserLeaveSince: at(-10 * MINUTE), socket: { up: false, lastAliveAt: at(-SYNC_SOCKET_DOWN_MS - MINUTE) } } })))
+      .toEqual({ live_degraded: "browser_leave_unconfirmed" });
     const quarantined = evaluatePageAlerts(facts({ journal: { quarantined: { "dm-messages.head": 2 } } }), registry);
     expect(quarantined).toEqual([expect.objectContaining({
       subKey: "live_degraded",
