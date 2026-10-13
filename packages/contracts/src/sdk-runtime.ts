@@ -543,7 +543,11 @@ export function subscribeSyncEvents(options: KernelClientOptions, input: {
  * token yet behaves exactly as without it), and the SDK writes the header in
  * this order.
  */
-export const AI_STREAM_CAPABILITIES = ["debug-input-v1", "context-v1", "split-all-v1"] as const;
+export const AI_STREAM_CAPABILITIES = [
+  "debug-input-v1", "context-v1", "split-all-v1",
+  // chat-extension R20 HF-8в: the `coverageCheck` answers in the context frame.
+  "coverage-check-v1",
+] as const;
 export type AiStreamCapability = (typeof AI_STREAM_CAPABILITIES)[number];
 
 /** The header value for `streamAiFeature`: the union of `capabilities` and

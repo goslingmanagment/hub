@@ -1,8 +1,11 @@
-import type {
-  ClientFanClaimBody,
-  ClientFanClaimResponse,
-  ClientSendCustodyItem,
-  ClientSendCustodyResolveBody,
+import {
+  CLIENT_MANUAL_GROUP_REF_PREFIX,
+  type ClientClaimGroup,
+  type ClientClaimSendGroup,
+  type ClientFanClaimBody,
+  type ClientFanClaimResponse,
+  type ClientSendCustodyItem,
+  type ClientSendCustodyResolveBody,
 } from "@agency_hub_core/contracts";
 import {
   applyClientClaimAction,
@@ -16,11 +19,18 @@ import {
   type ClientClaimActionInput,
   type ClientClaimRejectionCode,
   type ClientFanClaimView,
+  type ClientSendRate,
   type Database,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, requireDashboardUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import {
+  admitClientSend,
+  clientClaimGroupKind,
+  clientCustodyExistsOn,
+  type ClientSendAdmission,
+} from "./client-claim-admission.ts";
 import { clientVersionRefusal } from "./client-features.ts";
 import {
   CLIENT_BOOTSTRAP_CONFIG_KEYS,
@@ -49,24 +59,29 @@ import {
  * decideClaimTransition): this file decides who may ask, which of the owner's
  * switches an action waits for, and how a view and a refusal travel.
  *
- * WHICH SWITCH AN ACTION WAITS FOR
+ * WHICH SWITCH AN ACTION WAITS FOR (what a platform takes is the admission
+ * table, client-claim-admission.ts: R20 architecture §11.1)
  * - `claim`, `renew`: the `newcomers` feature, like every flagged client route.
- * - `dispatch`: `previewSend`, and `newcomers` too for a greeting, read INSIDE
- *   the dispatch's transaction from rows held locked (loadClientSwitchesForSend),
- *   after the repeat check: a repeat of an attempt the hub already holds reads
- *   its state whatever the switches say now, so a client that lost the first
- *   answer learns it has no ticket and reports `failed`.
+ * - `dispatch`: the platform's admission of its purpose and group, then the
+ *   flags that admission names (OnlyFans: `previewSend`, and `newcomers` too
+ *   for a greeting; Fansly: a greeting only, under `newcomers` without
+ *   `previewSend`), all read INSIDE the dispatch's transaction from rows held
+ *   locked (loadClientSwitchesForSend), after the repeat check: a repeat of an
+ *   attempt the hub already holds reads its state whatever the switches say
+ *   now, so a client that lost the first answer learns it has no ticket and
+ *   reports `failed`. The rate it counts toward is the admission's too.
  * - the status read: no flag, so the master switch and the minimum version only
- *   (requireClientPage), on a page of a platform where sending from the preview
- *   exists. It answers while `previewSend` and `newcomers` are off.
+ *   (requireClientPage), on a page of a platform where the custody exists. It
+ *   answers while `previewSend` and `newcomers` are off.
  * - `release`, `sent`, `failed`: the page grant only. They end a lease or a send
  *   the hub already admitted; a switch turned off in between must not strand it
  *   (an unreported send holds the fan until someone resolves it by hand).
- * - `registerNativeSend`: the page grant and the platform only, like them. The
- *   message is already in the chat when the report comes, and the client ends a
- *   registration on any answer. Refused by the master switch, a flag or the
- *   minimum version, the fan would read as not greeted and a colleague would
- *   greet again. It admits nothing: a dispatch after it waits for its switches.
+ * - `registerNativeSend`: the page grant and the platform's admission of its
+ *   purpose and group only, no flag. The message is already in the chat when
+ *   the report comes, and the client ends a registration on any answer.
+ *   Refused by the master switch, a flag or the minimum version, the fan would
+ *   read as not greeted and a colleague would greet again. It admits nothing: a
+ *   dispatch after it waits for its switches.
  *
  * Database only: nothing here asks OnlyFans or queues work. The hub never sends
  * the message; the ticket only marks the page-world command of the client.
@@ -112,8 +127,15 @@ function toWire(view: ClientFanClaimView, flagRevision: number): ClientFanClaimR
   };
 }
 
+/** Whose rate window a 429 advises on: the dispatch's user, page and rate. */
+interface RateScope {
+  userId: number;
+  pageId: number;
+  rate?: ClientSendRate;
+}
+
 /** The repository's refusal as the route answers it (docs/error-handling.md §3). */
-async function refuse(app: AppContext, code: ClientClaimRejectionCode, userId: number): Promise<never> {
+async function refuse(app: AppContext, code: ClientClaimRejectionCode, scope: RateScope): Promise<never> {
   switch (code) {
     case "invalid_request":
       throw new BadRequestError("The request contradicts itself");
@@ -129,16 +151,33 @@ async function refuse(app: AppContext, code: ClientClaimRejectionCode, userId: n
         { reason: "ticket_live" },
       );
     case "preview_send_rate_limited":
-      throw new ClientPreviewSendRateLimitedError(await readClientPreviewSendRetryAfterMs(app.db, userId));
+      throw new ClientPreviewSendRateLimitedError(await readClientPreviewSendRetryAfterMs(app.db, scope));
     default:
       throw new ClientClaimRefusedError(code);
   }
 }
 
-/** The body as the repository takes it: the caller and the page are the hub's, never the client's. */
-function toAction(
+/**
+ * A group as the repository keeps it. A manual group is one part named by its
+ * text's fingerprint, kept as `generation_ref` `manual:<fingerprint>`: the
+ * custody rules see one more group, and no table changes (an AI group's ref
+ * never takes that form: the body schema refuses it).
+ */
+function storedGroup(group: ClientClaimSendGroup): ClientClaimGroup {
+  return "kind" in group
+    ? { generationRef: `${CLIENT_MANUAL_GROUP_REF_PREFIX}${group.textFingerprint}`, variant: 0, partCount: 1 }
+    : group;
+}
+
+/**
+ * The body as the repository takes it: the caller and the page are the hub's,
+ * never the client's. Exported for the repository's tests, so they drive the
+ * rules with exactly what the route hands over.
+ */
+export function clientClaimActionInput(
   body: ClientFanClaimBody,
   actor: { pageId: number; fanRef: string; userId: number },
+  rate?: ClientSendRate,
 ): ClientClaimActionInput {
   switch (body.action) {
     case "claim":
@@ -152,11 +191,12 @@ function toAction(
         attemptId: id(body.attemptId),
         instanceId: id(body.instanceId),
         purpose: body.purpose,
-        group: body.group,
+        group: storedGroup(body.group),
         partIndex: body.partIndex,
         textRevision: body.textRevision,
         leaseToken: body.leaseToken === undefined ? null : id(body.leaseToken),
         flagRevision: body.flagRevision,
+        ...(rate === undefined ? {} : { rate }),
       };
     case "sent":
       return {
@@ -182,7 +222,7 @@ function toAction(
         attemptId: id(body.attemptId),
         instanceId: id(body.instanceId),
         purpose: body.purpose,
-        group: body.group,
+        group: storedGroup(body.group),
         partIndex: body.partIndex,
         platformMessageId: body.platformMessageId,
       };
@@ -190,20 +230,26 @@ function toAction(
 }
 
 /**
- * The switches of one dispatch, decided inside its transaction: `previewSend`
- * for every send from the preview, `newcomers` too for a greeting, then the
- * extension's version. Throws 409 `client_feature_disabled`; the transaction
- * rolls back and no attempt is recorded.
+ * The admission and the switches of one dispatch, decided inside its
+ * transaction after the repeat check: the platform's admission of the send
+ * (`platform_unsupported`, which no switch lifts), then each flag it names
+ * (OnlyFans: `previewSend`, and `newcomers` too for a greeting; Fansly:
+ * `newcomers`), then the extension's version. Throws 409
+ * `client_feature_disabled`; the transaction rolls back and no attempt is
+ * recorded.
  */
 async function requireDispatchSwitches(
   app: AppContext,
   tx: Database,
   request: ClientFeatureRequest,
   page: ClientBootstrapPageRow,
-  purpose: "greeting" | "preview-reply",
+  admission: ClientSendAdmission,
 ): Promise<void> {
+  if (!admission.admitted) {
+    throw new ClientFeatureDisabledError(admission.feature, admission.reason);
+  }
+  const { flags } = admission.rule;
   const switches = await loadClientSwitchesForSend(app, tx);
-  const flags = purpose === "greeting" ? [PREVIEW_SEND_FLAG, NEWCOMERS_FLAG] as const : [PREVIEW_SEND_FLAG] as const;
   for (const flag of flags) {
     const reason = clientFeatureRefusal(switches, page, flag);
     if (reason !== null) {
@@ -212,7 +258,7 @@ async function requireDispatchSwitches(
   }
   const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
   if (outdated !== null) {
-    throw new ClientFeatureDisabledError(PREVIEW_SEND_FLAG, outdated);
+    throw new ClientFeatureDisabledError(flags[0] ?? PREVIEW_SEND_FLAG, outdated);
   }
 }
 
@@ -228,6 +274,8 @@ export async function applyClientFanClaim(
   const stored = await findPageSummaryByLabel(app.db, input.pageLabel);
 
   let page: ClientBootstrapPageRow;
+  /** A dispatch's: what the platform takes of it, decided once the page is known. */
+  let admission: ClientSendAdmission | null = null;
   switch (body.action) {
     case "claim":
     case "renew":
@@ -238,14 +286,21 @@ export async function applyClientFanClaim(
       page = await requireClientFeature(app, request, principal, stored, NEWCOMERS_FLAG);
       break;
     case "dispatch":
-      // The grant only: the switches are read in the dispatch's transaction.
+      // The grant only: the admission and the switches are decided in the
+      // dispatch's transaction, after the repeat check.
       page = await requireClientGrantedPage(app, principal, stored, PREVIEW_SEND_FLAG);
+      admission = admitClientSend({ platform: page.platform, purpose: body.purpose, group: clientClaimGroupKind(body.group) });
       break;
-    case "registerNativeSend":
+    case "registerNativeSend": {
       // A proven send is recorded whatever the switches and the client's
-      // version say now: the grant, on a platform where the custody exists.
-      page = await requireClientGrantedPage(app, principal, stored, CLAIM_FEATURE, PREVIEW_SEND_FLAG);
+      // version say now: the grant, and a send the page's platform takes.
+      page = await requireClientGrantedPage(app, principal, stored, CLAIM_FEATURE);
+      const native = admitClientSend({ platform: page.platform, purpose: body.purpose, group: clientClaimGroupKind(body.group) });
+      if (!native.admitted) {
+        throw new ClientFeatureDisabledError(CLAIM_FEATURE, native.reason);
+      }
       break;
+    }
     case "release":
     case "sent":
     case "failed":
@@ -258,15 +313,19 @@ export async function applyClientFanClaim(
   // change that lands in between is answered under the older revision, and the
   // client's next call sees the revision move.
   const flagRevision = await getClientConfigRevision(app.db, CLIENT_BOOTSTRAP_CONFIG_KEYS);
+  // An admitted dispatch counts toward its platform's rate; a refused one is
+  // refused before the rate is read, so it names none.
+  const dispatch = admission;
+  const rate = dispatch?.admitted ? dispatch.rule.rate : undefined;
   const result = await applyClientClaimAction(
     app.db,
-    toAction(body, { pageId: page.id, fanRef: input.fanRef, userId }),
-    body.action === "dispatch"
-      ? { beforeDispatch: (tx) => requireDispatchSwitches(app, tx, request, page, body.purpose) }
+    clientClaimActionInput(body, { pageId: page.id, fanRef: input.fanRef, userId }, rate),
+    dispatch !== null
+      ? { beforeDispatch: (tx) => requireDispatchSwitches(app, tx, request, page, dispatch) }
       : {},
   );
   if (!result.ok) {
-    return refuse(app, result.code, userId);
+    return refuse(app, result.code, { userId, pageId: page.id, ...(rate === undefined ? {} : { rate }) });
   }
   return toWire(result.view, flagRevision);
 }
@@ -284,7 +343,7 @@ export async function getClientFanClaimStatus(
     principal,
     await findPageSummaryByLabel(app.db, input.pageLabel),
     CLAIM_FEATURE,
-    PREVIEW_SEND_FLAG,
+    (platform) => clientCustodyExistsOn(platform),
   );
   const flagRevision = await getClientConfigRevision(app.db, CLIENT_BOOTSTRAP_CONFIG_KEYS);
   // The request names no client install and no lease token: the caller's own
@@ -331,7 +390,7 @@ export async function resolveClientSendCustodyByStaff(
     note: input.body.note,
   });
   if (!result.ok) {
-    return refuse(app, result.code, principal.user.id);
+    return refuse(app, result.code, { userId: principal.user.id, pageId: page.id });
   }
   const item = await findClientSendCustodyItem(app.db, { pageId: page.id, attemptId });
   if (!item) {

@@ -18,6 +18,8 @@ import {
   storeProxyConfig,
   upsertVoiceProfile,
   upsertAiPersona,
+  writeThreadChain,
+  type ThreadChainState,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -3544,7 +3546,7 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       servedHead: { messageRef: "7702", isFromFan: true },
       archiveHead: { messageRef: "7701", isFromFan: true },
       window: { served: 2 },
-      // The history proof is the OnlyFans capture lane's: a Fansly chat has none.
+      // A Fansly chat's proof is the Sync Engine's chain, and none is proven here.
       coverage: "unknown",
       knownFanMessages: [{ id: "7702", state: "included" }, { id: "7701", state: "included" }],
     });
@@ -3757,6 +3759,123 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     expect(await coverage()).toBe("unknown");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("reports a Fansly chat's coverage from the Sync Engine's chain (chat-extension R20 HF-8д)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const group = "880003";
+    const { rows: [fanslyThread] } = await testDb.pool.query<{ id: string }>(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3) returning id::text as id`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       values ($1, 'fansly', $2, '7711', $3, false, now() - interval '10 minutes', 'hello from the start'),
+              ($1, 'fansly', $2, '7712', null, true, now() - interval '5 minutes', 'hey you')`,
+      [fanslyPageId, group, FAN],
+    );
+    const fanslyCoverage = async (body: Record<string, unknown> = {}) => (await stream({
+      capabilities: "context-v1",
+      body: { pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN, ...body },
+    })).context!.coverage;
+
+    // The released Fansly extension (2.10.1, fansly-chat kernel-feature-gateway.ts)
+    // sends its own transcript, advertises no capability, and names the chat in
+    // both of its shapes: Reply as fan/fan, Coach as group/fan. Its streams and
+    // prompts must not move with the chain.
+    const legacyContext = {
+      transcript: "[10:00] Fan: hello from the start\n[10:05] You: hey you",
+      messageCount: 2,
+      fanDisplayName: "Legacy Fan",
+      fanSpendingData: "",
+      fanSubscriptionData: "",
+    };
+    const legacyForms = [
+      { feature: "fast-reply", body: { conversationRef: FAN, messageCount: 100, clientContext: legacyContext } },
+      {
+        feature: "coach-chat",
+        body: {
+          conversationRef: group, fanRef: FAN, messageCount: 100,
+          chatterQuestion: "What should I send next?", clientContext: legacyContext,
+        },
+      },
+    ];
+    const legacyStreams = async () => {
+      const out: Array<{ raw: string; prompt: unknown }> = [];
+      for (const form of legacyForms) {
+        const capture: { input?: AiGatewayProviderInput } = {};
+        const served = await stream({
+          feature: form.feature,
+          body: { pageLabel: "svc-fs", platform: "fansly", ...form.body },
+          capture,
+        });
+        expect(served.types).toEqual(["meta", "content_delta", "usage", "done"]);
+        out.push({ raw: comparable(served.raw), prompt: capture.input!.body.prompt });
+      }
+      return out;
+    };
+    const legacyBefore = await legacyStreams();
+
+    // No chain yet.
+    expect(await fanslyCoverage()).toBe("unknown");
+    // Messages legacy stored, no chain proven: the effective state is `unverified`.
+    await testDb.pool.query(`update page_dm_threads set stored_message_count = 2 where id = $1`, [fanslyThread!.id]);
+    expect(await fanslyCoverage()).toBe("unknown");
+
+    // A chain from a confirmed head that has not reached the chat's first message.
+    const partial: ThreadChainState = {
+      epoch: 1,
+      state: "partial",
+      headId: "7712",
+      headAt: new Date(),
+      oldestId: "7711",
+      oldestCreatedAtMs: Date.now() - 10 * 60_000,
+      count: 2,
+      upwardCount: 0,
+      proof: null,
+      proofWitness: null,
+      provenAt: null,
+    };
+    await writeThreadChain(appContext.db, Number(fanslyThread!.id), { chain: partial, source: "engine" });
+    expect(await fanslyCoverage()).toBe("unknown");
+
+    // Proven down to the first message: an accepted empty page below 7711.
+    const complete: ThreadChainState = {
+      ...partial,
+      state: "complete",
+      proof: "empty_page",
+      proofWitness: { kind: "observation", observationId: 1, receivedAt: new Date() },
+      provenAt: new Date(),
+    };
+    await writeThreadChain(appContext.db, Number(fanslyThread!.id), { chain: complete, source: "engine" });
+    expect(await fanslyCoverage()).toBe("complete");
+    // Every kernel-lane feature of the chat reads the same word.
+    expect(await fanslyCoverage({ messageCount: 5 })).toBe("complete");
+
+    // The proof is this chat's: another chat of the page holds no thread.
+    expect(await fanslyCoverage({ conversationRef: "880004" })).toBe("unknown");
+
+    // The released extension's requests are what they were.
+    expect(await legacyStreams()).toEqual(legacyBefore);
+
+    // OnlyFans answers from its own proof and never from a chain, even one
+    // that says `complete` for the same chat id.
+    await seedConversation();
+    const { rows: [onlyFansThread] } = await testDb.pool.query<{ id: string }>(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $2) returning id::text as id`,
+      [pageId, FAN],
+    );
+    await writeThreadChain(appContext.db, Number(onlyFansThread!.id), {
+      chain: { ...complete, headId: "9003", oldestId: "9001" },
+      source: "engine",
+    });
+    expect((await stream({ capabilities: "context-v1" })).context!.coverage).toBe("unknown");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("reads only the database: no platform request, no queued work, no chat marked read (critic item 8)", async (context) => {
     if (!testDb) {
       context.skip();
@@ -3793,5 +3912,147 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     } finally {
       await trap.restore();
     }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
+  const NOTE_FIELDS = ["Имя", "Локация", "Возраст", "Работа", "Хобби", "Фетиши", "Характеристика", "Медиа"];
+  // The extension sends what a full Recap sends: the whole chat it read.
+  const notesPayload = (over: Record<string, unknown> = {}) => ({
+    clientRequestId: randomUUID(),
+    pageLabel: "svc-fs",
+    platform: "fansly",
+    conversationRef: "group-777",
+    fanRef: "fan-42",
+    messageCount: 3000,
+    noteFields: NOTE_FIELDS,
+    clientContext: {
+      transcript: "[10:00] Fan: im Mike, 34, from Austin\n[10:05] Model: hey Mike",
+      messageCount: 2,
+      fanDisplayName: "Mike R",
+      fanSpendingData: "Total spent: $310.00 (tips $60.00, messages $250.00)",
+      fanSubscriptionData: "Subscribed: yes (since 2026-03-01, renews)",
+      fanBio: "gym rat, Texas",
+      fanCustomName: "Mike VIP whale",
+      transcriptCoverage: "full-history",
+    },
+    ...over,
+  });
+  const post = (feature: string, payload: Record<string, unknown>) =>
+    apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload,
+    });
+
+  it("fills the labels from the client's whole chat on Sonnet 5.5 low by default", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({ noteFields: ["  Имя ", ...NOTE_FIELDS.slice(1)] }));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(aiFrames(res.body).at(-1)?.type).toBe("done");
+    const body = capture.input!.body;
+    expect(body).toMatchObject({
+      feature: "fan-notes-fill",
+      model: "anthropic:claude-sonnet-5-5",
+      reasoningEffort: "low",
+    });
+    expect(body.prompt.userBlocks.every((block) => block.cache === "none")).toBe(true);
+    expect(body.prompt.systemBlocks.every((block) => block.cache === "none")).toBe(true);
+    const task = body.prompt.userBlocks.at(-1)!.text;
+    // The trimmed labels, in order, in the task block only.
+    expect(task).toContain(`<note_fields>\n${NOTE_FIELDS.join("\n")}\n</note_fields>`);
+    expect(task).toContain(`Output exactly ${NOTE_FIELDS.length} lines`);
+    const user = body.prompt.userBlocks.map((block) => block.text).join("");
+    expect(user).toContain("Fansly agency chatter");
+    expect(user).toContain("[10:00] Fan: im Mike, 34, from Austin");
+    expect(user).toContain("(the transcript below covers the ENTIRE conversation history)");
+    expect(user).toContain("Total spent: $310.00");
+    expect(user).toContain("Subscribed: yes (since 2026-03-01, renews)");
+    expect(user).toContain("Fan bio: gym rat, Texas");
+    // The chatter's saved name and the display name are not fan statements.
+    expect(user).not.toContain("Mike VIP whale");
+    expect(user).not.toContain("Mike R");
+    const { rows } = await testDb.pool.query<{ conversation_ref: string | null; fan_ref: string | null }>(
+      `select conversation_ref, fan_ref from ai_generation_content
+       where feature = 'fan-notes-fill' order by id desc limit 1`,
+    );
+    expect(rows[0]).toEqual({ conversation_ref: "group-777", fan_ref: "fan-42" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps the request's model and reasoning overrides", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" }));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(capture.input!.body).toMatchObject({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("requires noteFields, refuses them on every other feature, before any provider call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const missing = await post("fan-notes-fill", notesPayload({ noteFields: undefined }));
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(missing.json().message).toBe("fan-notes-fill requires noteFields");
+    for (const feature of ["fan-summary", "help-me", "fast-reply", "chat-review"]) {
+      const stray = await post(feature, notesPayload());
+      expect(stray.statusCode, stray.body).toBe(400);
+      expect(stray.json().message).toBe(`${feature} does not accept noteFields`);
+    }
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses labels the contract does not allow, and a fansly request without fanRef", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    for (const noteFields of [
+      [],
+      ["Имя", "имя"],
+      ["Имя:"],
+      ["Имя\nВозраст"],
+      ["   "],
+      ["Хобби & интересы"],
+      ["x".repeat(61)],
+      Array.from({ length: 31 }, (_, index) => `Поле ${index}`),
+    ]) {
+      const res = await post("fan-notes-fill", notesPayload({ noteFields }));
+      expect(res.statusCode, JSON.stringify(noteFields)).toBe(400);
+    }
+    const noFan = await post("fan-notes-fill", notesPayload({ fanRef: undefined }));
+    expect(noFan.statusCode, noFan.body).toBe(400);
+    expect(noFan.json().message).toBe("fanRef is required on fansly for fan-notes-fill");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses an empty conversation (gate_min_messages)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({
+      clientContext: { transcript: "(no messages)", messageCount: 0, fanDisplayName: "Mike R" },
+    }));
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toBe("gate_min_messages");
+    expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

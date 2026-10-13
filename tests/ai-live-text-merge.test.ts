@@ -42,7 +42,7 @@ const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
 
 /** One hub message: the transcript's form and the ref its store keeps. */
 function hub(ref: string, sender: "Fan" | "Model", text: string, minutes: number) {
-  const message: TranscriptMessage = { id: Number(ref), createdAtMs: T0 + minutes * 60_000, sender, text, labels: [] };
+  const message: TranscriptMessage = { id: ref, createdAtMs: T0 + minutes * 60_000, sender, text, labels: [] };
   const window: AiContextMessageRef = {
     messageRef: ref,
     occurredAt: new Date(message.createdAtMs),
@@ -89,7 +89,7 @@ describe("mergeLiveText", () => {
     const result = merge([item("9004", "fan", "are you there?", 15)]);
     expect(refs(result)).toEqual(["9001", "9002", "9003", "9004"]);
     expect(result.messages[3]).toEqual({
-      id: 9004, createdAtMs: T0 + 15 * 60_000, sender: "Fan", text: "are you there?", labels: [],
+      id: "9004", createdAtMs: T0 + 15 * 60_000, sender: "Fan", text: "are you there?", labels: [],
     });
     expect(result.window[3]).toEqual({ messageRef: "9004", occurredAt: new Date(T0 + 15 * 60_000), isFromFan: true });
     expect(result).toMatchObject({
@@ -170,7 +170,7 @@ describe("mergeLiveText", () => {
       { stores: { "9500": { isSentByMe: true, occurredAt: new Date(T0 + 7 * 60_000) } } },
     );
     expect(refs(unread)).toEqual(["9001", "9002", "9500", "9003"]);
-    expect(unread.messages[2]).toMatchObject({ id: 9500, createdAtMs: T0 + 7 * 60_000, sender: "Model" });
+    expect(unread.messages[2]).toMatchObject({ id: "9500", createdAtMs: T0 + 7 * 60_000, sender: "Model" });
     expect(unread.window[2]).toEqual({ messageRef: "9500", occurredAt: new Date(T0 + 7 * 60_000), isFromFan: false });
     expect(unread).toMatchObject({ accepted: ["9500"], outsideWindow: 0 });
     // The hub's time stands even where the client's names no instant.
@@ -246,18 +246,19 @@ describe("mergeLiveText", () => {
       item("9004", "fan", "first", 15),
       item("9004", "fan", "the same id again", 16),
       item("9005", "fan", "<p> </p><br>", 17),
-      // Not a safe integer: the transcript keys a message by Number(id).
-      item("9007199254740993", "fan", "too large an id", 18),
+      // Not a decimal id: the transcript keys a message by its exact ref.
+      // (An id past 2^53 is one like any other: ai-transcript-exact-ids.test.ts.)
+      item("9oo4", "fan", "not an id", 18),
       { platformMessageId: "9006", direction: "fan", occurredAt: "not a time", text: "no time" },
     ]);
     expect(result.accepted).toEqual(["9004"]);
     expect(result.rejected).toEqual([
       { id: "9004", reason: "duplicate" },
       { id: "9005", reason: "empty" },
-      { id: "9007199254740993", reason: "unusable" },
+      { id: "9oo4", reason: "unusable" },
       { id: "9006", reason: "unusable" },
     ]);
-    expect(result.messages.find((message) => message.id === 9004)!.text).toBe("first");
+    expect(result.messages.find((message) => message.id === "9004")!.text).toBe("first");
   });
 
   it("rejects an item whose time names no instant, though the wire takes its form", () => {

@@ -15,8 +15,11 @@ import {
   routeSchemas,
   type RouteAuthPolicy,
 } from "@agency_hub_core/contracts";
+import { platforms, type Platform } from "@agency_hub_core/shared";
 
+import { OPERATION_FEATURES } from "../apps/runtime/src/modules/ai/index.ts";
 import { clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
+import { CLIENT_FEATURE_REQUIREMENTS } from "../apps/runtime/src/services/client-features.ts";
 import {
   CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE,
   clientTokenIngestKinds,
@@ -241,12 +244,49 @@ describe("the narrow token's capture producer", () => {
 });
 
 describe("the narrow token's AI switch", () => {
-  it("puts Coach, Recap and Review behind their own flags, every other feature behind the master switch", () => {
-    expect(clientAiFeatureFlag("coach-chat")).toBe("coach");
-    expect(clientAiFeatureFlag("fan-summary")).toBe("recap");
-    expect(clientAiFeatureFlag("chat-review")).toBe("review");
-    for (const feature of ["fast-reply", "improve-draft", "hi-greeting", "ping", "constructor", "toString"]) {
-      expect(clientAiFeatureFlag(feature), feature).toBeNull();
+  const flagsOn = (platform: Platform) =>
+    Object.fromEntries(OPERATION_FEATURES.map((feature) => [feature, clientAiFeatureFlag(feature, platform)]));
+
+  it("on OnlyFans puts Coach, Recap and Review behind their own flags, every other feature behind the master switch", () => {
+    // As before R20 HF-12: no OnlyFans generation gains a flag.
+    expect(flagsOn("onlyfans")).toEqual({
+      "fast-reply": null,
+      "improve-draft": null,
+      "help-me": null,
+      "fan-summary": "recap",
+      "chat-review": "review",
+      "ping": null,
+      "hi-greeting": null,
+      "coach-chat": "coach",
+      "voice-script": null,
+      "fan-notes-fill": null,
+    });
+  });
+
+  it("[R20 HF-12] on Fansly puts Reply, Fix, Hi and Ping behind drafts, the voice script behind voice, the notes fill behind notesFill", () => {
+    expect(flagsOn("fansly")).toEqual({
+      "fast-reply": "drafts",
+      "improve-draft": "drafts",
+      "help-me": null,
+      "fan-summary": "recap",
+      "chat-review": "review",
+      "ping": "drafts",
+      "hi-greeting": "drafts",
+      "coach-chat": "coach",
+      "voice-script": "voice",
+      "fan-notes-fill": "notesFill",
+    });
+    // Each Fansly flag exists on Fansly alone.
+    for (const flag of ["drafts", "voice", "notesFill"] as const) {
+      expect(CLIENT_FEATURE_REQUIREMENTS[flag].platforms, flag).toEqual(["fansly"]);
+    }
+  });
+
+  it("names no flag for a feature it does not know, prototype names included", () => {
+    for (const platform of platforms) {
+      for (const feature of ["constructor", "toString", "__proto__", "hasOwnProperty", "scan"]) {
+        expect(clientAiFeatureFlag(feature, platform), `${platform} ${feature}`).toBeNull();
+      }
     }
   });
 });

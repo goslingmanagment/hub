@@ -14,6 +14,7 @@ import {
   validateConfigOverride,
   type AppConfig,
   type ChatExtensionParseResult,
+  type Platform,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -355,10 +356,12 @@ export async function requireClientFeature(
  *
  * `page` is what the route resolved from its path, null or undefined when
  * there is no such page; `feature` is how the refusal names the route.
- * `existsWith` names the flagged feature the route belongs to, when it exists
- * only where that feature does: `platform_unsupported` on any other platform,
- * before `disabled`, as in the feature evaluation. Without it no platform is
- * asked for.
+ * `existsWith` says where the route exists, when not on every platform: the
+ * flagged feature it belongs to (it exists only where that feature does), or
+ * a test of the platform (the claim status: where the greeting custody
+ * exists, client-claim-admission.ts). `platform_unsupported` on any other
+ * platform, before `disabled`, as in the feature evaluation. Without it no
+ * platform is asked for.
  */
 export async function requireClientPage(
   app: AppContext,
@@ -366,10 +369,13 @@ export async function requireClientPage(
   principal: HumanAuthPrincipal,
   page: { id: number } | null | undefined,
   feature: string,
-  existsWith?: ClientFeatureFlagName,
+  existsWith?: ClientFeatureFlagName | ((platform: Platform) => boolean),
 ): Promise<ClientBootstrapPageRow> {
+  const exists = existsWith === undefined ? null
+    : typeof existsWith === "function" ? existsWith
+    : (platform: Platform) => clientFeatureExistsOn(existsWith, platform);
   return requireClientPageRow(app, request, principal, page, feature, (switches, row) => {
-    if (existsWith !== undefined && !clientFeatureExistsOn(existsWith, row.platform)) {
+    if (exists !== null && !exists(row.platform)) {
       return "platform_unsupported";
     }
     return switches.settings.enabled ? null : "disabled";

@@ -891,6 +891,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # (account_probe_at) where account_probe_resolved is false, built
   # CONCURRENTLY. Index-only: the previous image never needs it.
   "0268_page_fans_account_probe_unresolved_idx.sql"
+  # R20 HF-7д0: three nullable columns without a default on message_archive
+  # and its shadow (catalog only). The previous image names its columns in
+  # every insert, update and copy of both tables and maps named fields of its
+  # `select ma.*` reads, so it runs unchanged beside them; rows it projects
+  # leave the markers as they are (unknown until observed again).
+  "0270_message_archive_fansly_markers.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

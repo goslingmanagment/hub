@@ -67,16 +67,24 @@ export type ClientCursorRefusalReason = (typeof CLIENT_CURSOR_REFUSAL_REASONS)[n
 const count = z.number().int().nonnegative();
 const positive = z.number().int().positive();
 
-/** Known names: documentation and the client's narrowing. On the wire they are open strings. */
+/**
+ * Known names: documentation and the client's narrowing. On the wire they are open strings.
+ *
+ * `drafts`, `voice` and `notesFill` exist on Fansly only (R20 HF-12): the
+ * narrow token's Reply, Fix, Hi and Ping, its voice script and its notes fill
+ * on a Fansly page. On OnlyFans those generations need no flag of their own.
+ */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
   "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
   "coach", "recap", "review", "splitAll",
+  "drafts", "voice", "notesFill",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
-  "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1",
+  "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
+  "coverage-check-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -149,7 +157,18 @@ export const clientBootstrapLimitsSchema = z.object({
   claimLeaseSec: positive,
   claimRenewSec: positive,
   claimActivityWindowSec: positive,
+  /**
+   * Sends from the preview per person per minute: on OnlyFans every dispatch,
+   * a greeting or a reply, counts toward it.
+   */
   previewSendPerMinute: count,
+  /**
+   * Greetings per person per minute where a greeting has a rate of its own
+   * (`manual-greeting-v1`: Fansly's «Новые», which sends a greeting and nothing
+   * else). Counted apart from `previewSendPerMinute`, per platform. Absent
+   * from a hub without `manual-greeting-v1`.
+   */
+  greetingSendPerMinute: count.optional(),
   navInsertTimeoutSec: positive,
   dispatchTicketSec: positive,
   /** Empty: sending from the preview (X8) is off. */
@@ -320,7 +339,7 @@ export const CLIENT_FEED_DEFAULT_LIMIT = 50;
 /** The first page's summary reads this many of the newest messages unless the query says otherwise: the Ping window. */
 export const CLIENT_FEED_SUMMARY_WINDOW_DEFAULT = 100;
 export const CLIENT_FEED_SUMMARY_WINDOW_MIN = 5;
-/** The transcript readers' own cap. The deeper read (3000) is the full Recap's alone: a feed page never makes it. */
+/** The transcript readers' own cap. The deeper read (up to 5000) is the full Recap's and the notes fill's alone: a feed page never makes it. */
 export const CLIENT_FEED_SUMMARY_WINDOW_MAX = 1500;
 
 /** Known values of the feed's `source`. On the wire an open token. The AI
@@ -900,6 +919,15 @@ export const adminClientHealthResponseSchema = z.object({
 // packages/contracts/src/hub/newcomers.ts). The hub takes every body that schema
 // lets out and answers only what it reads. The states of the three automata are
 // closed enums here and there: a new state is a new route version.
+//
+// A MANUAL GROUP (`manual-greeting-v1`, chat-extension R20 HF-3): a greeting
+// the chatter wrote or edited, sent with no AI generation behind it. Its group
+// is `{kind: "manual", textFingerprint}`, the sha256 of the exact text, and is
+// one part. The hub keeps it as `generation_ref` `manual:<textFingerprint>`,
+// variant 0, one part, and answers it in that form (`group.generationRef`):
+// the custody rules see one more group, and no table changes. Only where the
+// platform's admission takes it (Fansly; never OnlyFans) and only for a
+// greeting. The hub never sees the text, as with an AI group.
 
 /** An id the client mints (lease token, install id, attempt id): its UUID form. */
 const clientMintedId = z.string().regex(CLIENT_REQUEST_ID_PATTERN);
@@ -924,6 +952,13 @@ export const CLIENT_SEND_FAILURE_REASONS = ["not_enqueued", "native_rejected"] a
 /** A group has at most this many variants (Hi) and parts. */
 export const CLIENT_CLAIM_MAX_VARIANTS = 3;
 export const CLIENT_CLAIM_MAX_PARTS = 10;
+/**
+ * How a manual group's `generationRef` reads in an answer: this prefix and the
+ * group's `textFingerprint`. An AI group's `generationRef` never starts with it.
+ */
+export const CLIENT_MANUAL_GROUP_REF_PREFIX = "manual:";
+/** A manual group's `textFingerprint`: the sha256 of the exact text, lower-case hex. */
+export const CLIENT_TEXT_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
 export type ClientClaimAction = (typeof CLIENT_CLAIM_ACTIONS)[number];
 export type ClientCustodyState = (typeof CLIENT_CUSTODY_STATES)[number];
@@ -943,6 +978,18 @@ export const clientClaimGroupSchema = z.object({
   partCount: z.number().int().min(1).max(CLIENT_CLAIM_MAX_PARTS),
 }).strict();
 
+/**
+ * A greeting with no AI generation behind it (`manual-greeting-v1`): one part,
+ * named by the sha256 of its exact text. Only for a greeting.
+ */
+export const clientManualClaimGroupSchema = z.object({
+  kind: z.literal("manual"),
+  textFingerprint: z.string().regex(CLIENT_TEXT_FINGERPRINT_PATTERN),
+}).strict();
+
+/** The group a send names: an AI generation's, or a manual one. */
+export const clientClaimSendGroupSchema = z.union([clientClaimGroupSchema, clientManualClaimGroupSchema]);
+
 const clientPartIndex = z.number().int().min(0).max(CLIENT_CLAIM_MAX_PARTS - 1);
 const clientSendPurpose = z.enum(CLIENT_SEND_PURPOSES);
 /** The columns that keep the two revisions are 32-bit. */
@@ -961,7 +1008,7 @@ export const clientFanClaimBodySchema = z.discriminatedUnion("action", [
     attemptId: clientMintedId,
     instanceId: clientMintedId,
     purpose: clientSendPurpose,
-    group: clientClaimGroupSchema,
+    group: clientClaimSendGroupSchema,
     partIndex: clientPartIndex,
     textRevision: clientRevision,
     /** A greeting needs the caller's live lease until the greeting is confirmed. */
@@ -993,13 +1040,34 @@ export const clientFanClaimBodySchema = z.discriminatedUnion("action", [
     attemptId: clientMintedId,
     instanceId: clientMintedId,
     purpose: clientSendPurpose,
-    group: clientClaimGroupSchema,
+    group: clientClaimSendGroupSchema,
     partIndex: clientPartIndex,
     platformMessageId: clientNumericIdSchema,
   }).strict(),
 ]).superRefine((body, ctx) => {
-  if ((body.action === "dispatch" || body.action === "registerNativeSend") && body.partIndex >= body.group.partCount) {
-    ctx.addIssue({ code: "custom", path: ["partIndex"], message: "partIndex must be below group.partCount" });
+  if (body.action === "dispatch" || body.action === "registerNativeSend") {
+    const { group } = body;
+    if ("kind" in group) {
+      // A manual group is one part, and only a greeting's.
+      if (body.partIndex !== 0) {
+        ctx.addIssue({ code: "custom", path: ["partIndex"], message: "a manual group is one part: partIndex must be 0" });
+      }
+      if (body.purpose !== "greeting") {
+        ctx.addIssue({ code: "custom", path: ["group"], message: "a manual group is a greeting's only" });
+      }
+    } else {
+      if (body.partIndex >= group.partCount) {
+        ctx.addIssue({ code: "custom", path: ["partIndex"], message: "partIndex must be below group.partCount" });
+      }
+      // The manual groups' namespace: an AI group there would read as one.
+      if (group.generationRef.startsWith(CLIENT_MANUAL_GROUP_REF_PREFIX)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["group", "generationRef"],
+          message: `an AI group's generationRef never starts with "${CLIENT_MANUAL_GROUP_REF_PREFIX}"`,
+        });
+      }
+    }
   }
   if (body.action === "failed") {
     const proven = body.reason === "native_rejected"
@@ -1574,7 +1642,8 @@ export const clientRouteSchemas = {
     tags: ["client"],
     summary: "The greeting lease and the send custody of one fan: claim, renew, release, dispatch, sent, failed, registerNativeSend",
     description: "Database-only: no platform request, no queued work; the hub never sends the message itself. "
-      + "`fanRef` is the OnlyFans fan id, which is the chat id. Three facts per fan: the first greeting is "
+      + "`fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's "
+      + "account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is "
       + "confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, "
       + "`release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). "
       + "A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone "
@@ -1582,7 +1651,9 @@ export const clientRouteSchemas = {
       + "desktop new-follower command may have greeted the fan (409 `custody_held`). "
       + "`dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same "
       + "body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; "
-      + "the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
+      + "the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and "
+      + "replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, "
+      + "`limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
       + "send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the "
       + "fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner "
       + "and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` "
@@ -1594,19 +1665,36 @@ export const clientRouteSchemas = {
       + "from the next one; a value that only the environment sets admits no dispatch. Custody never expires: "
       + "past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a "
       + "manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 "
-      + "`custody_not_owned`); `failed` only with proof the native queue never took the part, and only while "
-      + "the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). "
+      + "`custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket "
+      + "lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is "
+      + "`not_enqueued` (no request was made: the native queue never took the part, or the client's last "
+      + "check before its own request refused it) or `native_rejected` with the platform's 4xx other than "
+      + "401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` "
+      + "with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is "
+      + "over, until a late `sent` or a manual resolve. "
       + "`registerNativeSend` records a proven send from the composer, once per page and message, and frees "
       + "nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). "
       + "A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's "
       + "greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan "
       + "never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch "
-      + "for (`uncertain-held`); a part inside its ticket is in flight. Switches by action: `claim` and "
-      + "`renew` need `newcomers`; `dispatch` needs `previewSend`, and `newcomers` too for a greeting; "
+      + "for (`uncertain-held`); a part inside its ticket is in flight. "
+      + "A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, "
+      + "a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the "
+      + "sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one "
+      + "part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI "
+      + "groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting "
+      + "only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / "
+      + "`platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. "
+      + "The admission is decided after the repeat check, with the switches. `claim` and `renew` need "
+      + "`newcomers` everywhere; "
       + "`release`, `sent` and `failed` end what the hub already admitted and need only the page grant; "
-      + "`registerNativeSend` reports a send that already happened and needs only the page grant on an "
-      + "OnlyFans page: no switch, flag or minimum version refuses it, and it admits no dispatch. A refusal "
-      + "by the switches is 409 `client_feature_disabled` with the reason.",
+      + "`registerNativeSend` reports a send that already happened and needs only the page grant on a page of "
+      + "a platform where the custody exists, with a purpose and group that platform admits: no switch, flag "
+      + "or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where "
+      + "every switch of one of its sends exists: OnlyFans; Fansly once `newcomers` exists there, and until "
+      + "then every action that starts something on a Fansly page, and the status read, is 409 "
+      + "`client_feature_disabled` / `platform_unsupported`. A refusal by the switches is 409 "
+      + "`client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     body: clientFanClaimBodySchema,
     response: {
@@ -1635,7 +1723,8 @@ export const clientRouteSchemas = {
       + "proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch "
       + "for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the "
       + "command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum "
-      + "version, with no flag of its own: it answers while `previewSend` and `newcomers` are off. 409 "
+      + "version, with no flag of its own, on a page of a platform where the custody exists (see the claim "
+      + "POST): it answers while `previewSend` and `newcomers` are off. 409 "
       + "`client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, "
       + "`client_outdated`).",
     params: clientPageFanParamsSchema,
@@ -1784,6 +1873,8 @@ export type ClientSpenderAwaitingReplyQuery = z.infer<typeof clientSpenderAwaiti
 export type ClientSpenderAwaitingReplyItem = z.infer<typeof clientSpenderAwaitingReplyItemSchema>;
 export type ClientSpenderAwaitingReplyResponse = z.infer<typeof clientSpenderAwaitingReplyResponseSchema>;
 export type ClientClaimGroup = z.infer<typeof clientClaimGroupSchema>;
+export type ClientManualClaimGroup = z.infer<typeof clientManualClaimGroupSchema>;
+export type ClientClaimSendGroup = z.infer<typeof clientClaimSendGroupSchema>;
 export type ClientFanClaimBody = z.infer<typeof clientFanClaimBodySchema>;
 export type ClientFanClaimResponse = z.infer<typeof clientFanClaimResponseSchema>;
 export type ClientSendCustodyResolveBody = z.infer<typeof clientSendCustodyResolveBodySchema>;
@@ -1873,14 +1964,19 @@ const CLIENT_HEALTH_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.
 const healthInstant = z.string().max(40).regex(CLIENT_HEALTH_INSTANT_PATTERN);
 
 /**
- * The perf metrics and the fixed upper bounds (ms) of their buckets, as the
- * client froze them (`PERF_METRICS`, contracts v1.0.0): the client builds every
- * histogram from these, and the hub checks a histogram against them before it
- * merges one.
+ * The perf metrics and the fixed upper bounds (ms) of their buckets: the client
+ * builds every histogram from these, and the hub checks a histogram against
+ * them before it merges one. The first eleven are as the client froze them
+ * (`PERF_METRICS`, contracts v1.0.0); the hub holds the Fansly ones below first,
+ * and the client adopts the same names and bounds before it sends them.
  *
  * Buckets: a histogram with n bounds has n + 1 counts. counts[0] holds values
  * ≤ bounds[0]; counts[i] values in (bounds[i-1], bounds[i]]; counts[n] values
  * above bounds[n-1] (that bucket tops out at the histogram's `max`).
+ *
+ * A metric names no host: the intake keys every rollup row by the report's
+ * host kind and build, so one metric measured on two host pages is two rows
+ * and never one set of buckets.
  *
  * The bounds and meaning of one (metric, schemaVersion) never change: new
  * bounds or a new meaning are a new schemaVersion, and the registry is
@@ -1912,6 +2008,26 @@ export const CLIENT_HEALTH_PERF_METRICS = {
   eventLatencyMs: { unit: "ms", schemaVersion: 1, bounds: [8, 16, 24, 32, 50, 75, 100, 150, 250, 500, 1000] },
   /** Input delay in the host's composer with the extension on. */
   composerInputDelayMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250] },
+
+  // Fansly (chat-extension Project Unite R20, HF-13), reported from a
+  // `fansly-web` tab. Each set has an edge at every budget it is checked
+  // against, so the share within a budget and each overrun past it are read
+  // off the buckets, not guessed inside one: a frame parsed in ≤ 0.1 ms on
+  // average (the mean is sum / count, exact; the edges below 0.1 show where the
+  // mass lies), a response parsed in ≤ 2 ms per task, the snapshot step in
+  // ≤ 5 ms. Past a budget the edges run on to a 60 Hz frame (16 ms) and a long
+  // task (50 ms); the last bucket keeps the rest, topped by `max`.
+  /** One socket frame of the host page parsed by the client's tap in the page. */
+  frameParseMs: { unit: "ms", schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100] },
+  /** One XHR response of the host page parsed by the client's observer: one task, deferred or not. */
+  xhrParseMs: { unit: "ms", schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100] },
+  /** The generation snapshot's one synchronous step in the page. */
+  snapshotMs: { unit: "ms", schemaVersion: 1, bounds: [0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 8, 16, 32, 50, 100, 250] },
+  /** Click → the generation request ready, the snapshot's round trip through the page included. */
+  snapshotRoundTripMs: {
+    unit: "ms", schemaVersion: 1,
+    bounds: [1, 2, 5, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000],
+  },
 } as const satisfies Record<string, { unit: "ms"; schemaVersion: number; bounds: readonly number[] }>;
 
 export type ClientHealthPerfMetricName = keyof typeof CLIENT_HEALTH_PERF_METRICS;

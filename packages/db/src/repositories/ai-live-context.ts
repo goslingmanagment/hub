@@ -1,7 +1,8 @@
 // chat-extension H-4b: where the hub's message stores stand on message ids a
-// client names for ONE conversation. The AI feature lane asks it for the ids of
-// `knownFanMessageIds` that the served transcript does not hold, to answer them
-// in the `context_v1` frame.
+// client names for ONE conversation. The AI feature lane asks it, once per
+// generation, for the ids of `knownFanMessageIds` and of `coverageCheck`
+// (chat-extension R20 HF-8в) that the served transcript does not hold, to
+// answer them in the `context_v1` frame.
 //
 // One statement, point lookups only:
 //   - message_archive by its unique (account_id, platform, message_ref);
@@ -37,8 +38,11 @@ import type { Database } from "../client.ts";
 export type AiKnownMessageStoreState = "present" | "deleted" | "absent";
 
 /** A point lookup, not a reader: it refuses a longer list. The wire names at
- *  most 10 ids. */
-export const AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS = 100;
+ *  most 130 ids in one request, all asked in one lookup: 10
+ *  `knownFanMessageIds`, and 60 window ids and 60 deleted ids of
+ *  `coverageCheck` (R20 HF-8в; tests/ai-coverage-check.test.ts holds the sum).
+ *  The fresh-text lookup below shares the cap; its wire names at most 60. */
+export const AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS = 130;
 
 export interface AiKnownMessageLookupInput {
   pageId: number;

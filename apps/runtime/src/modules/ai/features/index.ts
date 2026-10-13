@@ -1,4 +1,5 @@
 import type {
+  AiCoverageCheck,
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
@@ -52,6 +53,7 @@ import {
   applyLiveTextContext,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
+  checkAiConversationPair,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
@@ -133,9 +135,16 @@ export interface AiFeatureRequestBody {
    * validations, one message unless variantCount says otherwise, and the
    * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
+  /** fan-notes-fill only, and required there: the questionnaire labels of the
+   * fan's native note, in output order (trimmed and checked by the contract). */
+  noteFields?: string[];
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
+  /** chat-extension R20 HF-8в: the window coverage check, ids only; answered
+   *  in the `context_v1` frame for a caller that advertised
+   *  `coverage-check-v1`, never read into the prompt. */
+  coverageCheck?: AiCoverageCheck;
   /** chat-extension H-4c: the fresh text of the open OnlyFans chat, merged
    * into the hub's transcript for this generation only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
@@ -220,6 +229,24 @@ export function assertGreetingRequestShape(
   }
 }
 
+/** fan-notes-fill (the Fansly notes panel's «fill with AI»): the questionnaire
+ * labels are the whole task, so the feature REQUIRES `noteFields`, and every
+ * other feature REFUSES them, so a stray list can never reshape a Reply or a
+ * Recap prompt. The labels' own rules (count, length, characters, repeats) are
+ * the contract's. Pure, like the greeting rules above. */
+export function assertNoteFieldsRequestShape(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "noteFields">,
+): void {
+  if (feature === "fan-notes-fill") {
+    if (body.noteFields === undefined || body.noteFields.length === 0) {
+      throw new BadRequestError("fan-notes-fill requires noteFields");
+    }
+  } else if (body.noteFields !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteFields`);
+  }
+}
+
 /** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
  * HI_GREETING_MAX_TRANSCRIPT). Decision 379: it counts PERSONAL messages when
  * the client reports them, so a fan holding only welcome/mass sends is not
@@ -291,7 +318,7 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // Short recap also bounds its INPUT window: the compact template promises the
 // model "300 recent messages max are provided", so the archive lane must not
 // pull the deep default (1500) — or a caller-supplied messageCount up to the
-// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+// 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
 /** Decision #204: the Help button became a coach preset turn. The canonical
@@ -364,6 +391,7 @@ export async function prepareAiFeatureStream(
   if (body.summaryMode !== undefined && feature !== "fan-summary") {
     throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
+  assertNoteFieldsRequestShape(feature, body);
   // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
   // the canonical groupId, NOT the fan — so a restricted row keyed only by
   // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
@@ -383,6 +411,13 @@ export async function prepareAiFeatureStream(
     throw new BadRequestError(
       "fanRef is required on fansly for coach-chat and short fan-summary",
     );
+  }
+  // The same erasure rule for the notes fill: its record holds the facts of one
+  // fan (name, age, location), so on Fansly, where conversationRef is the
+  // groupId, the record must carry the fan. A new feature: no released client
+  // sends it without fanRef.
+  if (isFanslyRequest && !body.fanRef?.trim() && feature === "fan-notes-fill") {
+    throw new BadRequestError("fanRef is required on fansly for fan-notes-fill");
   }
 
   // Access is checked HERE, before any context loads — a principal without
@@ -413,6 +448,17 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
+
+  // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
+  // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
+  // A pair the page's capture contradicts is refused (409
+  // `conversation_fan_mismatch`) before any context loads; a pair the hub
+  // cannot vouch for yet is served, and the manifest and the context_v1 frame
+  // say `unverified`. The client-context lane (the released Fansly extension
+  // sends its own transcript) is not read here: its requests are unchanged.
+  const conversationPair = isFanslyRequest && body.clientContext === undefined
+    ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
+    : null;
 
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
@@ -627,14 +673,14 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
-    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
-    // full Recap of a context-v1 client reads past it, and only where the owner
-    // raised `aiTranscriptDeepMaxRows`; for every other request this is
-    // undefined and nothing is read.
+    // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
+    // Only the full Recap and the notes fill of a context-v1 client read past
+    // it, on either platform: the Recap where the owner raised
+    // `aiTranscriptDeepMaxRows`, the notes fill to at least 3000. For every
+    // other request this is undefined and nothing is read.
     const maxRows = await resolveAiTranscriptMaxRows(app, {
       feature,
       summaryMode: body.summaryMode,
-      isFanslyRequest,
       capabilities: options?.capabilities,
     });
     // Uses the resolved window computed above (short fan-summary already clamped
@@ -738,6 +784,9 @@ export async function prepareAiFeatureStream(
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
+  }
+  if (conversationPair !== null) {
+    contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
@@ -905,10 +954,11 @@ export async function prepareAiFeatureStream(
     preset: feature === "coach-chat" ? body.preset : undefined,
     recapAttach,
     transcriptCoverage:
-      feature === "coach-chat" || feature === "fan-summary"
+      feature === "coach-chat" || feature === "fan-summary" || feature === "fan-notes-fill"
         ? body.clientContext?.transcriptCoverage
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
+    noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.
@@ -1113,7 +1163,13 @@ export async function prepareAiFeatureStream(
       }),
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+      // chat-extension R20 HF-8в: answered only to a caller that advertised
+      // `coverage-check-v1`; anyone else gets the frame it got before.
+      ...(body.coverageCheck !== undefined && options?.capabilities?.has("coverage-check-v1") === true
+        ? { coverageCheck: body.coverageCheck }
+        : {}),
       ...(liveText !== undefined ? { live: liveText.live } : {}),
+      ...(conversationPair !== null ? { pair: conversationPair } : {}),
     });
   }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
