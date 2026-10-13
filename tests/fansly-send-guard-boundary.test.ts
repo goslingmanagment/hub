@@ -70,6 +70,18 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     expect(rpc).toContain("socket = new WebSocket(this.#o.url, { dispatcher: agent });");
   });
 
+  it("a request through a page's browser goes only on the engine's grant: an unrouted check is refused", () => {
+    // The browser transport answers the operator's check with the pacer's
+    // grant (I1–I3, I13); the RPC client refuses a check no attempt waits for.
+    const transport = read("apps/runtime/src/sync/fansly/browser-transport.ts");
+    expect(transport).toContain("const refusal = hooks.grant();");
+    expect(transport).not.toMatch(/hooks\.check\(/);
+    const rpc = read("apps/runtime/src/services/egress/page-browser-rpc.ts");
+    expect(rpc).toContain('reply = { admit: false, reason: "lease_inactive" };');
+    expect(matching(/\bhooks\.grant\(/)).toEqual(["apps/runtime/src/sync/fansly/browser-transport.ts"]);
+    expect(read("apps/runtime/src/sync/engine/actor.ts")).toContain("grant: () => d.pacer.checkRemoteGrant(armed),");
+  });
+
   it("sends a Fansly HTTP request only through the wire layer's single-request send, under its check", () => {
     // The Fansly package holds one physical send, and it composes the caller's
     // send check onto the dispatcher for that request only.
