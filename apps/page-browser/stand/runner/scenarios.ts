@@ -180,7 +180,11 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
     if (how === "cdp-break") await dropRules(ctx, CDP_BREAK);
     activity.stop();
     checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, how === "cdp-break" ? 3000 : 1000);
-    if (closed) checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, how === "chrome" ? ["chrome_crashed"] : ["cdp_lost", "chrome_crashed"], false);
+    // A killed Chrome is named chrome_crashed when s6 has reaped it by the
+    // time the operator asks, cdp_lost otherwise; either is a failure with a
+    // retry. Which one, the run notes.
+    if (closed) checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["cdp_lost", "chrome_crashed"], false);
+    ctx.notes.stopReason = transitions(ctx.page).find((state) => state.atMono >= faultMono && state.stopReason !== null)?.stopReason ?? null;
     const alarm = engine.alarms.find(({ atMono, alarm: a }) => atMono >= faultMono && a.kind === "cdp_lost");
     checks.alarm = alarm ? [] : ["no cdp_lost alarm"];
     if (alarm) ctx.notes.alarm = alarm.alarm.detail;
@@ -244,10 +248,15 @@ async function exitIpChange(ctx: Ctx): Promise<ScenarioOutcome> {
  *  again and gets every outcome it had not acknowledged. */
 async function engineLinkLoss(ctx: Ctx): Promise<ScenarioOutcome> {
   const engine = ctx.page.engine;
-  const { activity, faultMono } = await atMoment(ctx, async () => {
+  let burst: number[] = [];
+  const { activity, faultMono } = await atMoment(ctx, async (running) => {
+    running.stop();
+    // Requests sent the instant the engine goes silent: their outcomes come
+    // and are committed, but never acknowledged on this connection.
+    burst = await engine.issueHub(5);
+    engine.sendIssued(burst);
     await engine.drop("silent");
   });
-  activity.stop();
   const checks: Record<string, string[]> = {};
   const dropped = await engine.waitClosed(10_000);
   const droppedAt = engine.closedAtMono;
@@ -263,7 +272,9 @@ async function engineLinkLoss(ctx: Ctx): Promise<ScenarioOutcome> {
   // A lost engine is no reason to stop the page (plan §4.9: sockets and the
   // buffer go on; only admissions stop).
   checks.pageStayedUp = back !== null && back.exitOpen && back.stopReason === null ? [] : [`the page was not up when the engine came back: ${JSON.stringify(back)}`];
-  return { faultMono, checks, attempts: activity.issued };
+  await sleep(1000);
+  ctx.notes.redelivered = (await ctx.store.redeliveries(engine.run)).outcomes;
+  return { faultMono, checks, attempts: [...activity.issued, ...burst] };
 }
 
 /** The engine restarts (a Hub deploy): a new owner generation says hello;
@@ -272,18 +283,24 @@ async function engineLinkLoss(ctx: Ctx): Promise<ScenarioOutcome> {
  *  of; the page stays up. */
 async function engineRestart(ctx: Ctx): Promise<ScenarioOutcome> {
   const before = ctx.page.engine;
+  let burst: number[] = [];
+  let engine = before;
   const { activity, faultMono } = await atMoment(ctx, async (running) => {
     running.stop();
+    // Requests in flight when the engine goes: its process ends right after
+    // their sends.
+    burst = await before.issueHub(5);
+    before.sendIssued(burst);
+    engine = await ctx.page.restartEngine();
   });
   const previousGeneration = before.generation;
-  const engine = await ctx.page.restartEngine();
   await engine.connectRetrying(20_000);
   const checks: Record<string, string[]> = {};
   const quiesced = await waitFor(() => engine.quiesced.length > 0, 10_000);
   checks.quiesced = quiesced && engine.quiesced[0]!.previousGeneration === previousGeneration ? [] : [`no quiesced for generation ${previousGeneration}: ${JSON.stringify(engine.quiesced)}`];
   ctx.notes.quiesced = engine.quiesced[0] ?? null;
   // What the previous engine issued and has no committed outcome of.
-  const issued = activity.issued;
+  const issued = [...activity.issued, ...burst];
   const committed = new Set((await ctx.store.outcomes(ctx.page.info.name, issued)).map((row) => row.attemptId));
   const open = issued.filter((id) => !committed.has(id));
   ctx.notes.recovered = open.length;
@@ -292,6 +309,8 @@ async function engineRestart(ctx: Ctx): Promise<ScenarioOutcome> {
   checks.recoverAnswered = answered ? [] : ["no recoverResult in 10 s"];
   const state = engine.state;
   checks.pageStayedUp = state !== null && isUp(engine) ? [] : [`a new owner stopped the page: ${JSON.stringify(state)}`];
+  await sleep(1000);
+  ctx.notes.redelivered = (await ctx.store.redeliveries(engine.run)).outcomes;
   return { faultMono, checks, attempts: issued };
 }
 
@@ -305,7 +324,14 @@ async function databaseDown(ctx: Ctx): Promise<ScenarioOutcome> {
   if (!postgres) throw new Error("STAND_POSTGRES_CONTAINER is not set");
   const engine = ctx.page.engine;
   const failuresBefore = engine.commitFailures;
-  const { activity, faultMono } = await atMoment(ctx, () => ctx.docker.action(postgres, "stop", 2));
+  // Issued before the outage (the engine records its attempts first), sent
+  // once the database is gone: their outcomes come while it is down.
+  const pending = await engine.issueHub(5);
+  const { activity, faultMono } = await atMoment(ctx, async (running) => {
+    running.stop();
+    await ctx.docker.action(postgres, "stop", 2);
+    engine.sendIssued(pending);
+  });
   const checks: Record<string, string[]> = {};
   const downMs = 3000 + Math.round(ctx.random() * 3000);
   await sleep(downMs);
@@ -315,10 +341,11 @@ async function databaseDown(ctx: Ctx): Promise<ScenarioOutcome> {
   checks.databaseBack = back ? [] : ["the stand's database did not come back in 30 s"];
   ctx.notes.downMs = downMs;
   ctx.notes.commitFailures = engine.commitFailures - failuresBefore;
+  checks.outageFelt = engine.commitFailures > failuresBefore ? [] : ["nothing was to be committed while the database was down: the run proves nothing"];
   // The page did not stop for it (plan §4.9).
   const stops = transitions(ctx.page).filter((state) => state.atMono >= faultMono && (!state.exitOpen || state.stopReason !== null));
   checks.pageStayedUp = stops.length === 0 && isUp(engine) ? [] : [`the page stopped while the database was down: ${JSON.stringify(stops[0] ?? engine.state)}`];
-  return { faultMono, checks, attempts: activity.issued };
+  return { faultMono, checks, attempts: [...activity.issued, ...pending] };
 }
 
 /** The buffer's disk fills up (only the disk page's small fixed-size tmpfs
@@ -440,6 +467,44 @@ async function controlDuplicate(ctx: Ctx): Promise<ScenarioOutcome> {
   return { faultMono, checks: {}, attempts: issued, naive: true };
 }
 
+/** An engine that acknowledges events before it commits them, with its
+ *  database down while the operator's start writes its gap: the operator
+ *  deletes what the engine never kept, and the numbers have a hole. */
+async function controlHole(ctx: Ctx): Promise<ScenarioOutcome> {
+  const postgres = process.env.STAND_POSTGRES_CONTAINER ?? "";
+  if (!postgres) throw new Error("STAND_POSTGRES_CONTAINER is not set");
+  const early = await ctx.page.restartEngine({ ackEarly: true });
+  await early.connectRetrying(20_000);
+  await early.ensureUp(60_000);
+  await sleep(ctx.momentMs);
+  ctx.arm();
+  const faultMono = mono();
+  await ctx.docker.action(postgres, "stop", 2);
+  try {
+    // The operator starts again: its operator_start gap is acknowledged
+    // and lost.
+    const received = early.eventsReceived;
+    await inPage(ctx, ["kill", "-KILL", String(await servicePid(ctx, "operator"))]);
+    await early.waitClosed(5000);
+    await early.reconnect(40_000);
+    ctx.notes.received = await waitFor(() => early.eventsReceived > received, 15_000);
+    // The database stays down until that commit has failed.
+    ctx.notes.lost = await waitFor(() => early.eventsLost > 0, 20_000);
+  } finally {
+    await ctx.docker.action(postgres, "start");
+    await ctx.store.reachable(30_000);
+  }
+  // Once more, with the database back: the next gap is committed after the hole.
+  const normal = await ctx.page.restartEngine();
+  await normal.connectRetrying(20_000);
+  await inPage(ctx, ["kill", "-KILL", String(await servicePid(ctx, "operator"))]);
+  await normal.waitClosed(5000);
+  await normal.reconnect(40_000);
+  await waitGap(ctx, "operator_start", faultMono + 1);
+  await normal.ensureUp(60_000);
+  return { faultMono, checks: {}, attempts: [] };
+}
+
 // ── what needs the site (PR 7) ───────────────────────────────────────────
 
 /** The site's own traffic for a run, once the operator loads the site: the
@@ -496,6 +561,7 @@ export const SCENARIOS: Scenario[] = [
   { name: "control-leak", proves: "control: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — the criteria must catch all three", needs: [], page: "main", moment: [0, 500], control: ["arrived without any admission", "a closed write reached Fansly", "a forbidden socket message reached Fansly", "a socket opened"], run: controlLeak },
   { name: "control-bypass", proves: "control: a hole in the page's rules and a connection past the proxy — the OS capture and the direct listener must catch it", needs: [], page: "main", moment: [0, 500], control: ["traffic past the proxy", "a connection past the proxy reached the stand directly"], run: controlBypass },
   { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — the exactly-once check must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: ["committed 2 times"], run: controlDuplicate },
+  { name: "control-hole", proves: "control: an engine that acknowledges events before it commits them, its database down — C7 must catch the hole", needs: [], page: "main", moment: [0, 500], control: ["were never committed"], run: controlHole },
   { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
   { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },
   { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },

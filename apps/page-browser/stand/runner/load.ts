@@ -88,6 +88,7 @@ async function main(): Promise<void> {
   mkdirSync(dir, { recursive: true });
   const label = `load/${name}`;
   const startedWall = Date.now();
+  const positions = new Map<string, number>();
   const journalSince = await s.stand.mark();
   await s.stand.reset();
   for (const page of pages) {
@@ -109,6 +110,7 @@ async function main(): Promise<void> {
     }),
   );
   log("load.up", { startMs });
+  for (const page of pages) if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
 
   // The resources, every 5 s (spec §4, threshold 8).
   const samples = new Map<string, ContainerSample[]>(pages.map((page) => [page.info.name, []]));
@@ -216,7 +218,7 @@ async function main(): Promise<void> {
     const capture = readCapture(join(s.topology.results, "capture", page.info.name), startedWall, endWall);
     criteria[`C4 no traffic past the proxy (${page.info.name})`] = pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort });
     const seqs = new Map<string, number[]>();
-    for (const engine of page.enginesOfRun) if (engine.bufferId) seqs.set(engine.bufferId, await s.store.seqsOf(engine.bufferId));
+    for (const engine of page.enginesOfRun) if (engine.bufferId) seqs.set(engine.bufferId, (await s.store.seqsOf(engine.bufferId)).filter((seq) => seq >= (positions.get(engine.bufferId) ?? 0)));
     criteria[`C7 no event deleted before it was committed (${page.info.name})`] = contiguous(seqs);
   }
   const report = { name, profiles, minutes, outageMinutes, revision: process.env.PB_SUITE_REV ?? "unknown", startedWall, endWall, siteLoaded, frameLatencyAllP95: percentile(latencies, 95), thresholds, criteria };

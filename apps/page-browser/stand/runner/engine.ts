@@ -84,6 +84,9 @@ export interface EngineOptions {
   /** Commit outcomes without a key and acknowledge them late: the control
    *  that shows the exactly-once check can fail. */
   naive?: boolean;
+  /** Acknowledge events before they are committed, and keep the position
+   *  in memory: the control that shows the contiguity check can fail. */
+  ackEarly?: boolean;
   log?: (event: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -111,6 +114,10 @@ export class StandEngine {
   /** Where the engine's position in each buffer stood (diagnostics). */
   readonly committedBatches: Array<{ bufferId: string; first: number; last: number; fresh: number; atMono: number }> = [];
   commitFailures = 0;
+  /** Events received on the stream (committed or not). */
+  eventsReceived = 0;
+  /** ackEarly: events acknowledged whose commit failed. */
+  eventsLost = 0;
   /** How long each commit to the stand's Postgres took, ms. */
   readonly commitMs: number[] = [];
   /** When the operator closed (or lost) the connection — not the engine's
@@ -125,6 +132,8 @@ export class StandEngine {
   #commandResults = new Map<string, (result: CommandResult) => void>();
   #bodies = new Map<string, number>();
   #commitChain: Promise<void> = Promise.resolve();
+  /** The last number acknowledged (ackEarly: the position, in memory). */
+  #acked = new Map<string, number>();
   #subscribed = false;
   #stalled = false;
   #inFlight: { ref: string; kind: "site" | "ws" } | null = null;
@@ -394,6 +403,12 @@ export class StandEngine {
   }
 
   async #position(bufferId: string): Promise<number> {
+    if (this.options.ackEarly) {
+      // Its position, once known, is kept in memory only.
+      const known = this.#acked.get(bufferId) ?? (await this.options.store.committedUpTo(bufferId).catch(() => 0));
+      this.#acked.set(bufferId, known);
+      return known;
+    }
     for (;;) {
       try {
         return await this.options.store.committedUpTo(bufferId);
@@ -413,7 +428,18 @@ export class StandEngine {
   }
 
   async #onEvents(bufferId: string, events: BufferEvent[]): Promise<void> {
+    this.eventsReceived += events.length;
     if (this.#stalled || events.length === 0) return;
+    if (this.options.ackEarly) {
+      const last = events.at(-1)!.seq;
+      this.#acked.set(bufferId, last);
+      this.#send({ type: "ack", ownerGeneration: this.generation, bufferId, uptoSeq: last });
+      await this.options.store.commitEvents(this.options.page, this.run, bufferId, events as unknown as StoredEvent[]).catch((error: unknown) => {
+        this.eventsLost += events.length;
+        this.#log("events.lost", { error: String(error) });
+      });
+      return;
+    }
     try {
       const began = mono();
       const fresh = await this.options.store.commitEvents(this.options.page, this.run, bufferId, events as unknown as StoredEvent[]);
@@ -532,14 +558,21 @@ export class StandEngine {
 
   readonly #hubTargets = new Map<number, string>();
 
-  /** Hub requests (`send`), one per attempt id, recorded as issued first. */
-  async sendHub(count: number, path = "/api/v1/account/me"): Promise<number[]> {
-    if (!this.connected || this.#silent) return [];
+  readonly #rids = new Map<number, string>();
+
+  /** Hub requests recorded as issued (the engine's attempts), not sent yet. */
+  async issueHub(count: number): Promise<number[]> {
     const rids = Array.from({ length: count }, () => `hub-${randomUUID().slice(0, 8)}`);
     const ids = await this.options.store.issue(this.options.page, this.run, "hub", rids);
+    ids.forEach((id, index) => this.#rids.set(id, rids[index]!));
+    return ids;
+  }
+
+  /** The `send` of attempts issued before. */
+  sendIssued(ids: readonly number[], path = "/api/v1/account/me"): void {
     const live = this.state?.sessionFingerprint ?? createHash("sha256").update("pb-suite: no live session").digest("hex");
-    ids.forEach((attemptId, index) => {
-      const target = `apiv3.fansly.com${path}?rid=${rids[index]!}`;
+    for (const attemptId of ids) {
+      const target = `apiv3.fansly.com${path}?rid=${this.#rids.get(attemptId) ?? `hub-${attemptId}`}`;
       this.#hubTargets.set(attemptId, target);
       const now = mono();
       this.#send({
@@ -557,7 +590,14 @@ export class StandEngine {
         sendDeadlineMono: now + SEND_WINDOW_MS,
         requestDeadlineMono: now + 20_000,
       });
-    });
+    }
+  }
+
+  /** Hub requests (`send`), one per attempt id, recorded as issued first. */
+  async sendHub(count: number, path = "/api/v1/account/me"): Promise<number[]> {
+    if (!this.connected || this.#silent) return [];
+    const ids = await this.issueHub(count);
+    this.sendIssued(ids, path);
     return ids;
   }
 

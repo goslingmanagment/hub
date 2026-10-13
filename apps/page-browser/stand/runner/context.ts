@@ -71,7 +71,7 @@ export class Page {
 
   /** An engine for this page; a restarted one takes the next generation
    *  when it connects (`takeOver`). */
-  newEngine(options: { naive?: boolean } = {}): StandEngine {
+  newEngine(options: { naive?: boolean; ackEarly?: boolean } = {}): StandEngine {
     const engine = new StandEngine({
       page: this.info.name,
       pageId: this.info.pageId,
@@ -82,6 +82,7 @@ export class Page {
       env: STAND_ENV,
       store: this.#store,
       ...(options.naive ? { naive: true } : {}),
+      ...(options.ackEarly ? { ackEarly: true } : {}),
       log: this.#log,
     });
     this.enginesOfRun.push(engine);
@@ -89,7 +90,7 @@ export class Page {
   }
 
   /** The engine restarts: the old one is gone, a new one owns the page. */
-  async restartEngine(options: { naive?: boolean } = {}): Promise<StandEngine> {
+  async restartEngine(options: { naive?: boolean; ackEarly?: boolean } = {}): Promise<StandEngine> {
     const previous = this.engine;
     await previous.drop("clean");
     const engine = this.newEngine(options);

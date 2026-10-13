@@ -152,7 +152,7 @@ async function notReady(needs: readonly Need[], page: Page, stand: StandFansly, 
 }
 
 /** The common criteria of every run (plan §5, stage 2). */
-async function commonChecks(s: Stand, page: Page, label: string, outcome: ScenarioOutcome | null, journal: JournalEvent[], fromWall: number, toWall: number): Promise<Record<string, string[]>> {
+async function commonChecks(s: Stand, page: Page, label: string, outcome: ScenarioOutcome | null, journal: JournalEvent[], fromWall: number, toWall: number, positions: ReadonlyMap<string, number>): Promise<Record<string, string[]>> {
   const grants = [...s.pages.values()].flatMap((p) => p.enginesOfRun.flatMap((engine) => engine.grants));
   const capture = readCapture(join(s.topology.results, "capture", page.info.name), fromWall, toWall);
   const attempts = await s.store.attemptsOfRun(label);
@@ -167,8 +167,13 @@ async function commonChecks(s: Stand, page: Page, label: string, outcome: Scenar
     arrived: attempt.rid !== null && arrivedRids.has(attempt.rid),
   }));
   const buffers = new Set(page.enginesOfRun.map((engine) => engine.bufferId).filter(Boolean));
+  // From where the engine stood when the run began: what came before was
+  // judged by its own run.
   const seqs = new Map<string, number[]>();
-  for (const bufferId of buffers) seqs.set(bufferId, await s.store.seqsOf(bufferId));
+  for (const bufferId of buffers) {
+    const from = positions.get(bufferId) ?? 0;
+    seqs.set(bufferId, (await s.store.seqsOf(bufferId)).filter((seq) => seq >= from));
+  }
   return {
     "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants),
     "C2 no closed write": closedWrites(journal),
@@ -237,12 +242,14 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
     const startedWall = Date.now();
     const started = mono();
     let journalSince = 0;
+    const positions = new Map<string, number>();
     try {
       await s.stand.reset();
       if (scenario.site) await s.stand.config({ site: scenario.site });
       await page.engine.ensureUp(90_000);
       await page.engine.settled();
       journalSince = await s.stand.mark();
+      if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
       const ctx: Ctx = {
         page,
         pages: s.pages,
@@ -277,7 +284,7 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       for (const [name, found] of Object.entries(outcome?.checks ?? {})) checks[name] = found;
       try {
         const journal = await s.stand.journal(journalSince);
-        Object.assign(checks, await commonChecks(s, page, label, outcome, journal, startedWall, toWall));
+        Object.assign(checks, await commonChecks(s, page, label, outcome, journal, startedWall, toWall, positions));
         notes.journal = { events: journal.length, api: journal.filter((event) => event.type === "req" && event.role === "api").length, socks: journal.filter((event) => event.type === "socks.connect").length, ipify: journal.filter((event) => event.type === "ipify").length };
         notes.redeliveries = await s.store.redeliveries(label);
         const attempts = await s.store.attemptsOfRun(label);

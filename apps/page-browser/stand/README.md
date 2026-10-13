@@ -135,6 +135,7 @@ image (the self-test no longer reports `dnr_*` as not installed).
 | `control-leak` | — | **control**: an unadmitted read, a closed write and a socket with a forbidden message reach the stand — C1, C2 and C3 must catch them, in every run |
 | `control-bypass` | — | **control**: a hole in the page's rules and a connection past the proxy — C4 and C5 must catch it |
 | `control-duplicate` | — | **control**: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate |
+| `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — C7 must catch the hole |
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |
 | `site-proxy-down` | PR 7 | what waited when the proxy failed is never sent after it is back (plan §4.5) |

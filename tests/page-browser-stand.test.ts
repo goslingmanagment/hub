@@ -193,7 +193,7 @@ describe("the series", () => {
       expect(scenario.moment[0]).toBeLessThanOrEqual(scenario.moment[1]);
       if (scenario.site) expect(scenario.needs).toContain("PR7");
     }
-    expect(SCENARIOS.filter((scenario) => scenario.control).map((scenario) => scenario.name)).toEqual(["control-leak", "control-bypass", "control-duplicate"]);
+    expect(SCENARIOS.filter((scenario) => scenario.control).map((scenario) => scenario.name)).toEqual(["control-leak", "control-bypass", "control-duplicate", "control-hole"]);
   });
 });
 
