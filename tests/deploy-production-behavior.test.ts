@@ -727,7 +727,8 @@ describe("production deploy behavior without production access", () => {
       "--reason", `deploy fixture-123 ${revision} forward`, "api", "worker",
     ]);
     expect(readFileSync(path.join(fixtureRoot, "helper-stdin"), "utf8")).toBe(readFileSync(archiveHelperPath, "utf8"));
-    expect(result.stderr).toBe("Container logs archived (forward) duration_seconds=0: service=fixture found=1\n");
+    // The duration is whole seconds of wall time: 0, or 1 on a busy machine.
+    expect(result.stderr).toMatch(/^Container logs archived \(forward\) duration_seconds=\d+: service=fixture found=1\n$/);
   });
 
   it.each([

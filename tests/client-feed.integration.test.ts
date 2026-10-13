@@ -1002,12 +1002,15 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     // the walk: those are ids of hub-wide sequences, and in the clear they
     // would tell a chatter how many messages the whole hub holds.
     const envelope = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
-      payload: { st: Record<string, unknown> };
+      payload: { iat: number; st: Record<string, unknown> };
     };
     expect(Object.keys(envelope.payload.st).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
     expect(envelope.payload.st.alg).toBe("aes-256-gcm");
+    // `iat` is when the cursor was issued, in the clear by design: its digits
+    // are no leak, and now and then they spell a message id.
+    expect(envelope.payload.iat).toEqual(expect.any(Number));
     const readable = [
-      JSON.stringify(envelope),
+      JSON.stringify({ ...envelope, payload: { ...envelope.payload, iat: undefined } }),
       Buffer.from(String(envelope.payload.st.ciphertext), "base64").toString("latin1"),
     ].join("\n");
     expect(readable).not.toMatch(
