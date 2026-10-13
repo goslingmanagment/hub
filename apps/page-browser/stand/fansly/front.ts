@@ -161,6 +161,8 @@ export class Front {
   #nextWs = 1;
   #nextFrame = 1;
   #pushTimer: NodeJS.Timeout | null = null;
+  /** Every connection the front holds (a fault drops them all). */
+  readonly #connections = new Set<TLSSocket>();
 
   constructor(options: FrontOptions) {
     this.#options = options;
@@ -185,6 +187,8 @@ export class Front {
     });
     server.on("secureConnection", (socket: TLSSocket) => {
       socket.on("error", () => undefined);
+      this.#connections.add(socket);
+      socket.on("close", () => this.#connections.delete(socket));
       if (socket.alpnProtocol === "h2") this.#h2.emit("connection", socket);
       else this.#h1.emit("connection", socket);
     });
@@ -378,6 +382,15 @@ export class Front {
       closed += 1;
     }
     return closed;
+  }
+
+  /** Every connection dropped: the browser's next request needs a new one
+   *  (a warm HTTP/2 connection would carry it past a slow CONNECT). */
+  dropConnections(): number {
+    const count = this.#connections.size;
+    for (const socket of this.#connections) socket.destroy();
+    this.#options.journal.log("stand.dropped", { connections: count });
+    return count;
   }
 
   /** The push rate changed (config.wsPush): frames at even intervals. */

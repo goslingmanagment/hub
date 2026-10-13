@@ -8,6 +8,7 @@
 //                   site?: { readEveryMs, writeEveryMs, socket, forbiddenWs } | null }
 //   POST /socks   { down?, refuseAuth?, connectDelayMs? }      the faults
 //   POST /reset                             no fault, the settings of the start
+//   POST /drop                              every connection of the front dropped
 //   POST /ws/push { text? | bytes?, wsId? } a frame into the open sockets
 //   POST /ws/close { code?, wsId? }
 
@@ -122,6 +123,8 @@ async function handle(deps: ControlDeps, req: IncomingMessage): Promise<unknown>
       journal.log("stand.reset");
       return state(deps);
     }
+    case "POST /drop":
+      return { dropped: front.dropConnections() };
     case "POST /ws/push": {
       const body = await readJson(req);
       const wsId = typeof body.wsId === "string" ? body.wsId : undefined;

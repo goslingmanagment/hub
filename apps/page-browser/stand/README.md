@@ -142,6 +142,7 @@ image (the self-test no longer reports `dnr_*` as not installed).
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |
 | `site-proxy-down` | PR 7 | what waited when the proxy failed is never sent after it is back (plan §4.5) |
+| `site-admission-expiry` | PR 7 | an admission runs out while its connection is set up (the SOCKS5 holds the CONNECT 20 s, the admission is 15 s), then the delay goes: nothing arrives after its deadline (condition №2) |
 | `site-engine-restart` | PR 7 | `recover` with Hub requests released: never `not_sent` of one that left |
 | `site-closed-writes` | PR 6, PR 7 | the site's closed writes never reach Fansly |
 | `site-forbidden-ws` | PR 7 | a forbidden socket message never leaves; the page stops with `unknown_ws_message` |

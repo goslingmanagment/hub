@@ -520,6 +520,24 @@ function withSite(base: Scenario["run"]): Scenario["run"] {
   };
 }
 
+/** The admission runs out while its connection is being set up (plan §5,
+ *  stage 2: "истечение срока допуска во время установления соединения с
+ *  последующим снятием задержки"): every connection is dropped, the SOCKS5
+ *  answers a CONNECT only after 20 s — past the 15 s of an admission — and
+ *  then the delay goes. Nothing admitted may arrive after its deadline (C1
+ *  judges each arrival against its own window). */
+async function admissionExpiry(ctx: Ctx): Promise<ScenarioOutcome> {
+  const { activity, faultMono } = await atMoment(ctx, async () => {
+    await ctx.stand.socks({ connectDelayMs: 20_000 });
+    await ctx.stand.drop();
+  });
+  await sleep(25_000);
+  await ctx.stand.socks({ connectDelayMs: 0 });
+  await sleep(10_000);
+  activity.stop();
+  return { faultMono, checks: {}, attempts: activity.issued };
+}
+
 /** The site works for a while, no fault: every request it made, and every
  *  socket it opened, went under its own admission. */
 /** The site sends a socket message spec §2.6 does not allow: it never
@@ -567,6 +585,7 @@ export const SCENARIOS: Scenario[] = [
   { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },
   { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome")) },
   { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: none of them goes after the proxy is back (plan §4.5)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(proxyFault("down")) },
+  { name: "site-admission-expiry", proves: "an admission runs out while its connection is set up (CONNECT held 20 s past a 15 s admission), then the delay goes: nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry) },
   { name: "site-engine-restart", proves: "as engine-restart with Hub requests released: recover says unknown or resends, never not_sent of one that left", needs: ["PR7"], page: "main", moment: [300, 1500], site: SITE_TRAFFIC, run: withSite(engineRestart) },
   { name: "site-closed-writes", proves: "the site's closed writes (message/ack) never reach Fansly: the rules extension and the operator both refuse them", needs: ["PR6", "PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, writeEveryMs: 2000 }, run: withSite(siteSteady) },
   { name: "site-forbidden-ws", proves: "a forbidden socket message never leaves: the page stops with unknown_ws_message", needs: ["PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, forbiddenWs: true }, run: withSite(siteForbidden) },
