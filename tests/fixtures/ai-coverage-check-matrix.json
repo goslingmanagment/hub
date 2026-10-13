@@ -1,0 +1,468 @@
+{
+  "$comment": [
+    "The window coverage check of the AI context frame (chat-extension Project Unite R20, HF-8в): one fixture matrix for the hub and its client.",
+    "The hub (tests/ai-coverage-check.test.ts) proves every `hubCases` answer with resolveCoverageCheck and checks every `coverageVerdict` with the reference reader below. The client (chat-extension P8b2, its pure verdict function) copies this file VERBATIM and reads every case's `answer` to the same `coverageVerdict`; a change here is a change of the contract both sides read (docs/ai-gateway-contract.md, the window coverage check).",
+    "`classes`: how the client reads each answer (chat-extension docs/project-unite/spec.md §3.5, table one). A state missing from its list's table reads `unverified`.",
+    "`coverageVerdict`: the coverage check's own part of the client's verdict (spec §3.5, table two), the first that holds: `unverified` when the frame carries no `coverageCheck`, when an asked id has no answer or more than one in its list, when a list answers an id it did not ask, or when any answer reads `unverified`; `miss` when any window answer reads `miss`; `stale` when any deleted answer reads `stale`; `fresh` otherwise. The client puts its own conditions around it (no frame, no snapshot, unknown observation, a truncated snapshot first; the fresh text's `live` beside `miss`; coverage `complete`, and an empty window only under full observation, before `fresh`).",
+    "`hubCases`: `served` is the window the model read, oldest first, each message with the side that sent it; `stores` is what the hub's stores hold for THIS conversation about the ids `served` does not hold (`present`, `deleted`; an id not listed is `absent`), or null when that read failed; `request` is the body's `coverageCheck`; `answer` is the frame's `coverageCheck`.",
+    "`clientCases`: answers the hub never sends, which the client still has to read safely (`answer: null`: the frame has no `coverageCheck`).",
+    "`invalidRequests`: bodies the hub refuses with 400 before anything runs; a fake hub refuses them too. The list caps (AI_COVERAGE_CHECK_WINDOW_MAX, AI_COVERAGE_CHECK_DELETED_MAX: 60 each) come from the SDK."
+  ],
+  "version": 1,
+  "classes": {
+    "window": {
+      "included": "counted",
+      "deleted": "counted",
+      "direction_mismatch": "miss",
+      "outside_window": "miss",
+      "absent": "miss",
+      "unknown": "unverified"
+    },
+    "deleted": {
+      "deleted": "counted",
+      "absent": "counted",
+      "still_served": "stale",
+      "included": "stale",
+      "unknown": "unverified"
+    }
+  },
+  "hubCases": [
+    {
+      "name": "every message of the tab's window was read, from the side the tab says; the answers keep the client's order",
+      "served": [
+        { "id": "700000000000000101", "dir": "fan" },
+        { "id": "700000000000000102", "dir": "model" },
+        { "id": "700000000000000103", "dir": "fan" }
+      ],
+      "stores": {},
+      "request": {
+        "window": [
+          { "id": "700000000000000103", "dir": "fan" },
+          { "id": "700000000000000102", "dir": "model" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000103", "state": "included" },
+          { "id": "700000000000000102", "state": "included" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "an empty chat: nothing to check, and the answer still says the check was read",
+      "served": [],
+      "stores": {},
+      "request": { "window": [], "deletedIds": [] },
+      "answer": { "window": [], "deleted": [] },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "the tab's fan message is the model's own in the served window",
+      "served": [
+        { "id": "700000000000000101", "dir": "fan" },
+        { "id": "700000000000000102", "dir": "model" }
+      ],
+      "stores": {},
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "direction_mismatch" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "miss"
+    },
+    {
+      "name": "a message the hub holds for the chat, older than the served window",
+      "served": [
+        { "id": "700000000000000102", "dir": "fan" },
+        { "id": "700000000000000103", "dir": "model" }
+      ],
+      "stores": { "700000000000000101": "present" },
+      "request": {
+        "window": [
+          { "id": "700000000000000103", "dir": "model" },
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000103", "state": "included" },
+          { "id": "700000000000000102", "state": "included" },
+          { "id": "700000000000000101", "state": "outside_window" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "miss"
+    },
+    {
+      "name": "a message the hub has not seen for this chat (never, or only in another chat)",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": {},
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "absent" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "miss"
+    },
+    {
+      "name": "a window message the hub knows was deleted is counted, not a miss",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": { "700000000000000102": "deleted" },
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "model" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "deleted" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "deleted on the tab and tombstoned by the hub",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": { "700000000000000201": "deleted" },
+      "request": {
+        "window": [{ "id": "700000000000000101", "dir": "fan" }],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "deleted" }]
+      },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "deleted on the tab, never seen by the hub",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": {},
+      "request": {
+        "window": [{ "id": "700000000000000101", "dir": "fan" }],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "absent" }]
+      },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "deleted on the tab but still in the served window: the model read it, the context is stale",
+      "served": [
+        { "id": "700000000000000101", "dir": "fan" },
+        { "id": "700000000000000201", "dir": "fan" }
+      ],
+      "stores": {},
+      "request": {
+        "window": [{ "id": "700000000000000101", "dir": "fan" }],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "still_served" }]
+      },
+      "coverageVerdict": "stale"
+    },
+    {
+      "name": "deleted on the tab, held live by the hub but older than the served window: the model did not read it",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": { "700000000000000201": "present" },
+      "request": {
+        "window": [{ "id": "700000000000000101", "dir": "fan" }],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "absent" }]
+      },
+      "coverageVerdict": "fresh"
+    },
+    {
+      "name": "the stores could not be read: what the window holds is answered, the rest is unknown",
+      "served": [{ "id": "700000000000000101", "dir": "fan" }],
+      "stores": null,
+      "request": {
+        "window": [
+          { "id": "700000000000000101", "dir": "fan" },
+          { "id": "700000000000000102", "dir": "fan" }
+        ],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000101", "state": "included" },
+          { "id": "700000000000000102", "state": "unknown" }
+        ],
+        "deleted": [{ "id": "700000000000000201", "state": "unknown" }]
+      },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "the stores could not be read, but the window holds every id",
+      "served": [
+        { "id": "700000000000000101", "dir": "fan" },
+        { "id": "700000000000000201", "dir": "model" }
+      ],
+      "stores": null,
+      "request": {
+        "window": [{ "id": "700000000000000101", "dir": "fan" }],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "still_served" }]
+      },
+      "coverageVerdict": "stale"
+    },
+    {
+      "name": "a miss and a stale context together: the miss comes first",
+      "served": [
+        { "id": "700000000000000101", "dir": "fan" },
+        { "id": "700000000000000201", "dir": "fan" }
+      ],
+      "stores": {},
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "absent" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": [{ "id": "700000000000000201", "state": "still_served" }]
+      },
+      "coverageVerdict": "miss"
+    },
+    {
+      "name": "one unchecked id comes before a miss and a stale context",
+      "served": [
+        { "id": "700000000000000101", "dir": "model" },
+        { "id": "700000000000000201", "dir": "fan" }
+      ],
+      "stores": null,
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": ["700000000000000201", "700000000000000202"]
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "unknown" },
+          { "id": "700000000000000101", "state": "direction_mismatch" }
+        ],
+        "deleted": [
+          { "id": "700000000000000201", "state": "still_served" },
+          { "id": "700000000000000202", "state": "unknown" }
+        ]
+      },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a counted deletion does not hide a direction mismatch beside it",
+      "served": [{ "id": "700000000000000101", "dir": "model" }],
+      "stores": { "700000000000000102": "deleted", "700000000000000201": "deleted" },
+      "request": {
+        "window": [
+          { "id": "700000000000000102", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "fan" }
+        ],
+        "deletedIds": ["700000000000000201"]
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000102", "state": "deleted" },
+          { "id": "700000000000000101", "state": "direction_mismatch" }
+        ],
+        "deleted": [{ "id": "700000000000000201", "state": "deleted" }]
+      },
+      "coverageVerdict": "miss"
+    },
+    {
+      "name": "two ids one double apart are two messages, each with its own answer",
+      "served": [{ "id": "700000000000000001", "dir": "fan" }],
+      "stores": { "700000000000000003": "deleted" },
+      "request": {
+        "window": [
+          { "id": "700000000000000002", "dir": "fan" },
+          { "id": "700000000000000001", "dir": "fan" }
+        ],
+        "deletedIds": ["700000000000000003"]
+      },
+      "answer": {
+        "window": [
+          { "id": "700000000000000002", "state": "absent" },
+          { "id": "700000000000000001", "state": "included" }
+        ],
+        "deleted": [{ "id": "700000000000000003", "state": "deleted" }]
+      },
+      "coverageVerdict": "miss"
+    }
+  ],
+  "clientCases": [
+    {
+      "name": "no coverageCheck in the frame: a hub without coverage-check-v1, or a request that did not advertise it",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": [] },
+      "answer": null,
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a window id with no answer",
+      "request": {
+        "window": [
+          { "id": "700000000000000101", "dir": "fan" },
+          { "id": "700000000000000102", "dir": "fan" }
+        ],
+        "deletedIds": []
+      },
+      "answer": { "window": [{ "id": "700000000000000101", "state": "included" }], "deleted": [] },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a window id answered twice",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": [] },
+      "answer": {
+        "window": [
+          { "id": "700000000000000101", "state": "included" },
+          { "id": "700000000000000101", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "an answer to an id the request did not name",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": [] },
+      "answer": {
+        "window": [
+          { "id": "700000000000000101", "state": "included" },
+          { "id": "700000000000000102", "state": "included" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a state this build does not know",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": [] },
+      "answer": { "window": [{ "id": "700000000000000101", "state": "future_state" }], "deleted": [] },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a deleted id answered with a window-only state",
+      "request": { "window": [], "deletedIds": ["700000000000000201"] },
+      "answer": { "window": [], "deleted": [{ "id": "700000000000000201", "state": "outside_window" }] },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a deleted id answered in the window list",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": ["700000000000000201"] },
+      "answer": {
+        "window": [
+          { "id": "700000000000000101", "state": "included" },
+          { "id": "700000000000000201", "state": "deleted" }
+        ],
+        "deleted": []
+      },
+      "coverageVerdict": "unverified"
+    },
+    {
+      "name": "a deleted id answered included: the context is stale",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": ["700000000000000201"] },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "included" }],
+        "deleted": [{ "id": "700000000000000201", "state": "included" }]
+      },
+      "coverageVerdict": "stale"
+    },
+    {
+      "name": "a stale context and an unknown state: the unknown comes first",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": ["700000000000000201"] },
+      "answer": {
+        "window": [{ "id": "700000000000000101", "state": "future_state" }],
+        "deleted": [{ "id": "700000000000000201", "state": "still_served" }]
+      },
+      "coverageVerdict": "unverified"
+    }
+  ],
+  "invalidRequests": [
+    {
+      "name": "an id repeated in the window",
+      "request": {
+        "window": [
+          { "id": "700000000000000101", "dir": "fan" },
+          { "id": "700000000000000101", "dir": "model" }
+        ],
+        "deletedIds": []
+      }
+    },
+    {
+      "name": "an id both in the window and deleted",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }], "deletedIds": ["700000000000000101"] }
+    },
+    {
+      "name": "a deleted id repeated",
+      "request": { "window": [], "deletedIds": ["700000000000000201", "700000000000000201"] }
+    },
+    {
+      "name": "a direction other than fan or model",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "creator" }], "deletedIds": [] }
+    },
+    {
+      "name": "an id with a leading zero",
+      "request": { "window": [{ "id": "0700000000000000101", "dir": "fan" }], "deletedIds": [] }
+    },
+    {
+      "name": "an id as a number",
+      "request": { "window": [{ "id": 101, "dir": "fan" }], "deletedIds": [] }
+    },
+    {
+      "name": "no deletedIds",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan" }] }
+    },
+    {
+      "name": "a key the schema does not know",
+      "request": { "window": [], "deletedIds": [], "knownFanMessageIds": ["700000000000000101"] }
+    },
+    {
+      "name": "a window item with text",
+      "request": { "window": [{ "id": "700000000000000101", "dir": "fan", "text": "hi" }], "deletedIds": [] }
+    }
+  ]
+}

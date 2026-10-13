@@ -71,11 +71,8 @@ const FANSLY_CALLS: readonly Call[] = [
   { name: "Fix", feature: "improve-draft", fanslyFlag: "drafts", body: { draftText: "hey you" } },
   { name: "Hi", feature: "hi-greeting", fanslyFlag: "drafts" },
   { name: "Ping", feature: "ping", fanslyFlag: "drafts" },
-  // The voice script's refs as the hub takes them today: the fan on both.
-  {
-    name: "Voice script", feature: "voice-script", fanslyFlag: "voice",
-    body: { conversationRef: FANSLY_FAN, fanRef: FANSLY_FAN, draftText: "miss you" },
-  },
+  // The voice script names the group and the fan apart too (R20 HF-4а).
+  { name: "Voice script", feature: "voice-script", fanslyFlag: "voice", body: { draftText: "miss you" } },
   { name: "Notes fill", feature: "fan-notes-fill", fanslyFlag: "notesFill", body: { noteFields: NOTE_FIELDS } },
 ];
 

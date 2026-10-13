@@ -1531,6 +1531,47 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     : sql`conversation_ref = ${ref}`;
   const generationPred = sql`page_id in ${scope.pageIds}
     and (${generationConvPred} or fan_ref = ${ref})`;
+
+  // Voice-notes lane (0109): a fan's rendered audio + conversation_ref + a
+  // source_generation_ref into an ai_generation_content row this same erasure
+  // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
+  // flag its omission — the delete must be explicit, or a fan erasure leaves up
+  // to 2 MiB of audio addressed to the erased fan behind (now dangling on a
+  // deleted source_generation_ref).
+  //
+  // conversation_ref is the fanRef on OnlyFans, but on Fansly the extension may
+  // fall back to the messaging GROUP id (item.groupId) — a DIFFERENT id space
+  // than the fan's partnerAccountId fanRef (recorded law A49 / decisions.md
+  // ~3570: Fansly conversationRef is the group id, the partner id travels
+  // separately). Matching conversation_ref = fanRef alone leaves those
+  // group-ref'd notes behind. Resolve the fan's group ids from page_dm_threads
+  // (the sync table linking groupId ↔ partnerAccountId ↔ fan) via the SAME
+  // linkage the thread target above uses, plus the partner-id column that
+  // carries the Fansly partnerAccountId, and scope voice notes to fanRef OR
+  // those group ids. The list was resolved above before the thread target can
+  // delete the linkage; a live subquery here would find nothing at execution.
+  //
+  // chat-extension R20 HF-4а: the new client renders for a group named apart
+  // from the fan, and the hub may not link that group to the fan at all (a
+  // pair served unverified: no thread of the group, no live message of the
+  // fan in it). The note's source generation carries the fan (`fan_ref`), so
+  // a note is the fan's too when its source generation is one this erasure
+  // deletes. That arm reads ai_generation_content at execution, so this
+  // target runs BEFORE the generation targets.
+  const voiceNoteConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and (${voiceNoteConvPred}
+    or source_generation_ref in (
+      select generation_ref from ai_generation_content where ${generationPred}))`;
+  targets.push({
+    plane: "hot",
+    target: "voice_notes",
+    action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from voice_notes where ${voiceNotePred}`),
+    run: (tx) => execCount(tx, sql`delete from voice_notes where ${voiceNotePred}`),
+  });
+
   targets.push({
     plane: "hot",
     target: "ai_acceptance_events",
@@ -1608,36 +1649,6 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       select count(*)::text as n from ai_media_descriptions where ${mediaDescriptionPred}`),
     run: (tx) => execCount(tx, sql`
       delete from ai_media_descriptions where ${mediaDescriptionPred}`),
-  });
-
-  // Voice-notes lane (0109): a fan's rendered audio + conversation_ref + a
-  // source_generation_ref into an ai_generation_content row this same erasure
-  // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
-  // flag its omission — the delete must be explicit, or a fan erasure leaves up
-  // to 2 MiB of audio addressed to the erased fan behind (now dangling on a
-  // deleted source_generation_ref).
-  //
-  // conversation_ref is the fanRef on OnlyFans, but on Fansly the extension may
-  // fall back to the messaging GROUP id (item.groupId) — a DIFFERENT id space
-  // than the fan's partnerAccountId fanRef (recorded law A49 / decisions.md
-  // ~3570: Fansly conversationRef is the group id, the partner id travels
-  // separately). Matching conversation_ref = fanRef alone leaves those
-  // group-ref'd notes behind. Resolve the fan's group ids from page_dm_threads
-  // (the sync table linking groupId ↔ partnerAccountId ↔ fan) via the SAME
-  // linkage the thread target above uses, plus the partner-id column that
-  // carries the Fansly partnerAccountId, and scope voice notes to fanRef OR
-  // those group ids. The list was resolved above before the thread target can
-  // delete the linkage; a live subquery here would find nothing at execution.
-  const voiceNoteConvPred = fanGroupIds.length > 0
-    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
-    : sql`conversation_ref = ${ref}`;
-  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and ${voiceNoteConvPred}`;
-  targets.push({
-    plane: "hot",
-    target: "voice_notes",
-    action: "delete",
-    rows: await countOf(app, sql`select count(*)::text as n from voice_notes where ${voiceNotePred}`),
-    run: (tx) => execCount(tx, sql`delete from voice_notes where ${voiceNotePred}`),
   });
 
   // Transactions: the money moved — anonymize, never delete (fan scope).
@@ -1887,6 +1898,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["sync_holds", "page_id"],
     ["sync_alert_evaluations", "page_id"],
     ["sync_pages", "page_id"],
+    // Project Browser (0275): the page's browser — its account, session
+    // fingerprint and sealed secrets go with the page's sync rows.
+    ["page_browsers", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],

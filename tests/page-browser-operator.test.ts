@@ -698,9 +698,11 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     await until(() => s.operator.buffer.lastSeq === 1, 3000, "the operator's start gap");
     for (let n = 1; n < 30; n++) s.operator.buffer.append(wsFrame(n));
     await durable(s.operator.buffer.append(wsFrame(30)));
-    // state.buffer is real now.
-    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes > 0);
-    expect(state.buffer).toEqual({ bytes: s.operator.buffer.stats().bytes, oldestAgeMs: expect.any(Number) });
+    // state.buffer is real now: a state sent after the writes carries their
+    // bytes (an earlier one may carry the start gap's alone).
+    const bytes = s.operator.buffer.stats().bytes;
+    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes === bytes);
+    expect(state.buffer).toEqual({ bytes, oldestAgeMs: expect.any(Number) });
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
     await until(() => seqs(s.engine).length === 31, 5000, "31 events");
     expect(seqs(s.engine)).toEqual(Array.from({ length: 31 }, (_, n) => n + 1));
@@ -1273,6 +1275,8 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const refused = await SocketTunnelClient.connect(s.model.proxyPort);
     expect(refused.status).toBe(403);
     expect(s.engine.of("wsAdmit")).toHaveLength(1);
+    // The journal's line is written asynchronously: wait for it, do not race it.
+    await until(() => journal(s.logDir, "connections").some((line) => line.result === "refused: socket not admitted (no engine link)"), 3000, "the refusal journaled");
     expect(journal(s.logDir, "connections").at(-1)).toMatchObject({ host: "wsv3.fansly.com", refused: true, result: "refused: socket not admitted (no engine link)" });
     // The open one: still a tunnel, its frames still kept.
     expect(s.operator.sockets.openConnections).toBe(1);
