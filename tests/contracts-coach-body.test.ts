@@ -10,6 +10,7 @@ import {
   AI_NOTE_FIELD_LABEL_MAX_CHARS,
   AI_NOTE_FIELDS_MAX,
   AI_NOTE_VALUE_MAX_CHARS,
+  AI_START_PROOF_AUTOMATED_IDS_MAX,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
   routeSchemas,
@@ -121,6 +122,10 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     summaryMode: "short",
   } as const;
 
+  // An avatar address is its Fansly host and then anything, 4,096 code units in all.
+  const AVATAR_HOST = "https://a.fansly.com/";
+  const AVATAR_URL_MAX_CHARS = 4096;
+
   // A body at EVERY field's max, each field filled with one code unit repeated,
   // so the serialized size is the worst case for that unit.
   const maxBodyFilledWith = (unit: string) => ({
@@ -161,6 +166,26 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
         (_, index) => `2${String(index).padStart(29, "0")}`,
       ),
     },
+    // R20 HF-5, Hi on Fansly by the start proof. The proof is ids and counts:
+    // a witness and 120 automatic ids of 30 digits, about 4KB whatever `unit`
+    // is. The avatar's address is free text after its Fansly host: 4,096 code
+    // units, about 24.5KB at six bytes a unit. The service takes them on Hi
+    // without clientContext only, but that is decided after this byte limit and
+    // the schema: the worst schema-valid body has them beside everything else.
+    startProof: {
+      v: 1 as const,
+      source: "tab-short-page" as const,
+      groupId: "9".repeat(30),
+      startWitnessId: `1${"0".repeat(29)}`,
+      coveredCount: Number.MAX_SAFE_INTEGER,
+      personalCount: Number.MAX_SAFE_INTEGER - AI_START_PROOF_AUTOMATED_IDS_MAX,
+      automatedIds: Array.from(
+        { length: AI_START_PROOF_AUTOMATED_IDS_MAX },
+        (_, index) => `1${String(index + 1).padStart(29, "0")}`,
+      ),
+    },
+    personalMessageCount: Number.MAX_SAFE_INTEGER,
+    fanAvatarUrl: `${AVATAR_HOST}${unit.repeat(AVATAR_URL_MAX_CHARS - AVATAR_HOST.length)}`,
     // 20 x (2k question + 64k answer) = the 1.32M-code-unit bulk.
     coachHistory: Array.from({ length: 20 }, () => ({
       question: unit.repeat(2_000),
@@ -187,6 +212,12 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
       fanSpendingData: unit.repeat(20_000),
       fanSubscriptionData: unit.repeat(20_000),
       fanBio: unit.repeat(5_000),
+      // The greeting fields of the released clients: two names of 200 code
+      // units and their own avatar address, about 27KB at six bytes a unit.
+      fanCustomName: unit.repeat(200),
+      fanUsername: unit.repeat(200),
+      fanAvatarUrl: `${AVATAR_HOST}${unit.repeat(AVATAR_URL_MAX_CHARS - AVATAR_HOST.length)}`,
+      personalMessageCount: 5000,
       pingSegment: "segment-a",
       fanSilenceDays: FAN_SILENCE_DAYS_MAX,
       transcriptCoverage: "full-history",
@@ -212,8 +243,9 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
     // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~1.69M
     // units x 3 ~= 5.06MB of text before fresh text; measured with the media
-    // list and JSON framing, 5.27MB before fresh text, 6.18MB with it and
-    // 6.36MB with the note values (60k units, ~0.18MB at three bytes).
+    // list and JSON framing, 5.27MB before fresh text, 6.18MB with it,
+    // 6.36MB with the note values (60k units, ~0.18MB at three bytes) and
+    // 6.39MB with the greeting fields and the start proof.
     const worstCase = maxBodyFilledWith("の");
     expect(schema.safeParse(worstCase).success, "の worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -228,8 +260,10 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
     // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB of text (10.33MB with the
     // media list and framing) before fresh text, 12.15MB with it, 12.51MB with
-    // the notes fill's values. The former 8 MiB limit would have 413'd this
-    // contract-valid body; 12 MiB (12.58MB) still clears it, by about 0.07MB.
+    // the notes fill's values, 12.56MB with the released clients' greeting
+    // fields (27KB, uncounted here until R20 HF-5) and HF-5's start proof and
+    // top-level avatar (29KB). The former 8 MiB limit would have 413'd this
+    // contract-valid body; 12 MiB (12.58MB) still clears it, by about 18KB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -251,6 +285,26 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // 120 ids of 30 digits, the sides and the JSON framing.
     expect(added).toBeGreaterThan(120 * 30);
     expect(added).toBeLessThan(8 * 1024);
+  });
+
+  it("the start proof, its count and the top-level avatar are about 29KB of that worst case (R20 HF-5)", () => {
+    const withProof = maxBodyFilledWith("\ud800");
+    const { startProof, personalMessageCount, fanAvatarUrl, ...withoutProof } = withProof;
+    expect(startProof.automatedIds).toHaveLength(120);
+    expect(fanAvatarUrl).toHaveLength(AVATAR_URL_MAX_CHARS);
+    expect(personalMessageCount).toBe(Number.MAX_SAFE_INTEGER);
+    const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+    // The proof: 122 ids of 30 digits, two 16-digit counts and the framing.
+    expect(size({ startProof })).toBeGreaterThan(122 * 30);
+    expect(size({ startProof })).toBeLessThan(5 * 1024);
+    // The avatar: its host, then 4,075 code units at six bytes each.
+    expect(size({ fanAvatarUrl })).toBeGreaterThan((AVATAR_URL_MAX_CHARS - AVATAR_HOST.length) * 6);
+    expect(size({ fanAvatarUrl })).toBeLessThan(25 * 1024);
+    const added = size(withProof) - size(withoutProof);
+    expect(added).toBeGreaterThan(28 * 1024);
+    expect(added).toBeLessThan(30 * 1024);
+    // What is left under the limit with every field counted.
+    expect(AI_FEATURE_STREAM_BODY_LIMIT_BYTES - size(withProof)).toBeGreaterThan(16 * 1024);
   });
 
   it("the notes fill's current values are about 360KB of that worst case", () => {

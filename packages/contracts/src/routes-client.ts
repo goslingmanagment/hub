@@ -42,6 +42,18 @@ export const clientOpenToken = z.string().min(1).max(64);
  */
 export const CLIENT_NUMERIC_ID_PATTERN = /^[1-9]\d{0,29}$/;
 export const clientNumericIdSchema = z.string().regex(CLIENT_NUMERIC_ID_PATTERN);
+/**
+ * The order of two such ids where the platform's ids are snowflakes (Fansly:
+ * a message id grows with the moment it was sent): negative when `a` is the
+ * older. The shorter id is the older, then the string order. Never by number:
+ * a double merges neighbours past 2^53.
+ */
+export function compareClientNumericIds(a: string, b: string): number {
+  if (a.length !== b.length) {
+    return a.length - b.length;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 /** The platform's fan id: on OnlyFans the fan id (== chat_id), on Fansly the fan's account id. */
 export const clientFanRefSchema = clientNumericIdSchema;
 /**
@@ -94,7 +106,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
-  "coverage-check-v1", "conversation-recaps-v1",
+  "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
