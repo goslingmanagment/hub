@@ -992,6 +992,9 @@ export interface DmLiveReaderMessage {
   apiUnavailable: boolean;
   /** R20 HF-7д0: the frame's `type` and `correlationId` with their presence. */
   markers: FanslyMessageMarkers;
+  /** R20 HF-7а: the frame's attachments in the message's order (content type
+   * and id only: the socket names no file); empty when it named none. */
+  attachments: Array<{ contentType: number; contentId: string }>;
 }
 
 export type DmLiveUnionItem<Row> =
@@ -1096,6 +1099,7 @@ async function listDmLiveReaderMessages(
     message_type: number | null;
     correlation_id: string | null;
     field_mask: number;
+    attachments: unknown;
   }>(sql`
     select m.platform_message_id, m.platform_conversation_id, m.sender_platform_user_id,
       case when m.is_sent_by_page then 'model'
@@ -1103,7 +1107,7 @@ async function listDmLiveReaderMessages(
         else 'unknown' end as sender_role,
       m.created_at, m.content, m.in_reply_to_message_id,
       coalesce(btrim(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}), '') <> '' as api_unavailable,
-      m.message_type, m.correlation_id, m.field_mask
+      m.message_type, m.correlation_id, m.field_mask, m.attachments
     from dm_live_messages m
     join page_dm_threads t
       on t.platform_account_id = m.page_id and t.platform_conversation_id = m.platform_conversation_id
@@ -1130,5 +1134,20 @@ async function listDmLiveReaderMessages(
     markers: fanslyMessageMarkers({
       type: row.message_type, correlationId: row.correlation_id, fieldMask: row.field_mask,
     }),
+    attachments: liveAttachments(row.attachments),
   }));
+}
+
+/** The stored attachments as the live decoder wrote them (`{contentType,
+ * contentId}`); anything else in the column is skipped, never guessed. */
+function liveAttachments(value: unknown): DmLiveReaderMessage["attachments"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) => {
+    if (typeof item !== "object" || item === null) return [];
+    const { contentType, contentId } = item as Record<string, unknown>;
+    return typeof contentType === "number" && Number.isInteger(contentType)
+      && typeof contentId === "string" && contentId.length > 0
+      ? [{ contentType, contentId }]
+      : [];
+  });
 }

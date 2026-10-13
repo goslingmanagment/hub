@@ -3085,6 +3085,101 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("Fansly media in the kernel transcript (chat-extension R20 HF-7a)", () => {
+  // Predicate of the new behaviour: a Fansly page and the transcript the hub
+  // loads itself (no clientContext). The released Fansly extension (2.10.1)
+  // sends its own transcript in clientContext, Reply as fan/fan and Coach as
+  // group/fan: its prompts do not move with the archive's media. An OnlyFans
+  // archive row keeps its bytes whatever its stored media list says.
+  const group = "880003";
+
+  async function promptOf(feature: string, body: Record<string, unknown>) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { clientRequestId: randomUUID(), ...body },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return capture.input!.body.prompt;
+  }
+
+  it("labels a Fansly row's stored media on the kernel lane only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3)`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain, price_mills)
+       values ($1, 'fansly', $2, '7801', $3, false, now() - interval '10 minutes', 'look at this', null),
+              ($1, 'fansly', $2, '7802', null, true, now() - interval '5 minutes', 'unlock me', 15000)`,
+      [fanslyPageId, group, FAN],
+    );
+    const kernel = async () => JSON.stringify(await promptOf("fast-reply", {
+      pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN,
+    }));
+    const legacyContext = {
+      transcript: "[10:00] Fan: look at this\n[10:05] Model: unlock me",
+      messageCount: 2,
+      fanDisplayName: "Legacy Fan",
+      fanSpendingData: "",
+      fanSubscriptionData: "",
+    };
+    const legacy = async () => [
+      await promptOf("fast-reply", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: FAN, messageCount: 100, clientContext: legacyContext,
+      }),
+      await promptOf("coach-chat", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN, messageCount: 100,
+        chatterQuestion: "What should I send next?", clientContext: legacyContext,
+      }),
+    ];
+
+    const kernelBefore = await kernel();
+    expect(kernelBefore).toContain("Fan: look at this");
+    expect(kernelBefore).toContain("Model: [PPV $15.00, unknown] unlock me");
+    const legacyBefore = await legacy();
+
+    // The two rows' media as the Fansly material head stores them (prod shape).
+    for (const [ref, media] of [
+      ["7801", [{ id: "810000000000000001", type: "image/jpeg", canView: true, isReady: null, duration: null }]],
+      ["7802", [{ id: "810000000000000002", type: "video/mp4", canView: true, isReady: null, duration: 12.5 }]],
+    ] as const) {
+      await testDb.pool.query(
+        `update message_archive set media_metadata = $3::jsonb where account_id = $1 and message_ref = $2`,
+        [fanslyPageId, ref, JSON.stringify(media)],
+      );
+    }
+
+    const kernelAfter = await kernel();
+    expect(kernelAfter).toContain("Fan: [Photo] look at this");
+    expect(kernelAfter).toContain("Model: [Video - PPV $15.00, unknown] unlock me");
+    // The 2.10.1 requests are what they were.
+    expect(await legacy()).toEqual(legacyBefore);
+
+    // OnlyFans: a stored media list on an archive row adds no label.
+    await seedConversation();
+    await testDb.pool.query(
+      `update message_archive set media_metadata = '[{"id": 7001, "type": "photo"}]'::jsonb
+       where account_id = $1 and message_ref = '9002'`,
+      [pageId],
+    );
+    const onlyFans = JSON.stringify(await promptOf("fast-reply", {
+      pageLabel: "svc-of", platform: "onlyfans", conversationRef: FAN, messageCount: 50,
+    }));
+    expect(onlyFans).toContain("Model: hey you");
+    expect(onlyFans).not.toContain("[Photo]");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("a chat Fansly no longer serves, on the client-context lane (arena vanished chat, plan §5)", () => {
   // The released fansly-chat client sends its own transcript (clientContext).
   // The hub keeps it exactly as sent and only appends the one-line status of a

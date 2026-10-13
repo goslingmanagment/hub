@@ -559,3 +559,126 @@ export async function listArchiveMessagePurchaseState(
     orderRef: row.order_ref,
   }));
 }
+
+// ── R20 HF-7а: the Fansly transcript's media labels ─────────────────────────
+//
+// The archive row keeps a Fansly message's attachments as `media_metadata`
+// (id, MIME type, `bundle` or `other`), in id order. Three things it does not
+// keep are read here, from the media plane of the same observations: where
+// each attachment sits in the message and what kind of content it is (a
+// tip's attachment is not media), the members of a bundle, and the kind of a
+// media the archive row never named (a socket message carries ids only).
+
+/** One attachment of a Fansly message, as the media plane recorded it. */
+export interface FanslyMessageOfferRow {
+  messageRef: string;
+  /** The attachment's content id: a media offer, a bundle, a tip... */
+  contentRef: string;
+  /** Its place in the message: Fansly's `pos`, else its index. */
+  ordinal: number;
+  /** Fansly's attachment `contentType`: 1 a media, 2 a bundle, 7 a tip. */
+  contentType: number | null;
+}
+
+/** The attachments of these Fansly messages of a page, each message's in
+ *  position order. A message the media plane has not recorded is absent. */
+export async function listFanslyMessageOffers(
+  db: Database,
+  input: { pageId: number; messageRefs: readonly string[] },
+): Promise<FanslyMessageOfferRow[]> {
+  if (input.messageRefs.length === 0) {
+    return [];
+  }
+  const result = await db.execute<{
+    message_ref: string;
+    media_offer_ref: string;
+    offer_ordinal: number;
+    offer_type: number | null;
+  }>(sql`
+    select message_ref, media_offer_ref, offer_ordinal, offer_type
+    from message_media_offers
+    where page_id = ${input.pageId}
+      and platform = 'fansly'
+      and message_ref = any(${textArrayParam(input.messageRefs)})
+      and media_offer_ref is not null
+    order by message_ref, offer_ordinal
+  `);
+  return result.rows.map((row) => ({
+    messageRef: row.message_ref,
+    contentRef: row.media_offer_ref,
+    ordinal: Number(row.offer_ordinal),
+    contentType: row.offer_type === null ? null : Number(row.offer_type),
+  }));
+}
+
+/** What kind of file a Fansly media offer is: Fansly's media `type` and the
+ *  file's MIME type, as the page served them. */
+export interface FanslyMediaKindRow {
+  mediaType: number | null;
+  mimeType: string | null;
+}
+
+export interface FanslyMediaKinds {
+  /** Bundle ref → its members in order, each with its kind, or null for a
+   *  member the page never served. A bundle the page never served is absent. */
+  bundles: Map<string, Array<{ ref: string; media: FanslyMediaKindRow | null }>>;
+  /** Media offer ref → its kind; a media the page never served is absent. */
+  media: Map<string, FanslyMediaKindRow>;
+}
+
+/** The members of these Fansly bundles and the kinds of these media offers
+ *  of a page (creator_media_bundles, creator_media). */
+export async function readFanslyMediaKinds(
+  db: Database,
+  input: { pageId: number; bundleRefs: readonly string[]; mediaRefs: readonly string[] },
+): Promise<FanslyMediaKinds> {
+  const kinds: FanslyMediaKinds = { bundles: new Map(), media: new Map() };
+  const kindOf = (row: { media_type: number | null; mime_type: string | null }): FanslyMediaKindRow => ({
+    mediaType: row.media_type === null ? null : Number(row.media_type),
+    mimeType: row.mime_type,
+  });
+  if (input.bundleRefs.length > 0) {
+    const result = await db.execute<{
+      bundle_ref: string;
+      member_ref: string | null;
+      known: boolean;
+      media_type: number | null;
+      mime_type: string | null;
+    }>(sql`
+      select b.bundle_ref, m.ref as member_ref, cm.media_offer_ref is not null as known,
+        cm.media_type, cm.mime_type
+      from creator_media_bundles b
+      left join lateral unnest(b.member_refs) with ordinality as m(ref, ord) on true
+      left join creator_media cm
+        on cm.page_id = b.page_id and cm.platform = b.platform and cm.media_offer_ref = m.ref
+      where b.page_id = ${input.pageId}
+        and b.platform = 'fansly'
+        and b.bundle_ref = any(${textArrayParam(input.bundleRefs)})
+      order by b.bundle_ref, m.ord
+    `);
+    for (const row of result.rows) {
+      const members = kinds.bundles.get(row.bundle_ref) ?? [];
+      kinds.bundles.set(row.bundle_ref, members);
+      if (row.member_ref !== null) {
+        members.push({ ref: row.member_ref, media: row.known === true ? kindOf(row) : null });
+      }
+    }
+  }
+  if (input.mediaRefs.length > 0) {
+    const result = await db.execute<{
+      media_offer_ref: string;
+      media_type: number | null;
+      mime_type: string | null;
+    }>(sql`
+      select media_offer_ref, media_type, mime_type
+      from creator_media
+      where page_id = ${input.pageId}
+        and platform = 'fansly'
+        and media_offer_ref = any(${textArrayParam(input.mediaRefs)})
+    `);
+    for (const row of result.rows) {
+      kinds.media.set(row.media_offer_ref, kindOf(row));
+    }
+  }
+  return kinds;
+}
