@@ -28,6 +28,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { decodeFanslyWsLiveFrame, FANSLY_WS_LIVE_FIELD } from "@agency_hub_core/shared";
+
 import {
   clampDraftOccurredAt,
   OCCURRED_AT_CLAMP_MIN,
@@ -40,6 +42,7 @@ import type {
   CanonicalEventDraft,
   CanonicalizableObservation,
 } from "../apps/runtime/src/services/canonicalize/types.ts";
+import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 
 const PAGE_ID = 3;
 const OWN_REF = "acct-creator";
@@ -370,8 +373,90 @@ describe("sync-pull media plane — golden shapes", () => {
     // Fansly DM pages serve no tip NOTE, so tipText is declared unobserved and
     // the archive's presence-guarded coalesce cannot wipe another producer's
     // value with a null.
-    expect(head.fieldPresence).toEqual({ media: true, reply: true, tipText: false });
+    // The automation markers (R20 HF-7d0) declare their own presence. The
+    // fixture's placeholder correlation id is no native id: observed, unusable.
+    expect(head.fieldPresence).toEqual({
+      media: true, reply: true, tipText: false, messageType: true, correlationId: true,
+    });
+    expect(head).toMatchObject({ messageType: 0, correlationId: null });
     expect(material.dedupKey).toMatch(/^msg-material:message-1:[0-9a-f]{64}$/);
+  });
+});
+
+describe("Fansly automation markers (R20 HF-7d0)", () => {
+  const OWN = "700000000000000009";
+  const PAGE_CONTEXT = { nativeAccountRefByAccountId: new Map<number, string>([[PAGE_ID, OWN]]) };
+  /** A REST message the live decoder would also accept (native ids, a time). */
+  const restMessage = (fields: Record<string, unknown> = {}) => ({
+    id: "900000000000000001", groupId: "800000000000000001", senderId: OWN,
+    createdAt: 1_790_599_288, content: "<p>hello</p>", attachments: [], inReplyTo: null, inReplyToRoot: null,
+    type: 2, correlationId: "500000000000000001", ...fields,
+  });
+  const headOf = (message: Record<string, unknown>) => only(canonicalizeSyncPullObservation(
+    dmObservation({ messages: [message] }), PAGE_CONTEXT,
+  ), "message.material_observed").data.head as Record<string, unknown> & {
+    fieldPresence: Record<string, boolean>;
+  };
+
+  it("carries the vendor's type and correlationId on the material head, beside the message's own key", () => {
+    const events = canonicalizeSyncPullObservation(dmObservation({ messages: [restMessage()] }), PAGE_CONTEXT);
+    expect(only(events, "message.sent").dedupKey).toBe("msg:sent:900000000000000001");
+    expect(only(events, "message.sent").data).toEqual({ text: "<p>hello</p>", tipAmountMills: 0, isTip: false });
+    expect(only(events, "message.material_observed").data.head).toMatchObject({
+      messageType: 2, correlationId: "500000000000000001",
+      fieldPresence: { messageType: true, correlationId: true },
+    });
+  });
+
+  it("keeps '0' and an explicit null: observed values, not unknown ones", () => {
+    expect(headOf(restMessage({ type: 1, correlationId: "0" }))).toMatchObject({
+      messageType: 1, correlationId: "0", fieldPresence: { messageType: true, correlationId: true },
+    });
+    expect(headOf(restMessage({ correlationId: null }))).toMatchObject({
+      correlationId: null, fieldPresence: { correlationId: true },
+    });
+  });
+
+  it("declares a key the message did not carry as unobserved, so it can wipe nothing", () => {
+    const message: Record<string, unknown> = restMessage();
+    delete message.type;
+    delete message.correlationId;
+    expect(headOf(message)).toMatchObject({
+      messageType: null, correlationId: null, fieldPresence: { messageType: false, correlationId: false },
+    });
+  });
+
+  it.each([
+    ["the full marker pair", {}],
+    ["an ordinary reply", { type: 1, correlationId: "0", inReplyTo: "900000000000000000" }],
+    ["a type past int4", { type: 2 ** 31 }],
+    ["a fractional type", { type: 1.5 }],
+    ["a string type", { type: "2" }],
+    ["a correlation id with letters", { correlationId: "corr-1" }],
+    ["a numeric correlation id", { correlationId: 77 }],
+    ["a null correlation id", { correlationId: null }],
+    ["no type key", { type: undefined }],
+    ["no correlationId key", { correlationId: undefined }],
+  ])("reads %s exactly as the live overlay decoder does", (_label, patch) => {
+    const message: Record<string, unknown> = restMessage();
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete message[key];
+      else message[key] = value;
+    }
+    const [item] = decodeFanslyWsLiveFrame(serviceFrame({ type: 1, message })).items;
+    if (item?.kind !== "message_created") throw new Error(`live decoder refused the fixture: ${item?.kind}`);
+    const head = headOf(message);
+    expect({
+      type: head.messageType,
+      correlationId: head.correlationId,
+      typeObserved: head.fieldPresence.messageType,
+      correlationIdObserved: head.fieldPresence.correlationId,
+    }).toEqual({
+      type: item.message.type,
+      correlationId: item.message.correlationId,
+      typeObserved: (item.message.fieldMask & FANSLY_WS_LIVE_FIELD.type) !== 0,
+      correlationIdObserved: (item.message.fieldMask & FANSLY_WS_LIVE_FIELD.correlationId) !== 0,
+    });
   });
 });
 

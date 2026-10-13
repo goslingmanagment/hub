@@ -9,7 +9,14 @@ import {
   errorResponseSchema,
   type ClientFanClaimResponse,
 } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, createOnlyFansPage, insertAgentKey } from "@agency_hub_core/db";
+import {
+  CLIENT_GREETING_SEND_RATE,
+  applyClientClaimAction,
+  createFanslyPage,
+  createModel,
+  createOnlyFansPage,
+  insertAgentKey,
+} from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -20,6 +27,8 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { clientClaimActionInput } from "../apps/runtime/src/services/client-claim.ts";
+import * as sdk from "../packages/sdk/src/index.ts";
 import { frozenClaimBodySchema, frozenClaimStateSchema, frozenErrorBodySchema } from "./helpers/client-claim-frozen.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -1071,6 +1080,175 @@ describe("chat-extension claim and custody routes", () => {
     }
     await patchConfig([features({ newcomers: true, previewSend: true })]);
     expectRefused(await act(nikitaToken, fan, dispatchBody({ instanceId: I3, leaseToken: randomUUID() })), 409, "greeting_done");
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // ── R20 HF-3: a manual greeting and the custody's admission by platform ──
+  //
+  // On Fansly the custody admits a greeting only, under `newcomers` without `previewSend`, with
+  // an AI or a manual group. `newcomers` exists on OnlyFans only until HF-2, so here every Fansly
+  // action that starts something is refused by the platform, as before this PR; the rules over a
+  // manual group are tests/client-claim.integration.test.ts, the full Fansly run is HF-2's.
+
+  /** The extension's SDK, generated from this hub, as the extension calls it (over inject: no socket leaves). */
+  function sdkClient(token: string) {
+    return sdk.createClient({
+      baseUrl: "http://hub.invalid",
+      auth: { mode: "bearer", token: () => token },
+      headers: { "x-client-version": EXTENSION_VERSION },
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        const response = await server!.inject({
+          method: init?.method as "GET" | "POST",
+          url: `${url.pathname}${url.search}`,
+          headers: init?.headers as Record<string, string>,
+          ...(typeof init?.body === "string" ? { payload: init.body } : {}),
+        });
+        return new Response(response.body, {
+          status: response.statusCode,
+          headers: { "content-type": String(response.headers["content-type"] ?? "application/json") },
+        });
+      },
+    });
+  }
+
+  /** What an AI request leaves behind: a generation's record and its spend. */
+  const aiRows = () => query<{ generations: number; usage: number }>(`
+    select (select count(*) from ai_generation_content)::int as generations,
+           (select count(*) from ai_usage_events)::int as usage`);
+
+  const fingerprintOf = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const manualGroup = (text: string) => ({ kind: "manual" as const, textFingerprint: fingerprintOf(text) });
+  let fsFanSeq = 5_234_567_890_123_456_000n;
+  /** A Fansly fan id: 19 digits, past a double's exact integers. */
+  const nextFsFan = () => String(++fsFanSeq);
+
+  async function refusedBySdk(call: Promise<unknown>, statusCode: number, error: string, reason?: string) {
+    const failure = await call.then(() => null, (caught: unknown) => caught);
+    expect(failure).toBeInstanceOf(sdk.KernelApiError);
+    const apiError = failure as InstanceType<typeof sdk.KernelApiError>;
+    expect([apiError.status, apiError.code], apiError.message).toEqual([statusCode, error]);
+    expect((apiError.body as { reason?: string }).reason).toBe(reason);
+  }
+
+  it("Fansly until HF-2: every send, manual or AI, is refused by the platform through the real SDK, and no AI is asked", async () => {
+    // Every switch on, for every page and for the Fansly page itself: only the platform refuses.
+    const fanslyOn = { newcomers: true, previewSend: true };
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }, features(fanslyOn, { "lora-fansly": fanslyOn })]);
+    const before = await aiRows();
+    const client = sdkClient(grishaToken);
+    const params = { pageLabel: "lora-fansly", fanRef: nextFsFan() };
+    const text = "Привет! Спасибо за подписку 💛";
+    const leaseToken = randomUUID();
+    const starting = [
+      { action: "claim", leaseToken, instanceId: I1 },
+      { action: "renew", leaseToken, instanceId: I1 },
+      dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 }),
+      dispatchBody({ leaseToken, group: group({ partCount: 1 }) }),
+      replyBody(),
+      nativeBody({ group: manualGroup(text), partIndex: 0, platformMessageId: "1234567890123456789" }),
+      nativeBody({ group: group({ partCount: 1 }), platformMessageId: "1234567890123456788" }),
+      nativeBody({ purpose: "preview-reply", group: group({ partCount: 1 }), platformMessageId: "1234567890123456787" }),
+    ] as const;
+    for (const body of starting) {
+      // The body is one the SDK lets out: the refusal is the platform's, never a 400.
+      expect(sdk.routeSchemas.clientFanClaim.body.safeParse(body).success, JSON.stringify(body)).toBe(true);
+      await refusedBySdk(
+        client.clientFanClaim({ params, body: body as never }),
+        409,
+        "client_feature_disabled",
+        "platform_unsupported",
+      );
+    }
+    await refusedBySdk(client.clientFanClaimStatus({ params }), 409, "client_feature_disabled", "platform_unsupported");
+    // What only ends something is never the platform's to refuse: here there is nothing to end.
+    await refusedBySdk(client.clientFanClaim({ params, body: { action: "release", leaseToken, instanceId: I1 } }), 409, "claim_expired");
+    await refusedBySdk(
+      client.clientFanClaim({ params, body: { action: "failed", attemptId: randomUUID(), instanceId: I1, reason: "not_enqueued" } }),
+      409,
+      "custody_not_owned",
+    );
+    expect(await query("select 1 from client_fan_leases where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
+    expect(await query("select 1 from client_send_custody where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
+    expect(await aiRows()).toEqual(before);
+    // The bootstrap announces the capability and the greeting's rate; the page's features stay off.
+    const bootstrap = clientBootstrapResponseSchema.parse((await server!.inject({
+      method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken),
+    })).json());
+    expect(bootstrap.capabilities).toContain("manual-greeting-v1");
+    expect(bootstrap.limits).toMatchObject({ previewSendPerMinute: 6, greetingSendPerMinute: 30 });
+    expect(bootstrap.pages.find((page) => page.pageLabel === "lora-fansly")?.features).toMatchObject({
+      newcomers: { available: false, reason: "platform_unsupported" },
+      previewSend: { available: false, reason: "platform_unsupported" },
+    });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("OnlyFans is unchanged: a manual group is refused by the platform, and the AI group goes as before", async () => {
+    await switchOn();
+    const fan = nextFan();
+    const leaseToken = randomUUID();
+    ok(await act(grishaToken, fan, claimBody(I1, leaseToken)));
+    const text = "Hi! So glad you're here";
+    const post = (body: Body) => server!.inject({ method: "POST", url: claimUrl(fan), headers: bearer(grishaToken), payload: body });
+    for (const body of [
+      dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 }),
+      nativeBody({ group: manualGroup(text), partIndex: 0 }),
+    ]) {
+      expect(sdk.routeSchemas.clientFanClaim.body.safeParse(body).success).toBe(true);
+      expectRefused(await post(body), 409, "client_feature_disabled", "platform_unsupported");
+    }
+    expect(await custodyRows(fan)).toEqual([]);
+    // An AI group never takes a manual group's ref.
+    const forged = await post(dispatchBody({ leaseToken, group: group({ generationRef: `manual:${fingerprintOf(text)}` }) }));
+    expect(forged.statusCode, forged.body).toBe(400);
+    expect(await custodyRows(fan)).toEqual([]);
+    // The extension's own forms answer as before.
+    expect(ok(await act(grishaToken, fan, dispatchBody({ leaseToken }))).custody).toMatchObject({ state: "dispatching" });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an attempt started on Fansly is finished with every switch off: sent, failed and release need the page grant only", async () => {
+    // The switches are at rest. The attempts were started under switches since turned off, put in
+    // through the repository exactly as the route puts them in.
+    const fsPage = pageIds["lora-fansly"]!;
+    const start = async (fanRef: string, text: string) => {
+      const leaseToken = randomUUID();
+      const actor = { pageId: fsPage, fanRef, userId: userIds.grisha };
+      expect((await applyClientClaimAction(app.db, clientClaimActionInput(
+        { action: "claim", leaseToken, instanceId: I1 }, actor,
+      ))).ok).toBe(true);
+      const attemptId = randomUUID();
+      expect((await applyClientClaimAction(app.db, clientClaimActionInput({
+        action: "dispatch", attemptId, instanceId: I1, purpose: "greeting", group: manualGroup(text), partIndex: 0,
+        textRevision: 1, leaseToken, flagRevision: 0,
+      }, actor, CLIENT_GREETING_SEND_RATE))).ok).toBe(true);
+      return { leaseToken, attemptId };
+    };
+    const post = (fanRef: string, body: Body) => server!.inject({
+      method: "POST", url: claimUrl(fanRef, "lora-fansly"), headers: bearer(grishaToken), payload: body,
+    });
+    const sentFan = nextFsFan();
+    const sentText = "Привет!";
+    const sending = await start(sentFan, sentText);
+    const messageId = "1234567890123456789";
+    expect(ok(await post(sentFan, sentBody(sending.attemptId, messageId)))).toMatchObject({
+      greeting: { state: "confirmed", source: "preview-send", messageRef: messageId },
+      group: { generationRef: `manual:${fingerprintOf(sentText)}`, variant: 0, partCount: 1, sentParts: [0], heldParts: [] },
+      custody: { attemptId: sending.attemptId, state: "sent" },
+    });
+    // The last check before the request refused it: no request was made, and the fan is free again.
+    const failedFan = nextFsFan();
+    const failing = await start(failedFan, "Hello!");
+    expect(ok(await post(failedFan, { action: "failed", attemptId: failing.attemptId, instanceId: I1, reason: "not_enqueued" })))
+      .toMatchObject({ greeting: { state: "none" }, custody: { attemptId: failing.attemptId, state: "failed" } });
+    expect(ok(await post(failedFan, { ...claimBody(I1, failing.leaseToken), action: "release" })).lease.state).toBe("released");
+    expect((await custodyRows(failedFan)).map((row) => row.state)).toEqual(["failed"]);
+    // Until HF-2 the status read itself does not exist on Fansly.
+    expectRefused(await status(grishaToken, sentFan, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

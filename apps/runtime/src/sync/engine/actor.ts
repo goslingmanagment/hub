@@ -51,9 +51,13 @@ import {
   type LivePageSocketRef,
   type OwnershipSession,
   type PageTransport,
+  type SiteAdmissionPort,
+  type SiteRequestEnd,
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
+import { SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
+import { admitSite, commitSiteEnd, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
 import {
   beforeGateKeys,
   pollsFor,
@@ -126,6 +130,10 @@ export interface ActorDeps extends CommitDeps {
   /** The page's socket owner (`ws.connect` plans by its state); absent where
    *  no socket owner runs. */
   socket?: LivePageSocketRef;
+  /** The page browser's site admission (Project Browser, plan §3.2): the
+   *  site's own requests it holds paused. Absent or null: a page without a
+   *  browser — nothing of the site path runs. */
+  site?: SiteAdmissionPort | null;
   /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
    *  host passes it through from its own test option, `main.ts` never. */
   routeTimeScale?: number;
@@ -191,6 +199,8 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
+  /** The site's share of the slots (Project Browser): one per cycle. */
+  readonly #siteTurns = new SiteTurns();
   /** The diagnostic of the unreadable hold rows last logged (null: the hold
    *  set reads). */
   #holdSetProblem: string | null = null;
@@ -257,8 +267,14 @@ export class SyncActor {
       await stepBeforeGate(d, owned, signals.stop);
     }
 
+    // The site's waiting requests are judged every lap: what must be refused
+    // now is, whatever the gate says (spec §3).
+    const siteCandidate = d.site ? await this.#siteSweep(owned) : null;
     const gate = await this.#gate(owned);
     if (!gate.open) {
+      // The owner's manual login passes the page's pause and a credentials
+      // hold (plan §3.2): a slot for its request alone.
+      if (siteCandidate !== null) return this.#siteOnlySlot(signals);
       this.#phase("idle");
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -298,6 +314,10 @@ export class SyncActor {
     const unverified = underCredentials ? null : await this.#unverifiedStoredDigest(page);
     const checksOnly = unverified !== null;
     const exclusions = pickExclusions(page, d.registry, now, { checksOnly });
+    if (d.site && this.#siteTurns.due()) {
+      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
+      if (served !== "none") return served;
+    }
     const picked = underCredentials
       ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
       : await this.#pick(page, holds, held?.until ?? null, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
@@ -310,6 +330,11 @@ export class SyncActor {
       return null;
     }
     if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed", unverified)) return null;
+    if (picked === null && d.site) {
+      // A slot the engine leaves empty is the site's.
+      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
+      if (served !== "none") return served;
+    }
     if (picked === null) {
       // Idle until the next work this pick could take: a paused, switched-off,
       // held or route-closed row is never "due" here, or the actor would lap
@@ -410,6 +435,7 @@ export class SyncActor {
     }
     if (admission === null) return null;
     this.admissions += 1;
+    this.#siteTurns.engineAdmitted();
     await this.#fault("after_admit");
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
@@ -419,6 +445,120 @@ export class SyncActor {
     this.#phase("commit");
     await this.#fault("after_send");
     return this.#commitOutcome(admission, armed, outcome, module);
+  }
+
+  // ── a page's own site requests (Project Browser, plan §3.2; PR 8) ─────────
+
+  /** The site's waiting requests at this lap: what must be refused now is
+   *  refused; the request a slot would admit, if any. Nothing is admitted. */
+  async #siteSweep(page: SyncPageRow): Promise<ClassifiedSiteRequest | null> {
+    const d = this.#d;
+    const now = d.clock.wallNow();
+    const holds = holdSetOf(page.holds);
+    const clocks = holds.routes.ok ? await this.#routeClocks(holds.routes.state) : null;
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
+    return settleSiteDecision(d, d.site!, ctx);
+  }
+
+  /** A slot for the manual login while the gate is closed to the engine (the
+   *  owner's pause, a credentials hold): the pacer's pause still holds. */
+  async #siteOnlySlot(signals: ActorSignals): Promise<ActorExit | null> {
+    const d = this.#d;
+    let grant: SlotGrant;
+    this.#phase("slot");
+    try {
+      grant = await d.pacer.waitForSlot(signals.stop);
+    } catch (error) {
+      if (isAbort(error, signals.stop)) return { kind: "stopped" };
+      throw error;
+    }
+    if (signals.stop.aborted) return { kind: "stopped" };
+    this.#phase("pick");
+    const page = await getSyncPage(d.db, d.pageId);
+    if (page === null) return { kind: "mode_changed", mode: null };
+    const holds = holdSetOf(page.holds);
+    if (!holds.routes.ok) {
+      await this.#sleep(ROUTE_STATE_RECHECK_MS, signals.stop);
+      return null;
+    }
+    const clocks = await this.#routeClocks(holds.routes.state);
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals);
+    return served === "none" ? null : served;
+  }
+
+  /** The site's slot: the oldest request admissible now, if any ("none":
+   *  nothing to admit, the slot is free). */
+  async #trySite(
+    grant: SlotGrant,
+    page: SyncPageRow,
+    holds: HoldSet,
+    clocks: RouteClocks,
+    now: Date,
+    checksOnly: boolean,
+    signals: ActorSignals,
+  ): Promise<ActorExit | null | "none"> {
+    const d = this.#d;
+    const site = d.site!;
+    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
+    const classified = settleSiteDecision(d, site, ctx);
+    if (classified === null) return "none";
+    // What the route check just applied, recorded on the attempt (I19).
+    const intervals = clocks.intervals(classified.route);
+
+    this.#phase("admit");
+    if ((await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
+      d.metrics.increment("sync_ping_timeouts", { pageId: d.pageId });
+      if (!(await d.ownership.stillHolds(d.pageId))) return { kind: "ownership_lost", foreign: false };
+      return null;
+    }
+    // The send window starts BEFORE the admission commit (SK16).
+    const issuedMono = d.clock.monoNow();
+    let attemptId: number;
+    try {
+      ({ attemptId } = await admitSite(d, { classified, grant, intervals }));
+    } catch (error) {
+      if (error instanceof LiveGateClosedError) {
+        d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });
+        await this.#sleep(LIVE_GATE_RECHECK_MS, signals.stop);
+        return null;
+      }
+      // A hold or the pause written since the decision: the request keeps
+      // waiting (or is refused by the next lap's decision).
+      if (error instanceof AdmissionHeldError) return null;
+      throw error;
+    }
+    this.#siteTurns.siteAdmitted();
+    d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
+    const armed = d.pacer.arm(grant, attemptId, issuedMono);
+    // The final word before the browser may send: the same check an engine
+    // send passes at `onRequestStart` (ownership alive, within the window,
+    // past the floor and the pause), without its send mark (Astra's review
+    // of PR 8: a lost ownership must never reach a grant).
+    const refusal = d.pacer.checkRemoteGrant(armed);
+    let end: SiteRequestEnd;
+    if (refusal !== null) {
+      site.refuse(classified.request.id, "lease");
+      d.metrics.increment("sync_site_refused", { reason: "lease" });
+      end = { kind: "aborted_before_send", reason: refusal.reason };
+    } else {
+      site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) });
+      this.#phase("send");
+      end = await siteEnd(site, classified.request.id, signals.abort);
+    }
+    // The browser reports no send instant yet (PR 12): a request that may
+    // have gone out counts as sent at its completion, the safe upper bound.
+    d.pacer.complete(armed, transportOutcomeOfSite(end));
+    this.#phase("commit");
+    const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, armed, end, classified }));
+    if (!committed.ok) {
+      if (committed.exit.kind === "failed") {
+        await markAttemptCommitFailed(d.db, { attemptId, errorClass: `commit_failed:${committed.exit.error}` }).catch(() => false);
+      }
+      return committed.exit;
+    }
+    return null;
   }
 
   async #send(

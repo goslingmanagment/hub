@@ -60,12 +60,14 @@ family_member (route, family) as (values
   ('stats.tags', 'creator_stats'),
   ('stats.posts', 'creator_stats'),
   ('stats.fans_top', 'creator_stats'),
-  ('stats.fan', 'creator_stats')
+  ('stats.fan', 'creator_stats'),
+  ('site.other', 'site')
 ),
 family_budget (family, ceiling_per_min, current_per_min) as (values
   ('messaging', 15, 15),
   ('earnings', 17, 17),
-  ('creator_stats', 12, 5)
+  ('creator_stats', 12, 5),
+  ('site', 20, 20)
 ),
 evidence as (
   select :since::timestamptz as since, clock_timestamp() as now

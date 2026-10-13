@@ -39,6 +39,29 @@ const CLIENT_PERF_METRICS = {
 };
 
 /**
+ * The Fansly metrics (chat-extension Project Unite R20, HF-13): the hub holds
+ * them first, the client copies them into its `PERF_METRICS` (its contracts
+ * 1.15.0) before it sends one. Each with the budgets it is checked against
+ * (chat-extension docs/project-unite/plan.md §4): parsing ≤ 0.1 ms per frame on
+ * average and ≤ 2 ms per task, the snapshot step ≤ 5 ms; the round trip has no
+ * budget of its own yet, and its edges still tell 2 and 5 ms apart.
+ */
+const FANSLY_PERF_METRICS = {
+  frameParseMs: {
+    schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100], budgets: [0.1, 2, 5],
+  },
+  xhrParseMs: {
+    schemaVersion: 1, bounds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 16, 50, 100], budgets: [0.1, 2, 5],
+  },
+  snapshotMs: {
+    schemaVersion: 1, bounds: [0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 8, 16, 32, 50, 100, 250], budgets: [0.1, 2, 5],
+  },
+  snapshotRoundTripMs: {
+    schemaVersion: 1, bounds: [1, 2, 5, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000], budgets: [2, 5],
+  },
+};
+
+/**
  * The client's valid `clientHealth` fixture (packages/contracts/test/fixtures/
  * samples.ts, contracts v1.0.0), serialized as the client builds it. The client
  * moves `kind` into the ingest envelope; the rest is the hub's report body.
@@ -135,13 +158,60 @@ describe("client_health v1 report contract", () => {
     expect(refuses(CLIENT_FIXTURE)).toBe(true);
   });
 
-  it("holds the client's metric registry: the same names, schemaVersions and bounds", () => {
-    expect(Object.keys(CLIENT_HEALTH_PERF_METRICS)).toEqual(Object.keys(CLIENT_PERF_METRICS));
+  it("holds the client's metric registry as it froze it, then the Fansly metrics (HF-13) and nothing else", () => {
+    // Additive only: every metric of the client's v1.0.0 registry keeps its
+    // place, schemaVersion and bounds, so a report the client sends today
+    // merges exactly as it did.
+    expect(Object.keys(CLIENT_HEALTH_PERF_METRICS)).toEqual([
+      ...Object.keys(CLIENT_PERF_METRICS),
+      ...Object.keys(FANSLY_PERF_METRICS),
+    ]);
     for (const [metric, entry] of Object.entries(CLIENT_HEALTH_PERF_METRICS)) {
       const { unit, ...fixed } = entry;
       expect(unit, metric).toBe("ms");
-      expect(fixed, metric).toEqual(CLIENT_PERF_METRICS[metric as keyof typeof CLIENT_PERF_METRICS]);
+      const frozen = Object.hasOwn(CLIENT_PERF_METRICS, metric)
+        ? CLIENT_PERF_METRICS[metric as keyof typeof CLIENT_PERF_METRICS]
+        : (({ budgets: _budgets, ...added }) => added)(FANSLY_PERF_METRICS[metric as keyof typeof FANSLY_PERF_METRICS]);
+      expect(fixed, metric).toEqual(frozen);
     }
+  });
+
+  it("gives each Fansly metric an edge at every budget it is checked against and buckets past it (HF-13)", () => {
+    for (const [metric, { bounds, budgets }] of Object.entries(FANSLY_PERF_METRICS)) {
+      for (const budget of budgets) {
+        // An edge at the budget: a value at the budget and one just past it land in two buckets.
+        expect(bounds, `${metric} ${budget}`).toContain(budget);
+        const at = histogramFor(metric as keyof typeof CLIENT_HEALTH_PERF_METRICS, [budget]);
+        const past = histogramFor(metric as keyof typeof CLIENT_HEALTH_PERF_METRICS, [budget * 1.01]);
+        expect(past.counts.indexOf(1), `${metric} ${budget}`).toBe(at.counts.indexOf(1) + 1);
+      }
+      // Overruns are told apart: at least two edges above the largest budget, past a long task (50 ms).
+      const largest = Math.max(...budgets);
+      expect(bounds.filter((bound) => bound > largest).length, metric).toBeGreaterThanOrEqual(2);
+      expect(bounds.at(-1)!, metric).toBeGreaterThanOrEqual(50);
+    }
+    // A frame parse averages ≤ 0.1 ms: the edges below 0.1 show where the bulk lies.
+    expect(FANSLY_PERF_METRICS.frameParseMs.bounds.filter((bound) => bound < 0.1).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("takes a report of a Fansly tab with the four new histograms beside the old ones (HF-13)", () => {
+    const report = validReport();
+    report.host.kind = "fansly-web";
+    report.host.build = "main-AbCdEfGh";
+    report.perf = [
+      histogramFor("frameParseMs", [0.004, 0.03, 0.1, 0.1004, 2, 2.4, 60]),
+      histogramFor("xhrParseMs", [0.01, 0.6, 2, 3.2]),
+      histogramFor("snapshotMs", [0.8, 5, 5.2, 40]),
+      histogramFor("snapshotRoundTripMs", [4, 5, 12, 7000]),
+      histogramFor("insertMs", [20]),
+    ];
+    const parsed = clientHealthReportV1Schema.safeParse(report);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    // A frame at the 0.1 ms budget and one just past it, a task at 2 ms and one past it.
+    expect(report.perf[0]!.counts).toEqual([1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0]);
+    // A snapshot step at 5 ms and one past it; a round trip past the last edge tops out at its max.
+    expect(report.perf[2]!.counts).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0]);
+    expect(report.perf[3]!.counts.at(-1)).toBe(1);
   });
 
   it("accepts reports the client's schema accepts beyond its fixture", () => {

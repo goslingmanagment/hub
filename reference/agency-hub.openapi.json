@@ -113886,7 +113886,7 @@
                   "messageCount": {
                     "type": "integer",
                     "minimum": 5,
-                    "maximum": 3000
+                    "maximum": 5000
                   },
                   "draftText": {
                     "type": "string",
@@ -119889,6 +119889,11 @@
                           "minimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "greetingSendPerMinute": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
                         "navInsertTimeoutSec": {
                           "type": "integer",
                           "exclusiveMinimum": 0,
@@ -122141,7 +122146,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the OnlyFans fan id, which is the chat id. Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the native queue never took the part, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. Switches by action: `claim` and `renew` need `newcomers`; `dispatch` needs `previewSend`, and `newcomers` too for a greeting; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on an OnlyFans page: no switch, flag or minimum version refuses it, and it admits no dispatch. A refusal by the switches is 409 `client_feature_disabled` with the reason.",
+        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, `limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is `not_enqueued` (no request was made: the native queue never took the part, or the client's last check before its own request refused it) or `native_rejected` with the platform's 4xx other than 401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is over, until a late `sent` or a manual resolve. `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / `platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. The admission is decided after the repeat check, with the switches. `claim` and `renew` need `newcomers` everywhere; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on a page of a platform where the custody exists, with a purpose and group that platform admits: no switch, flag or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where every switch of one of its sends exists: OnlyFans; Fansly once `newcomers` exists there, and until then every action that starts something on a Fansly page, and the status read, is 409 `client_feature_disabled` / `platform_unsupported`. A refusal by the switches is 409 `client_feature_disabled` with the reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -122248,30 +122253,54 @@
                         ]
                       },
                       "group": {
-                        "type": "object",
-                        "properties": {
-                          "generationRef": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 100
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "generationRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "variant": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2
+                              },
+                              "partCount": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 10
+                              }
+                            },
+                            "required": [
+                              "generationRef",
+                              "variant",
+                              "partCount"
+                            ],
+                            "additionalProperties": false
                           },
-                          "variant": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 2
-                          },
-                          "partCount": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "manual"
+                                ]
+                              },
+                              "textFingerprint": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "textFingerprint"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "generationRef",
-                          "variant",
-                          "partCount"
-                        ],
-                        "additionalProperties": false
+                        ]
                       },
                       "partIndex": {
                         "type": "integer",
@@ -122405,30 +122434,54 @@
                         ]
                       },
                       "group": {
-                        "type": "object",
-                        "properties": {
-                          "generationRef": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 100
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "generationRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "variant": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2
+                              },
+                              "partCount": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 10
+                              }
+                            },
+                            "required": [
+                              "generationRef",
+                              "variant",
+                              "partCount"
+                            ],
+                            "additionalProperties": false
                           },
-                          "variant": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 2
-                          },
-                          "partCount": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "manual"
+                                ]
+                              },
+                              "textFingerprint": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "textFingerprint"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "generationRef",
-                          "variant",
-                          "partCount"
-                        ],
-                        "additionalProperties": false
+                        ]
                       },
                       "partIndex": {
                         "type": "integer",
@@ -122919,7 +122972,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: one snapshot, no lock, no write, never a ticket. The same answer as the claim POST. The request names no client install, so the caller's own live lease reads `held` by `you-elsewhere`; an idempotent `claim` with the lease's token answers `owned`. It names no attempt either: `custody` is the fan's unresolved send (anyone's, `dispatching` or `uncertain-held`), and while there is none, the caller's own last send to the fan dispatched from the preview, in the state it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source `desktop-outbox`. One whose outcome is unknown (queued, in flight, indeterminate, or failed without proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum version, with no flag of its own: it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
+        "description": "Read-only and database-only: one snapshot, no lock, no write, never a ticket. The same answer as the claim POST. The request names no client install, so the caller's own live lease reads `held` by `you-elsewhere`; an idempotent `claim` with the lease's token answers `owned`. It names no attempt either: `custody` is the fan's unresolved send (anyone's, `dispatching` or `uncertain-held`), and while there is none, the caller's own last send to the fan dispatched from the preview, in the state it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source `desktop-outbox`. One whose outcome is unknown (queued, in flight, indeterminate, or failed without proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum version, with no flag of its own, on a page of a platform where the custody exists (see the claim POST): it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
         "parameters": [
           {
             "schema": {

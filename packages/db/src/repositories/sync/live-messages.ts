@@ -940,6 +940,42 @@ export async function readDmReaderStore(db: Database, pageId: number): Promise<D
   return dmReaderStoreOf(result.rows[0]?.mode);
 }
 
+/**
+ * R20 HF-7д0: Fansly's automation markers of one message, the same shape from
+ * both stores a transcript reads — the archive (`ArchiveMessageRow.markers`)
+ * and the live overlay (`DmLiveReaderMessage.markers`). `type` and
+ * `correlationId` are the vendor's values (null when unusable); `*Observed`
+ * says whether the captured message carried the key at all. Not observed is
+ * UNKNOWN, never "no marker": an archive row from before the markers, an
+ * OnlyFans row, a socket frame without the key. Only data: no reader labels
+ * a message from them yet (that is HF-7д).
+ */
+export interface FanslyMessageMarkers {
+  type: number | null;
+  typeObserved: boolean;
+  correlationId: string | null;
+  correlationIdObserved: boolean;
+}
+
+/** The markers from a store's columns: the value pair and a presence mask in
+ * `FANSLY_WS_LIVE_FIELD` bits (the overlay's `field_mask`, the archive's
+ * `marker_field_mask`; null = nothing observed). */
+export function fanslyMessageMarkers(input: {
+  type: number | null;
+  correlationId: string | null;
+  fieldMask: number | null;
+}): FanslyMessageMarkers {
+  const mask = input.fieldMask ?? 0;
+  const typeObserved = (mask & FANSLY_WS_LIVE_FIELD.type) !== 0;
+  const correlationIdObserved = (mask & FANSLY_WS_LIVE_FIELD.correlationId) !== 0;
+  return {
+    type: typeObserved ? input.type : null,
+    typeObserved,
+    correlationId: correlationIdObserved ? input.correlationId : null,
+    correlationIdObserved,
+  };
+}
+
 /** A provisional message as a reader shows it: socket fields only. */
 export interface DmLiveReaderMessage {
   platformMessageId: string;
@@ -954,6 +990,8 @@ export interface DmLiveReaderMessage {
   /** The chat is excluded from REST message sync, so no REST copy will ever
    * confirm this message: «API недоступен» (plan §7.9a). */
   apiUnavailable: boolean;
+  /** R20 HF-7д0: the frame's `type` and `correlationId` with their presence. */
+  markers: FanslyMessageMarkers;
 }
 
 export type DmLiveUnionItem<Row> =
@@ -1055,13 +1093,17 @@ async function listDmLiveReaderMessages(
     content: string;
     in_reply_to_message_id: string | null;
     api_unavailable: boolean;
+    message_type: number | null;
+    correlation_id: string | null;
+    field_mask: number;
   }>(sql`
     select m.platform_message_id, m.platform_conversation_id, m.sender_platform_user_id,
       case when m.is_sent_by_page then 'model'
         when t.partner_platform_user_id = m.sender_platform_user_id then 'fan'
         else 'unknown' end as sender_role,
       m.created_at, m.content, m.in_reply_to_message_id,
-      coalesce(btrim(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}), '') <> '' as api_unavailable
+      coalesce(btrim(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}), '') <> '' as api_unavailable,
+      m.message_type, m.correlation_id, m.field_mask
     from dm_live_messages m
     join page_dm_threads t
       on t.platform_account_id = m.page_id and t.platform_conversation_id = m.platform_conversation_id
@@ -1085,5 +1127,8 @@ async function listDmLiveReaderMessages(
     content: row.content,
     inReplyToMessageId: row.in_reply_to_message_id,
     apiUnavailable: row.api_unavailable === true,
+    markers: fanslyMessageMarkers({
+      type: row.message_type, correlationId: row.correlation_id, fieldMask: row.field_mask,
+    }),
   }));
 }
