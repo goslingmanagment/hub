@@ -16,7 +16,9 @@ import { loadClientSwitches } from "../../../services/client-switches.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { BadRequestError, ContextConflictError } from "../../../services/errors.ts";
 import {
+  compareMessageRefs,
   formatTranscript,
+  isTranscriptMessageRef,
   normalizeTranscriptMessages,
   type OfapiChatMessage,
   type OperationFeature,
@@ -24,7 +26,8 @@ import {
 } from "../prompts/index.ts";
 import type { AiContextMessageRef, TranscriptServedSnapshot } from "./context-frame.ts";
 
-// chat-extension H-4c — the fresh text of the open OnlyFans chat.
+// chat-extension H-4c — the fresh text of the open chat: OnlyFans, and Fansly
+// since R20 HF-8б.
 //
 // The hub's archive trails the chat a chatter is looking at by seconds to
 // minutes. A client that reads the open page sends the last confirmed messages
@@ -64,22 +67,19 @@ export type AiLiveTextItem = AiLiveTextContext["items"][number];
  * is a 400 with a machine reason. The owner's switch is NOT here: switched
  * off, fresh text is ignored, never refused (resolveLiveTextMode).
  *
- * `isFanslyRequest` comes from the feature service's single platform-branch
- * site rather than a second one here.
+ * No platform is refused here (R20 HF-8б): where fresh text exists is the
+ * `freshText` flag's platforms (CLIENT_FEATURE_REQUIREMENTS), which the switch
+ * reads. A Fansly page takes it on the hub's own transcript only: the released
+ * Fansly extension sends its whole transcript as `clientContext`, and fresh
+ * text beside it is refused below, as it always was.
  */
 export function assertLiveTextRequestShape(input: {
   feature: OperationFeature;
-  isFanslyRequest: boolean;
   hasClientContext: boolean;
   capabilities: ReadonlySet<AiStreamCapability> | undefined;
 }): void {
   if (!(AI_LIVE_TEXT_FEATURES as readonly string[]).includes(input.feature)) {
     throw new BadRequestError(`${input.feature} does not accept liveTextContext`, {
-      reason: "live_text_not_allowed",
-    });
-  }
-  if (input.isFanslyRequest) {
-    throw new BadRequestError("liveTextContext is only accepted for OnlyFans pages", {
       reason: "live_text_not_allowed",
     });
   }
@@ -110,7 +110,8 @@ export interface LiveTextPage {
  * What the hub does with fresh text on this page right now: the owner's
  * `aiLiveTextContextMode`, and only where the page's `freshText` flag is on
  * (the same evaluation the bootstrap announces: master switch, flag, platform,
- * binding, served capability).
+ * binding, served capability). One mode for both platforms: an OnlyFans page
+ * and a Fansly page (R20 HF-8б) are told apart by their own flags only.
  *
  * Anything that is not a clear `shadow` or `serve` is `off`, a failed read
  * included: fresh text is an addition, so the safe answer is to leave it out
@@ -146,8 +147,8 @@ export type AiLiveTextRejectReason =
   | "duplicate"
   /** Nothing is left of the text once it is normalized like an archive row. */
   | "empty"
-  /** The transcript cannot key the id (not a safe integer) or the time, or
-   *  the text is one the normalizers fail on. */
+  /** The transcript cannot key the id (not a decimal id, or one already in
+   *  it) or the time, or the text is one the normalizers fail on. */
   | "unusable"
   /** The store lookup failed: the id could be deleted or another chat's. */
   | "unverified"
@@ -193,11 +194,6 @@ export interface AiLiveTextMergeInput {
   limit: number;
 }
 
-/** Numeric ids compare as numbers without becoming one (they can pass 2^53). */
-function compareNumericIds(left: string, right: string): number {
-  return left.length - right.length || (left < right ? -1 : left > right ? 1 : 0);
-}
-
 /** One client item as a transcript message, through the path an archive row
  *  takes: `normalizeDmMessageText` is what turns a platform message into the
  *  archive's `text_plain` (tags and entities out), and the transcript
@@ -208,11 +204,10 @@ function compareNumericIds(left: string, right: string): number {
  *  this conversation: it stands, and the client's clock is not read. */
 function liveItemToTranscriptMessage(
   item: AiLiveTextItem,
-  id: number,
   heldAt: Date | null,
 ): TranscriptMessage | "empty" | "unusable" {
   const shaped = {
-    id,
+    id: item.platformMessageId,
     text: normalizeDmMessageText(item.text),
     isSentByMe: item.direction === "model",
     createdAt: heldAt === null ? item.occurredAt : heldAt.toISOString(),
@@ -260,7 +255,7 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
   const merged = input.messages.map((message, index) => ({
     message,
     ref: input.window[index] ?? {
-      messageRef: String(message.id),
+      messageRef: message.id,
       occurredAt: new Date(message.createdAtMs),
       isFromFan: message.sender === "Fan",
     },
@@ -284,7 +279,7 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
     const atMs = Date.parse(item.occurredAt);
     if (
       Number.isFinite(atMs)
-      && (head === null || atMs > head.atMs || (atMs === head.atMs && compareNumericIds(id, head.ref) > 0))
+      && (head === null || atMs > head.atMs || (atMs === head.atMs && compareMessageRefs(id, head.ref) > 0))
     ) {
       head = { ref: id, atMs };
     }
@@ -316,10 +311,10 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
       conflicts.push({ id, reason: "direction" });
       continue;
     }
-    // The transcript keys a message by Number(ref): an id it cannot hold
-    // exactly, or one that collides with a row already there, cannot join.
-    const numericId = Number(id);
-    if (!Number.isSafeInteger(numericId) || hubIds.has(numericId)) {
+    // The transcript keys a message by its exact ref (HF-8a): an id that is
+    // not a decimal one, or one a row there already holds, cannot join. Ids
+    // past 2^53 join like any other.
+    if (!isTranscriptMessageRef(id) || hubIds.has(id)) {
       rejected.push({ id, reason: "unusable" });
       continue;
     }
@@ -327,7 +322,7 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
     // on is a text the transcript cannot use, not a failed generation.
     let message: ReturnType<typeof liveItemToTranscriptMessage>;
     try {
-      message = liveItemToTranscriptMessage(item, numericId, state?.occurredAt ?? null);
+      message = liveItemToTranscriptMessage(item, state?.occurredAt ?? null);
     } catch {
       message = "unusable";
     }
@@ -335,7 +330,7 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
       rejected.push({ id, reason: message });
       continue;
     }
-    hubIds.add(numericId);
+    hubIds.add(id);
     added += 1;
     merged.push({
       message,
@@ -346,7 +341,7 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
 
   // The transcript's own order (normalizeTranscriptMessages), then its cap.
   merged.sort((left, right) => (
-    left.message.createdAtMs - right.message.createdAtMs || left.message.id - right.message.id
+    left.message.createdAtMs - right.message.createdAtMs || compareMessageRefs(left.message.id, right.message.id)
   ));
   // `slice(-0)` is the whole array, not none of it.
   const kept = input.limit > 0 ? merged.slice(-input.limit) : [];
@@ -507,6 +502,9 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
         messageRefs: outside,
         // Other pages are read only as far as the caller may read them.
         otherPageIds: pageScopeFor(input.principal) ?? null,
+        // R20 HF-8б: the Fansly socket overlay, read where it served the
+        // transcript: its deletions, its groups, its senders and times.
+        liveOverlay: loaded.served.source === "live_union",
       });
     } catch (error) {
       stores = null;
@@ -542,7 +540,9 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
     ...loaded.contextManifest,
     liveText: liveTextManifest({ mode, status, sent: items.length, merge }),
   };
-  const live = { status, accepted: merge.accepted.length, rejected };
+  // `matched` (R20 HF-8б): the client's items the hub's transcript already
+  // held, so a client can account for every item it sent.
+  const live = { status, accepted: merge.accepted.length, rejected, matched: merge.matched };
   if (mode === "shadow") {
     return { transcript: { ...loaded, contextManifest }, live };
   }

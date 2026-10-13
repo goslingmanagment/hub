@@ -4394,6 +4394,12 @@ export const messageArchive = pgTable(
     materialObservedAt: timestamp("material_observed_at", { withTimezone: true }),
     replyParentObservedAt: timestamp("reply_parent_observed_at", { withTimezone: true }),
     replyRootObservedAt: timestamp("reply_root_observed_at", { withTimezone: true }),
+    // R20 HF-7д0 (0270): Fansly's automation markers and which of them any
+    // applied material head carried (FANSLY_WS_LIVE_FIELD bits, as
+    // dm_live_messages.field_mask); null mask = unknown.
+    messageType: integer("message_type"),
+    correlationId: text("correlation_id"),
+    markerFieldMask: integer("marker_field_mask"),
     vendorChangedAt: timestamp("vendor_changed_at", { withTimezone: true }),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }),
     servingContractVersion: integer("serving_contract_version").default(0).notNull(),
