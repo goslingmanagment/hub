@@ -344,7 +344,27 @@ describe("the protocol's messages", () => {
     expect(parseEngineMessage(JSON.stringify(command(1, "c", "launchMissiles")))).toMatchObject({ ok: false });
     expect(parseEngineMessage(JSON.stringify(command(1, "", "stopPage")))).toMatchObject({ ok: false });
     expect(parseEngineMessage("{")).toEqual({ ok: false, error: "not JSON" });
-    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult" }))).toEqual({ ok: false, error: "wsAdmitResult is not supported by this operator yet" });
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult" }))).toEqual({ ok: false, error: "siteAdmitResult is not supported by this operator yet" });
+  });
+
+  it("parses a socket's admission strictly (PR 10)", () => {
+    const connectionId = "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: true, deadlineMono: 1234.5, attemptId: 77 }))).toEqual({
+      ok: true,
+      message: { type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: true, deadlineMono: 1234.5, attemptId: 77 },
+    });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: false, reason: "pace", retryNotBeforeWall: null }))).toEqual({
+      ok: true,
+      message: { type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: false, reason: "pace", retryNotBeforeWall: null },
+    });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: false, reason: "route_hold", retryNotBeforeWall: 1_791_800_000_000 }))).toMatchObject({ ok: true });
+    // An admission without its attempt or deadline, a refusal without its
+    // retry, an id that is not a UUID: protocol errors.
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: true, deadlineMono: 1 }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: true, attemptId: 77 }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: false, reason: "pace" }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId: "conn-1", admit: false, reason: "pace", retryNotBeforeWall: null }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult", ownerGeneration: 2, connectionId, admit: "yes" }))).toMatchObject({ ok: false });
   });
 
   it("parses the buffer's messages strictly", () => {

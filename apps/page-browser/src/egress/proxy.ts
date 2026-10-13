@@ -9,6 +9,16 @@
 // - Tunnels to the API host pass through the send gate (gate.ts): a new one
 //   only for the request just released, and every TLS record Chrome writes
 //   into one is decided on its own.
+// - Tunnels to the socket host carry one socket each, and each is admitted
+//   by the engine (PR 10; ws/sockets.ts): the CONNECT waits for the
+//   admission and is refused without one (stage 1, amendment 8). Admitted,
+//   its handshake request — the first big application-data record after the
+//   TLS handshake (the second in TLS 1.3, whose client Finished is
+//   application data too; the first if it rides early data) — goes up only
+//   before the admission's deadline; at the deadline, with the request not
+//   sent, the tunnel is cut (spec §9). After the request everything goes:
+//   the guard in the page checks the messages. A tunnel that is not TLS is
+//   cut: its request could not be found.
 // - Each tunnel is one line of the connection journal: host, port, opened,
 //   closed, bytes both ways, what was held, the result.
 //
@@ -41,8 +51,27 @@ export interface TunnelRecord {
   result: string;
 }
 
+/** What became of a socket's tunnel (ws/sockets.ts hears it). */
+export type SocketTunnelEvent =
+  | { kind: "open" }
+  | { kind: "handshake_sent"; mono: number; wall: number }
+  | { kind: "ended"; result: string; handshakeSent: boolean };
+
+/** A socket's CONNECT waiting for the engine's admission. */
+export interface SocketTicket {
+  /** The admission's connection id. */
+  id: string;
+  /** The admission's deadline (CLOCK_MONOTONIC ms) to let the CONNECT
+   *  through, or null to refuse it. */
+  granted: Promise<number | null>;
+  event: (event: SocketTunnelEvent) => void;
+}
+
 export interface EgressOptions {
   classify: HostClassifier;
+  /** A CONNECT to the socket host: its admission (a ticket), or why it is
+   *  refused now. Without it every such CONNECT is refused. */
+  admitSocket?: (host: string, port: number) => SocketTicket | string;
   gate?: ApiGate;
   /** Every refusal and every closed tunnel (the connection journal). */
   onRecord?: (record: TunnelRecord) => void;
@@ -56,6 +85,18 @@ export interface EgressOptions {
 
 const EMPTY = Buffer.alloc(0);
 const RECENT_RECORDS = 1000;
+
+interface SocketTunnel {
+  ticket: SocketTicket;
+  /** The admission's deadline; 0 while it waits for it. */
+  deadline: number;
+  timer: NodeJS.Timeout | null;
+  /** Chrome's first record was a TLS handshake record. */
+  tls: boolean;
+  /** Big application-data records Chrome wrote before its request. */
+  appRecords: number;
+  handshakeSent: boolean;
+}
 
 class Tunnel {
   readonly record: TunnelRecord;
@@ -73,6 +114,8 @@ class Tunnel {
   tls13: boolean | null = null;
   /** The server's first bytes until its ServerHello is read; null after. */
   serverFirst: Buffer | null = EMPTY;
+  /** A socket's tunnel: its admission and its handshake request. */
+  socket: SocketTunnel | null = null;
 
   constructor(record: TunnelRecord, client: Socket) {
     this.record = record;
@@ -139,6 +182,11 @@ export class Egress {
     return this.#cutWhere((tunnel) => tunnel.record.cls === cls, reason);
   }
 
+  /** Cut the tunnel of one socket's admission; returns whether it was there. */
+  cutSocket(id: string, reason: string): boolean {
+    return this.#cutWhere((tunnel) => tunnel.socket?.ticket.id === id, reason) > 0;
+  }
+
   /** Refusals of CONNECTs to `host:port` since `sinceMono` (the self-test
    *  finds its probe's refusal here). */
   refusalsSince(host: string, port: number, sinceMono: number): TunnelRecord[] {
@@ -201,6 +249,32 @@ export class Egress {
     tunnel.upstream?.destroy();
     this.#log("tunnel.closed", { id: record.id, host: record.host, port: record.port, cls: record.cls, up: record.up, down: record.down, held: record.held, result });
     this.#remember(record);
+    this.#socketEnded(tunnel, result);
+  }
+
+  #socketEnded(tunnel: Tunnel, result: string): void {
+    const socket = tunnel.socket;
+    if (socket === null) return;
+    if (socket.timer) clearTimeout(socket.timer);
+    socket.timer = null;
+    this.#tell(socket, { kind: "ended", result, handshakeSent: socket.handshakeSent });
+  }
+
+  /** The socket's path hears what became of its tunnel; whatever it does
+   *  with it, the proxy goes on. */
+  #tell(socket: SocketTunnel, event: SocketTunnelEvent): void {
+    try {
+      socket.ticket.event(event);
+    } catch (error) {
+      this.#log("socket.event_failed", { kind: event.kind, error: errorMessage(error) });
+    }
+  }
+
+  /** A socket's CONNECT that waited, refused after all. */
+  #refuseWaiting(tunnel: Tunnel, result: string): void {
+    if (!this.#tunnels.delete(tunnel)) return;
+    this.#refuse(tunnel.record, tunnel.client, result);
+    this.#socketEnded(tunnel, result);
   }
 
   #refuse(record: TunnelRecord, client: Socket, result: string): void {
@@ -235,7 +309,57 @@ export class Egress {
       return;
     }
     if (tunnel.record.cls === "api") this.#onApiData(tunnel, chunk);
+    else if (tunnel.socket !== null && !tunnel.socket.handshakeSent) this.#onSocketData(tunnel, tunnel.socket, chunk);
     else this.#up(tunnel, chunk);
+  }
+
+  /** A socket's tunnel before its handshake request went up: records are
+   *  read at their headers; the request goes only before the admission's
+   *  deadline (Astra's review of the prototype, finding 6). */
+  #onSocketData(tunnel: Tunnel, socket: SocketTunnel, chunk: Buffer): void {
+    const data = tunnel.partial.length > 0 ? Buffer.concat([tunnel.partial, chunk]) : chunk;
+    tunnel.partial = EMPTY;
+    let offset = 0;
+    while (offset < data.length && !socket.handshakeSent) {
+      if (tunnel.recordLeft > 0) {
+        const take = Math.min(tunnel.recordLeft, data.length - offset);
+        tunnel.recordLeft -= take;
+        offset += take;
+        continue;
+      }
+      if (data.length - offset < 5) {
+        // The next record's header is not complete: decided with the next chunk.
+        this.#up(tunnel, data.subarray(0, offset));
+        tunnel.partial = Buffer.from(data.subarray(offset));
+        return;
+      }
+      const type = data[offset]!;
+      if (!socket.tls) {
+        if (type !== 22) {
+          this.#finish(tunnel, "cut: a socket's tunnel that is not TLS");
+          return;
+        }
+        socket.tls = true;
+      }
+      const total = 5 + data.readUInt16BE(offset + 3);
+      if (type === 23 && total > controlRecordLimit(tunnel.tls13)) {
+        socket.appRecords += 1;
+        // Before the server's hello it is early data: the request itself.
+        const request = tunnel.tls13 !== true || socket.appRecords === 2;
+        if (request) {
+          if (!(monoMs() < socket.deadline)) {
+            this.#finish(tunnel, "cut: the socket's admission expired before its handshake request");
+            return;
+          }
+          socket.handshakeSent = true;
+          if (socket.timer) clearTimeout(socket.timer);
+          socket.timer = null;
+          this.#tell(socket, { kind: "handshake_sent", mono: monoMs(), wall: wallMs() });
+        }
+      }
+      tunnel.recordLeft = total;
+    }
+    this.#up(tunnel, data);
   }
 
   /** Chrome's bytes on an API tunnel: the gate decides record by record.
@@ -278,7 +402,7 @@ export class Egress {
     if (holdFrom >= 0) this.#hold(tunnel, data.subarray(holdFrom));
   }
 
-  /** The TLS version of an API tunnel decides the size of a control record;
+  /** The TLS version of an API or socket tunnel decides the size of a control record;
    *  a handshake the proxy cannot read is not carried at all. */
   #serverHello(tunnel: Tunnel, chunk: Buffer): void {
     const seen = Buffer.concat([tunnel.serverFirst ?? EMPTY, chunk]);
@@ -324,9 +448,18 @@ export class Egress {
     if (!this.#exitOpen || socks === null) return this.#refuse(record, client, "refused: exit closed");
     if (local) return this.#refuse(record, client, "refused: local or private address");
     if (cls === "denied") return this.#refuse(record, client, "refused: host not allowed");
-    // Each socket of the site will be its own tunnel, admitted by the engine
-    // (PR 10); until that path exists no socket is admitted.
-    if (cls === "ws") return this.#refuse(record, client, "refused: socket not admitted");
+    // Each socket of the site is its own tunnel, admitted by the engine.
+    let ticket: SocketTicket | null = null;
+    if (cls === "ws") {
+      let admission: SocketTicket | string;
+      try {
+        admission = this.#options.admitSocket?.(host, record.port) ?? "no admitting path";
+      } catch (error) {
+        admission = `the admission failed: ${errorMessage(error)}`;
+      }
+      if (typeof admission === "string") return this.#refuse(record, client, `refused: socket not admitted (${admission})`);
+      ticket = admission;
+    }
     if (cls === "api") {
       // A new connection to the API serves only the request just released.
       // Any other moment it is Chrome repeating a request on a new
@@ -336,25 +469,60 @@ export class Egress {
       this.gate.noteTunnel(record.id);
     }
     const tunnel = new Tunnel(record, client);
+    if (ticket !== null) tunnel.socket = { ticket, deadline: 0, timer: null, tls: false, appRecords: 0, handshakeSent: false };
     this.#tunnels.add(tunnel);
     client.on("close", () => this.#finish(tunnel, tunnel.record.result || "closed by Chrome"));
     client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
     if (head.length > 0) this.#onClientData(tunnel, head);
+    if (ticket === null) {
+      this.#connect(tunnel, socks);
+      return;
+    }
+    // The socket's CONNECT waits for the engine; closing the exit, or Chrome
+    // dropping it, ends the wait (its end is reported in #finish).
+    const socketTunnel = tunnel.socket!;
+    ticket.granted.then(
+      (deadline) => {
+        if (!this.#tunnels.has(tunnel)) return;
+        if (deadline === null) return this.#refuseWaiting(tunnel, "refused: socket not admitted");
+        if (!(monoMs() < deadline)) return this.#refuseWaiting(tunnel, "refused: the socket's admission came expired");
+        const now = this.#socks;
+        if (!this.#exitOpen || now === null) return this.#refuseWaiting(tunnel, "refused: exit closed");
+        socketTunnel.deadline = deadline;
+        socketTunnel.timer = setTimeout(() => {
+          if (!socketTunnel.handshakeSent) this.#finish(tunnel, "cut: the socket's admission expired before its handshake request");
+        }, Math.max(0, deadline - monoMs()));
+        socketTunnel.timer.unref();
+        this.#connect(tunnel, now);
+      },
+      (error: unknown) => this.#refuseWaiting(tunnel, `refused: the socket's admission failed (${errorMessage(error)})`),
+    );
+  }
+
+  #connect(tunnel: Tunnel, socks: SocksConfig): void {
+    const record = tunnel.record;
+    const { host, cls } = record;
+    const client = tunnel.client;
     socksConnect(socks, host, record.port, this.#options.socksTimeoutMs)
       .then((upstream) => {
         if (!this.#tunnels.has(tunnel) || !this.#exitOpen) {
           upstream.destroy();
           return;
         }
+        if (tunnel.socket !== null && !(monoMs() < tunnel.socket.deadline)) {
+          upstream.destroy();
+          this.#finish(tunnel, "cut: the socket's admission expired before its connection");
+          return;
+        }
         tunnel.upstream = upstream;
         upstream.on("data", (chunk: Buffer) => {
           tunnel.record.down += chunk.length;
-          if (cls === "api") {
+          if (cls === "api" || cls === "ws") {
             if (tunnel.serverFirst !== null) this.#serverHello(tunnel, chunk);
             if (!this.#tunnels.has(tunnel)) return;
-            // Before Chrome can react to them (a refusal it would repeat on).
-            this.gate.noteServerBytes(tunnel.record.id);
           }
+          // Before Chrome can react to them (a refusal it would repeat on).
+          if (cls === "api") this.gate.noteServerBytes(tunnel.record.id);
           if (!client.write(chunk)) upstream.pause();
         });
         client.on("drain", () => upstream.resume());
@@ -364,6 +532,7 @@ export class Egress {
         upstream.resume();
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         this.#log("tunnel.open", { id: record.id, host, port: record.port, cls });
+        if (tunnel.socket !== null) this.#tell(tunnel.socket, { kind: "open" });
         for (const chunk of tunnel.early.splice(0)) this.#onClientData(tunnel, chunk);
       })
       .catch((error: unknown) => {

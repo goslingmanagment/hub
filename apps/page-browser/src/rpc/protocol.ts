@@ -28,12 +28,27 @@
 //   one binary frame, the last. Headers of a response leave out
 //   `set-cookie`.
 //
+// - PR 10: `ws.open.sessionFingerprint` may be null — no session of the
+//   site was seen when the socket opened (the site opens its socket before
+//   the login too; the engine decides whether to admit it, and `wsAdmit`
+//   says null). The stop reason `ws_guard_failed` (state/steps.ts).
+//   `wsAdmit.url` and `context` are CDP's word on the oldest socket of the
+//   host still waiting to connect — the CONNECT itself names only the host;
+//   the socket is tied to its admission at its handshake (ws/sockets.ts). A
+//   `wsAdmitResult` admits only on the connection it was asked on: an engine
+//   connection that changes or goes refuses every socket still waiting, and
+//   an admission that finds its socket gone gets `wsDone` with `sent:
+//   false`. After a `gap` with reason `operator_start` or `chrome_restart`,
+//   no connection opened before it is open any more, whether or not its
+//   `ws.close` came (a restarted operator does not know the previous one's
+//   connections).
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
-// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, and a
-// Hub request's (PR 9): `send`, `checkResult`. The other kinds of command
-// are refused as not supported yet, and the other messages of the engine
-// come with the PRs that implement them (siteAdmit — PR 7, wsAdmit — PR 10).
+// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
+// Hub request's (PR 9): `send`, `checkResult`, and the site socket's (PR
+// 10): `wsAdmitResult`. The other kinds of command are refused as not
+// supported yet, and `siteAdmitResult` comes with PR 7.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
@@ -325,7 +340,8 @@ export interface EventsRefused {
   givenSeq: number;
 }
 export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
-  | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
+  /** `sessionFingerprint` null: no session of the site seen yet (PR 10). */
+  | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex | null }
   | { kind: "ws.in"; connectionId: ConnectionId; frame: string }
   | { kind: "ws.close"; connectionId: ConnectionId; code: number | null; reason: string | null }
   | { kind: "gap"; fromSeq: number | null; fromWall: WallMs | null; reason: "ws_reconnect" | "operator_start" | "chrome_restart" | "buffer_full" | "disk_full" }
@@ -407,13 +423,13 @@ export type OperatorToEngine =
 export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
 
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult;
 
 /** A Hub request's messages (PR 9). */
 export type HubMessage = Send | CheckResult;
 
 /** Types of the protocol that later PRs implement. */
-const LATER_TYPES = new Set(["siteAdmitResult", "wsAdmitResult"]);
+const LATER_TYPES = new Set(["siteAdmitResult"]);
 
 /** A recover names at most this many attempts. */
 const MAX_RECOVER = 10_000;
@@ -567,6 +583,18 @@ function parseCheckResult(m: Record<string, unknown>): CheckResult {
   return { ...base, admit: false, reason: reason as Refusal };
 }
 
+const CONNECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function parseWsAdmitResult(m: Record<string, unknown>): WsAdmitResult {
+  const connectionId = str(m.connectionId, "connectionId", 64);
+  if (!CONNECTION_ID.test(connectionId)) throw new Invalid("connectionId is not a UUID");
+  const base = { type: "wsAdmitResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), connectionId };
+  if (m.admit === true) return { ...base, admit: true, deadlineMono: num(m.deadlineMono, "deadlineMono"), attemptId: int(m.attemptId, "attemptId", 1) };
+  if (m.admit !== false) throw new Invalid("admit is not a boolean");
+  const retry = m.retryNotBeforeWall === null ? null : num(m.retryNotBeforeWall, "retryNotBeforeWall");
+  return { ...base, admit: false, reason: str(m.reason, "reason", 128), retryNotBeforeWall: retry };
+}
+
 function parseBufferMessage(type: BufferMessage["type"], m: Record<string, unknown>): BufferMessage {
   const ownerGeneration = int(m.ownerGeneration, "ownerGeneration");
   switch (type) {
@@ -617,6 +645,8 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: parseSend(m) };
       case "checkResult":
         return { ok: true, message: parseCheckResult(m) };
+      case "wsAdmitResult":
+        return { ok: true, message: parseWsAdmitResult(m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }

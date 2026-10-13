@@ -107,7 +107,9 @@ describe("the open exit", () => {
       ...Array(7).fill("refused: local or private address"),
       "refused: host not allowed",
       "refused: host not allowed",
-      "refused: socket not admitted",
+      // No admitting path given to this proxy: a socket is never let through
+      // without one (PR 10, ws/sockets.ts).
+      "refused: socket not admitted (no admitting path)",
     ]);
   });
 

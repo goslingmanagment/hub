@@ -5,7 +5,9 @@
 //   site  — the site's page, scripts, styles, fonts: a plain tunnel, journaled
 //   api   — the API: every TLS record through the send gate (egress/gate.ts)
 //   ws    — the site's socket: one tunnel per socket, each by the engine's
-//           admission (PR 10); until that path exists, refused
+//           admission (ws/sockets.ts); any other request to this host is
+//           failed in the interception, so no socket rides another's
+//           connection (stage 1, §3.2)
 //   cdn   — media and previews: a plain tunnel, journaled
 //   denied — everything else, Chrome's own service hosts included until the
 //           owner approves their list (stage 1, item 10; owner decision №2)
