@@ -148,7 +148,8 @@ export {
 // The greeting lease and send custody (routes-client.ts, clientFanClaim): the
 // states of its three automata, closed on the wire, and the known values of
 // its open tokens (the greeting's source; the purpose and state of a
-// resolved send).
+// resolved send); a manual group's fingerprint and how its ref reads
+// (manual-greeting-v1).
 export {
   CLIENT_CLAIM_ACTIONS,
   CLIENT_CLAIM_MAX_PARTS,
@@ -158,11 +159,15 @@ export {
   CLIENT_GREETING_STATES,
   CLIENT_LEASE_HOLDERS,
   CLIENT_LEASE_STATES,
+  CLIENT_MANUAL_GROUP_REF_PREFIX,
   CLIENT_SEND_FAILURE_REASONS,
   CLIENT_SEND_PURPOSES,
+  CLIENT_TEXT_FINGERPRINT_PATTERN,
   type ClientClaimAction,
+  type ClientClaimSendGroup,
   type ClientCustodyState,
   type ClientGreetingSource,
+  type ClientManualClaimGroup,
   type ClientSendPurpose,
 } from "@agency_hub_core/contracts";
 // The "new subscribers" list (routes-client.ts, clientAudienceNew): its
