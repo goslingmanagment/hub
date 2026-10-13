@@ -1165,7 +1165,9 @@ export class SiteRequests {
           headers: engineHeaders(end.headers),
           body: ref,
           complete: whole,
-          source: this.#source(op),
+          // A redirect ends here before Chrome tells of its response: the
+          // gate's word that the request went up makes it the network's.
+          source: end.empty ? (this.#sent(op) ? "network" : "cache_unconfirmed") : this.#source(op),
           sessionFingerprint: fingerprint,
         },
         ...(body ? { body } : {}),

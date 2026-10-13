@@ -93,6 +93,8 @@ async function setUp(
     buffer?: OperatorDeps["buffer"];
     socketTimings?: OperatorDeps["socketTimings"];
     siteTimings?: OperatorDeps["siteTimings"];
+    /** How long the site's document may take (30 s in the operator). */
+    siteLoadMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -152,7 +154,7 @@ async function setUp(
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -232,6 +234,15 @@ describe("the start (plan §4.1)", () => {
     expect(s.operator.admissionsOpen()).toBe(true);
     // The states journal has every transition.
     expect(journal(s.logDir, "states").map((line) => line.to)).toEqual(expect.arrayContaining(["exit_open", "site_loaded"]));
+  });
+
+  it("a site whose document never comes fails the start too: the page is not taken for loaded", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [5000] }, siteLoadMs: 300 });
+    s.model.siteLoads = "never";
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 10_000, "the failure");
+    expect(s.engine.of("state").some((state) => state.step === "site_loaded")).toBe(false);
+    expect(s.operator.egress.exitOpen).toBe(false);
   });
 
   it("a site that does not load fails the start (proxy_unavailable) and is tried again after the backoff", async () => {

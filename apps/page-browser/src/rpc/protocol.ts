@@ -56,6 +56,18 @@
 //   "proxy"` for a record the socket gate held, `left: true` for one CDP
 //   says left.
 //
+// - PR 7 (the site's own requests; spec §6.4): no shape changes. `siteAdmit`
+//   of an operation with a CORS preflight is asked at the preflight's pause
+//   with its request's method; its `sessionFingerprint` is the request's own
+//   session, the live one for a preflight, null when there is none. The
+//   `sessionFingerprint` of a `site.response` to a request without a
+//   session is the empty session's (sha256 of "fansly-session/1\n\n"); one
+//   with `complete: false` names an empty body no frames carry.
+//   `siteDone.body` is `not_platform_data` also when there is nothing to
+//   keep (no answer, a preflight's answer). An operator that starts again
+//   sends `siteDone` for what the previous one admitted: `sent` — whether
+//   it was released — and no status.
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
 // messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a

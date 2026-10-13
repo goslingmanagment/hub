@@ -508,7 +508,7 @@ describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", (
     const fulfill = w.cdp.sent("Fetch.fulfillRequest").at(-1)!;
     expect(fulfill.params.responseCode).toBe(302);
     expect((fulfill.params.responseHeaders as Array<{ name: string }>).map((entry) => entry.name.toLowerCase())).not.toContain("location");
-    expect(siteResponses(w.buffer)[0]).toMatchObject({ status: 302, complete: true, body: { decodedBytes: 0 } });
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ status: 302, complete: true, body: { decodedBytes: 0 }, source: "network" });
   });
 
   it("a request without a session (the login screens' reads) is asked with none; its answer names the empty session", async () => {
