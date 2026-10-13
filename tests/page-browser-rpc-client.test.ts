@@ -222,6 +222,30 @@ describe("a Hub request", () => {
     expect(results[0]!.body?.equals(body)).toBe(true);
   });
 
+  it("an answer that takes time is written when it settles — never on a connection the check did not come on", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    await up(made);
+    let release: (reply: { admit: true; deadlineMono: number }) => void = () => undefined;
+    made.register(48, { onCheck: () => new Promise((resolve) => (release = resolve)), onSent: () => undefined, onResult: () => undefined });
+    fake.server.send({ type: "check", attemptId: 48, pausedMono: 1, liveSessionFingerprint: SESSION_A });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.checkResults).toEqual([]);
+    release({ admit: true, deadlineMono: 777 });
+    await until(() => fake.checkResults.length === 1, 5_000, "the answer");
+    expect(fake.checkResults[0]).toMatchObject({ attemptId: 48, admit: true, deadlineMono: 777 });
+
+    // The same, but the link changes before the answer: it is not written.
+    made.register(49, { onCheck: () => new Promise((resolve) => (release = resolve)), onSent: () => undefined, onResult: () => undefined });
+    fake.server.send({ type: "check", attemptId: 49, pausedMono: 1, liveSessionFingerprint: SESSION_A });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fake.server.protocolError("a test drops the engine");
+    await until(() => fake.hellos.length === 2 && made.up, 5_000, "the new connection");
+    release({ admit: true, deadlineMono: 778 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fake.checkResults.filter((result) => result.attemptId === 49)).toEqual([]);
+  });
+
   it("a body of several parts is reassembled before its JSON; an empty body is one last frame", async () => {
     const fake = await operator();
     const made = client(fake.url);

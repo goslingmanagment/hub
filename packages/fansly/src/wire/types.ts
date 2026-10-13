@@ -437,6 +437,10 @@ export type FanslyWireOutcome =
     /** `transport_reported` only: when the request left, as its sender
      *  reported it, on the caller's monotonic clock (`Clock.monoNow`). */
     sentMono?: number;
+    /** The answer is not the server's confirmed word (a page's browser: its
+     *  cache nobody revalidated, the site's service worker): kept in the
+     *  journal as a rejected answer, never applied as a refresh. */
+    unconfirmed?: "cache_unconfirmed" | "service_worker";
     /** The decoded body itself: `capture: 'bytes'` routes only (a CDN file),
      *  whose body is not text. */
     bodyBuffer?: Buffer;

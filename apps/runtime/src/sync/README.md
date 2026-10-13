@@ -938,11 +938,16 @@ tests/sync-live-gate.integration.test.ts.
 - **The engine's requests** (PR 12, `fansly/browser-transport.ts`): the same `PageTransport`. `prepare` builds the
   registry's request without Chrome's and the session's headers (the operator puts the live session's in). `send` is
   the RPC `send` with the admission context (`SendAdmission`: the attempt, the owner generation, the absolute send
-  deadline); the operator's `check` is answered at once by `hooks.grant` with the deadline on CLOCK_MONOTONIC; the
-  browser reports when the request left and the pacer counts the pause from there (I1). A request the browser could
-  not take ends `aborted_before_send` / `transport_unavailable`, and an operator out of reach makes `prepare` throw
+  deadline); the operator's `check` is answered by `hooks.grant` with the deadline on CLOCK_MONOTONIC — after the
+  page's stored account and proxy and the settings of the link's hello are read again: if they moved since `prepare`,
+  nothing is granted (`credentials_changed`) and the next `prepare` says hello again with the new SOCKS5. The browser
+  reports when the request left and the pacer counts the pause from there (I1). A request the browser could not take
+  ends `aborted_before_send` / `transport_unavailable`, and an operator out of reach makes `prepare` throw
   `PageTransportUnavailableError`: nothing is admitted, no network hold — the operator is not Fansly. An outcome is
-  acknowledged to the operator (`resultAck`) only after its commit (`PageTransport.settled`).
+  acknowledged to the operator (`resultAck`) only once what it carried is committed (`PageTransport.settled`): the
+  raw answer by the capture, a CDN hop's bytes by the apply that puts them in the describer's handoff — an apply that
+  fails leaves it with the operator. An answer the server did not confirm is journaled as rejected (`unconfirmed`)
+  and acknowledged after that commit.
 - **One credentials generation**: the digest of the page, its account, the browser's session fingerprint (the
   operator's `state`) and the proxy — on every request (`credentialsGeneration`) and from `storedCredentialsGeneration`
   alike, so the identity proof makes it the trusted one and a new login or a new proxy (a new hello) puts the page
@@ -1011,6 +1016,7 @@ A retry after an error is always a new attempt through the same admission.
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted); a DM head read Fansly refuses with its own error envelope also counts toward the chat's unavailability episode (above) |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
+| an answer the server did not confirm (a page's browser: its unrevalidated cache, the site's service worker) | `unconfirmed` | journaled as `<kind>:unconfirmed` with its disposition, never applied; as `network` otherwise |
 | refused before sending | `not_sent` | nothing learned: the work is admitted again |
 
 An apply that fails (`engine/commit.ts`, `classifyApplyError`) never stops the actor. A deferral (erasure fence busy,

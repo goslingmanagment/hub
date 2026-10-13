@@ -123,11 +123,13 @@ export interface FanslySendGuard {
  *  `pace` (closer than S × (1 + u) to the previous send) and `takeover_floor`
  *  (before the first-send floor after an ownership takeover) are the Sync
  *  Engine pacer's, which reuses this check contract (`composeFanslySendCheck`).
- *  The last three are a page browser's (Project Browser, plan §3.2, spec §6):
+ *  The last four are a page browser's (Project Browser, plan §3.2, spec §6):
  *  `session_mismatch` — the site's live session is not the one the request
- *  was prepared for, `generation_stale` — the browser serves a newer owner of
- *  the page, `transport_unavailable` — the browser could not take the request
- *  at all (no link, not ready). Nothing left in any of them. */
+ *  was prepared for, `credentials_changed` — the page's stored credentials
+ *  (its account, its proxy) changed since it was prepared, `generation_stale`
+ *  — the browser serves a newer owner of the page, `transport_unavailable` —
+ *  the browser could not take the request at all (no link, not ready).
+ *  Nothing left in any of them. */
 export type FanslySendRefusalReason =
   | "lease_inactive"
   | "lease_used"
@@ -135,6 +137,7 @@ export type FanslySendRefusalReason =
   | "pace"
   | "takeover_floor"
   | "session_mismatch"
+  | "credentials_changed"
   | "generation_stale"
   | "transport_unavailable";
 

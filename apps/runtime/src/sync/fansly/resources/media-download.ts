@@ -98,6 +98,9 @@ export function mediaDownloadOutcome(decision: OutcomeDecision, step: OutcomeSte
         },
       };
     case "network":
+    case "unconfirmed":
+      // `unconfirmed`: a hop a page's browser answered from its cache or the
+      // site's service worker — no download of the server's (Project Browser).
       return {
         ...decision,
         pageHold: { action: "keep" },

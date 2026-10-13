@@ -103,6 +103,11 @@ export class FakeOperator {
   checkTwice = false;
   /** Runs first on every `send` (a test changes the live session there). */
   onSendHook: ((send: Send) => void) | null = null;
+  /** Awaited after a `send` passed, right before its `check` is asked (a
+   *  test changes the page's stored proxy there). */
+  beforeCheck: ((send: Send) => Promise<void>) | null = null;
+  /** Where the answers come from (Chrome's word, plan §4.2 step 8). */
+  responseSource: "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed" = "network";
   /** Leave the session to the engine's check: a `send` of another session
    *  than the live one still stops at a `check` (a lagging operator). */
   skipSessionCheckAtSend = false;
@@ -211,6 +216,7 @@ export class FakeOperator {
     if (this.live === null) return this.#store(send, { kind: "transport_error", sent: false, message: "no live session of the site yet" });
     if (this.live !== send.sessionFingerprint && !this.skipSessionCheckAtSend) return this.#store(send, { kind: "aborted_before_send", refusal: "session_mismatch" });
     if (monoMs() >= send.sendDeadlineMono) return this.#store(send, { kind: "aborted_before_send", refusal: "send_deadline_passed" });
+    if (this.beforeCheck !== null) await this.beforeCheck(send);
     const checkedMono = monoMs();
     this.#waiting.set(send.attemptId, { send, checkedMono });
     this.server.send({ type: "check", attemptId: send.attemptId, pausedMono: checkedMono, liveSessionFingerprint: this.live });
@@ -241,7 +247,7 @@ export class FakeOperator {
       headers: answer.headers ?? {},
       body: { bodyId, decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") },
       encodedBytes: body.length,
-      source: "network",
+      source: this.responseSource,
       sentMono: this.reportSend ? sentMono : null,
       sendMark: this.reportSend ? "transport_reported" : "completion_fallback",
     }, body);

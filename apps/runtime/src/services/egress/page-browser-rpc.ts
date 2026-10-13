@@ -136,8 +136,10 @@ export interface DeliveredResult {
 }
 
 export interface AttemptHandlers {
-  /** Synchronous: the operator holds the request paused until the answer. */
-  onCheck(check: Check): CheckReply;
+  /** The operator holds the request paused until the answer (it waits a
+   *  few seconds, then fails the request): an asynchronous answer is written
+   *  when it settles, on the connection the check came on only. */
+  onCheck(check: Check): CheckReply | Promise<CheckReply>;
   onSent(sent: Sent): void;
   onResult(delivered: DeliveredResult): void;
 }
@@ -656,18 +658,28 @@ export class PageBrowserRpcClient {
 
   #onCheck(check: Check): void {
     const handlers = this.#attempts.get(check.attemptId);
-    let reply: CheckReply;
-    if (handlers === undefined) {
-      // Nothing waits for this attempt here: it is never admitted.
-      reply = { admit: false, reason: "lease_inactive" };
-    } else {
-      try {
-        reply = handlers.onCheck(check);
-      } catch (error) {
-        this.#log.warn({ attemptId: check.attemptId, err: errorName(error) }, "page browser link: a check's handler failed; refused");
-        reply = { admit: false, reason: "lease_inactive" };
-      }
+    const refused: CheckReply = { admit: false, reason: "lease_inactive" };
+    const failed = (error: unknown): CheckReply => {
+      this.#log.warn({ attemptId: check.attemptId, err: errorName(error) }, "page browser link: a check's handler failed; refused");
+      return refused;
+    };
+    // Nothing waits for this attempt here: it is never admitted.
+    if (handlers === undefined) return this.#answerCheck(check, refused);
+    let reply: CheckReply | Promise<CheckReply>;
+    try {
+      reply = handlers.onCheck(check);
+    } catch (error) {
+      return this.#answerCheck(check, failed(error));
     }
+    if (!(reply instanceof Promise)) return this.#answerCheck(check, reply);
+    const epoch = this.#epoch;
+    void reply.then((settled) => settled, failed).then((settled) => {
+      // On another connection the operator failed the paused request already.
+      if (this.#epoch === epoch) this.#answerCheck(check, settled);
+    });
+  }
+
+  #answerCheck(check: Check, reply: CheckReply): void {
     const answer: CheckResult = reply.admit
       ? { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: true, deadlineMono: reply.deadlineMono }
       : { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: false, reason: reply.reason };

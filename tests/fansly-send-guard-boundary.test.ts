@@ -77,7 +77,8 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     expect(transport).toContain("const refusal = hooks.grant();");
     expect(transport).not.toMatch(/hooks\.check\(/);
     const rpc = read("apps/runtime/src/services/egress/page-browser-rpc.ts");
-    expect(rpc).toContain('reply = { admit: false, reason: "lease_inactive" };');
+    expect(rpc).toContain("if (handlers === undefined) return this.#answerCheck(check, refused);");
+    expect(rpc).toContain('const refused: CheckReply = { admit: false, reason: "lease_inactive" };');
     expect(matching(/\bhooks\.grant\(/)).toEqual(["apps/runtime/src/sync/fansly/browser-transport.ts"]);
     expect(read("apps/runtime/src/sync/engine/actor.ts")).toContain("grant: () => d.pacer.checkRemoteGrant(armed),");
   });

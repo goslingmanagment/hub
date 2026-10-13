@@ -31,6 +31,7 @@ import {
   drainDueApplies,
   ensureCredentialsVerify,
   errorName,
+  isAnswerInMemory,
   markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
@@ -627,13 +628,19 @@ export class SyncActor {
       await this.#markCommitFailed(admission, captured.exit);
       return captured.exit;
     }
-    // The raw answer is in the journal: a sender that keeps outcomes until
-    // they are acknowledged may drop this one (a page's browser, plan §4.2).
-    this.#settled(admission.attemptId);
+    // A sender that keeps outcomes until they are acknowledged (a page's
+    // browser, plan §4.2) may drop this one once what it carried is
+    // committed: the raw answer, by the capture — or, for a route the
+    // journal does not keep (a CDN hop: its bytes reach the describer's
+    // handoff in the apply), by the apply. An apply that did not commit
+    // leaves it with the sender.
+    const inMemoryOnly = isAnswerInMemory(admission.request.spec);
+    if (!inMemoryOnly || !captured.value.applyNow) this.#settled(admission.attemptId);
     this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
-      await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
+      const applied = await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
+      if (inMemoryOnly && applied === "applied") this.#settled(admission.attemptId);
     }
     await this.#fault("after_apply");
     return null;

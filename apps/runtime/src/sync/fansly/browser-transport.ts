@@ -10,7 +10,7 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
-import { REFUSALS, type Refusal, type Send, type State } from "../../services/egress/page-browser-protocol.ts";
+import { REFUSALS, type Check, type Refusal, type Send, type State } from "../../services/egress/page-browser-protocol.ts";
 import {
   systemMonoBridge,
   type CheckReply,
@@ -58,12 +58,18 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   anew (a new fingerprint) or the proxy changes. The fingerprint itself
 //   goes in the `send` too, for the operator to hold the live session to it.
 // - send: RPC `send`; the operator's `check` (when it holds the request
-//   paused) is answered from the engine's lease and pacer at once
-//   (`hooks.grant`, synchronous, as undici's `onRequestStart` check) with the
-//   admission's absolute deadline on CLOCK_MONOTONIC — or refused, when the
-//   live session is not the one prepared for (`session_mismatch`: nothing
-//   goes; the new fingerprint moves the generation and the usual verify
-//   follows). One admission is one check: a second is refused (`lease_used`).
+//   paused) is answered from the engine's lease and pacer (`hooks.grant`,
+//   synchronous, as undici's `onRequestStart` check) with the admission's
+//   absolute deadline on CLOCK_MONOTONIC — or refused: when the live session
+//   is not the one prepared for (`session_mismatch`: nothing goes; the new
+//   fingerprint moves the generation and the usual verify follows), and when
+//   what the request was prepared under moved since — the page's stored
+//   account or proxy (the generation read again with the live session), or
+//   the settings the link's hello carried (`credentials_changed`: nothing
+//   goes; the next `prepare` says hello again with the new SOCKS5, and the
+//   moved generation asks for the verify first). Both are read again right
+//   before the grant. One admission is one check: a second is refused
+//   (`lease_used`).
 // - The send instant: the operator's report (`sent`, the result's `sentMono`
 //   — Chrome's timing, never before the gate's first bytes), converted from
 //   CLOCK_MONOTONIC by one constant shift (plan §4.2, step 5) and rounded up
@@ -72,9 +78,11 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   completion). None: the completion.
 // - The outcome: the operator's, as the wire layer shapes it (lower-case
 //   headers, the body decoded; a CDN hop's bytes as `bodyBuffer`, 5 MiB). An
-//   answer of another session than the one prepared for, a body that did not
-//   arrive whole, an answer the server did not confirm (a cache, the site's
-//   service worker) is no answer: a transport error, sent.
+//   answer the server did not confirm (a cache, the site's service worker)
+//   goes over marked `unconfirmed`: journaled as rejected, never applied. An
+//   answer of another session than the one prepared for, or a body that did
+//   not arrive whole, is no answer: a transport error, sent — left with the
+//   operator for the buffer's intake (PR 13).
 // - The operator not reachable or not ready is not Fansly's failure (no
 //   network hold, plan §3.2): `prepare` refuses with
 //   `PageTransportUnavailableError` and nothing is admitted; a request the
@@ -86,9 +94,10 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   operator's result again (it keeps outcomes until `resultAck`, and
 //   delivers them to the next connection) up to `resultWaitMs`; then the
 //   request may have gone: a transport error, sent.
-// - `resultAck` once the actor committed the outcome (`settled`), for an
-//   outcome taken whole. The rest stay with the operator for the buffer's
-//   intake (PR 13).
+// - `resultAck` once the actor committed what the outcome carried
+//   (`settled`: after the capture, or after the apply of a CDN hop's bytes),
+//   for an outcome taken whole. The rest stay with the operator for the
+//   buffer's intake (PR 13).
 
 /** How long a request waits for the operator's result after its `send`: the
  *  operator ends every operation within 21 s of its last send (spec §9). */
@@ -309,8 +318,16 @@ export async function createBrowserPageTransport(
   }
 
   /** The operator's result as the engine's outcome; `reported` is the `sent`
-   *  instant on the engine's clock, if one came. */
-  function outcomeOf(delivered: DeliveredResult, meta: Prepared, req: FanslyWireRequest, reported: number | null): { outcome: TransportOutcome; whole: boolean } {
+   *  instant on the engine's clock, if one came; `credentialsChanged`: the
+   *  engine refused the check because what the request was prepared under
+   *  moved. */
+  function outcomeOf(
+    delivered: DeliveredResult,
+    meta: Prepared,
+    req: FanslyWireRequest,
+    reported: number | null,
+    credentialsChanged: boolean,
+  ): { outcome: TransportOutcome; whole: boolean } {
     const { result, body, bodyProblem } = delivered;
     const o = result.outcome;
     const sentAt = (mono: number | null) => (mono === null ? reported : bridge.fromKernel(mono) + SEND_REPORT_GUARD_MS);
@@ -327,7 +344,7 @@ export async function createBrowserPageTransport(
     }
     switch (o.kind) {
       case "aborted_before_send":
-        return { outcome: { kind: "aborted_before_send", refusal: o.refusal }, whole: true };
+        return { outcome: { kind: "aborted_before_send", refusal: credentialsChanged ? "credentials_changed" : o.refusal }, whole: true };
       case "transport_error":
       case "timeout": {
         if (!o.sent) return { outcome: { kind: "aborted_before_send", refusal: "transport_unavailable" }, whole: true };
@@ -336,14 +353,16 @@ export async function createBrowserPageTransport(
       }
       case "response": {
         if (bodyProblem !== null || body === null) return { outcome: sentError(`the page's browser answered, but ${bodyProblem ?? "its body is missing"}`, o.sentMono), whole: false };
-        if (o.source === "cache_unconfirmed" || o.source === "service_worker") {
-          return { outcome: sentError(`an answer the server did not confirm (${o.source})`, o.sentMono), whole: false };
-        }
         if (o.preflight === true && o.status >= 200 && o.status < 300) {
           return { outcome: sentError("only the CORS preflight of the request went", o.sentMono), whole: true };
         }
         const at = sentAt(o.sentMono);
-        const marked = at === null ? { sendMark: "completion_fallback" as const } : { sendMark: "transport_reported" as const, sentMono: at };
+        const marked = {
+          ...(at === null ? { sendMark: "completion_fallback" as const } : { sendMark: "transport_reported" as const, sentMono: at }),
+          // Not the server's confirmed word: journaled as rejected, never a
+          // refresh (plan §4.2, step 8).
+          ...(o.source === "cache_unconfirmed" || o.source === "service_worker" ? { unconfirmed: o.source } : {}),
+        };
         if (meta.kind === "api") {
           return {
             outcome: { kind: "response", status: o.status, headers: o.headers, bodyText: o.preflight === true ? "" : new TextDecoder("utf-8").decode(body), bodyBytes: o.encodedBytes, ...marked },
@@ -364,6 +383,21 @@ export async function createBrowserPageTransport(
     }
   }
 
+  /** Why a prepared request may no longer go (null: it may): the page's
+   *  browser generation read again with the live session, and the revision of
+   *  the settings the link's hello carried. A moved hello is said again by
+   *  the next `prepare` (`ensureHelloCurrent`), after this outcome's commit
+   *  and acknowledgement. */
+  async function movedSince(meta: Prepared, liveSession: string): Promise<string | null> {
+    const [generation, revision] = await Promise.all([
+      readBrowserCredentialsGeneration(ctx.db, page.pageId, liveSession),
+      client.settingsDigestNow(),
+    ]);
+    if (generation !== meta.credentialsGeneration) return "the page's stored credentials moved";
+    if (client.helloDigest === null || client.helloDigest !== revision) return "the settings of the link's hello moved";
+    return null;
+  }
+
   async function sendOne(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome> {
     const meta = prepared.get(req);
     if (meta === undefined) return { kind: "aborted_before_send", refusal: "lease_inactive" };
@@ -376,7 +410,8 @@ export async function createBrowserPageTransport(
     }
     const attemptId = admission.attemptId;
     let granted = false;
-    let asked = false;
+    /** Refused at the check: what it was prepared under moved since. */
+    let credentialsChanged = false;
     let reported: number | null = null;
     let settle!: (outcome: TransportOutcome) => void;
     const done = new Promise<TransportOutcome>((resolve) => (settle = resolve));
@@ -387,27 +422,44 @@ export async function createBrowserPageTransport(
       settle(outcome);
     };
     const notSent = (refusal: "transport_unavailable" | "lease_inactive") => {
+      if (credentialsChanged) return finish({ kind: "aborted_before_send", refusal: "credentials_changed" });
       if (refusal === "transport_unavailable") unavailableUntil = monoNow() + unavailableRetryMs;
       finish({ kind: "aborted_before_send", refusal });
     };
     const maySent = (message: string) => finish(reported === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: reported });
 
+    /** The answer to the operation's first check. */
+    let firstAnswer: Promise<CheckReply> | null = null;
+    const answerCheck = async (check: Check): Promise<CheckReply> => {
+      if (finished) return { admit: false, reason: "lease_inactive" };
+      if (check.liveSessionFingerprint !== meta.sessionFingerprint) return { admit: false, reason: "session_mismatch" };
+      // Right before the grant: the page's stored account and proxy with the
+      // live session, and the settings the link's hello carried, are still
+      // what the request was prepared under.
+      const moved = await movedSince(meta, check.liveSessionFingerprint).catch(() => "the page's credentials do not read");
+      if (finished) return { admit: false, reason: "lease_inactive" };
+      if (moved !== null) {
+        credentialsChanged = true;
+        return { admit: false, reason: "lease_inactive" };
+      }
+      const refusal = hooks.grant();
+      if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
+      granted = true;
+      return { admit: true, deadlineMono: bridge.toKernel(admission.sendDeadlineMono) };
+    };
     const unregister = client.register(attemptId, {
-      onCheck(check): CheckReply {
-        if (finished) return { admit: false, reason: "lease_inactive" };
-        if (asked) return { admit: false, reason: "lease_used" };
-        asked = true;
-        if (check.liveSessionFingerprint !== meta.sessionFingerprint) return { admit: false, reason: "session_mismatch" };
-        const refusal = hooks.grant();
-        if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
-        granted = true;
-        return { admit: true, deadlineMono: bridge.toKernel(admission.sendDeadlineMono) };
+      onCheck(check): Promise<CheckReply> {
+        // One admission is one check; a second is refused (`lease_used`),
+        // never before the first is answered.
+        if (firstAnswer !== null) return firstAnswer.then(() => ({ admit: false, reason: "lease_used" }));
+        firstAnswer = answerCheck(check);
+        return firstAnswer;
       },
       onSent(sent) {
         reported ??= bridge.fromKernel(sent.sentMono) + SEND_REPORT_GUARD_MS;
       },
       onResult(delivered) {
-        const { outcome, whole } = outcomeOf(delivered, meta, req, reported);
+        const { outcome, whole } = outcomeOf(delivered, meta, req, reported, credentialsChanged);
         if (whole) ackable.add(attemptId);
         if (outcome.kind === "aborted_before_send" && outcome.refusal === "transport_unavailable") unavailableUntil = monoNow() + unavailableRetryMs;
         finish(outcome);

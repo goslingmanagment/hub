@@ -7,13 +7,24 @@ import type { AppConfig } from "@agency_hub_core/shared";
 
 import { readPageBrowserLinkRevision, readPageBrowserLinkSettings, sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { PageBrowserRpcClient, type PageBrowserRpcTiming } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
+import { SyncCrashFault, type SyncFaultHook } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { createMediaDownloadModule } from "../apps/runtime/src/sync/fansly/resources/media-download.ts";
 import type { PageTransport } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createBrowserPageTransport, readBrowserCredentialsGeneration, SEND_REPORT_GUARD_MS } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOperator, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
-import { HARNESS_OWN_REF, harnessConfig, runActorUntil, seedHarnessPage, until, type HarnessPage } from "./helpers/sync-engine.ts";
+import {
+  demandHarnessDownload,
+  HARNESS_OWN_REF,
+  harnessCdnUrlAllowed,
+  harnessConfig,
+  runActorUntil,
+  seedHarnessPage,
+  until,
+  type HarnessPage,
+} from "./helpers/sync-engine.ts";
 import { countRows, makeTestActor, testSpec } from "./helpers/sync-engine-host.ts";
 
 // The engine's browser transport (Project Browser plan §3.2, §4.2; stage 3
@@ -113,14 +124,23 @@ async function rig(options: { verified?: boolean; settingMs?: number; startOpera
   const transport = await createBrowserPageTransport({ db: db(), config: config() }, { pageId: page.pageId }, {
     client,
     timing: { unavailableRetryMs: 200, resultWaitMs: 5_000 },
+    cdnUrlAllowed: harnessCdnUrlAllowed,
   });
   cleanups.push(() => transport.close());
   await until(async () => client.up, 5_000, "the link to the operator");
   return { page, operator, transport, client };
 }
 
-async function actor(r: Rig, settingMs = 60) {
-  const made = await makeTestActor({ db: db(), pageId: r.page.pageId, registry: registry(), transport: r.transport, settingMs, ownRef: HARNESS_OWN_REF });
+async function actor(r: Rig, settingMs = 60, options: { registry?: ReturnType<typeof registry>; faults?: SyncFaultHook } = {}) {
+  const made = await makeTestActor({
+    db: db(),
+    pageId: r.page.pageId,
+    registry: options.registry ?? registry(),
+    transport: r.transport,
+    settingMs,
+    ownRef: HARNESS_OWN_REF,
+    ...(options.faults === undefined ? {} : { faults: options.faults }),
+  });
   expect(made.generation).toBe(1n);
   return made;
 }
@@ -381,6 +401,114 @@ describe("the transport on its own", () => {
     await until(async () => r.operator.physical.length === 1, 5_000, "the request out");
     await r.client.close();
     expect(await sending).toMatchObject({ kind: "transport_error", sent: true });
+  }, 60_000);
+});
+
+// Astra's review of PR 12: what an acknowledgement promises, a proxy that
+// moves under a prepared request, an answer the server did not confirm.
+describe("the review of PR 12", () => {
+  const mediaRegistry = () => createEngineRegistry([
+    { ...fanslyResourceSpec("media-download.fetch")!, module: async () => createMediaDownloadModule({ urlAllowed: harnessCdnUrlAllowed }) },
+  ]);
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
+  const mediaAnswer = (r: Rig) => {
+    r.operator.respond = () => ({ status: 200, headers: { "content-type": "image/jpeg" }, body: JPEG });
+  };
+  const handoffs = async (pageId: number) => countRows(testDb!.pool, "select count(*)::int as n from sync_media_handoff where page_id = $1", [pageId]);
+
+  it("a CDN hop's bytes stay with the operator until the apply put them in the handoff: a crash in the apply acknowledges nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    mediaAnswer(r);
+    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/a.jpg" });
+    const made = await actor(r, 60, {
+      registry: mediaRegistry(),
+      faults: (point) => {
+        if (point === "in_apply") throw new SyncCrashFault("in_apply");
+      },
+    });
+    await expect(made.actor.run({ stop: made.stop.signal, abort: made.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
+    expect(r.operator.physical).toHaveLength(1);
+    const attemptId = r.operator.physical[0]!.attemptId;
+    // The capture committed; the bytes did not reach the handoff.
+    expect((await attempts(r.page.pageId)).find((row) => row.id === attemptId)).toMatchObject({ outcome: "response" });
+    expect(await handoffs(r.page.pageId)).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(r.operator.acks).not.toContain(attemptId);
+    expect(r.operator.held.has(attemptId)).toBe(true);
+  }, 60_000);
+
+  it("a CDN hop is acknowledged once its bytes are in the handoff", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    mediaAnswer(r);
+    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/b.jpg" });
+    const made = await actor(r, 60, { registry: mediaRegistry() });
+    await runActorUntil(made, async () => r.operator.acks.length === 1, 20_000, "the ack of the download");
+    expect(r.operator.physical).toHaveLength(1);
+    expect(r.operator.physical[0]!.kind).toBe("image");
+    expect(await handoffs(r.page.pageId)).toBe(1);
+    expect(r.operator.acks).toEqual([r.operator.physical[0]!.attemptId]);
+  }, 60_000);
+
+  it("the page's proxy moves between prepare and the check: nothing is granted, and the next request goes after a hello with the new SOCKS5 and a verify", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    let moved: number | null = null;
+    r.operator.beforeCheck = async (send) => {
+      if (moved !== null) return;
+      moved = send.attemptId;
+      await storeProxyConfig(db(), r.page.pageId, { url: "socks5://127.0.0.3:1082", encryptedAuth: null, keyVersion: null });
+    };
+    const made = await actor(r);
+    await runActorUntil(made, async () => r.operator.physical.some((request) => !isVerify(request.url)), 30_000, "the work through the new proxy");
+    expect(moved).not.toBeNull();
+    expect(r.operator.checkResults.find((result) => result.attemptId === moved)).toMatchObject({ admit: false });
+    expect(r.operator.physical.some((request) => request.attemptId === moved)).toBe(false);
+    expect((await attempts(r.page.pageId)).find((row) => row.id === moved)).toMatchObject({
+      outcome: "aborted_before_send",
+      errorClass: "not_sent:credentials_changed",
+      sentAt: null,
+    });
+    // The link said hello again with the new SOCKS5 before anything went;
+    // the first request through it was the verify of the new generation.
+    expect(r.operator.hellos.at(-1)!.socks5).toMatchObject({ ip: "127.0.0.3", port: 1082 });
+    expect(isVerify(r.operator.physical[0]!.url)).toBe(true);
+    expect(r.operator.sends.findIndex((send) => send.attemptId === r.operator.physical[0]!.attemptId))
+      .toBeGreaterThan(r.operator.sends.findIndex((send) => send.attemptId === moved));
+    const proof = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
+    expect((await getSyncPage(db(), r.page.pageId))!.credentialsGeneration).toBe(proof);
+    // The refused attempt's outcome was acknowledged after its commit.
+    await until(async () => r.operator.acks.includes(moved!), 5_000, "the ack of the refused attempt");
+  }, 60_000);
+
+  it("a complete answer the server did not confirm is journaled as rejected, never applied, and acknowledged after that commit", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.responseSource = "cache_unconfirmed";
+    let applies = 0;
+    const counted = createEngineRegistry([
+      testSpec(READ_KEY, {
+        plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+        apply: async () => {
+          applies += 1;
+          return { work: { satisfiesRevision: true }, followups: [] };
+        },
+      }, { kind: "poll", class: "planned", period: { everyMs: 20 } }),
+    ]);
+    const made = await actor(r, 60, { registry: counted });
+    await runActorUntil(made, async () => r.operator.acks.length >= 1, 20_000, "the ack of the unconfirmed answer");
+    const attemptId = r.operator.acks[0]!;
+    expect((await attempts(r.page.pageId)).find((row) => row.id === attemptId)).toMatchObject({ outcome: "response", errorClass: "unconfirmed" });
+    const journaled = await testDb.pool.query<{ kind: string; source: string; payload: Record<string, unknown> }>(
+      `select o.kind, o.source, o.payload from sync_attempts a join observations o on o.id = a.observation_id and o.received_at = a.observation_received_at
+        where a.id = $1`,
+      [attemptId],
+    );
+    expect(journaled.rows[0]).toMatchObject({ kind: expect.stringMatching(/:unconfirmed$/), source: "pull" });
+    expect(journaled.rows[0]!.payload).toMatchObject({ status: 200, source: "cache_unconfirmed", disposition: "rejected_not_applied" });
+    expect(applies).toBe(0);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and apply_state <> 'none'", [r.page.pageId])).toBe(0);
   }, 60_000);
 });
 
