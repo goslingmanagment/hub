@@ -38,13 +38,16 @@
 //   `wsAdmitResult` admits only on the connection it was asked on: an engine
 //   connection that changes or goes refuses every socket still waiting, and
 //   an admission that finds its socket gone gets `wsDone` with `sent:
-//   false`. Every connection that opened is closed in the stream: by CDP's
-//   word, when the browser goes under it, or — after a restart of the
-//   operator — before its `operator_start` gap. A ws.open that died with
-//   the previous operator is rebuilt by the next one from the connection it
-//   kept, with its `wsDone` (`sentMono` null: that moment died with it); one
-//   that never opened gets `wsDone` with the handshake's fate unknown
-//   (`sent` true once tied, `status` null). `alarm.detail` of
+//   false`. Every connection that opened is closed in the stream exactly
+//   once: by CDP's word, when the browser goes under it, or — by an
+//   operator that starts again, its Chrome gone — before its
+//   `operator_start` gap. An admitted connection that never opened in the
+//   stream before such a restart gets `wsDone` with `fate: "unknown"` (an
+//   addition): whether its handshake went is not known — `sent` is false
+//   because nothing proves it went, `status` null; the engine takes it as
+//   it takes `recover`'s `unknown`. Frames that were not durable before a
+//   crash are not written afterwards (the holder's delivery of them is
+//   acknowledged and dropped): the gap covers them. `alarm.detail` of
 //   `unknown_ws_message` says where it was caught: `left: false` and `at:
 //   "proxy"` for a record the socket gate held, `left: true` for one CDP
 //   says left.
@@ -308,6 +311,9 @@ export interface WsDone {
   sentMono: MonoMs | null;
   status: number | null;
   error: string | null;
+  /** An addition (PR 10): the operator started again after the admission,
+   *  and nothing tells whether the handshake went. */
+  fate?: "unknown";
 }
 // ── the event stream (plan §4.4; PR 11) ──
 export interface EventsSubscribe extends FromEngine {

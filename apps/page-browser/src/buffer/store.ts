@@ -62,25 +62,15 @@ export interface NewEventRow {
 }
 
 /** A change of a site socket's connection (schema.ts, v3). */
-export type ConnectionChange =
-  | { connectionId: string; admitted: { attemptId: number; fingerprint: string } }
-  | { connectionId: string; tied: string }
-  | { connectionId: string; opened: true }
-  | { connectionId: string; gone: true };
+export type ConnectionChange = { connectionId: string; admitted: { attemptId: number } } | { connectionId: string; opened: true } | { connectionId: string; gone: true };
 
 /** A site socket's connection as the buffer has it (v3). */
 export interface StoredConnection {
   connectionId: string;
   attemptId: number;
-  fingerprint: string;
-  /** Chrome's socket (CDP session and request id), once tied. */
-  socketKey: string | null;
   /** Its ws.open is in the stream. */
   opened: boolean;
 }
-
-/** Receipts kept at most (schema.ts, v3): the oldest go beyond. */
-export const MAX_RECEIPTS = 100_000;
 
 export interface NewOutcomeRow {
   attemptId: number;
@@ -115,12 +105,6 @@ export interface Commit {
   outcomes: NewOutcomeRow[];
   /** Steps of Hub attempts (schema.ts, v2). */
   marks?: AttemptMark[];
-  /** Receipts of the Chrome messages these events were made of (v3). */
-  receipts?: Array<{ origin: string; seq: number; atWall: number }>;
-  /** Receipts no longer needed (their acknowledgement reached the holder). */
-  forgetReceipts?: string[];
-  /** Every receipt goes (a new Chrome, a new holder). */
-  purgeReceipts?: boolean;
   /** Changes of the site socket's connections, in order (v3). */
   connections?: Array<ConnectionChange & { atWall: number }>;
   /** Delete the events up to this number (acknowledged), or nothing. */
@@ -196,13 +180,7 @@ function row(statement: StatementSync, ...params: Array<number | string | null>)
 }
 
 function connectionOf(found: Record<string, unknown>): StoredConnection {
-  return {
-    connectionId: String(found.connection_id),
-    attemptId: Number(found.attempt_id),
-    fingerprint: String(found.fingerprint),
-    socketKey: typeof found.socket_key === "string" ? found.socket_key : null,
-    opened: Number(found.opened) === 1,
-  };
+  return { connectionId: String(found.connection_id), attemptId: Number(found.attempt_id), opened: Number(found.opened) === 1 };
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -234,17 +212,9 @@ export class BufferStore {
   readonly #bodyIds: StatementSync;
   readonly #outcomeSeqSizes: StatementSync;
   readonly #outcomeSeqRange: StatementSync;
-  readonly #receiptSeq: StatementSync;
-  readonly #addReceipt: StatementSync;
-  readonly #forgetReceipt: StatementSync;
-  readonly #purgeReceipts: StatementSync;
-  readonly #countReceipts: StatementSync;
-  readonly #capReceipts: StatementSync;
   readonly #admitConnection: StatementSync;
-  readonly #tieConnection: StatementSync;
   readonly #openConnection: StatementSync;
   readonly #dropConnection: StatementSync;
-  readonly #connectionBySocket: StatementSync;
   readonly #allConnections: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
@@ -295,18 +265,10 @@ export class BufferStore {
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
       this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
       this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
-      this.#receiptSeq = db.prepare("SELECT seq FROM ws_receipts WHERE origin = ?");
-      this.#addReceipt = db.prepare("INSERT OR IGNORE INTO ws_receipts (origin, seq, at_wall) VALUES (?, ?, ?)");
-      this.#forgetReceipt = db.prepare("DELETE FROM ws_receipts WHERE origin = ?");
-      this.#purgeReceipts = db.prepare("DELETE FROM ws_receipts");
-      this.#countReceipts = db.prepare("SELECT count(*) AS n FROM ws_receipts");
-      this.#capReceipts = db.prepare("DELETE FROM ws_receipts WHERE origin IN (SELECT origin FROM ws_receipts ORDER BY at_wall, origin LIMIT ?)");
-      this.#admitConnection = db.prepare("INSERT OR REPLACE INTO ws_connections (connection_id, attempt_id, fingerprint, socket_key, opened, at_wall) VALUES (?, ?, ?, NULL, 0, ?)");
-      this.#tieConnection = db.prepare("UPDATE ws_connections SET socket_key = ? WHERE connection_id = ?");
+      this.#admitConnection = db.prepare("INSERT OR REPLACE INTO ws_connections (connection_id, attempt_id, opened, at_wall) VALUES (?, ?, 0, ?)");
       this.#openConnection = db.prepare("UPDATE ws_connections SET opened = 1 WHERE connection_id = ?");
       this.#dropConnection = db.prepare("DELETE FROM ws_connections WHERE connection_id = ?");
-      this.#connectionBySocket = db.prepare("SELECT connection_id, attempt_id, fingerprint, socket_key, opened FROM ws_connections WHERE socket_key = ?");
-      this.#allConnections = db.prepare("SELECT connection_id, attempt_id, fingerprint, socket_key, opened FROM ws_connections ORDER BY at_wall, connection_id");
+      this.#allConnections = db.prepare("SELECT connection_id, attempt_id, opened FROM ws_connections ORDER BY at_wall, connection_id");
       this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes, seq) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?, ?)`);
       this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
       this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
@@ -386,16 +348,8 @@ export class BufferStore {
       for (const mark of batch.marks ?? []) {
         this.#mark.run(mark.attemptId, mark.atWall, mark.step === "received" ? 0 : 1, mark.step === "released" ? 1 : 0);
       }
-      if (batch.purgeReceipts) this.#purgeReceipts.run();
-      for (const origin of batch.forgetReceipts ?? []) this.#forgetReceipt.run(origin);
-      for (const receipt of batch.receipts ?? []) this.#addReceipt.run(receipt.origin, receipt.seq, receipt.atWall);
-      if ((batch.receipts?.length ?? 0) > 0) {
-        const over = Number(row(this.#countReceipts)?.n ?? 0) - MAX_RECEIPTS;
-        if (over > 0) this.#capReceipts.run(over);
-      }
       for (const change of batch.connections ?? []) {
-        if ("admitted" in change) this.#admitConnection.run(change.connectionId, change.admitted.attemptId, change.admitted.fingerprint, change.atWall);
-        else if ("tied" in change) this.#tieConnection.run(change.tied, change.connectionId);
+        if ("admitted" in change) this.#admitConnection.run(change.connectionId, change.admitted.attemptId, change.atWall);
         else if ("opened" in change) this.#openConnection.run(change.connectionId);
         else this.#dropConnection.run(change.connectionId);
       }
@@ -507,24 +461,6 @@ export class BufferStore {
   /** Every body a stored outcome names (the rest of bodies/ goes). */
   bodyIds(): string[] {
     return (this.#bodyIds.all() as Array<{ body_id: string }>).map((found) => found.body_id);
-  }
-
-  /** The number of the event made of this Chrome message, if its receipt
-   *  is kept. */
-  receiptSeq(origin: string): number | null {
-    const found = row(this.#receiptSeq, origin);
-    return found === undefined ? null : Number(found.seq);
-  }
-
-  /** Receipts kept (diagnostics, tests). */
-  receiptCount(): number {
-    return Number(row(this.#countReceipts)?.n ?? 0);
-  }
-
-  /** The connection tied to a Chrome socket, if any. */
-  connectionBySocket(key: string): StoredConnection | null {
-    const found = row(this.#connectionBySocket, key);
-    return found === undefined ? null : connectionOf(found);
   }
 
   /** Every connection kept, oldest first. */

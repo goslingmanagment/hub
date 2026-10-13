@@ -32,9 +32,11 @@
 // allow-list outside the page's JavaScript, record by record; each socket's
 // CONNECT waits at the proxy for the engine's `wsAdmit`, and its handshake
 // goes only before the admission's deadline; its frames go from CDP into
-// the buffer — acknowledged to the holder once durable, written once when
-// the holder delivers them again after a restart — its handshake's outcome
-// to the engine as `wsDone`, and gaps mark where frames may be missing.
+// the buffer — acknowledged to the holder once durable — its handshake's
+// outcome to the engine as `wsDone`, and gaps mark where frames may be
+// missing. After a restart, what the holder delivers again of the previous
+// Chrome's sockets is dropped, and the connections the buffer kept from
+// before are ended there.
 //
 // What holds, whatever happens:
 // - No request leaves without the engine's admission. A Hub request goes
@@ -600,9 +602,10 @@ export class Operator {
         // could not start another link while this one ran: link again.
         if (!this.cdp.linked) continue;
         if (!this.#socketsRestarted) {
-          // What the holder kept of the site's socket from before is in the
-          // stream now; the connections of the Chrome before are closed
-          // there, and the gap of this start follows (plan §4.4, step 6).
+          // What the holder kept of the site's socket from before is behind
+          // (dropped); the connections the buffer kept from before are
+          // ended there, and the gap of this start follows (plan §4.4,
+          // step 6).
           this.#socketsRestarted = true;
           await this.sockets.afterRestart();
         }

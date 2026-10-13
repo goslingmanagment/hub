@@ -18,8 +18,8 @@
 //     not let its authorization go (egress/socket-gate.ts), and a socket
 //     before the login is of no use to Hub. The CONNECT is refused then.
 //  2. `wsAdmitResult`: refused — the CONNECT is refused; admitted — the
-//     admission is written to the buffer first (a restarted operator must
-//     find it: below), then, with the deadline still ahead, the tunnel opens
+//     admission is written to the buffer first (an operator that starts
+//     again ends it: below), then, with the deadline still ahead, the tunnel opens
 //     and its handshake request may go only before the deadline
 //     (egress/proxy.ts; spec §9). An answer counts
 //     only on the engine connection it was asked on: a link that changes or
@@ -61,27 +61,25 @@
 //    one of the same Chrome closed — from that one's last event. A buffer
 //    that fills up writes its own (`buffer_full`, `disk_full`).
 //
-// Restarts (Astra's reviews of PR 10). The holder keeps every message the
-// operator has not acknowledged, and a restarted operator gets them again:
-//  - each event of the socket is acknowledged only once what it wrote is
-//    durable (the client's `holdAcks`); one that wrote nothing at once;
-//  - every event keeps a receipt of the holder's message it was made of
-//    (buffer.ts): one delivered again is not written twice. The receipt
-//    outlives the event (the engine's ack deletes events): it goes once the
-//    acknowledgement was handed to the holder's socket, and every receipt
-//    goes when a new Chrome — a new holder — starts;
-//  - each connection is kept in the buffer (schema.ts v3): admitted before
-//    its CONNECT goes on, tied to Chrome's socket before the tie's event is
-//    acknowledged, opened with its ws.open, gone with its ws.close or its
-//    outcome. So a restarted operator ties the handshake the holder delivers
-//    again to its connection, rebuilds a ws.open that died with the
-//    previous operator (and its `wsDone`), and writes the frames that
-//    follow once. A frame delivered again that no kept connection can take
-//    is not acknowledged: the holder keeps it;
-//  - after the holder's first delivery, every connection the previous
-//    Chrome left — it is gone — is ended in the stream (`afterRestart`):
-//    one that opened gets its ws.close, one that never did its `wsDone`;
-//    then the start's `operator_start` gap.
+// Restarts. The CDP holder delivers again, to an operator that starts
+// again, every message the previous one had not acknowledged. Nothing of the
+// socket is rebuilt from them: that operator kills the previous one's Chrome
+// (it does not know its targets), so every socket of it is gone, and what was
+// not durable before the crash is what the `operator_start` gap is for — the
+// engine finds the gap and backfills it (plan §4.4). So:
+//  - an event of the socket is acknowledged to the holder only once what it
+//    wrote is durable (the client's `holdAcks`); one that wrote nothing, at
+//    once;
+//  - one delivered again (from before this operator) is acknowledged without
+//    writing anything, and counted;
+//  - each admitted connection is kept in the buffer (schema.ts v3) before its
+//    CONNECT goes on, opened with its ws.open, gone with its ws.close or its
+//    outcome. After the holder's first delivery, this operator ends in the
+//    stream every connection kept from before: one that opened gets its
+//    ws.close, one that did not its `wsDone` with the handshake's fate
+//    unknown (`fate: "unknown"`, `sent` false: nothing proves it went) —
+//    then the `operator_start` gap from the last event saved before.
+//    Nothing is attributed by guesswork.
 //
 // Outgoing messages, three layers:
 //  1. the guard in the page (inpage/ws-guard.js) lets only spec §2.6's go
@@ -125,14 +123,12 @@ export interface SocketBuffer {
   markGap(reason: GapReason, from?: { seq: number | null; wall: number | null }): Appended;
   putOutcome(outcome: WsDone): Appended;
   changeConnection(change: ConnectionChange): Appended;
-  forgetReceipts(origins: readonly string[]): void;
-  purgeReceipts(): void;
-  /** The connection tied to a Chrome socket (committed), if any. */
-  connectionBySocket(key: string): StoredConnection | null;
   /** Every connection kept (committed). */
   connections(): StoredConnection[];
   /** Everything accepted so far committed. */
   flush(): Promise<void>;
+  readonly lastSeq: number;
+  readonly lastWall: number | null;
 }
 
 /** The events of the site's socket: their acknowledgement to the holder is
@@ -207,8 +203,7 @@ interface Admission {
   extensions: string | null;
 }
 
-/** A socket as CDP shows it — this operator's, or one of a kept connection
- *  rebuilt after a restart (no admission of this operator then). */
+/** A socket as CDP shows it to this operator. */
 interface CdpSocket {
   key: string;
   url: string;
@@ -217,23 +212,21 @@ interface CdpSocket {
   /** The admission asking for this socket's CONNECT (a guess: the url and
    *  context of `wsAdmit`). */
   guessedBy: string | null;
-  /** This operator's admission, once tied. */
+  /** Its admission, once tied at its handshake. */
   admission: Admission | null;
-  /** Its connection, once tied. */
-  connection: { connectionId: string; attemptId: number; fingerprint: string } | null;
+  /** new → tied (its handshake) → open (101) → closed: its one terminal
+   *  close is written, nothing more of it is. */
   state: "new" | "tied" | "open" | "closed";
   /** Its handshake went with no admission to tie it to: its frames cannot
    *  be kept. */
   lost: boolean;
 }
 
-/** What a handler did with its event: wrote nothing (acknowledged at once),
- *  wrote something (acknowledged once it is durable, its receipt forgotten
- *  once that acknowledgement reached the holder), or must keep it with the
- *  holder (not acknowledged). */
-type Taken = null | "keep" | { durable: Promise<unknown>; origin?: string };
+/** What a handler wrote: acknowledged to the holder once durable; null —
+ *  nothing, acknowledged at once. */
+type Taken = { durable: Promise<unknown> } | null;
 
-/** Sockets and connections remembered at most (a site that leaks them). */
+/** Sockets and admissions remembered at most (a site that leaks them). */
 const MAX_SOCKETS = 1000;
 const MAX_GONE = 1000;
 
@@ -279,8 +272,7 @@ export class SiteSockets {
    *  answer to one that was does nothing twice. */
   readonly #gone = new Map<string, { why: string; attemptId: number | null }>();
   readonly #sockets = new Map<string, CdpSocket>();
-  /** Connections this operator ended (closed in the stream, or answered
-   *  without an open): nothing more is written of them, whatever comes. */
+  /** Connections this operator ended: the start's sweep leaves them be. */
   readonly #ended = new Map<string, true>();
   /** The last event of the socket's stream (ws.open, ws.in, ws.close). */
   #last: Mark | null = null;
@@ -293,7 +285,10 @@ export class SiteSockets {
   #startPending = false;
   #lastHandshake: { mono: number; wall: number } | null = null;
   #binaryFrames = 0;
-  #droppedLate = 0;
+  /** Events dropped: delivered again from before this operator, or of no
+   *  socket it has open (one closed, or never seen). */
+  #replayed = 0;
+  #dropped = 0;
 
   constructor(deps: SocketDeps) {
     this.#deps = deps;
@@ -316,22 +311,27 @@ export class SiteSockets {
     }
   }
 
-  /** One event of the socket and its acknowledgement to the holder. */
+  /** One event of the socket and its acknowledgement to the holder: once
+   *  what it wrote is durable (or could not be written — the buffer's own
+   *  gap covers it), at once when it wrote nothing. One delivered again
+   *  from before this operator is not looked at. */
   #take(event: CdpEvent, handle: (event: CdpEvent) => Taken): void {
     let taken: Taken = null;
     try {
-      taken = handle(event);
+      if (event.replayed) {
+        this.#replayed += 1;
+        if (this.#replayed === 1 || this.#replayed % 100 === 0) this.#log("event.replayed_dropped", { method: event.method, count: this.#replayed });
+      } else {
+        taken = handle(event);
+      }
     } finally {
       const cdp = this.#deps.cdp;
       if (taken === null) cdp.ack(event.seq);
-      else if (taken !== "keep") {
-        const origin = taken.origin;
-        const written = origin === undefined ? undefined : () => this.#deps.buffer.forgetReceipts([origin]);
+      else
         void taken.durable.then(
-          () => cdp.ack(event.seq, true, written),
-          () => cdp.ack(event.seq, true, written),
+          () => cdp.ack(event.seq, true),
+          () => cdp.ack(event.seq, true),
         );
-      }
     }
   }
 
@@ -437,9 +437,9 @@ export class SiteSockets {
       this.#done(admission, { sent: false, status: null, error: `not used: ${unusable}` });
       return;
     }
-    // Kept before the CONNECT goes on: a restarted operator must find what
-    // the holder delivers again of this connection.
-    const kept = this.#deps.buffer.changeConnection({ connectionId: admission.id, admitted: { attemptId: result.attemptId, fingerprint: admission.fingerprint } });
+    // Kept before the CONNECT goes on: an operator that starts again after
+    // a crash ends it in the stream.
+    const kept = this.#deps.buffer.changeConnection({ connectionId: admission.id, admitted: { attemptId: result.attemptId } });
     if (!kept.ok) {
       this.#done(admission, { sent: false, status: null, error: `not used: the admission could not be kept (${kept.reason})` });
       return;
@@ -494,16 +494,17 @@ export class SiteSockets {
 
   // ── the page's lifetime ────────────────────────────────────────────────
 
-  /** The operator started and had what the holder kept from before it (its
-   *  first delivery; operator.ts): the connections of the previous Chrome —
-   *  gone with the previous operator — are ended in the stream, and the
-   *  stream may have missed anything since its last saved event (plan §4.4,
-   *  step 6). */
+  /** The operator started, and the holder's first delivery is behind it
+   *  (operator.ts): every connection kept from before is ended in the
+   *  stream — the previous operator's Chrome is gone with it — and the
+   *  stream may have missed anything since the last event saved before
+   *  (plan §4.4, step 6). */
   async afterRestart(): Promise<void> {
     const buffer = this.#deps.buffer;
     await buffer.flush();
-    this.#sweep("the previous operator's Chrome is gone");
-    const marked = buffer.markGap("operator_start");
+    const from = buffer.lastSeq === 0 ? { seq: null, wall: null } : { seq: buffer.lastSeq, wall: buffer.lastWall };
+    this.#sweep("the operator started again: the previous Chrome is gone");
+    const marked = buffer.markGap("operator_start", from);
     // A buffer that cannot be opened yet gets it all once it opens; a full
     // one writes its own gap when there is room.
     this.#startPending = !marked.ok && marked.reason === "buffer_unavailable";
@@ -516,13 +517,11 @@ export class SiteSockets {
     if (this.#startPending) void this.afterRestart();
   }
 
-  /** A new Chrome starts: a connection of the previous one is gone, and so
-   *  is its holder — no message it kept can come again. */
+  /** A new Chrome starts: a connection of the previous one is gone. */
   async chromeStarting(): Promise<void> {
     const buffer = this.#deps.buffer;
     await buffer.flush();
     this.#sweep("the previous Chrome is gone");
-    buffer.purgeReceipts();
     if (!this.#openedSinceGap && this.#uncovered === null) return;
     const from = this.#last;
     buffer.markGap("chrome_restart", from === null ? undefined : { seq: from.seq, wall: from.wall });
@@ -532,40 +531,37 @@ export class SiteSockets {
 
   /** The page stops or its browser goes (the exit is closed already): what
    *  waits is refused, every admission still open ends, and every open
-   *  connection is closed in the stream — CDP may never say so; whatever it
-   *  still says of them is dropped. */
+   *  connection gets its one terminal close — CDP may never say so, and
+   *  whatever it still says of them is dropped. */
   endAll(reason: string): void {
     for (const admission of [...this.#admissions.values()]) {
       if (admission.stage === "asking") this.#endAsk(admission, `the page stopped: ${reason}`);
       else if (admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: admission.status, error: `the page stopped: ${reason}` });
     }
     for (const socket of this.#sockets.values()) {
-      if (socket.state === "open" && socket.connection !== null) this.#close(socket, socket.connection.connectionId, `the page stopped: ${reason}`, null);
-      else if (socket.connection !== null && socket.admission === null && !this.#ended.has(socket.connection.connectionId)) this.#rebuiltOutcome(socket.connection, null, `the page stopped before the handshake's answer: ${reason}`);
-      else if (socket.connection !== null) this.#endConnection(socket.connection.connectionId);
+      if (socket.state === "open" && socket.admission !== null) this.#close(socket, `the page stopped: ${reason}`, null);
       socket.state = "closed";
     }
     this.#sockets.clear();
   }
 
   /** Every connection kept and not ended by this operator, of a Chrome that
-   *  is gone: one that opened gets its ws.close, one that never did its
-   *  `wsDone` (its handshake's fate unknown: sent, if it was tied). */
+   *  is gone: one that opened gets its ws.close; one that did not its
+   *  `wsDone`, the handshake's fate unknown — nothing in the buffer proves
+   *  it went. */
   #sweep(why: string): void {
-    for (const socket of this.#sockets.values()) socket.state = "closed";
     for (const kept of this.#deps.buffer.connections()) {
       if (this.#ended.has(kept.connectionId) || this.#admissions.has(kept.connectionId)) continue;
+      remember(this.#ended, kept.connectionId, true, MAX_GONE);
       if (kept.opened) {
         this.#append({ kind: "ws.close", connectionId: kept.connectionId, code: null, reason: null }, null, { connection: { connectionId: kept.connectionId, gone: true } });
         this.#uncovered = this.#last;
       } else {
-        this.#store({ type: "wsDone", connectionId: kept.connectionId, attemptId: kept.attemptId, sent: kept.socketKey !== null, sentMono: null, status: null, error: `the handshake's answer never came: ${why}` });
+        this.#store({ type: "wsDone", connectionId: kept.connectionId, attemptId: kept.attemptId, sent: false, sentMono: null, status: null, error: `the handshake's fate is unknown: ${why}`, fate: "unknown" });
         this.#deps.buffer.changeConnection({ connectionId: kept.connectionId, gone: true });
       }
-      remember(this.#ended, kept.connectionId, true, MAX_GONE);
       this.#log("connection.swept", { connectionId: kept.connectionId, opened: kept.opened, why });
     }
-    this.#sockets.clear();
   }
 
   // ── the guard's word ───────────────────────────────────────────────────
@@ -636,21 +632,17 @@ export class SiteSockets {
   }
 
   // ── CDP ────────────────────────────────────────────────────────────────
+  //
+  // Only live events of this operator's Chrome come here (#take); each
+  // handler returns the durability of what it wrote, or null.
 
   #key(event: CdpEvent): string | null {
     const requestId = (event.params as { requestId?: unknown }).requestId;
     return typeof requestId === "string" ? `${event.sessionId ?? ""}|${requestId}` : null;
   }
 
-  /** The Chrome message an event of the stream is made of: its socket and
-   *  the holder's number of the message (the same when it is delivered
-   *  again). */
-  #origin(event: CdpEvent, key: string): string {
-    return `${key}#${event.seq}`;
-  }
-
   /** When Chrome saw it (Network.MonotonicTime is CLOCK_MONOTONIC, as the
-   *  operator's clock), else now: a message delivered again keeps its time. */
+   *  operator's clock), else now. */
   #at(event: CdpEvent): { mono: number; wall: number } {
     const now = monoMs();
     const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
@@ -658,19 +650,27 @@ export class SiteSockets {
     return { mono, wall: Math.round(wallMs() - (now - mono)) };
   }
 
-  #track(socket: CdpSocket): void {
-    remember(this.#sockets, socket.key, socket, MAX_SOCKETS);
+  #socket(event: CdpEvent): CdpSocket | null {
+    const key = this.#key(event);
+    return key === null ? null : (this.#sockets.get(key) ?? null);
   }
 
   #newSocket(event: CdpEvent, key: string, url: string): CdpSocket {
-    const socket: CdpSocket = { key, url, host: hostOf(url), context: contextOf(this.#deps.targetType(event.sessionId ?? null)), guessedBy: null, admission: null, connection: null, state: "new", lost: false };
-    this.#track(socket);
+    const socket: CdpSocket = { key, url, host: hostOf(url), context: contextOf(this.#deps.targetType(event.sessionId ?? null)), guessedBy: null, admission: null, state: "new", lost: false };
+    remember(this.#sockets, key, socket, MAX_SOCKETS);
     return socket;
   }
 
+  /** Something of a socket this operator has no open connection for (one
+   *  closed — after its one close — or never seen): dropped, counted; the
+   *  gap after a close covers it. */
+  #drop(what: string): null {
+    this.#dropped += 1;
+    if (this.#dropped === 1 || this.#dropped % 100 === 0) this.#log("event.dropped", { what, count: this.#dropped });
+    return null;
+  }
+
   #onCreated(event: CdpEvent): Taken {
-    // A previous instance's: its Chrome is killed.
-    if (event.replayed) return null;
     const key = this.#key(event);
     if (key === null || this.#sockets.has(key)) return null;
     this.#newSocket(event, key, String((event.params as { url?: unknown }).url ?? ""));
@@ -691,37 +691,19 @@ export class SiteSockets {
     return false;
   }
 
-  /** A kept connection, rebuilt in memory for its Chrome socket. */
-  #restore(event: CdpEvent, key: string, kept: StoredConnection): CdpSocket {
-    const socket = this.#sockets.get(key) ?? this.#newSocket(event, key, "");
-    socket.connection = { connectionId: kept.connectionId, attemptId: kept.attemptId, fingerprint: kept.fingerprint };
-    socket.state = kept.opened ? "open" : "tied";
-    return socket;
-  }
-
   #onWillSendHandshake(event: CdpEvent): Taken {
     const key = this.#key(event);
     if (key === null) return null;
     let socket = this.#sockets.get(key) ?? null;
-    if (socket !== null && (socket.connection !== null || socket.lost || socket.state === "closed")) return null;
-    const host = socket?.host ?? "";
+    if (socket !== null && socket.state !== "new") return null;
+    if (socket === null) {
+      // Its creation was not seen (the operator came later): taken as is.
+      socket = this.#newSocket(event, key, "");
+    }
+    const host = socket.host;
     const untied = [...this.#admissions.values()].filter((admission) => admission.stage === "admitted" && admission.socket === null && (host === "" || admission.host === host));
-    const admission = event.replayed ? undefined : untied[0];
-    if (admission === undefined) {
-      // No admission of this operator: one kept by the operator before it
-      // (a restart, the holder delivering again) — already tied to this
-      // socket, or the one kept untied.
-      const kept = this.#deps.buffer.connectionBySocket(key);
-      if (kept !== null) {
-        if (!this.#ended.has(kept.connectionId)) this.#restore(event, key, kept);
-        return null;
-      }
-      const loose = this.#deps.buffer.connections().filter((candidate) => candidate.socketKey === null && !this.#ended.has(candidate.connectionId) && !this.#admissions.has(candidate.connectionId));
-      if (loose.length === 1) {
-        const restored = this.#restore(event, key, loose[0]!);
-        return this.#tie(restored.connection!.connectionId, key);
-      }
-      if (socket === null) socket = this.#newSocket(event, key, "");
+    const admission = untied[0];
+    if (!admission) {
       // A handshake through no admitted tunnel the operator knows of (its
       // tunnel already ended): nothing it receives can be tied to an
       // admission. Its frames are not kept; a gap covers them.
@@ -732,52 +714,30 @@ export class SiteSockets {
       return null;
     }
     if (untied.length > 1) this.#log("socket.tie_ambiguous", { admissions: untied.length, chosen: admission.id });
-    socket ??= this.#newSocket(event, key, "");
     socket.admission = admission;
-    socket.connection = { connectionId: admission.id, attemptId: admission.attemptId!, fingerprint: admission.fingerprint };
     socket.state = "tied";
     admission.socket = socket;
-    // Acknowledged once the tie is kept: the handshake delivered again
-    // after a restart finds its connection.
-    return this.#tie(admission.id, key);
-  }
-
-  #tie(connectionId: string, key: string): Taken {
-    const tied = this.#deps.buffer.changeConnection({ connectionId, tied: key });
-    return tied.ok ? { durable: tied.durable } : null;
+    return null;
   }
 
   #onHandshakeResponse(event: CdpEvent): Taken {
-    const key = this.#key(event);
-    if (key === null) return null;
+    const socket = this.#socket(event);
+    if (socket === null || socket.state === "closed") return this.#drop("a handshake's answer");
     const response = (event.params as { response?: { status?: unknown; headers?: unknown } }).response;
     const status = Number(response?.status);
-    const known = Number.isInteger(status) ? status : null;
-    let socket = this.#sockets.get(key) ?? null;
-    if (socket?.state === "closed") return this.#late(socket.connection?.connectionId ?? null);
-    const admission = socket?.admission ?? null;
-    if (admission !== null) {
-      admission.status = known;
-      admission.extensions = extensionsOf(response?.headers);
-    }
-    if (socket === null || socket.connection === null) {
-      // No socket of this operator: a connection kept before a restart.
-      const kept = this.#deps.buffer.connectionBySocket(key);
-      if (kept === null) {
-        if (socket?.lost && status === 101) this.#log("socket.untied_open", { url: urlForLogLine(socket.url) });
-        return null;
-      }
-      if (this.#ended.has(kept.connectionId)) return this.#late(kept.connectionId);
-      socket = this.#restore(event, key, kept);
-    }
-    if (socket.state === "open") return null;
-    const connection = socket.connection!;
-    if (status !== 101) {
-      if (admission !== null) this.#done(admission, { sent: true, status: known, error: `the handshake was answered ${String(known)}` });
-      else this.#rebuiltOutcome(connection, known, `the handshake was answered ${String(known)}`);
-      socket.state = "closed";
+    const admission = socket.admission;
+    if (admission === null || socket.state !== "tied") {
+      if (socket.lost && status === 101) this.#log("socket.untied_open", { url: urlForLogLine(socket.url) });
       return null;
     }
+    admission.status = Number.isInteger(status) ? status : null;
+    admission.extensions = extensionsOf(response?.headers);
+    if (status !== 101) {
+      socket.state = "closed";
+      this.#done(admission, { sent: true, status: admission.status, error: `the handshake was answered ${String(admission.status)}` });
+      return null;
+    }
+    if (admission.attemptId === null) return null;
     // The stream's break since the previous connection closed goes first.
     const uncovered = this.#uncovered;
     if (uncovered !== null) {
@@ -786,81 +746,35 @@ export class SiteSockets {
     }
     socket.state = "open";
     this.#openedSinceGap = true;
-    const origin = this.#origin(event, key);
     const durable = this.#append(
-      { kind: "ws.open", connectionId: connection.connectionId, attemptId: connection.attemptId, sessionFingerprint: this.#deps.sessionFingerprint() ?? connection.fingerprint },
+      { kind: "ws.open", connectionId: admission.id, attemptId: admission.attemptId, sessionFingerprint: this.#deps.sessionFingerprint() ?? admission.fingerprint },
       this.#at(event),
-      { origin, connection: { connectionId: connection.connectionId, opened: true } },
+      { connection: { connectionId: admission.id, opened: true } },
     );
-    if (admission !== null) this.#done(admission, { sent: true, status: 101, error: null });
-    else this.#rebuiltOutcome(connection, 101, null);
-    return durable === null ? null : { durable, origin };
-  }
-
-  /** The outcome of a handshake the operator before this one admitted (its
-   *  own died with it): answered as CDP says, its moment unknown. */
-  #rebuiltOutcome(connection: NonNullable<CdpSocket["connection"]>, status: number | null, error: string | null): void {
-    this.#store({ type: "wsDone", connectionId: connection.connectionId, attemptId: connection.attemptId, sent: true, sentMono: null, status, error });
-    if (status !== 101) this.#endConnection(connection.connectionId);
-    this.#log("connection.rebuilt", { connectionId: connection.connectionId, status });
-  }
-
-  /** The connection of an event's socket: open — its connection; ended by
-   *  this operator — "ended"; none — null. A socket this operator did not
-   *  see open (a restart, the holder delivering again) is looked up among
-   *  the kept connections. */
-  #connectionOf(event: CdpEvent, key: string): { socket: CdpSocket; connectionId: string } | "ended" | null {
-    let socket = this.#sockets.get(key) ?? null;
-    if (socket?.state === "closed") return "ended";
-    if (socket?.state === "open" && socket.connection !== null) return { socket, connectionId: socket.connection.connectionId };
-    if (socket?.admission != null) return null;
-    const kept = this.#deps.buffer.connectionBySocket(key);
-    if (kept === null) return null;
-    if (this.#ended.has(kept.connectionId)) return "ended";
-    if (!kept.opened) return null;
-    socket = this.#restore(event, key, kept);
-    return { socket, connectionId: kept.connectionId };
-  }
-
-  /** Something CDP says of a connection after its ws.close: dropped, counted
-   *  (the gap after the close covers it). */
-  #late(connectionId: string | null): Taken {
-    this.#droppedLate += 1;
-    if (this.#droppedLate === 1 || this.#droppedLate % 100 === 0) this.#log("event.after_close", { connectionId, dropped: this.#droppedLate });
-    return null;
+    this.#done(admission, { sent: true, status: 101, error: null });
+    return durable === null ? null : { durable };
   }
 
   #onFrameReceived(event: CdpEvent): Taken {
-    const key = this.#key(event);
-    if (key === null) return null;
-    const connection = this.#connectionOf(event, key);
-    if (connection === "ended") return this.#late(null);
-    if (connection === null) {
-      // Delivered again with no kept connection to take it: the holder
-      // keeps it (a later operator may have one); live, it is a lost
-      // socket's, covered by a gap.
-      return event.replayed ? "keep" : null;
-    }
+    const socket = this.#socket(event);
+    if (socket === null || socket.state !== "open" || socket.admission === null) return socket?.lost ? null : this.#drop("a frame");
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
     if (response?.opcode !== 1 || typeof response.payloadData !== "string") {
       // Not text: Fansly's socket sends none; counted, its content not kept.
       this.#binaryFrames += 1;
-      if (this.#binaryFrames === 1 || this.#binaryFrames % 100 === 0) this.#log("frame.not_text", { connectionId: connection.connectionId, opcode: Number(response?.opcode), count: this.#binaryFrames });
+      if (this.#binaryFrames === 1 || this.#binaryFrames % 100 === 0) this.#log("frame.not_text", { connectionId: socket.admission.id, opcode: Number(response?.opcode), count: this.#binaryFrames });
       return null;
     }
-    const origin = this.#origin(event, key);
-    const durable = this.#append({ kind: "ws.in", connectionId: connection.connectionId, frame: response.payloadData }, this.#at(event), { origin });
-    return durable === null ? null : { durable, origin };
+    const durable = this.#append({ kind: "ws.in", connectionId: socket.admission.id, frame: response.payloadData }, this.#at(event), {});
+    return durable === null ? null : { durable };
   }
 
   #onFrameSent(event: CdpEvent): Taken {
-    if (event.replayed) return null;
-    const key = this.#key(event);
-    const socket = key === null ? null : (this.#sockets.get(key) ?? null);
+    const socket = this.#socket(event);
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
     const opcode = Number(response?.opcode);
     const payload = typeof response?.payloadData === "string" ? response.payloadData : "";
-    const connectionId = socket?.connection?.connectionId ?? null;
+    const connectionId = socket?.admission?.id ?? null;
     if (opcode !== 1 && opcode !== 2) {
       this.#deps.journal({ connectionId, event: "out", message: { kind: "other", opcode, bytes: payload.length } });
       return null;
@@ -879,9 +793,7 @@ export class SiteSockets {
   }
 
   #onFrameError(event: CdpEvent): Taken {
-    const key = this.#key(event);
-    const socket = key === null || event.replayed ? null : (this.#sockets.get(key) ?? null);
-    const admission = socket?.admission ?? null;
+    const admission = this.#socket(event)?.admission ?? null;
     const message = String((event.params as { errorMessage?: unknown }).errorMessage ?? "").slice(0, 160);
     if (admission === null || admission.stage !== "admitted") return null;
     const status = Number(/response code: (\d{3})/.exec(message)?.[1] ?? NaN);
@@ -890,19 +802,15 @@ export class SiteSockets {
   }
 
   #onClosed(event: CdpEvent): Taken {
-    const key = this.#key(event);
-    if (key === null) return null;
-    const connection = this.#connectionOf(event, key);
-    if (connection === "ended") return this.#late(null);
-    if (connection !== null) {
-      const origin = this.#origin(event, key);
-      const durable = this.#close(connection.socket, connection.connectionId, "closed", this.#at(event), origin);
-      return durable === null ? null : { durable, origin };
+    const socket = this.#socket(event);
+    if (socket === null || socket.state === "closed") return socket?.lost ? null : this.#drop("a close");
+    if (socket.state === "open" && socket.admission !== null) {
+      const durable = this.#close(socket, "closed", this.#at(event));
+      return durable === null ? null : { durable };
     }
-    const socket = this.#sockets.get(key) ?? null;
-    const admission = socket?.admission ?? null;
+    const admission = socket.admission;
+    socket.state = "closed";
     if (admission !== null && admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: admission.status, error: "the socket closed before its handshake's answer" });
-    if (socket !== null) socket.state = "closed";
     return null;
   }
 
@@ -927,20 +835,20 @@ export class SiteSockets {
   }
 
   /** A connection's one terminal close in the stream (its kept connection
-   *  goes in the same commit). From now on nothing more is written of it;
+   *  goes in the same commit): nothing more of it is written afterwards;
    *  what comes after it until the next connection opens may be missing. */
-  #close(socket: CdpSocket, connectionId: string, why: string, at: { mono: number; wall: number } | null, origin?: string): Promise<unknown> | null {
+  #close(socket: CdpSocket, why: string, at: { mono: number; wall: number } | null): Promise<unknown> | null {
     socket.state = "closed";
+    const connectionId = socket.admission!.id;
     remember(this.#ended, connectionId, true, MAX_GONE);
-    const durable = this.#append({ kind: "ws.close", connectionId, code: null, reason: null }, at, { connection: { connectionId, gone: true }, ...(origin === undefined ? {} : { origin }) });
+    const durable = this.#append({ kind: "ws.close", connectionId, code: null, reason: null }, at, { connection: { connectionId, gone: true } });
     this.#uncovered = this.#last;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
     return durable;
   }
 
-  /** A connection that will not open (or opened and is closed elsewhere):
-   *  ended here, its kept row gone. */
+  /** A connection that will not open: ended here, its kept row gone. */
   #endConnection(connectionId: string): void {
     if (this.#ended.has(connectionId)) return;
     remember(this.#ended, connectionId, true, MAX_GONE);
