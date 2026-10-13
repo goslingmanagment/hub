@@ -60,6 +60,8 @@ import {
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  loadFanslySpendingContext,
+  loadFanslySubscriptionContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
@@ -738,12 +740,20 @@ export async function prepareAiFeatureStream(
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
-    const spending = policy.includesEarnings
-      ? await loadSpendingContext(app, { pageId, fanRef })
-      : null;
-    const subscription = policy.includesEarnings
-      ? await loadSubscriptionContext(app, { pageId, fanRef })
-      : null;
+    // chat-extension R20 HF-7г: on Fansly the two blocks are the released
+    // extension's own shape, from the ledger and the captured subscriptions
+    // (context/fansly-money.ts); a deep feature also reads its months by type.
+    // OnlyFans keeps its loaders and its bytes.
+    const spending = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySpendingContext(app, { pageId, fanRef, deep: policy.messageCountBucket === "deep" })
+        : await loadSpendingContext(app, { pageId, fanRef });
+    const subscription = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySubscriptionContext(app, { pageId, fanRef })
+        : await loadSubscriptionContext(app, { pageId, fanRef });
     // One clock for the segment and the silence (Decision #127); readers
     // that show the conversation call the same helper.
     const pingSummary = policy.usesPingSegment

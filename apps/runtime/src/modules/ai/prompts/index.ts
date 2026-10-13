@@ -15,3 +15,5 @@ export * from "./transcript/message-ref.ts";
 export * from "./transcript/ping-segment.ts";
 export * from "./context/spending.ts";
 export * from "./context/subscription.ts";
+export * from "./context/fansly-spending.ts";
+export * from "./context/fansly-subscription.ts";
