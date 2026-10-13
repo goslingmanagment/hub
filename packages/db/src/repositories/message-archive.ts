@@ -1520,6 +1520,12 @@ export interface ArchiveMessageRow {
   /** R20 HF-7д0: Fansly's `type` and `correlationId` with their presence;
    * unknown on rows no marker-carrying head has reached (and on OnlyFans). */
   markers: FanslyMessageMarkers;
+  /** The stored media list (`media_metadata`), its objects verbatim. An
+   * OnlyFans item carries OFAPI's media type; a Fansly one the attachment's
+   * id and the MIME type of its media, `bundle`, or `other` for an attachment
+   * the page served no media or bundle for (the sync-pull material head), in
+   * id order. R20 HF-7а: the AI transcript reads it on Fansly only. */
+  mediaMetadata: Array<Record<string, unknown>>;
 }
 
 function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
@@ -1544,6 +1550,10 @@ function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
       correlationId: (row.correlation_id as string | null) ?? null,
       fieldMask: row.marker_field_mask == null ? null : Number(row.marker_field_mask),
     }),
+    mediaMetadata: Array.isArray(row.media_metadata)
+      ? row.media_metadata.filter((item): item is Record<string, unknown> =>
+        typeof item === "object" && item !== null && !Array.isArray(item))
+      : [],
   };
 }
 

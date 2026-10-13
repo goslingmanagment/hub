@@ -12,6 +12,7 @@ import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
+import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
@@ -38,6 +39,7 @@ import {
   TLS13_OVERHEAD,
   tlsLikeServer,
   until,
+  writeExtensionPackage,
   writeNetSelftest,
   wsFrame,
 } from "./helpers/page-browser-fakes.ts";
@@ -72,6 +74,8 @@ interface SetUp {
   netSelftest: string;
   /** The operator's hand-over of the page's environment to Chrome's start. */
   chromeEnv: string;
+  /** The ID of the rules extension's package the operator serves. */
+  extensionId: string | null;
   lines: string[];
   newOperator: () => Promise<Operator>;
   rpcPort: () => number;
@@ -79,7 +83,10 @@ interface SetUp {
 
 async function setUp(
   options: {
-    extension?: "required";
+    /** "not_installed": an image without the rules extension. */
+    extension?: "not_installed";
+    /** The operator has no package to serve: nothing installs. */
+    noPackage?: boolean;
     exitIp?: () => string | Promise<string>;
     holderMaxBytes?: number;
     params?: Record<string, unknown>;
@@ -115,6 +122,10 @@ async function setUp(
   const netSelftest = join(temp.dir, "net-selftest.json");
   writeNetSelftest(netSelftest);
   const logDir = join(temp.dir, "logs");
+  // The image's package of the rules extension: Chrome's policy installs it
+  // from the operator's port at every start (the model does).
+  const extensionDir = join(temp.dir, "extension");
+  const extensionId = options.noPackage ? null : writeExtensionPackage(extensionDir);
   let rpcPort = 0;
   const newOperator = async () => {
     const operator = new Operator({
@@ -130,6 +141,7 @@ async function setUp(
         logDir,
         stateDir: join(temp.dir, "state"),
         bufferDir: join(temp.dir, "buffer"),
+        extensionDir,
         heartbeatPath: join(temp.dir, "alive"),
         operatorVersion: "test",
       },
@@ -154,7 +166,7 @@ async function setUp(
   cleanups.push(() => engine.close());
   engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
-  return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
+  return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
@@ -194,9 +206,10 @@ describe("the start (plan §4.1)", () => {
     expect(steps.slice(steps.lastIndexOf("exit_closed"))).toEqual(["exit_closed", "env_applied", "chrome_started", "control_attached", "selftest_passed", "exit_ip_verified", "exit_open"]);
     const state = s.engine.last("state")!;
     expect(state).toMatchObject({ exitOpen: true, exitIp: "203.0.113.7", chromeVersion: "Chrome/155.0.8059.39", operatorVersion: "test", stopReason: null });
-    expect(state.selfTest).toMatchObject({ ok: true, failed: null, notInstalled: ["dnr_never", "dnr_write"] });
+    // Every mechanism, the rules extension's two among them: nothing "not installed".
+    expect(state.selfTest).toEqual({ ok: true, atWall: expect.any(Number), failed: null });
     const checks = s.operator.lastSelfTest!.checks;
-    expect([checks.proxy_closed.status, checks.os_rules.status, checks.dnr_never.status, checks.dnr_write.status]).toEqual(["passed", "passed", "not_installed", "not_installed"]);
+    expect([checks.proxy_closed.status, checks.os_rules.status, checks.dnr_never.status, checks.dnr_write.status]).toEqual(["passed", "passed", "passed", "passed"]);
     // The probe reached the interception, went on, and met the closed exit.
     const probe = s.model.requests.find((request) => request.fragment.startsWith("#pb-selftest-"))!;
     expect(probe).toMatchObject({ method: "GET", outcome: "continued", proxyStatus: 403 });
@@ -244,22 +257,56 @@ describe("the start (plan §4.1)", () => {
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
   });
 
-  it("with the rules extension required, passes only when it cancels both probes before the interception", async () => {
-    const s = await setUp({ extension: "required" });
-    s.model.extensionInstalled = true;
+  it("Chrome's policy installs the rules extension from the operator's own port, and the self-test passes only when it cancels both probes before the interception", async () => {
+    const s = await setUp();
     await started(s);
+    // The package the operator served is what is installed: its ID, the map's rules.
+    expect(s.model.installs).toEqual([{ id: s.extensionId, rules: buildRules().length }]);
+    expect(s.model.rules).toEqual(buildRules());
+    expect(s.lines.filter((line) => line.includes('"e":"extension.served"')).map((line) => (JSON.parse(line) as { path: string }).path)).toEqual(["/pb-extension/update.xml", "/pb-extension/hub.crx"]);
     const checks = s.operator.lastSelfTest!.checks;
-    expect([checks.dnr_never.status, checks.dnr_write.status]).toEqual(["passed", "passed"]);
+    expect([checks.dnr_never, checks.dnr_write]).toEqual([
+      { status: "passed", detail: "cancelled by the extension" },
+      { status: "passed", detail: "cancelled by the extension" },
+    ]);
+    // Cancelled before the interception: neither probe was ever paused.
+    const probes = s.model.requests.filter((request) => request.method === "POST");
+    expect(probes.map((request) => [new URL(request.url).pathname, request.outcome])).toEqual([
+      ["/api/v1/message/ack", "blocked_by_extension"],
+      ["/api/v1/pb-selftest-unknown", "blocked_by_extension"],
+    ]);
     expect(s.engine.last("state")!.selfTest).toEqual({ ok: true, atWall: expect.any(Number), failed: null });
   });
 
-  it("with the rules extension required and missing, fails the self-test", async () => {
-    const s = await setUp({ extension: "required" });
+  it("without the package nothing installs: the self-test fails on the extension, the exit stays closed", async () => {
+    const s = await setUp({ noPackage: true });
     s.engine.send({ type: "ping", n: 1, ownerGeneration: 1 });
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "selftest_failed", 15_000);
     expect(alarm.detail).toMatchObject({ failed: "dnr_never" });
+    expect(s.model.installs[0]).toEqual({ failed: "the update manifest: 403" });
+    expect(s.model.rules).toBeNull();
+    expect(s.operator.lastSelfTest!.checks.dnr_never).toEqual({ status: "failed", detail: "the extension let it through: the operator stopped it" });
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
+  });
+
+  it("an extension that is installed but does not cancel the probes fails the self-test too", async () => {
+    const s = await setUp();
+    // Another extension's rules: nothing of the map in them.
+    s.model.policyInstalls = false;
+    s.model.rules = [];
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "selftest_failed", 15_000);
+    expect(alarm.detail).toMatchObject({ failed: "dnr_never" });
+    expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
+  });
+
+  it("an image without the rules extension reports its checks as not installed — never as passed", async () => {
+    const s = await setUp({ extension: "not_installed", noPackage: true });
+    await started(s);
+    expect(s.engine.last("state")!.selfTest).toMatchObject({ ok: true, failed: null, notInstalled: ["dnr_never", "dnr_write"] });
+    const checks = s.operator.lastSelfTest!.checks;
+    expect([checks.dnr_never.status, checks.dnr_write.status]).toEqual(["not_installed", "not_installed"]);
   });
 });
 
@@ -341,7 +388,7 @@ describe("commands", () => {
       type: "commandResult",
       commandId: expect.any(String),
       ok: true,
-      detail: "proxy_closed: passed, os_rules: passed, dnr_never: not_installed, dnr_write: not_installed",
+      detail: "proxy_closed: passed, os_rules: passed, dnr_never: passed, dnr_write: passed",
     });
   });
 

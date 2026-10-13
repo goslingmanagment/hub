@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# The stand check of the page browser image (plan §5, stage 3, PR 2): a test
-# page container from docker-compose.page-browser.yml on this machine's
-# Docker — never a server's — with a new profile, then stand/image-check.mjs
-# inside it, twice: on the first start and after the container is recreated
-# with the same profile. Removes the container and its volumes at the end;
-# the networks pb-control and pb-egress stay.
+# The stand check of the page browser image (plan §5, stage 3, PR 2 and
+# PR 6): a test page container from docker-compose.page-browser.yml on this
+# machine's Docker — never a server's — with a new profile, then, inside it,
+# stand/image-check.mjs (the image: policies, sandbox, the operator's hold of
+# Chrome) and stand/rules-check.mjs (the rules extension: installed by
+# policy, and what it cancels without the operator), twice: on the first
+# start and after the container is recreated with the same profile. Removes
+# the container and its volumes at the end; the networks pb-control and
+# pb-egress stay.
 #
 #   apps/page-browser/stand/image-check.sh [--image <tag>] [--apparmor <profile>]
 #
@@ -24,7 +27,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --image) IMAGE="$2"; shift 2 ;;
     --apparmor) APPARMOR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -90,10 +93,13 @@ run_check() {
     docker logs "page-browser-$PAGE" 2>&1 | grep -E 'init-net|net-selftest|s6-rc|rc.init' | tail -30 >&2
     return 1
   fi
-  docker cp "$APP/stand/image-check.mjs" "page-browser-$PAGE:/tmp/image-check.mjs" >/dev/null
-  docker exec "page-browser-$PAGE" chmod 644 /tmp/image-check.mjs
-  log "$label"
-  docker exec "page-browser-$PAGE" /command/s6-setuidgid pb-operator node --no-warnings /tmp/image-check.mjs
+  local script
+  for script in image-check.mjs rules-check.mjs; do
+    docker cp "$APP/stand/$script" "page-browser-$PAGE:/tmp/$script" >/dev/null
+    docker exec "page-browser-$PAGE" chmod 644 "/tmp/$script"
+    log "$label: $script"
+    docker exec "page-browser-$PAGE" /command/s6-setuidgid pb-operator node --no-warnings "/tmp/$script"
+  done
 }
 
 compose up -d >/dev/null 2>&1

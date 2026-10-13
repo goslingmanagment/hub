@@ -164,8 +164,16 @@ export class QuotaDeniedError extends AppError {
 // wording structurally; the message strings stay stable for clients that
 // still match on them (#120 follow-up).
 export class ProductGateError extends AppError {
-  constructor(message: string, code: `gate_${string}`) {
+  /** Documented structured extension (docs/error-handling.md §3): a machine
+   * reason beside the gate's code, serialized only when non-null. chat-extension
+   * R20 HF-5 uses it for the start-proof lane of `gate_hi_greeting_limit`
+   * (AI_HI_GREETING_REFUSAL_REASONS: `history_unproven`, `too_many_personal`).
+   * Every other gate stays reason-less and keeps the plain envelope. */
+  readonly reason: string | null;
+
+  constructor(message: string, code: `gate_${string}`, options?: { reason?: string | null }) {
     super(message, 400, code);
+    this.reason = options?.reason ?? null;
   }
 }
 

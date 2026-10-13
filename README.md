@@ -84,7 +84,7 @@ curl http://127.0.0.1:3000/api/v1/health
 read -r -s -p 'Initial owner password: ' INITIAL_OWNER_PASSWORD
 printf '\n'
 export INITIAL_OWNER_PASSWORD
-docker compose --env-file .env.production -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec -e INITIAL_OWNER_PASSWORD api \
   node apps/runtime/dist/cli.js user add \
   --username owner \
   --role owner \

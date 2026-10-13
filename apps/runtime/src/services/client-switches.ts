@@ -1,5 +1,6 @@
 import type { ClientFeatureFlagName, ClientReceiptProfile } from "@agency_hub_core/contracts";
 import {
+  findPageSummaryByLabel,
   getConfigOverrides,
   listClientBootstrapPages,
   lockConfigOverridesForShare,
@@ -55,13 +56,19 @@ export const CLIENT_SWITCH_KEYS = [
  * switches, the health intake's own switch (H-11b; it is not one of the five,
  * see `ClientSwitches.healthIngestEnabled`), and the two keys later PRs add,
  * listed already so the revision means the same thing from the first client on;
- * a key that does not exist yet has no audit row.
+ * a key that does not exist yet has no audit row. Then the two switches of the
+ * voice-notes lane that the bootstrap's `voice` reads (R20 HF-4б,
+ * voice-lane.ts); the lane's other two conditions are no setting (the provider
+ * is built at boot, a voice profile is a row of its own), and the client sees
+ * them within the bootstrap's TTL.
  */
 export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   ...CLIENT_SWITCH_KEYS,
   "aiLiveTextContextMode",
   "aiTranscriptDeepMaxRows",
   "chatExtensionHealthIngestEnabled",
+  "voiceNotesEnabled",
+  "voiceNotesPageAllowlist",
 ] as const;
 
 /** The resting minimum: every readable extension version passes until the owner sets one. */
@@ -343,6 +350,25 @@ export async function requireClientFeature(
   page: { id: number },
   flag: ClientFeatureFlagName,
 ): Promise<ClientBootstrapPageRow> {
+  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
+    clientFeatureRefusal(switches, row, flag)
+  ));
+}
+
+/**
+ * requireClientFeature for a page the request names by its label: the narrow
+ * token's AI generations behind a flag (client-ai-switch.ts) and its voice
+ * notes (R20 HF-4б, modules/voice). A label no page has answers like a page
+ * not granted, so the refusal reveals nothing.
+ */
+export async function requireClientFeatureOnLabel(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  pageLabel: string,
+  flag: ClientFeatureFlagName,
+): Promise<ClientBootstrapPageRow> {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
   return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
     clientFeatureRefusal(switches, row, flag)
   ));

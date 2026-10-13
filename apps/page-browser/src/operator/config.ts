@@ -27,6 +27,9 @@ export interface OperatorConfig {
   stateDir: string;
   /** The buffer's database (plan §4.4; buffer/), on the buffer volume. */
   bufferDir: string;
+  /** The rules extension's package (extension/build.ts), served to
+   *  Chrome's policy on the proxy's port. */
+  extensionDir: string;
   /** Touched every second; the watchdog kills an operator that stops. */
   heartbeatPath: string | null;
   operatorVersion: string;
@@ -56,6 +59,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     logDir: envStr("PB_LOG_DIR", "/data/buffer/logs"),
     stateDir: envStr("PB_STATE_DIR", "/data/buffer/operator"),
     bufferDir: envStr("PB_BUFFER_DIR", "/data/buffer/store"),
+    extensionDir: envStr("PB_EXTENSION_DIR", "/opt/page-browser/extension/dist"),
     heartbeatPath: envStr("PB_HEARTBEAT", "/run/pb/operator/alive"),
     operatorVersion: envStr("PB_OPERATOR_VERSION", "dev"),
   };

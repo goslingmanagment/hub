@@ -382,9 +382,16 @@ describe("the image", () => {
       QuicAllowed: false,
       WebRtcIPHandling: "disable_non_proxied_udp",
       NetworkPredictionOptions: 2,
+      // Every http:// navigation upgraded: the page leaves only over TLS.
+      HttpsOnlyMode: "force_enabled",
       PasswordManagerEnabled: false,
       PasswordLeakDetectionEnabled: false,
       BrowserSignin: 0,
+      // No window or profile where the rules extension does not run:
+      // extensions are off in Incognito and in guest windows (PR 6).
+      IncognitoModeAvailability: 1,
+      BrowserGuestModeEnabled: false,
+      BrowserAddPersonEnabled: false,
       SyncDisabled: true,
       DownloadRestrictions: 3,
       RestoreOnStartup: 4,
@@ -395,5 +402,39 @@ describe("the image", () => {
 
   it("keeps the stand out of the build context", () => {
     expect(readFileSync(path.join(app, ".dockerignore"), "utf8").split("\n")).toContain("stand");
+  });
+});
+
+describe("the stand's checks of the image", () => {
+  const imageCheck = read("apps/page-browser/stand/image-check.sh");
+  const rulesCheckSh = read("apps/page-browser/stand/rules-check.sh");
+  const rulesCheck = read("apps/page-browser/stand/rules-check.mjs");
+
+  it("run in a container as the operator's user: the image's, then the rules extension's (PR 6)", () => {
+    expect(imageCheck).toContain("for script in image-check.mjs rules-check.mjs; do");
+    expect(imageCheck).toContain('docker exec "page-browser-$PAGE" /command/s6-setuidgid pb-operator node --no-warnings "/tmp/$script"');
+    // In a page container that exists: only a page's, and only as pb-operator.
+    expect(rulesCheckSh).toContain('[[ "$CONTAINER" == page-browser-* ]]');
+    expect(rulesCheckSh).toContain('exec docker exec "$CONTAINER" /command/s6-setuidgid pb-operator node --no-warnings /tmp/rules-check.mjs');
+    for (const script of ["image-check.sh", "rules-check.sh"]) expect(spawnSync("bash", ["-n", path.join(app, "stand", script)]).status, script).toBe(0);
+    for (const script of ["image-check.mjs", "rules-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
+  });
+
+  it("the rules check asks the image's own map for what must be cancelled, and never a container whose Chrome runs unasked", () => {
+    expect(rulesCheck).toContain("await import(`${SRC}/policy/operations.ts`)");
+    expect(rulesCheck).toContain('const SRC = process.env.PB_SRC ?? "/opt/page-browser/src";');
+    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS) for (const method of methodsOf(row))");
+    // A closed read is asked for by a GET too, as a page and in other spellings.
+    expect(rulesCheck).toContain('const methodsOf = (row) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] : row.methods);');
+    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS.filter((entry) => entry.methods.includes(ANY_METHOD))) {");
+    expect(rulesCheck).toContain("for (const closure of GENERAL_CLOSURES)");
+    expect(rulesCheck).toContain('if (!chromeGone() && !takeOver) throw new Error("Chrome is running');
+    // No window without the extension (Ctrl+Shift+N), TLS only, and the
+    // environment check's page under those policies, on the real Chrome.
+    for (const name of ["no_window_without_the_extension", "env_check_page_works", "http_navigation_upgraded"]) expect(rulesCheck).toContain(`check("${name}"`);
+    // It leaves the page as a standing one, whatever happened.
+    const last = rulesCheck.slice(rulesCheck.indexOf("} finally {"));
+    expect(last).toContain('svc("-d", CHROME)');
+    expect(last).toContain('if (operatorStopped) svc("-u", OPERATOR)');
   });
 });

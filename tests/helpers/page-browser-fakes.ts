@@ -1,6 +1,7 @@
-import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer } from "node:http";
+import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
+import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -9,12 +10,16 @@ import type { EventBody } from "../../apps/page-browser/src/buffer/buffer.ts";
 import { CdpError, CdpUnanswered, type CdpEvent, type CdpPort, type EventHandler } from "../../apps/page-browser/src/cdp/client.ts";
 import type { ApiGate } from "../../apps/page-browser/src/egress/gate.ts";
 import { clientFrameBytes } from "../../apps/page-browser/src/egress/socket-gate.ts";
+import { unzip, verifyCrx3 } from "../../apps/page-browser/src/extension/crx.ts";
+import { buildPackage, EXTENSION_ORIGIN, PACKAGE_FILES, UPDATE_PATH } from "../../apps/page-browser/src/extension/package.ts";
 import { ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
 import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
+import { buildRules, type DnrRule } from "../../apps/page-browser/src/policy/rules.ts";
 import { monoMs } from "../../apps/page-browser/src/shared/util.ts";
 import { acceptWebSocket, clientHandshake, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
+import { dnrBlocks } from "./page-browser-dnr.ts";
 
 // Fakes for the page browser's unit tests (Project Browser plan §3.3:
 // "the operator with a fake CDP"): Chrome's DevTools endpoint, the page's
@@ -589,6 +594,36 @@ interface ModelTarget {
   loaded: boolean;
 }
 
+let extensionKey: KeyObject | null = null;
+
+/** The rules extension's package as the image's build leaves it
+ *  (apps/page-browser/extension/build.ts), in `dir`: what the operator
+ *  serves to Chrome's policy. Returns its ID. */
+export function writeExtensionPackage(dir: string): string {
+  extensionKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+  const template = JSON.parse(readFileSync(new URL("../../apps/page-browser/extension/manifest.json", import.meta.url), "utf8")) as Record<string, unknown>;
+  const built = buildPackage({ template, rules: buildRules(), key: extensionKey });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, PACKAGE_FILES.crx), built.crx);
+  writeFileSync(join(dir, PACKAGE_FILES.update), built.updateXml);
+  writeFileSync(join(dir, PACKAGE_FILES.id), `${built.id}\n`);
+  writeFileSync(join(dir, PACKAGE_FILES.rules), built.rules);
+  return built.id;
+}
+
+/** A plain GET to the operator's proxy port, as Chrome makes it to loopback. */
+function plainGet(port: number, path: string): Promise<{ status: number; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, method: "GET", path }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 /** What Chrome shows of the page's environment (the model's process). */
 export interface ModelEnv {
   timeZone: string;
@@ -598,16 +633,26 @@ export interface ModelEnv {
 
 /** A browser behind FakeChrome, scripted enough for the operator's start:
  *  targets and auto-attach, the work tab, isolated worlds, the self-test's
- *  fetch() — paused in Fetch, or cancelled by a rules extension — and what a
- *  continued request does: a CONNECT to the operator's proxy. And the page's
+ *  fetch() — paused in Fetch, or cancelled by the rules extension — and what
+ *  a continued request does: a CONNECT to the operator's proxy. The rules
+ *  extension as Chrome's policy installs it at a start: the update manifest
+ *  and the package from the operator's port, verified, its rules.json
+ *  applied by the model of DNR (page-browser-dnr.ts). And the page's
  *  environment: the time zone and languages Chrome's start took from the
  *  operator's hand-over (`chromeStarts`), geolocation grants and overrides,
  *  throwaway browser contexts, a page whose document the operator answers. */
 export class BrowserModel {
   readonly chrome: FakeChrome;
   readonly requests: ModelRequest[] = [];
-  extensionInstalled = false;
-  /** The operator's proxy port (where a continued request goes). */
+  /** The installed extension's rules (the profile keeps them over Chrome's
+   *  restarts); null — none installed. */
+  rules: DnrRule[] | null = null;
+  /** Chrome's policy force-installs the extension at every start. */
+  policyInstalls = true;
+  /** What each start's install came to: the ID installed, or why not. */
+  readonly installs: Array<{ id: string; rules: number } | { failed: string }> = [];
+  /** The operator's proxy port (where a continued request goes, and where
+   *  the policy's update URL points). */
   proxyPort = 0;
   /** Called on Browser.close, before Chrome goes. */
   onBrowserClose: () => void = () => undefined;
@@ -739,9 +784,46 @@ export class BrowserModel {
 
   /** Chrome starts, as its run script starts it: with the time zone and
    *  languages of the hand-over at `path`, if there is one. */
+  get extensionInstalled(): boolean {
+    return this.rules !== null;
+  }
+
+  /** A test's shortcut: the image's own rules installed, or none (and no
+   *  policy to install them). */
+  set extensionInstalled(installed: boolean) {
+    this.rules = installed ? buildRules() : null;
+    if (!installed) this.policyInstalls = false;
+  }
+
+  /** Chrome's policy at a start (ExtensionSettings, force_installed): the
+   *  update manifest from the operator's port, the package it names — its
+   *  bytes checked against the manifest's hash, its signature and ID as
+   *  Chrome checks them — and its rules.json enabled. */
+  async installByPolicy(): Promise<void> {
+    try {
+      const update = await plainGet(this.proxyPort, `${UPDATE_PATH}?os=linux&acceptformat=crx3&x=installedby%3Dpolicy%26uc`);
+      if (update.status !== 200) throw new Error(`the update manifest: ${update.status}`);
+      const xml = update.body.toString();
+      const attribute = (name: string) => new RegExp(`${name}='([^']*)'`).exec(xml)?.[1] ?? "";
+      const codebase = new URL(attribute("codebase"));
+      if (codebase.origin !== EXTENSION_ORIGIN) throw new Error(`the package is not on the operator's port: ${codebase.origin}`);
+      const crx = await plainGet(this.proxyPort, codebase.pathname);
+      if (crx.status !== 200) throw new Error(`the package: ${crx.status}`);
+      if (createHash("sha256").update(crx.body).digest("hex") !== attribute("hash_sha256")) throw new Error("the package is not the bytes the update manifest names");
+      const read = verifyCrx3(crx.body);
+      if (read.id !== attribute("appid")) throw new Error("the package's ID is not the update manifest's");
+      const rules = JSON.parse(unzip(read.archive).find((file) => file.name === "rules.json")!.data.toString()) as DnrRule[];
+      this.rules = rules;
+      this.installs.push({ id: read.id, rules: rules.length });
+    } catch (error) {
+      this.installs.push({ failed: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   chromeStarts(path: string): void {
     this.#tabs.clear();
     this.overrides.clear();
+    if (this.policyInstalls) void this.installByPolicy();
     let text: string | null;
     try {
       text = readFileSync(path, "utf8");
@@ -880,8 +962,7 @@ export class BrowserModel {
   }
 
   #fetch(url: string, method: string, sessionId: string | undefined): void {
-    const path = new URL(url).pathname;
-    if (this.extensionInstalled && method !== "GET" && (path === "/api/v1/message/ack" || path.startsWith("/api/v1/pb-selftest-unknown"))) {
+    if (this.rules !== null && dnrBlocks(this.rules, { method, url })) {
       const n = ++this.#requests;
       const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: url.split("#")[0]!, fragment: "", method, sessionId, outcome: "blocked_by_extension" };
       this.requests.push(request);

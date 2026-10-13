@@ -45,6 +45,7 @@ import {
   GenerationNotEligibleError,
   NotFoundError,
   OfapiCollectionRefusedError,
+  ProductGateError,
   SnapshotRestartRequiredError,
   TooManyRequestsError,
   UnauthorizedError,
@@ -573,7 +574,8 @@ export async function buildApiServer(appContext: AppContext) {
         || error instanceof ConflictError
         || error instanceof BadRequestError
         || error instanceof ClientFeatureDisabledError
-        || error instanceof GenerationNotEligibleError)
+        || error instanceof GenerationNotEligibleError
+        || error instanceof ProductGateError)
       && error.reason !== null
     ) {
       // Documented structured extension (docs/error-handling.md §3): the
@@ -581,8 +583,9 @@ export async function buildApiServer(appContext: AppContext) {
       // 401 for a presented device token, used | expired | revoked on the
       // account-link 409, too_short | too_long | common on the redeem 400, why
       // a chat-extension feature is unavailable on client_feature_disabled,
-      // why a generation never becomes a dossier on generation_not_eligible.
-      // A reason-less error keeps the plain envelope.
+      // why a generation never becomes a dossier on generation_not_eligible,
+      // history_unproven | too_many_personal on the start-proof lane of
+      // gate_hi_greeting_limit. A reason-less error keeps the plain envelope.
       reply.code(error.statusCode).send({
         error: error.code,
         message: error.message,

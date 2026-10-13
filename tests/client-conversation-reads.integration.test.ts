@@ -704,6 +704,52 @@ describe("reads by conversation (chat-extension R20 HF-10)", () => {
       await trap!.assertNoOutbound();
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
+    it("the feed captions a Fansly row's media as its transcript labels them; an OnlyFans row keeps its reading (R20 HF-7в)", async (context) => {
+      if (!server) return context.skip();
+      // The media lists the Fansly material head stores (prod shape): a photo,
+      // a tip's attachment (`other`, no media plane row: never shown), and a
+      // bundle beside a video (id order, no members known yet).
+      const stored = (id: string, type: string) => ({ id, type, canView: true, isReady: null, duration: null });
+      for (const [ref, media] of [
+        ["811", [stored("810000000000000001", "image/jpeg")]],
+        ["812", [stored("840000000000000001", "other")]],
+        ["813", [stored("820000000000000001", "bundle"), stored("830000000000000001", "video/mp4")]],
+      ] as const) {
+        await testDb!.pool.query(
+          "update message_archive set media_metadata = $3::jsonb where account_id = $1 and message_ref = $2",
+          [pageIds["lora-fansly"], ref, JSON.stringify(media)],
+        );
+      }
+      const fansly = await feedOk({ conversationRef: GROUP, limit: 3 });
+      // Read the OnlyFans way, these were `[Media]`, `[Media]` and `[Media Bundle]`.
+      expect(fansly.items.map((item) => [item.messageId, item.attachmentLabels])).toEqual([
+        ["811", ["[Photo]"]],
+        ["812", []],
+        ["813", ["[Media Bundle]", "[Video]"]],
+      ]);
+      // A later page reads its captions the same way.
+      await testDb!.pool.query(
+        "update message_archive set media_metadata = $3::jsonb where account_id = $1 and message_ref = $2",
+        [pageIds["lora-fansly"], "814", JSON.stringify([stored("810000000000000002", "video/mp4")])],
+      );
+      const next = await feedOk({ conversationRef: GROUP, cursor: fansly.nextOlderCursor!, limit: 1 });
+      expect(next.items.map((item) => [item.messageId, item.attachmentLabels])).toEqual([["814", ["[Video]"]]]);
+
+      // OnlyFans: OFAPI's own list, read as before (a MIME type is not one of its words).
+      for (const [ref, media] of [["91", [{ id: 7001, type: "photo" }]], ["92", [{ id: 7002, type: "image/jpeg" }]]] as const) {
+        await testDb!.pool.query(
+          "update message_archive set media_metadata = $3::jsonb where account_id = $1 and message_ref = $2",
+          [pageIds["lora-of"], ref, JSON.stringify(media)],
+        );
+      }
+      const onlyFans = await feedOk({ page: "lora-of", fan: OF_FAN, limit: 2 });
+      expect(onlyFans.items.map((item) => [item.messageId, item.attachmentLabels])).toEqual([
+        ["91", ["[Photo]"]],
+        ["92", ["[Media]"]],
+      ]);
+      await trap!.assertNoOutbound();
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
     it("two chats and two fans with different ids never leak into each other: recaps, Coach, the dossier save and the feed", async (context) => {
       if (!server) return context.skip();
       // Each row that must not reach FAN is NEWER than the one that must.

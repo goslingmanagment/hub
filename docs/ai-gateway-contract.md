@@ -100,7 +100,7 @@ return it as JSON on success.
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
 `packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
-`coverage-check-v1`). A token is
+`coverage-check-v1`, `hi-start-proof-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -121,6 +121,10 @@ authorization.
   something only beside `context-v1` (see "Feature-lane window coverage check" below). The
   bootstrap lists the same name among the capabilities this hub serves: a client sends the body's
   `coverageCheck` only to a hub that lists it, since an older hub's strict body refuses the field.
+- `hi-start-proof-v1` moves Hi on a Fansly page, for a request without `clientContext`, to the
+  start-proof gate, and is required to send `startProof`, `personalMessageCount` and the top-level
+  `fanAvatarUrl` (see "Hi on Fansly by the start proof" below). It adds no frame. The bootstrap lists
+  the same name: a client sends those fields only to a hub that lists it.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -257,6 +261,84 @@ as before: a request with `clientContext` (the released Fansly extension sends i
 with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
 `fanRef`.
 
+### Hi on Fansly by the start proof (chat-extension R20 HF-5)
+
+Hi is for a conversation with at most 10 personal messages (the fan's, and the model's that are not
+a welcome or a mass send), counted over a history read to its first message. The hub cannot count
+them on Fansly: its history there is pull-cadenced and almost never reaches a new chat's first
+message. The released Fansly extension counts them itself and sends the count in `clientContext`.
+A client that sends no `clientContext` proves the start from what its page already loaded, and the
+hub checks what it can check.
+
+**The lane.** `hi-greeting`, a Fansly page, no `clientContext`, a caller that advertised
+`hi-start-proof-v1`. On it the proof decides Hi and nothing else does. Off it nothing changes: Hi
+keeps the gate it had (the count of messages in the hub's transcript, or the released clients'
+`clientContext.personalMessageCount`), and the three body fields below are refused.
+
+**The body fields** (all optional):
+
+- `startProof`: `{ v: 1, source, groupId, startWitnessId, coveredCount, personalCount, automatedIds }`.
+  `source` is who proved the start: `tab-short-page` (the open tab, by a fresh end of the history
+  shorter than a page and the continuous observation since) or `pass-empty-page` (a walk of the
+  history to its empty page). `groupId` is the chat. `startWitnessId` is the first message of the
+  conversation as the source saw it, null only for an empty history. `coveredCount` is how many
+  messages from the start the source saw. `personalCount` is the personal messages among them: a
+  tab counts over the whole history it proved, a pass among the last 30 messages of the history it
+  walked, as the released extension does. `automatedIds` are the newest automatic messages, oldest
+  first, at most 120. Ids only, never a text. The schema is the client's own, field by field:
+  the witness is null exactly when `coveredCount` is 0, no automatic id is older than it, the
+  automatic ids ascend without repeats, the counts stay within `coveredCount` (a tab's personal and
+  automatic messages together too), and a pass counts at most 30.
+- `personalMessageCount`: the same count at the top level, as the released clients carry it in
+  `clientContext`. It proves nothing by itself; beside a proof it must equal
+  `startProof.personalCount`.
+- `fanAvatarUrl`: the fan's avatar as the page already loaded it, under the rule of
+  `clientContext.fanAvatarUrl` (an HTTPS address on a Fansly host, at most 4,096 characters). It
+  rides to the provider as an image, exactly as that field does; the hub never fetches it.
+
+**Where they are refused** (400 `bad_request` with a machine `reason`, before any context loads;
+a request that sends none of them is never refused here):
+
+| The request | `reason` |
+|---|---|
+| a feature other than `hi-greeting`, a request with `clientContext`, or a page that is not Fansly | `start_proof_not_allowed` |
+| no `hi-start-proof-v1` in `x-kernel-ai-capabilities` | `capability_required` |
+| `startProof.groupId` is not the request's `conversationRef`, or `personalMessageCount` is not `startProof.personalCount` | `start_proof_mismatch` |
+
+**The gate.** A refusal is 400 `gate_hi_greeting_limit` with a machine `reason`
+(`AI_HI_GREETING_REFUSAL_REASONS`); nothing is generated and nothing is recorded. A request
+without a proof is refused before any context loads; a proof is judged after the transcript
+loaded. The first that holds:
+
+| The request | Answer |
+|---|---|
+| no `startProof` (with or without a count) | `history_unproven` |
+| the request's own `coverageCheck.window` names a message older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
+| the hub holds, as not deleted, a message of the conversation older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
+| `personalCount` is above 10 | `too_many_personal` |
+| otherwise | served |
+
+What the hub holds for the conversation is the transcript it just served (with the socket overlay's
+messages, where the live union served it) and the oldest message of its archive, one more read
+(`findAiConversationOldestMessageRef`: this page, this conversation, not deleted; on a page that
+reads the overlay, not deleted on the socket either). A message the hub knows as deleted never
+contradicts a proof. Neither does a message of another chat or of another page, nor a witness the
+hub does not hold or holds as deleted: the hub's history seldom reaches a chat's start, and the
+proof is the client's. Ids compare as snowflakes (the shorter is the older, then the string order),
+never as numbers. The number of messages in the hub's transcript is not read on this lane: a chat
+with forty automatic messages and no personal one is admitted. A failed read fails the request, as
+any failed context load does.
+
+An admitted proof adds nothing to the prompt, the stream or the `context_v1` frame; the record
+keeps its counts as `params.contextManifest.hiStartProof` (`source`, `coveredCount`,
+`personalCount`, `automatedCount`), never an id. The window's ids are still answered one by one
+in the frame (the window coverage check, above).
+
+The schema's bodies, the refusals and the gate's answers are one fixture matrix shared with the
+client: `tests/fixtures/ai-hi-start-proof-matrix.json`. The hub proves itself against it
+(`tests/ai-hi-start-proof.test.ts`); the client's fake hub copies the file verbatim (chat-extension
+P6c2). A change to these rules is a change to that file.
+
 ### Voice identity on Fansly (chat-extension R20 HF-4а)
 
 A voice take is a `voice-script` generation, then a paid render of it
@@ -325,6 +407,61 @@ What differs from the extension's blocks:
 Not changed: a request with `clientContext` (its two blocks are the client's, byte for byte), and
 OnlyFans (`loadSpendingContext`, `loadSubscriptionContext`).
 
+### Feature-lane media on Fansly (chat-extension R20 HF-7a)
+
+On a Fansly page the transcript the hub loads itself (no `clientContext`) shows a message's
+attachments as the released Fansly extension (2.10.1) shows them in the transcript it sends: one
+label per attachment, in the message's order, before the text. `[Photo]`, `[Video]`, `[Audio]`;
+`[Media]` for a media of no known kind or one the page never served; `[Media Bundle: 2 Photos,
+1 Video]` for a bundle, counting the photos and videos among its members the page served
+(`[Media Bundle]` when there are none). An attachment that is not media (a tip's, a story reply's)
+has no label; a tip reads `[Tip: $X.XX]` as before. Each paid attachment carries its own purchase
+mark (R20 HF-7в, below); a message whose attachments the media plane has not recorded yet keeps one
+suffix (` - PPV $X.XX, unknown`) on its first label, because the archive keeps one price per message.
+
+The labels come from the hub's stores: the archive row's `media_metadata` (what each attachment is:
+its MIME type, a bundle, or `other`) and the media plane of the same observations
+(`message_media_offers`: the attachments' order and content type; `creator_media_bundles` and
+`creator_media`: a bundle's members). On a page in `fanslyLiveOverlayReadPages` a socket message
+the archive does not hold yet is labelled from its attachments' ids by the same tables, with no
+price (money is REST-only): a file the hub has not seen reads `[Media]` until the message's REST
+copy arrives. A failed read of those tables does not fail the generation: the messages serve
+without media labels and `params.contextManifest.fanslyMediaError` is `true`.
+
+Unchanged: a request with `clientContext` (its transcript is the client's), and OnlyFans (the
+archive reader shapes its rows without their media list, as before; the union reads OFAPI's).
+
+The conversation feed (`clientConversationFeed`) captions a Fansly row's media with the same words
+(`[Photo]`, `[Media Bundle: 2 Photos]`, nothing for a tip's attachment), without price or purchase
+state: those are the item's `priceMills` and `tipMills`. An OnlyFans row's captions are read from its
+own media list, as before.
+
+### Feature-lane PPV purchase state on Fansly (chat-extension R20 HF-7в)
+
+On the same lane each paid attachment of a Fansly message is marked on its own label, as the
+released extension marks it: `[Video - PPV $20.00, purchased] [Photo] [Media Bundle: 1 Photo, 1 Video
+- PPV $30.00, unknown]`. An attachment is paid when a permission row the page served for its media or
+bundle has the PPV bit (`flags & 1`); its price is that row's `price`, else the price inside its
+`metadata`, else none (` - PPV, state`). The state is the chat's fan's (the fan the page's capture
+names for the group, `page_dm_threads`; unknown fan: every state `unknown`):
+
+- `purchased`: an order of the fan for that media or bundle in `media_orders` (a single media's own
+  order of type 1 or of no type; a bundle's order);
+- `not purchased`: no such order, and the hub has read the target's whole order history: its latest
+  Sync Engine walk (`purchases.targets`, one per media or bundle) closed on an empty page or on an
+  order its previous whole walk saw, every page its walks read is canonicalized, and no order of the
+  fan waits above the media plane's watermark;
+- `unknown`: everything else — a target never walked (the engine walks a target when an order of it
+  is seen, so a PPV nobody bought stays `unknown`), a walk open or closed on a refusal, an order not
+  projected yet, a failed read.
+
+The released extension asks Fansly on every generation instead (`/media/orderhistory` per paid
+attachment, filtered by the fan); where the hub has no complete walk it says `unknown` where the
+extension could say `not purchased`. `params.contextManifest.fanslyPpv` counts the paid attachments
+and their states (`{ paid, purchased, notPurchased, unknown }`, only when one is paid); a failed
+purchase read leaves every mark `unknown` and sets `fanslyPpvError: true`. A socket message (live
+overlay) carries no price and no mark.
+
 ### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
 
 `messageCount` is the window a request asks for (5 to 5000). The hub's two transcript readers (the
@@ -384,6 +521,49 @@ larger than the window of the model the request runs on is refused by the provid
 generation fails. The Recap's model (Opus 5.5) has a 1M-token window: the heaviest 5000-message
 Recap above takes about a quarter of it with the answer's 24k-token budget, and fits even if every
 byte of its text were a token. A request that names another `model` carries that model's window.
+
+### Feature-lane fan profile on Fansly (chat-extension R20 HF-7б)
+
+On a Fansly page a request without `clientContext` reads who the fan is from the hub's stores, by
+the rules of the released Fansly extension (2.10.1), which reads the fan's account from Fansly at
+every generation and sends what it read in `clientContext`
+(`apps/runtime/src/modules/ai/context/fansly-fan-identity.ts`):
+
+- **the name**: the username, else the display name, else `fan`. Hi turns the pair round (display
+  name first) and names the username on a line of its own.
+- **the saved name**: the page's own name for the fan (Fansly's "Custom Username" note),
+  `page_fans.page_alias` of the page the request names. It reads where `clientContext.fanCustomName`
+  does: in Ping and Hi. One difference from the released client: of several such notes on one fan
+  (2% of the named fans on production) the hub keeps the newest, the client reads the first Fansly
+  serves, which is the oldest.
+- **the bio**: the fan's profile text, for the features whose policy includes it (Hi, Ping, Help,
+  Coach, the notes fill).
+- The avatar is not the hub's: the client takes it from the page.
+
+A value is cut to the bound the contract puts on the same `clientContext` field (200 characters for
+a name, 5000 for the bio).
+
+The values are as fresh as the Sync Engine's reading of Fansly, not as the generation:
+
+- The names and the saved name come with the accounts Fansly serves beside the page's inbox list
+  (the newest 100 chats every 30 minutes, the whole list once a day), and with the account lookup.
+  Measured on production (2026-10-13, the 12 days before): a name saved for the first time reached
+  `page_alias` in 9 minutes at the median, 20 at the 90th percentile and 54 at most (134 names); a
+  changed name within 35 minutes for 150 of 176 fans, and with the daily read of the whole list (up
+  to 26 hours) for the rest, whose chats were below the newest 100.
+- The bio comes only with the account lookup (`GET /account?ids=`, at most once a day for a fan of
+  a page), which stores it in `fans.metadata.about`; the accounts beside a list carry no `about`.
+  A lookup's answer without `about` clears the stored text. A fan no lookup of the page has
+  returned has no bio in the prompt.
+
+The recorded generation says what was read, never the values: `params.contextManifest.fanIdentity`
+holds `known` (the hub has an account for the fan), `name` (`username`, `display_name` or
+`fallback`), `savedName`, `bio`, `savedNameReadAt` (when the page's notes on the fan were last
+read; null when Fansly never served one) and `accountReadAt` (the page's last lookup of the fan).
+
+Unchanged: a request with `clientContext` (the fan fields are the client's own), and OnlyFans (one
+name: the page's alias, else the display name, else the username; no saved-name line and no
+username line; no `fanIdentity` in the record).
 
 ### Feature-lane fresh text (`liveTextContext`)
 
@@ -546,7 +726,8 @@ load, quota reservation or provider call (`services/client-ai-switch.ts`). `coac
 (`requireClientFeature`). On Fansly (R20 HF-12; the request's `platform`, which the route holds to
 the page's own before any context load) `fast-reply`, `improve-draft`, `hi-greeting` and `ping` run
 the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-notes-fill` of
-`notesFill`: three flags that exist on Fansly alone. Every other feature, and on OnlyFans those six,
+`notesFill`: three flags that exist on Fansly alone (`voice` also opens the voice-note routes the
+script feeds to the narrow token, R20 HF-4б). Every other feature, and on OnlyFans those six,
 needs `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
 above `chatExtensionMinVersion`. A refusal is `409 client_feature_disabled` with its `reason`. The
 check runs once, when the generation is asked for: an owner's change while it streams holds from the
@@ -1029,6 +1210,10 @@ orthogonal, optional and refused with `bad_request` on every other feature:
   every message.
 - `clientContext.fanUsername` and `clientContext.fanAvatarUrl` (HTTPS Fansly
   host only; passed to the provider as an image, never fetched by the kernel).
+- `startProof`, `personalMessageCount` and `fanAvatarUrl` at the top level: Hi
+  on Fansly without `clientContext`, for a caller that advertised
+  `hi-start-proof-v1` ("Hi on Fansly by the start proof", above). There the
+  proof decides the gate; anywhere else the three fields are refused.
 
 `greetingMode: "new-follower"` is a DEPRECATED ALIAS kept for released clients
 (extension <= 2.4.3, of-desktop), with its earlier semantics unchanged: it
@@ -1085,6 +1270,22 @@ chat. The client sends the labels; the hub assembles the prompt
   transcript's day lines `--- YYYY-MM-DD ---` (the client adds them in merge
   mode; they are the only source of dates). The prompt also defines «Локация»,
   «График», «Планы и даты» and «Другое».
+- One fact in one field, merge mode only (2026-10-13, after the owner's review
+  of real output, where the same fact landed in «Фетиши», «Медиа» and
+  «Характеристика»). The two modes define two fields differently, so those
+  template lines are slots (`{noteFillCharacterField}`,
+  `{noteFillMediaField}`). Legacy mode keeps its definitions: «Характеристика»
+  is what the fan likes and pays for, «Медиа» what he bought and likes. Merge
+  mode: «Характеристика» is what kind of fan he is and how to talk to him, in
+  his own stated terms (the agency chatters' own use of the field), never his
+  purchases, prices, subscription, content tastes or fetishes; «Медиа» is what
+  content he bought (by the transcript's `purchased` tags and the spending and
+  subscription data) and what content he says he likes, and the one place for
+  purchases, prices and the subscription. One «Current Values» rule goes with
+  them: a fact is stated in one field, the one whose definition fits it best,
+  and a fact a current value already holds, in any field, is not added again.
+  How much the mode writes is unchanged (the owner's ruling: the output is not
+  to get shorter), and so are the request and the answer format.
 - Context as for a full Recap: on Fansly the client sends `clientContext` with
   the whole conversation it read (`transcriptCoverage` usually
   `full-history`), the spending and subscription blocks and the bio, plus

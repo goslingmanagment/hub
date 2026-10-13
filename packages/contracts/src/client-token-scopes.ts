@@ -52,6 +52,12 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanClaimStatus",
       // H-7c: the "new subscribers" list.
       "clientAudienceNew",
+      // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
+      // voice script, its status, its audio), behind the page's `voice` flag
+      // (modules/voice).
+      "voiceNoteCreate",
+      "voiceNoteStatus",
+      "voiceNoteAudio",
     ] as const satisfies readonly KernelOperationKey[],
     // `client_health` (H-11b) is never journaled: the capture lane folds it
     // into hourly rollups that hold no user.

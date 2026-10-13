@@ -30,7 +30,13 @@ import { decryptJson, encryptJson } from "@agency_hub_core/shared";
 import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
-import { computePingSummary, loadTranscriptContext, normalizeTranscriptMessages } from "../modules/ai/index.ts";
+import {
+  computePingSummary,
+  loadFanslyMediaLabelBodies,
+  loadTranscriptContext,
+  normalizeTranscriptMessages,
+  readsMaterialHeadMedia,
+} from "../modules/ai/index.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { resolveClientConversation, type ClientConversation } from "./client-conversation.ts";
 import { loadClientConversationCoverage } from "./client-coverage.ts";
@@ -285,13 +291,31 @@ function feedSenderOf(row: Pick<ConversationFeedRow, "senderRole" | "isSentByMe"
 const ATTACHMENT_LABELS_MAX = 50;
 const ATTACHMENT_LABEL_MAX_LENGTH = 80;
 
+function boundedLabels(labels: readonly string[]): string[] {
+  return labels
+    .slice(0, ATTACHMENT_LABELS_MAX)
+    .map((label) => label.slice(0, ATTACHMENT_LABEL_MAX_LENGTH));
+}
+
 /**
  * The captions of a row's media, in the words a generation reads for the same
  * message (`[Photo]`, `[Media Bundle: 2 Photos, 1 Video]`): the transcript's
  * own labeler, given the media alone so the price and the tip stay in their
  * own fields. No media id or URL leaves through it.
+ *
+ * chat-extension R20 HF-10 follow-up (with HF-7в): a Fansly row's media are
+ * labelled as its transcript labels them (`fanslyBodies`, read from the hub's
+ * stores by `loadFanslyMediaLabelBodies`): one caption per attachment, none for
+ * a tip's attachment. The OFAPI reading of the same list would call a photo
+ * `[Media]`. Without them (OnlyFans) the row's own list is read as before.
  */
-function attachmentLabelsOf(media: ConversationFeedRow["mediaMetadata"]): string[] {
+function attachmentLabelsOf(
+  media: ConversationFeedRow["mediaMetadata"],
+  fanslyBodies?: readonly string[],
+): string[] {
+  if (fanslyBodies !== undefined) {
+    return boundedLabels(fanslyBodies.map((body) => `[${body}]`));
+  }
   if (media === null || media.length === 0) {
     return [];
   }
@@ -302,9 +326,27 @@ function attachmentLabelsOf(media: ConversationFeedRow["mediaMetadata"]): string
     mediaCount: media.length,
     media: media.map((item) => ({ type: typeof item.type === "string" ? item.type : null })),
   }]);
-  return (labeled?.labels ?? [])
-    .slice(0, ATTACHMENT_LABELS_MAX)
-    .map((label) => label.slice(0, ATTACHMENT_LABEL_MAX_LENGTH));
+  return boundedLabels(labeled?.labels ?? []);
+}
+
+/**
+ * The Fansly captions of a page of rows, by message ref (only rows with at
+ * least one): the transcript's media labels without price or purchase state,
+ * read in the walk's snapshot. Null on a platform whose rows carry OFAPI's
+ * media list (OnlyFans): its captions are the rows' own.
+ */
+export async function loadFeedFanslyCaptions(
+  db: Database,
+  input: { pageId: number; platform: string; rows: readonly ConversationFeedRow[] },
+): Promise<Map<string, string[]> | null> {
+  if (!readsMaterialHeadMedia(input.platform)) {
+    return null;
+  }
+  return loadFanslyMediaLabelBodies({ db }, {
+    pageId: input.pageId,
+    stored: input.rows.map((row) => ({ messageRef: row.messageRef, mediaMetadata: row.mediaMetadata ?? [] })),
+    live: [],
+  });
 }
 
 /**
@@ -318,7 +360,7 @@ function attachmentLabelsOf(media: ConversationFeedRow["mediaMetadata"]): string
  * returns the stored text (other callers decide for themselves); it is dropped
  * in this mapper, the one place a row becomes this route's answer.
  */
-export function toClientFeedItem(row: ConversationFeedRow): ClientFeedItem {
+export function toClientFeedItem(row: ConversationFeedRow, fanslyCaptions?: ReadonlyMap<string, string[]> | null): ClientFeedItem {
   return {
     messageId: row.messageRef,
     at: isoInstantOrNull(row.occurredAt),
@@ -329,7 +371,10 @@ export function toClientFeedItem(row: ConversationFeedRow): ClientFeedItem {
     deleted: row.deleted,
     tipMills: row.isTip ? positiveMillsOrNull(row.tipAmountMills) : null,
     priceMills: row.isTip ? null : positiveMillsOrNull(row.priceMills),
-    attachmentLabels: attachmentLabelsOf(row.mediaMetadata),
+    attachmentLabels: attachmentLabelsOf(
+      row.mediaMetadata,
+      fanslyCaptions === undefined || fanslyCaptions === null ? undefined : fanslyCaptions.get(row.messageRef) ?? [],
+    ),
   };
 }
 
@@ -411,6 +456,8 @@ interface FeedRead {
   walk: FeedWalk;
   snapshot: ConversationFeedCursorState["snapshot"];
   page: ConversationFeedPage;
+  /** The page's Fansly captions (`loadFeedFanslyCaptions`); null on OnlyFans. */
+  captions: Map<string, string[]> | null;
   summary: ClientFeedSummary | null;
 }
 
@@ -436,6 +483,7 @@ async function readFirstPage(
     snapshot: input.snapshot,
     limit: input.limit,
   });
+  const captions = await loadFeedFanslyCaptions(db, { pageId: input.pageId, platform: input.platform, rows: page.rows });
   const coverage: ClientCoverageLevel = await loadClientConversationCoverage({ db }, {
     ...target,
     platform: input.platform,
@@ -489,6 +537,7 @@ async function readFirstPage(
       dmMaxId: input.snapshot.dmMaxId,
     },
     page,
+    captions,
     summary: {
       pingSegment: ping.segment,
       fanSilenceDays: ping.fanSilenceDays,
@@ -565,25 +614,27 @@ export async function getClientConversationFeed(
       }
       throw error;
     }
+    const rows = await listConversationFeedPage(tx, {
+      pageId: page.id,
+      conversationRef,
+      source,
+      snapshot: state.snapshot,
+      before: state.before,
+      limit,
+    });
     return {
       scope,
       read: {
         walk: state.walk,
         snapshot: state.snapshot,
-        page: await listConversationFeedPage(tx, {
-          pageId: page.id,
-          conversationRef,
-          source,
-          snapshot: state.snapshot,
-          before: state.before,
-          limit,
-        }),
+        page: rows,
+        captions: await loadFeedFanslyCaptions(tx, { pageId: page.id, platform: page.platform, rows: rows.rows }),
         summary: null,
       },
     };
   }, READ_SNAPSHOT);
 
-  const { walk, snapshot, page: rows, summary } = read.read;
+  const { walk, snapshot, page: rows, captions, summary } = read.read;
   return {
     target: {
       pageLabel: page.label,
@@ -603,7 +654,7 @@ export async function getClientConversationFeed(
         state: { snapshot, before: rows.nextBefore, walk },
         now,
       }),
-    items: rows.rows.map(toClientFeedItem),
+    items: rows.rows.map((row) => toClientFeedItem(row, captions)),
     summary,
   };
 }

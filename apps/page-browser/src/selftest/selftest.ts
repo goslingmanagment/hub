@@ -10,15 +10,16 @@
 //   os_rules      the kernel lets Chrome's user reach nothing but the proxy:
 //                 the result of the net-selftest service (s6), written at the
 //                 container's start, all checks passed;
-//   dnr_never     the rules extension cancels a request of the "never" list
-//                 (POST /api/v1/message/ack) before the interception:
-//                 net::ERR_BLOCKED_BY_CLIENT, never paused;
+//   dnr_never     the rules extension cancels a request the map closes one
+//                 by one (POST /api/v1/message/ack, a read mark — spec §2.5)
+//                 before the interception: net::ERR_BLOCKED_BY_CLIENT, never
+//                 paused;
 //   dnr_write     the extension cancels an unknown write the same way.
 //
-// The rules extension comes with PR 6. Until then its two checks report
-// "not_installed" — never "passed" — and do not hold the page: the switch
-// below is what PR 6 turns to "required", and from then a missing extension
-// fails the test.
+// The rules extension is in the image since PR 6 and is required: a missing
+// one — not installed yet, or not loaded — fails the test, and the exit
+// stays closed. Its policy allows no other extension, so the one that
+// cancels the probes is the image's.
 
 import { monoMs, wallMs, errorMessage } from "../shared/util.ts";
 import type { ProbeKind, ProbeOutcome } from "./probes.ts";
@@ -43,8 +44,9 @@ export interface SelfTestResult {
 }
 
 export type ExtensionChecks = "not_installed" | "required";
-/** The image has no rules extension yet: PR 6 brings it and sets "required". */
-export const EXTENSION_CHECKS: ExtensionChecks = "not_installed";
+/** The image carries the rules extension (PR 6): its checks must pass.
+ *  ("not_installed" is left for tests of an image without it.) */
+export const EXTENSION_CHECKS: ExtensionChecks = "required";
 
 export const NEVER_PATH = "/api/v1/message/ack";
 export const UNKNOWN_WRITE_PATH = "/api/v1/pb-selftest-unknown";
@@ -72,8 +74,8 @@ export async function runSelfTest(deps: SelfTestDeps): Promise<SelfTestResult> {
 
   const proxyClosed = await checkProxyClosed(deps, run, probeDeadline);
   const osRules = checkOsRules(deps);
-  let never: Check = { status: "not_installed", detail: "the rules extension is not in this image yet (PR 6)" };
-  let write: Check = { status: "not_installed", detail: "the rules extension is not in this image yet (PR 6)" };
+  let never: Check = { status: "not_installed", detail: "this image has no rules extension" };
+  let write: Check = { status: "not_installed", detail: "this image has no rules extension" };
   if (deps.extension === "required") {
     // On the first start of a profile the policy is still installing the
     // extension: tried again while the test's time lasts.

@@ -27,6 +27,24 @@ export interface NormalizeTranscriptOptions {
    * message itself; step 3 is a bare '[Tip]'. Amounts are never fabricated.
    */
   tipAmountsByMessageId?: ReadonlyMap<string, number>;
+  /**
+   * Fansly (chat-extension R20 HF-7a): a message's media label bodies, one per
+   * attachment in the order the message carries them (`Photo`, `Media Bundle:
+   * 2 Photos, 1 Video`), keyed by message id. The hub reads them from its own
+   * stores (context/fansly-media.ts); a Fansly message has no OFAPI `media[]`.
+   * A message with bodies takes them instead of the `media[]` reading, its
+   * PPV suffix on the first: the archive keeps one price per message, that of
+   * its first priced attachment. Absent for every OnlyFans read, so its labels
+   * are what they were.
+   */
+  mediaLabelBodiesByMessageId?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Fansly (chat-extension R20 HF-7в): the messages whose bodies above carry
+   * each paid attachment's own PPV mark (`Video - PPV $20.00, purchased`), as
+   * the Fansly extension 2.10.1 marks them: the message's price is not added
+   * to the first. Absent for every OnlyFans read.
+   */
+  mediaLabelBodiesCarryPpv?: ReadonlySet<string>;
 }
 
 const SINGLE_MEDIA_LABELS: Record<string, string> = {
@@ -122,8 +140,12 @@ function buildLabels(message: OfapiChatMessage, id: string, options: NormalizeTr
   const labels: string[] = [];
   const body = mediaLabelBody(message);
   const price = message.price ?? 0;
+  const bodies = options.mediaLabelBodiesByMessageId?.get(id) ?? [];
 
-  if (body !== null) {
+  if (bodies.length > 0) {
+    const first = options.mediaLabelBodiesCarryPpv?.has(id) === true ? bodies[0] : `${bodies[0]}${ppvSuffix(message)}`;
+    labels.push(`[${first}]`, ...bodies.slice(1).map((other) => `[${other}]`));
+  } else if (body !== null) {
     labels.push(`[${body}${ppvSuffix(message)}]`);
   } else if (price > 0) {
     // Paid message without resolvable media (e.g. locked text): state still applies.

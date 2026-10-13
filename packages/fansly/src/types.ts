@@ -2,6 +2,10 @@ export interface FanslyAccount {
   id: string;
   username: string | null;
   displayName: string | null;
+  /** The account's own profile text. `/account?ids=` serves it, and only for
+   *  an account that wrote one; the accounts a list serves beside its rows
+   *  (`/messaging/groups`, followers) never carry it. */
+  about?: string | null;
   createdAt?: number;
   statusId?: number;
   lastSeenAt?: number;
