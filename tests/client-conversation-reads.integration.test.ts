@@ -28,7 +28,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createBundledPersonalities } from "../apps/runtime/src/modules/ai/index.ts";
 import type { AiGatewayProvider, AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientFeaturesModule from "../apps/runtime/src/services/client-features.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -55,28 +54,11 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-// THE HF-2 STAND-IN. At merge `recap` and `preview` exist on OnlyFans only
-// (CLIENT_FEATURE_REQUIREMENTS), so every Fansly read here is
-// `platform_unsupported` whatever the owner's switches say: that is the first
-// test below. R20 HF-2 puts Fansly in the requirements. Until it does, the
-// Fansly tests admit the two flags on Fansly the way it will (the rest of the
-// evaluation unchanged: the master switch, the page's flag, the binding, the
-// served capabilities), so the routes run end to end on a Fansly page.
-const hf2 = vi.hoisted(() => ({ admitsFansly: false }));
-vi.mock("../apps/runtime/src/services/client-features.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientFeaturesModule>();
-  const flags = new Set<string>(["recap", "preview"]);
-  const platforms = new Set<string>(["fansly"]);
-  const admitted = (flag: string, platform: string) => hf2.admitsFansly && flags.has(flag) && platforms.has(platform);
-  return {
-    ...actual,
-    clientFeatureExistsOn: (flag: Parameters<typeof actual.clientFeatureExistsOn>[0], platform: Parameters<typeof actual.clientFeatureExistsOn>[1]) =>
-      admitted(flag, platform) || actual.clientFeatureExistsOn(flag, platform),
-    evaluateClientFeature: (input: Parameters<typeof actual.evaluateClientFeature>[0]) => actual.evaluateClientFeature(
-      admitted(input.flag, input.page.platform) ? { ...input, page: { ...input.page, platform: "onlyfans" } } : input,
-    ),
-  };
-});
+// R20 HF-2: `recap` and `preview` exist on Fansly, through the hub's regular
+// admission (CLIENT_FEATURE_REQUIREMENTS: no stand-in here). A Fansly page
+// reaches these routes only by its own row of the owner's switches: the `"*"`
+// row does not reach it, which is the first test below. The Fansly tests then
+// set the page's own row and run the routes end to end.
 
 const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret", nikita: "nikita-secret" } as const;
 const AUDIT = { source: "cli" } as const;
@@ -238,11 +220,19 @@ async function patchConfig(patches: Array<{ key: string; value: unknown }>) {
   expect(response.statusCode, response.body).toBe(200);
 }
 
-/** The owner's switches: the extension on, Recap and the preview on every page. */
-async function switchReadsOn() {
+const READS = { recap: true, preview: true };
+
+/**
+ * The owner's switches: the extension on, Recap and the preview on by the `"*"`
+ * row (every OnlyFans page) and, with `fansly`, by the Fansly page's own row.
+ */
+async function switchReadsOn(input: { fansly?: boolean } = {}) {
   await patchConfig([
     { key: "chatExtensionEnabled", value: true },
-    { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { recap: true, preview: true } }) },
+    {
+      key: "chatExtensionFeatures",
+      value: JSON.stringify({ "*": READS, ...(input.fansly === true ? { "lora-fansly": READS } : {}) }),
+    },
   ]);
 }
 
@@ -373,7 +363,6 @@ describe("reads by conversation (chat-extension R20 HF-10)", () => {
       context.skip();
       return;
     }
-    hf2.admitsFansly = false;
     await resetIntegrationDatabase(testDb.pool);
     script.text = "";
     app = createTestAppContext(testDb);
@@ -477,7 +466,6 @@ describe("reads by conversation (chat-extension R20 HF-10)", () => {
   }, 120_000);
 
   afterEach(async () => {
-    hf2.admitsFansly = false;
     await trap?.restore();
     trap = null;
     await server?.close();
@@ -488,28 +476,40 @@ describe("reads by conversation (chat-extension R20 HF-10)", () => {
     await testDb?.stop();
   });
 
-  it("is inert at merge: the capability is served, and nothing on Fansly is reachable until recap and preview exist there", async (context) => {
+  it("[R20 HF-2] is inert at merge: the capability is served, and nothing on Fansly is reachable until the owner sets the page's own row", async (context) => {
     if (!server) return context.skip();
+    // Recap and the preview on for every page by the "*" row: it reaches the OnlyFans page only.
     await switchReadsOn();
     const generationRef = await seedRecap({ text: "FAN RECAP", at: minutesAgo(5), conversationRef: GROUP, fanRef: FAN });
 
-    const bootstrap = clientBootstrapResponseSchema.parse(
-      (await server.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) })).json(),
+    const readBootstrap = async () => clientBootstrapResponseSchema.parse(
+      (await server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) })).json(),
     );
+    const bootstrap = await readBootstrap();
     expect(bootstrap.capabilities).toContain("conversation-recaps-v1");
     const fanslyPage = bootstrap.pages.find((page) => page.pageLabel === "lora-fansly")!;
     for (const flag of ["recap", "preview"]) {
-      expect(fanslyPage.features[flag], flag).toEqual({ available: false, reason: "platform_unsupported" });
+      expect(fanslyPage.features[flag], flag).toEqual({ available: false, reason: "flag_off" });
     }
     expect(bootstrap.pages.find((page) => page.pageLabel === "lora-of")!.features.recap).toEqual({ available: true });
 
-    // The owner's switches are on, and still: whatever the request names, before anything is read.
+    // The "*" row is on, and still: whatever the request names, before anything is read.
     for (const conversationRef of [GROUP, undefined, OTHER_GROUP]) {
-      expectRefused(await recaps({ conversationRef }), 409, "client_feature_disabled", "platform_unsupported");
-      expectRefused(await feed({ conversationRef }), 409, "client_feature_disabled", "platform_unsupported");
-      expectRefused(await save({ generationRef, conversationRef }), 409, "client_feature_disabled", "platform_unsupported");
+      expectRefused(await recaps({ conversationRef }), 409, "client_feature_disabled", "flag_off");
+      expectRefused(await feed({ conversationRef }), 409, "client_feature_disabled", "flag_off");
+      expectRefused(await save({ generationRef, conversationRef }), 409, "client_feature_disabled", "flag_off");
     }
     expect(await dossier(FAN)).toEqual([]);
+
+    // The page's own row, through the regular admission: the same requests are served.
+    await switchReadsOn({ fansly: true });
+    const own = (await readBootstrap()).pages.find((page) => page.pageLabel === "lora-fansly")!;
+    for (const flag of ["recap", "preview"]) {
+      expect(own.features[flag], flag).toEqual({ available: true });
+    }
+    expect(await recapsOk({ conversationRef: GROUP })).toMatchObject({ full: { generationRef, text: "FAN RECAP" } });
+    expect((await feedOk({ conversationRef: GROUP, limit: 1 })).target)
+      .toEqual({ pageLabel: "lora-fansly", fanRef: FAN, conversationRef: GROUP });
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -573,10 +573,9 @@ describe("reads by conversation (chat-extension R20 HF-10)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  describe("Fansly, with recap and preview admitted (the HF-2 stand-in)", () => {
+  describe("Fansly, with the page's own recap and preview rows (R20 HF-2)", () => {
     beforeEach(async () => {
-      hf2.admitsFansly = true;
-      await switchReadsOn();
+      await switchReadsOn({ fansly: true });
     });
 
     it("a recap the released Fansly extension made (conversation_ref = the group) is the new client's recap of the pair", async (context) => {

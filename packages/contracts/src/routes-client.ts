@@ -90,18 +90,23 @@ const positive = z.number().int().positive();
 /**
  * Known names: documentation and the client's narrowing. On the wire they are open strings.
  *
- * `drafts`, `voice` and `notesFill` exist on Fansly only (R20 HF-12): the
- * narrow token's Reply, Fix, Hi and Ping, its voice script and its notes fill
- * on a Fansly page. On OnlyFans those generations need no flag of their own.
- * `voice` also opens the voice-note routes to the narrow token (R20 HF-4б,
- * `voice-notes-v1`). `freshText` exists on both (Fansly since R20 HF-8б);
- * every other flag on OnlyFans only.
+ * Where each flag exists is the hub's (chat-extension R20 HF-2): a page of a
+ * platform without the flag reads `platform_unsupported`. `drafts`, `voice`,
+ * `notesFill`, `notes`, `vault` and `registration` exist on Fansly only: the
+ * narrow token's Reply, Fix, Hi and Ping, its voice script (`voice` also opens
+ * the voice-note routes, `voice-notes-v1`) and its notes fill on a Fansly page
+ * (R20 HF-12, HF-4б), and the extension's own notes, vault and «Регистрация».
+ * On OnlyFans those generations need no flag of their own. `previewSend`,
+ * `previewSendMarkAiGenerated`, `navigation`, `wsTap` and `stats` exist on
+ * OnlyFans only; every other flag on both. A Fansly page is switched on by its
+ * own row of the owner's switches alone, never by the `"*"` row, so the
+ * top-level `flags` (the `"*"` row) say nothing about a Fansly page.
  */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
   "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
   "coach", "recap", "review", "splitAll",
-  "drafts", "voice", "notesFill",
+  "drafts", "voice", "notesFill", "notes", "vault", "registration",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
@@ -1783,10 +1788,9 @@ export const clientRouteSchemas = {
       + "`registerNativeSend` reports a send that already happened and needs only the page grant on a page of "
       + "a platform where the custody exists, with a purpose and group that platform admits: no switch, flag "
       + "or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where "
-      + "every switch of one of its sends exists: OnlyFans; Fansly once `newcomers` exists there, and until "
-      + "then every action that starts something on a Fansly page, and the status read, is 409 "
-      + "`client_feature_disabled` / `platform_unsupported`. A refusal by the switches is 409 "
-      + "`client_feature_disabled` with the reason.",
+      + "every switch of one of its sends exists: OnlyFans and Fansly. On Fansly the owner's switches are "
+      + "the page's own row (`newcomers`; the `\"*\"` row never reaches a Fansly page). A refusal by the "
+      + "switches is 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     body: clientFanClaimBodySchema,
     response: {

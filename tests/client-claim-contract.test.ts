@@ -363,9 +363,11 @@ describe("claim and custody contract", () => {
       }), missing).toEqual({ available: false, reason: "hub_not_ready" });
     }
 
-    // The flag-less status and native record exist where sending from the preview does.
+    // Sending from the preview is OnlyFans' alone. The flag-less status and native record exist
+    // where the greeting custody does (client-claim-admission.ts): on Fansly too since R20 HF-2.
     expect(clientFeatureExistsOn("previewSend", "onlyfans")).toBe(true);
     expect(clientFeatureExistsOn("previewSend", "fansly")).toBe(false);
+    expect(clientFeatureExistsOn("newcomers", "fansly")).toBe(true);
 
     expect(contracts.CLIENT_CLAIM_ACTIONS).toEqual([
       "claim", "renew", "release", "dispatch", "sent", "failed", "registerNativeSend",

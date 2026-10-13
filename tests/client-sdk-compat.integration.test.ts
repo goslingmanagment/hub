@@ -316,11 +316,18 @@ for (const row of CLIENT_SDK_REGISTRY) {
         if (!ready(context)) return;
         // H-10a, the worst case for a released client: the owner's splitAll flag
         // is ON for every page. Only the capability it never sends is missing.
+        // R20 HF-2: the flag exists on Fansly too, where a page takes it from its
+        // own row alone, so the Fansly page has its row and its account id here.
         appContext.config.chatExtensionEnabled = true;
-        appContext.config.chatExtensionFeatures = JSON.stringify({ "*": { splitAll: true } });
+        appContext.config.chatExtensionFeatures = JSON.stringify({
+          "*": { splitAll: true },
+          [COMPAT_PAGES.fansly]: { splitAll: true },
+        });
         appContext.config.chatExtensionHostBindings = JSON.stringify({ "onlymonster:1": COMPAT_PAGES.onlyfans });
+        await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageIds.fansly, "500000000000000001"]);
         try {
           expect(await isSplitAllOnForPage(appContext, pageIds.onlyfans)).toBe(true);
+          expect(await isSplitAllOnForPage(appContext, pageIds.fansly)).toBe(true);
           for (const request of lane.calls) {
             await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "preferSplit" });
             const split = promptOf();
@@ -335,6 +342,7 @@ for (const row of CLIENT_SDK_REGISTRY) {
           appContext.config.chatExtensionEnabled = false;
           appContext.config.chatExtensionFeatures = "{}";
           appContext.config.chatExtensionHostBindings = "{}";
+          await testDb!.pool.query("update pages set external_page_id = null where id = $1", [pageIds.fansly]);
         }
       }, AI_TEST_TIMEOUT_MS);
 

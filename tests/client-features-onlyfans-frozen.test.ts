@@ -1,0 +1,167 @@
+import { createHash } from "node:crypto";
+
+import { describe, expect, it } from "vitest";
+
+import { CLIENT_SEND_PURPOSES } from "@agency_hub_core/contracts";
+
+import { OPERATION_FEATURES } from "../apps/runtime/src/modules/ai/index.ts";
+import { clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
+import { admitClientSend, clientCustodyExistsOn } from "../apps/runtime/src/services/client-claim-admission.ts";
+import {
+  clientBootstrapFlags,
+  clientFeatureExistsOn,
+  evaluateClientPageFeatures,
+  type ClientFeatureLane,
+  type ClientFeaturePage,
+  type ClientFeatureSettings,
+} from "../apps/runtime/src/services/client-features.ts";
+
+// chat-extension R20 HF-2: OnlyFans byte for byte. Every answer the hub's
+// admission gives about an OnlyFans page — the bootstrap's page `features` and
+// top-level `flags`, the server's check of every flagged route (the same
+// evaluation), the greeting custody's admission and the narrow token's AI
+// switch — over a matrix of the owner's switches, pages, served capabilities
+// and lanes, serialized and hashed.
+//
+// The digest below was computed by this very enumeration on hub origin/main
+// 8b73ab9fc (before HF-2), with only the flags that existed there. HF-2 adds
+// Fansly to the requirement table, three Fansly flags and the rule that a
+// Fansly page does not take the owner's "*" row: none of it may move one
+// OnlyFans answer. The flags HF-2 adds read `platform_unsupported` on every
+// OnlyFans page (asserted apart, below the digest).
+//
+// The inputs are literals, not the hub's live lists, so a later PR that
+// serves a new capability does not move this proof.
+
+/** The flags of hub origin/main 8b73ab9fc, in its order. */
+const FLAGS_BEFORE_HF2 = [
+  "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
+  "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
+  "coach", "recap", "review", "splitAll",
+  "drafts", "voice", "notesFill",
+] as const;
+/** The flags HF-2 adds: Fansly's own. */
+const FLAGS_OF_HF2 = ["notes", "vault", "registration"] as const;
+/** What hub origin/main 8b73ab9fc served (SERVED_CLIENT_CAPABILITIES), in its order. */
+const SERVED_BEFORE_HF2 = [
+  "context-v1", "live-text-v1", "shared-recaps-v1", "recap-profile-v1", "split-all-v1", "ai-usage-v1",
+  "spenders-stats-v1", "awaiting-reply-v1", "archive-feed-v1", "preview-send-custody-v1", "audience-new-v1",
+  "manual-greeting-v1", "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1", "voice-notes-v1",
+] as const;
+
+const PAGES: readonly ClientFeaturePage[] = [
+  { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },
+  { label: "lora-vip-of", platform: "onlyfans", platformAccountId: "100000002" },
+  // No platform account id: bindable only by an owner's host binding.
+  { label: "nova-of", platform: "onlyfans", platformAccountId: null },
+];
+
+const every = (flags: readonly string[], on: boolean) => Object.fromEntries(flags.map((flag) => [flag, on]));
+/** `chatExtensionFeatures` on prod, read only, 2026-10-13 and 2026-10-14: the two pilot pages, 13 flags each, no "*" row. */
+const PILOT_ROW = {
+  insertion: true, spenders: true, fanPanel: true, sound: true, wsTap: true, review: true, coach: true,
+  recap: true, preview: true, stats: true, newcomers: true, freshText: true, splitAll: true,
+};
+const ALL_NAMES = [...FLAGS_BEFORE_HF2, ...FLAGS_OF_HF2];
+
+const FEATURE_ROWS: ReadonlyArray<Record<string, Record<string, boolean>>> = [
+  {},
+  { "*": every(ALL_NAMES, true) },
+  { "*": every(ALL_NAMES, false) },
+  { "*": every(ALL_NAMES, true), "lora-of": every(ALL_NAMES, false) },
+  { "lora-of": every(ALL_NAMES, true) },
+  { "nova-of": every(ALL_NAMES, true), "*": { coach: true } },
+  { "lora-vip-of": PILOT_ROW, "lora-of": PILOT_ROW },
+  { "*": { coach: true, review: false, someFutureFlag: true }, "lora-of": { review: true, drafts: true, notes: true } },
+  // Fansly's flags, set everywhere: they reach no OnlyFans page.
+  { "*": every(["drafts", "voice", "notesFill", ...FLAGS_OF_HF2], true), "lora-fansly": every(ALL_NAMES, true) },
+];
+const HOST_BINDINGS: ReadonlyArray<Record<string, string>> = [
+  {},
+  { "onlymonster:36410": "nova-of" },
+  { "onlymonster:36410": "lora-of" },
+  { "otherhost:36410": "nova-of" },
+];
+const SERVED: ReadonlyArray<readonly string[]> = [
+  SERVED_BEFORE_HF2,
+  [],
+  ...SERVED_BEFORE_HF2.map((missing) => SERVED_BEFORE_HF2.filter((capability) => capability !== missing)),
+];
+const LANES: ReadonlyArray<ReadonlySet<ClientFeatureLane>> = [new Set(), new Set(["voice-notes"])];
+
+function pick(record: Record<string, unknown>, keys: readonly string[]): unknown[] {
+  return keys.map((key) => [key, record[key]]);
+}
+
+/** Every OnlyFans answer of the matrix, one line each, in a fixed order. */
+function onlyFansAnswers(): string[] {
+  const lines: string[] = [];
+  for (const enabled of [true, false]) {
+    for (const features of FEATURE_ROWS) {
+      for (const hostBindings of HOST_BINDINGS) {
+        const settings: ClientFeatureSettings = { enabled, features, hostBindings };
+        lines.push(JSON.stringify(["flags", enabled, features, hostBindings, pick(clientBootstrapFlags(settings), FLAGS_BEFORE_HF2)]));
+        for (const page of PAGES) {
+          for (const served of SERVED) {
+            for (const lanes of LANES) {
+              const answer = evaluateClientPageFeatures({ settings, page, served, lanes });
+              lines.push(JSON.stringify(["page", enabled, features, hostBindings, page, served, [...lanes], pick(answer, FLAGS_BEFORE_HF2)]));
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const flag of FLAGS_BEFORE_HF2) {
+    lines.push(JSON.stringify(["exists", flag, clientFeatureExistsOn(flag, "onlyfans")]));
+  }
+  lines.push(JSON.stringify(["custody", clientCustodyExistsOn("onlyfans")]));
+  for (const purpose of CLIENT_SEND_PURPOSES) {
+    for (const group of ["generation", "manual"] as const) {
+      lines.push(JSON.stringify(["send", purpose, group, admitClientSend({ platform: "onlyfans", purpose, group })]));
+    }
+  }
+  for (const feature of [...OPERATION_FEATURES, "scan", "compare", "constructor"]) {
+    lines.push(JSON.stringify(["ai", feature, clientAiFeatureFlag(feature, "onlyfans")]));
+  }
+  return lines;
+}
+
+describe("[R20 HF-2] OnlyFans byte for byte", () => {
+  it("every admission answer about an OnlyFans page is the one hub origin/main 8b73ab9fc gave", () => {
+    const lines = onlyFansAnswers();
+    expect(lines).toHaveLength(7885);
+    const digest = createHash("sha256").update(lines.join("\n")).digest("hex");
+    expect(digest).toBe("5b86eef5596215b316a15af1ac938a9e09c37a957ff89ee8993e8e4d5ae7e8bc");
+  });
+
+  it("what HF-2 adds to an OnlyFans answer: three keys after the older ones, each platform_unsupported", () => {
+    const keys = [...FLAGS_BEFORE_HF2, ...FLAGS_OF_HF2];
+    for (const enabled of [true, false]) {
+      for (const features of FEATURE_ROWS) {
+        for (const hostBindings of HOST_BINDINGS) {
+          const settings: ClientFeatureSettings = { enabled, features, hostBindings };
+          // The top-level flags: the "*" row, in the list's order.
+          const flags = clientBootstrapFlags(settings);
+          expect(Object.keys(flags)).toEqual(keys);
+          for (const flag of FLAGS_OF_HF2) {
+            expect(flags[flag], flag).toBe(enabled && features["*"]?.[flag] === true);
+          }
+          for (const page of PAGES) {
+            for (const served of [SERVED_BEFORE_HF2, []]) {
+              const answer = evaluateClientPageFeatures({ settings, page, served, lanes: LANES[1]! });
+              // The older keys keep their places: the new ones follow them.
+              expect(Object.keys(answer)).toEqual(keys);
+              for (const flag of FLAGS_OF_HF2) {
+                expect(answer[flag], `${page.label} ${flag}`).toEqual({ available: false, reason: "platform_unsupported" });
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const flag of FLAGS_OF_HF2) {
+      expect(clientFeatureExistsOn(flag, "onlyfans"), flag).toBe(false);
+    }
+  });
+});
