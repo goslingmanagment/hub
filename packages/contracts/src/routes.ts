@@ -2325,7 +2325,10 @@ export const aiFeatureStreamBodySchema = z.object({
   reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
-  messageCount: z.number().int().min(5).max(3000).optional(),
+  // The window the request asks for. The hub's readers cap it (1500 for every
+  // request; deeper only for the full Recap and the notes fill of a context-v1
+  // client, at most 5000: docs/ai-gateway-contract.md, R20 HF-6).
+  messageCount: z.number().int().min(5).max(5000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
   chatterQuestion: z.string().min(1).max(2_000).optional(),

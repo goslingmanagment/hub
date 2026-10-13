@@ -313,7 +313,7 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // Short recap also bounds its INPUT window: the compact template promises the
 // model "300 recent messages max are provided", so the archive lane must not
 // pull the deep default (1500) — or a caller-supplied messageCount up to the
-// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+// 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
 /** Decision #204: the Help button became a coach preset turn. The canonical
@@ -668,14 +668,14 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
-    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
-    // full Recap of a context-v1 client reads past it, and only where the owner
-    // raised `aiTranscriptDeepMaxRows`; for every other request this is
-    // undefined and nothing is read.
+    // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
+    // Only the full Recap and the notes fill of a context-v1 client read past
+    // it, on either platform: the Recap where the owner raised
+    // `aiTranscriptDeepMaxRows`, the notes fill to at least 3000. For every
+    // other request this is undefined and nothing is read.
     const maxRows = await resolveAiTranscriptMaxRows(app, {
       feature,
       summaryMode: body.summaryMode,
-      isFanslyRequest,
       capabilities: options?.capabilities,
     });
     // Uses the resolved window computed above (short fan-summary already clamped

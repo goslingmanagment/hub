@@ -208,48 +208,65 @@ as before: a request with `clientContext` (the released Fansly extension sends i
 with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
 `fanRef`.
 
-### Feature-lane transcript depth (`messageCount`, full Recap)
+### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
 
-`messageCount` is the window a request asks for (5 to 3000). The hub's two transcript readers (the
+`messageCount` is the window a request asks for (5 to 5000). The hub's two transcript readers (the
 archive reader and the union reader) cap every window at 1500 messages, whatever was asked: a
-request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`.
+request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`
+(`requested`, and `served`: the number of messages the transcript actually holds).
 
-One request reads past that cap, up to 3000 messages: the full Recap. All of these must hold:
+Two requests read past that cap, up to 5000 messages, on OnlyFans and Fansly alike
+(`apps/runtime/src/services/ai-transcript-depth.ts`). Both need:
 
-- the feature is `fan-summary` and the request is not `summaryMode: "short"` (the short Recap keeps
-  its window of 300);
-- the page is an OnlyFans page and the hub loads the transcript itself (a request with
-  `clientContext` brings its own transcript and is not read by the hub's readers at all);
-- the caller advertised `context-v1`;
-- the owner's live setting `aiTranscriptDeepMaxRows` is `3000`. It takes exactly `1500` or `3000`
-  and rests at `1500`.
+- a caller that advertised `context-v1`;
+- a transcript the hub loads itself: a request with `clientContext` brings its own transcript and is
+  not read by the hub's readers at all (the released Fansly extension sends up to 3000 messages
+  this way, unchanged).
 
-Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features, a Fansly page's
-hub-loaded transcript (the socket overlay union included), and every client that does not send
-`context-v1`. The released desktop lets a chatter set its deep window as high as 3000; such a Recap
-is served 1500, before and after the owner raises the setting.
+and then:
 
-A request that names no `messageCount` keeps the full Recap's default window of 1500. A client that
-wants the deeper read asks for it, up to the bootstrap's `limits.deepMax`, which is the value of
-`aiTranscriptDeepMaxRows` (`GET /api/v1/client/bootstrap`).
+- **the full Recap** (`fan-summary`, not `summaryMode: "short"`; the short Recap keeps its window of
+  300) reads up to the owner's live setting `aiTranscriptDeepMaxRows`. It takes exactly `1500`,
+  `3000` or `5000` and rests at `1500`; one value for both platforms.
+- **the notes fill** (`fan-notes-fill`) reads up to the same value, but never fewer than 3000: the
+  Fansly extension 2.10.1 fills its notes from the 3000 messages it reads itself, and its successor,
+  which lets the hub read, must not see less.
+
+On a Fansly page the hub's transcript is the archive, or, on a page in `fanslyLiveOverlayReadPages`,
+the archive joined with the socket messages it does not hold yet (`source: "live_union"`); both take
+the deeper cap. Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features,
+and every client that does not send `context-v1`. The released desktop lets a chatter set its deep
+window as high as 3000; such a Recap is served 1500, before and after the owner raises the setting.
+
+A request that names no `messageCount` keeps its feature's default window (1500 for the full Recap
+and the notes fill). A client that wants the deeper read asks for it: the full Recap up to the
+bootstrap's `limits.deepMax`, which is the value of `aiTranscriptDeepMaxRows`
+(`GET /api/v1/client/bootstrap`); the notes fill up to `max(3000, limits.deepMax)`. A larger
+`messageCount` is served at the cap.
 
 The recorded generation tells what was read: `params.requestedCount` is the window the request
 resolved to (not clipped by the cap), `params.keptCount` is the number of messages the prompt held,
 and `params.contextManifest.archiveCount` / `unionCount` are the rows each reader returned.
 
-Cost: at 3000 the transcript of a full Recap is up to twice as long. The per-request ceiling
-(`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply unchanged, to the
-longer prompt. The read itself is the same statement and plan at either cap: both readers fetch the
-whole conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are
-resolved before the cap).
+Cost: the deeper the read, the longer the prompt. Measured on production (2026-10-13), the heaviest
+5000-message window of a chat holds 374k characters of text (75 a message); a full Recap of it is a
+prompt of about 460k characters, about 200k input tokens on the Recap's model (Opus 5.5; production
+Recaps tokenize at 2.0 to 2.7 characters a token). By that model's list price a full Recap of that
+chat costs about $0.42 at 1500, $0.67 at 3000 and $1.00 at 5000, the answer included. The
+per-request ceiling (`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply
+unchanged, to the longer prompt; the cost preflight of that Recap is $0.94 against the $5 default.
+The read itself is the same statement and plan at every cap: both readers fetch the whole
+conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are resolved
+before the cap).
 
 Size: those ceilings bound what a request may cost, not how large its prompt is. The gateway does
 not measure a prompt against the model's context window; the cost preflight's token estimate (4
-characters per token) is used for the price alone. Nothing shortens a full Recap's transcript to fit
-(only Coach has a prompt budget), so a prompt larger than the window of the model the request runs
-on is refused by the provider and the generation fails. At 3000 messages a hub-loaded transcript is
-up to twice as long as any the readers served before. The window to check before raising the
-setting is the Recap model's: the feature default, or the `model` a request names.
+characters per token) is used for the price alone, and it counts only half to two thirds of the
+tokens a real chat transcript takes. Nothing shortens a full Recap's transcript to fit (only Coach has a prompt budget), so a prompt
+larger than the window of the model the request runs on is refused by the provider and the
+generation fails. The Recap's model (Opus 5.5) has a 1M-token window: the heaviest 5000-message
+Recap above takes about a quarter of it with the answer's 24k-token budget, and fits even if every
+byte of its text were a token. A request that names another `model` carries that model's window.
 
 ### Feature-lane fresh text (`liveTextContext`)
 

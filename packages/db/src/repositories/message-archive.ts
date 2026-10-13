@@ -1610,8 +1610,8 @@ export async function listArchiveConversationMessages(
  * content-pending stubs are filtered HERE, in the reader/repo layer (prompt
  * code never re-filters — the prompt unit is manifest-pinned), and the cap
  * is 1500 (AI windows read deeper than the dashboard's 500 clamp, whose
- * route contract is unchanged). One caller raises the cap with `maxRows`:
- * the full Recap (ai-transcript-depth.ts).
+ * route contract is unchanged). Two callers raise the cap with `maxRows`:
+ * the full Recap and the notes fill (ai-transcript-depth.ts).
  */
 /** The AI transcript reader's deepest window (fastreply-freshness PR2). */
 export const ARCHIVE_AI_TRANSCRIPT_MAX_ROWS = 1500;
@@ -1626,7 +1626,8 @@ export async function listArchiveConversationMessagesForAi(
      * also hide messages a socket deletion tombstones. */
     notTombstoned?: DmLiveTombstoneFilter;
     /** Raises the row cap of this read past ARCHIVE_AI_TRANSCRIPT_MAX_ROWS, up
-     * to AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+     * to AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the deep features pass it (the full
+     * Recap and the notes fill, ai-transcript-depth.ts). */
     maxRows?: number | undefined;
   },
 ): Promise<ArchiveMessageRow[]> {
