@@ -1,0 +1,79 @@
+#!/command/with-contenv sh
+# The page container's egress rules (plan §4.5), in place before any other
+# service starts. The kernel lets Chrome's user reach only the operator's
+# local proxy, the operator's user only its CDP port and the page's SOCKS5;
+# nothing else goes out, UDP and DNS included. In: only the engine's RPC and
+# the API (RPC, the owner's screen). Root has no rule: it needs no network.
+# These are the container's only rules: the flush takes Docker's own (its
+# DNS) with it.
+#
+# The addresses come from scripts/deploy-page-browser.sh: the page's SOCKS5
+# as an IP (the script resolves its name), `sync` and `api` by their fixed
+# addresses in pb-control. Anything missing or malformed stops the container
+# (S6_BEHAVIOUR_IF_STAGE2_FAILS=2).
+set -eu
+
+fail() {
+  echo "init-net: $*" >&2
+  exit 1
+}
+is_ipv4() {
+  printf '%s' "$1" | grep -Eq '^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$'
+}
+is_port() {
+  printf '%s' "$1" | grep -Eq '^[1-9][0-9]{0,4}$' && [ "$1" -le 65535 ]
+}
+
+SOCKS_IP="${PB_SOCKS_IP:-}"
+SOCKS_PORT="${PB_SOCKS_PORT:-}"
+SYNC_IP="${PB_SYNC_IP:-}"
+API_IP="${PB_API_IP:-}"
+is_ipv4 "$SOCKS_IP" || fail "PB_SOCKS_IP is not an IPv4 address"
+is_port "$SOCKS_PORT" || fail "PB_SOCKS_PORT is not a port"
+is_ipv4 "$SYNC_IP" || fail "PB_SYNC_IP is not an IPv4 address"
+is_ipv4 "$API_IP" || fail "PB_API_IP is not an IPv4 address"
+# The owner's screen never runs without its password (Astra's review of the
+# prototype, finding 12).
+[ -s /run/secrets/vnc_password ] || fail "no screen password in /run/secrets/vnc_password"
+
+nft -f - <<EOF
+flush ruleset
+table inet pb {
+  chain output {
+    type filter hook output priority 0; policy drop;
+    ct state established,related accept
+    oif lo meta skuid pb-chrome tcp dport 3128 accept
+    oif lo meta skuid pb-operator tcp dport 9222 accept
+    meta skuid pb-operator ip daddr $SOCKS_IP tcp dport $SOCKS_PORT accept
+    # Refused at once, not dropped: a dropped SYN only times out, which
+    # looks like a slow network — a refusal is the kernel's own answer
+    # (EHOSTUNREACH for TCP, EPERM for UDP), and net-selftest checks for it.
+    reject with icmpx admin-prohibited
+  }
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif lo accept
+    ct state established,related accept
+    ip saddr $SYNC_IP tcp dport 7700 accept
+    ip saddr $API_IP tcp dport { 6901, 7700 } accept
+  }
+}
+EOF
+
+# A volume created empty takes the image's owners; one restored from a
+# snapshot may not.
+chown pb-chrome:pb-chrome /data/profile
+chmod 700 /data/profile
+chown pb-operator:pb-operator /data/buffer
+chmod 700 /data/buffer
+install -d -o root -g root -m 755 /run/pb
+# The operator's and the holder's own: the holder's socket, the heartbeat,
+# the RPC token's copy, the page's environment for Chrome's start.
+install -d -o pb-operator -g pb-operator -m 700 /run/pb/operator
+# A restarted container keeps /run: a previous run's environment goes, and
+# Chrome has the container's defaults until the operator hands it the
+# engine's (src/env/handover.ts).
+rm -f /run/pb/operator/chrome-env /run/pb/operator/chrome-env.tmp
+printf '%s\n' "$SOCKS_IP" > /run/pb/socks-ip
+printf '%s\n' "$SOCKS_PORT" > /run/pb/socks-port
+echo "init-net: egress rules in place (SOCKS5 $SOCKS_IP:$SOCKS_PORT)"

@@ -17,7 +17,7 @@ import type { OwnGenerationForProfile } from "@agency_hub_core/db";
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
 import {
   DOSSIER_BODY_MAX_CHARS,
-  generationIsOfFan,
+  generationIsOfConversation,
   generationRefusalReason,
 } from "../apps/runtime/src/services/client-profile-from-generation.ts";
 import { GenerationNotEligibleError, GenerationNotReadyError } from "../apps/runtime/src/services/errors.ts";
@@ -108,6 +108,20 @@ describe("dossier-from-generation contract", () => {
     }
   });
 
+  it("[R20 HF-10] takes the conversation the generation was made in, in the one shape of a client id", () => {
+    // A Fansly group id: 18 digits, past 2^53, kept as text.
+    for (const conversationRef of ["650000000000000001", "777000777", "1"]) {
+      const body = { generationRef: GENERATION_REF, clientRequestId: CLIENT_REQUEST_ID, conversationRef };
+      expect(clientFanProfileFromGenerationBodySchema.parse(body)).toEqual(body);
+    }
+    for (const conversationRef of ["", "0", "0123", "group-900", "1".repeat(31), 650000001, null]) {
+      expect(
+        clientFanProfileFromGenerationBodySchema.safeParse({ generationRef: GENERATION_REF, conversationRef }).success,
+        String(conversationRef),
+      ).toBe(false);
+    }
+  });
+
   it("is strict: the text, the fan, the page and the time are never the client's to send", () => {
     for (const body of [
       {},
@@ -191,10 +205,12 @@ describe("dossier-from-generation contract", () => {
   });
 });
 
-describe("generationIsOfFan", () => {
+describe("generationIsOfConversation", () => {
   const FAN = "777000777";
   const OTHER_FAN = "777000888";
-  const target = { pageId: 1, fanRef: FAN };
+  // The fan names the conversation: OnlyFans, and every request without `conversationRef` there.
+  const target = { pageId: 1, conversationRef: FAN, fanRef: FAN };
+  const generationIsOfFan = generationIsOfConversation;
 
   it("finds a recap of the fan's own chat that names no other fan", () => {
     // An older client's request names the chat only; the extension's names the fan in both refs.
@@ -222,7 +238,50 @@ describe("generationIsOfFan", () => {
     }
     // The mixed record is nobody's, whichever of its two fans the path names.
     const mixed = generation({ conversationRef: FAN, fanRef: OTHER_FAN });
-    expect(generationIsOfFan(mixed, { pageId: 1, fanRef: OTHER_FAN })).toBe(false);
+    expect(generationIsOfFan(mixed, { pageId: 1, conversationRef: OTHER_FAN, fanRef: OTHER_FAN })).toBe(false);
+  });
+
+  describe("[R20 HF-10] a conversation with an id of its own (a Fansly group)", () => {
+    // Fansly ids are 18-digit snowflakes, past 2^53: compared as exact strings.
+    const GROUP = "650000000000000001";
+    const OTHER_GROUP = "650000000000000002";
+    const FANSLY_FAN = "700000000000000001";
+    const FANSLY_OTHER_FAN = "700000000000000002";
+    const pair = { pageId: 1, conversationRef: GROUP, fanRef: FANSLY_FAN };
+
+    it("finds the group's recap stored about this fan, and the fan's own form", () => {
+      // The form a Fansly Recap is stored in, by the released extension and the new one alike.
+      expect(generationIsOfConversation(generation({ conversationRef: GROUP, fanRef: FANSLY_FAN }), pair)).toBe(true);
+      // The released extension's older requests keyed the chat by its fan.
+      expect(generationIsOfConversation(generation({ conversationRef: FANSLY_FAN, fanRef: null }), pair)).toBe(true);
+      expect(generationIsOfConversation(generation({ conversationRef: FANSLY_FAN, fanRef: FANSLY_FAN }), pair)).toBe(true);
+    });
+
+    it("finds nothing of another group, another fan, or a group record that names no fan", () => {
+      const absent: Array<Partial<OwnGenerationForProfile>> = [
+        { pageId: 2, conversationRef: GROUP, fanRef: FANSLY_FAN },
+        { conversationRef: OTHER_GROUP, fanRef: FANSLY_FAN },
+        { conversationRef: GROUP, fanRef: FANSLY_OTHER_FAN },
+        { conversationRef: OTHER_GROUP, fanRef: FANSLY_OTHER_FAN },
+        { conversationRef: FANSLY_OTHER_FAN, fanRef: null },
+        { conversationRef: FANSLY_FAN, fanRef: FANSLY_OTHER_FAN },
+        // Nothing in it says whose the group's record is: it proves no fan's dossier.
+        { conversationRef: GROUP, fanRef: null },
+        { conversationRef: null, fanRef: FANSLY_FAN },
+        // The group named as the fan, the fan named as the group.
+        { conversationRef: GROUP, fanRef: GROUP },
+        { conversationRef: FANSLY_FAN, fanRef: GROUP },
+      ];
+      for (const over of absent) {
+        expect(generationIsOfConversation(generation(over), pair), JSON.stringify(over)).toBe(false);
+      }
+      // One fan's group record is not the other fan's, nor another group's of the same fan.
+      const record = generation({ conversationRef: GROUP, fanRef: FANSLY_FAN });
+      expect(generationIsOfConversation(record, { pageId: 1, conversationRef: GROUP, fanRef: FANSLY_OTHER_FAN })).toBe(false);
+      expect(generationIsOfConversation(record, { pageId: 1, conversationRef: OTHER_GROUP, fanRef: FANSLY_FAN })).toBe(false);
+      // Without the group (the fan's own form) the group's record is not found: as before HF-10.
+      expect(generationIsOfConversation(record, { pageId: 1, conversationRef: FANSLY_FAN, fanRef: FANSLY_FAN })).toBe(false);
+    });
   });
 });
 

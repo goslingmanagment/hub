@@ -1,4 +1,5 @@
 import { pathSegment } from "./path.js";
+import { isChatterSite, isConsoleSite } from "./sites.js";
 import type { PeriodOption } from "../stores/periodStore.js";
 import type { SpenderPeriodOption } from "../stores/spenderPeriodStore.js";
 
@@ -249,12 +250,24 @@ export function buildLoginRoute(returnTo: string): string {
 export const CHATTER_HOME = "/account";
 
 /**
+ * Where a chatter is sent from a console page. Their cabinet — except on the
+ * console's own production name: no cabinet is served there, a chatter login
+ * is not a way in, and the sign-in page ends the session and says where the
+ * account is.
+ */
+export function chatterExit(): string {
+  return isConsoleSite() ? "/login" : CHATTER_HOME;
+}
+
+/**
  * Where a signed-in principal belongs. A chatter has no owner page to return
  * to — every one of them answers 403 — so a remembered `next` never overrides
- * the cabinet for them. Every other role keeps the requested destination.
+ * the cabinet for them. On the chatters' site that holds for every role: the
+ * console is not served on that name, so the cabinet is the only home there.
+ * Elsewhere every other role keeps the requested destination.
  */
 export function resolveRoleHome(role: string, requested: string): string {
-  return role === "chatter" ? CHATTER_HOME : requested;
+  return isChatterSite() || role === "chatter" ? CHATTER_HOME : requested;
 }
 
 export function resolveFanProfileBackTarget(

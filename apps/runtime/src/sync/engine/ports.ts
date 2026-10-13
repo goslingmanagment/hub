@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { Database, SyncWorkRow } from "@agency_hub_core/db";
+import type { Database, SyncAttemptRow, SyncWorkRow } from "@agency_hub_core/db";
 import type {
   FanslySendCheck,
   FanslySendRefusalReason,
@@ -180,9 +180,41 @@ export type SendRefusal = FanslySendRefusalReason;
 
 /** The hooks of one admission. `check` is synchronous and runs at undici's
  *  `onRequestStart`, immediately before the request headers are written; a
- *  non-null result aborts the dispatch and writes nothing. */
+ *  non-null result aborts the dispatch and writes nothing. Passing it IS the
+ *  send.
+ *
+ *  `grant` is the same check for a sender outside the process (a page's
+ *  browser, Project Browser plan §3.2): every condition of `check`, asked
+ *  synchronously right before the sender is told it may send, but no send
+ *  mark — the sender may still not send (a session that changed, a deadline
+ *  passed on its side), and the send counts at the instant it reports
+ *  (`transport_reported`) or at the completion. A transport asks one of the
+ *  two, once per admission: a second ask is refused (`lease_used`). */
 export interface SendHooks {
   check: FanslySendCheck;
+  grant: FanslySendCheck;
+}
+
+/**
+ * What a transport knows of the admission it sends under (Project Browser,
+ * plan §3.2): a sender outside the process is told the attempt, the owner it
+ * belongs to and the deadline it must send by, and refuses a request of an
+ * earlier owner or past that deadline on its own side too.
+ */
+export interface SendAdmission {
+  /** `sync_attempts.id`: the sender keeps its outcome under it. */
+  attemptId: number;
+  /** The page's owner generation (`sync_pages.owner_generation`). */
+  ownerGeneration: bigint;
+  /** When the admission was issued (taken before its transaction), on the
+   *  engine's monotonic clock (`Clock.monoNow`). */
+  issuedMono: number;
+  /** The absolute deadline of the send (issue + `SEND_WINDOW_MS`), on the
+   *  engine's monotonic clock — never a remainder. `Clock.monoNow` is the
+   *  kernel's CLOCK_MONOTONIC shifted by a constant (`performance.now()`), so
+   *  a transport that hands it to another process converts it by that one
+   *  shift (`services/egress/page-browser-rpc.ts` `kernelMonoBridge`). */
+  sendDeadlineMono: number;
 }
 
 /** What one physical request came to: the wire layer's outcomes
@@ -195,10 +227,24 @@ export type TransportOutcome = FanslyWireOutcome;
 export interface PageTransport {
   /** The request of one plan, built right before its admission; `context`
    *  names the work it is for (a CDN hop reads the work's secret URL). Throws
-   *  `UnsendableRequestError` for a request that can never be sent. */
+   *  `UnsendableRequestError` for a request that can never be sent, and
+   *  `PageTransportUnavailableError` while the transport cannot take one now
+   *  (nothing is admitted either way). */
   prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
-  /** At most one physical request. */
-  send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+  /** At most one physical request, under `admission`; the transport asks
+   *  `hooks.check` (it writes the request itself) or `hooks.grant` (a sender
+   *  outside the process writes it), never both. */
+  send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome>;
+  /** The outcome of `attemptId` is committed (captured, or settled as not
+   *  sent): a sender that keeps outcomes until they are acknowledged (a
+   *  page's browser keeps them on disk) may drop it now. Never throws. */
+  settled?(attemptId: number): void;
+  /** The outcomes the sender keeps until they are acknowledged (a page's
+   *  browser keeps them on disk, plan §3.2 «Приём буфера и восстановление»):
+   *  asked at the actor's start before its recovery closes anything
+   *  `unknown`, and those nothing waits for taken every lap. Absent where the
+   *  transport keeps none (undici): recovery is as it always was. */
+  held?: HeldOutcomeSource;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
    *  compares it with the trusted digest (checks-only, G2) and with the
@@ -206,6 +252,56 @@ export interface PageTransport {
    *  Absent where the transport stores none. */
   storedCredentialsGeneration?(): Promise<string | null>;
   close(): Promise<void>;
+}
+
+// ── outcomes a sender keeps (Project Browser, plan §3.2; PR 13) ────────────
+
+/** What a sender that keeps outcomes until they are acknowledged holds of
+ *  one attempt (`HeldOutcomeSource`). Taking it is never a permission to
+ *  send anything again: it is the outcome of a request that was sent (or
+ *  was not), and only that is committed. */
+export type HeldAnswer =
+  /** It never left, by the sender's own record: closed as not sent. */
+  | { kind: "not_sent"; attemptId: number }
+  /** Nothing tells whether it left: `unknown`, as without such a sender.
+   *  `held`: the sender keeps an outcome that says so (a site socket whose
+   *  operator started again after its admission, `wsDone.fate`) — dropped
+   *  once the attempt is settled `unknown`. */
+  | { kind: "unknown"; attemptId: number; held?: true }
+  /** An engine request's outcome, as `send` would have returned it for the
+   *  attempt's row. */
+  | { kind: "request"; attemptId: number; resolve(attempt: SyncAttemptRow): Promise<HeldRequestOutcome> }
+  /** A site request's or a site socket's end (`fate: "unknown"` of a socket
+   *  comes as `unknown`). */
+  | { kind: "site"; attemptId: number; end: SiteRequestEnd; sentWall: Date | null };
+
+export interface HeldRequestOutcome {
+  outcome: TransportOutcome;
+  /** The answer came under the session the request was prepared for. One
+   *  of another session is never the attempt's answer (plan §3.2). */
+  sameSession: boolean;
+  /** Everything it carried arrived (its body whole). */
+  whole: boolean;
+  /** When the sender reported it left, on the wall clock (null: not
+   *  reported). */
+  sentWall: Date | null;
+}
+
+export interface HeldOutcomeSource {
+  /** What the sender holds of these attempts, its outcomes resent on the way
+   *  (waiting at most `waitMs` for it to be reachable). Null: it could not
+   *  be asked — they are `unknown`, as without it. */
+  recover(attemptIds: readonly number[], waitMs: number): Promise<Map<number, HeldAnswer> | null>;
+  /** At most `max` of the outcomes delivered that nothing waited for (after
+   *  a restart, another session's answer, a reply a lost COMMIT
+   *  acknowledgement left unapplied), taken out of the sender's queue. */
+  takeLate(max: number): HeldAnswer[];
+  /** The sender still holds the outcomes of these attempts but nothing here
+   *  keeps them now (a commit that failed): asked for again (`recover`) —
+   *  the sender does not deliver an outcome twice on one connection. */
+  retry(attemptIds: readonly number[]): void;
+  /** What the outcome carried is committed: the sender may drop it. */
+  acknowledge(attemptId: number): void;
 }
 
 /**
@@ -234,6 +330,17 @@ export class CredentialsGenerationChangedError extends Error {
         : `Fansly sync page ${pageId}: the stored credentials changed since the last identity check`,
     );
     this.name = "CredentialsGenerationChangedError";
+  }
+}
+
+/** The transport cannot take a request now (a page's browser: no link to its
+ *  operator, the operator not ready, a backoff after it could not take one):
+ *  thrown by `prepare` before anything is admitted. Not the platform's
+ *  failure — no network hold, no breaker: the actor waits and asks again. */
+export class PageTransportUnavailableError extends Error {
+  constructor(readonly reason: string, readonly retryInMs: number) {
+    super(`The page transport cannot take a request now: ${reason}`);
+    this.name = "PageTransportUnavailableError";
   }
 }
 
@@ -291,3 +398,65 @@ export interface LivePageSocket {
 
 /** The live page's socket owner now, or null (none in this process). */
 export type LivePageSocketRef = () => LivePageSocket | null;
+
+// ── a page's own site requests (Project Browser, plan §3.2, spec §3) ────────
+
+/** A request of the page's own site that waits for the engine's admission:
+ *  the page's browser holds it paused until the engine grants or refuses it
+ *  (`siteAdmit` of the operator, spec §6). */
+export interface PendingSiteRequest {
+  /** The operator's id of the request (`siteRequestId`). */
+  id: string;
+  method: string;
+  /** The class of its host: the API, the socket, the media CDN. */
+  host: "api" | "ws" | "cdn";
+  /** Its URL's path (a query is ignored; the journal keeps parameter names
+   *  only). */
+  path: string;
+  /** When the engine heard of it (this process's monotonic clock). */
+  askedMono: number;
+  /** The operator is in its manual-login mode: the owner logs in. Only then
+   *  does a login operation pass, and only then do the site's requests pass
+   *  the page's pause, its credentials hold and checks-only (plan §3.2). */
+  manualLogin: boolean;
+}
+
+/** How an admitted site request ended, as the operator reports it.
+ *  `sentMono`: when it left, as the browser reported it, on the engine's
+ *  monotonic clock (absent or null: not reported — the completion counts). */
+export type SiteRequestEnd =
+  | { kind: "response"; status: number; retryAfterMs: number | null; sentMono?: number | null }
+  | { kind: "transport_error"; sent: boolean; message: string; sentMono?: number | null }
+  | { kind: "aborted_before_send"; reason: string };
+
+/** Why the engine refused a site request (`siteAdmitResult`). */
+export type SiteRefusalReason =
+  | "waited_too_long"
+  | "write"
+  | "method"
+  | "not_api_path"
+  | "not_a_route"
+  | "mode"
+  | "paused"
+  | "credentials"
+  | "held"
+  | "route_held"
+  | "hour_ceiling"
+  /** The admission's final check refused the grant (ownership lost, the send
+   *  window passed, the pause): nothing may be sent. */
+  | "lease";
+
+/** The page browser's side of the site admission: its pending requests, the
+ *  engine's answers, the end of an admitted request. Absent on a page without
+ *  a browser: nothing of the site path runs there. */
+export interface SiteAdmissionPort {
+  /** The requests waiting now, oldest first. */
+  pending(): readonly PendingSiteRequest[];
+  /** Admit one: the browser may send it within `sendWithinMs` from now (the
+   *  admission's send window left), under the attempt `attemptId`. */
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void;
+  /** Refuse one: it is failed in the browser, nothing is sent. */
+  refuse(id: string, reason: SiteRefusalReason): void;
+  /** The end of an admitted request; never throws for an outcome. */
+  end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
+}

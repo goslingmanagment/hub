@@ -430,6 +430,37 @@ export async function ensurePostRepliesWalkRow(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
+/**
+ * A post's replies must be walked again (Project Browser, PR 13: the site
+ * read a reply page whose body the operator could not keep): its row of the
+ * `post_replies` plane is dirty and due now. Only a post of the page's own
+ * (`creator_posts`) whose row the projector queued: a post id from the
+ * site's request names nothing of the page by itself, and is never queued
+ * under it. False: nothing marked.
+ */
+export async function markPostRepliesDirty(
+  db: Database,
+  input: { pageId: number; subjectRef: string; reason: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update subject_refresh_state s
+       set refresh_class = 'dirty',
+           dirty_reason = ${input.reason},
+           next_due_at = least(coalesce(s.next_due_at, now()), now()),
+           updated_at = now()
+     where s.page_id = ${input.pageId}
+       and s.plane = 'post_replies'
+       and s.subject_ref = ${input.subjectRef}
+       and exists (
+         select 1 from creator_posts p
+          where p.account_id = s.page_id
+            and p.platform_post_id = s.subject_ref
+            and p.platform = 'fansly'
+       )
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 export interface PostRepliesWalkCandidate {
   subjectRef: string;
   knownCount: number | null;

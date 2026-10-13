@@ -83,6 +83,24 @@ const SHAPES: ReadonlyArray<readonly [name: string, input: PromptBuildInput]> = 
   }],
   ["coach-chat preset", { ...COACH, chatterQuestion: "Разбери текущую ситуацию.", preset: "situation" }],
   ["voice-script", { ...BASE, feature: "voice-script", draftText: "hey love, wanna see more? xx", replyTone: "spicy" }],
+  ["fan-notes-fill", {
+    ...BASE,
+    feature: "fan-notes-fill",
+    fanBio: "into gym and anime, from Texas",
+    transcriptCoverage: "full-history",
+    noteFields: ["Имя", "Локация", "Возраст", "Работа", "Хобби", "Фетиши", "Характеристика", "Медиа"],
+  }],
+  // Merge mode: the current values ride beside the labels, and the client's
+  // transcript carries day lines.
+  ["fan-notes-fill merge", {
+    ...BASE,
+    feature: "fan-notes-fill",
+    transcript: `--- 2026-09-14 ---\n${TRANSCRIPT}`,
+    fanBio: "into gym and anime, from Texas",
+    transcriptCoverage: "full-history",
+    noteFields: ["Имя", "Локация", "Возраст", "Работа", "График", "Хобби", "Планы и даты", "Фетиши", "Характеристика", "Медиа", "Другое"],
+    noteValues: ["Jake", "Texas", "", "", "", "gym & anime", "", "", "likes PPV <solo>", "Sexting 1", ""],
+  }],
 ];
 
 export interface ReferencePrompt {

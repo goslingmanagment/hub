@@ -1,0 +1,32 @@
+#!/bin/sh
+# The page's X server and the owner's screen (plan §3.1, §4.8): KasmVNC's
+# Xkasmvnc is both — no separate Xvfb (stage 1). Its web client on :6901
+# asks the user "owner" for the page's screen password (HTTP basic auth);
+# the input rules let only the API reach it.
+set -eu
+umask 077
+
+PASSWORD_FILE=/home/pb-chrome/.kasmpasswd
+password=$(cat /run/secrets/vnc_password)
+# kasmvncpasswd reads the password twice on stdin; -w: the owner may type,
+# not only watch.
+printf '%s\n%s\n' "$password" "$password" \
+  | env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin /command/s6-setuidgid pb-chrome kasmvncpasswd -u owner -w "$PASSWORD_FILE" >/dev/null
+unset password
+
+# A restarted container keeps /tmp: the old display's lock and socket go.
+# The socket directory is root's, as X expects; the server is not root.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+install -d -o root -g root -m 1777 /tmp/.X11-unix
+
+# -publicIP: no STUN lookups (UDP is closed, and without an address
+# Xkasmvnc exits when they fail).
+exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin \
+  /command/s6-setuidgid pb-chrome /usr/bin/Xkasmvnc :99 \
+  -geometry 1920x1080 -depth 24 \
+  -websocketPort 6901 -interface 0.0.0.0 \
+  -httpd /usr/share/kasmvnc/www \
+  -KasmPasswordFile "$PASSWORD_FILE" \
+  -sslOnly 0 -disableBasicAuth 0 -SecurityTypes None \
+  -FrameRate 30 -AlwaysShared -nolisten tcp \
+  -publicIP 127.0.0.1

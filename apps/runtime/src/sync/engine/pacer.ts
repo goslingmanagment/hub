@@ -14,7 +14,9 @@ import type { Clock, OwnershipSession, PauseSource, Rng, TransportOutcome } from
 // the owner's setting read at the admission of the later request — a strict
 // minimum, not an average. "Actual send" is undici's `onRequestStart`, the
 // instant right before the request headers are written, measured on the
-// monotonic clock; where a transport cannot mark it, the completion instant is
+// monotonic clock — or, for a sender outside the process (a page's browser,
+// Project Browser plan §3.2), the instant it reported the request left
+// (`transport_reported`); where neither is known, the completion instant is
 // used instead (a safe upper bound). One request is in flight at a time; the
 // first send after a takeover waits for a floor computed in the database.
 //
@@ -67,9 +69,17 @@ export interface Admission extends SlotGrant {
   /** The actual send (monotonic), or null while nothing was sent. */
   sentMono: number | null;
   sentWall: Date | null;
-  /** How the send instant was taken: at `onRequestStart`, or the completion
-   *  instant as the safe upper bound when the transport gave no such mark. */
-  sendMark: "request_start" | "completion_fallback" | null;
+  /** How the send instant was taken: at `onRequestStart`; as the sender
+   *  outside the process reported it (`transport_reported`, a page's
+   *  browser); or the completion instant as the safe upper bound when the
+   *  transport gave no such mark. */
+  sendMark: "request_start" | "completion_fallback" | "transport_reported" | null;
+  /** The instant `checkRemoteGrant` let a sender outside the process go
+   *  (monotonic), or null: such a sender never sends before it. */
+  grantedMono: number | null;
+  /** This pacer's previous actual send when the admission was armed: the
+   *  gap of a send marked later (`transport_reported`) is measured from it. */
+  prevSendMono: number | null;
   /** Gap to this pacer's previous actual send (`sync_attempts.gap_prev_ms`). */
   gapPrevMs: number | null;
   /** Why the send check refused the dispatch, if it did. */
@@ -235,6 +245,8 @@ export class Pacer {
       sentMono: null,
       sentWall: null,
       sendMark: null,
+      grantedMono: null,
+      prevSendMono: this.#st.lastSendMono,
       gapPrevMs: null,
       refusal: null,
     };
@@ -272,16 +284,53 @@ export class Pacer {
   }
 
   /**
+   * The send check of an admission the page's browser sends (Project
+   * Browser: a site request, or the engine's own request through the
+   * browser transport), right before the browser is told it may send: every
+   * condition of `check` — one grant per admission, in flight, not stopping,
+   * ownership alive, within the send window, past the takeover floor and the
+   * pause — but no send mark. The browser sends later, within the window it
+   * is given (it may not send at all: a session that changed, a deadline the
+   * gate passed); `complete` marks the send at the instant the browser
+   * reports (`transport_reported`), else at the completion (the safe upper
+   * bound) when the request may have gone out.
+   */
+  checkRemoteGrant(admission: Admission): FanslySendRefusedError | null {
+    if (admission.used) return this.#refuse(admission, "lease_used");
+    admission.used = true;
+    if (this.#st.inFlight !== admission) return this.#refuse(admission, "lease_inactive");
+    if (this.#stopping || !this.#deps.ownership.alive()) return this.#refuse(admission, "lease_inactive");
+    const now = this.#deps.clock.monoNow();
+    if (now >= admission.sendDeadlineMono) return this.#refuse(admission, "send_deadline_passed");
+    if (now < this.#st.floorMono) return this.#refuse(admission, "takeover_floor");
+    if (this.#st.lastCompletionMono !== null && now < this.#st.lastCompletionMono) {
+      return this.#refuse(admission, "pace");
+    }
+    if (this.#st.lastSendMono !== null && now - this.#st.lastSendMono < admission.pauseMs) {
+      return this.#refuse(admission, "pace");
+    }
+    admission.grantedMono = now;
+    return null;
+  }
+
+  /**
    * After the response body was read, or the request failed or was aborted.
-   * A request that may have reached the wire without an `onRequestStart`
-   * mark is counted as sent at this instant (the safe upper bound).
+   * A request whose sender reported when it left (`transport_reported`: a
+   * page's browser) is marked sent at that instant — never before this
+   * process let it go (its grant or check), never after now. One that may
+   * have reached the wire without either mark is counted as sent at this
+   * instant (the safe upper bound).
    */
   complete(admission: Admission, outcome: TransportOutcome): void {
     if (this.#st.inFlight !== admission) throw new PacerInvariantError("foreign_admission");
     const now = this.#deps.clock.monoNow();
     const mayHaveSent = outcome.kind === "response" ||
       ((outcome.kind === "transport_error" || outcome.kind === "timeout") && outcome.sent);
-    if (admission.sentMono === null && mayHaveSent) {
+    const reported = mayHaveSent ? reportedSendMono(outcome) : null;
+    if (reported !== null) {
+      const floor = admission.sentMono ?? admission.grantedMono ?? admission.issuedMono;
+      this.#markSent(admission, Math.min(Math.max(reported, floor), now), "transport_reported", now);
+    } else if (admission.sentMono === null && mayHaveSent) {
       this.#markSent(admission, now, "completion_fallback");
     } else if (outcome.kind === "response" && outcome.sendMark === "completion_fallback") {
       // The transport says it had no `onRequestStart` mark although the check
@@ -350,11 +399,20 @@ export class Pacer {
     );
   }
 
-  #markSent(admission: Admission, now: number, mark: "request_start" | "completion_fallback"): void {
-    admission.gapPrevMs = this.#st.lastSendMono === null ? null : now - this.#st.lastSendMono;
-    this.#st.lastSendMono = now;
-    admission.sentMono = now;
-    admission.sentWall = this.#deps.clock.wallNow();
+  /** The send of `admission` at `at` (monotonic); `now` is the instant of
+   *  marking — a send reported for an earlier instant gets the wall time of
+   *  that instant. */
+  #markSent(
+    admission: Admission,
+    at: number,
+    mark: "request_start" | "completion_fallback" | "transport_reported",
+    now: number = at,
+  ): void {
+    admission.gapPrevMs = admission.prevSendMono === null ? null : at - admission.prevSendMono;
+    this.#st.lastSendMono = at;
+    admission.sentMono = at;
+    const wall = this.#deps.clock.wallNow();
+    admission.sentWall = at === now ? wall : new Date(wall.getTime() - (now - at));
     admission.sendMark = mark;
   }
 
@@ -366,4 +424,16 @@ export class Pacer {
 
 export function createPacer(deps: PacerDeps): Pacer {
   return new Pacer(deps);
+}
+
+/** The send instant a transport reported (`transport_reported`), on the
+ *  pacer's clock, or null: none, or not a finite reading. */
+function reportedSendMono(outcome: TransportOutcome): number | null {
+  if (outcome.kind === "response") {
+    return outcome.sendMark === "transport_reported" && Number.isFinite(outcome.sentMono) ? outcome.sentMono! : null;
+  }
+  if (outcome.kind === "transport_error" || outcome.kind === "timeout") {
+    return outcome.sent && Number.isFinite(outcome.sentMono) ? outcome.sentMono! : null;
+  }
+  return null;
 }

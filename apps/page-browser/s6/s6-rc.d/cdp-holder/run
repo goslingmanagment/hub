@@ -1,0 +1,9 @@
+#!/bin/sh
+# The CDP holder (plan §3.1, §4.1; src/holder/): the one DevTools
+# connection to Chrome, kept when the operator fails, so a crashed or hung
+# operator never makes Chrome release its held requests. As pb-operator. It
+# exits when Chrome's connection closes; s6 starts a fresh one, which waits
+# for the next Chrome.
+set -eu
+exec env -i HOME=/home/pb-operator PATH=/usr/local/bin:/usr/bin:/bin \
+  /command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/holder/main.ts

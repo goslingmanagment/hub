@@ -129,8 +129,10 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
         is_sent_by_page: true, content: "hey" }),
     ]);
     expect((rows[0]!.created_at as Date).getTime()).toBe(Math.round(fanMessage.createdAt * 1000));
-    // Money never comes from the socket.
-    expect(JSON.stringify(rows)).not.toMatch(/cdn\.example|500/);
+    // Money never comes from the socket (the times are left out: their
+    // milliseconds may read 500 too).
+    expect(JSON.stringify(rows, (key, value: unknown) => (key === "created_at" || key === "deleted_at" ? undefined : value)))
+      .not.toMatch(/cdn\.example|500/);
 
     const events = await query(`select type, fan_identity_ref, conversation_ref, message_ref, dedup_key,
       observation_id::int, data from domain_events order by account_seq`);

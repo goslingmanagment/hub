@@ -1,0 +1,4 @@
+#!/bin/sh
+# The kernel check of the egress rules (plan §4.1, step 5): see
+# net-selftest.mjs.
+exec node --no-warnings /etc/s6-overlay/scripts/net-selftest.mjs

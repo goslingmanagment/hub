@@ -9,6 +9,14 @@ The console is "Настройки → Команда". Account routes use the i
 returned by the users list; a login is only for creation, sign-in and search.
 An owner cookie session is required for administrative actions.
 
+The console is served on `hub.gosling-agency.ru`; the person you invite lands
+on `chatgoose.gosling-agency.ru`, the chatters' site, which also serves their
+cabinet at `/account`. These are two doors. The
+console's name takes in the owner and team leads only: a chatter login is not
+accepted there (the form answers «Это вход в админку. Аккаунт ChatGoose — на
+chatgoose.gosling-agency.ru»), and no cabinet is served under that name. The
+chatters' site takes any login and shows that login's account.
+
 ## Inviting
 
 1. **Команда → Пригласить**: login, pages (multi-select, grouped by platform).
@@ -17,7 +25,8 @@ An owner cookie session is required for administrative actions.
    existing account, or the invite operation that creates the account, the page
    grants and the link in **one** transaction — if any page label is wrong,
    nothing is created at all.
-2. The response carries the link **once**: `https://gosling-agency.ru/join#<…>`.
+2. The response carries the link **once**:
+   `https://chatgoose.gosling-agency.ru/join#<…>`.
    It is never stored, logged or journalled. Copy it from the dialog and send it
    in Telegram by hand, with the ready-made message template. If you lose it,
    just make a new one (step 4) — the lost one is retired automatically.

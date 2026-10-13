@@ -163,12 +163,16 @@ export * from "./repositories/ofapi-sync-snapshot.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
+// The reads of `GET /api/v1/ops/live` (the operator screen's one request).
+export * from "./repositories/ops-live.ts";
 export * from "./repositories/page-dm.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
 export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // The session-less public account reader's own proxy (arena "vanished chat" R5).
 export * from "./repositories/fansly-public-egress.ts";
+export * from "./repositories/page-browsers.ts";
+export * from "./repositories/page-browser-intake.ts";
 // Its demand, budget, answers and stop (0259).
 export * from "./repositories/fansly-public-lookup.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt

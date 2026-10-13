@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLIENT_FAN_LEASE_TTL_MS,
+  CLIENT_GREETING_SEND_RATE,
+  CLIENT_PREVIEW_SEND_RATE,
   CLIENT_PREVIEW_SEND_RATE_LIMIT,
   CLIENT_SEND_TICKET_TTL_MS,
   custodyViewState,
@@ -537,6 +539,132 @@ describe("the status read's own last dispatch", () => {
     expect(deriveClientClaimView(snapshot({ lastOwnDispatch: custody({ state: "sent", fanRef: "77" }) }), reader).custody).toBeNull();
     // An action's answer never loads it.
     expect(deriveClientClaimView(snapshot(), reader).custody).toBeNull();
+  });
+});
+
+describe("a manual greeting (R20 HF-3, manual-greeting-v1)", () => {
+  // The route keeps `{kind: "manual", textFingerprint}` as one more group: one part named
+  // `manual:<sha256 of the text>`. The rules below are the same rules, read over that form.
+  const MANUAL: ClientClaimGroup = { generationRef: `manual:${"a".repeat(64)}`, variant: 0, partCount: 1 };
+  const EDITED: ClientClaimGroup = { generationRef: `manual:${"b".repeat(64)}`, variant: 0, partCount: 1 };
+  // A Fansly fan id and message id: 19 digits, past a double's exact integers.
+  const FS_FAN = "1234567890123456789";
+  const FS_MESSAGE = "1234567890123456790";
+  const fs = { ...actor, fanRef: FS_FAN };
+  const fsSnapshot = (over: Partial<ClientFanClaimSnapshot> = {}) => snapshot({ fanRef: FS_FAN, ...over });
+  const fsLease = lease({ fanRef: FS_FAN });
+  const fsCustody = (over: Partial<ClientCustodyRow> = {}) => custody({
+    fanRef: FS_FAN, generationRef: MANUAL.generationRef, variant: 0, partCount: 1, ...over,
+  });
+  const fsDispatch = (over: Partial<Extract<ClientClaimRequest, { action: "dispatch" }>> = {}): ClientClaimRequest =>
+    ({ ...dispatch({ group: MANUAL, rate: CLIENT_GREETING_SEND_RATE, ...over }), fanRef: FS_FAN });
+
+  it("dispatches under the lease like any greeting: one ticket for its one part, no generation needed", () => {
+    expect(decideClaimTransition(fsSnapshot({ activeLease: fsLease, requestedLease: fsLease }), fsDispatch())).toEqual({
+      outcome: "applied",
+      writes: [{
+        op: "insertDispatch", attemptId: A2, instanceId: I1, purpose: "greeting", group: MANUAL, partIndex: 0,
+        textRevision: 1, requestHash: "h2", leaseId: L1, flagRevision: 7, ticketExpiresAt: later(CLIENT_SEND_TICKET_TTL_MS),
+      }],
+    });
+    // Without the lease, or with another install's, it is refused as any greeting is.
+    expect(decideClaimTransition(fsSnapshot(), fsDispatch())).toMatchObject({ code: "claim_expired" });
+    expect(decideClaimTransition(fsSnapshot({ activeLease: lease({ fanRef: FS_FAN, instanceId: I2 }) }), fsDispatch()))
+      .toMatchObject({ code: "claim_busy" });
+    // A manual group is one part: a second index is outside it.
+    expect(decideClaimTransition(fsSnapshot({ activeLease: fsLease }), fsDispatch({ partIndex: 1 })))
+      .toMatchObject({ code: "invalid_request" });
+  });
+
+  it("confirms the fan with its sent part, and then nobody greets again: not another text, not another person", () => {
+    const attempt = fsCustody();
+    const sent: ClientClaimRequest = { ...fs, action: "sent", attemptId: A1, instanceId: I1, platformMessageId: FS_MESSAGE };
+    expect(decideClaimTransition(fsSnapshot({ attempt, openCustody: attempt }), sent).writes).toEqual([
+      { op: "markSent", attemptId: A1, platformMessageId: FS_MESSAGE },
+      { op: "confirmGreeting", source: "preview-send", ownerUserId: ME, attemptId: A1, messageRef: FS_MESSAGE, group: MANUAL },
+    ]);
+    const greeting = {
+      ownerUserId: ME, generationRef: MANUAL.generationRef, variant: 0, partCount: 1,
+      confirmedAt: NOW, firstMessageRef: FS_MESSAGE, firstAttemptId: A1, source: "preview-send" as const,
+    };
+    const greeted = fsSnapshot({ greeting, group: MANUAL, groupParts: [fsCustody({ state: "sent", platformMessageId: FS_MESSAGE })] });
+    expect(decideClaimTransition(greeted, fsDispatch({ leaseToken: null }))).toMatchObject({ code: "part_already_sent" });
+    expect(decideClaimTransition(greeted, fsDispatch({ group: EDITED, leaseToken: null }))).toMatchObject({ code: "generation_mismatch" });
+    expect(decideClaimTransition(greeted, fsDispatch({ group: { generationRef: "gen-9", variant: 0, partCount: 1 } })))
+      .toMatchObject({ code: "generation_mismatch" });
+    expect(decideClaimTransition(greeted, { ...fsDispatch(), userId: OTHER })).toMatchObject({ code: "greeting_done" });
+    expect(decideClaimTransition(greeted, { ...fs, action: "claim", leaseToken: L2, instanceId: I2, userId: OTHER }))
+      .toMatchObject({ code: "greeting_done" });
+  });
+
+  it("a native send of the card's text after «Открыть и вставить» confirms the fan for everyone", () => {
+    const register: ClientClaimRequest = {
+      ...fs, action: "registerNativeSend", attemptId: A2, instanceId: I1, purpose: "greeting", group: MANUAL,
+      partIndex: 0, platformMessageId: FS_MESSAGE, requestHash: "r1",
+    };
+    expect(decideClaimTransition(fsSnapshot(), register).writes).toEqual([
+      {
+        op: "insertNativeSend", attemptId: A2, instanceId: I1, purpose: "greeting", group: MANUAL, partIndex: 0,
+        platformMessageId: FS_MESSAGE, requestHash: "r1",
+      },
+      { op: "confirmGreeting", source: "native-register", ownerUserId: ME, attemptId: A2, messageRef: FS_MESSAGE, group: MANUAL },
+    ]);
+  });
+
+  it("an attempt nobody can vouch for holds the fan after a restart: no second ticket, no failure, until proof", () => {
+    const held = fsCustody({ ticketExpiresAt: later(-1) });
+    // The restarted client's new attempt, and anyone else's, meets the held one.
+    const state = fsSnapshot({ activeLease: fsLease, requestedLease: fsLease, openCustody: held });
+    expect(decideClaimTransition(state, fsDispatch())).toMatchObject({ code: "custody_held" });
+    expect(decideClaimTransition(state, fsDispatch({ group: EDITED }))).toMatchObject({ code: "custody_held" });
+    // Its own repeat reads, never a second ticket.
+    const repeat = fsCustody({ attemptId: A2, requestHash: "h2", ticketExpiresAt: later(-1) });
+    expect(decideClaimTransition(fsSnapshot({ attempt: repeat, openCustody: repeat }), fsDispatch()))
+      .toEqual({ outcome: "applied", writes: [] });
+    // Past the ticket no failure is taken, with proof or without; a 2xx that says it failed proves nothing.
+    for (const [reason, httpStatus] of [["not_enqueued", null], ["native_rejected", 403]] as const) {
+      expect(decideClaimTransition(fsSnapshot({ attempt: held, openCustody: held }), {
+        ...fs, action: "failed", attemptId: A1, instanceId: I1, reason, httpStatus,
+      })).toMatchObject({ code: "custody_held" });
+    }
+    expect(decideClaimTransition(fsSnapshot({ attempt: fsCustody(), openCustody: fsCustody() }), {
+      ...fs, action: "failed", attemptId: A1, instanceId: I1, reason: "native_rejected", httpStatus: 200,
+    })).toMatchObject({ code: "invalid_request" });
+    expect(isAcceptedFailureEvidence("native_rejected", 200)).toBe(false);
+    // The late proof ends it.
+    expect(decideClaimTransition(fsSnapshot({ attempt: held, openCustody: held }), {
+      ...fs, action: "sent", attemptId: A1, instanceId: I1, platformMessageId: FS_MESSAGE,
+    }).writes.map((write) => write.op)).toEqual(["markSent", "confirmGreeting"]);
+    expect(deriveClientClaimView(fsSnapshot({ openCustody: held, group: MANUAL, groupParts: [held] }), {
+      userId: ME, instanceId: null, leaseToken: null, attemptId: null,
+    })).toMatchObject({
+      custody: { attemptId: A1, state: "uncertain-held" },
+      group: { generationRef: MANUAL.generationRef, partCount: 1, heldParts: [0], sentParts: [] },
+    });
+  });
+});
+
+describe("the rate of a dispatch is its own (R20 HF-3)", () => {
+  it("a dispatch that names no rate is a send from the preview: six a minute, as before", () => {
+    const at = (n: number) => decideClaimTransition(snapshot({ ...ownedLease, recentPreviewSends: n }), dispatch());
+    expect(at(CLIENT_PREVIEW_SEND_RATE.limit - 1).outcome).toBe("applied");
+    expect(at(CLIENT_PREVIEW_SEND_RATE.limit)).toMatchObject({ code: "preview_send_rate_limited" });
+    expect(CLIENT_PREVIEW_SEND_RATE.limit).toBe(CLIENT_PREVIEW_SEND_RATE_LIMIT);
+  });
+
+  it("a greeting with a rate of its own takes thirty a minute", () => {
+    const at = (n: number) => decideClaimTransition(
+      snapshot({ ...ownedLease, recentPreviewSends: n }),
+      dispatch({ rate: CLIENT_GREETING_SEND_RATE }),
+    );
+    expect(at(29).outcome).toBe("applied");
+    expect(at(CLIENT_GREETING_SEND_RATE.limit)).toMatchObject({ code: "preview_send_rate_limited" });
+    // The rate is not part of what the attempt is: a repeat reads whatever the window says.
+    const attempt = custody({ attemptId: A2, requestHash: "h2" });
+    expect(decideClaimTransition(
+      snapshot({ ...ownedLease, attempt, openCustody: attempt, recentPreviewSends: 99 }),
+      dispatch({ rate: CLIENT_GREETING_SEND_RATE }),
+    )).toEqual({ outcome: "applied", writes: [] });
   });
 });
 

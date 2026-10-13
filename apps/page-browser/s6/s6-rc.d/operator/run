@@ -1,0 +1,15 @@
+#!/command/with-contenv sh
+# The page operator (plan §3.1; src/operator/), as pb-operator: Chrome's
+# only way out, its control through the holder, the engine's RPC. It stands
+# with the exit closed until the engine starts the page.
+#
+# The page's RPC token is the container's secret, root's alone: it is copied
+# into the operator's own directory before the operator starts. No token, no
+# operator — the service fails and the container is not healthy.
+set -eu
+umask 077
+[ -s /run/secrets/rpc_token ] || { echo "operator: no RPC token in /run/secrets/rpc_token" >&2; exit 1; }
+install -o pb-operator -g pb-operator -m 400 /run/secrets/rpc_token /run/pb/operator/rpc_token
+exec env -i HOME=/home/pb-operator PATH=/usr/local/bin:/usr/bin:/bin \
+  PB_OPERATOR_VERSION="${PB_OPERATOR_VERSION:-dev}" PB_RPC_HOST="${PB_CONTROL_IP:-0.0.0.0}" \
+  /command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/operator/main.ts

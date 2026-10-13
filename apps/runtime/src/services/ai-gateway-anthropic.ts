@@ -78,6 +78,12 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "coach-chat": 2500,
   // Voice notes: a spoken-message script is a single short line.
   "voice-script": 400,
+  // Notes fill: up to 30 `Label: value` lines (mostly Cyrillic). In merge mode
+  // (noteValues) an unchanged field is `Label: =`, but each new or rewritten
+  // value carries up to three `> «…»` fan quotes and two proposed fields may
+  // follow, so an 11-field note with most fields changed runs past 2000. 6000 clears a
+  // large, busy questionnaire; it is a ceiling, not a cost.
+  "fan-notes-fill": 6000,
 };
 
 const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
@@ -91,6 +97,9 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "hi-greeting": 0.7,
   "coach-chat": 0.5,
   "voice-script": 0.4,
+  // Extraction, not writing: stay close to what the chat says. (Sent only to
+  // models that still take sampling parameters; Sonnet 5.5 takes none.)
+  "fan-notes-fill": 0.2,
 };
 
 // Pre-4.6 request surface: no adaptive thinking, sampling params accepted.
@@ -134,6 +143,10 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // 'max_tokens' → the voice-notes admission guard rejects the source
   // unrecoverably. The non-adaptive FEATURE_MAX_TOKENS cap stays 400.
   "voice-script": 8000,
+  // Thinking headroom over the visible cap (low effort on Sonnet 5.5 by
+  // default), sized for merge mode's quotes like the visible cap above: a
+  // truncated note is an error for the client, never a result.
+  "fan-notes-fill": 16000,
 };
 
 const APPROX_CHARS_PER_TOKEN = 4;

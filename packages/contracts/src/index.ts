@@ -35,6 +35,8 @@ export * from "./routes-ofapi-vendor.ts";
 export * from "./routes-ofapi-collection.ts";
 export * from "./of-links.ts";
 export * from "./routes-of-links.ts";
+// The operator screen's one read (`GET /api/v1/ops/live`), spread by routes.ts.
+export * from "./routes-ops-live.ts";
 
 export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";

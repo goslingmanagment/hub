@@ -121,6 +121,12 @@ const DIRECT_WRITERS = [
   // Arena "vanished chat" R5: the session-less public account reader's raw
   // answer, page-less — `account_lookup_public` or its `:failed` body.
   "apps/runtime/src/sync/fansly/public-lookup.ts",
+  // Project Browser PR 13: the answers to a page's own site requests from
+  // its operator's buffer (source `browser_site`) — the wire spec's kind
+  // through the engine's codec, its `:failed`, `:unconfirmed` and
+  // `:incomplete` marks, or `fansly.site.<route>` for a path outside the
+  // registry; journaled as facts, parsed by nothing yet (plan §3.2).
+  "apps/runtime/src/sync/fansly/browser-intake.ts",
 ];
 
 describe("(1) coverage — every written kind is owned by something", () => {

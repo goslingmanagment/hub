@@ -406,6 +406,17 @@ LOCAL_DEPLOY_LOCK_ACQUIRED=0
 REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"
 REMOTE_DEPLOY_LOCK_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR")"
 REMOTE_DEPLOY_LOCK_ACQUIRED=0
+# A sign of the held lock for an observer that must not be given the app
+# directory itself. The server monitor mounts only this directory, read-only,
+# in place of the app directory, and so finds the marker where it looks for
+# the lock. The lock stays where it is: moved, a deploy run from an older
+# checkout would no longer exclude one run from this one. The marker is a
+# courtesy — nothing about it may fail a deploy — and its directory is never
+# removed: a mount of it would go on showing the removed one.
+REMOTE_DEPLOY_MARKER_PARENT="${APP_DIR%/}/.monitor"
+REMOTE_DEPLOY_MARKER_PARENT_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_PARENT")"
+REMOTE_DEPLOY_MARKER_DIR="${REMOTE_DEPLOY_MARKER_PARENT}/.deploy.lock"
+REMOTE_DEPLOY_MARKER_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR")"
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -880,6 +891,55 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # (account_probe_at) where account_probe_resolved is false, built
   # CONCURRENTLY. Index-only: the previous image never needs it.
   "0268_page_fans_account_probe_unresolved_idx.sql"
+  # Project Browser PR 8: sync_attempts.origin (engine, site, login) with a
+  # constant default (catalog only) and the class check widened to 'site'.
+  # No-transaction: each DDL waits at most 1 s for its lock (retried ~60 s),
+  # the checks are added NOT VALID and validated apart under SHARE UPDATE
+  # EXCLUSIVE, so the running engine's journal is never held for a scan. The
+  # previous image never names `origin` and never writes the class 'site';
+  # nothing writes a site attempt yet, so it runs unchanged after a rollback.
+  "0271_sync_attempts_origin.sql"
+  # R20 HF-7д0: three nullable columns without a default on message_archive
+  # and its shadow (catalog only). The previous image names its columns in
+  # every insert, update and copy of both tables and maps named fields of its
+  # `select ma.*` reads, so it runs unchanged beside them; rows it projects
+  # leave the markers as they are (unknown until observed again).
+  "0270_message_archive_fansly_markers.sql"
+  # Project Browser PR 12: sync_attempts.browser_request_id (nullable, no
+  # default: catalog only) and send_mark's check widened to
+  # 'transport_reported'. No-transaction like 0271: each DDL waits at most 1 s
+  # for its lock (retried ~60 s), the check is added NOT VALID and validated
+  # apart. The previous image never names the column, never writes the value
+  # and reads send_mark as text; nothing sends through a page's browser before
+  # the transport switch (PR 14), so it runs unchanged after a rollback.
+  "0272_sync_attempts_browser_send.sql"
+  # Project Browser PR 12: fansly_ws_connections.origin (constant default
+  # 'node': catalog only) and browser_connection_id (nullable uuid), their
+  # check and a partial unique index — a small table, under a 5 s
+  # lock_timeout. The previous image inserts and reads the table by named
+  # columns (its rows satisfy the check as they are); nothing writes a browser
+  # row before the transport switch, so it runs unchanged after a rollback.
+  "0273_fansly_ws_connections_browser.sql"
+  # Project Browser PR 12: observations.source's check gains 'browser_site',
+  # swapped NOT VALID in one ALTER that waits at most 1 s for its lock
+  # (retried ~60 s), as 0196 widened it. The previous image never writes the
+  # value (its writer comes with PR 13) and reads the column as text, so it
+  # runs unchanged after a rollback.
+  "0274_observations_source_browser_site.sql"
+  # Project Browser PR 12: the new page_browsers table (a profile's container,
+  # its page, the operator's last state, the page's RPC tokens and KasmVNC
+  # password, encrypted). The previous image never names it, and nothing
+  # writes a row before the page browsers' deploy script makes profiles, so
+  # it runs unchanged after a rollback.
+  "0275_page_browsers.sql"
+  # Project Browser PR 13: page_browsers gains the engine's intake position
+  # (events_buffer_id, events_acked_seq with a constant default, events_last_wall,
+  # events_gap_since, events_updated_at, and a halted buffer's
+  # events_halted_buffer_id/_reason/_at) and their check — a tiny table, under
+  # a 5 s lock_timeout. The previous image never names the columns and
+  # updates the table by named columns; nothing takes a page's buffer before
+  # the transport switch (PR 14), so it runs unchanged after a rollback.
+  "0276_page_browser_intake.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -977,8 +1037,26 @@ acquire_local_deploy_lock() {
 
 release_remote_deploy_lock() {
   [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]] || return 0
-  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi" \
-    || return 1
+  local remote_command
+  # The observers' marker goes first, while the lock is still this run's, and
+  # only when it is this run's: a later run has replaced it with its own.
+  remote_command=$(cat <<EOF
+set -euo pipefail
+if [[ -f ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner ]] && [[ "\$(cat ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner 2>/dev/null)" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then
+  rm -rf ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} 2>/dev/null \\
+    || printf '[deploy] warning: unable to remove the deploy marker %s\n' $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
+fi
+if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then
+  if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ "\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then
+    rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}
+  else
+    printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+    exit 1
+  fi
+fi
+EOF
+)
+  run_remote "$remote_command" || return 1
   REMOTE_DEPLOY_LOCK_ACQUIRED=0
 }
 
@@ -1051,6 +1129,15 @@ if mkdir ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} 2>/dev/null; then
     printf 'clean_full_base_tag=%s\n' $(printf '%q' "$CLEAN_FULL_BASE_TAG")
   } > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
   printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner
+  # The observers' marker, made anew under the lock: it carries this deploy's
+  # time, and one left behind by a run that died is replaced, not kept.
+  if ! { mkdir -p ${REMOTE_DEPLOY_MARKER_PARENT_ESCAPED} \\
+      && chmod 755 ${REMOTE_DEPLOY_MARKER_PARENT_ESCAPED} \\
+      && rm -rf ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} \\
+      && mkdir ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} \\
+      && printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner; } 2>/dev/null; then
+    printf '[deploy] warning: unable to publish the deploy marker %s; the deploy goes on\n' $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
+  fi
   exit 0
 fi
 printf '[deploy] error: another deploy is running; remote lock exists: %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
@@ -1059,7 +1146,7 @@ if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata ]]; then
   while IFS= read -r line; do printf '[deploy]   %s\n' "\$line" >&2; done < ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
 fi
 printf '[deploy] inspect with: ssh %s %s\n' $(printf '%q' "$REMOTE") $(printf '%q' "ls -la ${REMOTE_DEPLOY_LOCK_DIR}; cat ${REMOTE_DEPLOY_LOCK_DIR}/metadata") >&2
-printf '[deploy] remove only after confirming no deploy is active: rm -rf %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+printf '[deploy] remove only after confirming no deploy is active: rm -rf %s %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
 exit 73
 EOF
 )

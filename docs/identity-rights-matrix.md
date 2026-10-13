@@ -174,8 +174,8 @@ every cell, the agent key, a page that is not granted and one that does not
 exist, in both auth-policy modes, and another person's generation refused for
 every role.
 
-Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream)
-adds no right and no route. A caller who may generate for a page may send the
+Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream;
+Fansly since R20 HF-8б) adds no right and no route. A caller who may generate for a page may send the
 last messages its client read off that page's open chat; they join the
 transcript of that one generation and are stored in its restricted record
 only, scoped `contextScope: principal-draft` as above. Two limits keep it
@@ -188,7 +188,9 @@ inside what the caller could already do:
   pages' message stores (the archive and the webhook archive) only for pages
   granted to the caller (every page for the owner). A message id that exists
   on a page the caller is not granted is not looked up, so the
-  `context_conflict` refusal never says that an id exists there.
+  `context_conflict` refusal never says that an id exists there. On Fansly
+  (R20 HF-8б) the page's own socket overlay is read too, and only the
+  request's page's: it adds no page to what the caller may read.
 
 Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
 a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.
@@ -268,13 +270,20 @@ another is deliberately small:
   only the owner still gets a lease on a greeted fan.
 
 Which of the owner's switches an action waits for: `claim` and `renew` need
-`newcomers`; `dispatch` needs `previewSend` (and `newcomers` for a greeting),
-read from the owner's stored switches inside the dispatch's own transaction;
-the status read needs only the master switch and the minimum version, on an
-OnlyFans page; `release`, `sent` and `failed` end what the hub already
+`newcomers`; `dispatch` needs `previewSend` (and `newcomers` for a greeting)
+on OnlyFans and `newcomers` alone on Fansly, read from the owner's stored
+switches inside the dispatch's own transaction; the status read needs only
+the master switch and the minimum version, on a page of a platform where the
+custody exists; `release`, `sent` and `failed` end what the hub already
 admitted and need only the page grant; `registerNativeSend` reports a send
-that already happened and needs only the page grant on an OnlyFans page, so
-no switch, flag or minimum version ever loses the proof of a send. A page
+that already happened and needs only the page grant on a page of such a
+platform, so no switch, flag or minimum version ever loses the proof of a
+send. What a platform takes of a send is its admission (chat-extension R20
+HF-3, `apps/runtime/src/services/client-claim-admission.ts`): OnlyFans, a
+greeting or a reply with an AI group; Fansly, a greeting only, with an AI or
+a manual group (`manual-greeting-v1`), never a reply. The custody exists on
+Fansly once `newcomers` exists there (HF-2); until then every Fansly action
+that starts something, and the status read, is `platform_unsupported`. A page
 that is not the caller's answers as on every chat-extension page route (403 /
 404 with the policy enforced, `409 client_feature_disabled` / `not_granted`
 in `log` mode).

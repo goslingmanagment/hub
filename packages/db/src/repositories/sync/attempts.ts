@@ -46,7 +46,9 @@ export type SyncApplyState = (typeof SYNC_APPLY_STATES)[number];
  *  a fresh read instead (`requeueQuarantinedWork`). */
 export const SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE = "payload_unavailable:";
 
-export const SYNC_SEND_MARKS = ["request_start", "completion_fallback", "shadow"] as const;
+/** `transport_reported` (0272, Project Browser): the instant a page's
+ *  browser reported the request left. */
+export const SYNC_SEND_MARKS = ["request_start", "completion_fallback", "transport_reported", "shadow"] as const;
 export type SyncSendMark = (typeof SYNC_SEND_MARKS)[number];
 
 /** Admission issue → onRequestStart; a later send is refused (design §3.3).
@@ -301,6 +303,93 @@ export async function insertAdmission(
   return { attemptId: Number(row.attemptId), admittedAt: toRequiredDate(row.admittedAt) };
 }
 
+// ── a page's own site requests (Project Browser, 0271) ──────────────────────
+
+export interface InsertSiteAdmissionInput {
+  pageId: number;
+  generation: bigint;
+  /** `site`: the site's own request; `login`: an operation of the owner's
+   *  manual login. */
+  origin: "site" | "login";
+  /** Its route (a catalogue route, `site.other`, `auth.login`, `auth.twofa`). */
+  operation: string;
+  /** Request shape without secrets: method, host class, path, the
+   *  operator's request id. */
+  request: unknown;
+  /** The operator's id of the request (`siteRequestId`, a socket's
+   *  `connectionId`; 0272 `browser_request_id`). */
+  browserRequestId?: string | null;
+  settingMs: number;
+  jitterU: number;
+  pauseMs: number;
+  routeIntervalMs?: number | null;
+  familyIntervalMs?: number | null;
+}
+
+/**
+ * The admission of a page's own site request (after `lockOwnedPage`): its
+ * attempt — class `site`, no work, no cycle slot — and the page's last
+ * admission, under the page's generation. The cycle pointer stays: the site's
+ * share is counted apart (`engine/site-admission.ts`). Throws
+ * `OwnershipLostError` when the generation no longer owns the page.
+ */
+export async function insertSiteAdmission(
+  db: Database,
+  input: InsertSiteAdmissionInput,
+): Promise<{ attemptId: number; admittedAt: Date }> {
+  const result = await db.execute<{ attemptId: string; admittedAt: Date | string }>(sql`
+    with page as (
+      update sync_pages
+         set last_admitted_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+         and owner_generation = ${generationParam(input.generation)}
+      returning page_id
+    )
+    insert into sync_attempts (
+      page_id, work_id, resource, subject, class, slot, owner_generation, demand_revision,
+      setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms, origin,
+      browser_request_id
+    )
+    select page.page_id, null, 'site', '', 'site', null,
+           ${generationParam(input.generation)}, null,
+           ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
+           ${input.operation}::text, ${jsonParam(input.request)}, false,
+           ${boundedInt(input.routeIntervalMs)}::integer, ${boundedInt(input.familyIntervalMs)}::integer,
+           ${input.origin}::text, ${input.browserRequestId ?? null}::text
+      from page
+    returning id::text as "attemptId", admitted_at as "admittedAt"
+  `);
+  const row = result.rows[0];
+  if (!row) {
+    const current = await db.execute<{ generation: string }>(sql`
+      select owner_generation::text as generation from sync_pages where page_id = ${input.pageId}
+    `);
+    const found = current.rows[0];
+    throw new OwnershipLostError(input.pageId, input.generation, found ? BigInt(found.generation) : null);
+  }
+  return { attemptId: Number(row.attemptId), admittedAt: toRequiredDate(row.admittedAt) };
+}
+
+/**
+ * The page's site and login sends since `since` (the site's hour ceiling,
+ * spec §3), counted as the route clocks count them: a recorded send, or an
+ * attempt that may have gone out (`admitted`, `sent`, `unknown`). A short
+ * range scan of `sync_attempts_page_admitted`.
+ */
+export async function countSiteSendsSince(db: Database, input: { pageId: number; since: Date }): Promise<number> {
+  const result = await db.execute<{ sends: number }>(sql`
+    select count(*)::int as sends
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.admitted_at >= ${input.since}::timestamptz
+       and a.origin in ('site', 'login')
+       and not a.shadow
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown'))
+  `);
+  return Number(result.rows[0]?.sends ?? 0);
+}
+
 /**
  * Best effort when the actor gives up on a commit after the request (its
  * capture, or the settle of a refusal before sending, kept failing; bug hunt
@@ -347,9 +436,10 @@ export interface CaptureAttemptInput {
   outcome: "response" | "transport_error" | "timeout";
   /** Whether the request reached onRequestStart (or the completion fallback). */
   sent: boolean;
-  /** Wall clock of the send; for `completion_fallback` the completion instant. */
+  /** Wall clock of the send; for `completion_fallback` the completion instant,
+   *  for `transport_reported` the instant the page's browser reported. */
   sentAt: Date | null;
-  sendMark: "request_start" | "completion_fallback" | null;
+  sendMark: "request_start" | "completion_fallback" | "transport_reported" | null;
   /** Monotonic admission issue → send. */
   sendMonoOffsetMs?: number | null;
   /** Monotonic gap to this owner's previous send of the page. */
@@ -1097,6 +1187,9 @@ export interface SyncSendCounts {
   urgent: number;
   requests: number;
   planned: number;
+  /** The page's own site requests and login operations (Project Browser,
+   *  0271): sent through the page's browser under the engine's admission. */
+  site: number;
   byResource: Record<string, number>;
 }
 
@@ -1105,7 +1198,7 @@ export async function countSendsSince(
   db: Database,
   input: { pageId: number; since: Date },
 ): Promise<SyncSendCounts> {
-  const result = await db.execute<{ class: SyncEngineWorkClass; resource: string; sends: number }>(sql`
+  const result = await db.execute<{ class: SyncEngineWorkClass | "site"; resource: string; sends: number }>(sql`
     select a.class, a.resource, count(*)::int as sends
       from sync_attempts a
      where a.page_id = ${input.pageId}
@@ -1113,7 +1206,7 @@ export async function countSendsSince(
        and a.sent_at >= ${input.since}::timestamptz
      group by a.class, a.resource
   `);
-  const counts: SyncSendCounts = { urgent: 0, requests: 0, planned: 0, byResource: {} };
+  const counts: SyncSendCounts = { urgent: 0, requests: 0, planned: 0, site: 0, byResource: {} };
   for (const row of result.rows) {
     const sends = Number(row.sends);
     counts[row.class] += sends;

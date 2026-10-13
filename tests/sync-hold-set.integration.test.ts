@@ -21,6 +21,7 @@ import {
   getSyncPage,
   heartbeatSyncPageOwner,
   insertAdmission,
+  insertSiteAdmission,
   lockOwnedPage,
   markWorkRunning,
   recordSyncPageIdentityProof,
@@ -250,7 +251,7 @@ const INSERTS = ["ensureSyncPage", "ensureFanslySyncPages", "createLiveSyncPage"
 const UPDATES = [
   "acquireSyncPageOwnership", "heartbeatSyncPageOwner", "trustSyncPageCredentials", "recordSyncPageIdentityProof",
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
-  "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt",
+  "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode",
 ];
 
@@ -311,6 +312,15 @@ async function runEveryPageRowUpdate(
     ["captureAttempt", pageId, async () => expect(await captureAttempt(db, {
       attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start", httpStatus: 200, applyState: "none",
     })).toMatchObject({ captured: true })],
+    // A page's own site request (Project Browser, 0271): its admission stamps
+    // the page's last admission.
+    ["insertSiteAdmission", pageId, () => target.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update", live: true });
+      return insertSiteAdmission(tx, {
+        pageId, generation, origin: "site", operation: "site.other", request: { method: "GET" }, settingMs: 2_000, jitterU: 0.1, pauseMs: 2_200,
+      });
+    })],
     ["writeSafeRelease", pageId, async () => expect(await writeSafeRelease(db, { pageId, generation })).toBe(true)],
     // A second owner, gone with its container: the deploy confirms it stopped.
     ["acquireSyncPageOwnership", pageId, async () => { generation = (await acquire(target, pageId)).generation; }],

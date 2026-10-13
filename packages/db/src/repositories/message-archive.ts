@@ -5,13 +5,17 @@
 // OFAPI-only dm_message_archive and the hot table are idempotent via the
 // (account_id, platform, message_ref) unique key.
 
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { FANSLY_WS_LIVE_FIELD, normalizeDmMessageText } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiTranscriptRowCap } from "./ai-transcript-depth.ts";
 import { escapeLikePattern } from "./search.ts";
-import type { DmLiveTombstoneFilter } from "./sync/live-messages.ts";
+import {
+  fanslyMessageMarkers,
+  type DmLiveTombstoneFilter,
+  type FanslyMessageMarkers,
+} from "./sync/live-messages.ts";
 
 export const MESSAGE_ARCHIVE_PROJECTION = "message_archive";
 export const MESSAGE_ARCHIVE_SHADOW_PROJECTION = "message_archive_shadow";
@@ -125,6 +129,33 @@ function headDate(value: unknown): Date | null {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** R20 HF-7д0: the automation markers a material head declares. Only a head
+ * that says it observed a marker (`fieldPresence.<name> === true`) writes it;
+ * a head from before the markers, and every OnlyFans head, leaves the stored
+ * value and its presence bit as they are. The value checks repeat the
+ * canonicalizer's, so a malformed ledger event cannot fail the upsert (and
+ * hold the projection watermark) on every retry. */
+function headAutomationMarkers(
+  head: Record<string, unknown>,
+  fieldPresence: Record<string, unknown> | null,
+) {
+  const observesType = fieldPresence?.messageType === true;
+  const observesCorrelation = fieldPresence?.correlationId === true;
+  const type = head.messageType;
+  const correlationId = head.correlationId;
+  const fieldMask = (observesType ? FANSLY_WS_LIVE_FIELD.type : 0)
+    | (observesCorrelation ? FANSLY_WS_LIVE_FIELD.correlationId : 0);
+  return {
+    observesType,
+    observesCorrelation,
+    type: observesType && typeof type === "number" && Number.isInteger(type)
+      && type >= -0x8000_0000 && type <= 0x7fff_ffff ? type : null,
+    correlationId: observesCorrelation && typeof correlationId === "string"
+      && /^[0-9]{1,32}$/.test(correlationId) ? correlationId : null,
+    fieldMask: fieldMask === 0 ? null : fieldMask,
+  };
 }
 
 async function applyReplyMaterial(
@@ -267,6 +298,7 @@ export async function applyMessageEventsToArchive(
       const observesReply = fieldPresence?.reply !== false
         && head.originClass !== "fansly_dm_sidecar";
       const observesTipText = fieldPresence?.tipText !== false;
+      const markers = headAutomationMarkers(head, fieldPresence);
       const reply = typeof head.reply === "object" && head.reply !== null && !Array.isArray(head.reply)
         ? head.reply as Record<string, unknown>
         : null;
@@ -293,7 +325,8 @@ export async function applyMessageEventsToArchive(
           text_html, price_mills, is_opened, is_new, is_tip, tip_amount_mills,
           tip_text_plain, in_reply_to_ref, reply_metadata, media_metadata,
           origin_class, material_observed_at, vendor_changed_at,
-          source_event_id, source_account_seq, serving_contract_version
+          source_event_id, source_account_seq, serving_contract_version,
+          message_type, correlation_id, marker_field_mask
         ) values (
           ${input.accountId},
           ${input.platform},
@@ -320,7 +353,10 @@ export async function applyMessageEventsToArchive(
           ${vendorChangedAt},
           ${event.id},
           ${event.accountSeq},
-          1
+          1,
+          ${markers.type}::integer,
+          ${markers.correlationId}::text,
+          ${markers.fieldMask}::integer
         )
         on conflict (account_id, platform, message_ref) do update set
           conversation_ref = coalesce(excluded.conversation_ref, ${target}.conversation_ref),
@@ -355,6 +391,18 @@ export async function applyMessageEventsToArchive(
           media_metadata = case
             when ${observesMedia} then excluded.media_metadata
             else ${target}.media_metadata
+          end,
+          message_type = case
+            when ${markers.observesType} then excluded.message_type
+            else ${target}.message_type
+          end,
+          correlation_id = case
+            when ${markers.observesCorrelation} then excluded.correlation_id
+            else ${target}.correlation_id
+          end,
+          marker_field_mask = case
+            when excluded.marker_field_mask is null then ${target}.marker_field_mask
+            else coalesce(${target}.marker_field_mask, 0) | excluded.marker_field_mask
           end,
           origin_class = excluded.origin_class,
           material_observed_at = excluded.material_observed_at,
@@ -1467,6 +1515,17 @@ export interface ArchiveMessageRow {
   isTip: boolean;
   tipAmountMills: string;
   deletedAt: Date | null;
+  /** The message this one replies to (`in_reply_to_ref`); null = none known. */
+  inReplyToRef: string | null;
+  /** R20 HF-7д0: Fansly's `type` and `correlationId` with their presence;
+   * unknown on rows no marker-carrying head has reached (and on OnlyFans). */
+  markers: FanslyMessageMarkers;
+  /** The stored media list (`media_metadata`), its objects verbatim. An
+   * OnlyFans item carries OFAPI's media type; a Fansly one the attachment's
+   * id and the MIME type of its media, `bundle`, or `other` for an attachment
+   * the page served no media or bundle for (the sync-pull material head), in
+   * id order. R20 HF-7а: the AI transcript reads it on Fansly only. */
+  mediaMetadata: Array<Record<string, unknown>>;
 }
 
 function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
@@ -1485,6 +1544,16 @@ function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
     isTip: row.is_tip === true,
     tipAmountMills: String(row.tip_amount_mills ?? "0"),
     deletedAt: row.deleted_at == null ? null : new Date(row.deleted_at as string | Date),
+    inReplyToRef: (row.in_reply_to_ref as string | null) ?? null,
+    markers: fanslyMessageMarkers({
+      type: row.message_type == null ? null : Number(row.message_type),
+      correlationId: (row.correlation_id as string | null) ?? null,
+      fieldMask: row.marker_field_mask == null ? null : Number(row.marker_field_mask),
+    }),
+    mediaMetadata: Array.isArray(row.media_metadata)
+      ? row.media_metadata.filter((item): item is Record<string, unknown> =>
+        typeof item === "object" && item !== null && !Array.isArray(item))
+      : [],
   };
 }
 
@@ -1551,8 +1620,8 @@ export async function listArchiveConversationMessages(
  * content-pending stubs are filtered HERE, in the reader/repo layer (prompt
  * code never re-filters — the prompt unit is manifest-pinned), and the cap
  * is 1500 (AI windows read deeper than the dashboard's 500 clamp, whose
- * route contract is unchanged). One caller raises the cap with `maxRows`:
- * the full Recap (ai-transcript-depth.ts).
+ * route contract is unchanged). Two callers raise the cap with `maxRows`:
+ * the full Recap and the notes fill (ai-transcript-depth.ts).
  */
 /** The AI transcript reader's deepest window (fastreply-freshness PR2). */
 export const ARCHIVE_AI_TRANSCRIPT_MAX_ROWS = 1500;
@@ -1567,7 +1636,8 @@ export async function listArchiveConversationMessagesForAi(
      * also hide messages a socket deletion tombstones. */
     notTombstoned?: DmLiveTombstoneFilter;
     /** Raises the row cap of this read past ARCHIVE_AI_TRANSCRIPT_MAX_ROWS, up
-     * to AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+     * to AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the deep features pass it (the full
+     * Recap and the notes fill, ai-transcript-depth.ts). */
     maxRows?: number | undefined;
   },
 ): Promise<ArchiveMessageRow[]> {

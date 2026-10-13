@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import {
   ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
+  aiTranscriptRowCap,
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
   readDmLiveUnion,
@@ -18,6 +19,7 @@ import {
   formatFanSpendingData,
   formatFanSubscriptionData,
   formatTranscript,
+  isTranscriptMessageRef,
   normalizeTranscriptMessages,
   type FanSpendingData,
   type FanSubscriptionInput,
@@ -31,10 +33,12 @@ import {
   type AiContextSource,
   type TranscriptServedSnapshot,
 } from "./context-frame.ts";
+import { loadFanslyMediaLabelBodies, readsMaterialHeadMedia } from "./fansly-media.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./chat-access.ts";
 export * from "./context-frame.ts";
+export * from "./fansly-media.ts";
 export * from "./live-text.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";
@@ -53,7 +57,9 @@ export * from "./ping-summary.ts";
 type Db = Pick<AppContext, "db">;
 
 /** Rebuild the OFAPI chat-message shape the migrated normalizer consumes —
- * archive rows were projected from those same vendor payloads. */
+ * archive rows were projected from those same vendor payloads. The id is the
+ * row's ref as the store keeps it, never a number (HF-8a, message-ref.ts); a
+ * ref that is not a decimal id, or a row without an event time, is not served. */
 function archiveRowToOfapiShape(row: {
   messageRef: string;
   textPlain: string;
@@ -62,21 +68,23 @@ function archiveRowToOfapiShape(row: {
   priceMills: bigint | number | string | null;
   isTip: boolean;
   tipAmountMills: bigint | number | string;
-  /** Not surfaced by the archive read today — labels degrade gracefully. */
+  /** OFAPI's media list: only the OnlyFans union read passes it. An archive
+   * row comes without it (`archiveRowWithoutMedia`): its OnlyFans bytes are
+   * those of a read without media, and a Fansly row's media are labelled from
+   * the hub's own stores (fansly-media.ts, R20 HF-7a). */
   mediaMetadata?: Array<Record<string, unknown>> | null;
   /** PPV purchase state — the union read supplies it (dm arm + hot-table
    * purchased_at upgrade); the archive read leaves it null → 'unknown'. */
   isOpened?: boolean | null;
-}): OfapiChatMessage | null {
-  const id = Number(row.messageRef);
-  if (!Number.isFinite(id) || row.occurredAt === null) {
+}): ShapedArchiveMessage | null {
+  if (!isTranscriptMessageRef(row.messageRef) || row.occurredAt === null) {
     return null;
   }
   const priceDollars = row.priceMills === null ? null : millsToDollarsNumber(row.priceMills);
   const tipDollars = millsToDollarsNumber(row.tipAmountMills);
   const media = row.mediaMetadata ?? [];
   return {
-    id,
+    id: row.messageRef,
     text: row.textPlain,
     isSentByMe: row.isSentByMe,
     createdAt: row.occurredAt.toISOString(),
@@ -90,13 +98,27 @@ function archiveRowToOfapiShape(row: {
       type: (media.type as string | null) ?? null,
       canView: (media.canView as boolean | null) ?? null,
     })),
-  } as OfapiChatMessage;
+  } as ShapedArchiveMessage;
+}
+
+/** A served row in the normalizer's input shape, keyed by its exact ref. */
+type ShapedArchiveMessage = OfapiChatMessage & { id: string };
+
+/** An archive row for the shaper, without its stored media list: the archive
+ * read never gave the shaper media, so an OnlyFans transcript read from the
+ * archive keeps its bytes; a Fansly row's media are labelled by
+ * fansly-media.ts from the same list (R20 HF-7a). */
+function archiveRowWithoutMedia(row: ArchiveMessageRow) {
+  const { mediaMetadata: _stored, ...rest } = row;
+  return rest;
 }
 
 /** A Fansly live overlay row in the archive row shape the shaper reads: the
- * socket fields only. No price, tip or media: money is REST-only (owner
- * decision №7), and Fansly archive rows carry no media metadata either, so a
- * message reads the same before and after its REST copy replaces it. */
+ * socket fields only. No price or tip: money is REST-only (owner decision №7).
+ * Its attachments are labelled like a stored row's media (fansly-media.ts,
+ * R20 HF-7a) from the files the hub knows by their ids, so a message whose
+ * files the hub knows reads the same before and after its REST copy replaces
+ * it; one it does not know reads `[Media]` until then. */
 function liveMessageToArchiveShape(message: DmLiveReaderMessage) {
   return {
     messageRef: message.platformMessageId,
@@ -125,8 +147,9 @@ export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 export interface TranscriptContext {
   transcript: string;
   messages: TranscriptMessage[];
-  /** Per-message media ids of the served rows (image notes numbering). */
-  mediaByMessage: Map<number, OnlyFansMessageMedia>;
+  /** Per-message media ids of the served rows (image notes numbering), keyed
+   *  by the transcript's message id (the exact ref). */
+  mediaByMessage: Map<string, OnlyFansMessageMedia>;
   /** PR3: per-generation context manifest — counts/heads/timings only, no
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
@@ -149,9 +172,9 @@ export async function loadTranscriptContext(
     unionMode?: AiTranscriptUnionMode;
     /** Fansly pages only; the OnlyFans union mode never runs beside it. */
     liveOverlay?: AiTranscriptLiveOverlay;
-    /** chat-extension H-6: raises the row cap of the archive and union reads
-     * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
-     * The Fansly live overlay union never reads it and stays at its own cap. */
+    /** chat-extension H-6, R20 HF-6: raises the row cap of this load's reads
+     * (the deep features' deeper read, ai-transcript-depth.ts): the archive
+     * and union reads, and the Fansly live overlay union with its REST arm. */
     maxRows?: number;
     /** Arena "vanished chat" (plan §5): the chat has an established
      * unavailability episode (`readAiChatAccess`, read by the caller): its
@@ -178,13 +201,14 @@ export async function loadTranscriptContext(
         pageId: input.pageId,
         platformConversationId: input.conversationRef,
         store: "message_archive",
-        limit: Math.min(limit, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS),
+        limit: Math.min(limit, aiTranscriptRowCap(input.maxRows, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS)),
         readStore: async (notTombstoned) => {
           archiveRows = await listArchiveConversationMessagesForAi(app.db, {
             accountId: input.pageId,
             conversationRef: input.conversationRef,
             limit,
             notTombstoned,
+            maxRows: input.maxRows,
           });
           return archiveRows;
         },
@@ -227,20 +251,47 @@ export async function loadTranscriptContext(
 
   const serveUnion = mode === "serve" && unionRows !== null;
   const servedRows = liveUnion !== null
-    ? liveUnion.map((item) => item.source === "rest" ? item.row : liveMessageToArchiveShape(item.message))
-    : serveUnion ? unionRows! : archiveRows;
+    ? liveUnion.map((item) => item.source === "rest"
+      ? archiveRowWithoutMedia(item.row)
+      : liveMessageToArchiveShape(item.message))
+    : serveUnion ? unionRows! : archiveRows.map(archiveRowWithoutMedia);
   const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
-    .filter((row): row is OfapiChatMessage => row !== null);
+    .filter((row): row is ShapedArchiveMessage => row !== null);
+
+  // chat-extension R20 HF-7a: a Fansly row's media labels, from the hub's own
+  // stores (fansly-media.ts): the archive's media list and the socket's
+  // attachments. Fansly rows only: an OnlyFans archive row is shaped without
+  // media as before, and the union (OnlyFans) reads OFAPI's media list. A
+  // failed read is not a failed generation: the messages serve without their
+  // media labels, and the manifest says so.
+  let fanslyMediaLabels = new Map<string, string[]>();
+  let fanslyMediaError = false;
+  try {
+    fanslyMediaLabels = await loadFanslyMediaLabelBodies(app, {
+      pageId: input.pageId,
+      stored: liveUnion !== null
+        ? liveUnion.flatMap((item) => item.source === "rest" && readsMaterialHeadMedia(item.row.platform) ? [item.row] : [])
+        : serveUnion ? [] : archiveRows.filter((row) => readsMaterialHeadMedia(row.platform)),
+      live: liveUnion === null ? [] : liveUnion.flatMap((item) => item.source === "live"
+        ? [{ messageRef: item.message.platformMessageId, attachments: item.message.attachments }]
+        : []),
+    });
+  } catch {
+    fanslyMediaError = true;
+  }
 
   // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
   // page keeps its socket messages in the transcript, labelled: no REST read
   // will confirm them while the episode lasts. The transcript keys a message
-  // by Number(ref), so the labels do too.
+  // by its exact ref, so the labels do too.
   const unconfirmedIds = new Set(input.chatUnavailable === true && liveUnion !== null
-    ? liveUnion.flatMap((item) => item.source === "live" ? [Number(item.message.platformMessageId)] : [])
+    ? liveUnion.flatMap((item) => item.source === "live" ? [item.message.platformMessageId] : [])
     : []);
-  const messages = normalizeTranscriptMessages(shaped).slice(-limit).map((message) => (
+  const messages = normalizeTranscriptMessages(
+    shaped,
+    fanslyMediaLabels.size > 0 ? { mediaLabelBodiesByMessageId: fanslyMediaLabels } : {},
+  ).slice(-limit).map((message) => (
     unconfirmedIds.has(message.id)
       ? { ...message, labels: [...message.labels, UNCONFIRMED_SOCKET_MESSAGE_LABEL] }
       : message
@@ -284,9 +335,12 @@ export async function loadTranscriptContext(
     liveOverlay,
     liveCount: liveUnion === null ? null : liveUnion.filter((item) => item.source === "live").length,
     liveError,
+    // Only on a failed media read, so every other generation records what it
+    // recorded before.
+    ...(fanslyMediaError ? { fanslyMediaError: true } : {}),
   };
 
-  const mediaByMessage = new Map<number, OnlyFansMessageMedia>();
+  const mediaByMessage = new Map<string, OnlyFansMessageMedia>();
   for (const message of shaped) {
     const media = (message.media ?? []).flatMap((item) => (
       item.id === null || item.id === undefined ? [] : [{ id: String(item.id), type: item.type ?? null }]
@@ -303,7 +357,7 @@ export async function loadTranscriptContext(
 
   const served: TranscriptServedSnapshot = {
     source,
-    window: servedWindowOf(servedRows, messages),
+    window: servedWindowOf(messages),
     archiveHead: archiveHead === null
       ? null
       : {
@@ -451,3 +505,7 @@ export async function loadFanBio(
 // Fan-dossier context (Decision #136) — compiler + loader live in their own
 // file; re-exported here so consumers ride the module barrel.
 export * from "./fan-profile.ts";
+
+// Spend and subscription of a Fansly fan in the released extension's shape
+// (chat-extension R20 HF-7г); the two loaders above stay OnlyFans' own.
+export * from "./fansly-money.ts";

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Chrome stays down until the operator starts it (plan §3.1): pb-operator may
+# start and stop that one service (`s6-svc -u` / `-d`). And the operator's
+# watchdog, which runs as pb-operator too, may kill a hung operator
+# (`s6-svc -k`). Nothing else of s6.
+set -eu
+/command/s6-svperms -G pb-operator /run/service/chrome
+exec /command/s6-svperms -G pb-operator /run/service/operator

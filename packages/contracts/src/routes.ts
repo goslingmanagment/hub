@@ -10,6 +10,7 @@ import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collection
 import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
+import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -740,6 +741,15 @@ export const voiceNoteCreateBodySchema = z.object({
   // any non-UUID string can reach Postgres and raise a raw 22P02 → 500.
   clientRequestId: z.string().uuid(),
   conversationRef: z.string().min(1).max(200),
+  // chat-extension R20 HF-4а: the fan the render is for, named apart from the
+  // chat. The new client names the Fansly group as `conversationRef` and the
+  // fan here; the source generation must be of this very pair, and the page's
+  // capture must not hold the group as another fan's chat (409
+  // `conversation_fan_mismatch`). Optional: without it `conversationRef` is
+  // the fan's own id (the released Fansly extension's form), admitted exactly
+  // as before. Not part of the request hash: the hash's source generation
+  // already carries its fan.
+  fanRef: z.string().min(1).max(200).optional(),
   sourceGenerationRef: z.string().min(1).max(200),
   script: z.string().min(1).max(8000),
 });
@@ -2014,6 +2024,32 @@ export const AI_CONTEXT_SOURCES = ["archive", "union", "live_union"] as const;
 export const AI_KNOWN_FAN_MESSAGE_STATES = ["included", "absent", "deleted", "unknown"] as const;
 export const AI_CONTEXT_LIVE_STATUSES = ["not_sent", "disabled", "shadow", "served", "rejected"] as const;
 export const AI_FAN_LANGUAGE_EVIDENCE = ["latin", "cyrillic", "mixed", "unknown"] as const;
+/** chat-extension R20 HF-9: the frame's `pair`. A pair the hub knows to be
+ *  another fan's chat is never served: the request is refused with 409
+ *  `conversation_fan_mismatch` before any context loads. */
+export const AI_CONTEXT_PAIR_STATES = ["verified", "unverified"] as const;
+
+// chat-extension R20 HF-8в — the window coverage check: the ids of the last
+// messages the client's tab holds for the open chat, both directions, and the
+// ids of the messages it saw deleted there. The hub answers each one in the
+// `context_v1` frame (`coverageCheck`) from the transcript that served the
+// generation (docs/ai-gateway-contract.md). The client's verdict reads these
+// answers by a table it shares with the hub
+// (tests/fixtures/ai-coverage-check-matrix.json).
+/** How many ids `coverageCheck.window` may name. */
+export const AI_COVERAGE_CHECK_WINDOW_MAX = 60;
+/** How many ids `coverageCheck.deletedIds` may name. */
+export const AI_COVERAGE_CHECK_DELETED_MAX = 60;
+/** Who sent a message of `coverageCheck.window`, as the tab saw it. */
+export const AI_COVERAGE_CHECK_DIRECTIONS = ["fan", "model"] as const;
+/** The answers to an id of `coverageCheck.window`. */
+export const AI_COVERAGE_CHECK_WINDOW_STATES = [
+  "included", "direction_mismatch", "outside_window", "deleted", "absent", "unknown",
+] as const;
+/** The answers to an id of `coverageCheck.deletedIds`. */
+export const AI_COVERAGE_CHECK_DELETED_STATES = ["deleted", "still_served", "absent", "unknown"] as const;
+
+const aiCoverageCheckAnswerSchema = z.object({ id: z.string(), state: clientOpenToken });
 
 // Feature-lane-only: the transcript snapshot that ACTUALLY served this
 // generation. Emitted right after `meta` (and `debug_input_v1`), before the
@@ -2044,14 +2080,35 @@ export const aiFeatureContextFrameSchema = z.object({
   knownFanMessages: z.array(z.object({ id: z.string(), state: clientOpenToken }))
     .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
     .optional(),
+  /** chat-extension R20 HF-8в: one answer per id of the body's `coverageCheck`,
+   *  each list in the body's order. `window[].state`:
+   *  AI_COVERAGE_CHECK_WINDOW_STATES; `deleted[].state` (the ids of
+   *  `deletedIds`): AI_COVERAGE_CHECK_DELETED_STATES. Only for a caller that
+   *  advertised `coverage-check-v1` and sent `coverageCheck`; absent otherwise. */
+  coverageCheck: z.object({
+    window: z.array(aiCoverageCheckAnswerSchema).max(AI_COVERAGE_CHECK_WINDOW_MAX),
+    deleted: z.array(aiCoverageCheckAnswerSchema).max(AI_COVERAGE_CHECK_DELETED_MAX),
+  }).optional(),
   /** What the hub did with the client's fresh text: AI_CONTEXT_LIVE_STATUSES. */
   live: z.object({
     status: clientOpenToken,
     accepted: z.number().int().nonnegative(),
     rejected: z.number().int().nonnegative(),
+    /** chat-extension R20 HF-8б: the client's items the hub's own transcript
+     *  already held, from the same sender (the hub's row served). Present
+     *  only when the hub merged the fresh text (`shadow`, `served`,
+     *  `rejected`); absent for `not_sent` and `disabled`. */
+    matched: z.number().int().nonnegative().optional(),
   }),
   /** AI_FAN_LANGUAGE_EVIDENCE. */
   fanLanguageEvidence: clientOpenToken.optional(),
+  /** Fansly, a transcript the hub loads itself, a request that names both
+   *  `conversationRef` (the group) and `fanRef`: whether the hub's capture of
+   *  the page vouches that the group is this fan's chat. `verified`: the
+   *  page's thread of the group has this fan; `unverified`: the hub holds no
+   *  thread of the group on the page, or does not know its fan yet. Absent
+   *  otherwise. AI_CONTEXT_PAIR_STATES. */
+  pair: clientOpenToken.optional(),
 });
 
 // Unknown frames remain fatal for the raw gateway. Only streamAiFeature uses
@@ -2230,24 +2287,75 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // units, 1.8MB at six bytes each. The service refuses it on Coach and beside
 // `clientContext`, but that is decided AFTER this limit and the schema, and the
 // schema cannot refuse it (the feature is a path parameter). So the worst
-// schema-valid body carries both: ~1.99M code units, measured 12.13MB with the
+// schema-valid body carries both: ~1.99M code units, measured 12.15MB with the
 // media list and JSON framing, which 12 MiB (12.58MB) still clears by about
-// 0.45MB. No request the service accepts comes near it. A field added after
-// this one has to be counted in the test before it ships.
+// 0.43MB. No request the service accepts comes near it. A field added after
+// this one has to be counted in the test before it ships: fan-notes-fill's
+// `noteFields` (30 labels x 60 code units, about 11KB at six bytes) is, and so
+// is R20 HF-8в's `coverageCheck` (120 ids of digits, about 5KB).
+//
+// fan-notes-fill merge mode adds `noteValues`: 30 values x 2,000 code units =
+// 60k more, 360KB at six bytes each. The worst schema-valid body is then ~2.05M
+// code units, measured 12.51MB, which 12 MiB (12.58MB) still clears by about
+// 0.07MB. That margin is thin now: a later field of any real size raises the
+// limit with it.
 //
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
 
-// chat-extension H-4c — the fresh text of the open OnlyFans chat: the last
-// confirmed messages the client reads off the page it is showing, for the
-// features that draft a message to the fan (Reply, Fix, Hi, Ping). The hub's
-// archive lags the page by seconds to minutes; these fill that gap for ONE
-// generation and are stored nowhere else (docs/ai-gateway-contract.md).
+// chat-extension H-4c — the fresh text of the open chat (OnlyFans; Fansly since
+// R20 HF-8б): the last confirmed messages the client reads off the page it is
+// showing, for the features that draft a message to the fan (Reply, Fix, Hi,
+// Ping). The hub's archive lags the page by seconds to minutes; these fill
+// that gap for ONE generation and are stored nowhere else
+// (docs/ai-gateway-contract.md).
 export const AI_LIVE_TEXT_MAX_ITEMS = 60;
 /** Per item, in UTF-16 code units. */
 export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
+
+// fan-notes-fill: the questionnaire labels of the fan's native note («Имя»,
+// «Локация», …), as the Fansly notes panel reads them off the chatter's
+// template. The model answers one `Label: value` line per label, the label
+// copied byte for byte, so a label may not hold what would break that line or
+// change under the prompt's escaping: no line break, no `:`, no `<`, `>` or
+// `&`. Labels are trimmed here, so the line carries the trimmed label.
+export const AI_NOTE_FIELDS_MAX = 30;
+/** Per label, after trimming, in UTF-16 code units. */
+export const AI_NOTE_FIELD_LABEL_MAX_CHARS = 60;
+
+const aiNoteFieldLabelSchema = z.string()
+  .trim()
+  .min(1)
+  .max(AI_NOTE_FIELD_LABEL_MAX_CHARS)
+  .regex(/^[^\r\n\u2028\u2029:<>&]*$/, "A note field label holds no line break, ':', '<', '>' or '&'");
+
+export const aiNoteFieldsSchema = z.array(aiNoteFieldLabelSchema)
+  .min(1)
+  .max(AI_NOTE_FIELDS_MAX)
+  .refine(
+    (labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length,
+    { message: "noteFields repeat (labels compare case-insensitively)" },
+  );
+
+// fan-notes-fill merge mode: the questionnaire's current values, index-aligned
+// with `noteFields` (the service refuses a list of another length), `""` for an
+// empty field and for a template field the note does not have yet. A value is
+// one line of the note, so it holds no line break; any other character may
+// appear, `<`, `>` and `&` included (the prompt escapes them like all
+// untrusted text). Values are trimmed here, like the labels.
+/** Per value, after trimming, in UTF-16 code units. */
+export const AI_NOTE_VALUE_MAX_CHARS = 2_000;
+
+const aiNoteValueSchema = z.string()
+  .trim()
+  .max(AI_NOTE_VALUE_MAX_CHARS)
+  .regex(/^[^\r\n\u2028\u2029]*$/, "A note value holds no line break");
+
+export const aiNoteValuesSchema = z.array(aiNoteValueSchema)
+  .min(1)
+  .max(AI_NOTE_FIELDS_MAX);
 
 // An instant as the client writes it: ISO 8601 with seconds and an explicit
 // offset, at most nine fractional digits. The house `isoTimestamp` is a bare
@@ -2276,6 +2384,33 @@ export const aiLiveTextContextSchema = z.object({
   }).strict()).min(1).max(AI_LIVE_TEXT_MAX_ITEMS),
 }).strict();
 
+// chat-extension R20 HF-8в — the window coverage check (above). Ids only: no
+// text travels, nothing is added to the prompt and nothing is stored. Every id
+// is named once across both lists: one id with two answers would be no answer.
+export const aiCoverageCheckSchema = z.object({
+  /** The tab's last messages of the open chat, in the client's order (the
+   *  answers keep it). Media-only messages count. Empty when the chat has no
+   *  messages. */
+  window: z.array(z.object({
+    id: clientNumericIdSchema,
+    dir: z.enum(AI_COVERAGE_CHECK_DIRECTIONS),
+  }).strict()).max(AI_COVERAGE_CHECK_WINDOW_MAX),
+  /** Messages the tab saw deleted in that window. */
+  deletedIds: z.array(clientNumericIdSchema).max(AI_COVERAGE_CHECK_DELETED_MAX),
+}).strict().superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  const named = [
+    ...value.window.map((item, index) => ({ id: item.id, path: ["window", index, "id"] })),
+    ...value.deletedIds.map((id, index) => ({ id, path: ["deletedIds", index] })),
+  ];
+  for (const { id, path } of named) {
+    if (seen.has(id)) {
+      ctx.addIssue({ code: "custom", path, message: "coverageCheck ids repeat" });
+    }
+    seen.add(id);
+  }
+});
+
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   pageLabel: z.string().min(1).max(120),
@@ -2288,7 +2423,10 @@ export const aiFeatureStreamBodySchema = z.object({
   reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
-  messageCount: z.number().int().min(5).max(3000).optional(),
+  // The window the request asks for. The hub's readers cap it (1500 for every
+  // request; deeper only for the full Recap and the notes fill of a context-v1
+  // client, at most 5000: docs/ai-gateway-contract.md, R20 HF-6).
+  messageCount: z.number().int().min(5).max(5000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
   chatterQuestion: z.string().min(1).max(2_000).optional(),
@@ -2315,6 +2453,16 @@ export const aiFeatureStreamBodySchema = z.object({
   // freshness gate skipped. New clients send variantCount instead. Do not
   // remove while a supported client still sends it.
   greetingMode: z.literal("new-follower").optional(),
+  // fan-notes-fill only, and required there: the questionnaire labels to fill,
+  // in output order (above). Any other feature refuses the field with a 400.
+  noteFields: aiNoteFieldsSchema.optional(),
+  // fan-notes-fill only, and optional there: the questionnaire's current value
+  // per label, one per `noteFields` entry in the same order (above). Present,
+  // the prompt merges the chat into these values (merge mode); absent, it is
+  // the released clients' prompt, byte for byte. Any other feature refuses the
+  // field with a 400, and so does fan-notes-fill when the two lists differ in
+  // length.
+  noteValues: aiNoteValuesSchema.optional(),
   // chat-extension H-4b: ids only, never text. Fan messages the client saw in
   // the open chat before it asked for this generation, newest first. The hub
   // answers each one in the `context_v1` frame (`knownFanMessages`) from the
@@ -2326,10 +2474,16 @@ export const aiFeatureStreamBodySchema = z.object({
     .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
     .refine((ids) => new Set(ids).size === ids.length, { message: "knownFanMessageIds repeat" })
     .optional(),
-  // chat-extension H-4c: the fresh text of the open OnlyFans chat (above).
-  // Accepted only on fast-reply, improve-draft, hi-greeting and ping, only for
-  // an OnlyFans page, never beside clientContext, and only from a caller that
-  // advertised `context-v1`: anything else is a 400 with a machine reason.
+  // chat-extension R20 HF-8в: the window coverage check (above). Accepted on
+  // every feature; answered in the `context_v1` frame (`coverageCheck`) only to
+  // a caller that advertised both `context-v1` and `coverage-check-v1`, and
+  // ignored otherwise, as `knownFanMessageIds` is without the frame.
+  coverageCheck: aiCoverageCheckSchema.optional(),
+  // chat-extension H-4c: the fresh text of the open chat (above). Accepted
+  // only on fast-reply, improve-draft, hi-greeting and ping, never beside
+  // clientContext, and only from a caller that advertised `context-v1`:
+  // anything else is a 400 with a machine reason. Either platform (a Fansly
+  // page since R20 HF-8б).
   // Whether it is USED is the owner's switch (`aiLiveTextContextMode` and the
   // page's `freshText` flag); switched off, it is ignored and the `context_v1`
   // frame says `live.status: "disabled"`.
@@ -5017,8 +5171,9 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //                  key is refused here exactly as it is on every kind but agentKey
 // scope:"page" = the middleware resolves params.pageLabel and requires canAccessPage
 // before any handler runs; page ids derived from query/body stay handler-checked.
-// `roles` is reserved for narrowing beyond the kind (unused today; Stage 22 adds
-// device tokens additively). `roles` never admits an agent: it names human roles.
+// `roles` narrows the principal beyond the kind — `opsLive` is `monitoring` for
+// the owner alone: the token, or an owner's dashboard session. `roles` never
+// admits an agent: it names human roles.
 export const routeAuthPolicySchema = z
   .object({
     kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "pending-device-token", "agentKey", "any"]),
@@ -5864,6 +6019,7 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  ...opsLiveRouteSchemas,
   healthSync: {
     auth: { kind: "monitoring" },
     tags: ["system"],
@@ -6596,7 +6752,9 @@ const baseRouteSchemas = {
       + "detached). A replay of an already-admitted request re-runs no admission gate. "
       + "Structured error codes (in the body `error` field): 400 voice_script_invalid / "
       + "voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 "
-      + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
+      + "idempotency_mismatch (same id, different request) / voice_no_profile / "
+      + "conversation_fan_mismatch (a request with `fanRef`: the page's capture holds "
+      + "the group `conversationRef` names as another fan's chat); 429 "
       + "voice_quota_denied; 503 voice_provider_unavailable (live flag on but "
       + "ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is "
       + "unconfigured, or an active erasure temporarily owns the page writer "
@@ -8576,6 +8734,7 @@ export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlock
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
+export type AiCoverageCheck = z.infer<typeof aiCoverageCheckSchema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;

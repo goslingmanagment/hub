@@ -326,10 +326,11 @@ export async function createPageTransport(
   };
 }
 
-/** A CDN redirect's `Location` resolved against the hop's own URL (only this
+/** A CDN redirect's `Location` resolved against the hop's own URL (only the
  *  transport knows it): the next hop's URL as the resource checks and seals
- *  it. A `Location` that does not resolve is dropped (the hop then failed). */
-function absoluteLocation(outcome: TransportOutcome, base: string): TransportOutcome {
+ *  it. A `Location` that does not resolve is dropped (the hop then failed).
+ *  The browser transport resolves its hops' the same way. */
+export function absoluteLocation(outcome: TransportOutcome, base: string): TransportOutcome {
   if (outcome.kind !== "response" || outcome.status < 300 || outcome.status > 399) return outcome;
   const { location, ...rest } = outcome.headers;
   if (location === undefined) return outcome;

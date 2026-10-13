@@ -40,19 +40,35 @@ const LEGACY_ONLY_ROUTES = {
 
 type LegacyOnlyRoute = keyof typeof LEGACY_ONLY_ROUTES;
 
-/** A canonical Fansly route: a wire id (the engine's) or a legacy-only one. */
-export type FanslyRoute = FanslyWireId | LegacyOnlyRoute;
+/** The routes of a page's own site requests (Project Browser, spec §2.4,
+ *  owner decision №3): an API read outside the catalogue and the two login
+ *  operations of the owner's manual login. The engine never sends on them;
+ *  it admits the site's requests on them and journals them in sync_attempts
+ *  with origin `site` or `login` (0271), so the route clocks count them. */
+const SITE_ROUTES = {
+  "site.other": { method: "GET", template: "<an API path outside the catalogue>" },
+  "auth.login": { method: "POST", template: "/login" },
+  "auth.twofa": { method: "POST", template: "/login/twofa" },
+} as const;
+
+export type FanslySiteRoute = keyof typeof SITE_ROUTES;
+
+/** A canonical Fansly route: a wire id (the engine's), a legacy-only one or
+ *  a route of the site's own requests. */
+export type FanslyRoute = FanslyWireId | LegacyOnlyRoute | FanslySiteRoute;
 
 export type FanslyRouteHost = "api" | "ws" | "cdn";
 
 export interface FanslyRouteSpec {
   route: FanslyRoute;
-  /** Every route is a GET (Fansly is only read; the Upgrade is a GET too). */
-  method: "GET";
+  /** Every route the engine sends on is a GET (Fansly is only read; the
+   *  Upgrade is a GET too); the login operations of the site are POSTs. */
+  method: "GET" | "POST";
   host: FanslyRouteHost;
   /** The path template (`:id` / `{id}` for a path parameter). */
   template: string;
-  /** The wire spec that sends it; null for a legacy-only endpoint. */
+  /** The wire spec that sends it; null for a legacy-only endpoint and a route
+   *  of the site's own requests. */
   wire: FanslyWireId | null;
 }
 
@@ -89,6 +105,8 @@ export const FANSLY_ROUTE_FAMILIES = {
     "stats.fans_top",
     "stats.fan",
   ],
+  /** The site's own API reads outside the catalogue (owner decision №3). */
+  site: ["site.other"],
 } as const satisfies Record<string, readonly FanslyRoute[]>;
 
 export type FanslyRouteFamily = keyof typeof FANSLY_ROUTE_FAMILIES;
@@ -126,6 +144,10 @@ export const FAMILY_BUDGETS: Readonly<Record<FanslyRouteFamily, RouteBudget>> = 
   // quota of these routes is measured, and the capture of 2026-10-08 shows
   // only that the web app's own bursts pass.
   creator_stats: { ceilingPerMin: 12, currentPerMin: 5 },
+  // Owner decision №3 (2026-10-12): on the test account the site sends 15
+  // reads outside the catalogue in the first minute after a login and 1–2 a
+  // minute in a quiet tab (project-browser stage 1, §9).
+  site: { ceilingPerMin: 20, currentPerMin: 20 },
 };
 
 /**
@@ -197,6 +219,9 @@ function buildCatalogue(): ReadonlyMap<FanslyRoute, FanslyRouteSpec> {
   for (const [route, template] of Object.entries(LEGACY_ONLY_ROUTES) as Array<[LegacyOnlyRoute, string]>) {
     routes.set(route, { route, method: "GET", host: "api", template, wire: null });
   }
+  for (const [route, spec] of Object.entries(SITE_ROUTES) as Array<[FanslySiteRoute, (typeof SITE_ROUTES)[FanslySiteRoute]]>) {
+    routes.set(route, { route, method: spec.method, host: "api", template: spec.template, wire: null });
+  }
   return routes;
 }
 
@@ -216,11 +241,18 @@ export function routeOfWireId(id: FanslyWireId): FanslyRoute {
   return id;
 }
 
-/** The route of an engine attempt's `operation` (a wire id); null for an
- *  operation this build does not know. */
+export function isFanslySiteRoute(value: unknown): value is FanslySiteRoute {
+  return typeof value === "string" && Object.hasOwn(SITE_ROUTES, value);
+}
+
+/** The route of an attempt's `operation` in sync_attempts: a wire id (an
+ *  engine send), or — for a site or login attempt (0271) — any catalogue
+ *  route its request matched, a legacy-only endpoint and the site's own
+ *  routes included; null for an operation this build does not know (its
+ *  clock then counts against every route). */
 export function routeOfEngineOperation(operation: string): FanslyRoute | null {
   const route = operation as FanslyRoute;
-  return FANSLY_ROUTES.get(route)?.wire === route ? route : null;
+  return FANSLY_ROUTES.has(route) ? route : null;
 }
 
 /** The route of a legacy send log `operation`; null for one this build does

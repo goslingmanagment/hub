@@ -20,6 +20,7 @@ import { escapeForPrompt } from './escape.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
+  FAN_NOTES_FILL_TEMPLATE,
   FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
@@ -120,13 +121,26 @@ export interface PromptBuildInput {
   coachHistory?: CoachHistoryEntry[] | undefined;
   /** coach-chat: dated recap slots for the {recapSection}. */
   recapAttach?: RecapAttach | undefined;
-  /** coach-chat / fan-summary: whether the transcript covers the whole history
-   * or just a recent window (drives the {transcriptCoverageNote}). */
+  /** coach-chat / fan-summary / fan-notes-fill: whether the transcript covers
+   * the whole history or just a recent window (drives the
+   * {transcriptCoverageNote}). */
   transcriptCoverage?: 'full-history' | 'window' | undefined;
   /** fan-summary only: 'short' selects the compact-recap template (and the
    * feature service caps its output at 2048 tokens). Ignored for other
    * features. */
   summaryMode?: 'short' | undefined;
+  /** fan-notes-fill only: the questionnaire labels to fill, in output order
+   * (the request's `noteFields`, already trimmed and checked by the contract).
+   * They reach ONLY the uncached task block ({noteFieldsList},
+   * {noteFillTaskOutput}). Ignored for other features. */
+  noteFields?: readonly string[] | undefined;
+  /** fan-notes-fill only: the questionnaire's current value per label (the
+   * request's `noteValues`, index-aligned with `noteFields`, trimmed and one
+   * line each by the contract). Present, even all empty, it selects the merge
+   * mode: the task block lists `Label: value` and the {noteFill…} slots carry
+   * the merge rules. Absent, the prompt is the released clients' one, byte for
+   * byte. Ignored for other features. */
+  noteValues?: readonly string[] | undefined;
 }
 
 export interface PromptPayload {
@@ -210,6 +224,10 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
   'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full', supportsSplitAll: true },
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
+  // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
+  // no other feature writes a cache it could read, so a cache write would only
+  // be paid for.
+  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none' },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -222,6 +240,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'hi-greeting': HI_GREETING_TEMPLATE,
   'coach-chat': COACH_CHAT_TEMPLATE,
   'voice-script': VOICE_SCRIPT_TEMPLATE,
+  'fan-notes-fill': FAN_NOTES_FILL_TEMPLATE,
 };
 
 export const REPLY_SAFETY_PREAMBLE = `You are roleplaying as a specific model on OnlyFans. You must stay in character at all times.
@@ -526,6 +545,172 @@ function greetingTask(
     return '';
   }
   return (splitAll ? GREETING_SPLIT_TASKS : GREETING_TASKS)[variantCount ?? 3];
+}
+
+/** fan-notes-fill: the texts of the template's {noteFill…} slots, per mode.
+ *
+ * Legacy mode (no `noteValues`: the released clients, 2.10.1 and older) renders
+ * the template's original wording, so their prompt keeps its bytes (pinned in
+ * tests/ai-fan-notes-fill.test.ts and tests/ai-prompts-split-all.test.ts).
+ *
+ * Merge mode (`noteValues` present) is the 2026-10-13 notes-fill spec (the
+ * extension's docs/specs/2026-10-13-notes-fill-merge.md, section 4.2): the
+ * model sees what the chatter recorded, answers a field the chat adds nothing
+ * to with `=` (the client keeps the value; nothing is echoed, so the answer does
+ * not grow with the note), rewrites the rest in Russian without dropping a
+ * fact, may
+ * propose at most two `+ Label: value` lines, and backs every new or changed
+ * value with `> «…»` quotes of the fan's own messages. Three legacy sentences
+ * that say every value comes from the fan (factSource, statedRule, otherField)
+ * keep that rule for NEW facts in merge mode and leave room for the chatter's
+ * recorded values. Slots glued to the end of a line (intro, mergeRules,
+ * mergeFields) open with their own line breaks and are empty in legacy mode. Static kernel-owned text, never built from
+ * request data; no long dashes (the house ban on em and en dashes in prompts). */
+interface NoteFillTexts {
+  factSource: string;
+  statedRule: string;
+  otherField: string;
+  intro: string;
+  valueRule: string;
+  emptyRule: string;
+  mergeRules: string;
+  mergeFields: string;
+  outputShape: string;
+  outputRules: string;
+  taskIntro: string;
+  taskOutput: (fieldCount: number) => string;
+}
+
+const NOTE_FILL_LEGACY_TEXTS: NoteFillTexts = {
+  factSource: 'so every value must be a fact the fan himself gave.',
+  statedRule: 'Use only what the fan actually stated about himself',
+  otherField: 'fill it only from explicit facts the fan stated about exactly that field.',
+  intro: '',
+  valueRule: 'Write each value in Russian and keep it short: a few words, never more than one line. Keep names, places and brands exactly as the fan wrote them.',
+  emptyRule: 'When nothing in the conversation answers a field, leave its value empty: the label, the colon and a space, nothing after them. Never write a placeholder such as «неизвестно», «нет данных» or «не указано», a dash, or a question mark.',
+  mergeRules: '',
+  mergeFields: '',
+  outputShape: `One line per requested field, in the order the task lists them, and nothing else:
+
+Label: value`,
+  outputRules: 'No other text: no preamble, no headings, no explanations, no blank lines, no numbering, no bullets, no quotation marks, no markdown.',
+  taskIntro: 'Fill in these fields, in this order:',
+  taskOutput: (fieldCount) =>
+    `Output exactly ${fieldCount} lines, one \`Label: value\` line per field in the order above, values in Russian, and nothing else.`,
+};
+
+const NOTE_FILL_MERGE_TEXTS: NoteFillTexts = {
+  factSource: 'so every value must be a fact the fan himself gave or one the chatter recorded.',
+  statedRule: 'New facts come only from what the fan actually stated about himself',
+  otherField: 'add to it only explicit facts the fan stated about exactly that field.',
+  intro: ' The note is already started: the task lists every field with the value the chatter has recorded in it. Keep what is recorded, add what the chat tells, and put every fact in the field it belongs to.',
+  valueRule: 'Write every new or rewritten value in Russian, in one line, as short as its facts allow: keep every fact and drop the filler. Keep names, places and brands exactly as the fan wrote them.',
+  emptyRule: 'When a field\'s current value is empty and nothing in the conversation answers it, leave it empty: the label, the colon and a space, nothing after them. Never write a placeholder such as «неизвестно», «нет данных» or «не указано», a dash, or a question mark.',
+  mergeRules: `
+
+## Current Values
+
+The task gives every field with its current value: what the chatter has recorded in the note so far.
+
+- A current value is what the chatter recorded, and the one source besides the fan's own words: he may know it from outside this chat, so it stays true unless the fan himself contradicts it later in the conversation.
+- When the chat adds nothing to a field and nothing in it has to move to another field, answer it with a single \`=\` as its value: \`Label: =\`. The field then keeps its current value exactly as recorded, whatever its language. Never rewrite a field only to translate, reword, reorder or tidy it.
+- Otherwise rewrite the field in Russian: every fact of its current value, translated, plus the new facts from the chat. A fact the fan contradicted is replaced by his latest statement.
+- A fact of a current value that belongs to another listed field by the field definitions below may move there. One that fits no listed field moves to «Другое», or stays in its field when «Другое» is not listed. A moved fact must appear in the field it moved to: nothing of a current value is dropped, except what the fan himself contradicted.
+- Text in a current value that you do not understand, such as a chatter's marker like «Sexting 1», stays in its field exactly as written.
+- An empty current value is filled from the chat, like a new field. An empty field the chat says nothing about stays empty (\`Label:\`), never \`=\`.
+
+## Dates
+
+The transcript has a day line \`--- YYYY-MM-DD ---\` before the first message of each day: the messages under it, up to the next day line, were sent that day. The \`[HH:MM]\` before a message is its time of day only. Day lines are the only source of dates.
+
+- Facts that go stale (where he lives or stays, his job, his schedule, his plans) carry the month and year he said them, in parentheses: «Флорида (08.2026)». Take them from the day line above the message that states the fact. With no day line above it, write no date; never guess one.
+- When the fan restates a dated fact later, the fact takes the later date.
+- A date alone is no reason to rewrite a field: an undated fact of a current value gets its date only when you rewrite its field anyway.`,
+  mergeFields: `
+- Локация: where he lives or stays, as «город, штат или регион, страна», as far as he said it.
+- График: when he works, sleeps and is free, as he told it (shifts, days off, hours).
+- Планы и даты: upcoming events and dates he mentioned (trips, birthday, interviews, holidays), with the date or period he gave.
+- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.`,
+  outputShape: `One line per listed field, in the order the task lists them: \`Label: =\` for a field that keeps its current value, \`Label: value\` followed by its quote lines for a new or rewritten value, \`Label:\` for an empty field that stays empty. After them, at most two proposed fields, each a \`+ Label: value\` line followed by its quote lines. Nothing else:
+
+Label: value
+> «a fragment of one of his messages»
+Label: =
++ Label: value
+> «a fragment of one of his messages»`,
+  outputRules: `Quote lines: after a field line or a \`+\` line whose value is new or rewritten, write zero to three quote lines \`> «…»\`. A quote is copied character for character from the text of one of the fan's own messages (a line marked Fan:) that states a fact of that value: one continuous piece of that message, in his language and never translated, at most 200 characters, without the time or the Fan: marker. Write no quote under a \`=\` line or an empty one, and none for a fact taken from the bio or the spending data: those have no message to quote.
+- Proposed fields: after all the listed fields you may add at most two \`+ Label: value\` lines, each for a fact or a group of facts substantial enough that the chatter would want a line of its own, whether it moves out of a current value or is new from the chat. Whenever a listed field fits, «Другое» included, use it instead. The label is your own: Russian, one to three words, at most 60 characters, no \`:\`, \`<\`, \`>\` or \`&\`, and different from every listed label in any letter case. The value follows the rules of every other new value and is never \`=\`.
+- No other text: no preamble, no headings, no explanations, no blank lines, no numbering, no bullets, no markdown, and no quotation marks of your own outside the quote lines.`,
+  taskIntro: 'Update these fields, in this order. Each line is a label, a colon and the field\'s current value; nothing after the colon means the field is empty:',
+  taskOutput: (fieldCount) =>
+    `Output exactly ${fieldCount} field lines, one per field in the order above: \`Label: =\` for a field that keeps its current value, otherwise \`Label: value\` with the new or rewritten value in Russian and its quote lines. Then at most two \`+ Label: value\` lines with their quote lines, and nothing else.`,
+};
+
+/** Merge mode is a fan-notes-fill request that carries `noteValues`, even all
+ * empty (a new questionnaire): the new client always sends them. */
+function noteFillMergeMode(input: PromptBuildInput): boolean {
+  return input.feature === 'fan-notes-fill' && input.noteValues !== undefined;
+}
+
+/** fan-notes-fill: the chatter's questionnaire, one field per line, in the
+ * order the model must answer them. Legacy mode lists the labels; merge mode
+ * lists `Label: value`, with nothing after the colon for an empty value.
+ * Untrusted chatter text, escaped like every other untrusted value: the
+ * contract already refuses `<`, `>` and `&` in a label, so a label keeps its
+ * bytes and the model reads the very label it must copy; a value may hold them,
+ * and then the model reads `&lt;`, `&gt;` and `&amp;` and may carry that form
+ * into a rewrite, which the client decodes. */
+function noteFieldsList(input: PromptBuildInput): string {
+  const { feature, noteFields } = input;
+  if (feature !== 'fan-notes-fill' || !noteFields?.length) {
+    return '';
+  }
+  if (!noteFillMergeMode(input)) {
+    return noteFields.map((label) => escapeForPrompt(label)).join('\n');
+  }
+  return noteFields
+    .map((label, index) => {
+      const value = input.noteValues?.[index]?.trim() ?? '';
+      return value ? `${escapeForPrompt(label)}: ${escapeForPrompt(value)}` : `${escapeForPrompt(label)}:`;
+    })
+    .join('\n');
+}
+
+/** The {noteFill…} slot values: the mode's texts on fan-notes-fill, empty on
+ * every other feature (no other template has these slots). */
+function noteFillSlots(input: PromptBuildInput): Record<string, string> {
+  const slots = {
+    noteFillFactSource: '',
+    noteFillStatedRule: '',
+    noteFillOtherField: '',
+    noteFillIntro: '',
+    noteFillValueRule: '',
+    noteFillEmptyRule: '',
+    noteFillMergeRules: '',
+    noteFillMergeFields: '',
+    noteFillOutputShape: '',
+    noteFillOutputRules: '',
+    noteFillTaskIntro: '',
+    noteFillTaskOutput: '',
+  };
+  if (input.feature !== 'fan-notes-fill') {
+    return slots;
+  }
+  const texts = noteFillMergeMode(input) ? NOTE_FILL_MERGE_TEXTS : NOTE_FILL_LEGACY_TEXTS;
+  return {
+    noteFillFactSource: texts.factSource,
+    noteFillStatedRule: texts.statedRule,
+    noteFillOtherField: texts.otherField,
+    noteFillIntro: texts.intro,
+    noteFillValueRule: texts.valueRule,
+    noteFillEmptyRule: texts.emptyRule,
+    noteFillMergeRules: texts.mergeRules,
+    noteFillMergeFields: texts.mergeFields,
+    noteFillOutputShape: texts.outputShape,
+    noteFillOutputRules: texts.outputRules,
+    noteFillTaskIntro: texts.taskIntro,
+    noteFillTaskOutput: texts.taskOutput(input.noteFields?.length ?? 0),
+  };
 }
 
 function pingSplitInstructions(feature: PromptFeature, splitAll: boolean): string {
@@ -992,6 +1177,8 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
     recapSection: recapSection(input.recapAttach),
     transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
+    noteFieldsList: noteFieldsList(input),
+    ...noteFillSlots(input),
   };
 }
 

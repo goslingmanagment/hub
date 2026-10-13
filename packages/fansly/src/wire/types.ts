@@ -417,7 +417,9 @@ export interface FanslyWireSendHooks {
 /** How a send ended. `sent` / `sendMark` say whether bytes left for Fansly:
  *  `request_start` = the check passed at `onRequestStart`; `completion_fallback`
  *  = a response came back without that mark (no such path exists on undici
- *  dispatchers; the completion instant is then the safe upper bound).
+ *  dispatchers; the completion instant is then the safe upper bound);
+ *  `transport_reported` = a sender outside the process (a page's browser)
+ *  reported when the request left, `sentMono` on the caller's monotonic clock.
  *  Before `onRequestStart`: the budget running out is a `timeout` with
  *  `sent: false` (the transport never became ready), the caller's cancel is
  *  `aborted_before_send` / `lease_inactive`, and a refusal of the check is
@@ -431,7 +433,14 @@ export type FanslyWireOutcome =
     bodyText: string;
     /** Bytes of the body as received, before content decoding. */
     bodyBytes: number;
-    sendMark: "request_start" | "completion_fallback";
+    sendMark: "request_start" | "completion_fallback" | "transport_reported";
+    /** `transport_reported` only: when the request left, as its sender
+     *  reported it, on the caller's monotonic clock (`Clock.monoNow`). */
+    sentMono?: number;
+    /** The answer is not the server's confirmed word (a page's browser: its
+     *  cache nobody revalidated, the site's service worker): kept in the
+     *  journal as a rejected answer, never applied as a refresh. */
+    unconfirmed?: "cache_unconfirmed" | "service_worker";
     /** The decoded body itself: `capture: 'bytes'` routes only (a CDN file),
      *  whose body is not text. */
     bodyBuffer?: Buffer;
@@ -439,5 +448,13 @@ export type FanslyWireOutcome =
      *  or while streaming) and was not read to the end. */
     bodyOverflow?: boolean;
   }
-  | { kind: "transport_error" | "timeout"; sent: boolean; message: string }
+  | {
+    kind: "transport_error" | "timeout";
+    sent: boolean;
+    message: string;
+    /** With `sent`: when the request left, as a sender outside the process
+     *  reported it (the caller's monotonic clock); absent — the completion
+     *  instant stands for it (the safe upper bound). */
+    sentMono?: number;
+  }
   | { kind: "aborted_before_send"; refusal: FanslySendRefusalReason };

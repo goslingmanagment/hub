@@ -185,7 +185,7 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
     }
   };
 
-  it("one function selects the column, and only the live page transport calls it", () => {
+  it("one function selects the column, and only the live page transports call it", () => {
     expect(grep("select [^;]*secret_params")).toEqual(["packages/db/src/repositories/sync/work.ts"]);
     // The candidate exemption of an auth hold (S3-05) only asks whether a
     // work carries a secret; it never reads one.
@@ -195,13 +195,17 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
     ]);
     expect(selects).toHaveLength(2);
     expect(grep("readSyncWorkSecretParams\\(")).toEqual([
+      // A page's other live transport (Project Browser, PR 12): a CDN hop's
+      // URL through the page's browser, read the same way.
+      "apps/runtime/src/sync/fansly/browser-transport.ts",
       "apps/runtime/src/sync/fansly/transport.ts",
       "packages/db/src/repositories/sync/work.ts",
     ]);
   });
 
-  it("only the transport opens a secret; the box seals for the describer, a redirect's next hop and a candidate identity", () => {
+  it("only the live page transports open a secret; the box seals for the describer, a redirect's next hop and a candidate identity", () => {
     expect(grep("decryptSyncWorkSecret[<(]")).toEqual([
+      "apps/runtime/src/sync/fansly/browser-transport.ts",
       "apps/runtime/src/sync/fansly/transport.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
     ]);

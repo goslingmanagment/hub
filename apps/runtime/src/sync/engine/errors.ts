@@ -119,7 +119,12 @@ export type ErrorClass =
   | "network"
   | "contract"
   | "cursor_stuck"
-  | "envelope_unsuccessful";
+  | "envelope_unsuccessful"
+  /** An answer that is not the server's confirmed word (a page's browser:
+   *  its unrevalidated cache, the site's service worker): journaled as a
+   *  rejected answer, never applied; the page's network fails as for a
+   *  transport error. */
+  | "unconfirmed";
 
 /** An error class, or `not_sent`: the send check refused the dispatch (or the
  *  call was cancelled before it), so nothing reached Fansly and nothing about
@@ -145,6 +150,7 @@ export interface ClassifiedOutcome<R> {
  * |---|---|
  * | the dispatch was refused / cancelled before sending | `not_sent` |
  * | transport error, timeout, 408                       | `network` |
+ * | an answer the server did not confirm (a browser's cache, a service worker) | `unconfirmed` (network's consequences) |
  * | 429; a 5xx naming its own deadline (`Retry-After`)  | `rate_limit` (the provider's pace: the route that answered it) |
  * | 401 / 403 the resource declares about its subject   | `subject_terminal` (design G16: a CDN hop's signed URL, an excluded chat) |
  * | 401 / 403                                           | `auth` |
@@ -179,6 +185,10 @@ export function classifyWireOutcome<P, R>(
       return { errorClass: "network", httpStatus: null, retryAfterMs: null, read: null };
     case "response":
       break;
+  }
+  if (outcome.unconfirmed !== undefined) {
+    // Never read as the server's answer: no refresh comes of it.
+    return { errorClass: "unconfirmed", httpStatus: outcome.status, retryAfterMs: null, read: null };
   }
   const read = readFanslyWireResponse(spec, params, outcome);
   const status = outcome.status;
@@ -216,7 +226,7 @@ export function classifyWireOutcome<P, R>(
 
 /** `Retry-After` in ms from `now`; an HTTP-date also from the answer's own
  *  `Date` (the later of the two), never clamped. */
-function retryAfterDelayMs(retryAfter: string | null, served: string | null, now: Date): number | null {
+export function retryAfterDelayMs(retryAfter: string | null, served: string | null, now: Date): number | null {
   const local = parseRetryAfterDelayMsUnclamped(retryAfter, now.getTime());
   if (local === null || served === null) return local;
   const servedAt = Date.parse(served);
@@ -506,7 +516,10 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       // admitted again through a new slot.
       return { ...base, attemptErrorClass: "not_sent", work: reopenNow };
 
-    case "network": {
+    case "network":
+    case "unconfirmed": {
+      // An unconfirmed answer proves nothing of the network: it counts as
+      // the transport error it stands for.
       const streak = Math.max(0, page.networkFailureStreak) + 1;
       if (streak < NETWORK_FAILURES_TO_PAUSE) {
         return { ...base, networkFailureStreak: streak, work: reopenNow };

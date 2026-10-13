@@ -64952,7 +64952,8 @@
                                       "ping",
                                       "hi-greeting",
                                       "coach-chat",
-                                      "voice-script"
+                                      "voice-script",
+                                      "fan-notes-fill"
                                     ]
                                   },
                                   "requestCount": {
@@ -64994,7 +64995,8 @@
                                     "ping",
                                     "hi-greeting",
                                     "coach-chat",
-                                    "voice-script"
+                                    "voice-script",
+                                    "fan-notes-fill"
                                   ]
                                 },
                                 "requestCount": {
@@ -113544,7 +113546,8 @@
                             "ping",
                             "hi-greeting",
                             "coach-chat",
-                            "voice-script"
+                            "voice-script",
+                            "fan-notes-fill"
                           ]
                         },
                         "model": {
@@ -113883,7 +113886,7 @@
                   "messageCount": {
                     "type": "integer",
                     "minimum": 5,
-                    "maximum": 3000
+                    "maximum": 5000
                   },
                   "draftText": {
                     "type": "string",
@@ -113956,6 +113959,27 @@
                       "new-follower"
                     ]
                   },
+                  "noteFields": {
+                    "minItems": 1,
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60,
+                      "pattern": "^[^\\r\\n\\u2028\\u2029:<>&]*$"
+                    }
+                  },
+                  "noteValues": {
+                    "minItems": 1,
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 2000,
+                      "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+                    }
+                  },
                   "knownFanMessageIds": {
                     "minItems": 1,
                     "maxItems": 10,
@@ -113964,6 +113988,49 @@
                       "type": "string",
                       "pattern": "^[1-9]\\d{0,29}$"
                     }
+                  },
+                  "coverageCheck": {
+                    "type": "object",
+                    "properties": {
+                      "window": {
+                        "maxItems": 60,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,29}$"
+                            },
+                            "dir": {
+                              "type": "string",
+                              "enum": [
+                                "fan",
+                                "model"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "dir"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "deletedIds": {
+                        "maxItems": 60,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        }
+                      }
+                    },
+                    "required": [
+                      "window",
+                      "deletedIds"
+                    ],
+                    "additionalProperties": false
                   },
                   "liveTextContext": {
                     "type": "object",
@@ -114488,7 +114555,8 @@
                       "ping",
                       "hi-greeting",
                       "coach-chat",
-                      "voice-script"
+                      "voice-script",
+                      "fan-notes-fill"
                     ]
                   },
                   "pageLabel": {
@@ -118952,7 +119020,8 @@
                                     "ping",
                                     "hi-greeting",
                                     "coach-chat",
-                                    "voice-script"
+                                    "voice-script",
+                                    "fan-notes-fill"
                                   ]
                                 },
                                 "requestCount": {
@@ -118994,7 +119063,8 @@
                                   "ping",
                                   "hi-greeting",
                                   "coach-chat",
-                                  "voice-script"
+                                  "voice-script",
+                                  "fan-notes-fill"
                                 ]
                               },
                               "requestCount": {
@@ -119868,6 +119938,11 @@
                           "maximum": 9007199254740991
                         },
                         "previewSendPerMinute": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "greetingSendPerMinute": {
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
@@ -121218,7 +121293,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with `deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest `summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a day after the walk's first page (taking a page does not renew a walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first page again. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with `deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest `summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a day after the walk's first page (taking a page does not renew a walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first page again. With `conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), the feed reads that conversation, `target` repeats it, and a cursor is valid only for the same conversation and fan. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
         "parameters": [
           {
             "schema": {
@@ -121249,6 +121324,15 @@
             },
             "in": "query",
             "name": "summaryWindow",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "conversationRef",
             "required": false
           },
           {
@@ -121291,6 +121375,10 @@
                           "type": "string"
                         },
                         "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "conversationRef": {
                           "type": "string",
                           "pattern": "^[1-9]\\d{0,29}$"
                         }
@@ -121713,7 +121801,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no generation, no AI spend. Answers the freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the page, whoever generated them. A recap generated from context only its caller saw is never selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells whether the fan's latest dossier on this page has exactly the full recap's text. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Read-only and database-only: no platform request, no generation, no AI spend. Answers the freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the page, whoever generated them. A recap generated from context only its caller saw is never selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells whether the fan's latest dossier on this page has exactly the full recap's text. With `conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), and only recaps of that conversation stored about this fan, or keyed by the fan itself, are selected. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
         "parameters": [
           {
             "schema": {
@@ -121723,6 +121811,15 @@
             },
             "in": "query",
             "name": "personaDefinitionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "conversationRef",
             "required": false
           },
           {
@@ -122124,7 +122221,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the OnlyFans fan id, which is the chat id. Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the native queue never took the part, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. Switches by action: `claim` and `renew` need `newcomers`; `dispatch` needs `previewSend`, and `newcomers` too for a greeting; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on an OnlyFans page: no switch, flag or minimum version refuses it, and it admits no dispatch. A refusal by the switches is 409 `client_feature_disabled` with the reason.",
+        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, `limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is `not_enqueued` (no request was made: the native queue never took the part, or the client's last check before its own request refused it) or `native_rejected` with the platform's 4xx other than 401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is over, until a late `sent` or a manual resolve. `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / `platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. The admission is decided after the repeat check, with the switches. `claim` and `renew` need `newcomers` everywhere; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on a page of a platform where the custody exists, with a purpose and group that platform admits: no switch, flag or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where every switch of one of its sends exists: OnlyFans; Fansly once `newcomers` exists there, and until then every action that starts something on a Fansly page, and the status read, is 409 `client_feature_disabled` / `platform_unsupported`. A refusal by the switches is 409 `client_feature_disabled` with the reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -122231,30 +122328,54 @@
                         ]
                       },
                       "group": {
-                        "type": "object",
-                        "properties": {
-                          "generationRef": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 100
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "generationRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "variant": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2
+                              },
+                              "partCount": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 10
+                              }
+                            },
+                            "required": [
+                              "generationRef",
+                              "variant",
+                              "partCount"
+                            ],
+                            "additionalProperties": false
                           },
-                          "variant": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 2
-                          },
-                          "partCount": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "manual"
+                                ]
+                              },
+                              "textFingerprint": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "textFingerprint"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "generationRef",
-                          "variant",
-                          "partCount"
-                        ],
-                        "additionalProperties": false
+                        ]
                       },
                       "partIndex": {
                         "type": "integer",
@@ -122388,30 +122509,54 @@
                         ]
                       },
                       "group": {
-                        "type": "object",
-                        "properties": {
-                          "generationRef": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 100
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "generationRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "variant": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2
+                              },
+                              "partCount": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 10
+                              }
+                            },
+                            "required": [
+                              "generationRef",
+                              "variant",
+                              "partCount"
+                            ],
+                            "additionalProperties": false
                           },
-                          "variant": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 2
-                          },
-                          "partCount": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "manual"
+                                ]
+                              },
+                              "textFingerprint": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "textFingerprint"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "generationRef",
-                          "variant",
-                          "partCount"
-                        ],
-                        "additionalProperties": false
+                        ]
                       },
                       "partIndex": {
                         "type": "integer",
@@ -122902,7 +123047,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: one snapshot, no lock, no write, never a ticket. The same answer as the claim POST. The request names no client install, so the caller's own live lease reads `held` by `you-elsewhere`; an idempotent `claim` with the lease's token answers `owned`. It names no attempt either: `custody` is the fan's unresolved send (anyone's, `dispatching` or `uncertain-held`), and while there is none, the caller's own last send to the fan dispatched from the preview, in the state it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source `desktop-outbox`. One whose outcome is unknown (queued, in flight, indeterminate, or failed without proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum version, with no flag of its own: it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
+        "description": "Read-only and database-only: one snapshot, no lock, no write, never a ticket. The same answer as the claim POST. The request names no client install, so the caller's own live lease reads `held` by `you-elsewhere`; an idempotent `claim` with the lease's token answers `owned`. It names no attempt either: `custody` is the fan's unresolved send (anyone's, `dispatching` or `uncertain-held`), and while there is none, the caller's own last send to the fan dispatched from the preview, in the state it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source `desktop-outbox`. One whose outcome is unknown (queued, in flight, indeterminate, or failed without proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum version, with no flag of its own, on a page of a platform where the custody exists (see the claim POST): it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
         "parameters": [
           {
             "schema": {
@@ -123328,7 +123473,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no generation, no AI spend. The caller names one of its own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a `reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this text, the answer is `existing` and nothing is written. The generation's record appears shortly after the stream's `done` frame; until then, a request that names its `clientRequestId` is answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the record was never written, so a client bounds its repeats. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Database-only: no platform request, no generation, no AI spend. The caller names one of its own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a `reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this text, the answer is `existing` and nothing is written. The generation's record appears shortly after the stream's `done` frame; until then, a request that names its `clientRequestId` is answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the record was never written, so a client bounds its repeats. With `conversation-recaps-v1`, `conversationRef` names the conversation the generation was made in, apart from the fan (on Fansly the group id): the pair is checked before the generation is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), and a generation of that conversation that names this fan is found too. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -123344,6 +123489,10 @@
                   "clientRequestId": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  },
+                  "conversationRef": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,29}$"
                   }
                 },
                 "required": [
@@ -133539,6 +133688,497 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ops/live": {
+      "get": {
+        "summary": "What Hub is doing now: sync's sent requests since the cursor, each page's holds and why its work waits, process heartbeats, the job queue and open incidents (read-only; nothing identifies a fan)",
+        "tags": [
+          "system"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "monitoringTokenAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "processes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "stale",
+                              "missing"
+                            ]
+                          },
+                          "startedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastSeenAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "role",
+                          "state",
+                          "startedAt",
+                          "lastSeenAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "engine": {
+                            "type": "boolean"
+                          },
+                          "pausedAll": {
+                            "type": "boolean"
+                          },
+                          "pausedRequests": {
+                            "type": "boolean"
+                          },
+                          "pausedResources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "holds": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "scope": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "until": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "scope",
+                                "kind",
+                                "until"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "openWork": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "dueNow": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "nextDueAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "waiting": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "not_due",
+                                    "pacer",
+                                    "class_share",
+                                    "page_hold",
+                                    "route_budget",
+                                    "route_hold",
+                                    "resource_hold",
+                                    "subject_breaker",
+                                    "blocked_by_vendor",
+                                    "quarantined",
+                                    "paused",
+                                    "dependency",
+                                    "ownership_unconfirmed",
+                                    "running"
+                                  ]
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "reason",
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "lastSentAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "platform",
+                          "engine",
+                          "pausedAll",
+                          "pausedRequests",
+                          "pausedResources",
+                          "holds",
+                          "openWork",
+                          "dueNow",
+                          "nextDueAt",
+                          "waiting",
+                          "lastSentAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "attempts": {
+                      "maxItems": 2000,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[el][1-9][0-9]*$"
+                          },
+                          "page": {
+                            "type": "string"
+                          },
+                          "resource": {
+                            "type": "string"
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "class": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "urgent",
+                                  "requests",
+                                  "planned"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "sentAt": {
+                            "type": "string"
+                          },
+                          "completedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "failed": {
+                            "type": "boolean"
+                          },
+                          "httpStatus": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "durationMs": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "responseBytes": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "page",
+                          "resource",
+                          "operation",
+                          "class",
+                          "sentAt",
+                          "completedAt",
+                          "failed",
+                          "httpStatus",
+                          "durationMs",
+                          "responseBytes"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "waiting": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "active": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "failedLastHour": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "deadLetters": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "oldestWaitingAgeMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "waiting",
+                        "active",
+                        "failedLastHour",
+                        "deadLetters",
+                        "oldestWaitingAgeMs"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "incidents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "stream": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "openedAt": {
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 160
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "stream",
+                          "openedAt",
+                          "summary"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,200}$"
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "revision",
+                    "processes",
+                    "pages",
+                    "attempts",
+                    "queue",
+                    "incidents",
+                    "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           },
@@ -154518,7 +155158,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile; 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
+        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -154532,6 +155172,11 @@
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "conversationRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "fanRef": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200

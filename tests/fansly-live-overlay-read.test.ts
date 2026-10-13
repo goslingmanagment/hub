@@ -68,7 +68,7 @@ function overlayRow(id: string, seconds: number, extra: Record<string, unknown> 
   return {
     platform_message_id: id, platform_conversation_id: "800", sender_platform_user_id: "700",
     sender_role: "fan", created_at: at(seconds), content: `live ${id}`, in_reply_to_message_id: null,
-    api_unavailable: false, ...extra,
+    api_unavailable: false, message_type: null, correlation_id: null, field_mask: 0, ...extra,
   };
 }
 
@@ -94,7 +94,12 @@ const ids = (items: Awaited<ReturnType<typeof union>>["items"]) =>
 describe("readDmLiveUnion merge", () => {
   it("merges both newest-first lists by instant, then id, and keeps `limit`", async () => {
     const { items, execute } = await union({
-      overlay: [overlayRow("106", 50), overlayRow("104", 30), overlayRow("102", 10)],
+      // R20 HF-7d0: "106" carried both automation markers (field_mask bits 16 and 32, plus content).
+      // R20 HF-7a: and two attachments, beside what the column could hold but the decoder never writes.
+      overlay: [overlayRow("106", 50, { message_type: 2, correlation_id: "500", field_mask: 1 | 8 | 16 | 32,
+        attachments: [{ contentType: 2, contentId: "901" }, { contentType: 1, contentId: "900" },
+          { contentType: "1", contentId: "902" }, { contentType: 1, contentId: "" }, null] }),
+        overlayRow("104", 30), overlayRow("102", 10)],
       store: [{ id: "105", at: at(40) }, { id: "103", at: at(30) }, { id: "101", at: at(0) }],
       limit: 4,
     });
@@ -105,7 +110,13 @@ describe("readDmLiveUnion merge", () => {
     expect(live).toEqual({ source: "live", message: {
       platformMessageId: "106", platformConversationId: "800", senderPlatformUserId: "700", senderRole: "fan",
       createdAt: at(50), content: "live 106", inReplyToMessageId: null, apiUnavailable: false,
+      markers: { type: 2, typeObserved: true, correlationId: "500", correlationIdObserved: true },
+      attachments: [{ contentType: 2, contentId: "901" }, { contentType: 1, contentId: "900" }],
     } });
+    // A row whose frame carried neither key reads unknown, not "no marker".
+    expect(items[2]).toMatchObject({ source: "live", message: { platformMessageId: "104",
+      markers: { type: null, typeObserved: false, correlationId: null, correlationIdObserved: false },
+      attachments: [] } });
   });
 
   it("prefers the REST row when both reads hold the message, and keeps each list's own order", async () => {

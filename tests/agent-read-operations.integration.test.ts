@@ -880,6 +880,40 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(hits["m-2"]).toEqual(["2026-03-05T00:00:00.000Z", "yes baby, sending the custom now"]);
   });
 
+  it("#7 answers with snippets when a hit's window holds emoji: one long row does not fail the response", async () => {
+    // Postgres cuts the window at 300 CHARACTERS and the contract caps the snippet
+    // at 300 UTF-16 code units. An emoji is one of the former and two of the
+    // latter, so this row used to overflow the cap and the whole search answered
+    // 500 "Response validation failed" (prod, 2026-10-11).
+    const long = `${"so pretty ".repeat(11)}I love that dress 😍🔥 ${"so much ".repeat(40)}`;
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
+         tip_amount_mills, media_metadata)
+       values
+         ($1, 'fansly', $2, 'm-emoji', $3, 'fan', false, '2026-03-03T10:00:00Z',
+          $4, null, 0, '[]'::jsonb),
+         ($1, 'fansly', $2, 'm-plain', $3, 'fan', false, '2026-03-03T11:00:00Z',
+          'which dress do you like', null, 0, '[]'::jsonb)`,
+      [pageId, CONVERSATION_REF, FAN_PLATFORM_USER_ID, long],
+    );
+    const response = await agentPost("/api/v1/agent/search/messages", {
+      q: "dress",
+      from: "2026-03-01T00:00:00Z",
+      to: "2026-03-10T00:00:00Z",
+      includeSnippet: true,
+    });
+    expect(response.statusCode).toBe(200);
+    const snippets: Record<string, string> = Object.fromEntries(response.json().items.map(
+      (item: { messageRef: string; snippet: string }) => [item.messageRef, item.snippet],
+    ));
+    expect(Object.keys(snippets).sort()).toEqual(["m-emoji", "m-plain"]);
+    expect(snippets["m-plain"]).toBe("which dress do you like");
+    // The window still surrounds the match; only its tail is shorter.
+    expect(snippets["m-emoji"]).toContain("I love that dress 😍🔥");
+    expect(snippets["m-emoji"]).toHaveLength(300);
+  });
+
   it("#8 probes coverage per scope, with the journal floor", async () => {
     const response = await agentGet(`/api/v1/agent/coverage?${JANUARY}`);
     expect(response.statusCode).toBe(200);

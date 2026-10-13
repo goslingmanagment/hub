@@ -5,6 +5,7 @@ import type {
   DeviceTokenItem,
 } from "@agency_hub_core/contracts";
 import { platforms, type Platform, type UserRole } from "@agency_hub_core/shared";
+import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "@/lib/sites";
 
 // Decision 350 — the Team tab's pure view logic: statuses, sorting, platform
 // grouping, the join link and the Telegram template. Every user-facing word
@@ -123,7 +124,7 @@ export function groupPagesByPlatform<T extends { platform: Platform }>(
 /*  Links                                                              */
 /* ------------------------------------------------------------------ */
 
-export const START_GUIDE_URL = "https://ext.gosling-agency.ru/start.html";
+export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/fansly/start.html`;
 
 export const INVITE_DEFAULT_DAYS = 7;
 export const INVITE_MAX_DAYS = 30;
@@ -139,14 +140,15 @@ export function isValidUsername(value: string): boolean {
 }
 
 /** The link travels in the URL FRAGMENT (§4.1 p.2): it never reaches a
- * server log as a path. */
-export function buildJoinLink(origin: string, secret: string): string {
-  return `${origin}/join#${secret}`;
+ * server log as a path. It opens on the chatters' site that goes with the
+ * console it was made on: in production the console has a name of its own,
+ * and that name is not for the person being invited. */
+export function buildJoinLink(consoleOrigin: string, secret: string): string {
+  return `${chatterSiteOriginFor(consoleOrigin)}/join#${secret}`;
 }
 
-/** The dashboard is served same-origin with the kernel, so the join page the
- * person opens lives on exactly this origin. Guarded: the settings tree also
- * renders server-side in tests, where there is no window. */
+/** The origin this console runs on. Guarded: the settings tree also renders
+ * server-side in tests, where there is no window. */
 export function currentOrigin(): string {
   return typeof window === "undefined" ? "" : window.location.origin;
 }

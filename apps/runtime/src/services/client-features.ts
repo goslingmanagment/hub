@@ -34,8 +34,14 @@ export interface ClientFeatureRequirement {
 }
 
 const ONLYFANS: readonly Platform[] = ["onlyfans"];
+const FANSLY: readonly Platform[] = ["fansly"];
+const ONLYFANS_AND_FANSLY: readonly Platform[] = ["onlyfans", "fansly"];
 
-/** Every flag the extension knows, with what it needs. The pilot is OnlyFans only. */
+/**
+ * Every flag the extension knows, with what it needs. The pilot is OnlyFans
+ * only; the flags of Fansly's own AI generations (R20 HF-12) exist on Fansly
+ * alone, and fresh text (R20 HF-8б) on both.
+ */
 export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName, ClientFeatureRequirement>> = {
   // Client-only: the hub has no action behind these.
   insertion: { platforms: ONLYFANS, capabilities: [] },
@@ -49,14 +55,36 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // AI features the narrow token's AI switch checks.
   review: { platforms: ONLYFANS, capabilities: [] },
   coach: { platforms: ONLYFANS, capabilities: [] },
-  freshText: { platforms: ONLYFANS, capabilities: ["live-text-v1"] },
+  // R20 HF-8б: the fresh text of the open chat on Fansly too, by the same
+  // switch (`aiLiveTextContextMode` and the page's flag, live-text.ts).
+  freshText: { platforms: ONLYFANS_AND_FANSLY, capabilities: ["live-text-v1"] },
   splitAll: { platforms: ONLYFANS, capabilities: ["split-all-v1"] },
   recap: { platforms: ONLYFANS, capabilities: ["shared-recaps-v1", "recap-profile-v1"] },
   preview: { platforms: ONLYFANS, capabilities: ["archive-feed-v1"] },
   stats: { platforms: ONLYFANS, capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] },
   newcomers: { platforms: ONLYFANS, capabilities: ["audience-new-v1", "preview-send-custody-v1"] },
   previewSend: { platforms: ONLYFANS, capabilities: ["preview-send-custody-v1"] },
+  // R20 HF-12: on Fansly the narrow token's AI switch puts Reply, Fix, Hi and
+  // Ping behind `drafts`, the voice script behind `voice` and the notes fill
+  // behind `notesFill` (client-ai-switch.ts). On OnlyFans these flags do not
+  // exist and those generations keep the master switch and the version.
+  drafts: { platforms: FANSLY, capabilities: [] },
+  voice: { platforms: FANSLY, capabilities: [] },
+  notesFill: { platforms: FANSLY, capabilities: [] },
 };
+
+/**
+ * R20 HF-10: the platforms whose chats have ids of their own (a Fansly chat is
+ * a group). A client read by conversation there names the chat apart from its
+ * fan, and the hub checks the pair (client-conversation.ts). On every other
+ * platform the chat id IS the fan id (OnlyFans).
+ */
+const OWN_CONVERSATION_ID_PLATFORMS: readonly Platform[] = FANSLY;
+
+/** Whether a page of this platform keys its chats by ids of their own, not by their fans. */
+export function clientConversationsHaveOwnIds(platform: Platform): boolean {
+  return OWN_CONVERSATION_ID_PLATFORMS.includes(platform);
+}
 
 /**
  * The host apps the extension runs over, by the prefix of a host account
@@ -124,8 +152,9 @@ function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boo
 /**
  * Whether a flagged feature exists on a platform at all: the first thing the
  * evaluation asks. Also for a client route or action that has no flag of its
- * own but exists only where a feature does (H-7b: the claim status and
- * registerNativeSend exist where sending from the preview does).
+ * own but exists only where a feature does (the claim status and
+ * registerNativeSend exist where the greeting custody does: where every flag
+ * of one of its sends exists, client-claim-admission.ts).
  */
 export function clientFeatureExistsOn(flag: ClientFeatureFlagName, platform: Platform): boolean {
   return CLIENT_FEATURE_REQUIREMENTS[flag].platforms.includes(platform);

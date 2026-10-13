@@ -42,6 +42,21 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // subscribers" list. With it the hub serves all of `newcomers`; the owner's
   // switches decide from here on.
   "audience-new-v1",
+  // R20 HF-3: the claim route takes a manual greeting group (no AI generation)
+  // and admits the greeting custody by platform (client-claim-admission.ts).
+  // Nothing on Fansly is reachable through it until `newcomers` exists there.
+  "manual-greeting-v1",
+  // R20 HF-8в: the AI feature stream takes `coverageCheck` and answers each of
+  // its ids in the `context_v1` frame, for a caller that advertises
+  // `coverage-check-v1` in `x-kernel-ai-capabilities`. Ids only: nothing reaches
+  // the prompt, nothing is stored.
+  "coverage-check-v1",
+  // R20 HF-10: the reads by conversation. The shared recaps read, the dossier
+  // save from a generation and the archive feed take `conversationRef` (on
+  // Fansly the group, checked against the fan; client-conversation.ts). On
+  // OnlyFans the field equal to the fan changes nothing; nothing on Fansly is
+  // reachable through it until `recap` and `preview` exist there.
+  "conversation-recaps-v1",
 ];
 
 /**

@@ -32,6 +32,7 @@ import { z } from "zod";
 import type { AppContext } from "../bootstrap.ts";
 import { computePingSummary, loadTranscriptContext, normalizeTranscriptMessages } from "../modules/ai/index.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { resolveClientConversation, type ClientConversation } from "./client-conversation.ts";
 import { loadClientConversationCoverage } from "./client-coverage.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
@@ -66,7 +67,8 @@ import {
  * conversation (the bounds of the two stores, the head, the coverage, the
  * newest known time, the snapshot's name and time) travels in the cursor and is
  * repeated on every later page: a later page reads its rows and nothing else.
- * The cursor is signed and bound to the page, the fan, the person, the reader
+ * The cursor is signed and bound to the page, the fan (and a conversation with
+ * an id of its own, R20 HF-10), the person, the reader
  * and the archive generation (presented for anything else it fails its
  * signature like a forgery), and its state is sealed: the bounds are ids of
  * hub-wide sequences, and a chatter must not read from a cursor how many
@@ -386,6 +388,19 @@ export function conversationFeedNewestKnownAt(input: {
   return ahead ? laterInstant(input.headAt, isoInstantOrNull(listed)) : input.headAt;
 }
 
+/**
+ * The conversation's part of a cursor's scope. The fan's own chat keeps the
+ * scope it always had, so a walk begun before R20 HF-10, or without
+ * `conversationRef`, goes on with the same cursors. A conversation with an id
+ * of its own binds the cursor to it AND to its fan: a cursor of one never
+ * continues a walk of another, nor of the same group named with another fan.
+ */
+export function feedCursorConversationScope(conversation: ClientConversation): SignedCursorScope {
+  return conversation.kind === "fan"
+    ? { fanRef: conversation.conversationRef }
+    : { conversationRef: conversation.conversationRef, fanRef: conversation.fanRef };
+}
+
 function refuseCursor(): never {
   // One message and one reason for every refusal: saying WHY (another person's
   // cursor versus a cut one) would describe a scope the caller does not hold.
@@ -404,6 +419,7 @@ async function readFirstPage(
   db: Database,
   input: {
     pageId: number;
+    platform: string;
     conversationRef: string;
     source: ConversationFeedSource;
     snapshot: ConversationFeedSnapshot;
@@ -420,7 +436,10 @@ async function readFirstPage(
     snapshot: input.snapshot,
     limit: input.limit,
   });
-  const coverage: ClientCoverageLevel = await loadClientConversationCoverage({ db }, target);
+  const coverage: ClientCoverageLevel = await loadClientConversationCoverage({ db }, {
+    ...target,
+    platform: input.platform,
+  });
   const threadLastMessageAt = await readConversationFeedThreadLastMessageAt(db, target);
   // Last on purpose: the loader swallows a failed union read (a generation then
   // falls back to the archive), and a failed statement ends this snapshot.
@@ -498,11 +517,15 @@ export async function getClientConversationFeed(
   // caller, the feature exists on its platform, the owner's `preview` switch is
   // on for it, and the extension is not outdated (409 `client_feature_disabled`).
   const page = await requireClientFeature(app, request, principal, { id: stored.id }, FEED_FLAG);
+  // R20 HF-10: the conversation, checked against its fan before anything is
+  // read. On OnlyFans the fan names it, as before; on Fansly the group does.
+  const conversation = await resolveClientConversation(app, page, {
+    fanRef: input.fanRef,
+    conversationRef: input.query.conversationRef,
+  });
   const source = await loadConversationFeedSource(app);
   const ring = signedCursorKeyRing(app.config);
-  // The feature exists only where the chat id IS the fan id (OnlyFans), so the
-  // fan names the conversation.
-  const conversationRef = input.fanRef;
+  const { conversationRef } = conversation;
   const { cursor, limit } = input.query;
 
   const read = await app.db.transaction(async (tx): Promise<{ scope: SignedCursorScope; read: FeedRead }> => {
@@ -512,7 +535,7 @@ export async function getClientConversationFeed(
     // not bound a walk by ids that now name other rows.
     const scope: SignedCursorScope = {
       pageId: page.id,
-      fanRef: conversationRef,
+      ...feedCursorConversationScope(conversation),
       userId: principal.user.id,
       source,
       archiveGeneration: snapshot.archiveGeneration,
@@ -522,6 +545,7 @@ export async function getClientConversationFeed(
         scope,
         read: await readFirstPage(tx, {
           pageId: page.id,
+          platform: page.platform,
           conversationRef,
           source,
           snapshot,
@@ -561,7 +585,11 @@ export async function getClientConversationFeed(
 
   const { walk, snapshot, page: rows, summary } = read.read;
   return {
-    target: { pageLabel: page.label, fanRef: input.fanRef },
+    target: {
+      pageLabel: page.label,
+      fanRef: input.fanRef,
+      ...(input.query.conversationRef !== undefined ? { conversationRef: input.query.conversationRef } : {}),
+    },
     source,
     snapshotRevision: walk.revision,
     asOf: new Date(walk.asOf).toISOString(),

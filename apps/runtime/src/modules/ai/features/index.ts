@@ -1,4 +1,5 @@
 import type {
+  AiCoverageCheck,
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
@@ -52,12 +53,15 @@ import {
   applyLiveTextContext,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
+  checkAiConversationPair,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  loadFanslySpendingContext,
+  loadFanslySubscriptionContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
@@ -133,11 +137,24 @@ export interface AiFeatureRequestBody {
    * validations, one message unless variantCount says otherwise, and the
    * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
+  /** fan-notes-fill only, and required there: the questionnaire labels of the
+   * fan's native note, in output order (trimmed and checked by the contract). */
+  noteFields?: string[];
+  /** fan-notes-fill only, optional there: the questionnaire's current value
+   * per label, index-aligned with `noteFields` ("" for an empty field). Present,
+   * the prompt merges into them (merge mode); absent, it is the released
+   * clients' prompt byte for byte. Trimmed and one line each (the contract). */
+  noteValues?: string[];
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
-  /** chat-extension H-4c: the fresh text of the open OnlyFans chat, merged
-   * into the hub's transcript for this generation only (context/live-text.ts). */
+  /** chat-extension R20 HF-8в: the window coverage check, ids only; answered
+   *  in the `context_v1` frame for a caller that advertised
+   *  `coverage-check-v1`, never read into the prompt. */
+  coverageCheck?: AiCoverageCheck;
+  /** chat-extension H-4c: the fresh text of the open chat (OnlyFans; Fansly
+   * since R20 HF-8б), merged into the hub's transcript for this generation
+   * only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
@@ -220,6 +237,35 @@ export function assertGreetingRequestShape(
   }
 }
 
+/** fan-notes-fill (the Fansly notes panel's «fill with AI»): the questionnaire
+ * labels are the whole task, so the feature REQUIRES `noteFields`, and every
+ * other feature REFUSES them, so a stray list can never reshape a Reply or a
+ * Recap prompt. The current values (`noteValues`, merge mode) are optional on
+ * fan-notes-fill, one per label, so they never pair a value with the wrong
+ * label; every other feature refuses them too. The lists' own rules (count,
+ * length, characters, repeats) are the contract's. Pure, like the greeting
+ * rules above. */
+export function assertNoteFieldsRequestShape(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "noteFields" | "noteValues">,
+): void {
+  if (feature === "fan-notes-fill") {
+    if (body.noteFields === undefined || body.noteFields.length === 0) {
+      throw new BadRequestError("fan-notes-fill requires noteFields");
+    }
+    if (body.noteValues !== undefined && body.noteValues.length !== body.noteFields.length) {
+      throw new BadRequestError("noteValues must hold exactly one value per noteFields label");
+    }
+    return;
+  }
+  if (body.noteFields !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteFields`);
+  }
+  if (body.noteValues !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteValues`);
+  }
+}
+
 /** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
  * HI_GREETING_MAX_TRANSCRIPT). Decision 379: it counts PERSONAL messages when
  * the client reports them, so a fan holding only welcome/mass sends is not
@@ -291,7 +337,7 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // Short recap also bounds its INPUT window: the compact template promises the
 // model "300 recent messages max are provided", so the archive lane must not
 // pull the deep default (1500) — or a caller-supplied messageCount up to the
-// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+// 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
 /** Decision #204: the Help button became a coach preset turn. The canonical
@@ -364,6 +410,7 @@ export async function prepareAiFeatureStream(
   if (body.summaryMode !== undefined && feature !== "fan-summary") {
     throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
+  assertNoteFieldsRequestShape(feature, body);
   // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
   // the canonical groupId, NOT the fan — so a restricted row keyed only by
   // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
@@ -384,6 +431,13 @@ export async function prepareAiFeatureStream(
       "fanRef is required on fansly for coach-chat and short fan-summary",
     );
   }
+  // The same erasure rule for the notes fill: its record holds the facts of one
+  // fan (name, age, location), so on Fansly, where conversationRef is the
+  // groupId, the record must carry the fan. A new feature: no released client
+  // sends it without fanRef.
+  if (isFanslyRequest && !body.fanRef?.trim() && feature === "fan-notes-fill") {
+    throw new BadRequestError("fanRef is required on fansly for fan-notes-fill");
+  }
 
   // Access is checked HERE, before any context loads — a principal without
   // the page must not pull its transcript/spend into a prompt (fastreply-
@@ -402,17 +456,28 @@ export async function prepareAiFeatureStream(
   const pageId = stored.page.id;
 
   // chat-extension H-4c: fresh text is refused where it can never be used
-  // (the feature, the platform, beside clientContext, without the frame that
-  // answers it), before any context loads. The owner's switch is not a
-  // refusal: switched off, the text is ignored further down.
+  // (the feature, beside clientContext, without the frame that answers it),
+  // before any context loads. The owner's switch is not a refusal: switched
+  // off, the text is ignored further down. Either platform (R20 HF-8б): where
+  // fresh text exists is its flag's.
   if (body.liveTextContext !== undefined) {
     assertLiveTextRequestShape({
       feature,
-      isFanslyRequest,
       hasClientContext: body.clientContext !== undefined,
       capabilities: options?.capabilities,
     });
   }
+
+  // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
+  // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
+  // A pair the page's capture contradicts is refused (409
+  // `conversation_fan_mismatch`) before any context loads; a pair the hub
+  // cannot vouch for yet is served, and the manifest and the context_v1 frame
+  // say `unverified`. The client-context lane (the released Fansly extension
+  // sends its own transcript) is not read here: its requests are unchanged.
+  const conversationPair = isFanslyRequest && body.clientContext === undefined
+    ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
+    : null;
 
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
@@ -427,7 +492,17 @@ export async function prepareAiFeatureStream(
         "gate_voice_unsupported_platform",
       );
     }
-    if (!body.fanRef?.trim() || body.conversationRef !== body.fanRef) {
+    // The script's record carries the fan (the render's source check and the
+    // fan's erasure read it), so the fan is always named. chat-extension R20
+    // HF-4а: a request whose transcript the hub loads itself may name the
+    // group (`conversationRef`) and the fan apart, because its pair was
+    // checked above (a contradicted pair is already 409). The client-context
+    // lane keeps the one form the released Fansly extension sends, the fan's
+    // id as both refs, and its refusal answers as before.
+    if (
+      !body.fanRef?.trim()
+      || (body.conversationRef !== body.fanRef && conversationPair === null)
+    ) {
       throw new ProductGateError(
         "voice-script requires matching, nonblank conversationRef and fanRef",
         "gate_voice_identity_required",
@@ -627,14 +702,14 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
-    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
-    // full Recap of a context-v1 client reads past it, and only where the owner
-    // raised `aiTranscriptDeepMaxRows`; for every other request this is
-    // undefined and nothing is read.
+    // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
+    // Only the full Recap and the notes fill of a context-v1 client read past
+    // it, on either platform: the Recap where the owner raised
+    // `aiTranscriptDeepMaxRows`, the notes fill to at least 3000. For every
+    // other request this is undefined and nothing is read.
     const maxRows = await resolveAiTranscriptMaxRows(app, {
       feature,
       summaryMode: body.summaryMode,
-      isFanslyRequest,
       capabilities: options?.capabilities,
     });
     // Uses the resolved window computed above (short fan-summary already clamped
@@ -665,12 +740,20 @@ export async function prepareAiFeatureStream(
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
-    const spending = policy.includesEarnings
-      ? await loadSpendingContext(app, { pageId, fanRef })
-      : null;
-    const subscription = policy.includesEarnings
-      ? await loadSubscriptionContext(app, { pageId, fanRef })
-      : null;
+    // chat-extension R20 HF-7г: on Fansly the two blocks are the released
+    // extension's own shape, from the ledger and the captured subscriptions
+    // (context/fansly-money.ts); a deep feature also reads its months by type.
+    // OnlyFans keeps its loaders and its bytes.
+    const spending = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySpendingContext(app, { pageId, fanRef, deep: policy.messageCountBucket === "deep" })
+        : await loadSpendingContext(app, { pageId, fanRef });
+    const subscription = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySubscriptionContext(app, { pageId, fanRef })
+        : await loadSubscriptionContext(app, { pageId, fanRef });
     // One clock for the segment and the silence (Decision #127); readers
     // that show the conversation call the same helper.
     const pingSummary = policy.usesPingSegment
@@ -738,6 +821,9 @@ export async function prepareAiFeatureStream(
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
+  }
+  if (conversationPair !== null) {
+    contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
@@ -808,10 +894,16 @@ export async function prepareAiFeatureStream(
         body.conversationRef,
         ...(body.fanRef ? [body.fanRef] : []),
       ];
+      // R20 HF-10: with a pair the hub checked (HF-9: a Fansly request whose
+      // transcript the hub loads itself), only the recaps stored about its fan,
+      // as the client's recaps read selects them for the same pair. Every other
+      // request attaches what it did before.
+      const pairFanRef = conversationPair !== null ? body.fanRef ?? undefined : undefined;
       const found = await getFreshestUsableRecaps(app.db, {
         pageId,
         conversationRefs,
         personaDefinitionId: persona.definitionId,
+        ...(pairFanRef !== undefined ? { fanRef: pairFanRef } : {}),
       });
       const fullAt = found.full?.createdAt?.getTime() ?? null;
       const shortAt = found.short?.createdAt?.getTime() ?? null;
@@ -905,10 +997,12 @@ export async function prepareAiFeatureStream(
     preset: feature === "coach-chat" ? body.preset : undefined,
     recapAttach,
     transcriptCoverage:
-      feature === "coach-chat" || feature === "fan-summary"
+      feature === "coach-chat" || feature === "fan-summary" || feature === "fan-notes-fill"
         ? body.clientContext?.transcriptCoverage
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
+    noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
+    noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.
@@ -1113,7 +1207,13 @@ export async function prepareAiFeatureStream(
       }),
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+      // chat-extension R20 HF-8в: answered only to a caller that advertised
+      // `coverage-check-v1`; anyone else gets the frame it got before.
+      ...(body.coverageCheck !== undefined && options?.capabilities?.has("coverage-check-v1") === true
+        ? { coverageCheck: body.coverageCheck }
+        : {}),
       ...(liveText !== undefined ? { live: liveText.live } : {}),
+      ...(conversationPair !== null ? { pair: conversationPair } : {}),
     });
   }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {

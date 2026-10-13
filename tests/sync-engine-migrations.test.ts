@@ -131,7 +131,10 @@ describe("0228_sync_engine_core.sql", () => {
     expect(checkList(sql, "sync_work_waiting_reason_check")).toEqual([...SYNC_WAITING_REASONS]);
     expect(checkList(sql, "sync_attempts_outcome_check")).toEqual([...SYNC_ATTEMPT_OUTCOMES]);
     expect(checkList(sql, "sync_attempts_apply_state_check")).toEqual([...SYNC_APPLY_STATES]);
-    expect(checkList(sql, "sync_attempts_send_mark_check")).toEqual([...SYNC_SEND_MARKS]);
+    // 0272 (Project Browser) widened it by `transport_reported`.
+    expect(checkList(sql, "sync_attempts_send_mark_check")).toEqual(SYNC_SEND_MARKS.filter((mark) => mark !== "transport_reported"));
+    const widened = readFileSync("packages/db/migrations/0272_sync_attempts_browser_send.sql", "utf8");
+    expect(checkList(widened, "sync_attempts_send_mark_check")).toEqual([...SYNC_SEND_MARKS]);
   });
 
   it("keeps one open work row per page, shadow, resource and subject", () => {

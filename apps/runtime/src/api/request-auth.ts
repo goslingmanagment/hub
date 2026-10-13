@@ -11,6 +11,7 @@ import {
   requireAgentPrincipal,
   requireDashboardUser,
   requireHumanPrincipal,
+  requireOwner,
   type AgentAuthPrincipal,
   type AuthFailure,
   type AuthPrincipal,
@@ -227,6 +228,20 @@ export function createRequestAuth(appContext: AppContext) {
     };
   }
 
+  /**
+   * The gate of `/api/v1/ops/live`: the monitoring token, or the owner's
+   * dashboard session. Narrower than `requireSyncHealthAccess`, which admits
+   * every dashboard role and scopes the answer to its pages — this answer
+   * covers every page and has no scoped form. Declared as
+   * `{ kind: "monitoring", roles: ["owner"] }`.
+   */
+  async function requireOpsLiveAccess(request: PrincipalRequest): Promise<void> {
+    if (hasValidSyncHealthMonitoringToken(request)) {
+      return;
+    }
+    requireOwner(await requirePrincipal(request));
+  }
+
   return {
     resolvePrincipal,
     resolvePendingDeviceToken,
@@ -235,6 +250,7 @@ export function createRequestAuth(appContext: AppContext) {
     requirePendingDeviceToken,
     hasValidSyncHealthMonitoringToken,
     requireSyncHealthAccess,
+    requireOpsLiveAccess,
     pageScopeFor,
   };
 }

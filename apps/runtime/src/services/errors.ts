@@ -233,6 +233,27 @@ export class ContextConflictError extends AppError {
   }
 }
 
+// chat-extension R20 HF-9: a Fansly AI request whose transcript the hub loads
+// itself names a group (`conversationRef`) and a fan (`fanRef`), and the hub's
+// capture of the page holds that group as another fan's chat. The fan's own
+// context (spend, dossier, name) would be read into another chat's prompt, so
+// nothing is generated. 409: the request contradicts what the hub holds; the
+// same request is refused again, and the client resolves the chat's fan anew.
+// The message names neither id: never the fan the hub holds for the group.
+// R20 HF-10: a client read by conversation (recaps, the dossier save, the
+// feed) is refused the same way, before anything is read, for a Fansly group
+// of another fan, and on OnlyFans for a conversation that is not the fan's own
+// chat (client-conversation.ts).
+export class ConversationFanMismatchError extends AppError {
+  constructor() {
+    super(
+      "The conversation is another fan's chat on this page: fanRef is not the fan of the group conversationRef names",
+      409,
+      "conversation_fan_mismatch",
+    );
+  }
+}
+
 // chat-extension H-5: the dossier save named a generation of the caller whose
 // record has not appeared. The gateway writes the record right after the
 // stream's `done` frame, so a request made in that gap is repeated shortly.

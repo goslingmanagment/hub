@@ -5,6 +5,7 @@ import {
   checkNewPassword,
   previousBusinessDate,
 } from "@agency_hub_core/shared";
+import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 
 // Decision 351 (PLAN §2 "Словарь"): everything a person reads on /join and
 // /account is written in terms of ЛОГИН, ПАРОЛЬ and УСТРОЙСТВА. The words
@@ -13,7 +14,7 @@ import {
 // string in this directory and fails if one does.
 
 /** The one static guide both clients and the "done" screen link to. */
-export const START_GUIDE_URL = "https://ext.gosling-agency.ru/start.html";
+export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/fansly/start.html`;
 
 interface ClientOffer {
   platform: Platform;
@@ -30,12 +31,12 @@ const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
   ["fansly", {
     platform: "fansly",
     label: "Установить расширение для Fansly",
-    href: "https://ext.gosling-agency.ru/install.html",
+    href: `${CHATTER_SITE_ORIGIN}/fansly/`,
   }],
   ["onlyfans", {
     platform: "onlyfans",
     label: "Скачать приложение для OnlyFans",
-    href: "https://ext.gosling-agency.ru/desktop/",
+    href: `${CHATTER_SITE_ORIGIN}/desktop/`,
   }],
 ]);
 
@@ -230,6 +231,7 @@ const FEATURE_LABELS: Record<string, string> = {
   "hi-greeting": "Приветствие",
   "coach-chat": "Коуч",
   "voice-script": "Голосовой сценарий",
+  "fan-notes-fill": "Заметки: анкета",
 };
 
 export function featureLabel(feature: string): string {

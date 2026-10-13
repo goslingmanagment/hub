@@ -1,3 +1,4 @@
+import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -5,6 +6,8 @@ import {
   createOnlyFansPage,
   explainAiTranscriptUnionQuery,
   listAiTranscriptUnionMessages,
+  listArchiveConversationMessagesForAi,
+  readDmLiveUnion,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
@@ -417,5 +420,70 @@ describe("AI transcript union read (fastreply-freshness PR3)", () => {
     // Without `maxRows` the same request stays at the ordinary cap.
     expect(await listAiTranscriptUnionMessages(testDb.db, { pageId: page.id, conversationRef: CONV, limit: 3000 }))
       .toHaveLength(1500);
+
+    // R20 HF-6: the deepest cap, 5000, for the full Recap and the notes fill.
+    // The same plan once more: the two conversation indexes, no account-wide scan.
+    const deepestPlan = await explainAiTranscriptUnionQuery(testDb.db, {
+      pageId: page.id,
+      conversationRef: CONV,
+      limit: 5000,
+      maxRows: 5000,
+    });
+    expect(deepestPlan).toContain("message_archive_account_conv_idx");
+    expect(deepestPlan).toContain("dm_message_archive_page_conversation_idx");
+    expect(deepestPlan).not.toMatch(/Seq Scan on message_archive/);
+    expect(deepestPlan).not.toMatch(/Seq Scan on dm_message_archive/);
+    const deepestDurations: number[] = [];
+    let deepestRows: Awaited<ReturnType<typeof listAiTranscriptUnionMessages>> = [];
+    for (let run = 0; run < 5; run += 1) {
+      const startedAt = performance.now();
+      deepestRows = await listAiTranscriptUnionMessages(testDb.db, {
+        pageId: page.id,
+        conversationRef: CONV,
+        limit: 5000,
+        maxRows: 5000,
+      });
+      deepestDurations.push(performance.now() - startedAt);
+    }
+    // 5000 live, distinct messages: past the 50 tombstoned newest refs and
+    // around the 500 tombstone stubs (1005001..1005500), which never surface.
+    expect(deepestRows).toHaveLength(5000);
+    expect(new Set(deepestRows.map((row) => row.messageRef)).size).toBe(5000);
+    expect(deepestRows[0]!.messageRef).toBe("1000051");
+    expect(deepestRows.at(-1)!.messageRef).toBe("1005550");
+    expect(deepestRows.some((row) => Number(row.messageRef) >= 1005001 && Number(row.messageRef) <= 1005500)).toBe(false);
+    expect(deepestRows.slice(0, 3000).map((row) => row.messageRef)).toEqual(deepRows.map((row) => row.messageRef));
+    const deepestMedian = [...deepestDurations].sort((a, b) => a - b)[Math.floor(deepestDurations.length / 2)]!;
+    expect(deepestMedian, `runs: ${deepestDurations.map((ms) => ms.toFixed(0)).join(", ")} ms`).toBeLessThan(1500);
+
+    // The archive reader at 5000, alone and as the Fansly live overlay
+    // union's REST arm (with the socket tombstone filter): EXPLAIN over the
+    // exact statement it runs, captured on its way to the database.
+    const captured: SQL[] = [];
+    const capture = { execute: async (query: SQL) => { captured.push(query); return { rows: [] }; } } as never;
+    await listArchiveConversationMessagesForAi(capture, {
+      accountId: page.id, conversationRef: CONV, limit: 5000, maxRows: 5000,
+    });
+    await readDmLiveUnion(capture, {
+      pageId: page.id,
+      platformConversationId: CONV,
+      store: "message_archive",
+      limit: 5000,
+      readStore: (notTombstoned) => listArchiveConversationMessagesForAi(capture, {
+        accountId: page.id, conversationRef: CONV, limit: 5000, maxRows: 5000, notTombstoned,
+      }),
+      storeKey: (row) => ({ messageId: row.messageRef, at: row.occurredAt }),
+    });
+    // The archive read, the overlay arm, the overlay union's REST arm.
+    expect(captured).toHaveLength(3);
+    for (const statement of [captured[0]!, captured[2]!]) {
+      const explained = await testDb.db.execute<{ "QUERY PLAN": string }>(
+        sql`explain (analyze, format text) ${statement}`,
+      );
+      const archivePlan = explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
+      expect(archivePlan).toContain("message_archive_account_conv_idx");
+      expect(archivePlan).not.toMatch(/Seq Scan on message_archive/);
+      expect(archivePlan).toMatch(/Limit\s+\(cost=[^)]*\)\s+\(actual time=\S+ rows=5000 /);
+    }
   });
 });

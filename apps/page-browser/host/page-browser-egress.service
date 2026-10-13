@@ -1,0 +1,14 @@
+# The host's egress rules of the page browsers (apps/page-browser/host/egress-rules.sh),
+# put back at boot once Docker has made its DOCKER-USER chain.
+[Unit]
+Description=Project Browser: page containers reach only their SOCKS5
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/agency-hub/page-browser/egress-rules.sh apply
+
+[Install]
+WantedBy=multi-user.target

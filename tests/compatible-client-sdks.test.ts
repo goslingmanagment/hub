@@ -58,8 +58,10 @@ describe("compatible client SDKs", () => {
     expect(list[0]).toBe(KERNEL_CONTRACT_HASH);
     expect(new Set(list).size).toBe(list.length);
     for (const row of CLIENT_SDK_REGISTRY) expect(list).toContain(row.contractHash);
-    // The fleet's SDK today (desktop 0.1.64, Fansly 2.6.0-2.7.1).
+    // The fleet's SDKs: desktop 0.1.64 and Fansly 2.6.0-2.7.1, then Fansly
+    // 2.8.1-2.9.0 (the production contract until fan-notes-fill changed it).
     expect(list).toContain("b95b765c12f50905cb8f98c2d9644cf5adc4234299cd6516f0cd649b39235aab");
+    expect(list).toContain("030124539ce7c649519ca0acafe8c6c131e3620025e7b858650857baa7119bbc");
     // Past 64 hashes health would fail its own response schema: retire rows first.
     expect(healthResponseSchema.shape.compatibleClientSdks.safeParse(list).success).toBe(true);
     // The registry may hold this hub's own hash (an SDK vendored from the
@@ -94,9 +96,16 @@ describe("compatible client SDKs", () => {
         for (const status of [200, 503] as const) {
           // Fansly 2.7.1 reads the raw body with response[200], the SDK's typed
           // call by status: a non-strict object drops the key it does not know.
+          // An SDK vendored after H-1b (Fansly 2.8.1+) knows it and reads it.
+          const schema = sdk.routeSchemas.health!.response[status]! as unknown as { shape?: Record<string, unknown> };
+          const knowsList = schema.shape !== undefined && "compatibleClientSdks" in schema.shape;
           const parsed = sdk.routeSchemas.health!.response[status]!.safeParse(body) as { success: boolean; data?: object };
           expect(parsed.success, `${row.fixture} health ${status}`).toBe(true);
-          expect(parsed.data).not.toHaveProperty("compatibleClientSdks");
+          if (knowsList) {
+            expect(parsed.data).toMatchObject({ compatibleClientSdks: listCompatibleClientSdks() });
+          } else {
+            expect(parsed.data).not.toHaveProperty("compatibleClientSdks");
+          }
           expect(parsed.data).toMatchObject({ contractHash: KERNEL_CONTRACT_HASH, capabilities: ["desktop-lifecycle-v2"] });
         }
       }

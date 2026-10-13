@@ -19,7 +19,9 @@ import {
 import { publishCaptureCasReadMode } from "./payload-reader.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
-export type RuntimeRole = "api" | "worker" | "scheduler" | "sync";
+/** Every role a Hub deployment runs: each beats under its name. */
+export const RUNTIME_ROLES = ["api", "worker", "scheduler", "sync"] as const;
+export type RuntimeRole = (typeof RUNTIME_ROLES)[number];
 
 /** What a heartbeat reads from its process: the DB, the boot config (boot
  *  overrides applied) with what boot skipped, and a logger. Every role's

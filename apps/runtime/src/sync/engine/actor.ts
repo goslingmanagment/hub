@@ -1,5 +1,6 @@
 import {
   ensurePollRows,
+  getSyncAttempt,
   getSyncPage,
   LiveGateClosedError,
   lockOwnedPage,
@@ -25,12 +26,14 @@ import {
   apply,
   applyLocal,
   capture,
+  captureSendOf,
   commitNoHttp,
   deferAfterPlanError,
   deferForRoute,
   drainDueApplies,
   ensureCredentialsVerify,
   errorName,
+  isAnswerInMemory,
   markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
@@ -42,18 +45,24 @@ import {
   type SyncFaultPoint,
 } from "./commit.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
+import { reconcileHeldOutcomes, takeLateHeldOutcomes } from "./held-outcomes.ts";
 import { heldByScope, holdSetOf, resourceFilesHeld, whyHeld, type HoldSet } from "./admission.ts";
 import { CREDENTIALS_CHECK_KEYS, isResourceHoldExempt, resourceFileOf } from "./errors.ts";
 import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import {
   CredentialsGenerationChangedError,
+  PageTransportUnavailableError,
   UnsendableRequestError,
   type LivePageSocketRef,
   type OwnershipSession,
   type PageTransport,
+  type SiteAdmissionPort,
+  type SiteRequestEnd,
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
+import { SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
+import { admitSite, commitSiteEnd, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
 import {
   beforeGateKeys,
   pollsFor,
@@ -126,6 +135,10 @@ export interface ActorDeps extends CommitDeps {
   /** The page's socket owner (`ws.connect` plans by its state); absent where
    *  no socket owner runs. */
   socket?: LivePageSocketRef;
+  /** The page browser's site admission (Project Browser, plan §3.2): the
+   *  site's own requests it holds paused. Absent or null: a page without a
+   *  browser — nothing of the site path runs. */
+  site?: SiteAdmissionPort | null;
   /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
    *  host passes it through from its own test option, `main.ts` never. */
   routeTimeScale?: number;
@@ -191,9 +204,13 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
+  /** The site's share of the slots (Project Browser): one per cycle. */
+  readonly #siteTurns = new SiteTurns();
   /** The diagnostic of the unreadable hold rows last logged (null: the hold
    *  set reads). */
   #holdSetProblem: string | null = null;
+  /** Why the transport last could not take a request (null: it could). */
+  #transportProblem: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -211,6 +228,10 @@ export class SyncActor {
     const d = this.#d;
     this.#phase("recover");
     try {
+      // A sender that keeps its outcomes (a page's browser) is asked about
+      // the attempts left unfinished BEFORE the recovery closes them
+      // `unknown` (Project Browser plan §3.2; PR 13).
+      if (d.transport.held !== undefined) await reconcileHeldOutcomes(d, d.transport.held);
       await recoverUnfinished(d);
     } catch (error) {
       if (error instanceof OwnershipLostError) return { kind: "ownership_lost", foreign: true };
@@ -239,6 +260,9 @@ export class SyncActor {
   async #lap(signals: ActorSignals): Promise<ActorExit | null> {
     const d = this.#d;
     this.#phase("applies");
+    // The outcomes the sender delivered that nothing waited for (PR 13):
+    // committed or kept, then acknowledged — never sent again.
+    if (d.transport.held !== undefined) await takeLateHeldOutcomes(d, d.transport.held);
     await drainDueApplies(d, APPLIES_PER_LAP);
     if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) {
       this.#phase("polls");
@@ -257,8 +281,14 @@ export class SyncActor {
       await stepBeforeGate(d, owned, signals.stop);
     }
 
+    // The site's waiting requests are judged every lap: what must be refused
+    // now is, whatever the gate says (spec §3).
+    const siteCandidate = d.site ? await this.#siteSweep(owned) : null;
     const gate = await this.#gate(owned);
     if (!gate.open) {
+      // The owner's manual login passes the page's pause and a credentials
+      // hold (plan §3.2): a slot for its request alone.
+      if (siteCandidate !== null) return this.#siteOnlySlot(signals);
       this.#phase("idle");
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -298,6 +328,10 @@ export class SyncActor {
     const unverified = underCredentials ? null : await this.#unverifiedStoredDigest(page);
     const checksOnly = unverified !== null;
     const exclusions = pickExclusions(page, d.registry, now, { checksOnly });
+    if (d.site && this.#siteTurns.due()) {
+      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
+      if (served !== "none") return served;
+    }
     const picked = underCredentials
       ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
       : await this.#pick(page, holds, held?.until ?? null, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
@@ -310,6 +344,11 @@ export class SyncActor {
       return null;
     }
     if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed", unverified)) return null;
+    if (picked === null && d.site) {
+      // A slot the engine leaves empty is the site's.
+      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
+      if (served !== "none") return served;
+    }
     if (picked === null) {
       // Idle until the next work this pick could take: a paused, switched-off,
       // held or route-closed row is never "due" here, or the actor would lap
@@ -381,6 +420,17 @@ export class SyncActor {
         await this.#credentialsUnverified(error, signals.stop);
         return null;
       }
+      if (error instanceof PageTransportUnavailableError) {
+        // The transport cannot take a request now (a page's browser without
+        // its operator): not the platform's failure — nothing is admitted,
+        // no hold is written; the actor asks again after the transport's
+        // own wait (Project Browser plan §3.2).
+        d.metrics.increment("sync_transport_unavailable", { pageId: d.pageId });
+        this.#transportUnavailable(error.reason);
+        this.#phase("idle");
+        await this.#sleep(Math.max(0, Math.min(error.retryInMs, LIVE_GATE_RECHECK_MS)), signals.stop);
+        return null;
+      }
       if (!(error instanceof UnsendableRequestError)) throw error;
       // Nothing can ever send it (no secret, a host the engine never calls):
       // the work closes with that answer, nothing is admitted.
@@ -388,6 +438,7 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, { kind: "done", reason: error.reason, result: error.result });
       return null;
     }
+    this.#transportProblem = null;
     // The send window starts BEFORE the admission commit (SK16).
     const issuedMono = d.clock.monoNow();
     let admission: AdmissionRecord | null;
@@ -410,6 +461,7 @@ export class SyncActor {
     }
     if (admission === null) return null;
     this.admissions += 1;
+    this.#siteTurns.engineAdmitted();
     await this.#fault("after_admit");
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
@@ -419,6 +471,120 @@ export class SyncActor {
     this.#phase("commit");
     await this.#fault("after_send");
     return this.#commitOutcome(admission, armed, outcome, module);
+  }
+
+  // ── a page's own site requests (Project Browser, plan §3.2; PR 8) ─────────
+
+  /** The site's waiting requests at this lap: what must be refused now is
+   *  refused; the request a slot would admit, if any. Nothing is admitted. */
+  async #siteSweep(page: SyncPageRow): Promise<ClassifiedSiteRequest | null> {
+    const d = this.#d;
+    const now = d.clock.wallNow();
+    const holds = holdSetOf(page.holds);
+    const clocks = holds.routes.ok ? await this.#routeClocks(holds.routes.state) : null;
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
+    return settleSiteDecision(d, d.site!, ctx);
+  }
+
+  /** A slot for the manual login while the gate is closed to the engine (the
+   *  owner's pause, a credentials hold): the pacer's pause still holds. */
+  async #siteOnlySlot(signals: ActorSignals): Promise<ActorExit | null> {
+    const d = this.#d;
+    let grant: SlotGrant;
+    this.#phase("slot");
+    try {
+      grant = await d.pacer.waitForSlot(signals.stop);
+    } catch (error) {
+      if (isAbort(error, signals.stop)) return { kind: "stopped" };
+      throw error;
+    }
+    if (signals.stop.aborted) return { kind: "stopped" };
+    this.#phase("pick");
+    const page = await getSyncPage(d.db, d.pageId);
+    if (page === null) return { kind: "mode_changed", mode: null };
+    const holds = holdSetOf(page.holds);
+    if (!holds.routes.ok) {
+      await this.#sleep(ROUTE_STATE_RECHECK_MS, signals.stop);
+      return null;
+    }
+    const clocks = await this.#routeClocks(holds.routes.state);
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals);
+    return served === "none" ? null : served;
+  }
+
+  /** The site's slot: the oldest request admissible now, if any ("none":
+   *  nothing to admit, the slot is free). */
+  async #trySite(
+    grant: SlotGrant,
+    page: SyncPageRow,
+    holds: HoldSet,
+    clocks: RouteClocks,
+    now: Date,
+    checksOnly: boolean,
+    signals: ActorSignals,
+  ): Promise<ActorExit | null | "none"> {
+    const d = this.#d;
+    const site = d.site!;
+    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
+    const classified = settleSiteDecision(d, site, ctx);
+    if (classified === null) return "none";
+    // What the route check just applied, recorded on the attempt (I19).
+    const intervals = clocks.intervals(classified.route);
+
+    this.#phase("admit");
+    if ((await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
+      d.metrics.increment("sync_ping_timeouts", { pageId: d.pageId });
+      if (!(await d.ownership.stillHolds(d.pageId))) return { kind: "ownership_lost", foreign: false };
+      return null;
+    }
+    // The send window starts BEFORE the admission commit (SK16).
+    const issuedMono = d.clock.monoNow();
+    let attemptId: number;
+    try {
+      ({ attemptId } = await admitSite(d, { classified, grant, intervals }));
+    } catch (error) {
+      if (error instanceof LiveGateClosedError) {
+        d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });
+        await this.#sleep(LIVE_GATE_RECHECK_MS, signals.stop);
+        return null;
+      }
+      // A hold or the pause written since the decision: the request keeps
+      // waiting (or is refused by the next lap's decision).
+      if (error instanceof AdmissionHeldError) return null;
+      throw error;
+    }
+    this.#siteTurns.siteAdmitted();
+    d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
+    const armed = d.pacer.arm(grant, attemptId, issuedMono);
+    // The final word before the browser may send: the same check an engine
+    // send passes at `onRequestStart` (ownership alive, within the window,
+    // past the floor and the pause), without its send mark (Astra's review
+    // of PR 8: a lost ownership must never reach a grant).
+    const refusal = d.pacer.checkRemoteGrant(armed);
+    let end: SiteRequestEnd;
+    if (refusal !== null) {
+      site.refuse(classified.request.id, "lease");
+      d.metrics.increment("sync_site_refused", { reason: "lease" });
+      end = { kind: "aborted_before_send", reason: refusal.reason };
+    } else {
+      site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) });
+      this.#phase("send");
+      end = await siteEnd(site, classified.request.id, signals.abort);
+    }
+    // The send counts at the instant the browser reported (PR 12), else at
+    // the completion when it may have gone out (the safe upper bound).
+    d.pacer.complete(armed, transportOutcomeOfSite(end));
+    this.#phase("commit");
+    const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, send: captureSendOf(d, armed), end, classified }));
+    if (!committed.ok) {
+      if (committed.exit.kind === "failed") {
+        await markAttemptCommitFailed(d.db, { attemptId, errorClass: `commit_failed:${committed.exit.error}` }).catch(() => false);
+      }
+      return committed.exit;
+    }
+    return null;
   }
 
   async #send(
@@ -436,11 +602,21 @@ export class SyncActor {
           }
           return refusal;
         },
-      }, abort);
+        // A sender outside the process (a page's browser): the same check
+        // without the send mark — the pacer marks the send at the instant
+        // the transport reports, or at the completion (I1).
+        grant: () => d.pacer.checkRemoteGrant(armed),
+      }, abort, {
+        attemptId: armed.attemptId,
+        ownerGeneration: d.generation,
+        issuedMono: armed.issuedMono,
+        sendDeadlineMono: armed.sendDeadlineMono,
+      });
     } catch (error) {
       // Transports report outcomes, they do not throw; a throw is treated as a
-      // failure that may have reached the wire if the check passed.
-      return { kind: "transport_error", sent: armed.sentMono !== null, message: errorName(error) };
+      // failure that may have reached the wire if the check (or the grant)
+      // passed.
+      return { kind: "transport_error", sent: armed.sentMono !== null || armed.grantedMono !== null, message: errorName(error) };
     }
   }
 
@@ -454,18 +630,30 @@ export class SyncActor {
     if (outcome.kind === "aborted_before_send") {
       const settled = await this.#committed(() => settleNotSent(d, admission, outcome));
       if (!settled.ok) await this.#markCommitFailed(admission, settled.exit);
+      else this.#settled(admission.attemptId);
       return exitOf(settled);
     }
-    const captured = await this.#committed(() => capture(d, admission, armed, outcome, module));
+    const captured = await this.#committed(() => capture(d, admission, captureSendOf(d, armed), outcome, module));
     if (!captured.ok) {
       await this.#markCommitFailed(admission, captured.exit);
       return captured.exit;
     }
+    // A sender that keeps outcomes until they are acknowledged (a page's
+    // browser, plan §4.2) may drop this one once what it carried is
+    // committed: the raw answer, by the capture — or, for a route the
+    // journal does not keep (a CDN hop: its bytes reach the describer's
+    // handoff in the apply), by the apply, as the attempt's persisted state
+    // says (a capture repeated after a lost COMMIT acknowledgement decides
+    // nothing, so its `applyNow: false` proves nothing). Otherwise the
+    // sender keeps it, and delivers it again.
+    const inMemoryOnly = isAnswerInMemory(admission.request.spec);
+    if (!inMemoryOnly) this.#settled(admission.attemptId);
     this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
       await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
     }
+    if (inMemoryOnly && await this.#answerCommitted(admission.attemptId)) this.#settled(admission.attemptId);
     await this.#fault("after_apply");
     return null;
   }
@@ -488,6 +676,36 @@ export class SyncActor {
       }
     }
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
+  }
+
+  /** An answer the journal does not keep is committed whole: its attempt is
+   *  settled, and applied — or nothing of it was to be applied (an answer
+   *  that is not one to apply). A read that fails: not proven. */
+  async #answerCommitted(attemptId: number): Promise<boolean> {
+    try {
+      const attempt = await getSyncAttempt(this.#d.db, attemptId);
+      if (attempt === null || attempt.outcome === "admitted" || attempt.outcome === "sent") return false;
+      return attempt.applyState === "applied" || attempt.applyState === "none";
+    } catch (error) {
+      this.#d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: an attempt's state did not read; its answer stays with the sender");
+      return false;
+    }
+  }
+
+  /** Tell the transport an attempt's outcome is committed (never throws). */
+  #settled(attemptId: number): void {
+    try {
+      this.#d.transport.settled?.(attemptId);
+    } catch (error) {
+      this.#d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: the transport's settle failed");
+    }
+  }
+
+  /** The transport cannot take a request now: one log line per reason. */
+  #transportUnavailable(reason: string): void {
+    if (this.#transportProblem === reason) return;
+    this.#transportProblem = reason;
+    this.#d.logger.warn({ pageId: this.#d.pageId, reason }, "Fansly sync actor: the page transport cannot take a request now; nothing is admitted");
   }
 
   /** The actor gives up on a commit after the request (`failed`): the attempt
