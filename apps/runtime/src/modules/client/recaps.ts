@@ -22,6 +22,7 @@ export function registerClientRecapRoutes(server: ApiServer, ctx: ApiModuleConte
     return getClientConversationRecaps(appContext, request, principal, {
       pageLabel: request.params.pageLabel,
       fanRef: request.params.fanRef,
+      conversationRef: request.query.conversationRef,
       personaDefinitionId: request.query.personaDefinitionId,
     });
   });

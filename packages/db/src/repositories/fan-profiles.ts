@@ -1,8 +1,8 @@
-import { and, desc, eq, getTableColumns, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiGenerationContent, fanPages, fanProfiles, fans } from "../schema.ts";
-import { usableFanSummaryPredicate } from "./ai-restricted.ts";
+import { generationOfFanPredicate, usableFanSummaryPredicate } from "./ai-restricted.ts";
 import { findVisiblePageDmConversationByPlatformConversationId } from "./page-dm.ts";
 
 export interface AppendFanProfileInput {
@@ -136,13 +136,9 @@ export async function getLatestPromptEligibleFanProfile(
       eq(fanProfiles.fanId, input.fanId),
       eq(fanProfiles.platformAccountId, input.platformAccountId),
       usableFanSummaryPredicate("full"),
-      or(
-        eq(aiGenerationContent.fanRef, input.platformUserId),
-        and(
-          isNull(aiGenerationContent.fanRef),
-          eq(aiGenerationContent.conversationRef, input.platformUserId),
-        ),
-      ),
+      // `fan_ref`, or `conversation_ref` when no fan is named: the one rule,
+      // shared with the recaps read by conversation (R20 HF-10).
+      generationOfFanPredicate(input.platformUserId),
     ))
     .orderBy(
       desc(fanProfiles.version),

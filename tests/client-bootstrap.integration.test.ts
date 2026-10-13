@@ -244,8 +244,9 @@ describe("GET /api/v1/client/bootstrap", () => {
     // AI spend (H-15), the Spenders statistics (H-8b), the awaiting-reply
     // queue (H-8c), the archive feed of one conversation (H-9c), the greeting
     // lease and send custody (H-7b), the "new subscribers" list (H-7c), the
-    // manual greeting group with the custody's admission by platform (R20 HF-3)
-    // and the AI stream's window coverage check (R20 HF-8в).
+    // manual greeting group with the custody's admission by platform (R20 HF-3),
+    // the AI stream's window coverage check (R20 HF-8в) and the reads by
+    // conversation (R20 HF-10).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -260,6 +261,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "audience-new-v1",
       "manual-greeting-v1",
       "coverage-check-v1",
+      "conversation-recaps-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

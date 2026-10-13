@@ -9,9 +9,10 @@ import {
   clientPageFanParamsSchema,
   routeSchemas,
 } from "@agency_hub_core/contracts";
-import { usableFanSummaryPredicate, type UsableRecapBody } from "@agency_hub_core/db";
+import { generationOfFanPredicate, usableFanSummaryPredicate, type UsableRecapBody } from "@agency_hub_core/db";
 
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
+import { clientConversationRecapRefs } from "../apps/runtime/src/services/client-conversation.ts";
 import { CLIENT_FEATURE_REQUIREMENTS, evaluateClientFeature } from "../apps/runtime/src/services/client-features.ts";
 import { toClientRecapBody } from "../apps/runtime/src/services/client-recaps.ts";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
@@ -94,11 +95,28 @@ describe("shared recaps contract", () => {
       // The page and the fan are the path's; a second way to name them is refused.
       { pageLabel: "mia-of" },
       { fanRef: "777000888" },
-      { conversationRef: "777000888" },
       { userId: "1" },
+      // R20 HF-10: the conversation is a client id, in its one shape.
+      { conversationRef: "" },
+      { conversationRef: "0650" },
+      { conversationRef: "group-900" },
+      { conversationRef: "6".repeat(31) },
     ]) {
       expect(clientConversationRecapsQuerySchema.safeParse(query).success, JSON.stringify(query)).toBe(false);
     }
+  });
+
+  it("[R20 HF-10] takes the conversation apart from the fan, for a hub that serves conversation-recaps-v1", () => {
+    // A Fansly group id: 18 digits, past 2^53, kept as text.
+    for (const query of [
+      { conversationRef: "650000000000000001" },
+      { conversationRef: "777000777", personaDefinitionId: PERSONA },
+    ]) {
+      expect(clientConversationRecapsQuerySchema.parse(query)).toEqual(query);
+    }
+    expect(contracts.CLIENT_HUB_CAPABILITY_NAMES).toContain("conversation-recaps-v1");
+    expect(sdk.CLIENT_HUB_CAPABILITY_NAMES).toBe(contracts.CLIENT_HUB_CAPABILITY_NAMES);
+    expect(SERVED_CLIENT_CAPABILITIES).toContain("conversation-recaps-v1");
   });
 
   it("answers a response an installed SDK keeps reading: not strict, open coverage token, nullable provenance", () => {
@@ -199,5 +217,31 @@ describe("usableFanSummaryPredicate", () => {
     expect(params.slice(0, 2)).toEqual(["fan-summary", "full"]);
     expect(render("short").params.slice(0, 2)).toEqual(["fan-summary", "short"]);
     expect(render("short").sql).toBe(sql);
+  });
+});
+
+describe("[R20 HF-10] the recaps of one conversation of one fan", () => {
+  const render = (fanRef: string) => new PgDialect().sqlToQuery(generationOfFanPredicate(fanRef));
+
+  it("a row is the fan's when it names the fan, or names no fan and is keyed by the fan: the dossier proof's rule", () => {
+    const { sql, params } = render("700000000000000001");
+    const column = (name: string) => `"ai_generation_content"."${name}"`;
+    expect(sql).toBe(
+      `(${column("fan_ref")} = $1 or (${column("fan_ref")} is null and ${column("conversation_ref")} = $2))`,
+    );
+    expect(params).toEqual(["700000000000000001", "700000000000000001"]);
+  });
+
+  it("selects as before for the fan's own chat, and by the group and the fan for a conversation of its own", () => {
+    // OnlyFans: the fan names the conversation, and no fan filter is added.
+    expect(clientConversationRecapRefs({ kind: "fan", conversationRef: "777000777", fanRef: "777000777" }))
+      .toEqual({ conversationRefs: ["777000777"] });
+    // Fansly: the group's recaps and the fan's own form, each only when stored about this fan.
+    expect(clientConversationRecapRefs({
+      kind: "pair", conversationRef: "650000000000000001", fanRef: "700000000000000001", pair: "verified",
+    })).toEqual({ conversationRefs: ["650000000000000001", "700000000000000001"], fanRef: "700000000000000001" });
+    expect(clientConversationRecapRefs({
+      kind: "pair", conversationRef: "700000000000000001", fanRef: "700000000000000001", pair: "unverified",
+    })).toEqual({ conversationRefs: ["700000000000000001"], fanRef: "700000000000000001" });
   });
 });

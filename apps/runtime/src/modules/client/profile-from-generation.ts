@@ -24,6 +24,7 @@ export function registerClientProfileFromGenerationRoutes(server: ApiServer, ctx
       fanRef: request.params.fanRef,
       generationRef: request.body.generationRef,
       clientRequestId: request.body.clientRequestId,
+      conversationRef: request.body.conversationRef,
     });
   });
 }

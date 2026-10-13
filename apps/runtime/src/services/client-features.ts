@@ -74,6 +74,19 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
 };
 
 /**
+ * R20 HF-10: the platforms whose chats have ids of their own (a Fansly chat is
+ * a group). A client read by conversation there names the chat apart from its
+ * fan, and the hub checks the pair (client-conversation.ts). On every other
+ * platform the chat id IS the fan id (OnlyFans).
+ */
+const OWN_CONVERSATION_ID_PLATFORMS: readonly Platform[] = FANSLY;
+
+/** Whether a page of this platform keys its chats by ids of their own, not by their fans. */
+export function clientConversationsHaveOwnIds(platform: Platform): boolean {
+  return OWN_CONVERSATION_ID_PLATFORMS.includes(platform);
+}
+
+/**
  * The host apps the extension runs over, by the prefix of a host account
  * (`onlymonster:36408`), with the platforms of the accounts each one holds: an
  * OnlyMonster account is an OnlyFans account. An owner's host binding counts
