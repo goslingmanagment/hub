@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { Database, SyncWorkRow } from "@agency_hub_core/db";
+import type { Database, SyncAttemptRow, SyncWorkRow } from "@agency_hub_core/db";
 import type {
   FanslySendCheck,
   FanslySendRefusalReason,
@@ -239,6 +239,12 @@ export interface PageTransport {
    *  sent): a sender that keeps outcomes until they are acknowledged (a
    *  page's browser keeps them on disk) may drop it now. Never throws. */
   settled?(attemptId: number): void;
+  /** The outcomes the sender keeps until they are acknowledged (a page's
+   *  browser keeps them on disk, plan §3.2 «Приём буфера и восстановление»):
+   *  asked at the actor's start before its recovery closes anything
+   *  `unknown`, and those nothing waits for taken every lap. Absent where the
+   *  transport keeps none (undici): recovery is as it always was. */
+  held?: HeldOutcomeSource;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
    *  compares it with the trusted digest (checks-only, G2) and with the
@@ -246,6 +252,52 @@ export interface PageTransport {
    *  Absent where the transport stores none. */
   storedCredentialsGeneration?(): Promise<string | null>;
   close(): Promise<void>;
+}
+
+// ── outcomes a sender keeps (Project Browser, plan §3.2; PR 13) ────────────
+
+/** What a sender that keeps outcomes until they are acknowledged holds of
+ *  one attempt (`HeldOutcomeSource`). Taking it is never a permission to
+ *  send anything again: it is the outcome of a request that was sent (or
+ *  was not), and only that is committed. */
+export type HeldAnswer =
+  /** It never left, by the sender's own record: closed as not sent. */
+  | { kind: "not_sent"; attemptId: number }
+  /** Nothing tells whether it left: `unknown`, as without such a sender.
+   *  `held`: the sender keeps an outcome that says so (a site socket whose
+   *  operator started again after its admission, `wsDone.fate`) — dropped
+   *  once the attempt is settled `unknown`. */
+  | { kind: "unknown"; attemptId: number; held?: true }
+  /** An engine request's outcome, as `send` would have returned it for the
+   *  attempt's row. */
+  | { kind: "request"; attemptId: number; resolve(attempt: SyncAttemptRow): Promise<HeldRequestOutcome> }
+  /** A site request's or a site socket's end (`fate: "unknown"` of a socket
+   *  comes as `unknown`). */
+  | { kind: "site"; attemptId: number; end: SiteRequestEnd; sentWall: Date | null };
+
+export interface HeldRequestOutcome {
+  outcome: TransportOutcome;
+  /** The answer came under the session the request was prepared for. One
+   *  of another session is never the attempt's answer (plan §3.2). */
+  sameSession: boolean;
+  /** Everything it carried arrived (its body whole). */
+  whole: boolean;
+  /** When the sender reported it left, on the wall clock (null: not
+   *  reported). */
+  sentWall: Date | null;
+}
+
+export interface HeldOutcomeSource {
+  /** What the sender holds of these attempts, its outcomes resent on the way
+   *  (waiting at most `waitMs` for it to be reachable). Null: it could not
+   *  be asked — they are `unknown`, as without it. */
+  recover(attemptIds: readonly number[], waitMs: number): Promise<Map<number, HeldAnswer> | null>;
+  /** The outcomes delivered since the last call that nothing waited for
+   *  (after a restart, another session's answer, a reply a lost COMMIT
+   *  acknowledgement left unapplied). */
+  takeLate(): HeldAnswer[];
+  /** What the outcome carried is committed: the sender may drop it. */
+  acknowledge(attemptId: number): void;
 }
 
 /**

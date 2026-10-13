@@ -26,6 +26,7 @@ import {
   apply,
   applyLocal,
   capture,
+  captureSendOf,
   commitNoHttp,
   deferAfterPlanError,
   deferForRoute,
@@ -44,6 +45,7 @@ import {
   type SyncFaultPoint,
 } from "./commit.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
+import { reconcileHeldOutcomes, takeLateHeldOutcomes } from "./held-outcomes.ts";
 import { heldByScope, holdSetOf, resourceFilesHeld, whyHeld, type HoldSet } from "./admission.ts";
 import { CREDENTIALS_CHECK_KEYS, isResourceHoldExempt, resourceFileOf } from "./errors.ts";
 import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
@@ -226,6 +228,10 @@ export class SyncActor {
     const d = this.#d;
     this.#phase("recover");
     try {
+      // A sender that keeps its outcomes (a page's browser) is asked about
+      // the attempts left unfinished BEFORE the recovery closes them
+      // `unknown` (Project Browser plan §3.2; PR 13).
+      if (d.transport.held !== undefined) await reconcileHeldOutcomes(d, d.transport.held);
       await recoverUnfinished(d);
     } catch (error) {
       if (error instanceof OwnershipLostError) return { kind: "ownership_lost", foreign: true };
@@ -254,6 +260,9 @@ export class SyncActor {
   async #lap(signals: ActorSignals): Promise<ActorExit | null> {
     const d = this.#d;
     this.#phase("applies");
+    // The outcomes the sender delivered that nothing waited for (PR 13):
+    // committed or kept, then acknowledged — never sent again.
+    if (d.transport.held !== undefined) await takeLateHeldOutcomes(d, d.transport.held);
     await drainDueApplies(d, APPLIES_PER_LAP);
     if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) {
       this.#phase("polls");
@@ -568,7 +577,7 @@ export class SyncActor {
     // the completion when it may have gone out (the safe upper bound).
     d.pacer.complete(armed, transportOutcomeOfSite(end));
     this.#phase("commit");
-    const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, armed, end, classified }));
+    const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, send: captureSendOf(d, armed), end, classified }));
     if (!committed.ok) {
       if (committed.exit.kind === "failed") {
         await markAttemptCommitFailed(d.db, { attemptId, errorClass: `commit_failed:${committed.exit.error}` }).catch(() => false);
@@ -624,7 +633,7 @@ export class SyncActor {
       else this.#settled(admission.attemptId);
       return exitOf(settled);
     }
-    const captured = await this.#committed(() => capture(d, admission, armed, outcome, module));
+    const captured = await this.#committed(() => capture(d, admission, captureSendOf(d, armed), outcome, module));
     if (!captured.ok) {
       await this.#markCommitFailed(admission, captured.exit);
       return captured.exit;

@@ -71,6 +71,8 @@ sync/
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
+    held-outcomes.ts         a sender's kept outcomes (a page's browser, PR 13): asked before the recovery closes
+                             anything `unknown`, and those nothing waits for taken between steps
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
                              (`sync alerts status | ack`, `cli/alerts.ts`)
     send-audit.ts            the send audit (I1, I19): the one checker of the evaluator and `sync check live-hour`
@@ -81,7 +83,10 @@ sync/
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     browser-transport.ts     the same port through a page's browser (Project Browser; built by nothing until
-                             the transport switch, PR 14): RPC to the page's operator, the grant at its check
+                             the transport switch, PR 14): RPC to the page's operator, the grant at its check,
+                             the outcomes it keeps (`held`)
+    browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
+                             event id, gaps, the site's answers (`browser-site-capture.ts`); built by nothing yet
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
@@ -959,9 +964,29 @@ tests/sync-live-gate.integration.test.ts.
   frames, `recover`. Its types mirror the operator's (`services/egress/page-browser-protocol.ts`); the engine never
   loads the page-browser app, and tests/page-browser-protocol-drift.test.ts keeps the two the same.
 - **The site's socket** (`fansly/ws/browser-source.ts`): the connection rows (`fansly_ws_connections.origin =
-  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`. The events themselves, frames
-  by event id, the site's answers into `observations` (`browser_site`) and the recovery against the operator's buffer
-  are the buffer's intake (PR 13).
+  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`.
+- **The buffer's intake** (PR 13, `fansly/browser-intake.ts`): the operator's event stream — `events.subscribe` with
+  the buffer id and the last number committed (`page_browsers.events_*`, 0276), each batch committed in ONE
+  transaction with its new position under the page's owner generation, `ack` only after that commit (the next
+  subscription's `afterSeq` is itself the acknowledgement, so a crash before the commit loses nothing and one after
+  it, or a lost ack, duplicates nothing); a batch of another buffer or an earlier connection is never taken nor
+  acknowledged; another buffer (a volume made anew) is taken from its first event, its predecessor's untaken tail
+  a gap; a subscription ahead of the buffer takes nothing of it. Frames by event id (`browser:<buffer id>:<number>`,
+  `captureBrowserWsFrame`), fenced by the page and the session — the row its `ws.open` opened, open or not — then
+  the receipt and the live overlay as the engine's own socket's; the session's confirmation verifies the row and
+  asks for `repair.ws-gap`; the socket's refusal asks for `account.verify`. A `gap` of any reason lowers the next
+  connection's `gap_since` (where the repair reads back from) to its boundary — one the operator cannot name is the
+  last event the engine took, of any buffer. The site's answers go to `observations` (`browser_site`,
+  `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through the codec (`browser-site-capture.ts`);
+  one the operator could not keep whole leaves a mark and asks for the polls that read its route.
+- **Kept outcomes** (PR 13, `engine/held-outcomes.ts`, `PageTransport.held`): before `recoverUnfinished` closes the
+  attempts left unfinished `unknown`, the operator is asked about them (`recover`): its outcome, resent, is captured
+  and applied as the attempt's own (a CDN reply captured but not applied gets its bytes to the handoff); `not_sent`
+  closes it as not sent; `unknown`, or no operator within 10 s, leaves it `unknown`. Between steps, the outcomes it
+  delivered that no request waits for — after a restart, another session's answer — are kept as facts
+  (`<kind>:late`, `<kind>:foreign_session`), never applied in an attempt's place, and acknowledged. Nothing is ever
+  sent again from what the operator kept. The host builds neither the intake nor a browser transport before
+  `sync_pages.transport` (PR 14): an undici page has no `held`, and its recovery is as it always was.
 
 ## Classes
 

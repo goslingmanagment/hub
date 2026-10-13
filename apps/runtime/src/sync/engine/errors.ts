@@ -226,7 +226,7 @@ export function classifyWireOutcome<P, R>(
 
 /** `Retry-After` in ms from `now`; an HTTP-date also from the answer's own
  *  `Date` (the later of the two), never clamped. */
-function retryAfterDelayMs(retryAfter: string | null, served: string | null, now: Date): number | null {
+export function retryAfterDelayMs(retryAfter: string | null, served: string | null, now: Date): number | null {
   const local = parseRetryAfterDelayMsUnclamped(retryAfter, now.getTime());
   if (local === null || served === null) return local;
   const servedAt = Date.parse(served);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { findPageById, getSyncPage, readSyncWorkSecretParams, type Database, type SyncWorkRow } from "@agency_hub_core/db";
+import { findPageById, getSyncPage, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
 import {
   buildFanslyWireUrl,
   FANSLY_WIRE_MAX_BODY_BYTES,
@@ -10,7 +10,7 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
-import { REFUSALS, type Check, type Refusal, type Send, type State } from "../../services/egress/page-browser-protocol.ts";
+import { REFUSALS, type Check, type Refusal, type Send, type SiteDone, type State, type WsDone } from "../../services/egress/page-browser-protocol.ts";
 import {
   systemMonoBridge,
   type CheckReply,
@@ -18,15 +18,20 @@ import {
   type MonoBridge,
   type PageBrowserRpcClient,
 } from "../../services/egress/page-browser-rpc.ts";
-import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY } from "../engine/errors.ts";
+import { credentialsGenerationOfAttempt } from "../engine/commit.ts";
+import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY, retryAfterDelayMs } from "../engine/errors.ts";
 import { REQUEST_TIMEOUT_MS } from "../engine/pacer.ts";
 import {
   CredentialsGenerationChangedError,
   PageTransportUnavailableError,
   UnsendableRequestError,
+  type HeldAnswer,
+  type HeldOutcomeSource,
+  type HeldRequestOutcome,
   type PageTransport,
   type SendAdmission,
   type SendHooks,
+  type SiteRequestEnd,
   type TransportOutcome,
 } from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
@@ -81,8 +86,10 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   answer the server did not confirm (a cache, the site's service worker)
 //   goes over marked `unconfirmed`: journaled as rejected, never applied. An
 //   answer of another session than the one prepared for, or a body that did
-//   not arrive whole, is no answer: a transport error, sent — left with the
-//   operator for the buffer's intake (PR 13).
+//   not arrive whole, is no answer: a transport error, sent. Another
+//   session's answer that arrived whole is kept as a fact by the actor's
+//   late intake (`held`, below) and then acknowledged; a body that did not
+//   arrive whole stays with the operator, which sends it again.
 // - The operator not reachable or not ready is not Fansly's failure (no
 //   network hold, plan §3.2): `prepare` refuses with
 //   `PageTransportUnavailableError` and nothing is admitted; a request the
@@ -96,14 +103,26 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   request may have gone: a transport error, sent.
 // - `resultAck` once the actor committed what the outcome carried
 //   (`settled`: after the capture, or after the apply of a CDN hop's bytes),
-//   for an outcome taken whole. The rest stay with the operator for the
-//   buffer's intake (PR 13).
+//   for an outcome taken whole. The rest stay with the operator.
+// - The outcomes the operator keeps (`held`, PR 13): at the actor's start,
+//   before its recovery closes anything `unknown`, the operator is asked
+//   (`recover`) about the attempts left unfinished — its outcomes come
+//   again, and it says which never left (`not_sent`); between steps, the
+//   outcomes it delivered that no request waits for (after a restart, an
+//   answer of another session, a reply whose apply a lost COMMIT
+//   acknowledgement left undone) and the ends of the site path nobody claims
+//   go to the actor as late. Each becomes, for its attempt's row, what
+//   `send` would have returned; the actor commits it and acknowledges it.
+//   Nothing is ever sent again from it.
 
 /** How long a request waits for the operator's result after its `send`: the
  *  operator ends every operation within 21 s of its last send (spec §9). */
 export const BROWSER_RESULT_WAIT_MS = 60_000;
 /** The wait after a request the operator could not take at all. */
 export const BROWSER_UNAVAILABLE_RETRY_MS = 5_000;
+/** How many outcomes nobody waits for are kept until the actor takes them
+ *  (the operator delivers them again to the next connection). */
+export const BROWSER_LATE_OUTCOMES_MAX = 1_000;
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
  *  never run from an instant before the true send (I1: a strict minimum). */
@@ -121,7 +140,9 @@ export interface BrowserPageTransportOptions {
   monoNow?: () => number;
   /** The engine's clock against CLOCK_MONOTONIC (default: this process's). */
   bridge?: MonoBridge;
-  timing?: Partial<{ resultWaitMs: number; unavailableRetryMs: number }>;
+  /** TESTS ONLY: scaled waits (`recoverWaitMs` caps the actor's wait for
+   *  the operator at its start). */
+  timing?: Partial<{ resultWaitMs: number; unavailableRetryMs: number; recoverWaitMs: number }>;
   /** Which CDN URLs a hop may request. Default: a Fansly media CDN host.
    *  TESTS ONLY pass another. */
   cdnUrlAllowed?: (url: URL) => boolean;
@@ -226,10 +247,13 @@ export async function createBrowserPageTransport(
   const bridge = options.bridge ?? systemMonoBridge();
   const resultWaitMs = options.timing?.resultWaitMs ?? BROWSER_RESULT_WAIT_MS;
   const unavailableRetryMs = options.timing?.unavailableRetryMs ?? BROWSER_UNAVAILABLE_RETRY_MS;
+  const recoverWaitMs = options.timing?.recoverWaitMs ?? Number.POSITIVE_INFINITY;
   const cdnUrlAllowed = options.cdnUrlAllowed ?? isFanslyCdnUrl;
   const prepared = new WeakMap<FanslyWireRequest, Prepared>();
   /** Attempts whose outcome was taken whole: acknowledged once settled. */
   const ackable = new Set<number>();
+  /** Outcomes nobody waits for, by attempt (`held.takeLate`). */
+  const late = new Map<number, HeldAnswer>();
   let unavailableUntil = Number.NEGATIVE_INFINITY;
   let closed = false;
   client.start();
@@ -461,6 +485,11 @@ export async function createBrowserPageTransport(
       onResult(delivered) {
         const { outcome, whole } = outcomeOf(delivered, meta, req, reported, credentialsChanged);
         if (whole) ackable.add(attemptId);
+        // An answer this request may not take (another session's) but that
+        // arrived whole: kept as a fact by the actor's late intake, then
+        // acknowledged. A body that did not arrive whole stays with the
+        // operator, which sends it again.
+        else if (delivered.bodyProblem === null) keepLate(heldRequest(delivered));
         if (outcome.kind === "aborted_before_send" && outcome.refusal === "transport_unavailable") unavailableUntil = monoNow() + unavailableRetryMs;
         finish(outcome);
       },
@@ -503,7 +532,134 @@ export async function createBrowserPageTransport(
     }
   }
 
+  function keepLate(answer: HeldAnswer): void {
+    if (late.size >= BROWSER_LATE_OUTCOMES_MAX && !late.has(answer.attemptId)) return;
+    late.set(answer.attemptId, answer);
+  }
+
+  /** The wall-clock instant of a CLOCK_MONOTONIC reading of the operator. */
+  function wallOfKernel(kernelMono: number | null): Date | null {
+    if (kernelMono === null) return null;
+    return new Date(Date.now() - Math.max(0, monoNow() - bridge.fromKernel(kernelMono)));
+  }
+
+  /** A held result of an engine request, resolved against its attempt's row:
+   *  the session it came under against the one its request carried, and the
+   *  outcome as `send` would have given it. */
+  function heldRequest(delivered: DeliveredResult): HeldAnswer {
+    const attemptId = delivered.result.attemptId;
+    return {
+      kind: "request",
+      attemptId,
+      async resolve(attempt: SyncAttemptRow): Promise<HeldRequestOutcome> {
+        const media = fanslyWireSpec(attempt.operation as never).host === "cdn";
+        const expected = credentialsGenerationOfAttempt(attempt);
+        const generation = media ? null : await readBrowserCredentialsGeneration(ctx.db, page.pageId, delivered.result.sessionFingerprint).catch(() => null);
+        const sameSession = media || expected === null || generation === expected;
+        const o = delivered.result.outcome;
+        let url = "";
+        if (media && o.kind === "response" && o.status >= 300 && o.status <= 399 && attempt.workId !== null) {
+          // A redirect's Location is made absolute against the hop's URL (the
+          // work's secret), as for a request in flight.
+          const ciphertext = await readSyncWorkSecretParams(ctx.db, attempt.workId).catch(() => null);
+          try {
+            if (ciphertext !== null) url = String(decryptSyncWorkSecret<Partial<MediaDownloadSecret>>(ctx.config, ciphertext).url ?? "");
+          } catch {
+            url = "";
+          }
+        }
+        const meta: Prepared = {
+          route: attempt.operation,
+          kind: media ? "image" : "api",
+          maxBodyBytes: media ? MEDIA_DOWNLOAD_MAX_BYTES : FANSLY_WIRE_MAX_BODY_BYTES,
+          sessionFingerprint: delivered.result.sessionFingerprint,
+          credentialsGeneration: expected ?? "",
+        };
+        const req: FanslyWireRequest = { spec: attempt.operation as never, url, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS, credentialsGeneration: expected ?? "" };
+        const { outcome, whole } = outcomeOf(delivered, meta, req, null, false);
+        const sentWall = o.kind === "response" ? wallOfKernel(o.sentMono) : null;
+        return { outcome, sameSession, whole, sentWall };
+      },
+    };
+  }
+
+  /** A site request's or a site socket's end, as the site path takes it. */
+  function heldEnd(end: SiteDone | WsDone): HeldAnswer {
+    if (end.type === "wsDone" && end.fate === "unknown") return { kind: "unknown", attemptId: end.attemptId, held: true };
+    const sentMono = end.sentMono === null ? null : bridge.fromKernel(end.sentMono) + SEND_REPORT_GUARD_MS;
+    let siteEnd: SiteRequestEnd;
+    if (!end.sent) siteEnd = { kind: "aborted_before_send", reason: "not_sent" };
+    else if (end.status !== null) {
+      const retryAfter = end.type === "siteDone" ? end.retryAfter : null;
+      siteEnd = { kind: "response", status: end.status, retryAfterMs: retryAfterDelayMs(retryAfter, null, new Date()), sentMono };
+    } else {
+      const message = end.type === "siteDone" ? end.error?.message ?? "no answer" : end.error ?? "no answer";
+      siteEnd = { kind: "transport_error", sent: true, message, sentMono };
+    }
+    return { kind: "site", attemptId: end.attemptId, end: siteEnd, sentWall: end.sent ? wallOfKernel(end.sentMono) : null };
+  }
+
+  client.onUnclaimedResult((delivered) => {
+    // A body that did not arrive whole is left: the operator sends it again.
+    if (delivered.bodyProblem !== null) return;
+    keepLate(heldRequest(delivered));
+  });
+  client.onUnclaimedOutcome((end) => keepLate(heldEnd(end)));
+
+  const held: HeldOutcomeSource = {
+    async recover(attemptIds, waitMs) {
+      if (attemptIds.length === 0) return new Map();
+      const deadline = monoNow() + Math.min(waitMs, recoverWaitMs);
+      while (!client.up && !closed && monoNow() < deadline) {
+        const status = client.status.kind;
+        if (status === "superseded" || status === "refused" || status === "closed") return null;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!client.up) return null;
+      let answer: Awaited<ReturnType<typeof client.recover>> | null;
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        // An answer later than the wait is not waited for: the outcomes it
+        // resends on the way come as late ones.
+        answer = await Promise.race([
+          client.recover(attemptIds),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), Math.max(0, deadline - monoNow()));
+          }),
+        ]);
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (answer === null) return null;
+      const answers = new Map<number, HeldAnswer>();
+      for (const attemptId of attemptIds) {
+        const result = answer.results.get(attemptId);
+        const end = answer.ends.get(attemptId);
+        // An outcome resent whole is the attempt's; one whose body did not
+        // arrive whole is not known (the operator keeps it).
+        if (result !== undefined && result.bodyProblem === null) answers.set(attemptId, heldRequest(result));
+        else if (end !== undefined) answers.set(attemptId, heldEnd(end));
+        else if (answer.states.get(attemptId) === "not_sent") answers.set(attemptId, { kind: "not_sent", attemptId });
+        else answers.set(attemptId, { kind: "unknown", attemptId });
+        late.delete(attemptId);
+      }
+      return answers;
+    },
+    takeLate() {
+      const taken = [...late.values()];
+      late.clear();
+      return taken;
+    },
+    acknowledge(attemptId) {
+      ackable.delete(attemptId);
+      client.resultAck(attemptId);
+    },
+  };
+
   return {
+    held,
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
       const refused = refusalNow();
       if (refused !== null) throw refused;
