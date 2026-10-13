@@ -23,7 +23,7 @@ import { siteVariant } from "../fansly/front.ts";
 import { mono } from "../shared.ts";
 import { captureCovers, pastTheProxy, readCapture, sendSentinel, sentinelPorts } from "./capture.ts";
 import { Page, loadTopology, waitFor, type Ctx, type PageInfo, type ScenarioOutcome, type Topology } from "./context.ts";
-import { closedWrites, directArrivals, eventsComplete, exactlyOnce, forbiddenSocketMessages, unadmittedArrivals, variantLoaded, type BufferBounds, type PagesByAddress, type Resolution } from "./criteria.ts";
+import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, forbiddenSocketMessages, unadmittedArrivals, variantLoaded, type BufferBounds, type GrantUse, type PagesByAddress, type Resolution } from "./criteria.ts";
 import { Docker } from "./docker.ts";
 import { StandFansly, type JournalEvent } from "./fansly.ts";
 import { SCENARIOS, type Need, type Scenario } from "./scenarios.ts";
@@ -108,6 +108,11 @@ export interface Stand {
   stand: StandFansly;
   docker: Docker;
   pages: Map<string, Page>;
+  /** The stand's journal up to where the runs so far have judged it: a run
+   *  judges everything since — its own setup included, nothing skipped. */
+  journalCursor: number;
+  /** What each admission was used for, over the whole series. */
+  grantUse: GrantUse;
 }
 
 /** The stand's pages by the address the SOCKS5 sees them from. */
@@ -125,7 +130,7 @@ export async function openStand(): Promise<Stand> {
   const docker = new Docker(process.env.STAND_DOCKER_SOCK ?? "/proxy/docker.sock");
   const pages = new Map<string, Page>();
   for (const info of topology.pages) pages.set(info.name, new Page(info, topology, store, (event, fields) => log(event, fields)));
-  return { topology, store, stand, docker, pages };
+  return { topology, store, stand, docker, pages, journalCursor: await stand.mark(), grantUse: new Map() };
 }
 
 /** The page's container and its capture running and healthy; the capture
@@ -173,7 +178,7 @@ interface RunEvidence {
 /** The common criteria of every run (plan §5, stage 2). */
 async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Checks> {
   const { journal } = run;
-  const grants = [...s.pages.values()].flatMap((p) => p.enginesOfRun.flatMap((engine) => engine.grants));
+  const grants = [...s.pages.values()].flatMap((p) => p.engines.flatMap((engine) => engine.grants));
   // The run's own interval, exactly: its sentinels are sent inside it, and
   // what the run before let out is that run's.
   const capture = readCapture(join(s.topology.results, "capture", page.info.name), run.fromWall, run.toWall);
@@ -198,7 +203,7 @@ async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Che
   }
   const past = pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort });
   const checks: Record<(typeof COMMON_CHECKS)[number], string[]> = {
-    "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants, pagesByAddress(s.topology)),
+    "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants, pagesByAddress(s.topology), ARRIVAL_SLACK_MS, s.grantUse),
     "C2 no closed write": closedWrites(journal),
     "C3 no forbidden socket message": forbiddenSocketMessages(journal),
     // No sentinel, no evidence: an empty capture says nothing.
@@ -279,19 +284,21 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
     try {
       await s.stand.reset();
       await startPage(s.docker, info);
-      if (scenario.site) {
-        // The browser must run the page variant this scenario configures: a
-        // setting changes only what the next load gets, so the page is
-        // loaded anew, and says which variant it is.
-        await s.stand.config({ site: scenario.site });
+      // The browser must run the page variant this scenario configures —
+      // its traffic, or none: a setting changes only what the next load
+      // gets, so the page is loaded anew, and says which variant it is. (A
+      // browser that never loaded the site — until PR 7 — has no variant.)
+      const variant = siteVariant(scenario.site ?? null);
+      if (scenario.site || (page.variant !== null && page.variant !== variant)) {
+        await s.stand.config({ site: scenario.site ?? null });
         const before = await s.stand.mark();
         const reloaded = mono();
         const restarted = await page.engine.command("restartBrowser");
         if (!restarted.ok) throw new Error(`restartBrowser: ${restarted.detail ?? ""}`);
-        const variant = siteVariant(scenario.site);
         let loaded: string[] = ["not asked yet"];
         await waitFor(async () => (loaded = variantLoaded(await s.stand.journal(before), info.egressIp, variant, 0)).length === 0, 60_000, 500);
         if (loaded.length > 0) throw new Error(loaded[0]);
+        page.variant = variant;
         await page.engine.waitState((state) => state.exitOpen, 60_000, reloaded);
       }
       await page.engine.ensureUp(90_000);
@@ -339,7 +346,9 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       if (error !== null) checks["the run itself"] = [`an error after the fault: ${error}`];
       for (const [name, found] of Object.entries(outcome?.checks ?? {})) checks[name] = found;
       try {
-        const journal = await s.stand.journal(journalSince);
+        // Everything since the run before was judged: this run's setup too.
+        const journal = await s.stand.journal(Math.min(s.journalCursor, journalSince));
+        s.journalCursor = journal.at(-1)?.seq ?? s.journalCursor;
         Object.assign(checks, await commonChecks(s, page, { label, outcome, journal, fromWall: startedWall, toWall, positions, sentinels }));
         notes.journal = { events: journal.length, api: journal.filter((event) => event.type === "req" && event.role === "api").length, socks: journal.filter((event) => event.type === "socks.connect").length, ipify: journal.filter((event) => event.type === "ipify").length };
         notes.redeliveries = await s.store.redeliveries(label);

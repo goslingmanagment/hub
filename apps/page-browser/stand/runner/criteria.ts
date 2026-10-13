@@ -26,15 +26,19 @@ export const ARRIVAL_SLACK_MS = 50;
 /** The stand's pages by the address they come from at the SOCKS5. */
 export type PagesByAddress = ReadonlyMap<string, string>;
 
+/** What each admission was used for so far. A series keeps one over all its
+ *  runs: an admission used in one run is not there again for the next —
+ *  its window (15 s) outlasts a short run. */
+export type GrantUse = Map<Grant, { preflight: number; main: number }>;
+
 /** No API request and no socket reached Fansly without an admission in
  *  force — its own: the page's, for that address, inside its window. And one
  *  admission is one operation: one request and at most one preflight
  *  (owner decision №1), or one socket — a second arrival under it is a
  *  repeat, whatever came first. An arrival that is no page's (it did not come
  *  from a page's address) has no admission at all. */
-export function unadmittedArrivals(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress, slackMs = ARRIVAL_SLACK_MS): string[] {
+export function unadmittedArrivals(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress, slackMs = ARRIVAL_SLACK_MS, used: GrantUse = new Map()): string[] {
   const violations: string[] = [];
-  const used = new Map<Grant, { preflight: number; main: number }>();
   const inWindow = (grant: Grant, event: JournalEvent) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs;
   for (const event of events) {
     const api = event.type === "req" && event.role === "api";

@@ -97,18 +97,16 @@ export const REPORT_PATH = "/stand/report";
  *  browser cancelled it, `write-done` when an answer came): a closed write
  *  that was never attempted proves nothing about the closure. */
 export function sitePage(site: SiteBehaviour | null): string {
-  const script =
+  const hello = `function tell(path) { new Image().src = "https://fansly.com" + path + "&t=" + Date.now(); }
+  tell(${JSON.stringify(HELLO_PATH)} + "?variant=" + ${JSON.stringify(siteVariant(site))});`;
+  const traffic =
     site === null
       ? ""
-      : `<script>
-(function () {
-  "use strict";
+      : `
   var cfg = ${JSON.stringify(site)};
   var session = ${JSON.stringify(STAND_SESSION)};
   var KEY = ${JSON.stringify(FANSLY_CHECK_KEY)};
   var cyrb53 = ${cyrb53.toString()};
-  function tell(path) { new Image().src = "https://fansly.com" + path + "&t=" + Date.now(); }
-  tell(${JSON.stringify(HELLO_PATH)} + "?variant=" + ${JSON.stringify(siteVariant(site))});
   function call(method, path) {
     var rid = "site-" + Math.random().toString(36).slice(2, 12);
     var x = new XMLHttpRequest();
@@ -137,10 +135,10 @@ export function sitePage(site: SiteBehaviour | null): string {
     };
     ws.onclose = function () { if (ping) clearInterval(ping); setTimeout(socket, 2000); };
   }
-  if (cfg.socket) setTimeout(socket, 1500);
-})();
-</script>`;
-  return `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>pb-suite stand</title></head>\n<body><p>The stand's Fansly. Nothing here is Fansly's.</p>${script}</body></html>\n`;
+  if (cfg.socket) setTimeout(socket, 1500);`;
+  // The idle page (no behaviour) still says which variant it is: a run of a
+  // scenario without the site's traffic must know the browser has none.
+  return `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>pb-suite stand</title></head>\n<body><p>The stand's Fansly. Nothing here is Fansly's.</p><script>\n(function () {\n  "use strict";\n  ${hello}${traffic}\n})();\n</script></body></html>\n`;
 }
 
 export interface FrontOptions {

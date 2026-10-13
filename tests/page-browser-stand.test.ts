@@ -72,6 +72,16 @@ describe("C1: no request or socket without an admission in force", () => {
     expect(unadmittedArrivals([apiRequest(150, "GET", "/api/v1/account/me?rid=a", { from: "10.0.1.20" })], grants, PAGES)).toEqual([expect.stringContaining("which is no page of the stand")]);
   });
 
+  it("an admission used in one run is not there for the next: a series keeps what each was used for", () => {
+    const grants = [grant("ws", SOCKET, 400)];
+    const used = new Map();
+    expect(unadmittedArrivals([socketOpen(500, "ws-1")], grants, PAGES, 50, used)).toEqual([]);
+    // The next run, a second later: the admission's 15 s are not over, but it was used.
+    expect(unadmittedArrivals([socketOpen(1500, "ws-2")], grants, PAGES, 50, used)).toEqual([expect.stringContaining("arrived again under one admission")]);
+    // Judged alone, that run would pass: what the series' shared record is for.
+    expect(unadmittedArrivals([socketOpen(1500, "ws-2")], grants, PAGES)).toEqual([]);
+  });
+
   it("one socket per admission, at the admitted address: a second open under it is a repeat, another address has none", () => {
     const grants = [grant("ws", SOCKET, 400)];
     expect(unadmittedArrivals([socketOpen(500, "ws-1")], grants, PAGES)).toEqual([]);
@@ -414,7 +424,11 @@ describe("the stand's Fansly", () => {
     expect(() => new vm.Script(script)).not.toThrow();
     expect(script).toContain(`"/stand/hello" + "?variant=" + "${siteVariant(site)}"`);
     expect(script).toContain('"write-failed" : "write-done"');
-    expect(sitePage(null)).not.toContain("<script>");
+    // The idle page sends nothing but its own hello.
+    const idle = /<script>([\s\S]*)<\/script>/.exec(sitePage(null))?.[1] ?? "";
+    expect(() => new vm.Script(idle)).not.toThrow();
+    expect(idle).toContain(`"?variant=" + "idle"`);
+    expect(idle).not.toMatch(/XMLHttpRequest|WebSocket/);
     expect(Buffer.byteLength(JSON.stringify({ t: 1, d: JSON.stringify({ token: STAND_SESSION.token, v: 3 }) }))).toBe(authorizationBytes(STAND_SESSION.token));
   });
 

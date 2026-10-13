@@ -60,6 +60,12 @@ export class Page {
   engine: StandEngine;
   /** Every engine that owned the page during the current run. */
   enginesOfRun: StandEngine[] = [];
+  /** Every engine the page ever had here: their admissions stay in force
+   *  for their windows, whichever run gave them. */
+  readonly engines: StandEngine[] = [];
+  /** The variant of the stand's site the browser was last seen to load
+   *  (fansly/front.ts siteVariant); null: it never loaded the site. */
+  variant: string | null = null;
 
   constructor(info: PageInfo, topology: Topology, store: Store, log: (event: string, fields?: Record<string, unknown>) => void) {
     this.info = info;
@@ -86,6 +92,7 @@ export class Page {
       log: this.#log,
     });
     this.enginesOfRun.push(engine);
+    this.engines.push(engine);
     return engine;
   }
 
