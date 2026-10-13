@@ -292,10 +292,14 @@ export interface HeldOutcomeSource {
    *  (waiting at most `waitMs` for it to be reachable). Null: it could not
    *  be asked — they are `unknown`, as without it. */
   recover(attemptIds: readonly number[], waitMs: number): Promise<Map<number, HeldAnswer> | null>;
-  /** The outcomes delivered since the last call that nothing waited for
-   *  (after a restart, another session's answer, a reply a lost COMMIT
-   *  acknowledgement left unapplied). */
-  takeLate(): HeldAnswer[];
+  /** At most `max` of the outcomes delivered that nothing waited for (after
+   *  a restart, another session's answer, a reply a lost COMMIT
+   *  acknowledgement left unapplied), taken out of the sender's queue. */
+  takeLate(max: number): HeldAnswer[];
+  /** The sender still holds the outcomes of these attempts but nothing here
+   *  keeps them now (a commit that failed): asked for again (`recover`) —
+   *  the sender does not deliver an outcome twice on one connection. */
+  retry(attemptIds: readonly number[]): void;
   /** What the outcome carried is committed: the sender may drop it. */
   acknowledge(attemptId: number): void;
 }

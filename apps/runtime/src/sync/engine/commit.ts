@@ -60,6 +60,7 @@ import {
   FANSLY_WIRE_IDS,
   fanslyWireSpec,
   isFanslyErrorEnvelope,
+  readFanslyWireResponse,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRead,
@@ -965,6 +966,60 @@ function failedBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): 
   }).value;
 }
 
+/** The whole text of an answer, nothing cut: the only copy of a fact kept
+ *  as it came. */
+function wholeBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): Record<string, unknown> {
+  return replaceJournalUnstorableText({
+    status: outcome.status,
+    contentType: outcome.headers["content-type"] ?? null,
+    retryAfter: outcome.headers["retry-after"] ?? null,
+    bodyText: outcome.bodyText,
+    truncated: false,
+  }).value;
+}
+
+/**
+ * An answer kept as a fact that nothing applies, as the journal keeps the
+ * route's answer — the complete body through the capture codec (the trims by
+ * kind, the CDN tokens stripped, unpaired surrogates replaced) when it reads
+ * as the route's answer, else its whole text — with what it is (`about`: its
+ * disposition, its source). The operator drops its copy once this commits,
+ * so nothing of it is cut (Project Browser PR 13: Astra's review).
+ */
+function keptAnswerPayload(
+  d: CommitDeps,
+  input: {
+    spec: FanslyWireId;
+    kind: string;
+    outcome: Extract<FanslyWireOutcome, { kind: "response" }>;
+    request: RequestPlan;
+    module: ResourceModule | null;
+    about: Record<string, unknown>;
+  },
+): Record<string, unknown> {
+  const { outcome } = input;
+  if (input.module !== null) {
+    try {
+      const read = readFanslyWireResponse(fanslyWireSpec(input.spec) as never, input.request.params as never, outcome);
+      if (read.kind === "accepted" || read.kind === "contract_violation") {
+        const answer = (d.capture ?? defaultCaptureCodec).prepare({
+          spec: input.spec,
+          kind: input.kind,
+          response: read.response,
+          contractAccepted: read.kind === "accepted",
+          request: input.request,
+          ownRef: d.ownRef,
+          module: input.module,
+        });
+        return { ...input.about, status: outcome.status, contentType: outcome.headers["content-type"] ?? null, answer };
+      }
+    } catch {
+      // Not the route's answer for this request: its whole text below.
+    }
+  }
+  return { ...input.about, ...wholeBody(outcome) };
+}
+
 /** What a capture records of the send (tx 2): the pacer's admission of a
  *  request in flight (`captureSendOf`), or what a sender that kept the
  *  outcome reported of it after the engine started again (Project Browser
@@ -1036,9 +1091,17 @@ export async function capture(
     // A page browser's answer the server did not confirm: kept, under its
     // own kind and with its disposition, never as the route's answer — the
     // apply never sees it, the work is read again.
+    // The operator drops its copy once this commits: the complete answer.
     observationPayload = {
       kind: `${journaled}:unconfirmed`,
-      payload: { ...failedBody(outcome), source: outcome.unconfirmed, disposition: "rejected_not_applied" },
+      payload: keptAnswerPayload(d, {
+        spec: admission.request.spec,
+        kind: journaled,
+        outcome,
+        request: admission.request,
+        module,
+        about: { source: outcome.unconfirmed, disposition: "rejected_not_applied" },
+      }),
     };
   } else if (outcome.kind === "response" && read !== null && journaled !== null) {
     observationPayload = read.kind === "accepted" || read.kind === "contract_violation"
@@ -1252,24 +1315,30 @@ export async function capture(
  * never attributed to the request's, plan §3.2), or after its attempt was
  * settled without it (`late`: closed `unknown`, its work read again since).
  * The platform answered: the answer is kept as a fact under
- * `<kind>:<disposition>` — its text as a failed answer's (`failedBody`) —
+ * `<kind>:<disposition>` — complete, through the capture codec
+ * (`keptAnswerPayload`), since the operator's copy goes once this commits —
  * and nothing applies it. Idempotent by the attempt. False: nothing to keep
  * (not a response, or a route the journal does not keep).
  */
 export async function journalHeldAnswer(
   d: CommitDeps,
-  attempt: Pick<SyncAttemptRow, "id" | "resource" | "operation">,
+  attempt: Pick<SyncAttemptRow, "id" | "resource" | "operation" | "request">,
   outcome: FanslyWireOutcome,
   disposition: "late" | "foreign_session",
 ): Promise<boolean> {
   if (outcome.kind !== "response" || !(FANSLY_WIRE_IDS as readonly string[]).includes(attempt.operation)) return false;
-  const wire = fanslyWireSpec(attempt.operation as FanslyWireId);
+  const spec = attempt.operation as FanslyWireId;
+  const wire = fanslyWireSpec(spec);
   if (wire.kind === null || wire.capture !== undefined) return false;
-  const payload = {
-    ...failedBody(outcome),
-    attemptId: attempt.id,
-    disposition: disposition === "late" ? "late_not_applied" : "rejected_foreign_session",
-  };
+  const module = d.registry.spec(attempt.resource) === null ? null : await d.registry.module(attempt.resource).catch(() => null);
+  const payload = keptAnswerPayload(d, {
+    spec,
+    kind: wire.kind,
+    outcome,
+    request: requestOfAttempt(attempt),
+    module,
+    about: { attemptId: attempt.id, disposition: disposition === "late" ? "late_not_applied" : "rejected_foreign_session" },
+  });
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "share" });
     await insertObservation(tx, {

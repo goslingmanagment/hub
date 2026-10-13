@@ -339,6 +339,11 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   if (live.decode.debt > 0 && live.decode.debt > SYNC_DECODE_DEBT_SHARE * live.decode.receipts) {
     degraded.push({ detail: "protocol_changed", since: null, context: { ...live.decode } });
   }
+  // A page browser's buffer nothing is taken of (Project Browser PR 13): its
+  // socket's frames and the site's answers wait in it until the owner acts.
+  if (live.bufferHalted !== null) {
+    degraded.push({ detail: "browser_buffer_halted", since: live.bufferHalted.at, context: { ...live.bufferHalted } });
+  }
   const quarantined = Object.entries(journal.quarantined);
   if (quarantined.length > 0) {
     const byResource = Object.fromEntries(quarantined);
@@ -508,6 +513,7 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
     decode: { receipts: 0, debt: 0 },
     unconfirmed: { count: 0, oldestVisibleAt: null },
     unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
+    bufferHalted: null,
   },
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,

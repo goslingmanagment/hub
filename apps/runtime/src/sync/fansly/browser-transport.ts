@@ -120,9 +120,20 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 export const BROWSER_RESULT_WAIT_MS = 60_000;
 /** The wait after a request the operator could not take at all. */
 export const BROWSER_UNAVAILABLE_RETRY_MS = 5_000;
-/** How many outcomes nobody waits for are kept until the actor takes them
- *  (the operator delivers them again to the next connection). */
+/** How many outcomes nobody waits for are kept, with their bodies, until the
+ *  actor takes them. Beyond it only their ids are kept, and they are asked
+ *  for again (`recover`) once the queue drained — the operator delivers an
+ *  outcome once per connection. */
 export const BROWSER_LATE_OUTCOMES_MAX = 1_000;
+/** How many such ids are kept. Beyond it the link says hello again once
+ *  every id kept was taken: the operator then delivers every outcome it
+ *  still keeps, and the actor takes them over the next laps. */
+export const BROWSER_PENDING_OUTCOMES_MAX = 10_000;
+/** Ids asked for again in one `recover`. */
+const PENDING_RECOVER_CHUNK = 64;
+/** The pause before an outcome whose body did not arrive whole is asked for
+ *  again. */
+const PENDING_RETRY_MS = 1_000;
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
  *  never run from an instant before the true send (I1: a strict minimum). */
@@ -142,7 +153,7 @@ export interface BrowserPageTransportOptions {
   bridge?: MonoBridge;
   /** TESTS ONLY: scaled waits (`recoverWaitMs` caps the actor's wait for
    *  the operator at its start). */
-  timing?: Partial<{ resultWaitMs: number; unavailableRetryMs: number; recoverWaitMs: number }>;
+  timing?: Partial<{ resultWaitMs: number; unavailableRetryMs: number; recoverWaitMs: number; lateMax: number; pendingMax: number }>;
   /** Which CDN URLs a hop may request. Default: a Fansly media CDN host.
    *  TESTS ONLY pass another. */
   cdnUrlAllowed?: (url: URL) => boolean;
@@ -248,12 +259,20 @@ export async function createBrowserPageTransport(
   const resultWaitMs = options.timing?.resultWaitMs ?? BROWSER_RESULT_WAIT_MS;
   const unavailableRetryMs = options.timing?.unavailableRetryMs ?? BROWSER_UNAVAILABLE_RETRY_MS;
   const recoverWaitMs = options.timing?.recoverWaitMs ?? Number.POSITIVE_INFINITY;
+  const lateMax = options.timing?.lateMax ?? BROWSER_LATE_OUTCOMES_MAX;
+  const pendingMax = options.timing?.pendingMax ?? BROWSER_PENDING_OUTCOMES_MAX;
   const cdnUrlAllowed = options.cdnUrlAllowed ?? isFanslyCdnUrl;
   const prepared = new WeakMap<FanslyWireRequest, Prepared>();
   /** Attempts whose outcome was taken whole: acknowledged once settled. */
   const ackable = new Set<number>();
   /** Outcomes nobody waits for, by attempt (`held.takeLate`). */
   const late = new Map<number, HeldAnswer>();
+  /** Outcomes the operator keeps that nothing here holds now: asked for
+   *  again (`askPending`). */
+  const pending = new Set<number>();
+  let overflowed = false;
+  let asking = false;
+  let askNotBefore = Number.NEGATIVE_INFINITY;
   let unavailableUntil = Number.NEGATIVE_INFINITY;
   let closed = false;
   client.start();
@@ -484,12 +503,18 @@ export async function createBrowserPageTransport(
       },
       onResult(delivered) {
         const { outcome, whole } = outcomeOf(delivered, meta, req, reported, credentialsChanged);
-        if (whole) ackable.add(attemptId);
+        if (whole) {
+          ackable.add(attemptId);
+          // An outcome whose commit never proved whole is left with the
+          // operator: the oldest of those is forgotten here, never grown.
+          if (ackable.size > BROWSER_LATE_OUTCOMES_MAX) ackable.delete(ackable.values().next().value!);
+        }
         // An answer this request may not take (another session's) but that
         // arrived whole: kept as a fact by the actor's late intake, then
-        // acknowledged. A body that did not arrive whole stays with the
-        // operator, which sends it again.
+        // acknowledged. One whose body did not arrive whole is asked for
+        // again: the operator keeps it until it is taken.
         else if (delivered.bodyProblem === null) keepLate(heldRequest(delivered));
+        else askAgain(attemptId);
         if (outcome.kind === "aborted_before_send" && outcome.refusal === "transport_unavailable") unavailableUntil = monoNow() + unavailableRetryMs;
         finish(outcome);
       },
@@ -533,8 +558,58 @@ export async function createBrowserPageTransport(
   }
 
   function keepLate(answer: HeldAnswer): void {
-    if (late.size >= BROWSER_LATE_OUTCOMES_MAX && !late.has(answer.attemptId)) return;
+    if (late.size >= lateMax && !late.has(answer.attemptId)) {
+      askAgain(answer.attemptId);
+      return;
+    }
     late.set(answer.attemptId, answer);
+    pending.delete(answer.attemptId);
+  }
+
+  /** An outcome the operator keeps that nothing here holds: asked for again. */
+  function askAgain(attemptId: number): void {
+    if (pending.has(attemptId)) return;
+    if (pending.size >= pendingMax) {
+      overflowed = true;
+      return;
+    }
+    pending.add(attemptId);
+  }
+
+  /** The outcomes asked for again, a chunk at a time, once the late queue
+   *  drained; after an overflow, every one the operator keeps (a new hello). */
+  function askPending(): void {
+    if (asking || late.size > 0 || !client.up || closed) return;
+    if (pending.size === 0) {
+      if (overflowed) {
+        overflowed = false;
+        client.reconnect("redeliver the outcomes not kept (more than the transport keeps)");
+      }
+      return;
+    }
+    if (monoNow() < askNotBefore) return;
+    const chunk = [...pending].slice(0, Math.min(PENDING_RECOVER_CHUNK, lateMax));
+    asking = true;
+    let unresolved = false;
+    void client.recover(chunk).then((answer) => {
+      for (const attemptId of chunk) {
+        const result = answer.results.get(attemptId);
+        const end = answer.ends.get(attemptId);
+        if (result !== undefined && result.bodyProblem === null) late.set(attemptId, heldRequest(result));
+        else if (end !== undefined) late.set(attemptId, heldEnd(end));
+        else if (answer.states.get(attemptId) === "outcome_resent") {
+          unresolved = true;
+          continue;
+        }
+        // Taken now, or the operator keeps nothing of it any more.
+        pending.delete(attemptId);
+      }
+    }, () => {
+      unresolved = true;
+    }).finally(() => {
+      asking = false;
+      askNotBefore = unresolved ? monoNow() + PENDING_RETRY_MS : Number.NEGATIVE_INFINITY;
+    });
   }
 
   /** The wall-clock instant of a CLOCK_MONOTONIC reading of the operator. */
@@ -600,9 +675,9 @@ export async function createBrowserPageTransport(
   }
 
   client.onUnclaimedResult((delivered) => {
-    // A body that did not arrive whole is left: the operator sends it again.
-    if (delivered.bodyProblem !== null) return;
-    keepLate(heldRequest(delivered));
+    // A body that did not arrive whole is asked for again.
+    if (delivered.bodyProblem !== null) askAgain(delivered.result.attemptId);
+    else keepLate(heldRequest(delivered));
   });
   client.onUnclaimedOutcome((end) => keepLate(heldEnd(end)));
 
@@ -644,13 +719,24 @@ export async function createBrowserPageTransport(
         else if (answer.states.get(attemptId) === "not_sent") answers.set(attemptId, { kind: "not_sent", attemptId });
         else answers.set(attemptId, { kind: "unknown", attemptId });
         late.delete(attemptId);
+        pending.delete(attemptId);
+        // Resent with a body that did not arrive whole: asked for again.
+        if (result !== undefined && result.bodyProblem !== null) askAgain(attemptId);
       }
       return answers;
     },
-    takeLate() {
-      const taken = [...late.values()];
-      late.clear();
+    takeLate(max) {
+      askPending();
+      const taken: HeldAnswer[] = [];
+      for (const [attemptId, answer] of late) {
+        if (taken.length >= max) break;
+        taken.push(answer);
+        late.delete(attemptId);
+      }
       return taken;
+    },
+    retry(attemptIds) {
+      for (const attemptId of attemptIds) askAgain(attemptId);
     },
     acknowledge(attemptId) {
       ackable.delete(attemptId);

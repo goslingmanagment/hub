@@ -971,21 +971,31 @@ tests/sync-live-gate.integration.test.ts.
   subscription's `afterSeq` is itself the acknowledgement, so a crash before the commit loses nothing and one after
   it, or a lost ack, duplicates nothing); a batch of another buffer or an earlier connection is never taken nor
   acknowledged; another buffer (a volume made anew) is taken from its first event, its predecessor's untaken tail
-  a gap; a subscription ahead of the buffer takes nothing of it. Frames by event id (`browser:<buffer id>:<number>`,
+  a gap; a subscription ahead of the buffer halts that buffer for good (`events_halted_*`, alert 2
+  `browser_buffer_halted`) — only another buffer is taken. Nothing is acknowledged unless it is kept in full, or a
+  loss boundary and its repair are committed with it. Frames by event id (`browser:<buffer id>:<number>`,
   `captureBrowserWsFrame`), fenced by the page and the session — the row its `ws.open` opened, open or not — then
-  the receipt and the live overlay as the engine's own socket's; the session's confirmation verifies the row and
-  asks for `repair.ws-gap`; the socket's refusal asks for `account.verify`. A `gap` of any reason lowers the next
-  connection's `gap_since` (where the repair reads back from) to its boundary — one the operator cannot name is the
-  last event the engine took, of any buffer. The site's answers go to `observations` (`browser_site`,
-  `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through the codec (`browser-site-capture.ts`);
-  one the operator could not keep whole leaves a mark and asks for the polls that read its route.
+  the receipt and the live overlay as the engine's own socket's; a frame of a session the engine does not trust, or
+  of a connection whose `ws.open` was lost, is kept as a fact (`fansly.ws.frame.v1:<why>`, no receipt) and never
+  applied; one the journal cannot keep (not JSON, past the traversal's limit) is a loss on its connection. The
+  session's confirmation verifies the row and asks for `repair.ws-gap`; the socket's refusal asks for
+  `account.verify`. A `gap` of any reason lowers the next connection's `gap_since` (where the repair reads back
+  from) to its boundary — one the operator cannot name is the last event the engine took, of any buffer; a loss the
+  intake finds itself also reopens the gap of the connection still open, repaired at once when verified, and the
+  repair reads a browser connection's gap back a week (`SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS`). The site's answers go
+  to `observations` (`browser_site`, `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through
+  the codec (`browser-site-capture.ts`), complete; one the operator could not keep whole leaves a mark and asks for
+  the read that backfills it (the chat's messages, the post's reply walk, the polls of its route).
 - **Kept outcomes** (PR 13, `engine/held-outcomes.ts`, `PageTransport.held`): before `recoverUnfinished` closes the
   attempts left unfinished `unknown`, the operator is asked about them (`recover`): its outcome, resent, is captured
-  and applied as the attempt's own (a CDN reply captured but not applied gets its bytes to the handoff); `not_sent`
-  closes it as not sent; `unknown`, or no operator within 10 s, leaves it `unknown`. Between steps, the outcomes it
-  delivered that no request waits for — after a restart, another session's answer — are kept as facts
-  (`<kind>:late`, `<kind>:foreign_session`), never applied in an attempt's place, and acknowledged. Nothing is ever
-  sent again from what the operator kept. The host builds neither the intake nor a browser transport before
+  and applied as the attempt's own (a CDN reply captured but not applied gets its bytes to the handoff) — unless it
+  came under another session: then it is kept as a fact and the attempt settles as a request that went without its
+  answer; `not_sent` closes it as not sent; `unknown`, or no operator within 10 s, leaves it `unknown`; a site
+  request's end settles by the admission's own manual-login exemption. Between steps, the outcomes it delivered that
+  no request waits for — after a restart, another session's answer — are kept as facts, complete through the codec
+  (`<kind>:late`, `<kind>:foreign_session`), never applied in an attempt's place, and acknowledged after that commit;
+  one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
+  Nothing is ever sent again from what the operator kept. The host builds neither the intake nor a browser transport before
   `sync_pages.transport` (PR 14): an undici page has no `held`, and its recovery is as it always was.
 
 ## Classes

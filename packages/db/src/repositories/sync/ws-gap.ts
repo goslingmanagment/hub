@@ -11,6 +11,11 @@ import { textArrayParam, timestampParam, toDate } from "./values.ts";
 
 /** A connection older than this is not reconciled any more (history, not a gap). */
 export const SYNC_WS_GAP_LOOKBACK_HOURS = 24;
+/** A site socket's connection on a page's browser (Project Browser, PR 13)
+ *  is verified when the engine takes its events from the operator's buffer,
+ *  which keeps them up to 72 h (spec §5) — its gap is still a gap that long
+ *  after it opened: a week, past the buffer's cap. */
+export const SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS = 7 * 24;
 /** The window of a pass starts this long before the earliest gap. */
 export const SYNC_WS_GAP_MARGIN_MS = 60_000;
 
@@ -24,8 +29,9 @@ export interface FanslyWsGapPass {
 
 /**
  * The connections a new repair pass reconciles (read-only): verified, not yet
- * reconciled, started within the last day; and the instant the pass reads
- * back to — the earliest gap they record, 60 s earlier.
+ * reconciled, started within the last day — a page browser's within the week
+ * its buffer may replay — and the instant the pass reads back to: the
+ * earliest gap they record, 60 s earlier.
  */
 export async function readFanslyWsGapPass(db: Database, input: { pageId: number }): Promise<FanslyWsGapPass> {
   const result = await db.execute<{ targets: string[] | null; since: Date | string | null }>(sql`
@@ -35,7 +41,8 @@ export async function readFanslyWsGapPass(db: Database, input: { pageId: number 
      where c.page_id = ${input.pageId}
        and c.verified_at is not null
        and c.state_reconciled_at is null
-       and c.started_at > clock_timestamp() - ${SYNC_WS_GAP_LOOKBACK_HOURS}::double precision * interval '1 hour'
+       and c.started_at > clock_timestamp() - (case when c.origin = 'browser'
+             then ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS} else ${SYNC_WS_GAP_LOOKBACK_HOURS} end)::double precision * interval '1 hour'
   `);
   const row = result.rows[0];
   return { targets: row?.targets ?? [], since: toDate(row?.since ?? null) };

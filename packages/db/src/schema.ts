@@ -435,6 +435,9 @@ export const pageBrowsers = pgTable("page_browsers", {
   eventsLastWall: timestamp("events_last_wall", { withTimezone: true }),
   eventsGapSince: timestamp("events_gap_since", { withTimezone: true }),
   eventsUpdatedAt: timestamp("events_updated_at", { withTimezone: true }),
+  eventsHaltedBufferId: uuid("events_halted_buffer_id"),
+  eventsHaltedReason: text("events_halted_reason"),
+  eventsHaltedAt: timestamp("events_halted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });

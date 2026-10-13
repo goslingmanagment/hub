@@ -46,9 +46,12 @@ import { commitSiteEnd } from "./site-slot.ts";
 //   describer's handoff in that apply (`sync_media_handoff`) — a reply the
 //   journal does not keep is asked about too when its capture committed but
 //   its apply did not (a lost COMMIT acknowledgement, PR 12): recovery would
-//   otherwise skip it. A site request's or socket's end settles its attempt
-//   by the site path's rules (a 429 holds its route; a 401/403 holds nothing
-//   here — whether it was the manual login's is not known any more);
+//   otherwise skip it. An answer of another session is never the attempt's:
+//   it is kept as a fact first, and the attempt settles as a request that
+//   went without its answer — nothing of it is captured as the route's or
+//   applied. A site request's or socket's end settles its attempt by the
+//   site path's rules (a 429 holds its route; a 401/403 holds the
+//   credentials unless its admission recorded the manual login);
 // - `not_sent`: the sender's record shows it never left — closed as not sent
 //   (`aborted_before_send`, `not_sent:held`);
 // - `unknown` (or the sender not reachable within `HELD_RECOVER_WAIT_MS`):
@@ -59,9 +62,11 @@ import { commitSiteEnd } from "./site-slot.ts";
 // outcome it keeps to each new connection), an answer of another session
 // than the request's, a reply whose apply a lost COMMIT acknowledgement left
 // undone. Its attempt settled already, an answer is never applied in its
-// place — it is kept as a fact (`<kind>:late`, `<kind>:foreign_session`,
-// `journalHeldAnswer`), a CDN hop still waiting for its apply gets its bytes,
-// and the rest is acknowledged.
+// place — it is kept as a fact, complete through the codec (`<kind>:late`,
+// `<kind>:foreign_session`, `journalHeldAnswer`), a CDN hop still waiting for
+// its apply gets its bytes, and only then is it acknowledged. One that cannot
+// be taken now is asked for again (`retry`): the operator delivers an
+// outcome once per connection, so nothing is left to a reconnect.
 //
 // Taking an outcome is never a permission to send anything again: nothing
 // here prepares, admits or sends a request. A read the engine still needs
@@ -70,6 +75,9 @@ import { commitSiteEnd } from "./site-slot.ts";
 /** How long the actor's start waits for the sender (below the watchdog's
  *  stall bound, 120 s): not reachable by then, the attempts are `unknown`. */
 export const HELD_RECOVER_WAIT_MS = 10_000;
+/** Late outcomes taken per lap: a backlog goes over several laps, never
+ *  holding the page's requests for long. */
+export const HELD_LATE_PER_LAP = 50;
 
 /** How one held outcome was taken (tests, metrics). */
 export interface HeldTaken {
@@ -113,6 +121,9 @@ export async function reconcileHeldOutcomes(
     const answer = answers.get(attempt.id);
     if (answer !== undefined) taken.push(await takeOne(d, held, answer, attempt));
   }
+  // Not taken now: the sender keeps them; asked for again between steps.
+  const left = taken.filter((one) => one.how === "left").map((one) => one.attemptId);
+  if (left.length > 0) held.retry(left);
   if (taken.length > 0) {
     d.logger.info({ pageId: d.pageId, taken: taken.map((one) => `${one.attemptId}:${one.how}`) },
       "Fansly sync: the unfinished attempts were settled by what the page's browser kept");
@@ -120,20 +131,24 @@ export async function reconcileHeldOutcomes(
   return taken;
 }
 
-/** Between steps: the outcomes the sender delivered that nothing waited for. */
-export async function takeLateHeldOutcomes(d: CommitDeps, held: HeldOutcomeSource): Promise<HeldTaken[]> {
+/** Between steps: the outcomes the sender delivered that nothing waited for
+ *  (at most `HELD_LATE_PER_LAP`). One that cannot be taken now is asked for
+ *  again (`retry`): never dropped while the sender keeps it. */
+export async function takeLateHeldOutcomes(d: CommitDeps, held: HeldOutcomeSource, max: number = HELD_LATE_PER_LAP): Promise<HeldTaken[]> {
   const taken: HeldTaken[] = [];
-  for (const answer of held.takeLate()) {
+  for (const answer of held.takeLate(max)) {
     let attempt: SyncAttemptRow | null;
     try {
       attempt = await getSyncAttempt(d.db, answer.attemptId);
     } catch (error) {
-      // Left with the sender: it delivers the outcome again.
-      d.logger.warn({ pageId: d.pageId, attemptId: answer.attemptId, err: errorName(error) }, "Fansly sync: a held outcome's attempt does not read; left");
+      d.logger.warn({ pageId: d.pageId, attemptId: answer.attemptId, err: errorName(error) }, "Fansly sync: a held outcome's attempt does not read; asked for again");
+      taken.push({ attemptId: answer.attemptId, how: "left" });
       continue;
     }
     taken.push(await takeOne(d, held, answer, attempt));
   }
+  const left = taken.filter((one) => one.how === "left").map((one) => one.attemptId);
+  if (left.length > 0) held.retry(left);
   return taken;
 }
 
@@ -176,9 +191,9 @@ async function take(d: CommitDeps, held: HeldOutcomeSource, answer: HeldAnswer, 
           attemptId: attempt.id,
           send: heldSend(attempt, sent, answer.sentWall),
           end: answer.end,
-          // Whether it was the manual login's is not known any more: its
-          // 401/403 holds nothing, a 429 holds its route.
-          classified: { route: attempt.operation as FanslyRoute, exempt: true },
+          // The manual login's exemption as its admission recorded it: an
+          // ordinary request's 401/403 holds the credentials, as live.
+          classified: { route: attempt.operation as FanslyRoute, exempt: manualLoginOf(attempt) },
         });
       }
       held.acknowledge(attempt.id);
@@ -194,6 +209,13 @@ async function take(d: CommitDeps, held: HeldOutcomeSource, answer: HeldAnswer, 
       return isUnfinished(attempt) ? captureHeld(d, held, attempt, resolved) : lateHeld(d, held, attempt, resolved);
     }
   }
+}
+
+/** Whether a site attempt was the manual login's (its admission records it,
+ *  `engine/site-slot.ts` `admitSite`). */
+function manualLoginOf(attempt: SyncAttemptRow): boolean {
+  const request = attempt.request as { manualLogin?: unknown } | null;
+  return request?.manualLogin === true;
 }
 
 /** The send facts of a held outcome: the instant the sender reported, else
@@ -263,10 +285,22 @@ async function captureHeld(d: CommitDeps, held: HeldOutcomeSource, attempt: Sync
   }
   const module = await d.registry.module(attempt.resource);
   const sent = outcome.kind === "response" || outcome.sent;
+  if (!resolved.sameSession) {
+    // Another session's answer is never this request's (plan §3.2): kept as
+    // a fact first, then the attempt settles as a request that went without
+    // its answer — nothing of the body is captured as the route's, nothing
+    // is applied.
+    await keepAnswer(d, attempt, resolved);
+    await capture(d, admission, heldSend(attempt, true, resolved.sentWall), {
+      kind: "transport_error",
+      sent: true,
+      message: "the answer came under another session of the page's browser",
+    }, module);
+    held.acknowledge(attempt.id);
+    return "journaled";
+  }
   const captured = await capture(d, admission, heldSend(attempt, sent, resolved.sentWall), outcome, module);
   if (captured.applyNow) await apply(d, { attemptId: attempt.id, operation: attempt.operation }, captured.inMemory);
-  // Another session's answer is never this request's: kept as a fact.
-  if (!resolved.sameSession) await keepAnswer(d, attempt, resolved);
   if (!isAnswerInMemory(attempt.operation) || await answerCommitted(d, attempt.id)) held.acknowledge(attempt.id);
   return "captured";
 }

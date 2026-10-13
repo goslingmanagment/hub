@@ -22,6 +22,13 @@
 --                       next connection's gap_since starts no later, so the
 --                       socket's repair (`repair.ws-gap`) reads it back
 --   events_updated_at   the last commit of the intake
+--   events_halted_buffer_id, events_halted_reason, events_halted_at
+--                       a buffer whose history contradicts the engine's
+--                       (`ahead`: the engine committed more of it than it
+--                       gave — a file restored from before): nothing of it
+--                       is taken, whatever its numbers become, until the
+--                       operator names another buffer (alert `live_degraded`
+--                       `browser_buffer_halted`)
 --
 -- LOCKING: page_browsers is tiny (one row per browser profile). The columns
 -- are nullable or carry a constant default (catalog only, no rewrite); the
@@ -39,12 +46,16 @@ alter table page_browsers
   add column if not exists events_acked_seq bigint not null default 0,
   add column if not exists events_last_wall timestamptz,
   add column if not exists events_gap_since timestamptz,
-  add column if not exists events_updated_at timestamptz;
+  add column if not exists events_updated_at timestamptz,
+  add column if not exists events_halted_buffer_id uuid,
+  add column if not exists events_halted_reason text,
+  add column if not exists events_halted_at timestamptz;
 
 alter table page_browsers
   drop constraint if exists page_browsers_events_check,
   add constraint page_browsers_events_check check (
     events_acked_seq >= 0 and (events_buffer_id is not null or events_acked_seq = 0)
+    and (events_halted_buffer_id is null) = (events_halted_reason is null)
   );
 
 comment on column page_browsers.events_buffer_id is
@@ -53,13 +64,16 @@ comment on column page_browsers.events_acked_seq is
   'Project Browser (0276): the last event number of events_buffer_id the engine committed (the afterSeq of its next events.subscribe).';
 comment on column page_browsers.events_last_wall is
   'Project Browser (0276): the operator''s instant of the last event the engine committed, of any buffer: the start of a loss of unknown boundary.';
+comment on column page_browsers.events_halted_buffer_id is
+  'Project Browser (0276): a buffer whose history contradicts the engine''s (ahead); nothing of it is taken until the operator names another buffer.';
 comment on column page_browsers.events_gap_since is
   'Project Browser (0276): a gap the operator marked that no site socket connection has taken yet; the next connection''s gap_since starts no later.';
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'read_only') then
-    grant select (events_buffer_id, events_acked_seq, events_last_wall, events_gap_since, events_updated_at)
+    grant select (events_buffer_id, events_acked_seq, events_last_wall, events_gap_since, events_updated_at,
+      events_halted_buffer_id, events_halted_reason, events_halted_at)
       on page_browsers to read_only;
   end if;
 end $$;

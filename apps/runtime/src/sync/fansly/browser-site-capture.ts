@@ -27,9 +27,11 @@ import { FANSLY_ROUTES, isFanslyRoute } from "./routes.ts";
 //   status.
 // - Not the server's confirmed word (the browser's cache, the site's service
 //   worker): `<kind>:unconfirmed`, as the engine's own (PR 12). Not a 2xx with
-//   the route's answer: `<kind>:failed`. A body the operator could not take
-//   whole (`complete: false`) is no fact: a mark `<kind>:incomplete` without
-//   it, so the hole is seen in Hub.
+//   the route's answer: `<kind>:failed`. Either is the only copy (the
+//   operator drops its own once this commits): kept complete — the route's
+//   answer through the codec, else the whole text — never cut. A body the
+//   operator could not take whole (`complete: false`) is no fact: a mark
+//   `<kind>:incomplete` without it, so the hole is seen in Hub.
 // - The login operations' answers and any write's carry secrets: never
 //   written (the operator keeps none of them either).
 
@@ -38,10 +40,6 @@ export type SiteResponseEvent = Extract<BufferEvent, { kind: "site.response" }>;
 
 /** The routes whose answers are never written. */
 const SECRET_ROUTES: ReadonlySet<string> = new Set(["auth.login", "auth.twofa"]);
-
-/** The most of a failed or unconfirmed answer's text kept (as the engine's
- *  own capture keeps it, `engine/commit.ts`). */
-const MAX_FAILED_BODY_CHARS = 64 * 1024;
 
 export interface SiteResponseObservation {
   source: "browser_site";
@@ -100,14 +98,13 @@ function lineOf(event: SiteResponseEvent) {
   return { method: event.method, path: event.path, query: event.query, status: event.status, source: event.source };
 }
 
-function failedOf(event: SiteResponseEvent, text: string, disposition: string): Record<string, unknown> {
-  const kept = text.length > MAX_FAILED_BODY_CHARS ? text.slice(0, MAX_FAILED_BODY_CHARS) : text;
+/** An answer's whole text, nothing cut: its only copy. */
+function wholeOf(event: SiteResponseEvent, text: string, disposition: string): Record<string, unknown> {
   return replaceJournalUnstorableText({
     ...lineOf(event),
     contentType: event.headers["content-type"] ?? null,
     retryAfter: event.headers["retry-after"] ?? null,
-    bodyText: kept,
-    truncated: kept.length < text.length,
+    bodyText: text,
     disposition,
   }).value as Record<string, unknown>;
 }
@@ -147,9 +144,7 @@ export function siteResponseObservation(input: {
   }
   const text = new TextDecoder("utf-8").decode(input.body);
   if (journaled !== null && wire !== null && routeSpec !== null) {
-    if (event.source === "cache_unconfirmed" || event.source === "service_worker") {
-      return make(`${journaled}:unconfirmed`, failedOf(event, text, "rejected_not_applied"), "unconfirmed");
-    }
+    const unconfirmed = event.source === "cache_unconfirmed" || event.source === "service_worker";
     const params = paramsOf(routeSpec.template, event.path, event.query);
     try {
       const read = readFanslyWireResponse(wire as never, params as never, { status: event.status, headers: event.headers, bodyText: text });
@@ -159,9 +154,14 @@ export function siteResponseObservation(input: {
           contractAccepted: read.kind === "accepted",
           ...(wireId === "post.replies" && typeof params.postId === "string" ? { walk: { postId: params.postId, before: params.before ?? null } } : {}),
         });
+        if (unconfirmed) {
+          // Kept complete, through the codec, never as the route's answer.
+          return make(`${journaled}:unconfirmed`, { ...lineOf(event), disposition: "rejected_not_applied", answer: journal.payload }, "unconfirmed");
+        }
         return { ...base, kind: journaled, payload: journal.payload, payloadHash: journal.payloadHash, as: "route" };
       }
-      return make(`${journaled}:failed`, failedOf(event, text, "not_the_routes_answer"), "failed");
+      if (unconfirmed) return make(`${journaled}:unconfirmed`, wholeOf(event, text, "rejected_not_applied"), "unconfirmed");
+      return make(`${journaled}:failed`, wholeOf(event, text, "not_the_routes_answer"), "failed");
     } catch {
       // The codec cannot take it for this request (a reply page whose post
       // the path does not name): kept as the site's, as it is.

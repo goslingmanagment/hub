@@ -98,8 +98,9 @@ export async function beginBrowserWsConnection(db: Database, input: {
 /** How one frame of a site socket was taken (`captureBrowserWsFrame`). */
 export type BrowserWsFrameCapture =
   | { kind: "captured"; observationId: number; receivedAt: Date; inserted: boolean }
-  /** No connection of the page with that id: the frame is not the page's. */
-  | { kind: "no_connection" }
+  /** Kept as a fact that nothing applies: its connection is unknown to the
+   *  page (its `ws.open` was lost) or of a session the page did not verify. */
+  | { kind: "kept"; why: "unattributed" | "unverified_session" }
   /** An erasure that started after the frame arrived covers it. */
   | { kind: "erased" };
 
@@ -119,19 +120,36 @@ export function browserWsFrameKey(bufferId: string, seq: number): string {
  * is that session's), open or not, since a frame from the buffer may outlive
  * its connection. Then as the engine's own socket: the observation with the
  * B0 codec, the decode receipt the live overlay applies, the row's last
- * capture. Throws `fansly_ws_erasure_busy` while an erasure holds the page.
+ * capture. A frame of a connection the page has no row of (its `ws.open`
+ * lost), or whose session is not the one the engine trusts
+ * (`trustedGeneration`: `sync_pages.credentials_generation`), is kept as a
+ * fact under `fansly.ws.frame.v1:<why>` with no receipt: nothing applies it
+ * and no family parses it (the erasure finds it by its codec). Throws
+ * `fansly_ws_erasure_busy` while an erasure holds the page.
  */
 export async function captureBrowserWsFrame(tx: Database, input: {
   pageId: number; browserConnectionId: string; bufferId: string; seq: number;
-  accountRef: string | null; frame: string; receivedAt: Date;
+  accountRef: string | null; frame: string; receivedAt: Date; trustedGeneration: string | null;
 }): Promise<BrowserWsFrameCapture> {
   if (!await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId)) throw new Error("fansly_ws_erasure_busy");
   const connection = await tx.execute<{ id: string; generation: string }>(sql`select c.id::text as id, c.generation
     from fansly_ws_connections c
     where c.page_id=${input.pageId} and c.browser_connection_id=${input.browserConnectionId}::uuid`);
   const row = connection.rows[0];
-  if (row === undefined) return { kind: "no_connection" };
   if (await fanslyWsFrameErased(tx, input)) return { kind: "erased" };
+  const doubtful = row === undefined ? "unattributed" as const
+    : row.generation !== input.trustedGeneration ? "unverified_session" as const : null;
+  if (doubtful !== null) {
+    await insertObservation(tx, {
+      source: "fansly_ws", producer: "fansly:browser", platform: "fansly", accountId: input.pageId,
+      nativeAccountRef: input.accountRef, kind: `${FANSLY_WS_CAPTURE_KIND}:${doubtful}`,
+      payload: { codec: FANSLY_WS_CAPTURE_KIND, frame: input.frame, generation: row?.generation ?? null, disposition: "kept_not_applied" },
+      payloadHash: createHash("sha256").update(input.frame).digest(),
+      idempotencyKey: browserWsFrameKey(input.bufferId, input.seq), receivedAt: input.receivedAt,
+    });
+    return { kind: "kept", why: doubtful };
+  }
+  if (row === undefined) return { kind: "kept", why: "unattributed" };
   const inserted = await insertObservation(tx, {
     source: "fansly_ws", producer: "fansly:browser", platform: "fansly", accountId: input.pageId,
     nativeAccountRef: input.accountRef, kind: FANSLY_WS_CAPTURE_KIND,
@@ -145,6 +163,31 @@ export async function captureBrowserWsFrame(tx: Database, input: {
     last_capture_at=greatest(coalesce(last_capture_at,'-infinity'::timestamptz),${inserted.receivedAt}::timestamptz)
     where id=${row.id}::uuid`);
   return { kind: "captured", observationId: inserted.observationId, receivedAt: inserted.receivedAt, inserted: inserted.inserted };
+}
+
+/**
+ * A loss on a site socket's connection the engine knows of (PR 13): a frame
+ * the engine could not keep (one the business traversal refuses), events the
+ * operator no longer has. The connection — `browserConnectionId`, or the
+ * page's newest browser row still open — has its gap start no later than
+ * `since` and is unreconciled again, so the socket's repair (`repair.ws-gap`,
+ * `readFanslyWsGapPass`) reads it back. Null: no such connection (the next
+ * one's gap takes it); `verified`: the repair can run now.
+ */
+export async function markBrowserWsLoss(tx: Database, input: {
+  pageId: number; browserConnectionId: string | null; since: Date;
+}): Promise<{ verified: boolean } | null> {
+  const target = input.browserConnectionId === null
+    ? sql`(select c.id from fansly_ws_connections c where c.page_id=${input.pageId} and c.origin='browser'
+        and c.closed_at is null order by c.started_at desc limit 1)`
+    : sql`(select c.id from fansly_ws_connections c where c.page_id=${input.pageId}
+        and c.browser_connection_id=${input.browserConnectionId}::uuid)`;
+  const result = await tx.execute<{ verified: boolean }>(sql`update fansly_ws_connections
+      set gap_since=least(gap_since, ${input.since.toISOString()}::timestamptz), state_reconciled_at=null
+    where id=${target}
+    returning verified_at is not null as verified`);
+  const row = result.rows[0];
+  return row === undefined ? null : { verified: row.verified === true };
 }
 
 /**

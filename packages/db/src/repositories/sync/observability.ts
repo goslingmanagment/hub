@@ -486,6 +486,10 @@ export interface SyncLivePathFacts {
   /** The same age of fan messages still awaited in chats Hub has no thread
    *  for: counted for the status, never paged. */
   unconfirmedWithoutThread: { count: number; oldestVisibleAt: Date | null };
+  /** The page's browser buffer nothing is taken of (Project Browser PR 13,
+   *  `page_browsers.events_halted_*`): its history contradicts the engine's
+   *  until the operator names another buffer. Null: none. */
+  bufferHalted: { bufferId: string; reason: string; at: Date | null } | null;
 }
 
 /**
@@ -537,9 +541,16 @@ export async function readSyncLivePathFacts(
        and m.first_visible_at < statement_timestamp() - ${input.unconfirmedAfterMs}::double precision * interval '1 millisecond'
        and ${dmLiveAwaitingConfirmSql(sql`m`)}
   `);
+  const halted = await db.execute<{ bufferId: string; reason: string; at: Date | string | null }>(sql`
+    select b.events_halted_buffer_id::text as "bufferId", b.events_halted_reason as reason, b.events_halted_at as at
+      from page_browsers b
+     where b.page_id = ${input.pageId} and b.events_halted_buffer_id is not null
+  `);
+  const haltedRow = halted.rows[0];
   const socketRow = socket.rows[0];
   const unconfirmedRow = unconfirmed.rows[0];
   return {
+    bufferHalted: haltedRow === undefined ? null : { bufferId: haltedRow.bufferId, reason: haltedRow.reason, at: toDate(haltedRow.at) },
     socket: { up: socketRow?.up === true, lastAliveAt: toDate(socketRow?.lastAliveAt) },
     decode: { receipts: Number(decode.rows[0]?.receipts ?? 0), debt: Number(decode.rows[0]?.debt ?? 0) },
     unconfirmed: { count: Number(unconfirmedRow?.n ?? 0), oldestVisibleAt: toDate(unconfirmedRow?.oldest) },

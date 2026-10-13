@@ -1,9 +1,13 @@
 import {
   captureBrowserWsFrame,
+  findPageById,
   getSyncPage,
+  haltPageBrowserIntake,
   insertObservation,
   lockOwnedPage,
   lockPageBrowserIntake,
+  markBrowserWsLoss,
+  markPostRepliesDirty,
   OwnershipLostError,
   readPageBrowserIntake,
   touchBrowserWsConnection,
@@ -21,6 +25,7 @@ import { errorName, type SyncLogger } from "../engine/commit.ts";
 import type { Metrics } from "../engine/ports.ts";
 import { demandToUpsert, type DemandSignal, type EngineRegistry } from "../engine/resource.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
+import { replaceJournalUnstorableText } from "./lib/journal-lone-surrogates.ts";
 import { FANSLY_ROUTES, isFanslyRoute } from "./routes.ts";
 import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 
@@ -54,9 +59,12 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   old buffer's untaken tail is a loss since the last event committed; a
 //   buffer that cannot be opened — again once the operator's state says it
 //   opened; a subscription ahead of the buffer (a file restored from before)
-//   — nothing of that buffer is taken: its numbers are not this history's,
-//   and keys would collide (logged, tried again rarely); an ack before the
-//   subscription or past what it sent — subscribe again from the position.
+//   — that buffer is halted for good (`page_browsers.events_halted_*`, alert
+//   2 `browser_buffer_halted`): its numbers are not this history's, and
+//   once they grew past the position a subscription would acknowledge events
+//   never taken; only another buffer of the operator is taken again; an ack
+//   before the subscription or past what it sent — subscribe again from the
+//   position.
 // - Every batch commits under the page's owner generation (`lockOwnedPage`):
 //   an intake of an earlier owner commits nothing and stops.
 //
@@ -73,6 +81,10 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   page and the session — the connection row its `ws.open` opened, open or
 //   not), and after the commit goes to the live overlay as every captured
 //   frame (`fansly_ws_decode_receipts`, the live applier, the worker timer).
+//   A frame that cannot be kept — not JSON, or one the business traversal
+//   refuses (more children than it reads) — is never acknowledged as if it
+//   were: its connection's gap is open again (`markBrowserWsLoss`) and the
+//   repair asked for, in the same transaction.
 // - `gap`: the operator lost or could not keep events from `fromWall` (plan
 //   §4.4, step 6). The engine's own machinery backfills a socket's gap: the
 //   next connection's `gap_since` (0196) is where its `repair.ws-gap` reads
@@ -83,13 +95,17 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   buffer (`events_last_wall`) — and with none, the previous connection's
 //   end, as for the engine's own socket. Every reason is taken alike
 //   (`ws_reconnect`, `operator_start`, `chrome_restart`, `buffer_full`,
-//   `disk_full`).
+//   `disk_full`). A loss the intake finds itself — events the operator no
+//   longer has, a new buffer's predecessor's untaken tail — also opens the
+//   gap of the connection still open (it may never close in the stream):
+//   verified, its repair is asked for at once.
 // - `site.response`: the site's answer, journaled in `observations`
 //   (`browser_site`) by `browser-site-capture.ts`; a body the operator could
-//   not take whole leaves a mark there, and a poll of the registry that
-//   reads the route is asked for (its own request backfills it). A body
-//   that did not arrive whole over the link is not taken: the batch is cut
-//   before it, and the operator sends it again.
+//   not take whole leaves a mark there, and the reads that backfill it are
+//   asked for (`#backfillOf`: the chat's messages for `/message`, the post's
+//   reply walk for its replies, the polls of any other route). A body that
+//   did not arrive whole over the link is not taken: the batch is cut before
+//   it, and the operator sends it again.
 
 /** The intake's timing. Production always uses the defaults; tests scale
  *  them. */
@@ -99,15 +115,15 @@ export interface BrowserIntakeTiming {
   /** A batch cut before a body that did not arrive whole: subscribe again
    *  after this. */
   bodyRetryMs: number;
-  /** A subscription refused as ahead of the buffer: tried again after this. */
-  aheadRetryMs: number;
 }
 
 export const BROWSER_INTAKE_TIMING: Readonly<BrowserIntakeTiming> = Object.freeze({
   retryMs: [250, 1_000, 5_000, 15_000],
   bodyRetryMs: 1_000,
-  aheadRetryMs: 10 * 60_000,
 });
+
+/** Committed batches kept for diagnostics (a ring: the newest). */
+export const BROWSER_INTAKE_RECENT_BATCHES = 32;
 
 /** Where a test may break the intake: inside the batch's transaction before
  *  its commit (it rolls back), or after the commit before the ack. */
@@ -157,6 +173,8 @@ export interface BrowserIntakeBatch {
   fenced: number;
   siteResponses: number;
   gaps: number;
+  /** Frames the journal could not keep: losses on their connection. */
+  lost: number;
 }
 
 interface Subscription {
@@ -211,9 +229,12 @@ export class BrowserBufferIntake {
   #started = false;
   #stopped = false;
   #stopReason: string | null = null;
+  /** A buffer nothing is taken of (as persisted; kept here too should the
+   *  write fail). */
+  #halted: string | null = null;
   readonly #unlisten: Array<() => void> = [];
-  /** Committed batches (tests, diagnostics). */
-  readonly batches: BrowserIntakeBatch[] = [];
+  #recent: BrowserIntakeBatch[] = [];
+  #committedBatches = 0;
 
   constructor(deps: BrowserIntakeDeps) {
     this.#d = deps;
@@ -224,6 +245,16 @@ export class BrowserBufferIntake {
    *  null while it runs. */
   get stopReason(): string | null {
     return this.#stopReason;
+  }
+
+  /** The newest committed batches, oldest first (diagnostics, tests). */
+  get batches(): readonly BrowserIntakeBatch[] {
+    return this.#recent;
+  }
+
+  /** How many batches this intake committed. */
+  get committedBatches(): number {
+    return this.#committedBatches;
   }
 
   /** The subscription now (tests, diagnostics). */
@@ -343,6 +374,16 @@ export class BrowserBufferIntake {
       bufferId = NIL_BUFFER;
       afterSeq = 0;
     }
+    const halted = this.#halted ?? stored.halted?.bufferId ?? null;
+    if (halted !== null && bufferId === halted) {
+      // Its history contradicts the engine's: never taken again, whatever its
+      // numbers become. Another buffer of the operator is (a new hello).
+      this.#sub = null;
+      this.#startOver = null;
+      this.#d.metrics.increment("sync_browser_buffer_halted", { pageId });
+      logger.error({ pageId, bufferId, why }, "Fansly sync browser intake: the operator's buffer is halted (its history is not the engine's); nothing of it is taken until it names another");
+      return;
+    }
     this.#sub = { bufferId, committedSeq: afterSeq, epoch: client.epoch, first: true, switchedFrom };
     if (switchedFrom !== null) {
       this.#d.metrics.increment("sync_browser_buffer_switched", { pageId });
@@ -392,16 +433,25 @@ export class BrowserBufferIntake {
           this.#retryLater();
         }
         return;
-      case "ahead":
+      case "ahead": {
         // The engine has more of this buffer than the buffer gave: not this
-        // history (a file restored from before). Nothing of it is taken — its
-        // numbers would collide with the events committed.
+        // history (a file restored from before). Halted for good: once its
+        // numbers grew past the position, a subscription would acknowledge
+        // events the engine never took. Never retried; only another buffer
+        // is taken (alert 2 `browser_buffer_halted` while it stands).
         this.#sub = null;
+        this.#startOver = null;
+        this.#halted = refused.bufferId;
         metrics.increment("sync_browser_buffer_ahead", { pageId });
         logger.error({ pageId, bufferId: refused.bufferId, givenSeq: refused.givenSeq },
-          "Fansly sync browser intake: the operator's buffer is behind what the engine committed of it; nothing of it is taken");
-        this.#retryLater(this.#timing.aheadRetryMs);
+          "Fansly sync browser intake: the operator's buffer is behind what the engine committed of it; halted, nothing of it is taken");
+        try {
+          await haltPageBrowserIntake(this.#d.db, { pageId, bufferId: refused.bufferId, reason: "ahead" });
+        } catch (error) {
+          logger.warn({ pageId, err: errorName(error) }, "Fansly sync browser intake: the halt was not written; it holds in this process");
+        }
         return;
+      }
       case "not_subscribed":
       case "beyond_sent":
         await this.#subscribe(`an ack was refused (${refused.reason})`, null);
@@ -480,14 +530,19 @@ export class BrowserBufferIntake {
     const { pageId, metrics, logger } = d;
     const generations = new Map<number, string | null>();
     const now = new Date();
-    const batch: BrowserIntakeBatch = { bufferId: sub.bufferId, fromSeq: events[0]!.seq, uptoSeq: events.at(-1)!.seq, frames: 0, fenced: 0, siteResponses: 0, gaps: 0 };
+    const batch: BrowserIntakeBatch = { bufferId: sub.bufferId, fromSeq: events[0]!.seq, uptoSeq: events.at(-1)!.seq, frames: 0, fenced: 0, siteResponses: 0, gaps: 0, lost: 0 };
     const captured: number[] = [];
     const connections: Array<{ event: BufferEvent; taken: BrowserWsTaken }> = [];
     let result: { uptoSeq: number } | null;
     try {
       // A `ws.open`'s generation, on its own snapshot before the transaction.
+      // None while the page exists (no proxy for a moment): the batch waits —
+      // a connection of the page is never let go for a setting.
       for (const event of events) {
-        if (event.kind === "ws.open") generations.set(event.seq, await d.source.generationOf(event.sessionFingerprint));
+        if (event.kind !== "ws.open") continue;
+        const generation = await d.source.generationOf(event.sessionFingerprint);
+        if (generation === null && await findPageById(d.db, pageId) !== null) throw new Error("page_browser_generation_unreadable");
+        generations.set(event.seq, generation);
       }
       result = await d.db.transaction(async (raw) => {
         const tx = raw as unknown as Database;
@@ -499,12 +554,20 @@ export class BrowserBufferIntake {
         const storedSeq = stored.bufferId === sub.bufferId ? stored.ackedSeq : 0;
         let lastWall = stored.lastWall;
         let gapSince = stored.gapSince;
+        const signals: DemandSignal[] = [];
+        // The session the engine trusts: frames of another are kept, not applied.
+        const trustedGeneration = (await getSyncPage(tx, pageId))?.credentialsGeneration ?? null;
         if ((sub.switchedFrom !== null && stored.bufferId === sub.switchedFrom) || (missing && events[0]!.seq > storedSeq + 1)) {
           // The old buffer's untaken tail, or events the operator no longer
-          // has: lost since the last event taken.
+          // has: lost since the last event taken. The next connection's gap
+          // starts there; the connection still open (its close may be among
+          // them) has its gap open again — verified, repaired now.
           gapSince = minDate(gapSince, lastWall);
+          if (lastWall !== null) {
+            const open = await markBrowserWsLoss(tx, { pageId, browserConnectionId: null, since: lastWall });
+            if (open?.verified === true) signals.push({ resource: "repair.ws-gap", demand: { reason: "browser_events_lost" } });
+          }
         }
-        const signals: DemandSignal[] = [];
         /** The latest event of each connection in this batch: its proof of life. */
         const alive = new Map<string, Date>();
         let uptoSeq = storedSeq;
@@ -532,15 +595,26 @@ export class BrowserBufferIntake {
                 }
               } else if (kind === "auth_refused") {
                 signals.push({ resource: "account.verify", demand: { reason: "ws_auth_refused" } });
-              } else if (kind === "business") {
-                let business: string | null;
-                try {
-                  business = businessFanslyWsFrame(event.frame);
-                } catch {
-                  business = null;
+              } else if (kind === "business" || kind === "invalid") {
+                let business: string | null = null;
+                if (kind === "business") {
+                  try {
+                    business = businessFanslyWsFrame(event.frame);
+                  } catch {
+                    business = null;
+                  }
                 }
                 if (business === null) {
-                  batch.fenced += 1;
+                  // Not a frame the journal can keep (not JSON, more children
+                  // than the traversal reads): what it carried is a loss on
+                  // its connection — its gap open again, its repair asked for
+                  // — never an acknowledgement of nothing.
+                  batch.lost += 1;
+                  metrics.increment("sync_browser_frames_lost", { pageId, kind });
+                  logger.warn({ pageId, seq: event.seq, kind }, "Fansly sync browser intake: a frame the journal cannot keep; its connection's gap is repaired");
+                  const loss = await markBrowserWsLoss(tx, { pageId, browserConnectionId: event.connectionId, since: at });
+                  if (loss?.verified === true) signals.push({ resource: "repair.ws-gap", demand: { reason: "browser_frame_lost" } });
+                  else if (loss === null) batch.fenced += 1;
                   break;
                 }
                 const frame = await captureBrowserWsFrame(tx, {
@@ -549,15 +623,19 @@ export class BrowserBufferIntake {
                   bufferId: sub.bufferId,
                   seq: event.seq,
                   accountRef: d.ownRef,
-                  frame: business,
+                  // A NUL or an unpaired surrogate the journal cannot store
+                  // is replaced, as the engine's codec does for every body:
+                  // never a frame that stalls the stream.
+                  frame: replaceJournalUnstorableText(business).value,
                   receivedAt: at,
+                  trustedGeneration,
                 });
                 if (frame.kind === "captured") {
                   batch.frames += 1;
                   captured.push(frame.observationId);
                 } else {
                   batch.fenced += 1;
-                  metrics.increment("sync_browser_frames_fenced", { pageId, why: frame.kind });
+                  metrics.increment("sync_browser_frames_fenced", { pageId, why: frame.kind === "kept" ? frame.why : frame.kind });
                 }
               }
               break;
@@ -593,7 +671,14 @@ export class BrowserBufferIntake {
               });
               batch.siteResponses += 1;
               metrics.increment("sync_browser_site_responses", { pageId, as: observation.as });
-              if (observation.as === "incomplete") signals.push(...this.#backfillOf(event.route));
+              if (observation.as === "incomplete") {
+                const backfill = await this.#backfillOf(tx, event);
+                if (backfill.length === 0) {
+                  metrics.increment("sync_browser_site_unbackfilled", { pageId, route: event.route });
+                  logger.warn({ pageId, route: event.route, seq: event.seq }, "Fansly sync browser intake: a site answer not kept whole has no read that backfills it; its mark stays");
+                }
+                signals.push(...backfill);
+              }
               break;
             }
           }
@@ -617,7 +702,9 @@ export class BrowserBufferIntake {
         return false;
       }
       metrics.increment("sync_browser_batch_failed", { pageId, error: errorName(error) });
-      logger.warn({ pageId, fromSeq: batch.fromSeq, err: errorName(error) }, "Fansly sync browser intake: a batch did not commit; it comes again");
+      // Past the retry ladder it is no blip: said loudly, never a silent stall.
+      const log = this.#failures >= this.#timing.retryMs.length ? logger.error.bind(logger) : logger.warn.bind(logger);
+      log({ pageId, fromSeq: batch.fromSeq, failures: this.#failures + 1, err: errorName(error) }, "Fansly sync browser intake: a batch did not commit; it comes again");
       this.#sub = null;
       this.#retryLater();
       return false;
@@ -634,18 +721,35 @@ export class BrowserBufferIntake {
     for (const { event, taken } of connections) d.source.committed(event, taken);
     for (const observationId of captured) d.applyLive?.(observationId);
     batch.uptoSeq = result.uptoSeq;
-    this.batches.push(batch);
+    this.#committedBatches += 1;
+    this.#recent = [...this.#recent.slice(-(BROWSER_INTAKE_RECENT_BATCHES - 1)), batch];
     return true;
   }
 
-  /** The polls of the registry that read `route`: their own request
-   *  backfills a site answer the operator could not keep. */
-  #backfillOf(route: string): DemandSignal[] {
-    const wire = isFanslyRoute(route) ? FANSLY_ROUTES.get(route)?.wire ?? null : null;
+  /** The reads whose own request backfills a site answer the operator
+   *  could not keep, by its route, path and query: a chat's `/message` page
+   *  — the chat's messages (`dm-messages.head` from its head, `.catchup` for
+   *  an older page); a post's replies — the post's reply walk, its row of
+   *  the queue dirty; any other route — the polls that read it. */
+  async #backfillOf(tx: Database, event: Extract<BufferEvent, { kind: "site.response" }>): Promise<DemandSignal[]> {
+    const wire = isFanslyRoute(event.route) ? FANSLY_ROUTES.get(event.route)?.wire ?? null : null;
     if (wire === null) return [];
+    const reason = "browser_site_incomplete";
+    const query = new URLSearchParams(event.query.startsWith("?") ? event.query.slice(1) : event.query);
+    if (wire === "messages.page") {
+      const groupId = query.get("groupId");
+      if (groupId === null || groupId === "") return [];
+      return [{ resource: query.has("before") ? "dm-messages.catchup" : "dm-messages.head", subject: groupId, demand: { reason } }];
+    }
+    if (wire === "post.replies") {
+      const postId = /\/post\/([^/?#]+)\/replies/.exec(event.path)?.[1];
+      if (postId === undefined) return [];
+      await markPostRepliesDirty(tx, { pageId: this.#d.pageId, subjectRef: decodeURIComponent(postId), reason });
+      return [{ resource: "post-replies.walk", demand: { reason } }];
+    }
     return this.#d.registry.specs
       .filter((spec) => spec.kind === "poll" && spec.operations?.includes(wire) === true)
-      .map((spec) => ({ resource: spec.key, demand: { reason: "browser_site_incomplete" } }));
+      .map((spec) => ({ resource: spec.key, demand: { reason } }));
   }
 
   async #upsertDemands(tx: Database, signals: readonly DemandSignal[], now: Date): Promise<void> {

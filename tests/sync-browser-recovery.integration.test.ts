@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -7,7 +7,7 @@ import type { AppConfig } from "@agency_hub_core/shared";
 
 import { readPageBrowserLinkRevision, readPageBrowserLinkSettings, sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { PageBrowserRpcClient, type PageBrowserRpcTiming } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
-import { holdSetOf } from "../apps/runtime/src/sync/engine/admission.ts";
+import { holdSetOf, whyHeld } from "../apps/runtime/src/sync/engine/admission.ts";
 import { SyncCrashFault, type SyncFaultHook } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import type { PageTransport } from "../apps/runtime/src/sync/engine/ports.ts";
@@ -45,6 +45,8 @@ import { countRows, makeTestActor, testOwner, testSpec } from "./helpers/sync-en
 // - nothing is ever sent again from what the operator kept.
 
 const READ_KEY = "browser.read";
+/** A `/polls` answer well past 64K characters. */
+const LARGE_POLLS = { polls: Array.from({ length: 3_000 }, (_, i) => ({ id: String(1_000_000 + i), question: `question ${"x".repeat(40)}` })) };
 const PROXY = "socks5://127.0.0.1:1080";
 const TIMING: Partial<PageBrowserRpcTiming> = { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 };
 const PAGE_SETTINGS = {
@@ -131,7 +133,14 @@ interface Engine {
 async function engine(
   r: Rig,
   generation: bigint,
-  options: { registry: EngineRegistry; faults?: SyncFaultHook; resultWaitMs?: number; settingsBlocked?: () => boolean },
+  options: {
+    registry: EngineRegistry;
+    faults?: SyncFaultHook;
+    resultWaitMs?: number;
+    settingsBlocked?: () => boolean;
+    db?: Database;
+    limits?: { lateMax: number; pendingMax: number };
+  },
 ): Promise<Engine> {
   const client = new PageBrowserRpcClient({
     url: r.operator.url,
@@ -145,12 +154,12 @@ async function engine(
   });
   const transport = await createBrowserPageTransport({ db: db(), config: config() }, { pageId: r.page.pageId }, {
     client,
-    timing: { unavailableRetryMs: 200, resultWaitMs: options.resultWaitMs ?? 5_000, recoverWaitMs: 1_000 },
+    timing: { unavailableRetryMs: 200, resultWaitMs: options.resultWaitMs ?? 5_000, recoverWaitMs: 1_000, ...options.limits },
     cdnUrlAllowed: harnessCdnUrlAllowed,
   });
   cleanups.push(() => transport.close());
   const made = await makeTestActor({
-    db: db(),
+    db: options.db ?? db(),
     pageId: r.page.pageId,
     registry: options.registry,
     transport,
@@ -278,6 +287,8 @@ describe("at the engine's start, before the recovery closes anything unknown", (
     if (!testDb) return context.skip();
     const r = await rig();
     const applied: number[] = [];
+    // A large answer: kept complete, never cut at 64K (Astra's review).
+    r.operator.respond = () => ({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response: LARGE_POLLS }) });
     r.operator.deliverResults = false;
     const old = await crashAt(r, "after_send", pollRegistry(applied));
     const sends = r.operator.sends.length;
@@ -298,7 +309,8 @@ describe("at the engine's start, before the recovery closes anything unknown", (
     expect(await attempt(r.page.pageId, old)).toMatchObject({ outcome: "unknown", applyState: "none" });
     const late = await observationsOfKind(r.page.pageId, "polls:late");
     expect(late).toHaveLength(1);
-    expect(late[0]!.payload).toMatchObject({ status: 200, attemptId: old, disposition: "late_not_applied" });
+    expect(late[0]!.payload).toMatchObject({ status: 200, attemptId: old, disposition: "late_not_applied", answer: LARGE_POLLS });
+    expect(JSON.stringify(late[0]!.payload).length).toBeGreaterThan(64 * 1024);
     expect(applied).not.toContain(old);
     nothingSentAgain(r, sends, [old]);
   }, 60_000);
@@ -371,5 +383,130 @@ describe("between steps", () => {
     // Each was sent once.
     const ids = r.operator.physical.map((request) => request.attemptId);
     expect(new Set(ids).size).toBe(ids.length);
+  }, 60_000);
+});
+
+// Astra's review of PR 13: nothing from a doubtful source is applied, and
+// nothing is acknowledged before it is kept in full.
+describe("the review of PR 13", () => {
+  it("a recovered answer of another session is never applied: kept as a fact, the attempt settled as a request that went without its answer", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const applied: number[] = [];
+    r.operator.deliverResults = false;
+    r.operator.resultSession = SESSION_B;
+    const old = await crashAt(r, "after_send", pollRegistry(applied));
+    r.operator.deliverResults = true;
+    const second = await engine(r, 2n, { registry: pollRegistry(applied) });
+    await runActorUntil(second.made, async () => r.operator.acks.includes(old), 20_000, "the foreign answer acknowledged");
+    expect(await attempt(r.page.pageId, old)).toMatchObject({ outcome: "transport_error", applyState: "none", observationKey: null });
+    expect(applied).not.toContain(old);
+    const kept = (await observationsOfKind(r.page.pageId, "polls:foreign_session")).filter((row) => row.payload.attemptId === old);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.payload).toMatchObject({ disposition: "rejected_foreign_session", status: 200, answer: [] });
+  }, 60_000);
+
+  it("an answer the server did not confirm is kept complete, never cut at 64K, before it is acknowledged", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.responseSource = "cache_unconfirmed";
+    r.operator.respond = () => ({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response: LARGE_POLLS }) });
+    const run = await engine(r, 1n, { registry: pollRegistry() });
+    await runActorUntil(run.made, async () => r.operator.acks.length >= 1, 20_000, "the ack");
+    const kept = await observationsOfKind(r.page.pageId, "polls:unconfirmed");
+    expect(kept[0]!.payload).toMatchObject({ source: "cache_unconfirmed", disposition: "rejected_not_applied", answer: LARGE_POLLS });
+  }, 60_000);
+
+  for (const manualLogin of [false, true]) {
+    it(`a recovered site 401 ${manualLogin ? "of the manual login holds nothing" : "of an ordinary request holds the credentials, as live"}: the exemption is the admission's`, async (context) => {
+      if (!testDb) return context.skip();
+      const r = await rig();
+      const first = await acquireSyncPageOwnership(db(), { pageId: r.page.pageId, owner: testOwner(), judgePreviousOwner: () => "test_confirmed_dead" });
+      if (first.kind !== "acquired") throw new Error("not acquired");
+      const site = await insertSiteAdmission(db(), {
+        pageId: r.page.pageId, generation: first.generation, origin: manualLogin ? "login" : "site", operation: manualLogin ? "auth.login" : "polls",
+        request: { method: manualLogin ? "POST" : "GET", path: manualLogin ? "/login" : "/polls", manualLogin }, browserRequestId: randomUUID(),
+        settingMs: 60, jitterU: 0.1, pauseMs: 66,
+      });
+      r.operator.holdEnd({
+        type: "siteDone", siteRequestId: randomUUID(), attemptId: site.attemptId, sent: true, sentMono: null, sentWall: Date.now() - 5_000,
+        connectionReused: false, status: 401, retryAfter: null, error: null, body: "not_platform_data",
+      });
+      const second = await engine(r, first.generation + 1n, { registry: pollRegistry() });
+      await runActorUntil(second.made, async () => r.operator.acks.includes(site.attemptId), 20_000, "the end acknowledged");
+      expect(await attempt(r.page.pageId, site.attemptId)).toMatchObject({ outcome: "response", httpStatus: 401, errorClass: manualLogin ? "site:401" : "auth" });
+      const held = whyHeld(holdSetOf((await getSyncPage(db(), r.page.pageId))!.holds), null, {}, new Date());
+      if (manualLogin) expect(held).toBeNull();
+      else expect(held).toMatchObject({ scope: "credentials" });
+    }, 60_000);
+  }
+
+  it("a late outcome whose commit fails is not dropped: it is asked for again (the operator delivers an outcome once per connection) and kept", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.deliverResults = false;
+    const old = await crashAt(r, "after_send", pollRegistry());
+    // Nothing of the page is read meanwhile: the late outcome's commit is the
+    // next transaction.
+    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    r.operator.deliverResults = true;
+    let failNext = false;
+    let failures = 0;
+    const real = db();
+    const flaky = new Proxy(real, {
+      get(target, property) {
+        if (property === "transaction") {
+          return async (...args: Parameters<Database["transaction"]>) => {
+            if (failNext) {
+              failNext = false;
+              failures += 1;
+              throw new Error("the database is away for a moment");
+            }
+            return target.transaction(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    }) as Database;
+    let blocked = true;
+    const second = await engine(r, 2n, { registry: pollRegistry(), settingsBlocked: () => blocked, db: flaky });
+    const run = second.made.actor.run({ stop: second.made.stop.signal, abort: second.made.abort.signal });
+    try {
+      await until(async () => (await attempt(r.page.pageId, old))?.outcome === "unknown", 10_000, "the attempt closed unknown");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      failNext = true;
+      blocked = false;
+      await until(async () => r.operator.acks.includes(old), 20_000, "the late outcome kept after its failed commit");
+    } finally {
+      second.made.stop.abort();
+      await run;
+    }
+    expect(failures).toBe(1);
+    expect(r.operator.recovers.some((asked) => asked.includes(old))).toBe(true);
+    expect(await observationsOfKind(r.page.pageId, "polls:late")).toHaveLength(1);
+  }, 60_000);
+
+  it("more late outcomes than the transport keeps: each one is redelivered and taken — the overflow is asked for again, then a new hello", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    // Outcomes of attempts no page has (nothing to commit): acknowledged.
+    const ids = [9_001, 9_002, 9_003, 9_004, 9_005];
+    for (const id of ids) {
+      const body = Buffer.from(JSON.stringify({ success: true, response: { polls: [] } }));
+      r.operator.held.set(id, {
+        result: {
+          type: "result", attemptId: id, sessionFingerprint: SESSION_A,
+          outcome: { kind: "response", status: 200, headers: {}, body: { bodyId: randomUUID(), decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") }, encodedBytes: body.length, source: "network", sentMono: null, sendMark: "completion_fallback" },
+        },
+        body,
+      });
+    }
+    const run = await engine(r, 1n, { registry: pollRegistry(), limits: { lateMax: 2, pendingMax: 1 } });
+    // Paused: the laps only take the late outcomes.
+    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    await runActorUntil(run.made, async () => ids.every((id) => r.operator.acks.includes(id)), 20_000, "every outcome taken");
+    expect(r.operator.recovers.some((asked) => asked.length > 0 && asked.every((id) => ids.includes(id)))).toBe(true);
+    expect(r.operator.hellos.length).toBeGreaterThanOrEqual(2);
   }, 60_000);
 });

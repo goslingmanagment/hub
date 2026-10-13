@@ -430,6 +430,27 @@ export async function ensurePostRepliesWalkRow(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
+/**
+ * A post's replies must be walked again (Project Browser, PR 13: the site
+ * read a reply page whose body the operator could not keep): its row of the
+ * `post_replies` plane is dirty and due now, made if the projector has not
+ * queued the post yet.
+ */
+export async function markPostRepliesDirty(
+  db: Database,
+  input: { pageId: number; subjectRef: string; reason: string },
+): Promise<void> {
+  await db.execute(sql`
+    insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, dirty_reason, next_due_at)
+    values (${input.pageId}, 'post_replies', ${input.subjectRef}, 'dirty', ${input.reason}, now())
+    on conflict (page_id, plane, subject_ref) do update
+       set refresh_class = 'dirty',
+           dirty_reason = excluded.dirty_reason,
+           next_due_at = least(coalesce(subject_refresh_state.next_due_at, excluded.next_due_at), excluded.next_due_at),
+           updated_at = now()
+  `);
+}
+
 export interface PostRepliesWalkCandidate {
   subjectRef: string;
   knownCount: number | null;
