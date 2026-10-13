@@ -1350,3 +1350,76 @@ export async function tlsLikeServer(): Promise<{ port: number; received: () => B
       }),
   };
 }
+
+// ── the site's socket (PR 10) ──────────────────────────────────────────────
+
+/** A TLS record of `size` bytes in all, its body filled with `fill`. */
+export function tlsRecord(type: number, size: number, fill: number): Buffer {
+  return Buffer.concat([Buffer.from([type, 0x03, 0x03, (size - 5) >> 8, (size - 5) & 0xff]), Buffer.alloc(size - 5, fill)]);
+}
+
+/** What each of Chrome's records on a socket's tunnel is filled with: the
+ *  server can tell what reached it. */
+export const SOCKET_FILL = { clientHello: 0x11, finished: 0x22, request: 0x33, frame: 0x44 } as const;
+
+/** Chrome's side of a socket's tunnel through the operator's proxy, as TLS
+ *  records (TLS 1.3 against tlsLikeServer): its ClientHello, the server's
+ *  hello back, its Finished, then the WebSocket handshake request — the
+ *  record the proxy holds to the admission's deadline — and frames. */
+export class SocketTunnelClient {
+  readonly status: number;
+  readonly socket: Socket;
+  readonly closed: Promise<void>;
+
+  private constructor(status: number, socket: Socket) {
+    this.status = status;
+    this.socket = socket;
+    socket.on("error", () => undefined);
+    this.closed = new Promise((resolve) => socket.once("close", () => resolve()));
+  }
+
+  /** The CONNECT; resolves with the proxy's answer (it waits for the
+   *  admission first). */
+  static async connect(proxyPort: number, target = "wsv3.fansly.com:443"): Promise<SocketTunnelClient> {
+    const { status, socket } = await proxyConnect(proxyPort, target);
+    return new SocketTunnelClient(status, socket);
+  }
+
+  /** The TLS handshake: ClientHello, the server's hello, the Finished. */
+  async tls(): Promise<void> {
+    this.socket.write(tlsRecord(22, 200, SOCKET_FILL.clientHello));
+    await new Promise<void>((resolve) => {
+      this.socket.once("data", () => resolve());
+      this.socket.resume();
+    });
+    this.socket.write(tlsRecord(23, 58, SOCKET_FILL.finished));
+  }
+
+  /** The handshake request: one big application-data record. */
+  request(): void {
+    this.socket.write(tlsRecord(23, 300, SOCKET_FILL.request));
+  }
+
+  frame(): void {
+    this.socket.write(tlsRecord(23, 120, SOCKET_FILL.frame));
+  }
+
+  destroy(): void {
+    this.socket.destroy();
+  }
+}
+
+/** The engine's end, as the site socket's path sees it: what the operator
+ *  sent it. */
+export class FakeSocketLink {
+  readonly messages: Array<Record<string, unknown>> = [];
+
+  send(message: object): boolean {
+    this.messages.push(message as Record<string, unknown>);
+    return true;
+  }
+
+  of(type: string): Array<Record<string, unknown>> {
+    return this.messages.filter((message) => message.type === type);
+  }
+}
