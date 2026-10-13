@@ -174,8 +174,8 @@ every cell, the agent key, a page that is not granted and one that does not
 exist, in both auth-policy modes, and another person's generation refused for
 every role.
 
-Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream)
-adds no right and no route. A caller who may generate for a page may send the
+Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream;
+Fansly since R20 HF-8б) adds no right and no route. A caller who may generate for a page may send the
 last messages its client read off that page's open chat; they join the
 transcript of that one generation and are stored in its restricted record
 only, scoped `contextScope: principal-draft` as above. Two limits keep it
@@ -188,7 +188,9 @@ inside what the caller could already do:
   pages' message stores (the archive and the webhook archive) only for pages
   granted to the caller (every page for the owner). A message id that exists
   on a page the caller is not granted is not looked up, so the
-  `context_conflict` refusal never says that an id exists there.
+  `context_conflict` refusal never says that an id exists there. On Fansly
+  (R20 HF-8б) the page's own socket overlay is read too, and only the
+  request's page's: it adds no page to what the caller may read.
 
 Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
 a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.
