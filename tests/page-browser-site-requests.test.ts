@@ -1,0 +1,703 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
+import { PausedRequests } from "../apps/page-browser/src/cdp/paused.ts";
+import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
+import { fanslyClientCheck, sessionFingerprint, SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
+import { NO_SESSION, SiteRequests, type SiteTimings } from "../apps/page-browser/src/intercept/site.ts";
+import type { RequestLine } from "../apps/page-browser/src/logs/journal.ts";
+import type { OperatorMode } from "../apps/page-browser/src/policy/operations.ts";
+import type { BufferEvent, SiteAdmitResult, SiteDone } from "../apps/page-browser/src/rpc/protocol.ts";
+import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
+import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
+import { FakeCdpPort, quiet, tempDir, until } from "./helpers/page-browser-fakes.ts";
+import { SiteChrome, type SiteScript } from "./helpers/page-browser-site.ts";
+
+// The site's own requests (Project Browser plan §4.3; spec §2, §3, §6.1,
+// §9; owner decisions №1, №2, №3): every request of the site stops in
+// Fetch; the map decides it; a request to the API waits for the engine's
+// `siteAdmit` and goes only through the gate's window before its deadline;
+// the answers with platform data go whole into the buffer — or as a mark —
+// and the end goes to the engine as `siteDone` once durable. A scripted
+// Chrome (SiteChrome) shows what CDP would, and its `wire` is what
+// physically left: what the gate let up.
+
+const cleanups: Array<() => Promise<void> | void> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  setLogSink(null);
+  forgetSecrets();
+});
+
+const TOKEN = "fansly-token-SiTe0123456789xyz";
+const CLIENT_ID = "720167541418230001";
+const FINGERPRINT = sessionFingerprint(TOKEN, CLIENT_ID);
+const API = "https://apiv3.fansly.com/api/v1";
+
+function siteHeaders(path: string, token = TOKEN): Record<string, string> {
+  return {
+    Accept: "application/json, text/plain, */*",
+    authorization: token,
+    "fansly-client-check": fanslyClientCheck(path, CLIENT_ID),
+    "fansly-client-id": CLIENT_ID,
+    "fansly-client-ts": "1791800000000",
+    "fansly-session-id": "720167541418239999",
+  };
+}
+
+/** The engine's side: what the operator asks and tells it, and its answer
+ *  to each `siteAdmit` — an admission for 15 s by default, or whatever
+ *  `answer` says (null: none). */
+class FakeSiteEngine {
+  readonly messages: Array<Record<string, unknown>> = [];
+  up = true;
+  epoch = 1;
+  generation = 1;
+  #attempt = 5000;
+  answer: (ask: Record<string, unknown>) => SiteAdmitResult | null = (ask) => ({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: ++this.#attempt });
+  deliver: (result: SiteAdmitResult) => void = () => undefined;
+
+  link() {
+    return {
+      up: () => this.up,
+      epoch: () => this.epoch,
+      generation: () => this.generation,
+      send: (message: object) => {
+        if (!this.up) return false;
+        const record = message as Record<string, unknown>;
+        this.messages.push(record);
+        if (record.type === "siteAdmit") {
+          const answer = this.answer(record);
+          if (answer !== null) setImmediate(() => this.deliver(answer));
+        }
+        return true;
+      },
+    };
+  }
+
+  of(type: string): Array<Record<string, unknown>> {
+    return this.messages.filter((message) => message.type === type);
+  }
+}
+
+interface World {
+  cdp: FakeCdpPort;
+  chrome: SiteChrome;
+  gate: ApiGate;
+  engine: FakeSiteEngine;
+  site: SiteRequests;
+  buffer: EventBuffer;
+  session: SiteSession;
+  /** siteDone outcomes as committed (their JSON stored), by attempt. */
+  done: Map<number, SiteDone>;
+  faults: Array<{ reason: string; note: string }>;
+  journal: RequestLine[];
+  lines: string[];
+  up: { why: string | null };
+  refusal: { why: string | null };
+  mode: { now: OperatorMode };
+  /** What the engine's message order was, with the CDP commands. */
+  order: string[];
+}
+
+async function world(options: { timings?: Partial<SiteTimings>; capBytes?: number; dir?: string; holdRelease?: Promise<void> } = {}): Promise<World> {
+  let dir = options.dir;
+  if (dir === undefined) {
+    const temp = tempDir("pb-site-");
+    cleanups.push(temp.remove);
+    dir = temp.dir;
+  }
+  const lines: string[] = [];
+  setLogSink((line) => lines.push(line));
+  const cdp = new FakeCdpPort();
+  const gate = new ApiGate();
+  const chrome = new SiteChrome(cdp, gate);
+  gate.cut = () => chrome.cut();
+  gate.cutHeld = () => 0;
+  cleanups.push(() => gate.reset());
+  const engine = new FakeSiteEngine();
+  const done = new Map<number, SiteDone>();
+  const faults: World["faults"] = [];
+  const journal: RequestLine[] = [];
+  const up = { why: null as string | null };
+  const refusal = { why: null as string | null };
+  const mode = { now: "automation" as OperatorMode };
+  const order: string[] = [];
+  const buffer: EventBuffer = new EventBuffer({
+    dir: join(dir, "buffer"),
+    idFile: join(dir, "buffer-id"),
+    batchMs: 5,
+    log: quiet,
+    ...(options.capBytes ? { caps: { bytes: options.capBytes } } : {}),
+    onCommitted: ({ outcomes }) => {
+      for (const outcome of outcomes) {
+        const parsed = JSON.parse(outcome.json) as SiteDone;
+        if (parsed.type === "siteDone") done.set(outcome.attemptId, parsed);
+      }
+    },
+  });
+  buffer.start();
+  cleanups.push(() => buffer.close());
+  const session = new SiteSession();
+  let site: SiteRequests | null = null;
+  const paused = new PausedRequests(cdp, {
+    log: quiet,
+    decide: (request) => site!.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "nobody's" },
+  });
+  const original = cdp.send.bind(cdp);
+  cdp.send = (async (method: string, params?: Record<string, unknown>, sessionId?: string) => {
+    order.push(method);
+    return original(method, params, sessionId);
+  }) as typeof cdp.send;
+  const link = engine.link();
+  const created = new SiteRequests({
+    cdp,
+    resolve: (request, decision) => paused.resolve(request, decision),
+    gate,
+    cutApi: () => chrome.cut(),
+    buffer: { ...bufferPort(buffer, options.holdRelease), refusal: () => refusal.why ?? buffer.refusal() },
+    link: {
+      ...link,
+      send: (message) => {
+        order.push(message.type);
+        return link.send(message);
+      },
+    },
+    notUp: () => up.why,
+    session: { fingerprint: () => session.fingerprint, note: (request) => session.note(request) },
+    mode: () => mode.now,
+    fault: (reason, note) => faults.push({ reason, note }),
+    journal: (line) => journal.push(line),
+    timings: { admitWaitMs: 2000, opLimitMs: 2000, requestLimitMs: 1500, mainWaitMs: 500, armWaitMs: 100, retryMs: [50], ...options.timings },
+    log: makeLog("site"),
+  });
+  site = created;
+  gate.onEvent = (event) => created.onGateEvent(event);
+  engine.deliver = (result) => created.onAdmitResult(result);
+  return { cdp, chrome, gate, engine, site: created, buffer, session, done, faults, journal, lines, up, refusal, mode, order };
+}
+
+/** The buffer as the site path takes it (its methods bound); `holdRelease`:
+ *  an admission's write is durable only once it settles. */
+function bufferPort(buffer: EventBuffer, holdRelease?: Promise<void>) {
+  return {
+    appendGroup: buffer.appendGroup.bind(buffer),
+    changeSiteRequest: (change: Parameters<EventBuffer["changeSiteRequest"]>[0]) => {
+      const appended = buffer.changeSiteRequest(change);
+      if (holdRelease === undefined || !("released" in change) || !appended.ok) return appended;
+      return { ok: true as const, durable: appended.durable.then(async (durable) => (await holdRelease, durable)) };
+    },
+    siteRequests: buffer.siteRequests.bind(buffer),
+    beginBody: buffer.beginBody.bind(buffer),
+    removeBody: buffer.removeBody.bind(buffer),
+    readBody: buffer.readBody.bind(buffer),
+  };
+}
+
+function events(buffer: EventBuffer): Array<BufferEvent & { bodyId: string | null }> {
+  return buffer.readEvents(0, 1000, Number.MAX_SAFE_INTEGER).map((event) => ({ ...(JSON.parse(event.json) as BufferEvent), bodyId: event.bodyId ?? null }));
+}
+
+function siteResponses(buffer: EventBuffer): Array<Extract<BufferEvent, { kind: "site.response" }> & { bodyId: string | null }> {
+  return events(buffer).filter((event) => event.kind === "site.response") as never;
+}
+
+function bodyOf(buffer: EventBuffer, bodyId: string): Buffer {
+  return buffer.readBody(bodyId, 0, 64 * 1024 * 1024)!;
+}
+
+async function doneOf(w: World, count = 1): Promise<SiteDone[]> {
+  await until(() => w.done.size >= count, 5000, `${count} siteDone`);
+  return [...w.done.values()];
+}
+
+/** One request of the site to its end (the engine admits one at a time:
+ *  the gate has one window). */
+async function run(w: World, path: string, script: SiteScript): Promise<SiteDone> {
+  const before = w.done.size;
+  w.chrome.request(`${API}${path}`, { headers: siteHeaders(`/api/v1${path}`), script });
+  await until(() => w.done.size > before, 5000, `the end of ${path}`);
+  return [...w.done.values()].at(-1)!;
+}
+
+const JSON_BODY = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "300000000000000001", username: "lora" } } }));
+
+describe("a read of the API (plan §4.3)", () => {
+  it("is asked of the engine with its route and session, its stream armed before the ask, released through the gate's window under the admission, and its answer kept whole before siteDone goes", async () => {
+    const w = await world();
+    const request = w.chrome.request(`${API}/account/me?ngsw-bypass=true`, { headers: siteHeaders("/api/v1/account/me"), script: { chunks: [JSON_BODY.subarray(0, 40), JSON_BODY.subarray(40)] } });
+    const [done] = await doneOf(w);
+    const ask = w.engine.of("siteAdmit")[0]!;
+    expect(ask).toEqual({
+      type: "siteAdmit",
+      siteRequestId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      method: "GET",
+      host: "apiv3.fansly.com",
+      path: "/api/v1/account/me",
+      query: "?ngsw-bypass=true",
+      resourceType: "XHR",
+      route: "account.me",
+      operation: "read",
+      sessionFingerprint: FINGERPRINT,
+      pausedMono: expect.any(Number),
+      waitDeadlineMono: (ask.pausedMono as number) + 2000,
+    });
+    // The stream was armed at the request stage, before the engine was asked.
+    expect(request.armedAt).toBe("request");
+    expect(w.order.indexOf("Network.streamResourceContent")).toBeLessThan(w.order.indexOf("siteAdmit"));
+    expect(w.order.indexOf("siteAdmit")).toBeLessThan(w.order.indexOf("Fetch.continueRequest"));
+    // One physical request, through the gate's window; its answer stopped at
+    // its headers and went on.
+    expect(w.chrome.wire).toEqual([{ role: "main", method: "GET", url: `${API}/account/me?ngsw-bypass=true` }]);
+    expect(request.interceptResponse).toBe(true);
+    expect(w.cdp.sent("Fetch.continueRequest")[0]!.params).toEqual({ requestId: request.interceptionId, interceptResponse: true });
+    expect(w.chrome.pageRead.get(request.networkId)?.equals(JSON_BODY)).toBe(true);
+    // The answer: whole in the buffer, its body the page's, named by the event.
+    const [response] = siteResponses(w.buffer);
+    expect(response).toMatchObject({
+      kind: "site.response",
+      siteRequestId: ask.siteRequestId,
+      attemptId: done!.attemptId,
+      route: "account.me",
+      method: "GET",
+      path: "/api/v1/account/me",
+      query: "?ngsw-bypass=true",
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": String(JSON_BODY.length) },
+      body: { decodedBytes: JSON_BODY.length, sha256: createHash("sha256").update(JSON_BODY).digest("hex") },
+      complete: true,
+      source: "network",
+      sessionFingerprint: FINGERPRINT,
+    });
+    expect(response!.bodyId).toBe(response!.body.bodyId);
+    expect(bodyOf(w.buffer, response!.body.bodyId).equals(JSON_BODY)).toBe(true);
+    expect(done).toEqual({
+      type: "siteDone",
+      siteRequestId: ask.siteRequestId,
+      attemptId: done!.attemptId,
+      sent: true,
+      sentMono: expect.any(Number),
+      sentWall: expect.any(Number),
+      connectionReused: true,
+      status: 200,
+      retryAfter: null,
+      error: null,
+      body: "buffered",
+    });
+    // Chrome's moment, never earlier than the gate's first bytes.
+    expect(done!.sentMono).toBeGreaterThanOrEqual(w.gate.lastSend!.mono);
+    // Its id went with its end: nothing of it is kept.
+    await until(() => w.buffer.siteRequests().length === 0, 3000, "its id to go");
+    expect(w.journal).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "ended", status: 200, result: "200, body buffered", admission: `site request ${String(ask.siteRequestId)} (attempt ${done!.attemptId})` }));
+    // The session was learned from it.
+    expect(w.session.fingerprint).toBe(FINGERPRINT);
+    // No secret in the log.
+    for (const secret of [TOKEN, CLIENT_ID, "lora"]) expect(w.lines.join("\n"), secret).not.toContain(secret);
+  });
+
+  it("its id is in the buffer before its siteAdmit; a buffer that refuses writes admits nothing: failed at once, nothing asked", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    w.chrome.request(`${API}/messaging/groups`, { headers: siteHeaders("/api/v1/messaging/groups") });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    expect(w.buffer.siteRequests()).toEqual([{ siteRequestId: w.engine.of("siteAdmit")[0]!.siteRequestId, attemptId: null, released: false }]);
+    w.refusal.why = "buffer_full";
+    const refused = w.chrome.request(`${API}/messaging/groups`, { headers: siteHeaders("/api/v1/messaging/groups") });
+    await until(() => refused.outcome === "failed", 3000, "the request to fail");
+    expect(refused.failReason).toBe("Failed");
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("a page that is not up (the exit closed) takes none of the site's requests: the API's failed, the page's not passed", async () => {
+    const w = await world();
+    w.up.why = "the exit is closed";
+    const api = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    const page = w.chrome.request("https://fansly.com/main.js", { resourceType: "Script" });
+    await until(() => api.outcome === "failed" && page.outcome === "failed", 3000, "both to fail");
+    expect([api.failReason, page.failReason]).toEqual(["Failed", "BlockedByClient"]);
+    expect(w.engine.of("siteAdmit")).toEqual([]);
+  });
+
+  it("refused by the engine: failed (Failed), nothing leaves, and no siteDone (it had no attempt)", async () => {
+    const w = await world();
+    w.engine.answer = (ask) => ({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: false, reason: "site_hour_cap" });
+    const request = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications") });
+    await until(() => request.outcome === "failed", 3000, "the request to fail");
+    expect(request.failReason).toBe("Failed");
+    expect(w.chrome.wire).toEqual([]);
+    await until(() => w.buffer.siteRequests().length === 0, 3000, "its id to go");
+    expect(w.done.size).toBe(0);
+    expect(w.journal).toContainEqual(expect.objectContaining({ path: "/api/v1/notifications", decision: "ended", result: "refused by the engine: site_hour_cap" }));
+  });
+
+  it("no answer within its wait: failed (Failed), the reason journaled; an admission that comes later ends at once, not sent", async () => {
+    const w = await world({ timings: { admitWaitMs: 150 } });
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/subscribers`, { headers: siteHeaders("/api/v1/subscribers") });
+    await until(() => request.outcome === "failed", 3000, "the wait to end");
+    expect(request.failReason).toBe("Failed");
+    expect(w.journal).toContainEqual(expect.objectContaining({ path: "/api/v1/subscribers", decision: "ended", result: "no admission within 150 ms" }));
+    const ask = w.engine.of("siteAdmit")[0]!;
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 77 });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 77, sent: false, status: null, error: { afterSendStart: false, message: expect.stringContaining("not used") }, body: "not_platform_data" });
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("without the engine it waits and is asked once a link comes; a link that changes asks again what it had not answered — an answer counts only on its connection", async () => {
+    const w = await world();
+    w.engine.up = false;
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(w.engine.of("siteAdmit")).toEqual([]);
+    expect(request.outcome).toBe("paused");
+    w.engine.up = true;
+    w.site.linkChanged(true);
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+    const id = w.engine.of("siteAdmit")[0]!.siteRequestId;
+    // A new connection: the same request asked again, by the same id.
+    w.engine.epoch = 2;
+    w.site.linkChanged(true);
+    expect(w.engine.of("siteAdmit").map((ask) => ask.siteRequestId)).toEqual([id, id]);
+    // An answer of the old connection would not count — here the new one
+    // admits it.
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(id), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 90 });
+    await doneOf(w);
+    expect(w.chrome.wire).toHaveLength(1);
+  });
+
+  it("an admission answered on another connection than it was asked on is not used: siteDone, not sent", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    const id = String(w.engine.of("siteAdmit")[0]!.siteRequestId);
+    w.engine.epoch = 2;
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: id, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 91 });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 91, sent: false });
+    expect(request.outcome).toBe("paused");
+    expect(w.chrome.wire).toEqual([]);
+  });
+});
+
+describe("a CORS preflight (owner decision №1)", () => {
+  it("is part of its request: one admission asked at the preflight with the request's method, the preflight handed on by fulfill, the request under the same admission", async () => {
+    const w = await world();
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204, chunks: [JSON_BODY] } });
+    const [done] = await doneOf(w);
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ method: "GET", resourceType: "Preflight", route: "messages.page", sessionFingerprint: null });
+    expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight", "main"]);
+    expect(w.chrome.preflightOf(request)!.outcome).toBe("fulfilled");
+    expect(done).toMatchObject({ sent: true, status: 200, body: "buffered" });
+    // Armed at the request's own pause, before it went on.
+    expect(request.armedAt).toBe("request");
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ route: "messages.page", complete: true, sessionFingerprint: FINGERPRINT });
+  });
+
+  it("a non-2xx answer to the preflight is its operation's answer: the request never left", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 429, headers: [{ name: "retry-after", value: "30" }] } });
+    const [done] = await doneOf(w);
+    expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight"]);
+    expect(done).toMatchObject({ sent: true, status: 429, body: "not_platform_data", error: null });
+    expect(siteResponses(w.buffer)).toEqual([]);
+  });
+});
+
+describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", () => {
+  const whole = (script: SiteScript) => script;
+
+  it("not armed at the request stage (its session not known yet): armed at the response stage, before a byte reaches the page, and kept whole", async () => {
+    const w = await world();
+    // Chrome tells of the request (its session) only after the arming's
+    // wait at the request stage is over; the engine answers later still.
+    const admit = w.engine.answer;
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: whole({ willBeSentDelayMs: 200, chunks: [JSON_BODY] }) });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(request.armedAt).toBeNull();
+    w.site.onAdmitResult(admit(w.engine.of("siteAdmit")[0]!)!);
+    const [done] = await doneOf(w);
+    expect(request.armedAt).toBe("response");
+    expect(done).toMatchObject({ status: 200, body: "buffered" });
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ complete: true });
+  });
+
+  it("read as a stream (a cancel after the answer): whole by its declared length, or by its JSON shape; a truncated one is a mark, its body not kept", async () => {
+    const w = await world();
+    const done = [
+      await run(w, "/account/me", { then: "cancel_after_answer", chunks: [JSON_BODY] }),
+      await run(w, "/notifications", { then: "cancel_after_answer", chunked: true, chunks: [JSON_BODY.subarray(0, 30), JSON_BODY.subarray(30)] }),
+      await run(w, "/subscribers", { then: "cancel_after_answer", chunked: true, chunks: [JSON_BODY.subarray(0, 30)] }),
+      // Declared longer than what came: not whole, whatever its shape.
+      await run(w, "/polls", { then: "cancel_after_answer", contentLength: JSON_BODY.length + 5, chunks: [JSON_BODY] }),
+    ];
+    expect(done.map((entry) => entry.body)).toEqual(["buffered", "buffered", "incomplete", "incomplete"]);
+    expect(w.faults).toEqual([]);
+    const responses = siteResponses(w.buffer);
+    expect(responses.map((response) => [response.route, response.complete])).toEqual(
+      expect.arrayContaining([
+        ["account.me", true],
+        ["notifications.page", true],
+        ["subscribers.page", false],
+        ["polls", false],
+      ]),
+    );
+    const mark = responses.find((response) => response.route === "subscribers.page")!;
+    expect(mark.bodyId).toBeNull();
+    expect(mark.body).toMatchObject({ decodedBytes: 0 });
+  });
+
+  it("a chunk without its data, a short chunk, a body that broke off: never kept as a fact — a mark, siteDone says incomplete", async () => {
+    const w = await world();
+    const done = [
+      await run(w, "/account/me", { unstreamed: true, chunks: [JSON_BODY] }),
+      await run(w, "/notifications", { brokenChunk: true, chunks: [JSON_BODY] }),
+      await run(w, "/subscribers", { then: "body_fails", chunks: [JSON_BODY] }),
+    ];
+    expect(done.map((entry) => [entry.status, entry.body])).toEqual([
+      [200, "incomplete"],
+      [200, "incomplete"],
+      [200, "incomplete"],
+    ]);
+    expect(siteResponses(w.buffer).map((response) => [response.complete, response.bodyId])).toEqual([
+      [false, null],
+      [false, null],
+      [false, null],
+    ]);
+  });
+
+  it("from the browser's cache, revalidated by the server, through the site's service worker: the source says which", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { wireStatus: 304 } });
+    await doneOf(w, 1);
+    w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications"), script: { fromServiceWorker: true } });
+    await doneOf(w, 2);
+    expect(siteResponses(w.buffer).map((response) => response.source)).toEqual(["revalidated_304", "service_worker"]);
+  });
+
+  it("a redirect is answered as final, without its Location, and kept as the answer (an empty body)", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { status: 302, headers: [{ name: "location", value: "https://elsewhere.example/x" }], chunks: [Buffer.alloc(0)] } });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ status: 302, body: "buffered" });
+    const fulfill = w.cdp.sent("Fetch.fulfillRequest").at(-1)!;
+    expect(fulfill.params.responseCode).toBe(302);
+    expect((fulfill.params.responseHeaders as Array<{ name: string }>).map((entry) => entry.name.toLowerCase())).not.toContain("location");
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ status: 302, complete: true, body: { decodedBytes: 0 } });
+  });
+
+  it("a request without a session (the login screens' reads) is asked with none; its answer names the empty session", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/versioning`, { headers: { Accept: "application/json" } });
+    await doneOf(w);
+    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ route: "site.other", sessionFingerprint: null });
+    expect(siteResponses(w.buffer)[0]).toMatchObject({ route: "site.other", complete: true, sessionFingerprint: NO_SESSION });
+  });
+
+  it("a route without platform data (the device id) is admitted, its answer not kept", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/device/id`, { headers: siteHeaders("/api/v1/device/id") });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ status: 200, body: "not_platform_data" });
+    expect(siteResponses(w.buffer)).toEqual([]);
+    expect(w.cdp.sent("Network.streamResourceContent")).toEqual([]);
+  });
+});
+
+describe("what the map closes, and the modes (plan §4.6; spec §2; owner decision №2)", () => {
+  it("a closed write, a write outside the login, a closed read, another host's write: failed (BlockedByClient), nothing asked", async () => {
+    const w = await world();
+    const requests = [
+      w.chrome.request(`${API}/message/ack`, { method: "POST", headers: siteHeaders("/api/v1/message/ack"), postData: '{"messageIds":["1"],"type":2}' }),
+      w.chrome.request(`${API}/message`, { method: "POST", headers: siteHeaders("/api/v1/message"), postData: "{}" }),
+      w.chrome.request(`${API}/emails/unsubscribe`, { headers: siteHeaders("/api/v1/emails/unsubscribe") }),
+      w.chrome.request("https://fansly.com/", { method: "POST", resourceType: "Document", postData: "x" }),
+      w.chrome.request("http://169.254.169.254/latest", { resourceType: "Fetch" }),
+    ];
+    await until(() => requests.every((request) => request.outcome === "failed"), 3000, "all to fail");
+    expect(requests.map((request) => request.failReason)).toEqual(["BlockedByClient", "BlockedByClient", "BlockedByClient", "BlockedByClient", "BlockedByClient"]);
+    expect(w.engine.of("siteAdmit")).toEqual([]);
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("the login: refused in the automation mode; in the manual login admitted as an operation, its body counted by the gate, its answer never kept", async () => {
+    const w = await world();
+    const automation = w.chrome.request(`${API}/login`, { method: "POST", headers: { "content-type": "application/json" }, postData: '{"username":"u","password":"pw-secret-1"}' });
+    await until(() => automation.outcome === "failed", 3000, "the login refused");
+    expect(automation.failReason).toBe("BlockedByClient");
+    w.mode.now = "manual_login";
+    w.chrome.request(`${API}/login`, { method: "POST", headers: { "content-type": "application/json" }, postData: '{"username":"u","password":"pw-secret-1"}', script: { chunks: [Buffer.from('{"success":true,"response":{"session":{"token":"tok-secret"}}}')] } });
+    const [done] = await doneOf(w);
+    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ method: "POST", route: "auth.login", operation: "login" });
+    expect(done).toMatchObject({ status: 200, body: "not_platform_data" });
+    expect(siteResponses(w.buffer)).toEqual([]);
+    expect(w.chrome.wire).toEqual([{ role: "main", method: "POST", url: `${API}/login` }]);
+    for (const secret of ["pw-secret-1", "tok-secret"]) expect(w.lines.join("\n"), secret).not.toContain(secret);
+  });
+
+  it("the page's own files and third-party hosts pass at once, unpaced, the journal says their size and time at their end", async () => {
+    const w = await world();
+    const script = w.chrome.request("https://fansly.com/main.js?v=1", { resourceType: "Script" });
+    const third = w.chrome.request("https://widget.intercom.io/widget/abc", { resourceType: "Script" });
+    await until(() => script.outcome === "continued" && third.outcome === "continued", 3000, "both to pass");
+    expect(w.engine.of("siteAdmit")).toEqual([]);
+    expect(script.interceptResponse).toBe(false);
+    w.cdp.emit("Network.loadingFinished", { requestId: script.networkId, encodedDataLength: 4321 }, w.chrome.session);
+    expect(w.journal).toContainEqual(expect.objectContaining({ method: "GET", host: "fansly.com", path: "/main.js", resourceType: "Script", decision: "ended", result: "finished", bytes: 4321, durationMs: expect.any(Number) }));
+  });
+});
+
+describe("the gate and the end of a request (spec §9; stage 1, amendments 23, 36, 37)", () => {
+  it("Chrome's own repeat of a request is held by the gate: one physical request per admission", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { then: "retry" } });
+    await until(() => w.chrome.wire.length >= 1, 3000, "the send");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(w.chrome.wire).toHaveLength(1);
+  });
+
+  it("the page cancels a released request before its answer: the page stops (request_unended), the end told as sent", async () => {
+    const w = await world();
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { then: "cancel_after_send" } });
+    const [done] = await doneOf(w);
+    expect(w.faults).toEqual([{ reason: "request_unended", note: expect.stringContaining("cancelled a released request before its answer") }]);
+    expect(done).toMatchObject({ sent: true, status: null, error: { afterSendStart: true } });
+  });
+
+  it("no answer and no end within its limit: the page stops (request_unended)", async () => {
+    const w = await world({ timings: { opLimitMs: 200, requestLimitMs: 5000 } });
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { then: "hang_after_send" } });
+    const [done] = await doneOf(w);
+    expect(w.faults.map((fault) => fault.reason)).toEqual(["request_unended"]);
+    expect(done).toMatchObject({ sent: true, status: null });
+  });
+
+  it("an answer whose body still comes at the request's limit: its tunnels cut, the answer told with its status, its body a mark", async () => {
+    const w = await world({ timings: { requestLimitMs: 150, opLimitMs: 5000 } });
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { chunkDelayMs: 100, chunks: [JSON_BODY.subarray(0, 10), JSON_BODY.subarray(10, 20), JSON_BODY.subarray(20)] } });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ sent: true, status: 200, body: "incomplete" });
+    expect(w.faults).toEqual([]);
+  });
+
+  it("an admission past its deadline at the release is not used: nothing leaves", async () => {
+    const w = await world();
+    w.engine.answer = (ask) => ({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() - 1, attemptId: 61 });
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 61, sent: false, error: { message: "not used: the admission came expired" } });
+    expect(request.outcome).toBe("failed");
+    expect(w.chrome.wire).toEqual([]);
+  });
+});
+
+describe("documents, owners, restarts (stage 1, amendment 41; plan §4.7, §4.9)", () => {
+  it("a request of a document the site replaced is never released: failed at once while it waits, not used once admitted", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    const waiting = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), frameId: "F1", loaderId: "L1" });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    w.chrome.navigate("F1", "L1");
+    w.chrome.navigate("F1", "L2");
+    await until(() => waiting.outcome === "failed", 3000, "the old document's request to fail");
+    expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", result: "not used: its document was replaced while it waited" }));
+    // Admitted after its document went: not released, the engine hears.
+    const late = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications"), frameId: "F1", loaderId: "L2" });
+    await until(() => w.engine.of("siteAdmit").length === 2, 3000, "the second ask");
+    const id = String(w.engine.of("siteAdmit")[1]!.siteRequestId);
+    w.chrome.navigate("F1", "L3");
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: id, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 70 });
+    expect(late.outcome).toBe("failed");
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("a new owner: an earlier owner's admission not released never goes; a released one is waited for", async () => {
+    let release: () => void = () => undefined;
+    const w = await world({ holdRelease: new Promise<void>((resolve) => (release = resolve)) });
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    w.engine.generation = 2;
+    await w.site.quiesce(2);
+    release();
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 5001, sent: false, error: { message: "not used: a new owner of the page" } });
+    expect(request.outcome).toBe("failed");
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("recover: not_sent of an admission not released — and it never is; unknown of a released one", async () => {
+    let release: () => void = () => undefined;
+    const w = await world({ holdRelease: new Promise<void>((resolve) => (release = resolve)) });
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(w.site.recoverState(5001)).toBe("not_sent");
+    expect(w.site.recoverState(9999)).toBeNull();
+    release();
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 5001, sent: false, error: { message: "not used: the engine's recover closed it as not sent" } });
+    expect(request.outcome).toBe("failed");
+    expect(w.chrome.wire).toEqual([]);
+    const other = await world();
+    other.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { then: "hang_after_send" } });
+    await until(() => other.chrome.wire.length === 1, 3000, "the send");
+    expect(other.site.recoverState(5001)).toBe("unknown");
+  });
+
+  it("the page stops (a proxy that failed): what waits is failed, an admission not released ends not sent, nothing is asked again", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    const waiting = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    const admitted = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications"), script: { then: "hang_before_send" } });
+    await until(() => w.engine.of("siteAdmit").length === 2, 3000, "both asked");
+    const id = String(w.engine.of("siteAdmit")[1]!.siteRequestId);
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: id, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 80 });
+    await until(() => admitted.outcome === "continued", 3000, "the release");
+    w.site.endAll("the page's SOCKS5 failed a tunnel");
+    await until(() => waiting.outcome === "failed", 3000, "the waiting one to fail");
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 80, sent: false, error: { message: "the page stopped: the page's SOCKS5 failed a tunnel" } });
+    expect(w.site.live).toBe(0);
+    w.site.linkChanged(true);
+    expect(w.engine.of("siteAdmit")).toHaveLength(2);
+  });
+
+  it("an operator that starts again ends what the previous one admitted: siteDone sent if it was released, nothing for one never admitted", async () => {
+    const temp = tempDir("pb-site-restart-");
+    cleanups.push(temp.remove);
+    const before = await world({ dir: temp.dir });
+    before.buffer.changeSiteRequest({ siteRequestId: "11111111-1111-4111-8111-111111111111", asked: true });
+    before.buffer.changeSiteRequest({ siteRequestId: "22222222-2222-4222-8222-222222222222", asked: true });
+    before.buffer.changeSiteRequest({ siteRequestId: "22222222-2222-4222-8222-222222222222", released: { attemptId: 42 } });
+    await before.buffer.flush();
+    await before.buffer.close();
+    const after = await world({ dir: temp.dir });
+    expect(after.buffer.siteRequests()).toHaveLength(2);
+    after.site.afterRestart();
+    const [done] = await doneOf(after);
+    expect(done).toEqual({
+      type: "siteDone",
+      siteRequestId: "22222222-2222-4222-8222-222222222222",
+      attemptId: 42,
+      sent: true,
+      sentMono: null,
+      sentWall: null,
+      connectionReused: null,
+      status: null,
+      retryAfter: null,
+      error: { afterSendStart: true, message: expect.stringContaining("started again after its release") },
+      body: "not_platform_data",
+    });
+    await until(() => after.buffer.siteRequests().length === 0, 3000, "both ids to go");
+  });
+});
