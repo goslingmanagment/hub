@@ -1159,15 +1159,19 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   async function seedFanslyChat(silent = 0) {
     await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [FS.creator, pageIds["lora-fansly"]]);
     app.config.fanslyLiveOverlayReadPages = "all";
+    // An unread chat: fresh text reads the database only, so it stays unread.
     await testDb!.pool.query(
-      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
-       values ($1, $2, $3)`,
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id, unread_count)
+       values ($1, $2, $3, 2)`,
       [pageIds["lora-fansly"], FS.group, FS.fan],
     );
     await fanslyArchive({ ref: fsId(1), mine: false, text: "hey babe", minutesAgo: silent + 60 });
     await fanslyArchive({ ref: fsId(2), mine: true, text: "hey you", minutesAgo: silent + 55 });
     // Not archived yet: only the socket holds it so far.
     await socket({ ref: fsId(3), mine: false, text: "sent you something", minutesAgo: silent + 3 });
+    // The trap snapshots unread counts when armed: arm it again over this chat too.
+    await trap?.restore();
+    trap = await armNoOutboundTrap(testDb!);
   }
 
   async function fanslyArchive(row: {
