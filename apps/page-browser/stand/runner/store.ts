@@ -186,6 +186,22 @@ export class Store {
     return rows.map((row) => ({ frame: Number(row[0]), committedMono: Number(row[1]) }));
   }
 
+  /** The stand's frame numbers a page has stored as `ws.in` events, from
+   *  number `from` on. */
+  async storedFrames(page: string, from: number): Promise<number[]> {
+    const rows = await this.query(`SELECT frame FROM pb_events WHERE page = ${lit(page)} AND kind = 'ws.in' AND frame >= ${Math.floor(from)}`);
+    return rows.map((row) => Number(row[0]));
+  }
+
+  /** The gap marks committed for the pages: where each says the stream
+   *  broke (the operator's wall clock; null: unknown) and when it was
+   *  written. */
+  async gapsOf(pages: readonly string[]): Promise<Array<{ page: string; reason: string | null; fromWall: number | null; atWall: number }>> {
+    if (pages.length === 0) return [];
+    const rows = await this.query(`SELECT page, reason, body->>'fromWall', at_wall FROM pb_events WHERE kind = 'gap' AND page IN (${pages.map((page) => lit(page)).join(", ")}) ORDER BY at_wall`);
+    return rows.map((row) => ({ page: String(row[0]), reason: row[1] ?? null, fromWall: row[2] === null || row[2] === undefined ? null : Number(row[2]), atWall: Number(row[3]) }));
+  }
+
   /** Every number of a buffer committed so far, for the contiguity check. */
   async seqsOf(bufferId: string): Promise<number[]> {
     const rows = await this.query(`SELECT seq FROM pb_events WHERE buffer_id = ${lit(bufferId)} ORDER BY seq`);

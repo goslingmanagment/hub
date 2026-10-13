@@ -16,10 +16,13 @@ import {
   eventsComplete,
   exactlyOnce,
   exitClosedWithin,
+  expiredArrivals,
+  expiredUnderHold,
+  fanslyMade,
   forbiddenSocketMessages,
   frameRates,
-  heldPastDeadline,
   inFlightAtRestart,
+  madeAndKept,
   outageBacklog,
   sentAfterRecovery,
   stoodBetween,
@@ -27,7 +30,9 @@ import {
   unadmittedArrivals,
   upWithin,
   variantLoaded,
+  type Kept,
   type SeenTransition,
+  type StoredGap,
 } from "../apps/page-browser/stand/runner/criteria.ts";
 import type { Grant } from "../apps/page-browser/stand/runner/engine.ts";
 import { loadVerdict, type Threshold } from "../apps/page-browser/stand/runner/load.ts";
@@ -189,19 +194,6 @@ describe("evidence that a run met what it is about", () => {
     expect(closedWriteAttempted([siteRequest(1, "/stand/report?what=write-failed&rid=a"), siteRequest(2, "/stand/report?what=write-done&rid=b")], PAGE_IP)).toEqual([expect.stringContaining("got an answer")]);
   });
 
-  it("an expiry run must show an admission that ran out while its CONNECT was held", () => {
-    const hold = (mono: number, socksId: number) => event("socks.hold", mono, { socksId, host: "apiv3.fansly.com" });
-    const release = (mono: number, socksId: number) => event("socks.release", mono, { socksId, host: "apiv3.fansly.com" });
-    const admission = grant("site", "apiv3.fansly.com/api/v1/a?rid=1", 1000, { deadlineMono: 7000 });
-    expect(heldPastDeadline([hold(1200, 7), release(11_200, 7)], [admission], "p1", PAGE_IP, "apiv3.fansly.com")).toEqual([]);
-    // Let go before the deadline; held with no admission; no hold at all.
-    expect(heldPastDeadline([hold(1200, 7), release(5000, 7)], [admission], "p1", PAGE_IP, "apiv3.fansly.com")).toHaveLength(1);
-    expect(heldPastDeadline([hold(9000, 7), release(19_000, 7)], [admission], "p1", PAGE_IP, "apiv3.fansly.com")).toHaveLength(1);
-    expect(heldPastDeadline([], [admission], "p1", PAGE_IP, "apiv3.fansly.com")).toEqual([expect.stringContaining("the run proves nothing about the deadline")]);
-    // The control's late send: the request arrives when the hold goes, after the journaled deadline.
-    expect(unadmittedArrivals([apiRequest(11_300, "GET", "/api/v1/a?rid=1")], [admission], PAGES)).toEqual([expect.stringContaining("arrived outside its admission window")]);
-  });
-
   it("an engine-restart run must show a request that had reached Fansly and was not answered yet", () => {
     const arrived = apiRequest(1000, "GET", "/api/v1/account/me?rid=hub-1&delayMs=8000");
     const answer = (mono: number) => event("res", mono, { req: arrived.seq });
@@ -211,6 +203,113 @@ describe("evidence that a run met what it is about", () => {
     expect(inFlightAtRestart([arrived, answer(1500)], ["hub-1"], 2000)).toEqual([expect.stringContaining("no request was in flight at the engine's restart")]);
     expect(inFlightAtRestart([arrived], ["hub-1"], 500)).toHaveLength(1);
     expect(inFlightAtRestart([], ["hub-1"], 2000)).toHaveLength(1);
+  });
+});
+
+describe("an admission that runs out over its own held CONNECT", () => {
+  const API = "apiv3.fansly.com";
+  const admission = grant("site", `${API}/api/v1/a?rid=r1`, 1000, { attemptId: 41, deadlineMono: 7000 });
+  const socks = (type: string, mono: number, socksId: number, fields: Record<string, unknown> = {}) => event(type, mono, { socksId, host: API, ...fields });
+  const dropped = (mono: number) => event("stand.dropped", mono, { host: API, connections: 1, from: undefined });
+  const connected = (mono: number, socksId: number) => socks("socks.connect", mono, socksId, { upstream: `127.0.0.1:${40_000 + socksId}` });
+  const arrived = (mono: number, socksId: number) => apiRequest(mono, "GET", "/api/v1/a?rid=r1", { socksId, peer: `127.0.0.1:${40_000 + socksId}` });
+  // The page's connections dropped, the request admitted (1000…7000), its CONNECT held 10 s and let go.
+  const held = [dropped(900), socks("socks.hold", 1010, 7), socks("socks.release", 11_010, 7), connected(11_012, 7)];
+  const found = (events: JournalEvent[], judgedMono = 14_000) => expiredUnderHold(events, [admission], "p1", PAGE_IP, API, judgedMono);
+
+  it("finds the very request: admitted with no connection to ride, unused at its deadline, its CONNECT held over it — and it never arrives", () => {
+    const { expired, violations } = found(held);
+    expect(violations).toEqual([]);
+    expect(expired).toEqual([expect.objectContaining({ attemptId: 41, rid: "r1", holds: [{ socksId: 7, heldMono: 1010, releasedMono: 11_010, upstream: "127.0.0.1:40007" }] })]);
+    expect(expiredArrivals(held, expired)).toEqual({ late: [], violations: [] });
+    // The operator gave the CONNECT up at the deadline: held all the same, no connection came of it.
+    const gone = found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.closed", 7005, 7), socks("socks.release", 11_010, 7)]);
+    expect(gone.expired[0]?.holds).toEqual([expect.objectContaining({ socksId: 7, upstream: null })]);
+  });
+
+  it("the control's late send is that very request, on the connection that was held for it", () => {
+    const late = [...held, arrived(11_100, 7)];
+    const { expired } = found(late);
+    expect(expiredArrivals(late, expired).violations).toEqual(["the request r1 (attempt 41, GET) arrived 4100 ms after its admission ran out, on the connection whose CONNECT was held past it (SOCKS 7 → 127.0.0.1:40007)"]);
+    expect(unadmittedArrivals(late, [admission], PAGES)).toEqual([expect.stringContaining("arrived outside its admission window")]);
+    // It went by another connection: late all the same, and said so.
+    const elsewhere = [...held, connected(11_050, 9), arrived(11_100, 9)];
+    expect(expiredArrivals(elsewhere, found(elsewhere).expired)).toMatchObject({ late: [{ rid: "r1", held: null }], violations: [expect.stringContaining("on another connection (127.0.0.1:40009)")] });
+  });
+
+  it("a request already answered, then another connection held, is no evidence (and C1 is silent): the run proves nothing, and fails", () => {
+    // Admitted at 1000, it rode a connection that was there, was answered at 1100; only then a CONNECT is held, past 7000.
+    const answered = [dropped(900), connected(950, 6), arrived(1050, 6), event("res", 1100, { role: "api", host: API, method: "GET", path: "/api/v1/a?rid=r1", rid: "r1", status: 200 }), socks("socks.closed", 1150, 6), socks("socks.hold", 1200, 7), socks("socks.release", 11_200, 7), connected(11_201, 7)];
+    expect(unadmittedArrivals(answered, [admission], PAGES)).toEqual([]);
+    const { expired, violations } = found(answered);
+    expect(expired).toEqual([]);
+    expect(violations).toEqual([expect.stringMatching(/no admitted request of p1 ran out over its own held CONNECT \(1 admitted .* 1 arrived inside their window.*1 CONNECT\(s\) held and let go\): the run proves nothing about the deadline/)]);
+  });
+
+  it("nor is a request that could ride a connection already open, or one admitted before the connections were dropped", () => {
+    // A warm connection, never closed: whatever is held beside it, the request had a way.
+    expect(found([dropped(900), connected(950, 6), socks("socks.hold", 1200, 7), socks("socks.release", 11_200, 7)]).violations).toEqual([expect.stringContaining("1 had a connection to ride")]);
+    // No drop at all: a connection made before the run began is not in its journal.
+    expect(found(held.slice(1)).violations).toEqual([expect.stringContaining("1 before the page's connections were dropped (they never were)")]);
+    expect(found([dropped(1500), ...held.slice(1)]).violations).toEqual([expect.stringContaining("1 before the page's connections were dropped,")]);
+  });
+
+  it("nor a hold that was let go inside the window, began after the deadline, is another page's, or was let go a moment ago", () => {
+    expect(found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.release", 5000, 7), connected(5001, 7)]).violations).toHaveLength(1);
+    expect(found([dropped(900), socks("socks.hold", 9000, 7), socks("socks.release", 19_000, 7)], 30_000).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
+    expect(found([dropped(900), socks("socks.hold", 1010, 7, { from: "10.0.1.102" }), socks("socks.release", 11_010, 7, { from: "10.0.1.102" })]).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
+    // Judged before what follows the hold had its time.
+    expect(found(held, 12_000).violations).toEqual([expect.stringContaining("1 whose hold was let go under 2000 ms ago")]);
+    expect(found([]).violations).toEqual([expect.stringContaining("the run proves nothing about the deadline")]);
+  });
+});
+
+describe("C7's other half: what Fansly made against what the engine keeps", () => {
+  const sent = (mono: number, frame: number, fields: Record<string, unknown> = {}) => event("ws.out", mono, { wsId: "ws-1", frame, t: 0, ...fields });
+  const answered = (mono: number, pathWithQuery: string, fields: Record<string, unknown> = {}) => event("res", mono, { role: "api", host: "apiv3.fansly.com", method: "GET", path: pathWithQuery, status: 200, ...fields });
+  const kept = (frames: number[], outcomes: number[], gaps: StoredGap[] = []): Kept => ({ frames: new Map([["p1", new Set(frames)]]), outcomes: new Map([["p1", new Set(outcomes)]]), gaps });
+  // `event` puts the wall clock at 1 000 000 + mono.
+  const gap = (fromWall: number | null, atWall: number, page = "p1"): StoredGap => ({ page, reason: "operator_start", fromWall, atWall });
+
+  it("a tail lost before the engine ever received it: the numbers are whole, Fansly's own record is not", () => {
+    // The engine stood at 10, the operator sent nothing after it, nothing after it is stored.
+    expect(eventsComplete([{ bufferId: "b", start: 10, wireMax: 10, stored: [] }])).toEqual([]);
+    // Meanwhile Fansly sent the page two frames.
+    const made = fanslyMade([sent(5000, 101), sent(5500, 102), sent(5600, 103, { from: "10.0.1.20" })], [], PAGES);
+    expect(made.frames.map((frame) => [frame.page, frame.frame])).toEqual([["p1", 101], ["p1", 102]]);
+    expect(madeAndKept(made, kept([], [])).violations).toEqual(["Fansly sent p1 2 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 101, 102"]);
+    expect(madeAndKept(made, kept([101], [])).violations).toEqual([expect.stringContaining("1 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 102")]);
+    expect(madeAndKept(made, kept([101, 102], []))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 0 } });
+  });
+
+  it("a gap mark excuses only what lies inside it by time — and what it covers is counted, not let go in silence", () => {
+    const made = fanslyMade([sent(5000, 101), sent(5500, 102)], [], PAGES);
+    expect(madeAndKept(made, kept([], [], [gap(1_004_900, 1_006_000)]))).toEqual({ violations: [], coveredByGap: { frames: 2, answers: 0 } });
+    // Nothing was saved before the mark: its start is unknown, everything before it is under it.
+    expect(madeAndKept(made, kept([], [], [gap(null, 1_006_000)])).coveredByGap.frames).toBe(2);
+    // The stream broke after the first frame was sent; the mark was written before the second; another page's mark.
+    expect(madeAndKept(made, kept([], [], [gap(1_005_400, 1_006_000)]))).toEqual({ violations: [expect.stringContaining("1 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 101")], coveredByGap: { frames: 1, answers: 0 } });
+    expect(madeAndKept(made, kept([], [], [gap(1_004_900, 1_005_100)])).violations).toEqual([expect.stringContaining(": 102")]);
+    expect(madeAndKept(made, kept([], [], [gap(null, 1_006_000, "p2")])).violations).toEqual([expect.stringContaining("2 frame(s)")]);
+  });
+
+  it("every request Fansly answered has its stored outcome: a request the engine has nothing of is missed", () => {
+    const admitted = [grant("hub", "apiv3.fansly.com/api/v1/account/me?rid=hub-1", 4000, { attemptId: 7 })];
+    const events = [
+      apiRequest(4100, "GET", "/api/v1/account/me?rid=hub-1"),
+      answered(4200, "/api/v1/account/me?rid=hub-1"),
+      // A preflight's answer, and an answer to no page of the stand, are no attempt's.
+      answered(4150, "/api/v1/account/me?rid=hub-1", { method: "OPTIONS", status: 204 }),
+      answered(4300, "/api/v1/account/me?rid=leak-1", { from: "10.0.1.20" }),
+    ];
+    const made = fanslyMade(events, admitted, PAGES);
+    expect(made.answers).toEqual([expect.objectContaining({ page: "p1", attemptId: 7, target: "apiv3.fansly.com/api/v1/account/me?rid=hub-1", status: 200 })]);
+    expect(madeAndKept(made, kept([], [7])).violations).toEqual([]);
+    expect(madeAndKept(made, kept([], [])).violations).toEqual(["GET apiv3.fansly.com/api/v1/account/me?rid=hub-1 of p1 was answered by Fansly (200) and has no stored outcome (attempt 7), and no gap mark covers when it was answered"]);
+    expect(madeAndKept(made, kept([], [], [gap(1_004_000, 1_005_000)]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 } });
+    // Answered with no admission of the engine's at all (a control's own grant has no attempt).
+    const unowned = fanslyMade(events, [grant("site", "apiv3.fansly.com/api/v1/account/me?rid=hub-1", 4000, { attemptId: 0 })], PAGES);
+    expect(madeAndKept(unowned, kept([], [7])).violations).toEqual([expect.stringContaining("was answered by Fansly (200) and has no stored outcome (it is no attempt of the engine's)")]);
   });
 });
 

@@ -20,10 +20,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { siteVariant } from "../fansly/front.ts";
-import { mono } from "../shared.ts";
+import { mono, sleep } from "../shared.ts";
 import { captureCovers, pastTheProxy, readCapture, sendSentinel, sentinelPorts } from "./capture.ts";
 import { Page, loadTopology, waitFor, type Ctx, type PageInfo, type ScenarioOutcome, type Topology } from "./context.ts";
-import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, forbiddenSocketMessages, unadmittedArrivals, variantLoaded, type BufferBounds, type GrantUse, type PagesByAddress, type Resolution } from "./criteria.ts";
+import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, fanslyMade, forbiddenSocketMessages, madeAndKept, unadmittedArrivals, variantLoaded, type BufferBounds, type FanslyMade, type GrantUse, type Kept, type PagesByAddress, type Resolution } from "./criteria.ts";
 import { Docker } from "./docker.ts";
 import { StandFansly, type JournalEvent } from "./fansly.ts";
 import { SCENARIOS, type Need, type Scenario } from "./scenarios.ts";
@@ -144,6 +144,33 @@ export async function startPage(docker: Docker, info: PageInfo): Promise<void> {
   if (!capture.running || Date.parse(capture.startedAt) < Date.parse(page.startedAt)) await docker.action(info.capture, "restart", 1);
 }
 
+/** C7's other half, against the stand's Postgres: is everything the stand's
+ *  Fansly made (criteria.ts, fanslyMade) kept by the engine, or under a gap
+ *  mark it committed. Read again for a few seconds while something is
+ *  missing: a frame sent or a request answered at the very end of a run may
+ *  still be on its way through the operator's buffer. */
+export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean, waitMs = 5000): Promise<ReturnType<typeof madeAndKept>> {
+  const pages = [...new Set([...made.frames, ...made.answers].map((one) => one.page))];
+  const read = async (): Promise<Kept> => {
+    const frames = new Map<string, Set<number>>();
+    const outcomes = new Map<string, Set<number>>();
+    for (const page of pages) {
+      const sent = made.frames.filter((frame) => frame.page === page);
+      frames.set(page, new Set(sent.length === 0 ? [] : await store.storedFrames(page, sent.reduce((least, frame) => Math.min(least, frame.frame), Infinity))));
+      const attempts = made.answers.flatMap((answer) => (answer.page === page && answer.attemptId !== null ? [answer.attemptId] : []));
+      outcomes.set(page, new Set((await store.outcomes(page, attempts, naive)).map((row) => row.attemptId)));
+    }
+    return { frames, outcomes, gaps: await store.gapsOf(pages) };
+  };
+  let verdict = madeAndKept(made, await read());
+  const deadline = mono() + waitMs;
+  while (verdict.violations.length > 0 && mono() < deadline) {
+    await sleep(250);
+    verdict = madeAndKept(made, await read());
+  }
+  return verdict;
+}
+
 /** Why the scenario cannot run on this operator yet, or null. */
 async function notReady(needs: readonly Need[], page: Page, stand: StandFansly, journalSince: number): Promise<string | null> {
   const state = page.engine.state;
@@ -173,6 +200,8 @@ interface RunEvidence {
   positions: ReadonlyMap<string, number>;
   /** The run's capture sentinels (ports) sent to the page. */
   sentinels: number[];
+  /** What the run measured, kept with its result. */
+  notes: Record<string, unknown>;
 }
 
 /** The common criteria of every run (plan §5, stage 2). */
@@ -201,6 +230,11 @@ async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Che
     const start = run.positions.get(bufferId) ?? 0;
     bounds.push({ bufferId, start, wireMax: Math.max(0, ...page.enginesOfRun.map((engine) => engine.wireMax.get(bufferId) ?? 0)), stored: (await s.store.seqsOf(bufferId)).filter((seq) => seq > start) });
   }
+  // And apart from the operator's numbers: what the stand's Fansly made —
+  // the frames it sent, the requests it answered — against what is stored.
+  const made = fanslyMade(journal, grants, pagesByAddress(s.topology));
+  const kept = await keptOfMade(s.store, made, run.outcome?.naive === true);
+  run.notes.fanslyMade = { frames: made.frames.length, answers: made.answers.length, coveredByGap: kept.coveredByGap };
   const past = pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort });
   const checks: Record<(typeof COMMON_CHECKS)[number], string[]> = {
     "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants, pagesByAddress(s.topology), ARRIVAL_SLACK_MS, s.grantUse),
@@ -210,7 +244,7 @@ async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Che
     "C4 no traffic past the proxy (OS capture)": [...captureCovers(capture.packets, page.info.controlIp, s.topology.engineIp, run.sentinels), ...past],
     "C5 nothing reached the stand past the proxy": directArrivals(journal),
     "C6 every attempt resolved exactly once": exactlyOnce(resolutions),
-    "C7 no event deleted before it was committed": eventsComplete(bounds),
+    "C7 no event deleted before it was committed": [...eventsComplete(bounds), ...kept.violations],
     "C8 the stand's Fansly had no error": journal.filter((event) => event.type === "server.error").map((event) => `stand error: ${String(event.error).slice(0, 200)}`),
   };
   return checks;
@@ -349,7 +383,7 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
         // Everything since the run before was judged: this run's setup too.
         const journal = await s.stand.journal(Math.min(s.journalCursor, journalSince));
         s.journalCursor = journal.at(-1)?.seq ?? s.journalCursor;
-        Object.assign(checks, await commonChecks(s, page, { label, outcome, journal, fromWall: startedWall, toWall, positions, sentinels }));
+        Object.assign(checks, await commonChecks(s, page, { label, outcome, journal, fromWall: startedWall, toWall, positions, sentinels, notes }));
         notes.journal = { events: journal.length, api: journal.filter((event) => event.type === "req" && event.role === "api").length, socks: journal.filter((event) => event.type === "socks.connect").length, ipify: journal.filter((event) => event.type === "ipify").length };
         notes.redeliveries = await s.store.redeliveries(label);
         const attempts = await s.store.attemptsOfRun(label);

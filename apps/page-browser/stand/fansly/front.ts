@@ -14,7 +14,15 @@
 // The journal is the stand's truth: `req` when a request's headers arrived,
 // `res` when its answer was written, `ws.open` / `ws.in` / `ws.close` for
 // the socket. A request that is in the journal reached "Fansly"; one that is
-// not, did not.
+// not, did not. Each of them carries the connection it came on (`peer`: the
+// address and port of its other end — what the SOCKS5 journals as that
+// connection's `upstream`).
+//
+// It is also the record of what the stand's Fansly made, apart from anything
+// the operator or the engine say: every frame it sent into a socket has a
+// number of its own in its payload (`standFrame`) and a `ws.out` event with
+// that number, the socket and the time; every request it answered has its
+// `res`. What the engine keeps is compared with that (criteria.ts, C7).
 //
 // The direct listener (the stand's address on the egress network, :443) is
 // not a way in: the page container's kernel rules let nothing reach it.
@@ -159,7 +167,15 @@ interface OpenSocket {
   socksId: number | null;
   /** The page it belongs to (the client's address at the SOCKS5). */
   from: string | null;
+  /** The other end of the connection it came on. */
+  peer: string;
   received: number;
+}
+
+/** The other end of an accepted connection: what the SOCKS5 journals as
+ *  its `upstream`. */
+function peerOf(socket: { remoteAddress?: string | undefined; remotePort?: number | undefined }): string {
+  return `${socket.remoteAddress ?? ""}:${socket.remotePort ?? 0}`;
 }
 
 const MAX_BODY_BYTES = 48 * 1024 * 1024;
@@ -177,10 +193,14 @@ export class Front {
   #direct: TlsServer | null = null;
   readonly #sockets = new Map<string, OpenSocket>();
   #nextWs = 1;
-  #nextFrame = 1;
+  /** The next frame's number: never one an earlier stand's Fansly gave (the
+   *  stand's Postgres may outlive this process) — the second it started,
+   *  then a million numbers a second of its life. */
+  #nextFrame = Math.floor(Date.now() / 1000) * 1_000_000 + 1;
   #pushTimer: NodeJS.Timeout | null = null;
-  /** Every connection the front holds (a fault drops them all). */
-  readonly #connections = new Set<TLSSocket>();
+  /** Every connection the front holds, with the name its TLS asked for (a
+   *  fault drops them all, or those of one name). */
+  readonly #connections = new Map<TLSSocket, string>();
 
   constructor(options: FrontOptions) {
     this.#options = options;
@@ -205,7 +225,7 @@ export class Front {
     });
     server.on("secureConnection", (socket: TLSSocket) => {
       socket.on("error", () => undefined);
-      this.#connections.add(socket);
+      this.#connections.set(socket, typeof socket.servername === "string" ? socket.servername.toLowerCase() : "");
       socket.on("close", () => this.#connections.delete(socket));
       if (socket.alpnProtocol === "h2") this.#h2.emit("connection", socket);
       else this.#h1.emit("connection", socket);
@@ -264,6 +284,7 @@ export class Front {
     const params = url.searchParams;
     const role = roleOf(host);
     const meta = this.#options.metaOf(req.socket.remotePort);
+    const peer = peerOf(req.socket);
     const header = req.headers["x-stand-rid"];
     const rid = (typeof header === "string" ? header : null) ?? params.get("rid");
     const streamId = "stream" in req && req.stream ? req.stream.id : null;
@@ -276,6 +297,7 @@ export class Front {
       proto,
       socksId: meta?.socksId ?? null,
       from: meta?.from ?? null,
+      peer,
       streamId: streamId ?? null,
       rid,
       headers: Object.keys(req.headers).filter((name) => !name.startsWith(":")),
@@ -290,7 +312,7 @@ export class Front {
         if (res instanceof ServerResponse) res.writeHead(status, { ...headers, "content-length": String(data.length) });
         else res.writeHead(status, { ...headers, "content-length": String(data.length) });
         res.end(data, () => {
-          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
+          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, path: `${url.pathname}${url.search}`, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer });
         });
       };
       const delayMs = intParam(params, "delayMs", 60_000);
@@ -335,28 +357,29 @@ export class Front {
       .replace(/:\d+$/, "")
       .toLowerCase();
     const meta = this.#options.metaOf(req.socket.remotePort);
+    const peer = peerOf(req.socket);
     const path = req.url ?? "/";
     if (roleOf(host) !== "ws") {
-      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, from: meta?.from ?? null, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
+      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
       socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
       return;
     }
     const wsId = `ws-${this.#nextWs++}`;
     const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
     if (ws === null) {
-      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
+      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer });
       return;
     }
-    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, from: meta?.from ?? null, received: 0 };
+    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer, received: 0 };
     this.#sockets.set(wsId, open);
-    journal.log("ws.open", { wsId, host, path, url: `wss://${host}${path}`, socksId: open.socksId, from: open.from, origin: String(req.headers.origin ?? "") });
+    journal.log("ws.open", { wsId, host, path, url: `wss://${host}${path}`, socksId: open.socksId, from: open.from, peer, origin: String(req.headers.origin ?? "") });
     ws.onText = (payload) => {
       open.received += 1;
       const text = payload.toString("utf8");
       // The message as it came — the stand's own traffic carries no secret —
       // cut to what a criterion needs to tell its kind.
-      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
-      if (/^\{"t":1,/.test(text)) ws.sendText(JSON.stringify({ t: 1, d: JSON.stringify({ session: { id: "pb-suite-stand", accountId: this.#options.config.accountId } }) }));
+      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, peer, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
+      if (/^\{"t":1,/.test(text)) this.#frame(open, 1, { session: { id: "pb-suite-stand", accountId: this.#options.config.accountId } });
     };
     ws.onBinary = (payload) => {
       open.received += 1;
@@ -368,27 +391,24 @@ export class Front {
     };
   }
 
-  /** One frame into every open socket (or into `wsId`): journaled with its
-   *  number, so each can be looked for in what the engine committed. */
+  /** A frame of the stand's Fansly into a socket — the only way one goes:
+   *  its number is in its payload (`standFrame`), and the journal has it
+   *  with the socket, its connection and the time (`ws.out`), whatever
+   *  becomes of it on its way to the engine. */
+  #frame(open: OpenSocket, t: number, fields: Record<string, unknown>): boolean {
+    const frame = this.#nextFrame++;
+    const body = JSON.stringify({ ...fields, standFrame: frame, wsId: open.wsId });
+    if (!open.ws.sendText(JSON.stringify({ t, d: body })) && open.ws.closed) return false;
+    this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, from: open.from, peer: open.peer, frame, t, bytes: body.length });
+    return true;
+  }
+
+  /** One frame into every open socket (or into `wsId`). */
   push(bytes: number, wsId?: string): number {
     let sent = 0;
     for (const open of this.#sockets.values()) {
       if (wsId !== undefined && open.wsId !== wsId) continue;
-      const frame = this.#nextFrame++;
-      const body = JSON.stringify({ standFrame: frame, wsId: open.wsId, pad: "x".repeat(Math.max(0, bytes - 64)) });
-      if (!open.ws.sendText(JSON.stringify({ t: 0, d: body })) && open.ws.closed) continue;
-      this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, from: open.from, frame, bytes: body.length });
-      sent += 1;
-    }
-    return sent;
-  }
-
-  pushText(text: string, wsId?: string): number {
-    let sent = 0;
-    for (const open of this.#sockets.values()) {
-      if (wsId !== undefined && open.wsId !== wsId) continue;
-      open.ws.sendText(text);
-      sent += 1;
+      if (this.#frame(open, 0, { pad: "x".repeat(Math.max(0, bytes - 64)) })) sent += 1;
     }
     return sent;
   }
@@ -403,12 +423,19 @@ export class Front {
     return closed;
   }
 
-  /** Every connection dropped: the browser's next request needs a new one
-   *  (a warm HTTP/2 connection would carry it past a slow CONNECT). */
-  dropConnections(): number {
-    const count = this.#connections.size;
-    for (const socket of this.#connections) socket.destroy();
-    this.#options.journal.log("stand.dropped", { connections: count });
+  /** Every connection dropped — or every one of `host` (by the name its
+   *  TLS asked for): the browser's next request there needs a new one (a
+   *  warm HTTP/2 connection would carry it past a slow CONNECT). Journaled:
+   *  from here on, every connection to the host is one the journal saw
+   *  being made. */
+  dropConnections(host: string | null = null): number {
+    let count = 0;
+    for (const [socket, name] of this.#connections) {
+      if (host !== null && name !== host) continue;
+      socket.destroy();
+      count += 1;
+    }
+    this.#options.journal.log("stand.dropped", { connections: count, host });
     return count;
   }
 

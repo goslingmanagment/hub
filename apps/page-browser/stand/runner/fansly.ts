@@ -89,9 +89,10 @@ export class StandFansly {
     await json(this.host, this.port, "POST", "/socks", fault);
   }
 
-  /** Every connection of the front dropped (the next request reconnects). */
-  async drop(): Promise<void> {
-    await json(this.host, this.port, "POST", "/drop", {});
+  /** Every connection of the front dropped — or every one of `host` (the
+   *  next request there reconnects). */
+  async drop(host?: string): Promise<void> {
+    await json(this.host, this.port, "POST", "/drop", host === undefined ? {} : { host });
   }
 
   async reset(): Promise<void> {

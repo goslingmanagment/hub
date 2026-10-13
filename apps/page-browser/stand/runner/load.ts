@@ -26,9 +26,9 @@ import { atLeast } from "../../src/state/steps.ts";
 import { mono, sleep } from "../shared.ts";
 import { captureCovers, pastTheProxy, readCapture, sendSentinel } from "./capture.ts";
 import { waitFor, type Page } from "./context.ts";
-import { closedWrites, directArrivals, eventsComplete, forbiddenSocketMessages, frameRates, outageBacklog, unadmittedArrivals, type BufferBounds, type RatePhase } from "./criteria.ts";
+import { closedWrites, directArrivals, eventsComplete, fanslyMade, forbiddenSocketMessages, frameRates, outageBacklog, unadmittedArrivals, type BufferBounds, type RatePhase } from "./criteria.ts";
 import type { ContainerSample } from "./docker.ts";
-import { openStand, pagesByAddress, startPage, type Stand } from "./series.ts";
+import { keptOfMade, openStand, pagesByAddress, startPage, type Stand } from "./series.ts";
 
 function args(argv: string[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -227,7 +227,7 @@ async function main(): Promise<void> {
   const site = siteLoaded ? null : "the operator does not load the site yet (PR 7): no request reaches the stand, Hub's are answered 'not sent' in the operator";
   thresholds.push({ id: "1", what: "pages at once", limit: "7", value: profiles, held: profiles >= 7 ? true : null, ...(profiles < 7 ? { why: `run with ${profiles} profile(s): the threshold is judged with 7` } : {}) });
   thresholds.push({ id: "2", what: "requests per hour per page at the ceiling (stand journal, every page)", limit: "≥ 1240 at S = 2.5 s", value: perPage, held: site ? null : perPage.every((entry) => entry.perHour >= 1240), ...(site ? { why: site } : {}) });
-  const framesOut = journal.filter((event) => event.type === "ws.out").map((event) => ({ frame: Number(event.frame), mono: event.mono, page: byAddress.get(String(event.from ?? "")) }));
+  const framesOut = journal.filter((event) => event.type === "ws.out" && event.t === 0).map((event) => ({ frame: Number(event.frame), mono: event.mono, page: byAddress.get(String(event.from ?? "")) }));
   const rates = frameRates(framesOut, names, phases);
   thresholds.push({ id: "3", what: "socket frames per minute, every page, background and each burst", limit: `≥ 95 % of ${framesPerMinute}/min, of ${burstPerMinute}/min in bursts`, value: rates.rates, held: rates.held, ...(rates.why ? { why: rates.why } : {}) });
   const committed = await s.store.framesOfRun(label);
@@ -275,9 +275,14 @@ async function main(): Promise<void> {
     }
     criteria[`C7 no event deleted before it was committed (${page.info.name})`] = eventsComplete(bounds);
   }
+  // C7's other half, over every page: what the stand's Fansly made — the
+  // frames it sent, the requests it answered — is stored, or under a gap mark.
+  const made = fanslyMade(journal, grants, byAddress);
+  const kept = await keptOfMade(s.store, made, false, 30_000);
+  criteria["C7 no event deleted before it was committed (what Fansly made)"] = kept.violations;
   const violations = Object.values(criteria).flat();
   const outcome = loadVerdict(thresholds, violations.length);
-  const report = { name, profiles, minutes, outageMinutes, revision: process.env.PB_SUITE_REV ?? "unknown", startedWall, endWall, siteLoaded, ...outcome, thresholds, criteria };
+  const report = { name, profiles, minutes, outageMinutes, revision: process.env.PB_SUITE_REV ?? "unknown", startedWall, endWall, siteLoaded, ...outcome, thresholds, criteria, fanslyMade: { frames: made.frames.length, answers: made.answers.length, coveredByGap: kept.coveredByGap } };
   writeFileSync(join(dir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
   for (const threshold of thresholds) log("threshold", { id: threshold.id, what: threshold.what, held: threshold.held, value: threshold.value, ...(threshold.why ? { why: threshold.why } : {}) });
   for (const violation of violations) log("violation", { violation });

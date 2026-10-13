@@ -16,6 +16,12 @@
 //                 journaled when it began and when it was let go
 //                 (`socks.hold`, `socks.release`), so a run can show that a
 //                 connection was held past an admission's deadline.
+//
+// Every connection it makes to the front is journaled with its own end of
+// it (`socks.connect`: `upstream`, the address and port the front sees it
+// come from) — the front journals the same pair with every request and
+// socket that arrives on that connection (`peer`), so what arrived can be
+// tied to the CONNECT it came through: the held one, or another.
 
 import { connect as tcpConnect, createServer, type Server, type Socket } from "node:net";
 
@@ -190,6 +196,7 @@ export class StandSocks {
         socket.off("data", onData);
         socket.pause();
         const from = socket.remoteAddress ?? "";
+        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
         const go = () => {
           if (socket.destroyed) return;
           const upstream = tcpConnect({ host: "127.0.0.1", port: local });
@@ -198,7 +205,7 @@ export class StandSocks {
             const meta: SocksMeta = { socksId, host, port, from };
             const localPort = upstream.localPort;
             if (localPort !== undefined) this.#upstreams.set(localPort, meta);
-            journal.log("socks.connect", { socksId, host, port, from });
+            journal.log("socks.connect", { socksId, host, port, from, upstream: `${upstream.localAddress ?? ""}:${localPort ?? 0}`, heldMs: hold });
             socket.write(reply(REPLY_OK));
             if (rest.length > 0) {
               up += rest.length;
@@ -228,7 +235,6 @@ export class StandSocks {
           });
           socket.on("close", () => upstream.destroy());
         };
-        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
         if (hold > 0) {
           journal.log("socks.hold", { socksId, host, port, from, ms: hold });
           setTimeout(() => {

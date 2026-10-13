@@ -1,7 +1,9 @@
 // The criteria of plan §5, stage 2 ("Критерии на каждый сбой"), as checks a
 // machine runs over a run's evidence:
 //
-//   the stand's journal  — what physically reached the stand's Fansly
+//   the stand's journal  — what physically reached the stand's Fansly,
+//                          and what it made: the frames it sent, the
+//                          requests it answered
 //   the engine's grants  — every admission it gave, with its deadline
 //   the capture          — what left the page container at the OS level
 //   the stand's Postgres — what the engine committed
@@ -175,7 +177,9 @@ export interface BufferBounds {
  *  the run's start bound to its end bound is stored — the head of a new
  *  buffer, the middle, and the tail the operator sent last. The bounds are
  *  recorded apart from the store (the position before the run; what came on
- *  the wire), so a tail that was acknowledged and never stored shows. */
+ *  the wire), so a tail that was acknowledged and never stored shows. What
+ *  never came on the wire has no number here: `madeAndKept` below is the
+ *  other half of C7. */
 export function eventsComplete(buffers: readonly BufferBounds[]): string[] {
   const violations: string[] = [];
   for (const { bufferId, start, wireMax, stored } of buffers) {
@@ -192,6 +196,114 @@ export function eventsComplete(buffers: readonly BufferBounds[]): string[] {
     }
   }
   return violations;
+}
+
+// ── C7's other half: what Fansly made against what the engine keeps ───────
+// The numbers above are the operator's own word: an event it never sent
+// leaves no number to miss. The stand's Fansly keeps its own record of what
+// it made — every frame it sent into a page's socket, by the frame's number,
+// and every request it answered — and each of them must be kept by the
+// engine, or lie inside a gap mark the engine committed: not just be absent.
+
+export interface MadeFrame {
+  page: string;
+  wsId: string;
+  /** The frame's own number, in its payload (`standFrame`). */
+  frame: number;
+  mono: number;
+  wall: number;
+}
+
+export interface MadeAnswer {
+  page: string;
+  method: string;
+  /** host + path + query. */
+  target: string;
+  status: number;
+  mono: number;
+  wall: number;
+  /** The engine's attempt it was admitted as; null: none. */
+  attemptId: number | null;
+}
+
+export interface FanslyMade {
+  frames: MadeFrame[];
+  answers: MadeAnswer[];
+}
+
+/** What the stand's Fansly made for the stand's pages, from its journal:
+ *  the frames it sent (`ws.out`) and the API requests it answered (`res`,
+ *  preflights apart), each answer with the attempt the engine admitted that
+ *  request as. */
+export function fanslyMade(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress): FanslyMade {
+  const requests = new Map(events.filter((event) => event.type === "req").map((event) => [event.seq, event]));
+  const made: FanslyMade = { frames: [], answers: [] };
+  for (const event of events) {
+    const page = pages.get(String(event.from ?? ""));
+    if (page === undefined) continue;
+    if (event.type === "ws.out") made.frames.push({ page, wsId: String(event.wsId), frame: Number(event.frame), mono: event.mono, wall: event.wall });
+    if (event.type !== "res" || event.role !== "api" || event.method === "OPTIONS") continue;
+    const path = typeof event.path === "string" ? event.path : String(requests.get(Number(event.req))?.path ?? event.pathname);
+    const target = `${String(event.host)}${path}`;
+    const own = grants.filter((grant) => grant.page === page && grant.kind !== "ws" && grant.target === target && grant.attemptId > 0);
+    const grant = own.filter((candidate) => candidate.grantedMono <= event.mono).sort((a, b) => b.grantedMono - a.grantedMono)[0] ?? own[0];
+    made.answers.push({ page, method: String(event.method), target, status: Number(event.status), mono: event.mono, wall: event.wall, attemptId: grant?.attemptId ?? null });
+  }
+  return made;
+}
+
+/** A gap mark the engine committed (spec §6.1): the page's stream broke
+ *  after `fromWall` — the last event saved before the break; null: nothing
+ *  was saved before it, the boundary is unknown — and the mark was written
+ *  at `atWall`. */
+export interface StoredGap {
+  page: string;
+  reason: string | null;
+  fromWall: number | null;
+  atWall: number;
+}
+
+/** What the engine keeps, from the stand's Postgres. */
+export interface Kept {
+  /** The frame numbers stored as `ws.in` events, by page. */
+  frames: ReadonlyMap<string, ReadonlySet<number>>;
+  /** The attempts with a stored outcome, by page. */
+  outcomes: ReadonlyMap<string, ReadonlySet<number>>;
+  gaps: readonly StoredGap[];
+}
+
+/** Between Fansly writing a frame and the operator's clock on the event it
+ *  saves: a gap's boundaries are the operator's, the frame's time is the
+ *  stand's. */
+export const GAP_SLACK_MS = 250;
+
+/** Everything Fansly made is kept: each frame it sent is stored as its
+ *  `ws.in` event (by the frame's number), each request it answered has its
+ *  stored outcome. The only exception is what a committed gap mark covers
+ *  by time (the stream is known to be broken there, and the engine
+ *  backfills it): those are counted as covered, never silently let go — and
+ *  whatever is neither kept nor covered was deleted, or never recorded,
+ *  before the engine had it. */
+export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS): { violations: string[]; coveredByGap: { frames: number; answers: number } } {
+  const covered = (page: string, wall: number) => kept.gaps.some((gap) => gap.page === page && (gap.fromWall === null || wall >= gap.fromWall - slackMs) && wall <= gap.atWall + slackMs);
+  const coveredByGap = { frames: 0, answers: 0 };
+  const violations: string[] = [];
+  const lost = new Map<string, MadeFrame[]>();
+  for (const frame of made.frames) {
+    if (kept.frames.get(frame.page)?.has(frame.frame)) continue;
+    if (covered(frame.page, frame.wall)) coveredByGap.frames += 1;
+    else lost.set(`${frame.page} ${frame.wsId}`, [...(lost.get(`${frame.page} ${frame.wsId}`) ?? []), frame]);
+  }
+  for (const frames of lost.values()) {
+    const { page, wsId } = frames[0]!;
+    violations.push(`Fansly sent ${page} ${frames.length} frame(s) on ${wsId} that are not stored as ws.in events, and no gap mark covers when they were sent: ${frames.slice(0, 5).map((frame) => frame.frame).join(", ")}${frames.length > 5 ? ", …" : ""}`);
+  }
+  for (const answer of made.answers) {
+    if (answer.attemptId !== null && kept.outcomes.get(answer.page)?.has(answer.attemptId)) continue;
+    if (covered(answer.page, answer.wall)) coveredByGap.answers += 1;
+    else violations.push(`${answer.method} ${answer.target} of ${answer.page} was answered by Fansly (${answer.status}) and has no stored outcome (${answer.attemptId === null ? "it is no attempt of the engine's" : `attempt ${answer.attemptId}`}), and no gap mark covers when it was answered`);
+  }
+  return { violations, coveredByGap };
 }
 
 export interface SeenTransition {
@@ -268,17 +380,120 @@ export function closedWriteAttempted(events: readonly JournalEvent[], pageAddres
   return violations;
 }
 
-/** An admission ran out while its connection was held: a CONNECT of the API
- *  host from the page began inside an admission's window and was let go
- *  only after its deadline. */
-export function heldPastDeadline(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, apiHost: string): string[] {
-  const holds = events.filter((event) => event.type === "socks.hold" && event.host === apiHost && event.from === pageAddress);
-  const releases = new Map(events.filter((event) => event.type === "socks.release").map((event) => [Number(event.socksId), event.mono]));
-  const found = holds.some((hold) => {
-    const released = releases.get(Number(hold.socksId));
-    return released !== undefined && grants.some((grant) => grant.page === page && grant.kind !== "ws" && hold.mono >= grant.grantedMono && hold.mono <= grant.deadlineMono && released > grant.deadlineMono);
-  });
-  return found ? [] : [`no admission of ${page} ran out while its CONNECT was held (${holds.length} held): the run proves nothing about the deadline`];
+/** A CONNECT the stand's SOCKS5 held and then let go; `upstream`: the
+ *  connection to the stand's Fansly it became (the address and port the
+ *  front sees it come from) — null: its client had gone, none was made. */
+export interface HeldConnect {
+  socksId: number;
+  heldMono: number;
+  releasedMono: number;
+  upstream: string | null;
+}
+
+/** One admitted request whose admission ran out over a held CONNECT. */
+export interface ExpiredRequest {
+  attemptId: number;
+  rid: string;
+  target: string;
+  grantedMono: number;
+  deadlineMono: number;
+  /** Every CONNECT of its host the page had waiting at its deadline: the
+   *  only connections it could go by. */
+  holds: HeldConnect[];
+}
+
+const ridIn = (target: string | null): string | null => /[?&]rid=([^&]+)/.exec(target ?? "")?.[1] ?? null;
+
+/** The requests of `page` to `host` whose admission ran out over their own
+ *  connection's CONNECT (plan §5, stage 2: "истечение срока допуска во время
+ *  установления соединения"). One counts only when all of this is in the
+ *  journal — tied to that request, not to the page's traffic at large:
+ *
+ *  - it was admitted after the run dropped the page's connections to the
+ *    host (`stand.dropped`), and from its admission to its deadline the page
+ *    had no connection to the host it could ride: none was open at any
+ *    moment of that window (each `socks.connect` and `socks.closed` of the
+ *    page counted);
+ *  - its admission was not used: nothing with its request id arrived up to
+ *    its deadline;
+ *  - a CONNECT of the host from the page was being held at its deadline —
+ *    begun before it, let go after it — and has been let go for `settleMs`
+ *    by now, so that what follows the hold had the time to show.
+ *
+ *  A request answered before the hold, or one that had a warm connection,
+ *  is no evidence, however long another connection was held. With none
+ *  found the run proves nothing about the deadline, and says why. */
+export function expiredUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, judgedMono: number, settleMs = 2000): { expired: ExpiredRequest[]; violations: string[] } {
+  const own = (event: JournalEvent) => event.host === host && event.from === pageAddress;
+  const dropped = events.filter((event) => event.type === "stand.dropped" && (event.host === null || event.host === undefined || event.host === host)).map((event) => event.mono);
+  const connects = events.filter((event) => event.type === "socks.connect" && own(event));
+  const closedAt = new Map(events.filter((event) => event.type === "socks.closed").map((event) => [Number(event.socksId), event.mono]));
+  const releasedAt = new Map(events.filter((event) => event.type === "socks.release").map((event) => [Number(event.socksId), event.mono]));
+  const holds: HeldConnect[] = events
+    .filter((event) => event.type === "socks.hold" && own(event))
+    .flatMap((hold) => {
+      const socksId = Number(hold.socksId);
+      const releasedMono = releasedAt.get(socksId);
+      if (releasedMono === undefined) return [];
+      const upstream = connects.find((connect) => Number(connect.socksId) === socksId)?.upstream;
+      return [{ socksId, heldMono: hold.mono, releasedMono, upstream: typeof upstream === "string" && upstream !== "" ? upstream : null }];
+    });
+  const arrivals = events.filter((event) => event.type === "req" && event.role === "api" && typeof event.rid === "string");
+  const admitted = grants.filter((grant) => grant.page === page && grant.kind !== "ws" && grant.target !== null && grant.target.split("/")[0] === host);
+  const why = { unnamed: 0, beforeTheDrop: 0, used: 0, warm: 0, notHeld: 0, justLetGo: 0 };
+  const expired: ExpiredRequest[] = [];
+  for (const grant of admitted) {
+    const rid = ridIn(grant.target);
+    if (rid === null) why.unnamed += 1;
+    else if (!dropped.some((at) => at <= grant.grantedMono)) why.beforeTheDrop += 1;
+    else if (arrivals.some((arrival) => arrival.rid === rid && arrival.mono <= grant.deadlineMono)) why.used += 1;
+    else if (connects.some((connect) => connect.mono <= grant.deadlineMono && (closedAt.get(Number(connect.socksId)) ?? Infinity) > grant.grantedMono)) why.warm += 1;
+    else {
+      const over = holds.filter((hold) => hold.heldMono <= grant.deadlineMono && hold.releasedMono > grant.deadlineMono);
+      if (over.length === 0) why.notHeld += 1;
+      else if (over.some((hold) => hold.releasedMono + settleMs > judgedMono)) why.justLetGo += 1;
+      else expired.push({ attemptId: grant.attemptId, rid, target: grant.target!, grantedMono: grant.grantedMono, deadlineMono: grant.deadlineMono, holds: over });
+    }
+  }
+  if (expired.length > 0) return { expired, violations: [] };
+  const seen = `${admitted.length} admitted to ${host}: ${why.beforeTheDrop} before the page's connections were dropped${dropped.length === 0 ? " (they never were)" : ""}, ${why.used} arrived inside their window, ${why.warm} had a connection to ride, ${why.notHeld} with no CONNECT held over their deadline, ${why.justLetGo} whose hold was let go under ${settleMs} ms ago, ${why.unnamed} without a request id; ${holds.length} CONNECT(s) held and let go`;
+  return { expired, violations: [`no admitted request of ${page} ran out over its own held CONNECT (${seen}): the run proves nothing about the deadline`] };
+}
+
+export interface LateArrival {
+  attemptId: number;
+  rid: string;
+  method: string;
+  /** How long after its admission ran out it arrived. */
+  lateMs: number;
+  /** The connection it arrived on (the front's side of it). */
+  peer: string;
+  /** The held CONNECT that connection came through; null: another one. */
+  held: HeldConnect | null;
+}
+
+/** None of those requests ever arrived: with its admission run out over its
+ *  own connection, a request that still reaches Fansly was sent after its
+ *  deadline — shown here by its own id, and by the connection it came on:
+ *  the one whose CONNECT was held past its deadline (the front's `peer` is
+ *  the SOCKS5's `upstream` of that CONNECT), or another. */
+export function expiredArrivals(events: readonly JournalEvent[], expired: readonly ExpiredRequest[]): { late: LateArrival[]; violations: string[] } {
+  const late: LateArrival[] = [];
+  for (const request of expired) {
+    for (const arrival of events) {
+      if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== request.rid) continue;
+      const peer = String(arrival.peer ?? "");
+      const held = request.holds.find((hold) => hold.upstream !== null && hold.upstream === peer && Number(arrival.socksId) === hold.socksId && arrival.mono >= hold.releasedMono) ?? null;
+      late.push({ attemptId: request.attemptId, rid: request.rid, method: String(arrival.method ?? ""), lateMs: Math.round(arrival.mono - request.deadlineMono), peer, held });
+    }
+  }
+  return {
+    late,
+    violations: late.map(
+      (arrival) =>
+        `the request ${arrival.rid} (attempt ${arrival.attemptId}, ${arrival.method}) arrived ${arrival.lateMs} ms after its admission ran out, ${arrival.held ? `on the connection whose CONNECT was held past it (SOCKS ${arrival.held.socksId} → ${arrival.held.upstream!})` : `on another connection (${arrival.peer || "?"})`}`,
+    ),
+  };
 }
 
 /** A request was in flight when the engine restarted: one of `rids` had

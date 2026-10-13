@@ -9,8 +9,9 @@
 //   POST /socks   { down?, refuseAuth?, connectDelayMs?, hold?: { host, ms } | null,
 //                   extraLogin?: { username, password } | null }                    the faults
 //   POST /reset                             no fault, the settings of the start
-//   POST /drop                              every connection of the front dropped
-//   POST /ws/push { text? | bytes?, wsId? } a frame into the open sockets
+//   POST /drop    { host? }                 every connection of the front dropped
+//                                           (or every one of that name)
+//   POST /ws/push { bytes?, wsId? }      a numbered frame into the open sockets
 //   POST /ws/close { code?, wsId? }
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -136,12 +137,13 @@ async function handle(deps: ControlDeps, req: IncomingMessage): Promise<unknown>
       journal.log("stand.reset");
       return state(deps);
     }
-    case "POST /drop":
-      return { dropped: front.dropConnections() };
+    case "POST /drop": {
+      const body = await readJson(req);
+      return { dropped: front.dropConnections(typeof body.host === "string" ? body.host : null) };
+    }
     case "POST /ws/push": {
       const body = await readJson(req);
       const wsId = typeof body.wsId === "string" ? body.wsId : undefined;
-      if (typeof body.text === "string") return { sent: front.pushText(body.text, wsId) };
       return { sent: front.push(count(body.bytes ?? 256, "bytes", 1024 * 1024), wsId) };
     }
     case "POST /ws/close": {
