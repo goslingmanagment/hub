@@ -5,7 +5,7 @@ import type { Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
-import { REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
+import { MAX_WAITING, REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -816,7 +816,7 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
     expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
     // The engine asks again and again: the asks are merged, not stacked.
     const ids = Array.from({ length: count }, (_, n) => n + 1);
-    for (let n = 0; n < 5; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: ids });
+    for (let n = 0; n < 100; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: ids });
     expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
     expect(s.operator.replay.queued).toBeLessThanOrEqual(1);
     // It reads again: every outcome once from the replay, once for the
@@ -885,4 +885,64 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
     await s.engine.waitFor("state", (state) => state.stopReason === null);
     await started(s);
   });
+
+  /** An engine linked with outcomes waiting for it, that stops reading. */
+  async function stuckEngine(s: SetUp, count: number): Promise<RawEngine> {
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the engine to go");
+    for (let id = 1; id < count; id++) s.operator.buffer.putOutcome(hubResult(id, 200, 6000));
+    const last = s.operator.buffer.putOutcome(hubResult(count, 200, 6000));
+    if (!last.ok) throw new Error("refused");
+    await last.durable;
+    const engine = new RawEngine();
+    cleanups.push(() => engine.close());
+    await engine.connect(s.rpcPort());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    engine.pause();
+    return engine;
+  }
+
+  it("an engine that asks about more attempts than are kept waiting, without reading the answers, is cut off: nothing goes around the socket's wait", async () => {
+    const s = await setUp();
+    const engine = await stuckEngine(s, 3000);
+    let peak = 0;
+    const sample = setInterval(() => (peak = Math.max(peak, s.operator.rpc.backlog())), 5);
+    cleanups.push(() => clearInterval(sample));
+    // Five asks of 10 000 attempts each, then the same 10 000 again and
+    // again: 100 asks, past what waits for an answer.
+    const asks = Array.from({ length: 6 }, (_, ask) => Array.from({ length: 10_000 }, (_, n) => 1_000_000 + ask * 10_000 + n));
+    for (let n = 0; n < 100; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: asks[Math.min(n, 5)]! });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    clearInterval(sample);
+    expect(peak).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    await until(() => !s.operator.rpc.linkUp, 5000, "the connection to be closed");
+    expect(s.lines.some((line) => line.includes('"e":"protocol.error"') && line.includes("recover"))).toBe(true);
+    expect(s.lines.some((line) => line.includes('"e":"recover.refused"') && line.includes(`"cap":${MAX_WAITING}`))).toBe(true);
+    expect(s.operator.replay.queued).toBe(0);
+  }, 30_000);
+
+  it("a superseded engine that stopped reading does not hold up its successor: the new one gets every outcome and its recover's answer", async () => {
+    const s = await setUp();
+    await stuckEngine(s, 3000);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The replay waits on the stuck socket. A new owner connects.
+    const next = new FakeEngine();
+    next.generation = 2;
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("helloResult", (message) => message.ok === true);
+    next.send({ type: "recover", ownerGeneration: 2, attemptIds: [1, 2, 3000, 4000] });
+    // Well before the old socket's grace runs out (5 s).
+    await until(() => new Set(next.of("result").map((result) => result.attemptId)).size === 3000, 3000, "every outcome on the new connection");
+    expect(await next.waitFor("recoverResult", () => true, 3000)).toMatchObject({
+      attempts: [
+        { attemptId: 1, state: "outcome_resent" },
+        { attemptId: 2, state: "outcome_resent" },
+        { attemptId: 3000, state: "outcome_resent" },
+        { attemptId: 4000, state: "unknown" },
+      ],
+    });
+  }, 30_000);
 });

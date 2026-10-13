@@ -985,7 +985,7 @@ export class Operator {
       case "recover":
         // The engine's start (plan §3.2): the outcomes the buffer has go
         // first, then the answer for each attempt (buffer/replay.ts).
-        this.replay.recover(message.attemptIds);
+        if (!this.replay.recover(message.attemptIds)) this.rpc.protocolError("recover: more attempts waiting for their answer than the operator keeps");
         return;
     }
   }

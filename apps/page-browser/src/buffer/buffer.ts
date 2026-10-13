@@ -123,6 +123,8 @@ export interface BufferOptions {
   maxPages?: number;
   /** Tests: an error to fail a commit with (store.ts). */
   commitFault?: (batch: Commit) => Error | null;
+  /** Tests: an error for the first read after an open (store.ts). */
+  totalsFault?: () => Error | null;
   /** The pauses before a failed open is tried again (locked, I/O). */
   openRetryMs?: readonly number[];
   /** The pauses before a failed commit is tried again. */
@@ -377,6 +379,7 @@ export class EventBuffer {
 
   #open(): boolean {
     const options = this.#options;
+    let opened: BufferStore | null = null;
     try {
       const store = new BufferStore({
         dir: options.dir,
@@ -386,9 +389,10 @@ export class EventBuffer {
         ...(options.migrations ? { migrations: options.migrations } : {}),
         ...(options.maxPages !== undefined ? { maxPages: options.maxPages } : {}),
         ...(options.commitFault ? { commitFault: options.commitFault } : {}),
+        ...(options.totalsFault ? { totalsFault: options.totalsFault } : {}),
       });
+      opened = store;
       const totals = store.totals();
-      this.#store = store;
       this.#knownId = store.id;
       this.#unavailable = null;
       this.#bytes = totals.bytes;
@@ -399,8 +403,17 @@ export class EventBuffer {
       this.#oldestOutcomeWall = totals.oldestOutcomeWall;
       this.#walDirty = true;
       this.#log("opened", { bufferId: store.id, schema: store.schema.version, created: store.schema.created, lastSeq: store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes });
+      this.#store = store;
+      opened = null;
       return true;
     } catch (error) {
+      // An open that failed after the file was opened: its connection holds
+      // the lock and would refuse every retry — it goes first.
+      try {
+        opened?.close();
+      } catch {
+        // closing is all that is left to try
+      }
       const { cause, recoverable } = openFailure(error);
       const code = (error as { errcode?: unknown }).errcode;
       const detail = `the buffer could not be opened: ${errorMessage(error)}${typeof code === "number" ? ` (SQLite ${code})` : ""}`;

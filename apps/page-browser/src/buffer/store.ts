@@ -122,6 +122,9 @@ export interface StoreOptions {
   maxPages?: number;
   /** Tests: an error to fail a commit with, inside its transaction. */
   commitFault?: (batch: Commit) => Error | null;
+  /** Tests: an error for `totals` to throw (a read failing right after the
+   *  open). */
+  totalsFault?: () => Error | null;
 }
 
 const WAL_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -153,6 +156,7 @@ export class BufferStore {
   readonly #outcomeSizes: StatementSync;
   readonly #outcomeRange: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
+  readonly #totalsFault: StoreOptions["totalsFault"];
   #lastSeq: number;
   #lastWall: number | null;
   #closed = false;
@@ -187,27 +191,35 @@ export class BufferStore {
       db.close();
       throw error;
     }
-    this.#db = db;
-    const meta = (key: string) => String(row(db.prepare("SELECT value FROM meta WHERE key = ?"), key)?.value ?? "");
-    this.id = meta("buffer_id");
-    this.#lastSeq = Number(meta("last_seq"));
-    const lastWall = meta("last_wall");
-    this.#lastWall = lastWall === "" ? null : Number(lastWall);
-    this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
-    this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
-    this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
-    this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
-    this.#deleteUpTo = db.prepare("DELETE FROM events WHERE seq <= ?");
-    this.#deleteOutcome = db.prepare("DELETE FROM outcomes WHERE attempt_id = ? RETURNING bytes");
-    this.#sizesAfter = db.prepare("SELECT seq, bytes FROM events WHERE seq > ? ORDER BY seq LIMIT ?");
-    this.#readRange = db.prepare("SELECT seq, bytes, json FROM events WHERE seq > ? AND seq <= ? ORDER BY seq");
-    this.#first = db.prepare("SELECT seq, at_wall FROM events ORDER BY seq LIMIT 1");
-    this.#oldestOutcome = db.prepare("SELECT min(at_wall) AS at_wall FROM outcomes");
-    this.#outcome = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id = ?");
-    this.#outcomeSizes = db.prepare("SELECT attempt_id, bytes FROM outcomes WHERE attempt_id > ? ORDER BY attempt_id LIMIT ?");
-    this.#outcomeRange = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id > ? AND attempt_id <= ? ORDER BY attempt_id");
-    this.#commitFault = options.commitFault;
-    syncIdFile(options.idFile, this.id);
+    // Whatever fails from here on, the connection goes with it: an open
+    // connection holds the lock and would refuse every retry.
+    try {
+      this.#db = db;
+      const meta = (key: string) => String(row(db.prepare("SELECT value FROM meta WHERE key = ?"), key)?.value ?? "");
+      this.id = meta("buffer_id");
+      this.#lastSeq = Number(meta("last_seq"));
+      const lastWall = meta("last_wall");
+      this.#lastWall = lastWall === "" ? null : Number(lastWall);
+      this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
+      this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
+      this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
+      this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
+      this.#deleteUpTo = db.prepare("DELETE FROM events WHERE seq <= ?");
+      this.#deleteOutcome = db.prepare("DELETE FROM outcomes WHERE attempt_id = ? RETURNING bytes");
+      this.#sizesAfter = db.prepare("SELECT seq, bytes FROM events WHERE seq > ? ORDER BY seq LIMIT ?");
+      this.#readRange = db.prepare("SELECT seq, bytes, json FROM events WHERE seq > ? AND seq <= ? ORDER BY seq");
+      this.#first = db.prepare("SELECT seq, at_wall FROM events ORDER BY seq LIMIT 1");
+      this.#oldestOutcome = db.prepare("SELECT min(at_wall) AS at_wall FROM outcomes");
+      this.#outcome = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id = ?");
+      this.#outcomeSizes = db.prepare("SELECT attempt_id, bytes FROM outcomes WHERE attempt_id > ? ORDER BY attempt_id LIMIT ?");
+      this.#outcomeRange = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id > ? AND attempt_id <= ? ORDER BY attempt_id");
+      this.#commitFault = options.commitFault;
+      this.#totalsFault = options.totalsFault;
+      syncIdFile(options.idFile, this.id);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
 
   /** The last number given (0: none yet); it never goes back. */
@@ -346,6 +358,8 @@ export class BufferStore {
 
   /** Counted once at open; the buffer keeps them up to date after. */
   totals(): Totals {
+    const fault = this.#totalsFault?.();
+    if (fault) throw fault;
     const db = this.#db;
     const events = row(db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events"));
     const outcomes = row(db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM outcomes"));

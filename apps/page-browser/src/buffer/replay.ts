@@ -10,10 +10,16 @@
 // - one replay per connection: a new hello ends the previous one (its
 //   connection is gone) and starts afresh;
 // - `recover`s waiting their turn are merged into one, answered by one
-//   `recoverResult` that names every attempt asked about.
+//   `recoverResult` that names every attempt asked about. An attempt asked
+//   about again while its answer is still to come — waiting, or being
+//   answered now — adds nothing. Everything, answers included, goes out
+//   through the same wait for the socket.
+// - The attempts waiting for an answer are capped; an engine that asks
+//   about more without waiting for answers breaks the protocol, and its
+//   connection is closed (it connects again, and the replay starts afresh).
 //
-// What is in memory at any time: one page of outcomes, the attempt ids of
-// at most two recovers, and the socket's queue up to its mark.
+// What is in memory at any time: one page of outcomes, at most twice the
+// cap of attempt ids, and the socket's queue up to its mark.
 
 import { makeLog, sleep, type Logger } from "../shared/util.ts";
 import type { EventBuffer } from "./buffer.ts";
@@ -41,9 +47,9 @@ export interface ReplayOptions {
 type Job = { kind: "all" } | { kind: "recover"; attemptIds: Set<number> };
 
 export const REPLAY_HIGH_WATER = 256 * 1024;
-/** A recover asks about at most 10 000 attempts (rpc/protocol.ts); merged
- *  ones are kept up to this many, the rest answered `unknown` at once. */
-const MAX_MERGED = 50_000;
+/** A recover asks about at most 10 000 attempts (rpc/protocol.ts): two of
+ *  them may wait for their answer while one is being answered. */
+export const MAX_WAITING = 20_000;
 const RECOVER_CHUNK = 64;
 
 export class OutcomeReplay {
@@ -57,6 +63,8 @@ export class OutcomeReplay {
   #epoch = -1;
   #jobs: Job[] = [];
   #running = false;
+  /** The attempts the running recover answers, and its connection. */
+  #answering: { epoch: number; attemptIds: Set<number> } | null = null;
 
   constructor(buffer: EventBuffer, link: ReplayLink, options: ReplayOptions = {}) {
     this.#buffer = buffer;
@@ -87,8 +95,10 @@ export class OutcomeReplay {
   }
 
   /** The engine's recover: the outcomes it names that the buffer has, then
-   *  the answer. Merged with a recover still waiting its turn. */
-  recover(attemptIds: readonly number[]): void {
+   *  the answer. Merged with a recover still waiting its turn; attempts
+   *  whose answer is still to come add nothing. False: more would wait for
+   *  an answer than the cap — the caller closes the connection. */
+  recover(attemptIds: readonly number[]): boolean {
     const epoch = this.#link.epoch();
     if (epoch !== this.#epoch) {
       this.#epoch = epoch;
@@ -96,20 +106,17 @@ export class OutcomeReplay {
     }
     const waiting = this.#jobs.find((job) => job.kind === "recover");
     const into = waiting?.kind === "recover" ? waiting.attemptIds : new Set<number>();
-    const overflow: number[] = [];
-    for (const id of attemptIds) {
-      if (into.has(id)) continue;
-      if (into.size >= MAX_MERGED) overflow.push(id);
-      else into.add(id);
+    const answering = this.#answering?.epoch === epoch ? this.#answering.attemptIds : null;
+    const fresh = new Set(attemptIds.filter((id) => !into.has(id) && !answering?.has(id)));
+    if (into.size + fresh.size > MAX_WAITING) {
+      this.#log("recover.refused", { waiting: into.size, asked: fresh.size, cap: MAX_WAITING });
+      return false;
     }
-    if (!waiting) this.#jobs.push({ kind: "recover", attemptIds: into });
-    if (overflow.length > 0) {
-      // An engine that asks this much without waiting for answers: what is
-      // past the mark is `unknown` — never wrong, only less helpful.
-      this.#log("recover.overflow", { unknown: overflow.length });
-      this.#link.send(JSON.stringify({ type: "recoverResult", attempts: overflow.map((attemptId) => ({ attemptId, state: "unknown" })) }));
-    }
+    for (const id of fresh) into.add(id);
+    // A recover of nothing still gets its (empty) answer.
+    if (!waiting && (into.size > 0 || attemptIds.length === 0)) this.#jobs.push({ kind: "recover", attemptIds: into });
     this.#run();
+    return true;
   }
 
   #run(): void {
@@ -128,9 +135,14 @@ export class OutcomeReplay {
       const epoch = this.#epoch;
       try {
         if (job.kind === "all") await this.#all(epoch);
-        else await this.#recover([...job.attemptIds], epoch);
+        else {
+          this.#answering = { epoch, attemptIds: job.attemptIds };
+          await this.#recover([...job.attemptIds], epoch);
+        }
       } catch (error) {
         this.#log("replay.failed", { job: job.kind, error: error instanceof Error ? error.message : String(error) });
+      } finally {
+        this.#answering = null;
       }
     }
   }

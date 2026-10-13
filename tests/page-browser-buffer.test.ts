@@ -574,6 +574,27 @@ describe("space, failures and a buffer that cannot be opened (Astra's review of 
     expect(all(buffer).map((event) => [event.seq, event.kind, event.reason])).toEqual([[2, "gap", "buffer_full"]]);
   });
 
+  it("an open whose first read fails lets go of the file: the retry opens it", async () => {
+    const root = dir();
+    const first = open(root);
+    await seqOf(first.append(wsFrame(1)));
+    await first.close();
+    let faults = 1;
+    let opened = 0;
+    const buffer = open(root, {
+      openRetryMs: [20],
+      onOpened: () => (opened += 1),
+      // The file opens; reading it right after fails once (an I/O error).
+      totalsFault: () => (faults-- > 0 ? Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10 }) : null),
+    });
+    expect(buffer.unavailable).toMatchObject({ cause: "io", recoverable: true, attempts: 1 });
+    buffer.start();
+    await until(() => opened === 1, 3000, "the retry to open it");
+    expect(buffer.unavailable).toBeNull();
+    expect(buffer.lastSeq).toBe(1);
+    expect(await seqOf(buffer.append(wsFrame(2)))).toBe(2);
+  });
+
   it("opens a buffer that was locked once the lock goes, and says so", async () => {
     const root = dir();
     const holder = open(root);

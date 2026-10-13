@@ -18,7 +18,12 @@
 //   the operator (buffer/); an event batch is sent as the buffer stored it
 //   (`sendRaw`), not parsed and serialized again. What is sent in bulk (the
 //   outcomes replayed, buffer/replay.ts) waits for the socket: `backlog`
-//   and `drained`, for the connection of one `epoch`.
+//   and `drained`, for the connection of one `epoch`. A wait ends when the
+//   connection changes too: work for a superseded connection must not hang
+//   on a socket nobody reads.
+// - A connection closed by the operator (superseded, lost, a protocol
+//   error) is destroyed if its peer has not taken the close within a few
+//   seconds: a peer that stopped reading does not keep its socket forever.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -67,6 +72,8 @@ const CLOSE_PROTOCOL = 1008;
 const CLOSE_REFUSED = 4001;
 const CLOSE_SUPERSEDED = 4002;
 const CLOSE_LINK_LOST = 4003;
+/** A closed connection's peer gets this long to take what is queued. */
+const CLOSE_GRACE_MS = 5000;
 
 function digest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
@@ -87,6 +94,8 @@ export class RpcServer {
   #active: Conn | null = null;
   /** Changes with the active connection. */
   #epoch = 0;
+  /** Waits on the active connection's queue: woken when it changes. */
+  readonly #drainWaiters = new Set<() => void>();
   #lastHeard = 0;
   #pingN = 0;
   #pingMs: number;
@@ -131,7 +140,8 @@ export class RpcServer {
     return conn && !conn.ws.closed ? conn.ws.socket.writableLength : 0;
   }
 
-  /** Settles once the connection's queue has drained, or it is gone. */
+  /** Settles once the connection's queue has drained, or it is gone, or
+   *  another connection took its place. */
   drained(): Promise<void> {
     const conn = this.#active;
     if (!conn || conn.ws.closed || !conn.ws.socket.writableNeedDrain) return Promise.resolve();
@@ -140,17 +150,34 @@ export class RpcServer {
       const done = () => {
         socket.off("drain", done);
         socket.off("close", done);
+        this.#drainWaiters.delete(done);
         resolve();
       };
       socket.once("drain", done);
       socket.once("close", done);
+      this.#drainWaiters.add(done);
     });
+  }
+
+  /** The engine's connection breaks the protocol (as the operator sees it,
+   *  e.g. more asked than it keeps): closed, the engine connects again. */
+  protocolError(error: string): void {
+    const conn = this.#active;
+    if (conn) this.#protocolError(conn, error);
   }
 
   #setActive(conn: Conn | null): void {
     if (this.#active === conn) return;
     this.#active = conn;
     this.#epoch += 1;
+    for (const wake of [...this.#drainWaiters]) wake();
+  }
+
+  /** Closes a connection; one whose peer does not take the close (it stopped
+   *  reading) is destroyed after a grace. */
+  #close(conn: Conn, code: number): void {
+    conn.ws.close(code);
+    setTimeout(() => conn.ws.destroy("closed, its peer did not take it"), CLOSE_GRACE_MS).unref();
   }
 
   /** To the engine, when one is connected. */
@@ -223,7 +250,7 @@ export class RpcServer {
   #drop(conn: Conn, code: number, reason: string): void {
     const wasActive = this.#active === conn;
     if (wasActive) this.#setActive(null);
-    conn.ws.close(code);
+    this.#close(conn, code);
     if (wasActive) this.#options.handlers.onLink(false, reason);
   }
 
@@ -302,7 +329,7 @@ export class RpcServer {
     if (replaced && replaced !== conn) {
       this.#log(hello.ownerGeneration > replaced.generation ? "link.superseded" : "link.replaced", { from: replaced.generation, to: hello.ownerGeneration });
       this.#setActive(null);
-      replaced.ws.close(CLOSE_SUPERSEDED);
+      this.#close(replaced, CLOSE_SUPERSEDED);
     }
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
