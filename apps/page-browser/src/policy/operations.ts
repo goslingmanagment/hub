@@ -29,6 +29,8 @@
 // Modes of a row (spec §2): "automation", "manual_login", "both"; "closed" —
 // refused in both until the owner opens it.
 
+import { REFUSED_IPV4_TEXT, REFUSED_IPV6_TEXT } from "./special-addresses.ts";
+
 /** A row's mode (spec §2). */
 export type RowMode = "automation" | "manual_login" | "both" | "closed";
 /** The operator's mode (spec §6.1 `Mode`). */
@@ -89,7 +91,9 @@ export const API_OPEN_METHODS: readonly string[] = ["GET", "OPTIONS"];
 /** Local, private and special-use destinations (plan §4.5): refused by the
  *  proxy even with the exit open, and by the extension. Kept as text the
  *  rules builder turns into DNR expressions and the proxy into its checks:
- *  one list for both.
+ *  one list for both. The addresses are every entry of IANA's
+ *  special-purpose registries that is no destination
+ *  (policy/special-addresses.ts, held to the registries by a test).
  *
  *  Both refuse the address IN THE REQUEST — a name, or a literal address.
  *  What the page's SOCKS5 resolves a name to is not seen: DNS is resolved at
@@ -101,37 +105,10 @@ export const API_OPEN_METHODS: readonly string[] = ["GET", "OPTIONS"];
 export const LOCAL = {
   /** Names: these and every name under them; a name without a dot too. */
   names: ["localhost", "local", "internal", "home.arpa"],
-  /** IPv4 (IANA's special-purpose registry, the ranges that are not
-   *  reachable on the internet): the leading octets of a range, as
-   *  expressions (the dots are separators, the rest is matched by the
-   *  address's other octets) — this network, private, loopback,
-   *  link-local, shared address space, IETF protocol assignments,
-   *  documentation, benchmarking, multicast and reserved. */
-  ipv4: [
-    "0",
-    "10",
-    "127",
-    "169\\.254",
-    "192\\.168",
-    "172\\.(1[6-9]|2[0-9]|3[01])",
-    "100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])",
-    "192\\.0\\.0",
-    "192\\.0\\.2",
-    "198\\.1[89]",
-    "198\\.51\\.100",
-    "203\\.0\\.113",
-    "22[4-9]",
-    "2[3-5][0-9]",
-  ],
-  /** IPv6 (lower case, as a URL or a CONNECT writes it): unspecified and
-   *  loopback, and these prefixes — mapped IPv4, unique local, link-local,
-   *  multicast, documentation (2001:db8::/32), discard-only (100::/64). A
-   *  prefix is matched on the text: a group written without its leading
-   *  zeros (`fca::`) is taken too — more is closed, never less. Left out:
-   *  NAT64's 64:ff9b::/96, which stands for global IPv4 addresses only
-   *  (RFC 6052, §3.1: never for private ones). */
-  ipv6Exact: ["::", "::1"],
-  ipv6Prefixes: ["::ffff:", "fc", "fd", "fe8", "fe9", "fea", "feb", "ff", "2001:db8:", "100::"],
+  /** IPv4: expressions over the dotted text, each a whole address. */
+  ipv4: REFUSED_IPV4_TEXT,
+  /** IPv6: expressions over the canonical text, each a whole address. */
+  ipv6: REFUSED_IPV6_TEXT,
 } as const;
 
 /** Special-use names that exist nowhere (RFC 6761, 9476): the proxy refuses
@@ -141,7 +118,26 @@ export const LOCAL = {
 export const RESERVED_NAMES: readonly string[] = ["invalid", "test", "example", "onion", "alt"];
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-const LOCAL_IPV4 = new RegExp(`^(${LOCAL.ipv4.join("|")})\\.`);
+const LOCAL_IPV4 = new RegExp(`^(${LOCAL.ipv4.join("|")})$`);
+const LOCAL_IPV6 = new RegExp(`^(${LOCAL.ipv6.join("|")})$`);
+
+/** An address literal in the text a URL gives it (WHATWG's, Chrome's): an
+ *  IPv4 in dotted decimal however it was written, an IPv6 per RFC 5952. A
+ *  name stays as it is; an IPv6 literal that does not parse is null. */
+export function canonicalAddress(host: string): string | null {
+  if (host.includes(":")) {
+    try {
+      return new URL(`http://[${host}]/`).hostname.replace(/^\[|\]$/g, "");
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return new URL(`http://${host}/`).hostname;
+  } catch {
+    return host;
+  }
+}
 
 function under(host: string, name: string): boolean {
   return host === name || host.endsWith(`.${name}`);
@@ -155,9 +151,12 @@ export function normalHost(host: string): string {
 
 /** A local or private address (`LOCAL`): what the extension blocks too. */
 export function isLocalAddress(raw: string): boolean {
-  const host = normalHost(raw);
-  if (host === "") return true;
-  if (host.includes(":")) return (LOCAL.ipv6Exact as readonly string[]).includes(host) || LOCAL.ipv6Prefixes.some((prefix) => host.startsWith(prefix));
+  const named = normalHost(raw);
+  if (named === "") return true;
+  const host = canonicalAddress(named);
+  // An IPv6 literal that does not parse goes nowhere.
+  if (host === null) return true;
+  if (host.includes(":")) return LOCAL_IPV6.test(host);
   if (IPV4.test(host)) return LOCAL_IPV4.test(host);
   if (!host.includes(".")) return true;
   return LOCAL.names.some((name) => under(host, name));
@@ -458,6 +457,12 @@ export const GENERAL_CLOSURES: ReadonlyArray<{ rule: string; what: string; examp
       { method: "GET", url: "https://192.0.0.8/" },
       { method: "GET", url: "http://[2001:db8::1]/" },
       { method: "GET", url: "http://[100::1]/" },
+      { method: "GET", url: "https://[2001:2::1]/" },
+      { method: "GET", url: "https://[3fff::1]/" },
+      { method: "GET", url: "https://[5f00::1]/" },
+      { method: "GET", url: "https://[2002:a00:1::1]/" },
+      { method: "GET", url: "https://[64:ff9b:1::a00:1]/" },
+      { method: "GET", url: "https://192.88.99.2/" },
     ],
   },
 ];

@@ -186,19 +186,22 @@ export function buildRules(): DnrRule[] {
   // 100: local and private addresses (the proxy refuses them too).
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}([^/@]*\\.)?(${LOCAL.names.map(escapeRegex).join("|")})${HOST_END}`));
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}[^./@:\\[\\]]+${HOST_END}`));
-  for (const range of LOCAL.ipv4) rules.push(block(PRIORITY.local, `${WEB_ORIGIN}${range}\\.[0-9.]*(:[0-9]+)?/`));
-  rules.push(block(PRIORITY.local, `${WEB_ORIGIN}\\[(${LOCAL.ipv6Exact.map(escapeRegex).join("|")})\\](:[0-9]+)?/`));
-  // The prefixes in as few rules as the expressions' budget allows.
-  const ipv6Rule = (prefixes: readonly string[]) => `${WEB_ORIGIN}\\[(${prefixes.map(escapeRegex).join("|")})[^\\]]*\\](:[0-9]+)?/`;
-  let prefixes: string[] = [];
-  for (const prefix of LOCAL.ipv6Prefixes) {
-    if (prefixes.length > 0 && regexCost(ipv6Rule([...prefixes, prefix]), false) > REGEX_BUDGET) {
-      rules.push(block(PRIORITY.local, ipv6Rule(prefixes)));
-      prefixes = [];
+  // The special-purpose addresses (policy/special-addresses.ts), as few
+  // rules as the expressions' budget allows.
+  const literal = (texts: readonly string[], wrap: (alternatives: string) => string) => {
+    let group: string[] = [];
+    const flush = () => {
+      if (group.length > 0) rules.push(block(PRIORITY.local, wrap(group.join("|"))));
+      group = [];
+    };
+    for (const text of texts) {
+      if (group.length > 0 && regexCost(wrap([...group, text].join("|")), false) > REGEX_BUDGET) flush();
+      group.push(text);
     }
-    prefixes.push(prefix);
-  }
-  if (prefixes.length > 0) rules.push(block(PRIORITY.local, ipv6Rule(prefixes)));
+    flush();
+  };
+  literal(LOCAL.ipv4, (alternatives) => `${WEB_ORIGIN}(${alternatives})(:[0-9]+)?/`);
+  literal(LOCAL.ipv6, (alternatives) => `${WEB_ORIGIN}\\[(${alternatives})\\](:[0-9]+)?/`);
   return rules.map((rule, index) => {
     const cost = regexCost(rule.condition.regexFilter, rule.condition.isUrlFilterCaseSensitive);
     if (cost > REGEX_BUDGET) throw new Error(`rule ${index + 1}: its expression costs ${cost}, over the budget of ${REGEX_BUDGET} — Chrome would drop the rule: ${rule.condition.regexFilter}`);
