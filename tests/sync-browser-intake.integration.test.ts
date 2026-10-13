@@ -917,6 +917,62 @@ describe("the review of PR 13", () => {
     expect(row.rows[0]!.lossSince).toBeNull();
   }, 60_000);
 
+  it("a halt never written before the process died: the restored buffer, grown past the position, is still refused by its sent mark — nothing deleted — and the halt is written once the database is back", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const connectionId = randomUUID();
+    open(r.operator, connectionId);
+    const last = frame(r.operator, connectionId, WS_NOOP_FRAME);
+    const first = await r.start();
+    await committedUpTo(r.page.pageId, last.seq);
+    await until(async () => r.operator.buffer.acknowledged === last.seq, 5_000, "the ack");
+    await first.crash();
+    // The engine committed more of this buffer than the restored file gave.
+    await testDb.pool.query("update page_browsers set events_acked_seq = 10 where page_id = $1", [r.page.pageId]);
+    const second = await r.start({ faults: (point) => {
+      if (point === "halt_write") throw new Error("the database is away");
+    } });
+    await until(async () => r.operator.refusals.filter((refused) => refused.reason === "ahead").length >= 1, 5_000, "the refusal");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The process dies with the halt never written.
+    await second.crash();
+    expect((await position(r.page.pageId)).haltedBufferId).toBeNull();
+    // The restored buffer grows well past the position.
+    for (let i = 0; i < 12; i++) frame(r.operator, connectionId, serviceFrame({ type: 99, n: i }, 99));
+    expect(r.operator.buffer.lastSeq).toBeGreaterThan(10);
+    const refusals = r.operator.refusals.length;
+    const third = await r.start();
+    await until(async () => r.operator.refusals.slice(refusals).some((refused) => refused.reason === "ahead"), 5_000, "refused again by the sent mark");
+    await until(async () => (await position(r.page.pageId)).haltedBufferId === r.operator.buffer.id, 5_000, "the halt written");
+    await third.intake.idle();
+    expect(r.operator.buffer.acknowledged).toBe(last.seq);
+    expect(r.operator.buffer.kept).toHaveLength(12);
+    expect(third.intake.committedBatches).toBe(0);
+  }, 60_000);
+
+  it("an old loss mark on a connection never hides a fresh loss: the read-back is clamped to the week, and the repair clears it", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const id = randomUUID();
+    const browserConnectionId = randomUUID();
+    // Opened eight days ago, its opening gap repaired, a loss marked then.
+    await testDb.pool.query(
+      `insert into fansly_ws_connections (id, page_id, generation, origin, browser_connection_id, started_at, last_guard_at, verified_at, gap_since,
+         state_reconciled_at, transient_unknown, loss_since)
+       values ($1, $2, $3, 'browser', $4, now() - interval '8 days', now(), now() - interval '8 days', now() - interval '8 days 1 hour',
+               now() - interval '8 days', tstzrange(now() - interval '8 days 1 hour', now() - interval '8 days'), now() - interval '8 days')`,
+      [id, r.page.pageId, "c".repeat(64), browserConnectionId],
+    );
+    // A fresh loss: `least()` keeps the eight-day mark.
+    await db().transaction(async (tx) => markBrowserWsLoss(tx as unknown as Database, { pageId: r.page.pageId, browserConnectionId, since: new Date(Date.now() - 48 * 3_600_000) }));
+    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+    expect(pass.targets).toEqual([id]);
+    const week = 7 * 24 * 3_600_000;
+    expect(Math.abs(Date.now() - pass.since!.getTime() - (week + 60_000))).toBeLessThan(10_000);
+    expect(await stampFanslyWsGapReconciled(db(), { pageId: r.page.pageId, targets: pass.targets, since: pass.since! })).toBe(1);
+    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toEqual([]);
+  }, 60_000);
+
   it("a halt whose write fails keeps the intake closed until it is written; a restart then finds it, however the buffer grew", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

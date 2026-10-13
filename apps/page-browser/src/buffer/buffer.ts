@@ -430,6 +430,28 @@ export class EventBuffer {
     return this.#store?.lastSeq ?? 0;
   }
 
+  /** The highest number ever handed to a stream (store.ts, schema v4); 0
+   *  while the buffer cannot be opened. */
+  get sentMax(): number {
+    return this.#store?.sentMax ?? 0;
+  }
+
+  /** Raise the sent mark over everything stored now, durably, before the
+   *  stream sends past the old one (one write per advance, not per event).
+   *  False: it could not be written — nothing past the old mark may go (a
+   *  failing write: the buffer is full until it can write again). */
+  raiseSentMax(): boolean {
+    const store = this.#store;
+    if (this.#closed || store === null) return false;
+    try {
+      store.raiseSentMax(store.lastSeq);
+      return true;
+    } catch (error) {
+      this.#storageFailed(error, "write");
+      return false;
+    }
+  }
+
   /** The wall time of the last event given; null before the first. */
   get lastWall(): number | null {
     return this.#store?.lastWall ?? null;

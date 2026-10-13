@@ -16,6 +16,13 @@
 // - An ack covers only what this subscription sent; anything past that is
 //   refused. The subscription's own `afterSeq` is the engine's word that it
 //   has everything up to it: those events go.
+// - The buffer keeps durably the highest number it ever sent (`sentMax`,
+//   schema v4): before an event past it goes, the mark is raised over
+//   everything stored (one write per advance). A subscription past the mark
+//   is refused (`ahead`) as one past the last number is: the engine can only
+//   have committed what was sent. A file restored from before keeps its old
+//   mark, so however far its numbers grow, an old position never
+//   acknowledges — deletes — its new events (PR 13, Astra's review).
 // - At most a few batches are on their way unacknowledged: the engine's
 //   commits pace the stream, and the rest waits in the buffer (a Hub deploy,
 //   a database outage: the socket is not broken, plan §4.4, step 7).
@@ -95,9 +102,12 @@ export class EventStream {
     // the engine subscribes again once state no longer says so.
     if (this.#buffer.unavailable) return this.#refuse("events.subscribe", "unavailable", message.bufferId, message.afterSeq);
     if (message.bufferId !== this.#buffer.id) return this.#refuse("events.subscribe", "foreign_buffer", message.bufferId, message.afterSeq);
-    // The engine has more than this buffer ever gave: not this buffer's
-    // history (a restored file?) — nothing of it is acknowledged.
-    if (message.afterSeq > this.#buffer.lastSeq) return this.#refuse("events.subscribe", "ahead", message.bufferId, message.afterSeq);
+    // The engine has more than this buffer ever gave — numbered, or sent:
+    // not this buffer's history (a restored file) — nothing of it is
+    // acknowledged, however far its numbers grew since.
+    if (message.afterSeq > this.#buffer.lastSeq || message.afterSeq > this.#buffer.sentMax) {
+      return this.#refuse("events.subscribe", "ahead", message.bufferId, message.afterSeq);
+    }
     this.#buffer.acknowledge(message.afterSeq);
     this.#sub = { sentSeq: message.afterSeq, ackedSeq: message.afterSeq, inFlight: [] };
     this.#log("stream.subscribed", { afterSeq: message.afterSeq, lastSeq: this.#buffer.lastSeq });
@@ -130,6 +140,10 @@ export class EventStream {
         const envelope = `{"type":"events","bufferId":${JSON.stringify(this.#buffer.id)},"events":[`;
         const events = this.#buffer.readEvents(sub.sentSeq, this.#maxEvents, this.#maxBytes - envelope.length - 2);
         if (events.length === 0) return;
+        // Nothing goes past the durable mark: it is raised first, over
+        // everything stored now; not raised, nothing goes (tried again with
+        // the next commit).
+        if (events.at(-1)!.seq > this.#buffer.sentMax && !this.#buffer.raiseSentMax()) return;
         if (!this.#send(`${envelope}${events.map((event) => event.json).join(",")}]}`)) {
           this.reset();
           return;

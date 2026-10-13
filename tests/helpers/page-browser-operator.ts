@@ -54,6 +54,9 @@ export class MemoryEventBuffer {
   #lastSeq = 0;
   /** The highest number acknowledged (by an ack or a subscription). */
   acknowledged = 0;
+  /** The highest number ever handed to a stream (the operator's durable
+   *  mark, schema v4): a restored file keeps its own. */
+  sentMax = 0;
 
   constructor(id: string = randomUUID()) {
     this.id = id;
@@ -74,6 +77,11 @@ export class MemoryEventBuffer {
     const json = JSON.stringify(stamped);
     this.#events.push({ seq, json, bytes: Buffer.byteLength(json), event: stamped });
     return stamped;
+  }
+
+  raiseSentMax(): boolean {
+    this.sentMax = Math.max(this.sentMax, this.#lastSeq);
+    return true;
   }
 
   acknowledge(uptoSeq: number): void {
