@@ -65,6 +65,7 @@ import {
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  loadFanslyFanIdentity,
   readAiChatAccess,
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
@@ -555,6 +556,7 @@ export async function prepareAiFeatureStream(
     fanDisplayName: string;
     fanBio: string | undefined;
     fanCustomName: string | undefined;
+    fanUsername: string | undefined;
     pingSegment: PingSegment | undefined;
     fanSilenceDays: number | undefined;
   };
@@ -643,6 +645,7 @@ export async function prepareAiFeatureStream(
       fanDisplayName: clientContext.fanDisplayName,
       fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
       fanCustomName: clientContext.fanCustomName,
+      fanUsername: clientContext.fanUsername,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
@@ -759,20 +762,42 @@ export async function prepareAiFeatureStream(
     const pingSummary = policy.usesPingSegment
       ? computePingSummary(transcript.messages, Date.now())
       : null;
+    // chat-extension R20 HF-7б: on Fansly the hub forms the fan's identity as
+    // the released extension sends it in clientContext: the name by its rule,
+    // the username beside it for Hi, the page's saved name, the stored bio
+    // (context/fansly-fan-identity.ts). OnlyFans keeps its loaders: one name,
+    // no saved name and no username line.
+    const fanslyFan = isFanslyRequest
+      ? await loadFanslyFanIdentity(app, { pageId, fanRef, feature, includesFanBio: policy.includesFanBio })
+      : null;
     contextValues = {
       transcript: transcript.transcript,
       messageCount: transcript.messages.length,
       fanSpendingData: spending?.block ?? "",
       fanSubscriptionData: subscription?.block ?? "",
-      fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
-      fanBio: policy.includesFanBio
-        ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
-        : undefined,
-      // Kernel-context platforms carry no chatter-saved fan name today.
-      fanCustomName: undefined,
+      ...(fanslyFan !== null
+        ? {
+          fanDisplayName: fanslyFan.identity.fanDisplayName,
+          fanBio: fanslyFan.identity.fanBio,
+          fanCustomName: fanslyFan.identity.fanCustomName,
+          fanUsername: fanslyFan.identity.fanUsername,
+        }
+        : {
+          fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
+          fanBio: policy.includesFanBio
+            ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
+            : undefined,
+          fanCustomName: undefined,
+          fanUsername: undefined,
+        }),
       pingSegment: pingSummary?.segment,
       fanSilenceDays: pingSummary?.fanSilenceDays ?? undefined,
     };
+    if (fanslyFan !== null) {
+      // Where the name came from and how old the hub's copies are, never the
+      // values. Only on this lane: every other generation records what it did.
+      contextManifest = { ...(contextManifest ?? {}), fanIdentity: fanslyFan.manifest };
+    }
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.
     const ofItems = listOnlyFansMediaNoteItems(transcript.messages, transcript.mediaByMessage);
@@ -981,7 +1006,7 @@ export async function prepareAiFeatureStream(
     fanDisplayName: contextValues.fanDisplayName,
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
-    fanUsername: body.clientContext?.fanUsername,
+    fanUsername: contextValues.fanUsername,
     greetingVariantCount,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }

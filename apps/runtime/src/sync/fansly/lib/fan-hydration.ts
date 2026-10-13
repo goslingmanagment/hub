@@ -8,7 +8,7 @@ import {
   type UpsertFanInput,
 } from "@agency_hub_core/db";
 import type { FanslyAccount, FanslyAccountNote } from "@agency_hub_core/fansly";
-import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
+import { sanitizeLoneSurrogatesDeep, sanitizePostgresText } from "@agency_hub_core/shared";
 
 // The fan-hydration writers of the Sync Engine's resources (fan-profiles,
 // dm-conversations, subscribers, followers, transactions): a page's Fansly
@@ -34,14 +34,36 @@ export type FanslyAccountLookupStamp = {
   platformUserIds: string[];
 };
 
-function normalizeHydratedFan(account: FanslyAccount): UpsertFanInput {
+/** The fan's own profile text as an account answer gives it: trimmed, and in
+ * a form Postgres stores (like a note, it is served text: one broken emoji
+ * would fail the page transaction on every retry). Null when the fan wrote
+ * none. */
+function servedAbout(account: FanslyAccount): string | null {
+  if (typeof account.about !== "string") {
+    return null;
+  }
+  const about = sanitizePostgresText(account.about).trim();
+  return about.length > 0 ? about : null;
+}
+
+/**
+ * `fullProfile`: the account is an account lookup's answer (`/account?ids=`),
+ * the one answer that carries the fan's profile text. chat-extension R20
+ * HF-7б keeps it in `fans.metadata.about` for the AI context
+ * (modules/ai/context/fansly-fan-identity.ts). Fansly serves `about` only for
+ * an account that wrote one, so a lookup's answer without it clears the stored
+ * text. An account served beside a list (the inbox, the followers) never
+ * carries the text and says nothing about it: the stored one stays.
+ */
+function normalizeHydratedFan(account: FanslyAccount, fullProfile: boolean): UpsertFanInput {
+  const about = fullProfile ? servedAbout(account) : null;
   return {
     platform: "fansly",
     platformUserId: account.id,
     username: account.username,
     displayName: account.displayName,
     createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
-    metadata: {},
+    ...(fullProfile ? { metadata: about === null ? {} : { about } } : {}),
   };
 }
 
@@ -98,8 +120,10 @@ export async function upsertHydratedFansForPageDetailed(
 ) {
   const returnedIds = new Set(input.accounts.map((account) => account.id));
   const missedIds = (input.lookup?.platformUserIds ?? []).filter((id) => !returnedIds.has(id));
+  // Only a lookup's own answer is a full profile (see normalizeHydratedFan).
+  const fullProfiles = input.lookup != null;
   const fans = await upsertFans(db, [
-    ...input.accounts.map(normalizeHydratedFan),
+    ...input.accounts.map((account) => normalizeHydratedFan(account, fullProfiles)),
     ...[...missedIds, ...(input.unverifiedIds ?? []), ...(input.reusedIds ?? [])].map((platformUserId) => ({
       platform: "fansly" as const,
       platformUserId,

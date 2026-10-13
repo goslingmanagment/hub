@@ -409,6 +409,49 @@ generation fails. The Recap's model (Opus 5.5) has a 1M-token window: the heavie
 Recap above takes about a quarter of it with the answer's 24k-token budget, and fits even if every
 byte of its text were a token. A request that names another `model` carries that model's window.
 
+### Feature-lane fan profile on Fansly (chat-extension R20 HF-7б)
+
+On a Fansly page a request without `clientContext` reads who the fan is from the hub's stores, by
+the rules of the released Fansly extension (2.10.1), which reads the fan's account from Fansly at
+every generation and sends what it read in `clientContext`
+(`apps/runtime/src/modules/ai/context/fansly-fan-identity.ts`):
+
+- **the name**: the username, else the display name, else `fan`. Hi turns the pair round (display
+  name first) and names the username on a line of its own.
+- **the saved name**: the page's own name for the fan (Fansly's "Custom Username" note),
+  `page_fans.page_alias` of the page the request names. It reads where `clientContext.fanCustomName`
+  does: in Ping and Hi. One difference from the released client: of several such notes on one fan
+  (2% of the named fans on production) the hub keeps the newest, the client reads the first Fansly
+  serves, which is the oldest.
+- **the bio**: the fan's profile text, for the features whose policy includes it (Hi, Ping, Help,
+  Coach, the notes fill).
+- The avatar is not the hub's: the client takes it from the page.
+
+A value is cut to the bound the contract puts on the same `clientContext` field (200 characters for
+a name, 5000 for the bio).
+
+The values are as fresh as the Sync Engine's reading of Fansly, not as the generation:
+
+- The names and the saved name come with the accounts Fansly serves beside the page's inbox list
+  (the newest 100 chats every 30 minutes, the whole list once a day), and with the account lookup.
+  Measured on production (2026-10-13, the 12 days before): a name saved for the first time reached
+  `page_alias` in 9 minutes at the median, 20 at the 90th percentile and 54 at most (134 names); a
+  changed name within 35 minutes for 150 of 176 fans, and with the daily read of the whole list (up
+  to 26 hours) for the rest, whose chats were below the newest 100.
+- The bio comes only with the account lookup (`GET /account?ids=`, at most once a day for a fan of
+  a page), which stores it in `fans.metadata.about`; the accounts beside a list carry no `about`.
+  A lookup's answer without `about` clears the stored text. A fan no lookup of the page has
+  returned has no bio in the prompt.
+
+The recorded generation says what was read, never the values: `params.contextManifest.fanIdentity`
+holds `known` (the hub has an account for the fan), `name` (`username`, `display_name` or
+`fallback`), `savedName`, `bio`, `savedNameReadAt` (when the page's notes on the fan were last
+read; null when Fansly never served one) and `accountReadAt` (the page's last lookup of the fan).
+
+Unchanged: a request with `clientContext` (the fan fields are the client's own), and OnlyFans (one
+name: the page's alias, else the display name, else the username; no saved-name line and no
+username line; no `fanIdentity` in the record).
+
 ### Feature-lane fresh text (`liveTextContext`)
 
 The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
