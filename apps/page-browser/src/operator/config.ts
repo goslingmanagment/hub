@@ -4,6 +4,7 @@
 
 import { readFileSync } from "node:fs";
 
+import { HANDOVER_PATH } from "../env/handover.ts";
 import { envInt, envStr } from "../shared/util.ts";
 
 export interface OperatorConfig {
@@ -17,6 +18,8 @@ export interface OperatorConfig {
   rpcToken: string;
   /** The kernel check's result (s6 service net-selftest). */
   netSelftestPath: string;
+  /** The page's environment for Chrome's start (env/handover.ts). */
+  chromeEnvPath: string;
   /** The journals (plan §4.11), on the buffer volume. */
   logDir: string;
   /** The operator's small state on the buffer volume: the buffer's id, the
@@ -47,6 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     rpcPort: envInt("PB_RPC_PORT", 7700),
     rpcToken,
     netSelftestPath: envStr("PB_NET_SELFTEST", "/run/pb/net-selftest.json"),
+    chromeEnvPath: envStr("PB_CHROME_ENV", HANDOVER_PATH),
     logDir: envStr("PB_LOG_DIR", "/data/buffer/logs"),
     stateDir: envStr("PB_STATE_DIR", "/data/buffer/operator"),
     heartbeatPath: envStr("PB_HEARTBEAT", "/run/pb/operator/alive"),

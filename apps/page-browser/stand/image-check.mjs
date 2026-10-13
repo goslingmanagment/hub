@@ -3,8 +3,9 @@
 // operator's rights — by stand/image-check.sh. It checks:
 //  1. the kernel check of the egress rules passed (net-selftest);
 //  2. pb-operator starts Chrome through s6 (the operator's way, plan §3.1);
-//  3. Chrome applied every policy of hub.json, with its value, as a
-//     mandatory machine policy, and nothing reports it invalid;
+//  3. Chrome applied every policy of hub.json and of the page's policy
+//     (page.json: ForcedLanguages, written by Chrome's run script), with its
+//     value, as a mandatory machine policy, and nothing reports it invalid;
 //  4. Chrome's sandbox is on: namespaces and seccomp-BPF (chrome://sandbox);
 //  5. no automation shows: navigator.webdriver is false;
 //  6. pb-operator stops Chrome, and it is gone within its 5 s.
@@ -117,7 +118,10 @@ try {
     walk(document.body);
     return rows;
   })()`);
-  const wanted = JSON.parse(readFileSync("/etc/opt/chrome/policies/managed/hub.json", "utf8"));
+  const wanted = {
+    ...JSON.parse(readFileSync("/etc/opt/chrome/policies/managed/hub.json", "utf8")),
+    ...JSON.parse(readFileSync("/etc/opt/chrome/policies/managed/page.json", "utf8")),
+  };
   const byName = new Map(rows.map((row) => [row.name, row]));
   const misses = [];
   for (const [name, value] of Object.entries(wanted)) {

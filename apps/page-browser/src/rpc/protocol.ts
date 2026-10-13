@@ -9,6 +9,9 @@
 // additions; an unknown type or value is a protocol error and the connection
 // closes. The refusal of `hello` keeps its shape in every version.
 //
+// One addition to spec §6.1 (PR 5): the stop reason `env_mismatch`
+// (state/steps.ts).
+//
 // This operator (PR 4) takes `hello`, `ping`/`pong` and `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest); the other kinds of command
 // are refused as not supported yet, and the other messages of the engine
@@ -17,6 +20,7 @@
 
 import { isIP } from "node:net";
 
+import { EnvError, validateEnv } from "../env/rules.ts";
 import type { Step, StopReason } from "../state/steps.ts";
 
 export type { Step, StopReason };
@@ -99,6 +103,8 @@ export interface Hello extends FromEngine {
   pinnedExitIp: string;
   params: OperatorParams;
   socks5: { ip: string; port: number; username: string; password: string };
+  /** Checked strictly (env/rules.ts): a value out of its rules makes the
+   *  hello malformed. */
   env: { timeZone: string; languages: string[]; geolocation: { latitude: number; longitude: number; accuracyM: number } };
 }
 export type HelloResult = { type: "helloResult" } & (
@@ -400,13 +406,19 @@ function parseParams(value: unknown): OperatorParams {
 function parseHello(m: Record<string, unknown>): Hello {
   const protocol = record(m.protocol, "protocol");
   const socks5 = record(m.socks5, "socks5");
-  const env = record(m.env, "env");
-  const geolocation = record(env.geolocation, "env.geolocation");
   const pinnedExitIp = str(m.pinnedExitIp, "pinnedExitIp", 64);
   if (isIP(pinnedExitIp) === 0) throw new Invalid("pinnedExitIp is not an address");
   const socksIp = str(socks5.ip, "socks5.ip", 64);
   if (isIP(socksIp) === 0) throw new Invalid("socks5.ip is not an address");
-  if (!Array.isArray(env.languages)) throw new Invalid("env.languages is not a list");
+  // The page's environment, strictly (env/rules.ts): it reaches Chrome's
+  // start and every page target.
+  let env: Hello["env"];
+  try {
+    env = validateEnv(m.env);
+  } catch (error) {
+    if (error instanceof EnvError) throw new Invalid(error.message);
+    throw error;
+  }
   return {
     type: "hello",
     ownerGeneration: int(m.ownerGeneration, "ownerGeneration"),
@@ -417,11 +429,7 @@ function parseHello(m: Record<string, unknown>): Hello {
     pinnedExitIp,
     params: parseParams(m.params),
     socks5: { ip: socksIp, port: int(socks5.port, "socks5.port", 1, 65535), username: str(socks5.username, "socks5.username", 255), password: str(socks5.password, "socks5.password", 255) },
-    env: {
-      timeZone: str(env.timeZone, "env.timeZone", 64),
-      languages: env.languages.map((language, index) => str(language, `env.languages[${index}]`, 32)),
-      geolocation: { latitude: num(geolocation.latitude, "env.geolocation.latitude"), longitude: num(geolocation.longitude, "env.geolocation.longitude"), accuracyM: num(geolocation.accuracyM, "env.geolocation.accuracyM") },
-    },
+    env,
   };
 }
 

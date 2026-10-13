@@ -5,13 +5,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Cdp, CdpError, CdpUnanswered } from "../apps/page-browser/src/cdp/client.ts";
 import { BrowserControl } from "../apps/page-browser/src/cdp/control.ts";
 import { PausedRequests, type PausedRequest } from "../apps/page-browser/src/cdp/paused.ts";
+
+const POSITION = { latitude: 48.137, longitude: 11.575, accuracyM: 25 };
 import { BrowserModel, FakeChrome, HolderUnderS6, quiet, tempDir, until } from "./helpers/page-browser-fakes.ts";
 
 // The operator's CDP client through the holder (Project Browser plan §4.1,
 // step 4; stage 3, PR 4): a paused request is acknowledged only once Chrome
 // answered its resolution, a restarted operator learns about the requests
 // still paused from the holder's replay and fails them, and the control's
-// setup lets no web target run without it.
+// setup lets no web target run without it — the page's position (PR 5)
+// included.
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -164,6 +167,7 @@ describe("the control", () => {
     await cdp.connect();
     const failures: string[] = [];
     const control = new BrowserControl(cdp, { networkBuffer: { totalBytes: 100, perResponseBytes: 20 }, onSetupFailed: (target) => failures.push(target.type), log: quiet });
+    control.geolocation = POSITION;
     const tab = await control.attach(3000);
     expect(tab).toMatchObject({ targetId: "T1", sessionId: "S1", type: "page" });
     const order = chrome.commands.map((command) => `${command.method}${command.sessionId ? `@${command.sessionId}` : ""}`);
@@ -171,9 +175,14 @@ describe("the control", () => {
     expect(chrome.commands[0]?.params).toEqual({ patterns: [{ urlPattern: "*", requestStage: "Request" }] });
     expect(order.indexOf("Fetch.enable")).toBeLessThan(order.indexOf("Target.createTarget"));
     expect(chrome.sent("Target.setAutoAttach")[0]?.params).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-    // The work tab: set up, then let run.
+    // The site may read the page's position (nobody would answer a prompt):
+    // granted before any target is attached, let alone let run.
+    expect(chrome.sent("Browser.grantPermissions").map((command) => command.params)).toEqual([{ permissions: ["geolocation"], origin: "https://fansly.com" }]);
+    expect(order.indexOf("Browser.grantPermissions")).toBeLessThan(order.indexOf("Target.setAutoAttach"));
+    // The work tab: set up — its position included —, then let run.
     const tabCommands = order.filter((entry) => entry.endsWith("@S1"));
-    expect(tabCommands).toEqual(["Network.enable@S1", "Page.enable@S1", "Target.setAutoAttach@S1", "Runtime.runIfWaitingForDebugger@S1"]);
+    expect(tabCommands).toEqual(["Network.enable@S1", "Page.enable@S1", "Emulation.setGeolocationOverride@S1", "Target.setAutoAttach@S1", "Runtime.runIfWaitingForDebugger@S1"]);
+    expect(chrome.sent("Emulation.setGeolocationOverride").find((command) => command.sessionId === "S1")?.params).toEqual({ latitude: 48.137, longitude: 11.575, accuracy: 25 });
     expect(chrome.commands.find((command) => command.method === "Network.enable")?.params).toEqual({ maxTotalBufferSize: 100, maxResourceBufferSize: 20 });
     expect(chrome.commands.find((command) => command.method === "Target.setAutoAttach" && command.sessionId === "S1")?.params).toMatchObject({ filter: [{ type: "service_worker", exclude: true }, {}] });
     // The tab Chrome started with is not intercepted: closed.
@@ -189,8 +198,52 @@ describe("the control", () => {
     await cdp.connect();
     const failures: string[] = [];
     const control = new BrowserControl(cdp, { networkBuffer: { totalBytes: 100, perResponseBytes: 20 }, onSetupFailed: (target) => failures.push(target.type), log: quiet });
+    control.geolocation = POSITION;
     await expect(control.attach(1000)).rejects.toThrow(/not set up/);
     expect(failures).toEqual(["page"]);
     expect(chrome.sent("Runtime.runIfWaitingForDebugger").filter((command) => command.sessionId === "S1")).toEqual([]);
+  });
+
+  it("attaches nothing without the page's position", async () => {
+    const { chrome, operator } = await setUp();
+    new BrowserModel(chrome);
+    const { cdp } = operator();
+    await cdp.connect();
+    const control = new BrowserControl(cdp, { networkBuffer: { totalBytes: 100, perResponseBytes: 20 }, onSetupFailed: () => undefined, log: quiet });
+    await expect(control.attach(1000)).rejects.toThrow(/no position/);
+    // Not even the interception: no target is attached, none runs.
+    expect(chrome.commands).toEqual([]);
+  });
+
+  it("never lets a tab run whose position could not be set", async () => {
+    const { chrome, operator } = await setUp();
+    new BrowserModel(chrome);
+    chrome.handlers.set("Emulation.setGeolocationOverride", (command) => (command.sessionId === "S1" ? { error: { code: -32000, message: "no override" } } : {}));
+    const { cdp } = operator();
+    await cdp.connect();
+    const failures: string[] = [];
+    const control = new BrowserControl(cdp, { networkBuffer: { totalBytes: 100, perResponseBytes: 20 }, onSetupFailed: (target) => failures.push(target.type), log: quiet });
+    control.geolocation = POSITION;
+    await expect(control.attach(1000)).rejects.toThrow(/not set up/);
+    expect(failures).toEqual(["page"]);
+    expect(chrome.sent("Runtime.runIfWaitingForDebugger").filter((command) => command.sessionId === "S1")).toEqual([]);
+  });
+
+  it("sets the position in every tab, never through a frame (whose detach would clear the tab's); a worker, which has no geolocation, only runs", async () => {
+    const { chrome, operator } = await setUp();
+    new BrowserModel(chrome);
+    const { cdp } = operator();
+    await cdp.connect();
+    const control = new BrowserControl(cdp, { networkBuffer: { totalBytes: 100, perResponseBytes: 20 }, onSetupFailed: () => undefined, log: quiet });
+    control.geolocation = POSITION;
+    await control.attach(3000);
+    // A frame of another site and a worker of the work tab, both waiting.
+    chrome.event("Target.attachedToTarget", { sessionId: "S-frame", targetInfo: { targetId: "T-frame", type: "iframe", url: "" }, waitingForDebugger: true }, "S1");
+    chrome.event("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { targetId: "T-worker", type: "worker", url: "https://fansly.com/worker.js" }, waitingForDebugger: true }, "S1");
+    await until(() => chrome.sent("Runtime.runIfWaitingForDebugger").filter((command) => command.sessionId === "S-frame" || command.sessionId === "S-worker").length === 2);
+    const of = (session: string) => chrome.commands.filter((command) => command.sessionId === session).map((command) => command.method);
+    expect(of("S-frame")).toEqual(["Network.enable", "Page.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+    expect(of("S1")).toContain("Emulation.setGeolocationOverride");
+    expect(of("S-worker")).toEqual(["Network.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
   });
 });

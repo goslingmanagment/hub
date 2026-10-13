@@ -7,6 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { HANDOVER_PATH } from "../apps/page-browser/src/env/handover.ts";
+import { SCREEN, TAG_SYNTAX, ZONE_SYNTAX } from "../apps/page-browser/src/env/rules.ts";
+
 // The page browser image and its deployment (Project Browser plan §3.1,
 // §4.5; stage 3, PR 2). Hub's CI never builds the image (Chrome is not in
 // it): these hold the image's safety properties in its files. The image
@@ -32,6 +35,21 @@ describe("Chrome's start", () => {
   it("runs as pb-chrome with a clean environment", () => {
     expect(run).toContain("/command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable");
     expect(run).toMatch(/exec env -i HOME=\/home\/pb-chrome PATH=\/usr\/bin:\/bin DISPLAY=:99/);
+  });
+
+  it("takes the page's environment from the operator's hand-over (PR 5), quoted into Chrome's environment and flags", () => {
+    expect(run).toContain(`HANDOVER=${HANDOVER_PATH}\n`);
+    expect(run).toContain("POLICY=/etc/opt/chrome/policies/managed/page.json\n");
+    expect(run).toContain('  TZ="$TIME_ZONE" LANGUAGE="$LANGUAGE_LIST" LANG="$LOCALE" \\\n');
+    expect(command).toContain('--lang="$FIRST"');
+    // What hostile values do to the script: tests/page-browser-env.test.ts.
+    // A previous run's hand-over goes with the container's start.
+    expect(read("apps/page-browser/s6/scripts/init-net")).toContain("rm -f /run/pb/operator/chrome-env /run/pb/operator/chrome-env.tmp");
+  });
+
+  it("gives Chrome the screen the operator checks: the X server's geometry and the window", () => {
+    expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain(`-geometry ${SCREEN.width}x${SCREEN.height} `);
+    expect(command).toContain(`--window-size=${SCREEN.width},${SCREEN.height}`);
   });
 });
 
@@ -250,6 +268,11 @@ describe("a page's container on the server (page.sh)", () => {
     expect(switchTo.indexOf("healthy")).toBeLessThan(switchTo.indexOf('mv "$next" "$(env_file)"'));
     expect(switchTo).toContain('compose_with "$(env_file)" up -d --force-recreate --no-build');
     expect(read("apps/page-browser/host/egress-rules.sh")).toContain('"$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next');
+  });
+
+  it("takes Chrome's default zone and language by the rules the run script checks them with", () => {
+    expect(page).toContain(`=~ ${ZONE_SYNTAX} ]]`);
+    expect(page).toContain(`=~ ^${TAG_SYNTAX}$ ]]`);
   });
 
   it("runs one page operation at a time", () => {

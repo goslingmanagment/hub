@@ -8,15 +8,23 @@
 //   paused until it is set up here and Runtime.runIfWaitingForDebugger lets
 //   it run;
 // - in every tab and worker Network.enable (Chrome's body buffers of plan
-//   §4.14), in every tab Page.enable.
+//   §4.14), in every tab Page.enable;
+// - the page's position (plan §4.1, step 2; PR 5): before anything else may
+//   run, the site's origin is granted geolocation (Browser.grantPermissions:
+//   nobody would answer its prompt), and every tab and frame gets
+//   Emulation.setGeolocationOverride before it runs. Workers have neither
+//   the Emulation domain nor navigator.geolocation (Chrome 155 on the
+//   image): nothing to set there.
 // The work tab is opened only after Fetch.enable: a tab Chrome started with
 // had its loaders before the interception existed and is not intercepted
 // (stage 1, amendment 1), so it is closed.
 //
-// Later PRs add their steps to the same setup (the socket guard, PR 10; the
-// page's environment, PR 5). A web target whose setup fails is never let run.
+// Later PRs add their steps to the same setup (the socket guard, PR 10). A
+// web target whose setup fails is never let run.
 
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
+import { FANSLY_HOSTS } from "../egress/hosts.ts";
+import type { Geolocation } from "../env/rules.ts";
 import { errorMessage, makeLog, sleep, urlForLogLine, type Logger } from "../shared/util.ts";
 
 export interface TargetInfo {
@@ -38,8 +46,12 @@ export interface ControlOptions {
   networkBuffer: { totalBytes: number; perResponseBytes: number };
   /** A web target could not be set up (and stays paused). */
   onSetupFailed: (target: TargetInfo, error: Error) => void;
+  /** The origin the page's position is granted to (the site's). */
+  siteOrigin?: string;
   log?: Logger;
 }
+
+export const SITE_ORIGIN = `https://${FANSLY_HOSTS.site[0]}`;
 
 /** Targets of Chrome's own UI and of extensions are only let run. */
 function isWebTarget(target: TargetInfo): boolean {
@@ -63,6 +75,9 @@ export class BrowserControl {
   #workTab: TargetInfo | null = null;
   /** Chrome's body buffers for the next targets (the engine's params). */
   networkBuffer: { totalBytes: number; perResponseBytes: number };
+  /** The page's position for every tab and frame (its hello's env); a
+   *  start sets it before attach(), and no tab runs without it. */
+  geolocation: Geolocation | null = null;
 
   constructor(cdp: Cdp, options: ControlOptions) {
     this.#cdp = cdp;
@@ -88,24 +103,33 @@ export class BrowserControl {
     this.#workTab = null;
   }
 
-  /** Interception and auto-attach on the browser target, then the work tab:
-   *  a fresh about:blank opened after Fetch.enable; the others are closed. */
+  /** Interception, the site's geolocation grant and auto-attach on the
+   *  browser target, then the work tab: a fresh about:blank opened after
+   *  Fetch.enable; the others are closed. */
   async attach(timeoutMs = 5000): Promise<TargetInfo> {
+    if (this.geolocation === null) throw new Error("no position of the page for its tabs");
     await this.#cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+    await this.#cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: this.#options.siteOrigin ?? SITE_ORIGIN });
     await this.#cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const created = await this.#cdp.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
-    const deadline = Date.now() + timeoutMs;
-    let tab: TargetInfo | undefined;
-    while (!(tab = this.targets.find((target) => target.targetId === created.targetId)) && Date.now() < deadline) await sleep(20);
-    if (!tab) throw new Error("the work tab was not attached");
-    const ready = await Promise.race([tab.setup, sleep(Math.max(0, deadline - Date.now())).then(() => false)]);
-    if (!ready) throw new Error("the work tab was not set up");
+    const tab = await this.waitForTarget(created.targetId, timeoutMs, "the work tab");
     this.#workTab = tab;
     for (const other of this.targets) {
       if (other !== tab && other.type === "page" && other.parentSessionId === null) {
         await this.#cdp.send("Target.closeTarget", { targetId: other.targetId }).catch((error: unknown) => this.#log("close_tab.failed", { error: errorMessage(error) }));
       }
     }
+    return tab;
+  }
+
+  /** A target this control created: attached, set up and let run. */
+  async waitForTarget(targetId: string, timeoutMs: number, what = "the tab"): Promise<TargetInfo> {
+    const deadline = Date.now() + timeoutMs;
+    let tab: TargetInfo | undefined;
+    while (!(tab = this.targets.find((target) => target.targetId === targetId)) && Date.now() < deadline) await sleep(20);
+    if (!tab) throw new Error(`${what} was not attached`);
+    const ready = await Promise.race([tab.setup, sleep(Math.max(0, deadline - Date.now())).then(() => false)]);
+    if (!ready) throw new Error(`${what} was not set up`);
     return tab;
   }
 
@@ -165,6 +189,16 @@ export class BrowserControl {
         await this.#cdp.send("Network.enable", { maxTotalBufferSize: totalBytes, maxResourceBufferSize: perResponseBytes }, session);
       }
       if (page) await this.#cdp.send("Page.enable", {}, session);
+      if (page && target.type === "page") {
+        // The tab's position, which its frames inherit. Chrome keeps the
+        // override on the tab itself (its WebContents), whichever session
+        // set it, and a frame session's detach clears it: set through a
+        // frame, the tab would show the server's own position once that
+        // frame is gone (Chrome 155, emulation_handler.cc).
+        const position = this.geolocation;
+        if (position === null) throw new Error("no position of the page");
+        await this.#cdp.send("Emulation.setGeolocationOverride", { latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracyM }, session);
+      }
       if (page || worker) {
         // Service workers are attached once, by the browser target: a second
         // session to the same worker (from a page) deadlocks its start

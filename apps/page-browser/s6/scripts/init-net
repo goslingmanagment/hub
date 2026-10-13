@@ -68,8 +68,12 @@ chown pb-operator:pb-operator /data/buffer
 chmod 700 /data/buffer
 install -d -o root -g root -m 755 /run/pb
 # The operator's and the holder's own: the holder's socket, the heartbeat,
-# the RPC token's copy.
+# the RPC token's copy, the page's environment for Chrome's start.
 install -d -o pb-operator -g pb-operator -m 700 /run/pb/operator
+# A restarted container keeps /run: a previous run's environment goes, and
+# Chrome has the container's defaults until the operator hands it the
+# engine's (src/env/handover.ts).
+rm -f /run/pb/operator/chrome-env /run/pb/operator/chrome-env.tmp
 printf '%s\n' "$SOCKS_IP" > /run/pb/socks-ip
 printf '%s\n' "$SOCKS_PORT" > /run/pb/socks-port
 echo "init-net: egress rules in place (SOCKS5 $SOCKS_IP:$SOCKS_PORT)"
