@@ -678,6 +678,44 @@ model, provider, provider response id, bounded error code/class, token counts, a
 Provider response ids are audit metadata; they are not a substitute for storing prompt or response
 content.
 
+### Reads by conversation (chat-extension R20 HF-10)
+
+The shared recaps read, the dossier save from a generation and the archive feed below are about
+one conversation of one fan; the fan is in the path (`:fanRef`). On OnlyFans the chat id is the fan
+id, so the fan names the conversation. On Fansly a chat is a group with an id of its own: the
+request names it as `conversationRef` (the recaps and the feed in the query, the dossier save in
+the body; one client id shape, `CLIENT_NUMERIC_ID_PATTERN`). A client sends the field only to a hub
+that lists the bootstrap capability `conversation-recaps-v1`: the query strings and bodies are
+strict, and an older hub answers an unknown key `400`.
+
+Before anything is read, the hub resolves the conversation (`services/client-conversation.ts`):
+
+| Page | `conversationRef` | Answer |
+|---|---|---|
+| chats are their fans (OnlyFans) | absent, or the fan | the fan's chat: exactly the read as before |
+| chats are their fans (OnlyFans) | any other | `409 conversation_fan_mismatch` |
+| chats have ids of their own (Fansly) | absent | `400 bad_request` (no `reason`): the fan's id names no chat |
+| chats have ids of their own (Fansly) | a group | the pair is checked by the feature lane's rule (HF-9 above, `checkAiConversationPair`): the page's thread of the group with another fan is `409 conversation_fan_mismatch`; with this fan, none yet, or with a fan the hub does not know, the read is served |
+
+Which platform keys its chats by ids of their own is one table (`clientConversationsHaveOwnIds`,
+`services/client-features.ts`). A read by a group never returns what is stored about another fan:
+
+- recaps: the rows of the group and of the fan's own form (`conversation_ref` = the fan, how the
+  released Fansly extension's older requests keyed a chat), each only when stored about this fan —
+  `fan_ref` is the fan, or no fan is named and `conversation_ref` is the fan
+  (`generationOfFanPredicate`, the dossier's generation proof's own rule). A record of the group
+  that names no fan, or names another fan, is not selected. The Coach recap attach on a request
+  whose pair was checked (a Fansly request without `clientContext`) selects the same rows; every
+  other Coach request attaches as before;
+- the dossier save: a generation keyed by the fan as before, or one of the group that names this
+  fan (`generationIsOfConversation`); the fan's dossier is written, as always;
+- the feed: the group's messages; `target.conversationRef` repeats the request's, and a cursor is
+  bound to the group and the fan (a cursor of the fan's own chat keeps the scope it always had).
+
+Nothing on Fansly is reachable through these routes until `recap` and `preview` exist there
+(`CLIENT_FEATURE_REQUIREMENTS`, chat-extension R20 HF-2): until then they answer `409
+client_feature_disabled` `platform_unsupported` before the conversation is resolved.
+
 ### Shared recaps (chat-extension)
 
 The restricted generation records (`ai_generation_content`: prompt blocks and completions) are
@@ -698,8 +736,9 @@ ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
   status slot, never attached to Coach, never returned here and never proves a dossier. Fresh text
   is refused on `fan-summary`, so nothing writes the key on a `fan-summary` row and the condition
   is a guard.
-- `fanRef` is the OnlyFans fan id, which is the chat id. `personaDefinitionId` (optional, as on
-  the recap status) narrows both slots to one persona.
+- `fanRef` is the OnlyFans fan id, which is the chat id; on Fansly the fan's account id, with the
+  group as `conversationRef` (reads by conversation, above). `personaDefinitionId` (optional, as
+  on the recap status) narrows both slots to one persona.
 - Answer: `{ full, short, fullSavedToProfile }`. A slot is `null` or `{ generationRef,
   generatedAt, personaDefinitionId, coverage: { transcriptCoverage, requestedCount, keptCount },
   text }`; `generationRef` is the generation's `meta.requestId`. `fullSavedToProfile` is true when
@@ -716,7 +755,9 @@ ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
 (`clientFanProfileFromGeneration`, bootstrap capability `recap-profile-v1`) saves a finished full
 recap as the fan's dossier on the page. The body is `{ generationRef, clientRequestId? }`: the
 client names the generation (`generationRef` is the `meta.requestId` of its `fan-summary`
-request) and the hub copies the text from the restricted record it stored. No text travels
+request) and the hub copies the text from the restricted record it stored. With
+`conversation-recaps-v1` the body may name the conversation as well, `conversationRef` (reads by
+conversation, above). No text travels
 through the client, in either direction: the dossier is exactly the model's output, and the
 answer carries none of it.
 
@@ -726,8 +767,11 @@ answer carries none of it.
   else answers `404`, another person's generation included, for every role. A record whose two
   refs differ is found for neither fan: the AI route reads the transcript by `conversationRef`
   and the fan's own data by `fanRef` and does not make a Recap's two refs agree, so such a
-  record mixes two fans. This is narrower than the dossier's generation proof (`fan_ref`, or
-  `conversation_ref` when no fan is named), which the older write keeps.
+  record mixes two fans. On Fansly (R20 HF-10) the request names the group, the pair was checked
+  before the record is read, and a record of that group that names this fan is found as well: the
+  form a Fansly Recap is stored in (`conversation_ref` = the group, `fan_ref` = the fan). A record
+  of the group that names no fan is not. This is never wider than the dossier's generation proof
+  (`fan_ref`, or `conversation_ref` when no fan is named), which the older write keeps.
 - Eligible: only a usable full recap, by the rule above (`usableFanSummaryPredicate("full")`),
   and no longer than a dossier body may be (50,000 characters, the cap of the older write). Any
   other generation answers `409 generation_not_eligible` with a `reason`
@@ -758,7 +802,7 @@ answer carries none of it.
 
 ### Archive feed (chat-extension)
 
-`GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500]`
+`GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500][&conversationRef=…]`
 (`clientConversationFeed`, bootstrap capability `archive-feed-v1`) is not an AI route: it generates
 nothing and spends nothing. It is described here because it shows a chatter the conversation **as a
 generation would read it**, and three of its answers are a generation's own.
@@ -797,8 +841,8 @@ generation would read it**, and three of its answers are a generation's own.
   `newestKnownAt` are read once and repeated on every later page, and a message that arrives
   meanwhile is not in the walk (`packages/db/src/repositories/conversation-feed.ts` says what a
   walk guarantees). `nextOlderCursor` is opaque and signed (`services/signed-cursor.ts`, domain
-  `agency-hub:client-feed-cursor:v1`), bound to the page, the fan, the person, the reader and the
-  archive generation. Its state is sealed (AES-256-GCM under a subkey of the encryption ring):
+  `agency-hub:client-feed-cursor:v1`), bound to the page, the fan (and on Fansly the group:
+  reads by conversation, above), the person, the reader and the archive generation. Its state is sealed (AES-256-GCM under a subkey of the encryption ring):
   the walk's bounds are ids of hub-wide sequences, and a holder reads from the token neither them
   nor where the walk stands; `snapshotRevision` is a keyed digest for the same reason. A walk ends
   a day after its **first** page: every page issues a new cursor, and taking a page does not renew

@@ -16,6 +16,7 @@ import { isOutputExhausted } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { resolveClientConversation } from "./client-conversation.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
 import {
   ClientFeatureDisabledError,
@@ -31,9 +32,10 @@ import { resolveOrCreateFanOnPage } from "./fan-profiles.ts";
  *
  * The client names a generation; the hub copies its text. So the dossier is
  * exactly what the model wrote, and the hub decides what may become one:
- * - only the caller's own generation, of this page and this fan's chat
- *   (`generationIsOfFan`). Anything else reads as absent (404), another
- *   person's generation included;
+ * - only the caller's own generation, of this page and this fan's chat, or on
+ *   Fansly of the group the request names, checked against the fan
+ *   (`generationIsOfConversation`, R20 HF-10). Anything else reads as absent
+ *   (404), another person's generation included;
  * - only a usable full recap: `usableFanSummaryPredicate("full")`, the rule the
  *   recap status, the Coach attach, the shared recaps and the dossier's
  *   generation proof share. A dossier saved here is therefore always one the
@@ -94,29 +96,40 @@ export function generationRefusalReason(
 }
 
 /**
- * Whether a stored generation is a recap of this fan on this page.
+ * Whether a stored generation is a recap of this conversation of this fan on
+ * this page (`target` is the request's, client-conversation.ts).
  *
- * The feature exists only where the chat id IS the fan id (OnlyFans), so the
- * fan in the path names the conversation, as on the shared recaps read. A
- * generation is this fan's when it is of that conversation and names no other
- * fan. Both refs are checked: the AI route reads the transcript by
- * `conversation_ref` and the fan's own data (spending, subscription, name) by
- * `fan_ref`, and nothing there makes a Recap's two refs agree. A record whose
- * refs differ mixes two fans and is neither's dossier.
+ * The fan's own form, on every platform: the record is keyed by the fan's chat
+ * (`conversation_ref` = the fan) and names no other fan. On OnlyFans the chat
+ * id IS the fan id, so that is the only form: both refs are checked, because
+ * the AI route reads the transcript by `conversation_ref` and the fan's own
+ * data (spending, subscription, name) by `fan_ref`, and a record whose refs
+ * differ there mixes two fans and is neither's dossier.
  *
- * Narrower than the dossier's generation proof (`fan_ref`, or
+ * R20 HF-10, a conversation with an id of its own (a Fansly group, the request
+ * naming it apart from the fan): also a record of that conversation that names
+ * this fan, the form a Fansly Recap is stored in (`conversation_ref` = the
+ * group, `fan_ref` = the fan). The request's pair was checked against the
+ * page's capture before the record was read, so such a record is the fan's.
+ * One that names no fan is not: nothing in it says whose it is.
+ *
+ * Never wider than the dossier's generation proof (`fan_ref`, or
  * `conversation_ref` when no fan is named), so a generation found here always
- * proves the dossier it is saved as. A platform whose conversations have ids
- * of their own needs the conversation in the request before it gets the
- * feature.
+ * proves the dossier it is saved as.
  */
-export function generationIsOfFan(
+export function generationIsOfConversation(
   generation: Pick<OwnGenerationForProfile, "pageId" | "conversationRef" | "fanRef">,
-  target: { pageId: number; fanRef: string },
+  target: { pageId: number; conversationRef: string; fanRef: string },
 ): boolean {
-  return generation.pageId === target.pageId
-    && generation.conversationRef === target.fanRef
+  if (generation.pageId !== target.pageId) {
+    return false;
+  }
+  const fanKeyed = generation.conversationRef === target.fanRef
     && (generation.fanRef === null || generation.fanRef === target.fanRef);
+  const ofPair = target.conversationRef !== target.fanRef
+    && generation.conversationRef === target.conversationRef
+    && generation.fanRef === target.fanRef;
+  return fanKeyed || ofPair;
 }
 
 function toResponse(
@@ -137,7 +150,13 @@ export async function saveClientFanProfileFromGeneration(
   app: AppContext,
   request: ClientFeatureRequest,
   principal: HumanAuthPrincipal,
-  input: { pageLabel: string; fanRef: string; generationRef: string; clientRequestId: string | undefined },
+  input: {
+    pageLabel: string;
+    fanRef: string;
+    generationRef: string;
+    clientRequestId: string | undefined;
+    conversationRef: string | undefined;
+  },
 ): Promise<ClientFanProfileFromGenerationResponse> {
   // A cookie session → 403: the route is a client's, not the dashboard's.
   requireApiKeyUser(principal);
@@ -151,6 +170,9 @@ export async function saveClientFanProfileFromGeneration(
   // on for it, and the extension is not outdated (409 `client_feature_disabled`).
   const page = await requireClientFeature(app, request, principal, { id: stored.id }, RECAP_FLAG);
   const userId = principal.user.id;
+  // R20 HF-10: the conversation the generation was made in, checked against
+  // the fan before the generation is read (409 `conversation_fan_mismatch`).
+  const conversation = await resolveClientConversation(app, page, input);
 
   const generation = await findOwnGenerationForProfile(app.db, { generationRef: input.generationRef, userId });
   if (!generation) {
@@ -164,9 +186,13 @@ export async function saveClientFanProfileFromGeneration(
     }
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
-  if (!generationIsOfFan(generation, { pageId: page.id, fanRef: input.fanRef })) {
-    // The caller's own generation of another page, of another fan, or of two
-    // fans at once: not this fan's.
+  if (!generationIsOfConversation(generation, {
+    pageId: page.id,
+    conversationRef: conversation.conversationRef,
+    fanRef: conversation.fanRef,
+  })) {
+    // The caller's own generation of another page, of another conversation or
+    // fan, or of two fans at once: not this fan's.
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
   const refusal = generationRefusalReason(generation);

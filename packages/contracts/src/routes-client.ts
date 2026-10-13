@@ -35,14 +35,22 @@ export const clientOpenToken = z.string().min(1).max(64);
 
 /**
  * The ONE shape of a platform numeric id a client sends: an OnlyFans fan id
- * (== chat id) or message id. No leading zero, at most 30 digits. Every client
- * field that carries such an id (fanRef, the feed, fresh text, known message
- * ids) uses this schema, so the hub never holds two spellings of one id.
+ * (== chat id) or message id, a Fansly account or group id. No leading zero, at
+ * most 30 digits. Every client field that carries such an id (fanRef,
+ * conversationRef, the feed, fresh text, known message ids) uses this schema,
+ * so the hub never holds two spellings of one id.
  */
 export const CLIENT_NUMERIC_ID_PATTERN = /^[1-9]\d{0,29}$/;
 export const clientNumericIdSchema = z.string().regex(CLIENT_NUMERIC_ID_PATTERN);
-/** OnlyFans fan id (== chat_id). */
+/** The platform's fan id: on OnlyFans the fan id (== chat_id), on Fansly the fan's account id. */
 export const clientFanRefSchema = clientNumericIdSchema;
+/**
+ * R20 HF-10: the chat that a read by conversation names apart from its fan
+ * (`conversation-recaps-v1`): on Fansly the group id; on OnlyFans the chat id
+ * IS the fan id, so it equals `fanRef` or is left out. See "reads by
+ * conversation" below.
+ */
+export const clientConversationRefSchema = clientNumericIdSchema;
 
 const pageLabelSchema = z.string().min(1).max(120);
 export const clientPageParamsSchema = z.object({ pageLabel: pageLabelSchema });
@@ -86,7 +94,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
-  "coverage-check-v1",
+  "coverage-check-v1", "conversation-recaps-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -206,6 +214,28 @@ export const clientBootstrapResponseSchema = z.object({
   capabilities: z.array(clientOpenToken).max(64),
 });
 
+// ── reads by conversation (R20 HF-10) ────────────────────────────────────────
+//
+// The shared recaps read, the dossier save from a generation and the archive
+// feed are about one conversation of one fan; the fan is in the path. On
+// OnlyFans the chat id IS the fan id, so the fan names the conversation. On
+// Fansly a chat is a group with an id of its own, and the request names it as
+// `conversationRef`. A client sends the field only to a hub that lists
+// `conversation-recaps-v1`: the query strings and bodies are strict, so an
+// older hub answers an unknown key 400.
+//
+// Before anything is read the hub checks the pair, as the AI lane does
+// (chat-extension R20 HF-9):
+// - on a page whose chats are their fans (OnlyFans), `conversationRef` equal
+//   to the fan, or left out, changes nothing; any other is 409
+//   `conversation_fan_mismatch`;
+// - on a page whose chats have ids of their own (Fansly), it is required (400
+//   `bad_request` without it), and the page's thread of the group decides:
+//   another fan's thread is 409 `conversation_fan_mismatch`; this fan's
+//   thread, no thread yet (a chat the hub has not captured) or a thread whose
+//   fan the hub does not know is served.
+// A read by conversation never returns what is stored about another fan.
+
 // ── shared recaps (H-13) ─────────────────────────────────────────────────────
 //
 // The freshest usable full and short recap of one fan on one page, WITH their
@@ -223,6 +253,14 @@ export const clientConversationRecapsQuerySchema = z.object({
    *  With it, only that persona's recaps are selected; without it, the freshest
    *  of any persona, as `aiRecapStatus` does. */
   personaDefinitionId: z.string().min(16).max(100).optional(),
+  /**
+   * R20 HF-10 (`conversation-recaps-v1`): the conversation, apart from the fan
+   * in the path ("reads by conversation"). With a conversation of its own, the
+   * recaps are those of that conversation stored about this fan (`fanRef`),
+   * and those stored in the fan's own form: keyed by the fan, naming no other
+   * fan. A recap of the conversation that names no fan is not selected.
+   */
+  conversationRef: clientConversationRefSchema.optional(),
 }).strict();
 
 export const clientRecapBodySchema = z.object({
@@ -295,6 +333,14 @@ export const clientFanProfileFromGenerationBodySchema = z.object({
    *  the hub tells a generation whose record has not appeared yet (409
    *  `generation_not_ready`) from one it does not know (404). */
   clientRequestId: z.string().regex(CLIENT_REQUEST_ID_PATTERN).optional(),
+  /**
+   * R20 HF-10 (`conversation-recaps-v1`): the conversation the generation was
+   * made in, apart from the fan in the path ("reads by conversation"). With a
+   * conversation of its own, a generation of that conversation that names this
+   * fan (`fanRef`) is found too; one that names no fan is found only when it
+   * is keyed by the fan, as without the field.
+   */
+  conversationRef: clientConversationRefSchema.optional(),
 }).strict();
 
 export const clientFanProfileFromGenerationResponseSchema = z.object({
@@ -368,6 +414,12 @@ export const clientConversationFeedQuerySchema = z.object({
   /** How many of the newest messages the first page's summary reads. Not read on a later page, which has no summary. */
   summaryWindow: z.coerce.number().int()
     .min(CLIENT_FEED_SUMMARY_WINDOW_MIN).max(CLIENT_FEED_SUMMARY_WINDOW_MAX).optional(),
+  /**
+   * R20 HF-10 (`conversation-recaps-v1`): the conversation, apart from the fan
+   * in the path ("reads by conversation"). The feed reads that conversation,
+   * and a cursor is bound to it and to the fan.
+   */
+  conversationRef: clientConversationRefSchema.optional(),
 }).strict();
 
 export const clientFeedItemSchema = z.object({
@@ -418,7 +470,12 @@ export const clientFeedSummarySchema = z.object({
 });
 
 export const clientConversationFeedResponseSchema = z.object({
-  target: z.object({ pageLabel: z.string(), fanRef: clientFanRefSchema }),
+  target: z.object({
+    pageLabel: z.string(),
+    fanRef: clientFanRefSchema,
+    /** R20 HF-10: the request's `conversationRef`; absent when it named none. */
+    conversationRef: clientConversationRefSchema.optional(),
+  }),
   /** The reader that served the walk. Open token; known values: CLIENT_FEED_SOURCES. */
   source: clientOpenToken,
   /** Names the walk's snapshot: the same on every page of one walk. Opaque. */
@@ -1491,8 +1548,12 @@ export const clientRouteSchemas = {
       + "which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the "
       + "page, whoever generated them. A recap generated from context only its caller saw is never "
       + "selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells "
-      + "whether the fan's latest dossier on this page has exactly the full recap's text. Behind the "
-      + "chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+      + "whether the fan's latest dossier on this page has exactly the full recap's text. With "
+      + "`conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly "
+      + "the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for "
+      + "another fan's chat; required on a page whose chats have ids of their own, 400 without it), and only "
+      + "recaps of that conversation stored about this fan, or keyed by the fan itself, are selected. Behind "
+      + "the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     querystring: clientConversationRecapsQuerySchema,
     response: {
@@ -1522,7 +1583,12 @@ export const clientRouteSchemas = {
       + "only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a "
       + "day after the walk's first page (taking a page does not renew a walk): "
       + "anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first "
-      + "page again. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
+      + "page again. With `conversation-recaps-v1`, `conversationRef` names the conversation apart from the "
+      + "fan (on Fansly the group id): the pair is checked before anything is read (409 "
+      + "`conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their "
+      + "own, 400 without it), the feed reads that conversation, `target` repeats it, and a cursor is valid "
+      + "only for the same conversation and fan. Behind the chat-extension `preview` switch: 409 "
+      + "`client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     querystring: clientConversationFeedQuerySchema,
     response: {
@@ -1547,8 +1613,12 @@ export const clientRouteSchemas = {
       + "text, the answer is `existing` and nothing is written. The generation's record appears shortly "
       + "after the stream's `done` frame; until then, a request that names its `clientRequestId` is "
       + "answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the "
-      + "record was never written, so a client bounds its repeats. Behind the chat-extension `recap` "
-      + "switch: 409 `client_feature_disabled` with the reason.",
+      + "record was never written, so a client bounds its repeats. With `conversation-recaps-v1`, "
+      + "`conversationRef` names the conversation the generation was made in, apart from the fan (on Fansly "
+      + "the group id): the pair is checked before the generation is read (409 `conversation_fan_mismatch` "
+      + "for another fan's chat; required on a page whose chats have ids of their own, 400 without it), and "
+      + "a generation of that conversation that names this fan is found too. Behind the chat-extension "
+      + "`recap` switch: 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     body: clientFanProfileFromGenerationBodySchema,
     response: {

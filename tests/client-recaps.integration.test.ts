@@ -815,14 +815,22 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
       // The page and the fan are the path's; naming them in the query is refused, not ignored.
       [FAN, "?pageLabel=mia-of"],
       [FAN, `?fanRef=${OTHER_FAN}`],
-      [FAN, `?conversationRef=${OTHER_FAN}`],
       [FAN, "?userId=1"],
+      // R20 HF-10: the conversation is a client id, in its one shape.
+      [FAN, "?conversationRef=group-900"],
+      [FAN, "?conversationRef=0777"],
     ] as const) {
       const response = await recaps(grishaToken, { fan, query });
       expect(response.statusCode, `${fan}${query}: ${response.body}`).toBe(400);
       expect(errorResponseSchema.safeParse(response.json()).success, `${fan}${query}`).toBe(true);
       expect(response.body).not.toContain("FULL RECAP");
     }
+    // R20 HF-10: on OnlyFans the chat IS the fan, so another chat named beside
+    // the fan is another fan's (tests/client-conversation-reads.integration.test.ts).
+    const otherChat = await recaps(grishaToken, { query: `?conversationRef=${OTHER_FAN}` });
+    expect(otherChat.statusCode, otherChat.body).toBe(409);
+    expect(errorResponseSchema.parse(otherChat.json()).error).toBe("conversation_fan_mismatch");
+    expect(otherChat.body).not.toContain("FULL RECAP");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
