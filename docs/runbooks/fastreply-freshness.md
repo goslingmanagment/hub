@@ -7,13 +7,16 @@ the operational notes each Wave-1 PR ships; deploy preconditions live at the end
 file, so exec the container directly — wrap ad-hoc reads in a read-only envelope):
 
 ```bash
-ssh root@45.8.230.111
+ssh root@152.53.191.242
 docker exec -it agency-hub-postgres-1 psql -X -v ON_ERROR_STOP=1 -U postgres -d agency_hub_core
 # BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; …; ROLLBACK;
 ```
 
-Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed serves
-0.1.33. **0.1.29 is manual-reinstall-only**: the updater has no allowDowngrade
+The original Wave-1 rollout used desktop 0.1.33 and required no desktop build.
+For a new rollout, check the intended version and feed against the desktop's
+`apps/desktop/package.json` and `docs/RELEASE.md` in
+`~/code/1-platform/onlyfans-chat`; do not use 0.1.33 as a current release target.
+**0.1.29 is manual-reinstall-only**: the updater has no allowDowngrade
 (verified), so a machine rolled back to 0.1.29 can only move forward by reinstalling.
 
 ## PR1 — capture path
