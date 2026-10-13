@@ -281,6 +281,16 @@ describe("commands", () => {
     await started(s);
   });
 
+  it("restartBrowser on a running page starts it again at once: the previous Chrome's holder going is no failure", async () => {
+    const s = await setUp();
+    await started(s);
+    const before = s.engine.of("state").length;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.control.calls.filter((call) => call === "start").length === 2 && s.operator.page.step === "exit_open", 5000, "the page up again");
+    expect(s.engine.of("state").slice(before).every((state) => state.stopReason === null)).toBe(true);
+    expect(s.holder.exits.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("selfTest runs only with the exit closed, and reports each mechanism", async () => {
     const s = await setUp();
     await started(s);

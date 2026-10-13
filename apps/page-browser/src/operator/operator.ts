@@ -150,6 +150,9 @@ export class Operator {
   /** The holder is stopping: the exit stays closed until a holder links
    *  again — nothing may open it between "exit.closed" and the detach. */
   #holderStopping = false;
+  /** The linked holder's Chrome connection closed: that holder exits (s6
+   *  starts a fresh one), and its link closes soon. */
+  #holderSpent = false;
   #stopped = false;
   #linking = false;
   /** Chrome runs under the operator's control: losing it is a failure. */
@@ -245,6 +248,7 @@ export class Operator {
     this.cdp.onHolderEvent = (event) => {
       switch (event.t) {
         case "cdp.down":
+          this.#holderSpent = true;
           this.#controlLost("cdp_lost", `Chrome's DevTools connection closed (${event.reason})`);
           return;
         case "overflow":
@@ -359,6 +363,7 @@ export class Operator {
         try {
           link = await this.cdp.connect();
           this.#holderStopping = false;
+          this.#holderSpent = false;
         } catch {
           await sleep(this.#timings.holderRelinkMs);
           continue;
@@ -442,6 +447,12 @@ export class Operator {
       });
       check();
       if (!(await this.#waitUntil(() => !this.cdp.cdpUp, 3000))) throw new StartFailure("cdp_lost", "the holder still holds the previous Chrome");
+      check();
+      // The holder of the previous Chrome exits after it (s6 starts a fresh
+      // one): the start goes on with the fresh holder, so the old link's
+      // close is not taken for a lost control of the new Chrome — which
+      // made every restart of a running page fail once.
+      if (!(await this.#waitUntil(() => !this.#holderSpent && this.cdp.linked, 3000))) throw new StartFailure("cdp_lost", "the holder of the previous Chrome did not go");
       check();
       this.page.advance("env_applied", "the container's time zone and language; the page's own come with PR 5");
       await this.#withChrome(async () => {
