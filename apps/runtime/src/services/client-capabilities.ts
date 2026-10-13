@@ -57,6 +57,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // OnlyFans the field equal to the fan changes nothing; nothing on Fansly is
   // reachable through it until `recap` and `preview` exist there.
   "conversation-recaps-v1",
+  // R20 HF-5: the AI feature stream admits Hi on Fansly by the body's
+  // `startProof` (the start of the conversation and its personal messages, as
+  // the client's page saw them) and takes the fan's avatar at the top level,
+  // for a caller that advertises `hi-start-proof-v1` in
+  // `x-kernel-ai-capabilities` and sends no `clientContext`.
+  "hi-start-proof-v1",
 ];
 
 /**

@@ -40,6 +40,7 @@ export * from "./chat-access.ts";
 export * from "./context-frame.ts";
 export * from "./fansly-fan-identity.ts";
 export * from "./fansly-media.ts";
+export * from "./hi-start-proof.ts";
 export * from "./live-text.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";

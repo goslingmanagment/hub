@@ -100,7 +100,7 @@ return it as JSON on success.
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
 `packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
-`coverage-check-v1`). A token is
+`coverage-check-v1`, `hi-start-proof-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -121,6 +121,10 @@ authorization.
   something only beside `context-v1` (see "Feature-lane window coverage check" below). The
   bootstrap lists the same name among the capabilities this hub serves: a client sends the body's
   `coverageCheck` only to a hub that lists it, since an older hub's strict body refuses the field.
+- `hi-start-proof-v1` moves Hi on a Fansly page, for a request without `clientContext`, to the
+  start-proof gate, and is required to send `startProof`, `personalMessageCount` and the top-level
+  `fanAvatarUrl` (see "Hi on Fansly by the start proof" below). It adds no frame. The bootstrap lists
+  the same name: a client sends those fields only to a hub that lists it.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -256,6 +260,84 @@ not swallowed: the request fails as any failed context load does. Not checked, a
 as before: a request with `clientContext` (the released Fansly extension sends its own transcript,
 with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
 `fanRef`.
+
+### Hi on Fansly by the start proof (chat-extension R20 HF-5)
+
+Hi is for a conversation with at most 10 personal messages (the fan's, and the model's that are not
+a welcome or a mass send), counted over a history read to its first message. The hub cannot count
+them on Fansly: its history there is pull-cadenced and almost never reaches a new chat's first
+message. The released Fansly extension counts them itself and sends the count in `clientContext`.
+A client that sends no `clientContext` proves the start from what its page already loaded, and the
+hub checks what it can check.
+
+**The lane.** `hi-greeting`, a Fansly page, no `clientContext`, a caller that advertised
+`hi-start-proof-v1`. On it the proof decides Hi and nothing else does. Off it nothing changes: Hi
+keeps the gate it had (the count of messages in the hub's transcript, or the released clients'
+`clientContext.personalMessageCount`), and the three body fields below are refused.
+
+**The body fields** (all optional):
+
+- `startProof`: `{ v: 1, source, groupId, startWitnessId, coveredCount, personalCount, automatedIds }`.
+  `source` is who proved the start: `tab-short-page` (the open tab, by a fresh end of the history
+  shorter than a page and the continuous observation since) or `pass-empty-page` (a walk of the
+  history to its empty page). `groupId` is the chat. `startWitnessId` is the first message of the
+  conversation as the source saw it, null only for an empty history. `coveredCount` is how many
+  messages from the start the source saw. `personalCount` is the personal messages among them: a
+  tab counts over the whole history it proved, a pass among the last 30 messages of the history it
+  walked, as the released extension does. `automatedIds` are the newest automatic messages, oldest
+  first, at most 120. Ids only, never a text. The schema is the client's own, field by field:
+  the witness is null exactly when `coveredCount` is 0, no automatic id is older than it, the
+  automatic ids ascend without repeats, the counts stay within `coveredCount` (a tab's personal and
+  automatic messages together too), and a pass counts at most 30.
+- `personalMessageCount`: the same count at the top level, as the released clients carry it in
+  `clientContext`. It proves nothing by itself; beside a proof it must equal
+  `startProof.personalCount`.
+- `fanAvatarUrl`: the fan's avatar as the page already loaded it, under the rule of
+  `clientContext.fanAvatarUrl` (an HTTPS address on a Fansly host, at most 4,096 characters). It
+  rides to the provider as an image, exactly as that field does; the hub never fetches it.
+
+**Where they are refused** (400 `bad_request` with a machine `reason`, before any context loads;
+a request that sends none of them is never refused here):
+
+| The request | `reason` |
+|---|---|
+| a feature other than `hi-greeting`, a request with `clientContext`, or a page that is not Fansly | `start_proof_not_allowed` |
+| no `hi-start-proof-v1` in `x-kernel-ai-capabilities` | `capability_required` |
+| `startProof.groupId` is not the request's `conversationRef`, or `personalMessageCount` is not `startProof.personalCount` | `start_proof_mismatch` |
+
+**The gate.** A refusal is 400 `gate_hi_greeting_limit` with a machine `reason`
+(`AI_HI_GREETING_REFUSAL_REASONS`); nothing is generated and nothing is recorded. A request
+without a proof is refused before any context loads; a proof is judged after the transcript
+loaded. The first that holds:
+
+| The request | Answer |
+|---|---|
+| no `startProof` (with or without a count) | `history_unproven` |
+| the request's own `coverageCheck.window` names a message older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
+| the hub holds, as not deleted, a message of the conversation older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
+| `personalCount` is above 10 | `too_many_personal` |
+| otherwise | served |
+
+What the hub holds for the conversation is the transcript it just served (with the socket overlay's
+messages, where the live union served it) and the oldest message of its archive, one more read
+(`findAiConversationOldestMessageRef`: this page, this conversation, not deleted; on a page that
+reads the overlay, not deleted on the socket either). A message the hub knows as deleted never
+contradicts a proof. Neither does a message of another chat or of another page, nor a witness the
+hub does not hold or holds as deleted: the hub's history seldom reaches a chat's start, and the
+proof is the client's. Ids compare as snowflakes (the shorter is the older, then the string order),
+never as numbers. The number of messages in the hub's transcript is not read on this lane: a chat
+with forty automatic messages and no personal one is admitted. A failed read fails the request, as
+any failed context load does.
+
+An admitted proof adds nothing to the prompt, the stream or the `context_v1` frame; the record
+keeps its counts as `params.contextManifest.hiStartProof` (`source`, `coveredCount`,
+`personalCount`, `automatedCount`), never an id. The window's ids are still answered one by one
+in the frame (the window coverage check, above).
+
+The schema's bodies, the refusals and the gate's answers are one fixture matrix shared with the
+client: `tests/fixtures/ai-hi-start-proof-matrix.json`. The hub proves itself against it
+(`tests/ai-hi-start-proof.test.ts`); the client's fake hub copies the file verbatim (chat-extension
+P6c2). A change to these rules is a change to that file.
 
 ### Voice identity on Fansly (chat-extension R20 HF-4а)
 
@@ -1096,6 +1178,10 @@ orthogonal, optional and refused with `bad_request` on every other feature:
   every message.
 - `clientContext.fanUsername` and `clientContext.fanAvatarUrl` (HTTPS Fansly
   host only; passed to the provider as an image, never fetched by the kernel).
+- `startProof`, `personalMessageCount` and `fanAvatarUrl` at the top level: Hi
+  on Fansly without `clientContext`, for a caller that advertised
+  `hi-start-proof-v1` ("Hi on Fansly by the start proof", above). There the
+  proof decides the gate; anywhere else the three fields are refused.
 
 `greetingMode: "new-follower"` is a DEPRECATED ALIAS kept for released clients
 (extension <= 2.4.3, of-desktop), with its earlier semantics unchanged: it

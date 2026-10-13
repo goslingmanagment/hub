@@ -473,3 +473,75 @@ export async function explainAiLiveTextMessagesQuery(
   );
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
+
+// chat-extension R20 HF-5: the oldest message the hub holds LIVE for one
+// conversation. Hi on Fansly is admitted by the client's proof of the
+// conversation's start (`startProof`); the AI feature lane asks this, once per
+// such request, to see whether the hub's own history reaches further back than
+// the message the proof names as the first one.
+//
+// The rows are exactly those the AI transcript reader serves from the archive
+// (listArchiveConversationMessagesForAi): this page, this conversation, not
+// tombstoned, not a content-pending stub; with `liveOverlay` (the live union
+// served the transcript) also not tombstoned by a socket deletion, as the
+// union's REST arm hides them. A message the hub knows as deleted is never the
+// answer: a deleted row says nothing about where the conversation starts now.
+// The socket overlay's own unconfirmed messages are not read here: they are
+// the newest of a chat, and the caller already holds them in the transcript
+// it served.
+//
+// "Oldest" is the id's order (a Fansly message id is a snowflake: shorter is
+// older, then the string order), never `occurred_at`, which does not order the
+// messages of one second. One range of message_archive_account_conv_idx: the
+// conversation's rows, nothing of the page beyond them.
+
+export interface AiConversationOldestMessageInput {
+  pageId: number;
+  conversationRef: string;
+  /** The transcript was served by the live union (`source: "live_union"`):
+   *  a socket deletion hides the archive's copy here too. */
+  liveOverlay?: boolean;
+}
+
+function buildConversationOldestMessageQuery(input: AiConversationOldestMessageInput) {
+  return sql`
+    select ma.message_ref
+    from message_archive ma
+    where ma.account_id = ${input.pageId}
+      and ma.conversation_ref = ${input.conversationRef}
+      and ma.deleted_at is null
+      and ma.content_pending = false${input.liveOverlay === true ? sql`
+      and not exists (
+        select 1 from dm_live_messages tombstone
+        where tombstone.page_id = ${input.pageId}
+          and tombstone.platform_message_id = ma.message_ref
+          and tombstone.deleted_at is not null
+      )` : sql``}
+    order by char_length(ma.message_ref), ma.message_ref collate "C"
+    limit 1
+  `;
+}
+
+/**
+ * The id of the oldest message of this conversation the hub's archive holds
+ * live for this page, or null when it holds none.
+ */
+export async function findAiConversationOldestMessageRef(
+  db: Database,
+  input: AiConversationOldestMessageInput,
+): Promise<string | null> {
+  const result = await db.execute<{ message_ref: string }>(buildConversationOldestMessageQuery(input));
+  const row = result.rows[0];
+  return row === undefined ? null : String(row.message_ref);
+}
+
+/** Perf-gate seam: EXPLAIN over the exact statement the read runs. */
+export async function explainAiConversationOldestMessageQuery(
+  db: Database,
+  input: AiConversationOldestMessageInput,
+): Promise<string> {
+  const result = await db.execute<{ "QUERY PLAN": string }>(
+    sql`explain (format text) ${buildConversationOldestMessageQuery(input)}`,
+  );
+  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
+}

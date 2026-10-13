@@ -4,6 +4,7 @@ import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
   AiLiveTextContext,
+  AiStartProofV1,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
@@ -51,10 +52,14 @@ import {
   type MediaNotesGate,
   type MediaNotesManifest,
   applyLiveTextContext,
+  assertHiStartProof,
+  assertHiStartProofRequestShape,
+  assertHiStartProofSent,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
   computePingSummary,
+  hiStartProofDecides,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
   loadFanBio,
@@ -153,6 +158,14 @@ export interface AiFeatureRequestBody {
    *  in the `context_v1` frame for a caller that advertised
    *  `coverage-check-v1`, never read into the prompt. */
   coverageCheck?: AiCoverageCheck;
+  /** chat-extension R20 HF-5, hi-greeting on Fansly without `clientContext`,
+   *  for a caller that advertised `hi-start-proof-v1` (context/hi-start-proof.ts):
+   *  the client's proof of the conversation's start, the same count of personal
+   *  messages at the top level, and the fan's avatar (rides to the provider as
+   *  an image; never fetched here). Refused anywhere else. */
+  startProof?: AiStartProofV1;
+  personalMessageCount?: number;
+  fanAvatarUrl?: string;
   /** chat-extension H-4c: the fresh text of the open chat (OnlyFans; Fansly
    * since R20 HF-8б), merged into the hub's transcript for this generation
    * only (context/live-text.ts). */
@@ -548,6 +561,22 @@ export async function prepareAiFeatureStream(
   }
 
   assertGreetingRequestShape(feature, body, isFanslyRequest);
+  // chat-extension R20 HF-5: on this lane the client's proof of the
+  // conversation's start decides Hi (the gate below), and the fan's avatar may
+  // ride at the top level. Its body fields are refused everywhere else, so
+  // off the lane every request is answered as it was.
+  const hiStartProofLane = {
+    feature,
+    isFanslyRequest,
+    hasClientContext: body.clientContext !== undefined,
+    capabilities: options?.capabilities,
+  };
+  assertHiStartProofRequestShape({ ...hiStartProofLane, body });
+  const hiByStartProof = hiStartProofDecides(hiStartProofLane);
+  if (hiByStartProof) {
+    // Without a proof Hi is refused whatever the hub holds: before any context loads.
+    assertHiStartProofSent(body.startProof);
+  }
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -859,7 +888,27 @@ export async function prepareAiFeatureStream(
     );
   }
   if (feature === "hi-greeting") {
-    assertHiGreetingFreshness(body, contextValues.messageCount);
+    if (hiByStartProof) {
+      // chat-extension R20 HF-5: the proof's start against the history the hub
+      // holds, then its count of personal messages against the limit; the
+      // number of messages in the hub's own transcript is not the gate here.
+      // The lane has no clientContext, so the hub loaded the transcript itself.
+      if (!kernelTranscript) {
+        throw new Error("hi-greeting start-proof lane reached without a hub-loaded transcript");
+      }
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        hiStartProof: await assertHiStartProof(app, {
+          pageId,
+          conversationRef: body.conversationRef,
+          proof: body.startProof,
+          coverageCheck: body.coverageCheck,
+          served: kernelTranscript.context.served,
+        }),
+      };
+    } else {
+      assertHiGreetingFreshness(body, contextValues.messageCount);
+    }
   }
   // Decision #295: OnlyFans Ping is manual outreach at the chatter's discretion.
   // Keep the existing Fansly reactivation gate and the real segment on both lanes.
@@ -1106,6 +1155,10 @@ export async function prepareAiFeatureStream(
   }
 
   const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
+  // The fan's avatar for Hi, as an image for the provider: the released Fansly
+  // extension's inside `clientContext`, the start-proof lane's at the top
+  // level (R20 HF-5; refused off the lane, above). Never both, never fetched.
+  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? (hiByStartProof ? body.fanAvatarUrl : undefined);
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
@@ -1177,7 +1230,7 @@ export async function prepareAiFeatureStream(
     prompt: {
       systemBlocks: prompt.systemBlocks,
       userBlocks: prompt.userBlocks,
-      ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
+      ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
     },
   };
   // chat-extension H-4c: featureParams for every feature, not fan-summary
@@ -1197,7 +1250,7 @@ export async function prepareAiFeatureStream(
           systemBlocks: prompt.systemBlocks,
           userBlocks: prompt.userBlocks,
           contextManifest: contextManifest ?? null,
-          ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
+          ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
         };
         app.logger.info({
           feature,
