@@ -8,6 +8,11 @@
 //   requests    — every request the interception decided: method, host,
 //                 path, admission, time, decision, result
 //   states      — every transition of the page (plan §4.1) and its reason
+//   sockets     — the site's socket (PR 10): every admission asked and how
+//                 it went, every connection's open and close, and every
+//                 outgoing message — its shape (kind, opcode, size), never
+//                 its content: the authorization carries the token — and
+//                 every message the guard in the page did not let go
 //
 // What never goes in: passwords, 2FA codes, tokens, cookies, the SOCKS5
 // login and password, headers, query strings, request and response bodies.
@@ -22,8 +27,8 @@ import { createGzip } from "node:zlib";
 import { scrub } from "../shared/secrets.ts";
 import { errorMessage, makeLog, urlForLog, type Logger } from "../shared/util.ts";
 
-export type JournalKind = "connections" | "requests" | "states";
-const KINDS: readonly JournalKind[] = ["connections", "requests", "states"];
+export type JournalKind = "connections" | "requests" | "states" | "sockets";
+const KINDS: readonly JournalKind[] = ["connections", "requests", "states", "sockets"];
 
 export interface ConnectionLine {
   id: number;
@@ -63,6 +68,23 @@ export interface StateLine {
   note: string;
 }
 
+export interface SocketLine {
+  /** The admission's connection id; null for a socket the operator could
+   *  not tie to one. */
+  connectionId: string | null;
+  event: "asked" | "refused" | "admitted" | "open" | "failed" | "closed" | "out" | "blocked" | "unkept";
+  /** The engine's attempt, once admitted. */
+  attemptId?: number | null;
+  /** The handshake's status. */
+  status?: number | null;
+  /** An outgoing message: what it is, never what it says. */
+  message?: { kind: "ping" | "auth" | "other" | "binary"; opcode: number; bytes: number };
+  /** A blocked message's shape (ws/guard.ts), the context it came from. */
+  shape?: Record<string, string | number | boolean>;
+  context?: string;
+  detail?: string;
+}
+
 /** A URL's host and path, nothing else. */
 export function hostAndPath(url: string): { host: string; path: string } {
   const { scheme, path } = urlForLog(url);
@@ -74,7 +96,7 @@ export function hostAndPath(url: string): { host: string; path: string } {
   }
 }
 
-const FILE = /^(connections|requests|states)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/;
+const FILE = /^(connections|requests|states|sockets)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/;
 
 export interface JournalOptions {
   dir: string;
@@ -126,6 +148,10 @@ export class Journals {
 
   state(line: StateLine): void {
     this.#write("states", line);
+  }
+
+  socket(line: SocketLine): void {
+    this.#write("sockets", line);
   }
 
   /** Settles when the files written so far are flushed and closed. */

@@ -98,9 +98,27 @@ CREATE TABLE hub_attempts (
 CREATE INDEX hub_attempts_by_age ON hub_attempts (at_wall);
 `;
 
+/** Version 3 (PR 10): the site's socket.
+ *  - ws_connections: every admitted connection of the site's socket — its
+ *    attempt, and whether its ws.open is in the stream — written before its
+ *    CONNECT goes on, opened in the commit of ws.open, deleted in the commit
+ *    of ws.close (or of its outcome, when it never opened). An operator that
+ *    starts again ends in the stream what the previous one left there: its
+ *    Chrome is gone, and so is every socket of it.
+ *  Readable from 2: an older operator writes no socket events. */
+const V3 = `
+CREATE TABLE ws_connections (
+  connection_id TEXT PRIMARY KEY,
+  attempt_id INTEGER NOT NULL,
+  opened INTEGER NOT NULL,
+  at_wall INTEGER NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, readableFrom: 1, up: (db) => db.exec(V1) },
   { version: 2, readableFrom: 2, up: (db) => db.exec(V2) },
+  { version: 3, readableFrom: 2, up: (db) => db.exec(V3) },
 ];
 
 /** The format of a row's `json` this operator writes. */

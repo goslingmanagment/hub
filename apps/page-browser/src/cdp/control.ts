@@ -19,8 +19,11 @@
 // had its loaders before the interception existed and is not intercepted
 // (stage 1, amendment 1), so it is closed.
 //
-// Later PRs add their steps to the same setup (the socket guard, PR 10). A
-// web target whose setup fails is never let run.
+// - the socket guard (PR 10; ws/install.ts, `targetSetup`): in every tab,
+//   frame and worker, before it may run — Runtime.enable and the guard's
+//   binding everywhere, the guard as a script of every new document in tabs
+//   and frames, and a pause before the first script of every worker.
+// A web target whose setup fails is never let run.
 
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
 import { FANSLY_HOSTS } from "../egress/hosts.ts";
@@ -46,6 +49,9 @@ export interface ControlOptions {
   networkBuffer: { totalBytes: number; perResponseBytes: number };
   /** A web target could not be set up (and stays paused). */
   onSetupFailed: (target: TargetInfo, error: Error) => void;
+  /** More of a web target's setup (the socket guard), before auto-attach
+   *  and before it may run; a throw fails the setup. */
+  targetSetup?: (target: TargetInfo, kind: "page" | "worker", waiting: boolean) => Promise<void>;
   /** The origin the page's position is granted to (the site's). */
   siteOrigin?: string;
   log?: Logger;
@@ -199,6 +205,7 @@ export class BrowserControl {
         if (position === null) throw new Error("no position of the page");
         await this.#cdp.send("Emulation.setGeolocationOverride", { latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracyM }, session);
       }
+      if ((page || worker) && this.#options.targetSetup) await this.#options.targetSetup(target, page ? "page" : "worker", waiting);
       if (page || worker) {
         // Service workers are attached once, by the browser target: a second
         // session to the same worker (from a page) deadlocks its start

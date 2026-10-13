@@ -236,6 +236,16 @@ export default tseslint.config(
     },
   },
   {
+    // What Chrome runs inside the page (plan §3.3, inpage/): a classic
+    // script the operator wraps in a function of its own and calls by name
+    // (ws/guard.ts), so its one top-level function is used there.
+    files: ["apps/page-browser/src/inpage/**/*.js"],
+    languageOptions: { sourceType: "script" },
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { varsIgnorePattern: "^pbWsGuard$" }],
+    },
+  },
+  {
     files: ["apps/page-browser/src/{egress,cdp,holder,rpc}/**/*.ts"],
     rules: {
       "no-restricted-syntax": ["error", ...pageBrowserErasableOnly],

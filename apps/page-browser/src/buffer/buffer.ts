@@ -49,6 +49,11 @@
 // binary frames before the JSON that names them (replay.ts), and their file
 // goes with the outcome's resultAck.
 //
+// The site's socket (PR 10) keeps its connections here too
+// (`changeConnection`, or in the commit of an event: schema.ts v3) —
+// admitted, opened, gone — so an operator that starts again ends in the
+// stream what the previous one left there.
+//
 // Hub attempts (PR 9) leave their steps here too (`markAttempt`: received,
 // issued in the page, released to the network), each written before it is
 // taken: a repeated `send` does nothing twice across restarts, and the
@@ -68,14 +73,16 @@ import {
   type AttemptRecord,
   type AttemptStep,
   type Commit,
+  type ConnectionChange,
   type NewEventRow,
+  type StoredConnection,
   type NewOutcomeRow,
   type OpenCause,
   type StoredEvent,
   type StoredOutcome,
 } from "./store.ts";
 
-export type { AttemptRecord, AttemptStep };
+export type { AttemptRecord, AttemptStep, ConnectionChange, StoredConnection };
 
 /** Why a write is refused: a cap (`buffer_full`), the disk (`disk_full`),
  *  or a buffer that could not be opened (`buffer_unavailable`). */
@@ -222,6 +229,20 @@ interface PendingEvent {
   resolve: (durable: Durable) => void;
   /** A gap mark: its "from" is the event before it, unless given. */
   gap?: { reason: GapReason; from: { seq: number | null; wall: number | null } | null };
+  connection?: ConnectionChange;
+}
+
+/** One write of a group (`appendGroup`, PR 10). */
+export type GroupItem =
+  | { event: EventBody; at?: { mono: number; wall: number }; connection?: ConnectionChange }
+  | { gap: GapReason; from: { seq: number | null; wall: number | null } }
+  | { outcome: Outcome }
+  | { connection: ConnectionChange };
+
+/** What a producer says of an event besides the event itself (PR 10). */
+export interface AppendOptions {
+  /** A change of the site socket's connection, in the same commit. */
+  connection?: ConnectionChange;
 }
 
 interface PendingOutcome {
@@ -242,7 +263,15 @@ interface PendingMark {
   resolve: (durable: Durable) => void;
 }
 
-type Pending = PendingEvent | PendingOutcome | PendingMark;
+interface PendingConnection {
+  type: "connection";
+  change: ConnectionChange;
+  atWall: number;
+  bytes: number;
+  resolve: (durable: Durable) => void;
+}
+
+type Pending = PendingEvent | PendingOutcome | PendingMark | PendingConnection;
 
 function defaultDiskFree(dir: string): number {
   const stats = statfsSync(dir);
@@ -293,6 +322,7 @@ export class EventBuffer {
   #bodies: BodyFiles | null = null;
   /** Steps of Hub attempts not committed yet. */
   #pendingMarks = new Map<number, AttemptStep[]>();
+
   #lastPurge = 0;
   #purgeDue = false;
   #unavailable: BufferUnavailable | null = null;
@@ -398,6 +428,11 @@ export class EventBuffer {
   /** The last number given; 0 before the first event. */
   get lastSeq(): number {
     return this.#store?.lastSeq ?? 0;
+  }
+
+  /** The wall time of the last event given; null before the first. */
+  get lastWall(): number | null {
+    return this.#store?.lastWall ?? null;
   }
 
   /** Why the buffer cannot be opened, or null. */
@@ -512,10 +547,81 @@ export class EventBuffer {
   // ── the producers ──────────────────────────────────────────────────────
 
   /** An event of the stream, stamped now unless `at` says when. */
-  append(event: EventBody, at?: { mono: number; wall: number }): Appended {
+  append(event: EventBody, at?: { mono: number; wall: number }, options: AppendOptions = {}): Appended {
     if (!EVENT_KINDS.has(event.kind)) throw new Error(`not an event a producer appends: ${String(event.kind)}`);
     const body = JSON.stringify(event);
-    return this.#accept({ type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined });
+    const item: PendingEvent = { type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+    if (options.connection !== undefined) item.connection = options.connection;
+    return this.#accept(item);
+  }
+
+  /** Several writes in one commit, in this order — or none: the group is
+   *  accepted or refused as one, and its durability is the commit's. An
+   *  outcome already stored, or waiting for its commit, is left out (the
+   *  first outcome of an attempt stands). */
+  appendGroup(items: readonly GroupItem[]): Appended {
+    const refused = this.refusal();
+    if (refused) return { ok: false, reason: refused };
+    const store = this.#store!;
+    const group: Pending[] = [];
+    for (const item of items) {
+      if ("event" in item) {
+        if (!EVENT_KINDS.has(item.event.kind)) throw new Error(`not an event a producer appends: ${String(item.event.kind)}`);
+        const body = JSON.stringify(item.event);
+        const pending: PendingEvent = { type: "event", kind: item.event.kind, body, atMono: item.at?.mono ?? monoMs(), atWall: item.at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+        if (item.connection !== undefined) pending.connection = item.connection;
+        group.push(pending);
+      } else if ("gap" in item) {
+        const body = JSON.stringify({ kind: "gap", fromSeq: item.from.seq, fromWall: item.from.wall, reason: item.gap });
+        group.push({ type: "event", kind: "gap", body, atMono: monoMs(), atWall: this.#now(), bytes: stampedBytes(body), resolve: () => undefined, gap: { reason: item.gap, from: item.from } });
+      } else if ("outcome" in item) {
+        const outcome = item.outcome;
+        if (!OUTCOME_TYPES.has(outcome.type) || !Number.isSafeInteger(outcome.attemptId)) throw new Error("not an attempt's outcome");
+        if (this.#pendingOutcomes.has(outcome.attemptId)) continue;
+        try {
+          if (store.hasOutcome(outcome.attemptId)) continue;
+        } catch (error) {
+          this.#storageFailed(error, "read");
+          return { ok: false, reason: "disk_full" };
+        }
+        const json = JSON.stringify(outcome);
+        group.push({ type: "outcome", attemptId: outcome.attemptId, outcomeType: outcome.type, json, atWall: this.#now(), bytes: utf8Bytes(json), body: null, resolve: () => undefined });
+      } else {
+        group.push({ type: "connection", change: item.connection, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+      }
+    }
+    const bytes = group.reduce((sum, item) => sum + item.bytes, 0);
+    if (this.#bytes + this.#pendingBytes + bytes > this.#caps.bytes) {
+      this.#enterFull("buffer_full", "bytes", `${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
+      return { ok: false, reason: "buffer_full" };
+    }
+    const settled = group.map((item) => new Promise<Durable>((resolve) => (item.resolve = resolve)));
+    for (const item of group) {
+      this.#pending.push(item);
+      this.#pendingBytes += item.bytes;
+      if (item.type === "outcome") this.#pendingOutcomes.set(item.attemptId, item);
+    }
+    this.#schedule();
+    const durable = Promise.all(settled).then((all): Durable => all.find((one) => !one.ok) ?? all.filter((one) => one.ok && one.seq !== null).at(-1) ?? { ok: true, seq: null });
+    return { ok: true, durable };
+  }
+
+  /** A change of the site socket's connection on its own (admitted, opened,
+   *  gone), durable when its promise says so. */
+  changeConnection(change: ConnectionChange): Appended {
+    return this.#accept({ type: "connection", change, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+  }
+
+  /** Every connection kept (committed), oldest first. */
+  connections(): StoredConnection[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.connections();
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
+    }
   }
 
   /** A gap mark: the stream broke after `from` (default: the event just
@@ -802,8 +908,9 @@ export class EventBuffer {
 
   #oldestAgeMs(): number {
     const walls = [this.#oldestEventWall, this.#oldestOutcomeWall].filter((wall): wall is number => wall !== null);
-    // Marks of Hub attempts are no record of their own: they do not age.
-    for (const item of this.#pending) if (item.type !== "mark") walls.push(item.atWall);
+    // Marks of Hub attempts and connection changes are no record of their
+    // own: they do not age.
+    for (const item of this.#pending) if (item.type !== "mark" && item.type !== "connection") walls.push(item.atWall);
     if (walls.length === 0) return 0;
     return Math.max(0, this.#now() - Math.min(...walls));
   }
@@ -930,6 +1037,7 @@ export class EventBuffer {
     const events: NewEventRow[] = [];
     const outcomes: NewOutcomeRow[] = [];
     const marks: AttemptMark[] = [];
+    const connections: NonNullable<Commit["connections"]> = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
     let seq = store.lastSeq;
     let previousWall = store.lastWall;
@@ -944,6 +1052,11 @@ export class EventBuffer {
         settled.push({ item, seq: null });
         continue;
       }
+      if (item.type === "connection") {
+        connections.push({ ...item.change, atWall: item.atWall });
+        settled.push({ item, seq: null });
+        continue;
+      }
       let body = item.body;
       if (item.gap && item.gap.from === null) {
         body = JSON.stringify({ kind: "gap", fromSeq: seq === 0 ? null : seq, fromWall: seq === 0 ? null : previousWall, reason: item.gap.reason });
@@ -951,13 +1064,14 @@ export class EventBuffer {
       seq += 1;
       const json = `{"seq":${seq},"atMono":${item.atMono},"atWall":${item.atWall},${body.slice(1)}`;
       events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json) });
+      if (item.connection) connections.push({ ...item.connection, atWall: item.atWall });
       settled.push({ item, seq });
       previousWall = item.atWall;
     }
 
     let committed;
     try {
-      committed = store.commit({ events, outcomes, marks, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
+      committed = store.commit({ events, outcomes, marks, connections, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
       if (purge !== null) this.#purgeDue = true;

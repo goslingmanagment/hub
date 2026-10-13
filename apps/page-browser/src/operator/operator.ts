@@ -25,12 +25,26 @@
 // live session (plan §4.7), which only the PR that loads the site brings:
 // until then every `send` is answered, not sent ("the site is not loaded").
 //
+// The site's socket (ws/, PR 10; plan §4.3, §4.4; mandatory condition №3):
+// the guard (inpage/ws-guard.js) goes into every tab, frame and worker
+// before the site's code, and lets no message but spec §2.6's leave — the
+// first other one stops the page; the proxy's socket gate holds the same
+// allow-list outside the page's JavaScript, record by record; each socket's
+// CONNECT waits at the proxy for the engine's `wsAdmit`, and its handshake
+// goes only before the admission's deadline; its frames go from CDP into
+// the buffer — acknowledged to the holder once durable — its handshake's
+// outcome to the engine as `wsDone`, and gaps mark where frames may be
+// missing. After a restart, what the holder delivers again of the previous
+// Chrome's sockets is dropped, and the connections the buffer kept from
+// before are ended there.
+//
 // What holds, whatever happens:
 // - No request leaves without the engine's admission. A Hub request goes
-//   only by its `check` and through the gate's window; the site's requests
-//   have no admitting path yet (PR 7) and are failed — the session is
-//   learned from them as they stop — and so is every other paused request
-//   but a self-test probe.
+//   only by its `check` and through the gate's window; a socket only by its
+//   `wsAdmit`, through a tunnel of its own; the site's requests have no
+//   admitting path yet (PR 7) and are failed — the session is learned from
+//   them as they stop — and so is every other paused request but a self-test
+//   probe, a request to the socket host above all (no socket may ride it).
 // - A page starts only on the engine's restartBrowser; a failure stops it
 //   and retries after 10 s, 30 s, 2 min, then every 5 min; a halt (the
 //   engine's stopPage, a changed exit IP) holds until the next
@@ -60,6 +74,10 @@ import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
+import { guardExpression, newBindingName } from "../ws/guard.ts";
+import { GuardInstaller } from "../ws/install.ts";
+import { BoundaryFile } from "../ws/boundary.ts";
+import { SiteSockets, type SocketStop, type SocketTimings } from "../ws/sockets.ts";
 import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
 import { writeHandover } from "../env/handover.ts";
@@ -133,6 +151,8 @@ export interface OperatorDeps {
   buffer?: Pick<BufferOptions, "diskFree" | "minFreeBytes" | "checkEveryMs" | "resumePercent" | "maxPages" | "openRetryMs" | "retryMs">;
   /** Tests: the Hub requests' waits and limits. */
   hubTimings?: Partial<HubTimings>;
+  /** Tests: the socket's waits. */
+  socketTimings?: Partial<SocketTimings>;
   log?: Logger;
 }
 
@@ -179,6 +199,10 @@ export class Operator {
   readonly paused: PausedRequests;
   /** Hub's requests through the site's tab (plan §4.2). */
   readonly hub: HubRequests;
+  /** The socket guard in every context of the page (plan §4.3). */
+  readonly guard: GuardInstaller;
+  /** The site's socket: admissions, frames, outcomes (plan §4.4). */
+  readonly sockets: SiteSockets;
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
   readonly #log: Logger;
@@ -201,6 +225,9 @@ export class Operator {
   /** The linked holder's Chrome connection closed: that holder exits (s6
    *  starts a fresh one), and its link closes soon. */
   #holderSpent = false;
+  /** The site socket's part of this operator's start was done (after the
+   *  holder's first replay). */
+  #socketsRestarted = false;
   #stopped = false;
   #linking = false;
   /** Chrome runs under the operator's control: losing it is a failure. */
@@ -249,6 +276,7 @@ export class Operator {
 
     this.egress = new Egress({
       classify: this.#classify,
+      admitSocket: (host, port) => this.sockets.admit(host, port),
       onRecord: (record) =>
         this.journals.connection({
           id: record.id,
@@ -271,12 +299,19 @@ export class Operator {
     });
 
     this.cdp = new Cdp({ socketPath: this.config.holderSock });
+    this.guard = new GuardInstaller({
+      cdp: this.cdp,
+      ...((binding) => ({ binding, expression: guardExpression(binding) }))(newBindingName()),
+      onReport: (report, target) => this.sockets.onGuardReport(report, target),
+      onFailed: (target, why) => this.#socketStop("ws_guard_failed", `${why} (${target.type})`, "kill"),
+    });
     this.control = new BrowserControl(this.cdp, {
       networkBuffer: DEFAULT_PARAMS.chromeBodyBuffer,
       onSetupFailed: (target, error) => {
         if (!this.#controlExpected) return;
         void this.#fail("cdp_lost", `a ${target.type} could not be set up: ${error.message}`);
       },
+      targetSetup: (target, kind, waiting) => this.guard.setUp(target, kind, waiting),
     });
     this.probes = new ProbeDriver(this.cdp, this.control, { apiHost: this.#apiHost, exitClosed: () => !this.egress.exitOpen });
     this.envCheck = new EnvCheck(this.cdp, this.control);
@@ -337,10 +372,13 @@ export class Operator {
           if (message.type === "send") this.hub.onSend(message);
           else this.hub.onCheckResult(message);
         },
+        onSocket: (message) => this.sockets.onAdmitResult(message),
         onLink: (up, reason) => {
           // A new connection subscribes anew; the outcomes not acknowledged
           // go to it again (spec §6.2), a page at a time.
           this.stream.reset();
+          // An admission is answered only on the connection it was asked on.
+          this.sockets.linkChanged();
           this.#log(up ? "engine.linked" : "engine.lost", { reason, admissionsOpen: this.admissionsOpen() });
           if (!up) {
             this.replay.disconnected();
@@ -400,7 +438,7 @@ export class Operator {
         backlog: () => this.rpc.backlog(),
         drained: () => this.rpc.drained(),
       },
-      { stateOf: (attemptId) => this.hub.recoverState(attemptId) },
+      { stateOf: (attemptId) => this.sockets.recoverState(attemptId) ?? this.hub.recoverState(attemptId) },
     );
 
     this.hub = new HubRequests({
@@ -429,6 +467,22 @@ export class Operator {
       sessionChanged: () => this.#sendState(),
       ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
     });
+    this.sockets = new SiteSockets({
+      cdp: this.cdp,
+      buffer: this.buffer,
+      link: { send: (message) => this.rpc.send(message) },
+      notAdmitting: () => (this.admissionsOpen() ? null : this.#noAdmissionWhy()),
+      sessionFingerprint: () => this.hub.session.fingerprint,
+      authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
+      targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
+      socketHost: (host) => this.#classify(host) === "ws",
+      cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
+      journal: (line) => this.journals.socket(line),
+      alarm: (kind, detail) => this.#alarm(kind, detail),
+      stop: (reason, note, how) => this.#socketStop(reason, note, how),
+      startBoundary: new BoundaryFile(join(this.config.stateDir, "start-boundary.json")),
+      ...(deps.socketTimings ? { timings: deps.socketTimings } : {}),
+    });
     this.egress.gate.onEvent = (event) => {
       // The send as the gate saw it is the Hub request's (and PR 7's site
       // requests'); what it held or cut goes to the log.
@@ -456,13 +510,14 @@ export class Operator {
     if (this.#stopped) return;
     this.#stopped = true;
     this.egress.closeExit("the operator stops");
-    this.hub.endAll("the operator stops");
+    this.#endWork("the operator stops");
     this.#cancelRun();
     this.#clearRetry();
     this.#health.stop();
     this.#stopIpTimer();
     if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
     if (this.#stateTimer) clearInterval(this.#stateTimer);
+    this.sockets.close();
     this.cdp.close();
     await this.rpc.close();
     await this.egress.close();
@@ -470,11 +525,26 @@ export class Operator {
     await this.journals.close();
   }
 
-  /** May a request get an admission now (PR 7, PR 9)? Only with the engine
-   *  heard within 5 s (plan §4.13), the exit open, and the buffer taking
-   *  writes (plan §4.3). */
+  /** May a request get an admission now (PR 7, PR 9, PR 10)? Only with the
+   *  engine heard within 5 s (plan §4.13), the exit open, and the buffer
+   *  taking writes (plan §4.3). */
   admissionsOpen(): boolean {
     return this.rpc.linkUp && this.egress.exitOpen && this.page.step === "exit_open" && !this.page.halted && this.buffer.refusal() === null;
+  }
+
+  /** Why `admissionsOpen` says no. */
+  #noAdmissionWhy(): string {
+    if (!this.rpc.linkUp) return "no engine link";
+    if (!this.egress.exitOpen) return "the exit is closed";
+    if (this.page.halted || this.page.step !== "exit_open") return `the page is not up (${this.page.halted ? "halted" : this.page.step})`;
+    return `the buffer takes no writes (${this.buffer.refusal() ?? "?"})`;
+  }
+
+  /** What runs in the page ends: Hub's requests, the socket's admissions
+   *  and connections (the exit is closed already). */
+  #endWork(note: string): void {
+    this.hub.endAll(note);
+    this.sockets.endAll(note);
   }
 
   get state(): State {
@@ -535,6 +605,14 @@ export class Operator {
         // The link may have gone during the replay or the cleanup; its loss
         // could not start another link while this one ran: link again.
         if (!this.cdp.linked) continue;
+        if (!this.#socketsRestarted) {
+          // What the holder kept of the site's socket from before is behind
+          // (dropped); the gap of this start and the end of the connections
+          // the buffer kept from before go in one commit, tried until
+          // durable (plan §4.4, step 6).
+          this.#socketsRestarted = true;
+          await this.sockets.afterRestart();
+        }
         return;
       }
     } finally {
@@ -548,7 +626,7 @@ export class Operator {
     const exitWasOpen = this.egress.exitOpen;
     const gate = this.egress.gate.state;
     this.egress.closeExit(`control lost: ${detail}`);
-    this.hub.endAll(`control lost: ${detail}`);
+    this.#endWork(`control lost: ${detail}`);
     if (!this.#controlExpected) {
       this.#log("control.closed", { detail });
       return;
@@ -584,7 +662,7 @@ export class Operator {
       if (run !== this.#run || this.#stopped) throw new Cancelled();
     };
     this.egress.closeExit("a start");
-    this.hub.endAll("a new start of the page");
+    this.#endWork("a new start of the page");
     this.#health.stop();
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
@@ -624,6 +702,10 @@ export class Operator {
       await this.#withChrome(async () => {
         check();
         this.control.reset();
+        this.guard.reset();
+        // A connection of the previous Chrome is gone (plan §4.4, step 6),
+        // and so is its holder.
+        await this.sockets.chromeStarting();
         this.#controlExpected = true;
         await this.chrome.start();
       });
@@ -755,7 +837,7 @@ export class Operator {
    *  the exit closed until the engine starts it. */
   async #stand(note: string): Promise<void> {
     this.egress.closeExit(note);
-    this.hub.endAll(note);
+    this.#endWork(note);
     this.#cancelRun();
     const run = this.#run;
     this.#clearRetry();
@@ -779,7 +861,7 @@ export class Operator {
    *  is tried again after the backoff. */
   async #fail(reason: StopReason, note: string): Promise<void> {
     this.egress.closeExit(note);
-    this.hub.endAll(note);
+    this.#endWork(note);
     if (this.page.halted || this.#stopped) return;
     this.#cancelRun();
     const run = this.#run;
@@ -802,7 +884,7 @@ export class Operator {
    *  quits as on a user's quit (its profile is written); `kill`: at once. */
   async #halt(reason: StopReason, note: string, how: "stop" | "kill"): Promise<void> {
     this.egress.closeExit(note);
-    this.hub.endAll(note);
+    this.#endWork(note);
     this.#cancelRun();
     const run = this.#run;
     this.#clearRetry();
@@ -859,7 +941,10 @@ export class Operator {
    *  none yet (PR 7) — the live session is learned from those to the API —
    *  and are failed, like whatever is not a self-test probe the self-test
    *  waits for, or the environment check's own page (answered here, never
-   *  sent). A response stage only a Hub request asked for. */
+   *  sent). The socket host serves sockets only: any other request there
+   *  could open a connection a later socket would ride without its own
+   *  tunnel and admission (stage 1, §3.2) — CDP never shows a socket's
+   *  handshake here. A response stage only a Hub request asked for. */
   #decide(request: PausedRequest): PausedDecision {
     if (request.stage === "response") return this.hub.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "a response stage nobody asked for" };
     const envPage = this.envCheck.onPaused(request);
@@ -869,7 +954,9 @@ export class Operator {
     if (probe === "fail") return { action: "fail", reason: "BlockedByClient", why: "a self-test probe that may not go on" };
     const hub = this.hub.decide(request);
     if (hub) return hub;
-    if (this.#classify(hostAndPath(request.url).host) === "api") this.hub.noteSiteRequest(request);
+    const cls = this.#classify(hostAndPath(request.url).host);
+    if (cls === "ws") return { action: "fail", reason: "BlockedByClient", why: "the socket host serves sockets only" };
+    if (cls === "api") this.hub.noteSiteRequest(request);
     return { action: "fail", reason: "BlockedByClient", why: "no admission: the site's requests have no admitting path yet" };
   }
 
@@ -912,6 +999,22 @@ export class Operator {
       // not the site
     }
     return origin === SITE_ORIGIN ? null : "the site is not loaded in the work tab";
+  }
+
+  /** The site's socket stops the page (ws/): a message the guard did not let
+   *  go — or that went past it — or a context the guard could not go into.
+   *  The exit closes now, in this turn; the page stands until the engine
+   *  starts it again (spec §2.6; stage 1, amendment 17). A socket that
+   *  could not be accounted for is a failure instead: Chrome goes with
+   *  whatever it holds of that socket, and the page starts again. */
+  #socketStop(reason: SocketStop, note: string, how: "stop" | "kill"): void {
+    this.egress.closeExit(note);
+    if (reason === "ws_unaccounted") {
+      void this.#fail(reason, note);
+      return;
+    }
+    if (this.page.halted && this.page.snapshot.stopReason === reason) return;
+    void this.#halt(reason, note, how);
   }
 
   /** A Hub request the operator cannot vouch for (hub-requests/): the exit
@@ -974,6 +1077,7 @@ export class Operator {
       restartBackoffMs: params.restartBackoffMs.filter((ms) => ms >= 10),
     };
     this.rpc.setTiming(this.#params.pingMs, this.#params.linkLossMs);
+    this.sockets.setAdmitWait(this.#params.siteAdmitWaitMs);
     this.page.setBackoff(this.#params.restartBackoffMs);
     this.control.networkBuffer = this.#params.chromeBodyBuffer;
     this.buffer.setParams(this.#params.bufferBatchMs, this.#params.bufferCap);
@@ -992,9 +1096,11 @@ export class Operator {
     if (this.#starting) this.#standing = this.#stand("a new owner of the page");
     await this.#standing;
     // The earlier owners' Hub requests: refused if not released, ended
-    // (their limits hold them to it) if they were.
+    // (their limits hold them to it) if they were. Their sockets whose
+    // handshake has not gone up never go.
+    this.sockets.quiesce(this.rpc.generation);
     await this.hub.quiesce(this.rpc.generation);
-    const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend].filter((send): send is { mono: number; wall: number } => send !== null);
+    const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend, this.sockets.lastHandshake].filter((send): send is { mono: number; wall: number } => send !== null);
     const last = sends.length === 0 ? null : sends.reduce((a, b) => (b.mono > a.mono ? b : a));
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
@@ -1122,6 +1228,7 @@ export class Operator {
   #onBufferOpened(): void {
     const snapshot = this.page.snapshot;
     this.#log("buffer.opened", { bufferId: this.buffer.id });
+    this.sockets.bufferOpened();
     if (snapshot.stopReason === "buffer_unavailable" && !this.#stopped) {
       if (snapshot.halted) this.page.stand("the buffer is open");
       else if (!this.#starting) void this.#launch(false, "the buffer is open");
@@ -1134,6 +1241,8 @@ export class Operator {
    *  that stopped for it starts again now, not at its next retry. */
   #onBufferRoom(reason: FullReason): void {
     const snapshot = this.page.snapshot;
+    // The socket's writes that waited for room go first.
+    this.sockets.retryNow();
     this.#sendState();
     if (this.#stopped || this.#starting || snapshot.halted) return;
     if (snapshot.stopReason !== "buffer_full" && snapshot.stopReason !== "disk_full") return;

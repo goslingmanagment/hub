@@ -61,6 +61,17 @@ export interface NewEventRow {
   bytes: number;
 }
 
+/** A change of a site socket's connection (schema.ts, v3). */
+export type ConnectionChange = { connectionId: string; admitted: { attemptId: number } } | { connectionId: string; opened: true } | { connectionId: string; gone: true };
+
+/** A site socket's connection as the buffer has it (v3). */
+export interface StoredConnection {
+  connectionId: string;
+  attemptId: number;
+  /** Its ws.open is in the stream. */
+  opened: boolean;
+}
+
 export interface NewOutcomeRow {
   attemptId: number;
   atWall: number;
@@ -94,6 +105,8 @@ export interface Commit {
   outcomes: NewOutcomeRow[];
   /** Steps of Hub attempts (schema.ts, v2). */
   marks?: AttemptMark[];
+  /** Changes of the site socket's connections, in order (v3). */
+  connections?: Array<ConnectionChange & { atWall: number }>;
   /** Delete the events up to this number (acknowledged), or nothing. */
   deleteEventsUpTo: number | null;
   /** Delete these outcomes (their resultAck came). */
@@ -166,6 +179,10 @@ function row(statement: StatementSync, ...params: Array<number | string | null>)
   return statement.get(...params) as Record<string, unknown> | undefined;
 }
 
+function connectionOf(found: Record<string, unknown>): StoredConnection {
+  return { connectionId: String(found.connection_id), attemptId: Number(found.attempt_id), opened: Number(found.opened) === 1 };
+}
+
 function numberOrNull(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
@@ -195,6 +212,10 @@ export class BufferStore {
   readonly #bodyIds: StatementSync;
   readonly #outcomeSeqSizes: StatementSync;
   readonly #outcomeSeqRange: StatementSync;
+  readonly #admitConnection: StatementSync;
+  readonly #openConnection: StatementSync;
+  readonly #dropConnection: StatementSync;
+  readonly #allConnections: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
   readonly #nowWall: () => number;
@@ -244,6 +265,10 @@ export class BufferStore {
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
       this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
       this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
+      this.#admitConnection = db.prepare("INSERT OR REPLACE INTO ws_connections (connection_id, attempt_id, opened, at_wall) VALUES (?, ?, 0, ?)");
+      this.#openConnection = db.prepare("UPDATE ws_connections SET opened = 1 WHERE connection_id = ?");
+      this.#dropConnection = db.prepare("DELETE FROM ws_connections WHERE connection_id = ?");
+      this.#allConnections = db.prepare("SELECT connection_id, attempt_id, opened FROM ws_connections ORDER BY at_wall, connection_id");
       this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes, seq) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?, ?)`);
       this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
       this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
@@ -322,6 +347,11 @@ export class BufferStore {
       if (lastOutcomeSeq !== this.#lastOutcomeSeq) this.#setMeta.run(String(lastOutcomeSeq), "last_outcome_seq");
       for (const mark of batch.marks ?? []) {
         this.#mark.run(mark.attemptId, mark.atWall, mark.step === "received" ? 0 : 1, mark.step === "released" ? 1 : 0);
+      }
+      for (const change of batch.connections ?? []) {
+        if ("admitted" in change) this.#admitConnection.run(change.connectionId, change.admitted.attemptId, change.atWall);
+        else if ("opened" in change) this.#openConnection.run(change.connectionId);
+        else this.#dropConnection.run(change.connectionId);
       }
       if (batch.deleteEventsUpTo !== null) {
         const gone = row(this.#sumUpTo, batch.deleteEventsUpTo);
@@ -431,6 +461,11 @@ export class BufferStore {
   /** Every body a stored outcome names (the rest of bodies/ goes). */
   bodyIds(): string[] {
     return (this.#bodyIds.all() as Array<{ body_id: string }>).map((found) => found.body_id);
+  }
+
+  /** Every connection kept, oldest first. */
+  connections(): StoredConnection[] {
+    return (this.#allConnections.all() as Array<Record<string, unknown>>).map(connectionOf);
   }
 
   /** Pages SQLite holds free (deleted rows), not yet given back. */

@@ -17,7 +17,7 @@ export const STEPS = [
 ] as const;
 export type Step = (typeof STEPS)[number];
 
-/** Spec §6.1's reasons, and three more, to be added there before an engine
+/** Spec §6.1's reasons, and five more, to be added there before an engine
  *  reads these:
  *  - `env_mismatch` (PR 5): the page's environment could not be handed to
  *    Chrome, or the browser does not show it (plan §4.1, step 2; spec §10);
@@ -29,7 +29,19 @@ export type Step = (typeof STEPS)[number];
  *    cancelled before its answer. Chrome may still hold it and write it in a
  *    later admission's window, which the gate cannot tell from that
  *    admission's own: the request dies with the browser (stage 1,
- *    amendments 23, 32; spec §9). */
+ *    amendments 23, 32; spec §9);
+ *  - `ws_guard_failed` (PR 10): the socket guard could not go into a context
+ *    of the page — it said so from inside, or it threw at a worker's start.
+ *    That context could send unchecked: the exit closes, Chrome goes at once,
+ *    and the page stands until the engine starts it again (stage 1,
+ *    amendment 17);
+ *  - `ws_unaccounted` (PR 10): a site socket the operator could not account
+ *    for — a handshake on its tunnel CDP did not show, a tunnel that ended
+ *    with CDP not telling its socket's end, a second handshake, frames of a
+ *    socket no tunnel was bound to: what CDP says later could be taken for
+ *    another socket's.
+ *    The tunnel is cut, the exit closes, Chrome goes, and the page starts
+ *    again (a failure); no socket is admitted until then. */
 export const STOP_REASONS = [
   "selftest_failed",
   "env_mismatch",
@@ -44,6 +56,8 @@ export const STOP_REASONS = [
   "request_unended",
   "chrome_crashed",
   "unknown_ws_message",
+  "ws_guard_failed",
+  "ws_unaccounted",
   "header_mismatch",
   "login_required",
   "owner_stop",

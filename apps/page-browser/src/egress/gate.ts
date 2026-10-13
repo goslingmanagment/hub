@@ -324,6 +324,13 @@ export class ApiGate {
  *  needed. The ServerHello may be split over several handshake records (RFC
  *  8446 §5.1): their payloads are joined until the whole message is there. */
 export function serverHelloIsTls13(bytes: Buffer): boolean | null | undefined {
+  const hello = readServerHello(bytes);
+  return hello === null || hello === undefined ? hello : hello.tls13;
+}
+
+/** The ServerHello's version and cipher suite (the socket gate measures
+ *  records by both); null and undefined as in serverHelloIsTls13. */
+export function readServerHello(bytes: Buffer): { tls13: boolean; cipherSuite: number } | null | undefined {
   const parts: Buffer[] = [];
   let p = 0;
   let joined = 0;
@@ -350,13 +357,14 @@ export function serverHelloIsTls13(bytes: Buffer): boolean | null | undefined {
   return bytes.length > 70_000 ? null : undefined;
 }
 
-function parseServerHello(body: Buffer): boolean | null {
+function parseServerHello(body: Buffer): { tls13: boolean; cipherSuite: number } | null {
   let p = 2 + 32; // legacy_version, random
   if (body.length < p + 1) return null;
   p += 1 + body[p]!; // legacy_session_id
+  if (p + 3 > body.length) return null;
+  const cipherSuite = body.readUInt16BE(p);
   p += 2 + 1; // cipher_suite, legacy_compression_method
-  if (p > body.length) return null;
-  if (p === body.length) return false; // no extensions: TLS 1.2 or older
+  if (p === body.length) return { tls13: false, cipherSuite }; // no extensions: TLS 1.2 or older
   if (p + 2 > body.length) return null;
   const extEnd = p + 2 + body.readUInt16BE(p);
   if (extEnd > body.length) return null;
@@ -365,8 +373,8 @@ function parseServerHello(body: Buffer): boolean | null {
     const type = body.readUInt16BE(p);
     const length = body.readUInt16BE(p + 2);
     if (p + 4 + length > extEnd) return null;
-    if (type === 0x002b) return length === 2 ? body.readUInt16BE(p + 4) === 0x0304 : null;
+    if (type === 0x002b) return length === 2 ? { tls13: body.readUInt16BE(p + 4) === 0x0304, cipherSuite } : null;
     p += 4 + length;
   }
-  return false;
+  return { tls13: false, cipherSuite };
 }

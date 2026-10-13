@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
 import { MAX_WAITING, REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
+import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
@@ -28,9 +29,13 @@ import {
   quiet,
   RawEngine,
   RPC_TOKEN,
+  SOCKET_FILL,
+  socketServer,
+  SocketTunnelClient,
   SOCKS_PASSWORD,
   SOCKS_USER,
   tempDir,
+  TLS13_OVERHEAD,
   tlsLikeServer,
   until,
   writeNetSelftest,
@@ -79,6 +84,7 @@ async function setUp(
     holderMaxBytes?: number;
     params?: Record<string, unknown>;
     buffer?: OperatorDeps["buffer"];
+    socketTimings?: OperatorDeps["socketTimings"];
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -131,6 +137,7 @@ async function setUp(
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
       ...(options.buffer ? { buffer: options.buffer } : {}),
+      ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
     });
     const ports = await operator.start();
@@ -574,6 +581,8 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.operator.page.snapshot.stopReason === "env_mismatch", 10_000, "the failure");
     expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", halted: false, retryAtWall: expect.any(Number) });
+    // The journal is written through a stream: its line may lag the state.
+    await until(() => journal(s.logDir, "states").some((line) => line.stopReason === "env_mismatch"), 3000, "the journal's line");
     const failure = journal(s.logDir, "states").find((line) => line.stopReason === "env_mismatch");
     expect(String(failure?.note)).toContain(reason);
     // The engine is told (its socket may still be delivering it).
@@ -685,35 +694,41 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     const s = await setUp();
     const bufferId = s.engine.last("helloResult")!.bufferId as string;
     expect(bufferId).toBe(s.operator.buffer.id);
+    // The operator's start is a gap in the socket's stream (PR 10).
+    await until(() => s.operator.buffer.lastSeq === 1, 3000, "the operator's start gap");
     for (let n = 1; n < 30; n++) s.operator.buffer.append(wsFrame(n));
     await durable(s.operator.buffer.append(wsFrame(30)));
     // state.buffer is real now.
     const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes > 0);
     expect(state.buffer).toEqual({ bytes: s.operator.buffer.stats().bytes, oldestAgeMs: expect.any(Number) });
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
-    await until(() => seqs(s.engine).length === 30, 5000, "30 events");
-    expect(seqs(s.engine)).toEqual(Array.from({ length: 30 }, (_, n) => n + 1));
-    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "ws.in", connectionId: "conn-1", atWall: expect.any(Number), atMono: expect.any(Number) });
-    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId, uptoSeq: 20 });
+    await until(() => seqs(s.engine).length === 31, 5000, "31 events");
+    expect(seqs(s.engine)).toEqual(Array.from({ length: 31 }, (_, n) => n + 1));
+    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", fromSeq: null, fromWall: null, reason: "operator_start" });
+    expect(eventsOf(s.engine)[1]).toMatchObject({ kind: "ws.in", connectionId: "conn-1", atWall: expect.any(Number), atMono: expect.any(Number) });
+    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId, uptoSeq: 21 });
     await until(() => s.operator.buffer.stats().events === 10, 3000, "the acknowledged events to go");
     // Live: a new event goes out once it is durable.
     s.operator.buffer.append(wsFrame(31));
-    await until(() => seqs(s.engine).includes(31), 3000, "event 31");
+    await until(() => seqs(s.engine).includes(32), 3000, "event 32");
     // The engine goes and comes back (a Hub deploy): from its last ack.
     const again = await reconnect(s);
-    again.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 20 });
+    again.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 21 });
     await until(() => seqs(again).length === 11, 5000, "the rest");
-    expect(seqs(again)).toEqual(Array.from({ length: 11 }, (_, n) => n + 21));
+    expect(seqs(again)).toEqual(Array.from({ length: 11 }, (_, n) => n + 22));
     // The late ack of a buffer from before the volume was made anew.
-    again.send({ type: "ack", ownerGeneration: 1, bufferId: "11111111-1111-4111-8111-111111111111", uptoSeq: 31 });
-    expect(await again.waitFor("events.refused")).toEqual({ type: "events.refused", of: "ack", reason: "foreign_buffer", bufferId, givenBufferId: "11111111-1111-4111-8111-111111111111", givenSeq: 31 });
+    again.send({ type: "ack", ownerGeneration: 1, bufferId: "11111111-1111-4111-8111-111111111111", uptoSeq: 32 });
+    expect(await again.waitFor("events.refused")).toEqual({ type: "events.refused", of: "ack", reason: "foreign_buffer", bufferId, givenBufferId: "11111111-1111-4111-8111-111111111111", givenSeq: 32 });
     await s.operator.buffer.flush();
     expect(s.operator.buffer.stats().events).toBe(11);
-    // A restarted operator keeps the buffer, its id and its numbers.
+    // A restarted operator keeps the buffer, its id and its numbers — and
+    // marks its own start in the stream, from the last event saved.
     await s.operator.stop();
     const next = await s.newOperator();
     expect(next.buffer.id).toBe(bufferId);
-    expect(next.buffer.lastSeq).toBe(31);
+    await until(() => next.buffer.lastSeq === 33, 3000, "the new operator's start gap");
+    const restartGap = JSON.parse(next.buffer.readEvents(32, 1, 1_000_000)[0]!.json) as Record<string, unknown>;
+    expect(restartGap).toMatchObject({ seq: 33, kind: "gap", fromSeq: 32, reason: "operator_start" });
   });
 
   it("sends an attempt's outcome once durable, again on every new connection until its resultAck; recover resends what it has", async () => {
@@ -770,8 +785,8 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
     await until(() => seqs(s.engine).includes(last), 5000, "the backlog");
     s.engine.send({ type: "ack", ownerGeneration: 1, bufferId: s.operator.buffer.id, uptoSeq: last });
-    await until(() => eventsOf(s.engine).some((event) => event.kind === "gap"), 5000, "the gap");
-    expect(eventsOf(s.engine).find((event) => event.kind === "gap")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
+    await until(() => eventsOf(s.engine).some((event) => event.kind === "gap" && event.reason === "buffer_full"), 5000, "the gap");
+    expect(eventsOf(s.engine).find((event) => event.kind === "gap" && event.reason === "buffer_full")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
     await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start again");
     expect(s.operator.admissionsOpen()).toBe(true);
   });
@@ -785,10 +800,15 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     expect(s.engine.of("alarm")).toContainEqual(expect.objectContaining({ kind: "buffer", detail: expect.objectContaining({ full: true, reason: "disk_full" }) }));
     free = 10_000;
     await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start");
-    expect(s.operator.buffer.lastSeq).toBe(1);
+    // The buffer's own gap, then the start's — refused while the disk was
+    // full, written once there was room, from its first boundary.
+    await until(() => s.operator.buffer.lastSeq === 2, 3000, "the start's gap");
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
-    await until(() => eventsOf(s.engine).length === 1, 3000, "the gap");
-    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" });
+    await until(() => eventsOf(s.engine).length === 2, 3000, "the gaps");
+    expect(eventsOf(s.engine)).toMatchObject([
+      { kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" },
+      { kind: "gap", seq: 2, fromSeq: null, fromWall: null, reason: "operator_start" },
+    ]);
   });
 });
 
@@ -1101,5 +1121,250 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     const s = await setUp();
     s.engine.send({ ...sendOf(s.engine, 1), kind: "document" });
     await until(() => s.engine.closed !== null, 3000, "the connection to close");
+  });
+});
+
+describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)", () => {
+  const URL_WS = "wss://wsv3.fansly.com/?v=3";
+  const TOKEN = "eyJ-operator-socket-token-1a2b3c4d";
+  const AUTH = JSON.stringify({ t: 1, d: JSON.stringify({ token: TOKEN, v: 3 }) });
+  const FRAME_SECRET = "operator-frame-marker-5e6f";
+
+  const SITE_TOKEN = "MTA4NDU4OTk3MjEyNjE2NzA0MDoxOjI6MjZhNjU0M2Q0YWZmYzQyOWNiZWE0OWRmYjFmNmI4";
+  const CLIENT_ID = "720167541418230011";
+
+  function bindingOf(s: SetUp): string {
+    return String(s.chrome.sent("Runtime.addBinding")[0]!.params.name);
+  }
+
+  /** The site's own API request with its session, as it stops in Fetch: the
+   *  operator learns the live session from it (a socket is admitted only
+   *  with one). */
+  async function siteSession(s: SetUp, tab: string): Promise<string> {
+    const headers = { authorization: SITE_TOKEN, "fansly-client-id": CLIENT_ID, "fansly-client-check": fanslyClientCheck("/api/v1/account/me", CLIENT_ID), "fansly-client-ts": String(Date.now()) };
+    s.model.pause("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", "GET", tab, "XHR", headers);
+    const fingerprint = sessionFingerprint(SITE_TOKEN, CLIENT_ID);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    return fingerprint;
+  }
+
+  /** The site's socket to the 101, the engine admitting it. */
+  async function socketOpened(s: SetUp, server: { received: () => Buffer }, tab: string, attemptId: number): Promise<{ client: SocketTunnelClient; connectionId: string }> {
+    s.chrome.event("Network.webSocketCreated", { requestId: `WS${attemptId}`, url: URL_WS }, tab);
+    const asked = s.engine.of("wsAdmit").length;
+    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
+    await until(() => s.engine.of("wsAdmit").length > asked, 5000, "the admission asked");
+    const ask = s.engine.of("wsAdmit").at(-1)!;
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId });
+    const client = await connecting;
+    expect(client.status).toBe(200);
+    await client.tls();
+    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000 }, tab);
+    const before = server.received().length;
+    client.request();
+    await until(() => server.received().subarray(before).includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
+    await client.answered();
+    return { client, connectionId: String(ask.connectionId) };
+  }
+
+  it("goes into every tab before it runs: Runtime, the binding, the guard as a script of every new document", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const ofTab = s.chrome.commands.filter((command) => command.sessionId === tab).map((command) => command.method);
+    const [runtime, binding, guard, run] = ["Runtime.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument", "Runtime.runIfWaitingForDebugger"].map((method) => ofTab.indexOf(method));
+    expect(runtime).toBeGreaterThanOrEqual(0);
+    expect(runtime).toBeLessThan(binding!);
+    expect(binding).toBeLessThan(guard!);
+    expect(guard).toBeLessThan(run!);
+    const script = s.chrome.commands.find((command) => command.sessionId === tab && command.method === "Page.addScriptToEvaluateOnNewDocument")!;
+    expect(script.params.runImmediately).toBe(true);
+    expect(String(script.params.source)).toContain("pbWsGuard(");
+    expect(String(script.params.source)).toContain(JSON.stringify(bindingOf(s)));
+    expect(bindingOf(s)).toMatch(/^pb[0-9a-f]{18}$/);
+  });
+
+  it("end to end: the CONNECT waits for wsAdmit, the admitted socket is a tunnel of its own, wsDone once durable, its frames to the engine in order; nothing secret in a log", async () => {
+    const s = await setUp();
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const fingerprint = await siteSession(s, tab);
+    s.chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, tab);
+    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
+    const ask = await s.engine.waitFor("wsAdmit");
+    expect(ask).toMatchObject({ url: URL_WS, context: "page", sessionFingerprint: fingerprint });
+    expect(s.socks.connects).not.toContain("wsv3.fansly.com:443");
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId: 4242 });
+    const client = await connecting;
+    expect(client.status).toBe(200);
+    await client.tls();
+    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, tab);
+    client.request();
+    await until(() => server.received().includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
+    // The authorization and a ping, as Chrome writes them: the socket gate lets them go.
+    await client.answered();
+    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    client.message(1, SOCKET_FILL.ping);
+    await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
+    s.chrome.event("Network.webSocketFrameSent", { requestId: "WS1", response: { opcode: 1, payloadData: AUTH } }, tab);
+    for (let n = 0; n < 5; n++) s.chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: JSON.stringify({ n, marker: FRAME_SECRET }) }) } }, tab);
+    const done = await s.engine.waitFor("wsDone");
+    expect(done).toEqual({ type: "wsDone", connectionId: ask.connectionId, attemptId: 4242, sent: true, sentMono: expect.any(Number), status: 101, error: null });
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    const events = () => s.engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
+    await until(() => events().length === 7, 5000, "7 events");
+    expect(events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.in", "ws.in", "ws.in", "ws.in"]);
+    expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: ask.connectionId, attemptId: 4242, sessionFingerprint: fingerprint });
+    // The outcome stays until the engine's resultAck.
+    s.engine.send({ type: "resultAck", ownerGeneration: 1, attemptId: 4242 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    await s.operator.journals.close();
+    const journals = readdirSync(s.logDir).map((name) => readFileSync(join(s.logDir, name), "utf8"));
+    expect(journal(s.logDir, "sockets").map((line) => line.event)).toEqual(["asked", "admitted", "open", "out"]);
+    expect(journal(s.logDir, "sockets")[3]).toMatchObject({ message: { kind: "auth", opcode: 1, bytes: AUTH.length } });
+    const everything = [...journals, ...s.lines].join("\n");
+    for (const secret of [TOKEN, SITE_TOKEN, FRAME_SECRET, "?v=3"]) expect(everything, secret).not.toContain(secret);
+    client.destroy();
+  });
+
+  it("a message from a context without the guard is held at the proxy: it never reaches Fansly, the page is killed, the alarm says where", async () => {
+    const s = await setUp();
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await siteSession(s, tab);
+    const { client } = await socketOpened(s, server, tab, 4500);
+    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    client.message(1, SOCKET_FILL.ping);
+    await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
+    // No guard report comes (Astra's exhausted-stack frame): only the bytes.
+    client.message(52, SOCKET_FILL.forbidden);
+    await until(() => s.operator.page.snapshot.stopReason === "unknown_ws_message", 5000, "the stop");
+    expect(server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(s.operator.page.halted).toBe(true);
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.control.calls.at(-1)).toBe("kill");
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "unknown_ws_message");
+    expect(alarm.detail).toMatchObject({ at: "proxy", left: false, recordBytes: TLS13_OVERHEAD + 58, why: "a message of no allowed size" });
+    await s.operator.journals.close();
+    expect(journal(s.logDir, "connections")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", result: `cut: the socket gate held a record of ${TLS13_OVERHEAD + 58} bytes (a message of no allowed size)` }));
+  });
+
+  it("without the engine (no ping for 5 s — 600 ms here) no new socket is admitted, and no wsAdmit is asked; what is open stays", async () => {
+    const s = await setUp();
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await siteSession(s, tab);
+    const { client: open } = await socketOpened(s, server, tab, 4300);
+    await s.engine.waitFor("wsDone");
+    s.engine.answerPings = false;
+    await until(() => !s.operator.rpc.linkUp, 3000, "the link to go");
+    s.chrome.event("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, tab);
+    const refused = await SocketTunnelClient.connect(s.model.proxyPort);
+    expect(refused.status).toBe(403);
+    expect(s.engine.of("wsAdmit")).toHaveLength(1);
+    // The journal's line is written asynchronously: wait for it, do not race it.
+    await until(() => journal(s.logDir, "connections").some((line) => line.result === "refused: socket not admitted (no engine link)"), 3000, "the refusal journaled");
+    expect(journal(s.logDir, "connections").at(-1)).toMatchObject({ host: "wsv3.fansly.com", refused: true, result: "refused: socket not admitted (no engine link)" });
+    // The open one: still a tunnel, its frames still kept.
+    expect(s.operator.sockets.openConnections).toBe(1);
+    s.chrome.event("Network.webSocketFrameReceived", { requestId: "WS4300", response: { opcode: 1, payloadData: '{"t":2,"d":"{}"}' } }, tab);
+    await until(() => s.operator.buffer.lastSeq === 3, 3000, "the frame kept");
+    expect(s.operator.egress.exitOpen).toBe(true);
+    open.destroy();
+  });
+
+  it("a message the guard did not let go stops the page: the exit closed, the stop held for the engine's restart, the alarm with no content", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const payload = JSON.stringify({ k: "blocked_send", form: "json", len: 58, msgType: 46001, keys: '["t","d"]', dKeys: '["chatRoomId"]', where: "https://fansly.com/messages" });
+    s.chrome.event("Runtime.bindingCalled", { name: bindingOf(s), payload, executionContextId: 3 }, tab);
+    await until(() => s.operator.page.snapshot.stopReason === "unknown_ws_message", 5000, "the stop");
+    expect(s.operator.page.halted).toBe(true);
+    expect(s.operator.egress.exitOpen).toBe(false);
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "unknown_ws_message");
+    expect(alarm.detail).toEqual({ form: "json", len: 58, msgType: 46001, keys: "t,d", dKeys: "chatRoomId", context: "page", where: "https://fansly.com/messages", left: false });
+    // Another name's call is not the guard's.
+    const before = s.engine.of("alarm").length;
+    s.chrome.event("Runtime.bindingCalled", { name: "notTheGuard", payload, executionContextId: 3 }, tab);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(s.engine.of("alarm")).toHaveLength(before);
+  });
+
+  it("a context the guard could not go into stops the page at once (ws_guard_failed)", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.chrome.event("Runtime.bindingCalled", { name: bindingOf(s), payload: JSON.stringify({ k: "guard_failed", why: "WebSocketStream stays", where: "" }), executionContextId: 3 }, tab);
+    await until(() => s.operator.page.snapshot.stopReason === "ws_guard_failed", 5000, "the stop");
+    expect(s.operator.page.halted).toBe(true);
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.control.calls.at(-1)).toBe("kill");
+  });
+
+  it("a request to the socket host that is not a socket is failed: no socket may ride its connection", async () => {
+    const s = await setUp();
+    await started(s);
+    const request = s.model.pause("https://wsv3.fansly.com/?v=3", "GET", s.operator.control.workTab!.sessionId, "Fetch");
+    await until(() => request.outcome === "failed", 3000, "the request to fail");
+    expect(request.failReason).toBe("BlockedByClient");
+    await s.operator.journals.close();
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", decision: "failed", result: "BlockedByClient: the socket host serves sockets only" }));
+  });
+
+  it("a socket that cannot be accounted for — a handshake on its tunnel CDP never shows — fails the page: the exit closed, Chrome started again, nothing reassigned", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [300] }, socketTimings: { bindWaitMs: 200 } });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await siteSession(s, tab);
+    s.chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, tab);
+    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
+    await until(() => s.engine.of("wsAdmit").length === 1, 5000, "the admission asked");
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: s.engine.of("wsAdmit")[0]!.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId: 4500 });
+    const client = await connecting;
+    expect(client.status).toBe(200);
+    await client.tls();
+    // The request goes up its tunnel; CDP never shows the handshake.
+    client.request();
+    await until(() => s.operator.page.snapshot.stopReason === "ws_unaccounted", 5000, "the failure");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.control.calls).toContain("kill");
+    expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
+    await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "exit_open", 10_000, "Chrome started again");
+    client.destroy();
+  });
+
+  it("a browser that goes under an open connection marks the gap — from its last event — then closes it in the stream", async () => {
+    const s = await setUp();
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await siteSession(s, tab);
+    const { client } = await socketOpened(s, server, tab, 4400);
+    await s.engine.waitFor("wsDone");
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.buffer.lastSeq === 4, 10_000, "the close and the gap");
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    const events = () => s.engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
+    await until(() => events().length === 4, 5000, "4 events");
+    expect(events().map((event) => (event.kind === "gap" ? `gap:${String(event.reason)}` : event.kind))).toEqual(["gap:operator_start", "ws.open", "gap:chrome_restart", "ws.close"]);
+    expect(events()[2]).toMatchObject({ fromSeq: 2, fromWall: events()[1]!.atWall });
+    client.destroy();
   });
 });

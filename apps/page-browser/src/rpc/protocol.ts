@@ -28,12 +28,40 @@
 //   one binary frame, the last. Headers of a response leave out
 //   `set-cookie`.
 //
+// - PR 10: no `wsAdmit` before the site's live session is known (its
+//   `sessionFingerprint` is never null from this operator): the socket gate
+//   lets the authorization go only at the live token's size. The stop
+//   reasons `ws_guard_failed` and `ws_unaccounted` (state/steps.ts).
+//   `wsAdmit` goes one socket at a time: a CONNECT that comes while the
+//   socket before it is not accounted for waits, and is asked once it is
+//   (its `waitDeadlineMono` counts from the CONNECT). `wsAdmit.url` and
+//   `context` are CDP's word on the oldest socket of the host still waiting
+//   to connect — a label: the CONNECT itself names only the host; the socket
+//   is bound to its admission at its handshake (ws/sockets.ts). A
+//   `wsAdmitResult` admits only on the connection it was asked on: an engine
+//   connection that changes or goes refuses every socket asked on it, and
+//   an admission that finds its socket gone gets `wsDone` with `sent:
+//   false`. Every connection that opened is closed in the stream exactly
+//   once, after its `ws.open`: by CDP's word, when the browser goes under it
+//   (after a `chrome_restart` gap, in one commit), or — by an operator that
+//   starts again, its Chrome gone — after its `operator_start` gap, in one
+//   commit. An admitted connection that never opened in the
+//   stream before such a restart gets `wsDone` with `fate: "unknown"` (an
+//   addition): whether its handshake went is not known — `sent` is false
+//   because nothing proves it went, `status` null; the engine takes it as
+//   it takes `recover`'s `unknown`. Frames that were not durable before a
+//   crash are not written afterwards (the holder's delivery of them is
+//   acknowledged and dropped): the gap covers them. `alarm.detail` of
+//   `unknown_ws_message` says where it was caught: `left: false` and `at:
+//   "proxy"` for a record the socket gate held, `left: true` for one CDP
+//   says left.
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
-// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, and a
-// Hub request's (PR 9): `send`, `checkResult`. The other kinds of command
-// are refused as not supported yet, and the other messages of the engine
-// come with the PRs that implement them (siteAdmit — PR 7, wsAdmit — PR 10).
+// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
+// Hub request's (PR 9): `send`, `checkResult`, and the site socket's (PR
+// 10): `wsAdmitResult`. The other kinds of command are refused as not
+// supported yet, and `siteAdmitResult` comes with PR 7.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
@@ -287,6 +315,9 @@ export interface WsDone {
   sentMono: MonoMs | null;
   status: number | null;
   error: string | null;
+  /** An addition (PR 10): the operator started again after the admission,
+   *  and nothing tells whether the handshake went. */
+  fate?: "unknown";
 }
 // ── the event stream (plan §4.4; PR 11) ──
 export interface EventsSubscribe extends FromEngine {
@@ -407,13 +438,13 @@ export type OperatorToEngine =
 export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
 
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult;
 
 /** A Hub request's messages (PR 9). */
 export type HubMessage = Send | CheckResult;
 
 /** Types of the protocol that later PRs implement. */
-const LATER_TYPES = new Set(["siteAdmitResult", "wsAdmitResult"]);
+const LATER_TYPES = new Set(["siteAdmitResult"]);
 
 /** A recover names at most this many attempts. */
 const MAX_RECOVER = 10_000;
@@ -567,6 +598,18 @@ function parseCheckResult(m: Record<string, unknown>): CheckResult {
   return { ...base, admit: false, reason: reason as Refusal };
 }
 
+const CONNECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function parseWsAdmitResult(m: Record<string, unknown>): WsAdmitResult {
+  const connectionId = str(m.connectionId, "connectionId", 64);
+  if (!CONNECTION_ID.test(connectionId)) throw new Invalid("connectionId is not a UUID");
+  const base = { type: "wsAdmitResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), connectionId };
+  if (m.admit === true) return { ...base, admit: true, deadlineMono: num(m.deadlineMono, "deadlineMono"), attemptId: int(m.attemptId, "attemptId", 1) };
+  if (m.admit !== false) throw new Invalid("admit is not a boolean");
+  const retry = m.retryNotBeforeWall === null ? null : num(m.retryNotBeforeWall, "retryNotBeforeWall");
+  return { ...base, admit: false, reason: str(m.reason, "reason", 128), retryNotBeforeWall: retry };
+}
+
 function parseBufferMessage(type: BufferMessage["type"], m: Record<string, unknown>): BufferMessage {
   const ownerGeneration = int(m.ownerGeneration, "ownerGeneration");
   switch (type) {
@@ -617,6 +660,8 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: parseSend(m) };
       case "checkResult":
         return { ok: true, message: parseCheckResult(m) };
+      case "wsAdmitResult":
+        return { ok: true, message: parseWsAdmitResult(m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }

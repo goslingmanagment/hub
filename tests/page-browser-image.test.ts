@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isBuiltin, stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import vm from "node:vm";
 
 import { describe, expect, it } from "vitest";
 
@@ -152,13 +153,26 @@ describe("the operator's code (apps/page-browser/src)", () => {
       const full = path.join(dir, name);
       return statSync(full).isDirectory() ? files(full) : [full];
     });
-  const sources = files(src);
+  // What Chrome runs in the page (plan §3.3, inpage/): plain JavaScript,
+  // not the operator's code.
+  const inpage = path.join(src, "inpage") + path.sep;
+  const sources = files(src).filter((file) => !file.startsWith(inpage));
 
   it("is TypeScript Node runs as it is: erasable syntax only", () => {
     expect(sources.length).toBeGreaterThan(20);
     for (const file of sources) {
       expect(file.endsWith(".ts"), file).toBe(true);
       expect(() => stripTypeScriptTypes(readFileSync(file, "utf8")), path.relative(root, file)).not.toThrow();
+    }
+  });
+
+  it("keeps the page's own scripts as plain JavaScript a page runs as a classic script, with nothing to import", () => {
+    const scripts = files(src).filter((file) => file.startsWith(inpage));
+    expect(scripts.map((file) => path.relative(src, file))).toEqual([path.join("inpage", "ws-guard.js")]);
+    for (const file of scripts) {
+      const text = readFileSync(file, "utf8");
+      expect(() => new vm.Script(text, { filename: file }), path.relative(root, file)).not.toThrow();
+      expect(text, path.relative(root, file)).not.toMatch(/^\s*(import|export)\s/m);
     }
   });
 
