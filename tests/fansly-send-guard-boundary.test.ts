@@ -52,16 +52,22 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     expect(matching(origins)).toEqual(Object.keys(SANCTIONED_FANSLY_ORIGIN_FILES).sort());
   });
 
-  it("opens a WebSocket only in the socket helper, its Upgrade on a send lease", () => {
+  it("opens a Fansly WebSocket only in the socket helper, its Upgrade on a send lease; the other socket is the operator's RPC", () => {
     const sockets = matching(/new WebSocket\(/);
     expect(sockets).toEqual([
       "apps/runtime/src/services/egress/fansly-receiver-socket.ts",
+      // Project Browser (PR 12): the engine's link to a page's operator on
+      // pb-control — never Fansly (`ws:` to `<container>:7700/rpc` only); a
+      // Fansly request through it is the operator's, released only on the
+      // engine's grant (I13).
+      "apps/runtime/src/services/egress/page-browser-rpc.ts",
     ]);
-    for (const file of sockets) {
-      const text = read(file);
-      expect(text, file).toMatch(/lease: FanslySendLease/);
-      expect(text, file).toContain("bindFanslyUpgradeLease(lease, ");
-    }
+    const receiver = read("apps/runtime/src/services/egress/fansly-receiver-socket.ts");
+    expect(receiver).toMatch(/lease: FanslySendLease/);
+    expect(receiver).toContain("bindFanslyUpgradeLease(lease, ");
+    const rpc = read("apps/runtime/src/services/egress/page-browser-rpc.ts");
+    expect(rpc).toContain('if (url.protocol !== "ws:" || url.pathname !== "/rpc" || url.username !== "" || url.password !== "") {');
+    expect(rpc).toContain("socket = new WebSocket(this.#o.url, { dispatcher: agent });");
   });
 
   it("sends a Fansly HTTP request only through the wire layer's single-request send, under its check", () => {
