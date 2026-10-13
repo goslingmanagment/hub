@@ -27,6 +27,14 @@ export interface CdpEvent {
 
 export type EventHandler = (event: CdpEvent) => void;
 
+/** What the request paths need of the client: commands, events, and the
+ *  holder's acknowledgements (tests give an in-process Chrome instead). */
+export interface CdpPort {
+  send<T = Record<string, unknown>>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T>;
+  on(method: string, handler: EventHandler): void;
+  ack(seq: number): void;
+}
+
 export class CdpError extends Error {
   readonly code: number;
   readonly method: string;
@@ -71,7 +79,7 @@ export interface CdpOptions {
   log?: Logger;
 }
 
-export class Cdp {
+export class Cdp implements CdpPort {
   readonly #options: CdpOptions;
   readonly #log: Logger;
   #socket: Socket | null = null;

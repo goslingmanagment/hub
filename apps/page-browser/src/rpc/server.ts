@@ -16,7 +16,11 @@
 //   is not executed.
 // - The buffer's messages (events.subscribe, ack, resultAck, recover) go to
 //   the operator (buffer/); an event batch is sent as the buffer stored it
-//   (`sendRaw`), not parsed and serialized again. What is sent in bulk (the
+//   (`sendRaw`), not parsed and serialized again. A Hub request's messages
+//   (send, checkResult) go to the operator too (hub-requests/); a `send` of
+//   an earlier generation as well, so that it is answered (refused), never
+//   carried out. A body goes as binary frames (`sendBinary`) before the JSON
+//   that names it (plan §4.13). What is sent in bulk (the
 //   outcomes replayed, buffer/replay.ts) waits for the socket: `backlog`
 //   and `drained`, for the connection of one `epoch`. A wait ends when the
 //   connection changes too: work for a superseded connection must not hang
@@ -31,7 +35,7 @@ import type { Duplex } from "node:stream";
 
 import { CommandLedger, type CommandOutcome } from "./ledger.ts";
 import type { GenerationStore } from "./generation.ts";
-import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type OperatorToEngine, type State } from "./protocol.ts";
+import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type HubMessage, type OperatorToEngine, type State } from "./protocol.ts";
 import { acceptWebSocket, type WsConnection } from "../shared/ws.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
 
@@ -46,6 +50,10 @@ export interface RpcHandlers {
   /** The buffer's messages (PR 11): events.subscribe, ack, resultAck,
    *  recover — of this connection's generation. */
   onBuffer: (message: BufferMessage) => void;
+  /** A Hub request's messages (PR 9): `send` — of this connection's
+   *  generation or an earlier one (the operator refuses that) — and
+   *  `checkResult` of this connection's generation. */
+  onHub?: (message: HubMessage) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
 }
@@ -193,6 +201,15 @@ export class RpcServer {
     const conn = this.#active;
     if (!conn || conn.ws.closed) return false;
     conn.ws.sendText(json);
+    return true;
+  }
+
+  /** A binary frame (a body's part, plan §4.13): true when an engine is
+   *  connected to take it — queued, maybe not written yet. */
+  sendBinary(frame: Buffer): boolean {
+    const conn = this.#active;
+    if (!conn || conn.ws.closed) return false;
+    conn.ws.sendBinary(frame);
     return true;
   }
 
@@ -363,6 +380,8 @@ export class RpcServer {
       if (message.ownerGeneration > conn.generation) return this.#protocolError(conn, "a new generation without a hello");
       this.#log("message.stale", { type: message.type, generation: message.ownerGeneration, current: conn.generation });
       if (message.type === "command") conn.ws.sendText(JSON.stringify({ type: "commandResult", commandId: message.commandId, ok: false, detail: "generation_stale" }));
+      // Answered with its refusal (hub-requests/), never carried out.
+      if (message.type === "send") this.#options.handlers.onHub?.(message);
       return;
     }
     switch (message.type) {
@@ -383,6 +402,11 @@ export class RpcServer {
       case "recover":
         this.#lastHeard = monoMs();
         this.#options.handlers.onBuffer(message);
+        return;
+      case "send":
+      case "checkResult":
+        this.#lastHeard = monoMs();
+        this.#options.handlers.onHub?.(message);
         return;
     }
   }

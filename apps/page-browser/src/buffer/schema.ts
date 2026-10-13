@@ -64,7 +64,44 @@ CREATE TABLE outcomes (
 CREATE INDEX outcomes_by_age ON outcomes (at_wall);
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, readableFrom: 1, up: (db) => db.exec(V1) }];
+/** Version 2 (PR 9): Hub requests.
+ *  - outcomes.body_id, body_bytes: the body a result names (BodyRef), a
+ *    file of the buffer volume's bodies/ directory (bodies.ts); its bytes
+ *    count in the outcome's `bytes`, and so in the caps.
+ *  - outcomes.seq: the order outcomes were stored in (meta
+ *    `last_outcome_seq`), so their delivery follows the file with a cursor
+ *    (replay.ts), not a queue in memory; outcomes from before take their
+ *    attempt id (unique, and below every later number).
+ *  - hub_attempts: what the operator did with each Hub attempt it was sent
+ *    — received, the request issued in the page, released to the network,
+ *    its outcome acknowledged — written before the step it stands for. A
+ *    repeated `send` does nothing twice, across restarts too, and `recover`
+ *    can say `not_sent` of a request that was never released (plan §3.2,
+ *    §4.13). Rows outlive their outcome's resultAck by a day; nothing
+ *    stays longer than a week.
+ *  Readable from 2: an older operator would send results naming bodies it
+ *  cannot deliver, and never delete their files. */
+const V2 = `
+ALTER TABLE outcomes ADD COLUMN body_id TEXT;
+ALTER TABLE outcomes ADD COLUMN body_bytes INTEGER;
+ALTER TABLE outcomes ADD COLUMN seq INTEGER;
+UPDATE outcomes SET seq = attempt_id;
+CREATE UNIQUE INDEX outcomes_by_seq ON outcomes (seq);
+INSERT OR REPLACE INTO meta (key, value) SELECT 'last_outcome_seq', CAST(coalesce(max(attempt_id), 0) AS TEXT) FROM outcomes;
+CREATE TABLE hub_attempts (
+  attempt_id INTEGER PRIMARY KEY,
+  at_wall INTEGER NOT NULL,
+  issued INTEGER NOT NULL,
+  released INTEGER NOT NULL,
+  acked INTEGER NOT NULL
+) STRICT;
+CREATE INDEX hub_attempts_by_age ON hub_attempts (at_wall);
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, readableFrom: 1, up: (db) => db.exec(V1) },
+  { version: 2, readableFrom: 2, up: (db) => db.exec(V2) },
+];
 
 /** The format of a row's `json` this operator writes. */
 export const ROW_FORMAT = 1;

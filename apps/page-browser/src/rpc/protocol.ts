@@ -21,12 +21,27 @@
 //   ("" if none is known), and the engine subscribes again once `state` no
 //   longer says `buffer_unavailable`.
 //
+// - PR 9: `result.outcome.preflight` (response only, optional): the answer
+//   is the CORS preflight's — the request itself never left (a 429 to the
+//   preflight is a 429 of its operation, owner decision №1). The stop
+//   reason `request_unended` (state/steps.ts). A body of 0 bytes is still
+//   one binary frame, the last. Headers of a response leave out
+//   `set-cookie`.
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
-// openExit, stopPage, restartBrowser, selfTest — PR 4) and the buffer's
-// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`. The
-// other kinds of command are refused as not supported yet, and the other
-// messages of the engine come with the PRs that implement them (send/check —
-// PR 9, siteAdmit — PR 7, wsAdmit — PR 10).
+// openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
+// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, and a
+// Hub request's (PR 9): `send`, `checkResult`. The other kinds of command
+// are refused as not supported yet, and the other messages of the engine
+// come with the PRs that implement them (siteAdmit — PR 7, wsAdmit — PR 10).
+//
+// Bodies (BodyRef) go as binary frames before the JSON that names them:
+// 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
+// big-endian), 1 byte of flag — 0 more to come, 1 the last part — then up
+// to 1 MiB of the body. Additions to spec §6.1 (PR 9): part 0 starts a
+// body anew (a body is sent again on every delivery); the flag 2, with no
+// data, abandons the body — the parts of it sent before are void (a part
+// that could not be read), and no JSON names it.
 
 import { isIP } from "node:net";
 
@@ -73,6 +88,9 @@ export interface FromEngine {
 export interface OperatorParams {
   pingMs: number;
   linkLossMs: number;
+  /** Taken, not used: a Hub request is never cancelled from the page before
+   *  its deadline — the gate holds the deadline (spec §8.2, §9; stage 1,
+   *  amendment 22). */
   cancelMarginMs: number;
   siteAdmitWaitMs: number;
   siteRequestLimitMs: number;
@@ -196,6 +214,9 @@ export interface Result {
         sentMono: MonoMs | null;
         sendMark: "transport_reported" | "completion_fallback";
         bodyOverflow?: boolean;
+        /** An addition (PR 9): the status and headers are the CORS
+         *  preflight's; the request itself never left. */
+        preflight?: boolean;
       }
     | { kind: "transport_error" | "timeout"; sent: boolean; message: string }
     | { kind: "aborted_before_send"; refusal: Refusal };
@@ -386,10 +407,13 @@ export type OperatorToEngine =
 export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
 
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage;
+
+/** A Hub request's messages (PR 9). */
+export type HubMessage = Send | CheckResult;
 
 /** Types of the protocol that later PRs implement. */
-const LATER_TYPES = new Set(["send", "checkResult", "siteAdmitResult", "wsAdmitResult"]);
+const LATER_TYPES = new Set(["siteAdmitResult", "wsAdmitResult"]);
 
 /** A recover names at most this many attempts. */
 const MAX_RECOVER = 10_000;
@@ -488,6 +512,61 @@ function parseCommand(m: Record<string, unknown>): Command {
   return { ...base, command: { kind: kind as CommandKind } };
 }
 
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+/** An HTTP header name (RFC 9110 token). */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const REFUSALS = new Set<string>(["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch"]);
+/** A send names at most this many headers of its route. */
+const MAX_SEND_HEADERS = 64;
+
+function sha256Hex(value: unknown, what: string): string {
+  const text = str(value, what, 64);
+  if (!SHA256_HEX.test(text)) throw new Invalid(`${what} is not a sha256 in hex`);
+  return text;
+}
+
+function parseSend(m: Record<string, unknown>): Send {
+  if (m.method !== "GET") throw new Invalid("method is not GET");
+  const kind = str(m.kind, "kind", 16);
+  if (kind !== "api" && kind !== "image" && kind !== "video") throw new Invalid(`an unknown kind ${kind}`);
+  const rawHeaders = record(m.headers, "headers");
+  const entries = Object.entries(rawHeaders);
+  if (entries.length > MAX_SEND_HEADERS) throw new Invalid(`headers has more than ${MAX_SEND_HEADERS} names`);
+  const headers: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    if (name.length > 128 || !HEADER_NAME.test(name)) throw new Invalid("a header name that is not a token");
+    const text = str(value, "a header value", 8192);
+    if (/[\r\n\0]/.test(text)) throw new Invalid("a header value with a line break");
+    headers[name] = text;
+  }
+  const route = str(m.route, "route", 128);
+  if (route === "") throw new Invalid("an empty route");
+  return {
+    type: "send",
+    ownerGeneration: int(m.ownerGeneration, "ownerGeneration"),
+    attemptId: int(m.attemptId, "attemptId", 1),
+    route,
+    credentialsGeneration: sha256Hex(m.credentialsGeneration, "credentialsGeneration"),
+    sessionFingerprint: sha256Hex(m.sessionFingerprint, "sessionFingerprint"),
+    method: "GET",
+    url: str(m.url, "url", 16_384),
+    headers,
+    kind,
+    maxBodyBytes: int(m.maxBodyBytes, "maxBodyBytes"),
+    sendDeadlineMono: num(m.sendDeadlineMono, "sendDeadlineMono"),
+    requestDeadlineMono: num(m.requestDeadlineMono, "requestDeadlineMono"),
+  };
+}
+
+function parseCheckResult(m: Record<string, unknown>): CheckResult {
+  const base = { type: "checkResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), attemptId: int(m.attemptId, "attemptId", 1) };
+  if (m.admit === true) return { ...base, admit: true, deadlineMono: num(m.deadlineMono, "deadlineMono") };
+  if (m.admit !== false) throw new Invalid("admit is not a boolean");
+  const reason = str(m.reason, "reason", 64);
+  if (!REFUSALS.has(reason)) throw new Invalid(`an unknown refusal ${reason}`);
+  return { ...base, admit: false, reason: reason as Refusal };
+}
+
 function parseBufferMessage(type: BufferMessage["type"], m: Record<string, unknown>): BufferMessage {
   const ownerGeneration = int(m.ownerGeneration, "ownerGeneration");
   switch (type) {
@@ -534,6 +613,10 @@ export function parseEngineValue(value: unknown): Parsed {
       case "resultAck":
       case "recover":
         return { ok: true, message: parseBufferMessage(type, m) };
+      case "send":
+        return { ok: true, message: parseSend(m) };
+      case "checkResult":
+        return { ok: true, message: parseCheckResult(m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }
@@ -541,4 +624,40 @@ export function parseEngineValue(value: unknown): Parsed {
     if (error instanceof Invalid) return { ok: false, error: error.message };
     throw error;
   }
+}
+
+// ── bodies (plan §4.13: binary frames with a reference to their id) ──
+
+/** The most of a body one frame carries. */
+export const BODY_PART_BYTES = 1024 * 1024;
+const BODY_FRAME_HEAD = 16 + 4 + 1;
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** One frame of a body: its id, the part's number, whether it is the last,
+ *  and up to 1 MiB of the body. */
+export function encodeBodyFrame(bodyId: BodyId, part: number, last: boolean, data: Buffer): Buffer {
+  if (!UUID_TEXT.test(bodyId)) throw new Error("a body id that is not a UUID");
+  if (data.length > BODY_PART_BYTES) throw new Error(`a body part of ${data.length} bytes`);
+  const frame = Buffer.allocUnsafe(BODY_FRAME_HEAD + data.length);
+  Buffer.from(bodyId.replaceAll("-", ""), "hex").copy(frame, 0);
+  frame.writeUInt32BE(part, 16);
+  frame[20] = last ? 1 : 0;
+  data.copy(frame, BODY_FRAME_HEAD);
+  return frame;
+}
+
+/** The frame that abandons a body whose transmission failed after
+ *  `part` parts: those parts are void. */
+export function encodeBodyAbandon(bodyId: BodyId, part: number): Buffer {
+  const frame = encodeBodyFrame(bodyId, part, false, Buffer.alloc(0));
+  frame[20] = 2;
+  return frame;
+}
+
+/** The engine's side of `encodeBodyFrame` (tests, tools). */
+export function decodeBodyFrame(frame: Buffer): { bodyId: BodyId; part: number; last: boolean; abandoned: boolean; data: Buffer } {
+  if (frame.length < BODY_FRAME_HEAD) throw new Error("a body frame shorter than its head");
+  const hex = frame.subarray(0, 16).toString("hex");
+  const bodyId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return { bodyId, part: frame.readUInt32BE(16), last: frame[20] === 1, abandoned: frame[20] === 2, data: frame.subarray(BODY_FRAME_HEAD) };
 }

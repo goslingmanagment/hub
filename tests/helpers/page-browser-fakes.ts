@@ -6,9 +6,13 @@ import { join } from "node:path";
 import type { Duplex } from "node:stream";
 
 import type { EventBody } from "../../apps/page-browser/src/buffer/buffer.ts";
+import { CdpError, CdpUnanswered, type CdpEvent, type CdpPort, type EventHandler } from "../../apps/page-browser/src/cdp/client.ts";
+import type { ApiGate } from "../../apps/page-browser/src/egress/gate.ts";
+import { ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
 import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
+import { monoMs } from "../../apps/page-browser/src/shared/util.ts";
 import { acceptWebSocket, clientHandshake, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
 
 // Fakes for the page browser's unit tests (Project Browser plan §3.3:
@@ -372,22 +376,36 @@ export function proxyConnect(proxyPort: number, target: string): Promise<{ statu
 /** The engine's end of the RPC. */
 export class FakeEngine {
   readonly messages: Array<Record<string, unknown>> = [];
+  /** Binary frames (bodies' parts), in order. */
+  readonly frames: Buffer[] = [];
+  /** Every message's type in order, "binary" for a frame. */
+  readonly order: string[] = [];
   ws: WebSocket | null = null;
   closed: { code: number } | null = null;
   answerPings = true;
+  /** Every JSON message as it comes (an engine that answers checks). */
+  onMessage: (message: Record<string, unknown>) => void = () => undefined;
 
   connect(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`);
+      ws.binaryType = "arraybuffer";
       this.ws = ws;
       this.closed = null;
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error("the RPC connection failed"));
       ws.onclose = (event) => (this.closed = { code: event.code });
       ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          this.frames.push(Buffer.from(event.data));
+          this.order.push("binary");
+          return;
+        }
         const message = JSON.parse(String(event.data)) as Record<string, unknown>;
         this.messages.push(message);
+        this.order.push(String(message.type));
         if (message.type === "ping" && this.answerPings) this.send({ type: "pong", n: message.n, ownerGeneration: this.generation });
+        this.onMessage(message);
       };
     });
   }
@@ -661,14 +679,38 @@ export class BrowserModel {
     chrome.handlers.set("Page.createIsolatedWorld", () => ({ executionContextId: ++this.#contexts }));
     chrome.handlers.set("Runtime.evaluate", (command) => ({ result: { type: "object", value: this.#evaluate(String(command.params.expression ?? ""), command.sessionId) } }));
     chrome.handlers.set("Runtime.callFunctionOn", (command) => {
+      if (command.params.functionDeclaration === RELEASE) return { result: { type: "boolean", value: true } };
+      if (command.params.functionDeclaration === ISSUE) {
+        const [attemptId, url, , headers] = (command.params.arguments as Array<{ value: unknown }>).map((arg) => arg.value) as [number, string, string, Array<[string, string]>];
+        setTimeout(() => this.#hubStart(attemptId, url, headers, command.sessionId), 0);
+        return { result: { type: "boolean", value: true } };
+      }
       const args = command.params.arguments as Array<{ value: string }>;
       const [url, method] = [args[0]!.value, args[1]!.value];
       this.#fetch(url, method, command.sessionId);
       return { result: { type: "boolean", value: true } };
     });
     chrome.handlers.set("Fetch.continueRequest", (command) => {
+      const hub = this.hubRequests.find((request) => request.interceptionId === command.params.requestId && request.outcome === "paused");
+      if (hub) {
+        hub.outcome = "continued";
+        hub.url = String(command.params.url ?? hub.url);
+        void this.#hubContinue(hub);
+        return {};
+      }
       const request = this.#byInterception(String(command.params.requestId));
       if (request) void this.#continue(request);
+      return {};
+    });
+    chrome.handlers.set("Network.streamResourceContent", (command) => {
+      const hub = this.hubRequests.find((request) => request.networkId === command.params.requestId);
+      if (hub) hub.streamed = true;
+      return { bufferedData: "" };
+    });
+    chrome.handlers.set("Fetch.continueResponse", (command) => {
+      const hub = this.hubRequests.find((request) => request.interceptionId === command.params.requestId);
+      if (!hub) return { error: { code: -32602, message: "Invalid InterceptionId." } };
+      setTimeout(() => this.#hubBodyGoes(hub), 0);
       return {};
     });
     chrome.handlers.set("Fetch.fulfillRequest", (command) => {
@@ -712,21 +754,32 @@ export class BrowserModel {
   }
 
   /** A request of the page itself pauses in Fetch (the site, a worker...). */
-  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch"): ModelRequest {
+  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
     const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused" };
     this.requests.push(request);
-    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, method } }, sessionId);
+    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method } }, sessionId);
     this.chrome.event("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,
-      request: { url: request.url, urlFragment: request.fragment, method, headers: {} },
+      request: { url: request.url, urlFragment: request.fragment, method, headers },
       resourceType,
       frameId: `F-${sessionId}`,
     });
     return request;
   }
+
+  /** The tab's main frame commits a document at `url` (no request: the
+   *  site's own load is a later PR's; this only moves the tab there). */
+  navigate(sessionId: string, url: string): void {
+    this.chrome.event("Page.frameNavigated", { frame: { id: `F-${sessionId}`, url, loaderId: `L${++this.#requests}` } }, sessionId);
+  }
+
+  /** Hub's requests this browser ran: the body they get, and what
+   *  happened to each. */
+  hubBody: Buffer = Buffer.from('{"success":true,"response":{"id":"1"}}');
+  readonly hubRequests: Array<ModelRequest & { attemptId: number; headers: Array<[string, string]>; socket: Socket | null; streamed: boolean }> = [];
 
   #navigate(tab: ModelTarget): void {
     this.pause(tab.url, "GET", tab.sessionId, "Document");
@@ -760,6 +813,67 @@ export class BrowserModel {
     return 1;
   }
 
+  #hubStart(attemptId: number, issued: string, headers: Array<[string, string]>, sessionId: string | undefined): void {
+    const n = ++this.#requests;
+    const [bare, fragment = ""] = issued.split("#");
+    const request = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: `#${fragment}`, method: "GET", sessionId, outcome: "paused" as const, attemptId, headers, socket: null, streamed: false };
+    this.hubRequests.push(request);
+    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method: "GET" }, initiator: { type: "script" } }, sessionId);
+    this.chrome.event("Fetch.requestPaused", {
+      requestId: request.interceptionId,
+      networkId: request.networkId,
+      request: { url: request.url, urlFragment: request.fragment, method: "GET", headers: Object.fromEntries(headers) },
+      resourceType: "XHR",
+      frameId: `F-${sessionId ?? ""}`,
+    });
+  }
+
+  /** Released: a tunnel through the operator's proxy to the API host, a TLS
+   *  1.3 connection's records (its Finished, the HTTP/2 preface) and the
+   *  request's HEADERS — what the gate decides on — then its answer stops
+   *  at its headers. */
+  async #hubContinue(request: (typeof this.hubRequests)[number]): Promise<void> {
+    const { status, socket } = await proxyConnect(this.proxyPort, `${new URL(request.url).hostname}:443`);
+    request.proxyStatus = status;
+    if (status !== 200) {
+      socket.destroy();
+      this.chrome.event("Network.loadingFailed", { requestId: request.networkId, errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" }, request.sessionId);
+      return;
+    }
+    request.socket = socket;
+    socket.on("error", () => undefined);
+    await new Promise<void>((resolve) => {
+      socket.once("data", () => resolve());
+      socket.resume();
+    });
+    const record = (type: number, size: number) => Buffer.concat([Buffer.from([type, 0x03, 0x03, (size - 5) >> 8, (size - 5) & 0xff]), Buffer.alloc(size - 5, 0xab)]);
+    socket.write(Buffer.concat([record(22, 300), record(23, 58), record(23, 70), record(23, 90)]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    this.chrome.event("Network.requestWillBeSentExtraInfo", { requestId: request.networkId, headers: Object.fromEntries(request.headers.map(([name, value]) => [name.toLowerCase(), value])) }, request.sessionId);
+    this.chrome.event("Fetch.requestPaused", {
+      requestId: request.interceptionId,
+      networkId: request.networkId,
+      request: { url: request.url, method: "GET", headers: {} },
+      resourceType: "XHR",
+      responseStatusCode: 200,
+      responseStatusText: "OK",
+      responseHeaders: [
+        { name: "content-type", value: "application/json" },
+        { name: "content-length", value: String(this.hubBody.length) },
+        { name: "set-cookie", value: "sid=model-cookie-secret" },
+      ],
+    });
+  }
+
+  #hubBodyGoes(request: (typeof this.hubRequests)[number]): void {
+    const session = request.sessionId;
+    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: { requestTime: 777.125, sendStart: 1.5 }, connectionReused: false } }, session);
+    this.chrome.event("Network.responseReceivedExtraInfo", { requestId: request.networkId, statusCode: 200 }, session);
+    this.chrome.event("Network.dataReceived", { requestId: request.networkId, dataLength: this.hubBody.length, encodedDataLength: this.hubBody.length, ...(request.streamed ? { data: this.hubBody.toString("base64") } : {}) }, session);
+    this.chrome.event("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: this.hubBody.length + 100 }, session);
+    request.outcome = "fulfilled";
+  }
+
   #byInterception(id: string): ModelRequest | undefined {
     return this.requests.find((request) => request.interceptionId === id && request.outcome === "paused");
   }
@@ -785,4 +899,454 @@ export class BrowserModel {
     if (status === 200) this.chrome.event("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 0 }, request.sessionId);
     else this.chrome.event("Network.loadingFailed", { requestId: request.networkId, errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" }, request.sessionId);
   }
+}
+
+// ── Hub requests (PR 9) ────────────────────────────────────────────────────
+
+/** An in-process Chrome behind the CdpPort the request paths take: commands
+ *  answered by handlers (`{}` by default; `{ error }` rejects as Chrome's
+ *  error, UNANSWERED as no answer), events emitted in order. */
+export const UNANSWERED = Symbol("unanswered");
+
+export class FakeCdpPort implements CdpPort {
+  readonly commands: CdpCommand[] = [];
+  readonly handlers = new Map<string, (command: CdpCommand) => unknown>();
+  readonly acks: number[] = [];
+  readonly #listeners = new Map<string, EventHandler[]>();
+  #seq = 0;
+  #id = 0;
+
+  async send<T = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
+    const command: CdpCommand = { id: ++this.#id, method, params };
+    if (sessionId !== undefined) command.sessionId = sessionId;
+    this.commands.push(command);
+    const handler = this.handlers.get(method);
+    const reply = handler ? await handler(command) : {};
+    if (reply === UNANSWERED) throw new CdpUnanswered(method, "no answer (test)");
+    if (reply !== null && typeof reply === "object" && "error" in reply) {
+      const error = (reply as { error: { code: number; message: string } }).error;
+      throw new CdpError(method, error.code, error.message);
+    }
+    return (reply ?? {}) as T;
+  }
+
+  on(method: string, handler: EventHandler): void {
+    this.#listeners.set(method, [...(this.#listeners.get(method) ?? []), handler]);
+  }
+
+  ack(seq: number): void {
+    this.acks.push(seq);
+  }
+
+  emit(method: string, params: Record<string, unknown>, sessionId?: string): void {
+    const event: CdpEvent = { method, params, seq: ++this.#seq, replayed: false };
+    if (sessionId !== undefined) event.sessionId = sessionId;
+    for (const handler of this.#listeners.get(method) ?? []) handler(event);
+  }
+
+  sent(method: string): CdpCommand[] {
+    return this.commands.filter((command) => command.method === method);
+  }
+}
+
+/** What one Hub request does in HubChrome. */
+export interface HubScript {
+  /** A CORS preflight first, answered with this status. */
+  preflight?: number;
+  status?: number;
+  headers?: Array<{ name: string; value: string }>;
+  /** The body in chunks; its content-length is declared unless `chunked`. */
+  chunks?: Buffer[];
+  chunked?: boolean;
+  contentLength?: number;
+  /** Chrome's moment of the send (null: no timing). */
+  timing?: { requestTime: number; sendStart: number } | null;
+  fromDiskCache?: boolean;
+  fromServiceWorker?: boolean;
+  /** The status the server really sent (304 of a revalidated cache entry). */
+  wireStatus?: number;
+  connectionReused?: boolean;
+  noResponseReceived?: boolean;
+  /** The request opens a new connection (one per window). */
+  newTunnel?: boolean;
+  /** After its release, this long before its records are written. */
+  sendDelayMs?: number;
+  /** What happens after the release. */
+  then?: "answer" | "hang_before_send" | "hang_after_send" | "fail_before_send" | "fail_after_send" | "cancel_after_send" | "body_fails" | "retry" | "never_pauses";
+  /** A chunk whose data is shorter than its dataLength. */
+  brokenChunk?: boolean;
+  /** Chunks without their data (the stream not armed). */
+  unstreamed?: boolean;
+  chunkDelayMs?: number;
+  /** Network.streamResourceContent answers this late. */
+  armDelayMs?: number;
+}
+
+export interface HubWireRequest {
+  attemptId: number;
+  role: "preflight" | "main";
+  method: string;
+  url: string;
+}
+
+interface HubModelRequest {
+  attemptId: number;
+  role: "preflight" | "main";
+  interceptionId: string;
+  networkId: string;
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  cls: "api" | "cdn";
+  stage: "request" | "response";
+  continued: boolean;
+  interceptResponse: boolean;
+  ended: boolean;
+  tunnel: number | null;
+  sendCount: number;
+}
+
+/** A browser that runs Hub requests as Chrome would show them over CDP: the
+ *  isolated world's start (Runtime.callFunctionOn), Fetch pauses at both
+ *  stages, the Network events, the body's stream — and the proxy's view of
+ *  the API's tunnels through the real gate: `wire` is what physically left
+ *  (what the gate let up, and every CDN request released). */
+export class HubChrome {
+  readonly cdp: FakeCdpPort;
+  readonly gate: ApiGate;
+  readonly scripts = new Map<number, HubScript>();
+  defaultScript: HubScript = {};
+  readonly issued: Array<{ attemptId: number; url: string; kind: string; headers: Array<[string, string]> }> = [];
+  readonly wire: HubWireRequest[] = [];
+  readonly releasedInPage: number[] = [];
+  readonly armed = new Set<string>();
+  readonly session = "S1";
+  readonly #requests: HubModelRequest[] = [];
+  #n = 0;
+  #tunnels = 100;
+
+  constructor(cdp: FakeCdpPort, gate: ApiGate) {
+    this.cdp = cdp;
+    this.gate = gate;
+    cdp.handlers.set("Runtime.callFunctionOn", (command) => this.#call(command));
+    cdp.handlers.set("Fetch.continueRequest", (command) => this.#continue(command));
+    cdp.handlers.set("Fetch.continueResponse", (command) => this.#continueResponse(command));
+    cdp.handlers.set("Fetch.fulfillRequest", (command) => this.#fulfill(command));
+    cdp.handlers.set("Fetch.failRequest", (command) => this.#failCommand(command));
+    cdp.handlers.set("Network.streamResourceContent", async (command) => {
+      const request = this.#requests.find((entry) => entry.networkId === command.params.requestId);
+      const script = request ? this.#script(request.attemptId) : {};
+      if (script.armDelayMs) await new Promise((resolve) => setTimeout(resolve, script.armDelayMs));
+      this.armed.add(String(command.params.requestId));
+      return { bufferedData: "" };
+    });
+  }
+
+  /** The tab's main frame goes to `url` (a new document). */
+  navigate(url: string): void {
+    this.cdp.emit("Page.frameNavigated", { frame: { id: "F1", url, loaderId: `L${++this.#n}` } }, this.session);
+  }
+
+  /** The site's own API request, paused in Fetch with its headers. */
+  siteRequest(path: string, headers: Record<string, string>, method = "GET"): { interceptionId: string; networkId: string } {
+    const n = ++this.#n;
+    const url = `https://apiv3.fansly.com${path}`;
+    this.cdp.emit("Network.requestWillBeSent", { requestId: `site-${n}`, request: { url, method }, initiator: { type: "script" } }, this.session);
+    this.cdp.emit("Fetch.requestPaused", { requestId: `I-site-${n}`, networkId: `site-${n}`, request: { url, method, headers }, resourceType: "XHR", frameId: "F1" });
+    return { interceptionId: `I-site-${n}`, networkId: `site-${n}` };
+  }
+
+  /** What Chrome announced a site request went with (its header names). */
+  siteSent(networkId: string, names: string[]): void {
+    this.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: networkId, headers: Object.fromEntries(names.map((name) => [name, "v"])) }, this.session);
+  }
+
+  /** The tunnels of a class are cut: what is in flight there fails. */
+  cut(cls: "api" | "cdn"): number {
+    let cut = 0;
+    for (const request of this.#requests) {
+      if (request.cls !== cls || !request.continued || request.ended) continue;
+      cut += 1;
+      this.#end(request, "net::ERR_CONNECTION_CLOSED", false);
+    }
+    return cut;
+  }
+
+  requestsOf(attemptId: number): HubModelRequest[] {
+    return this.#requests.filter((request) => request.attemptId === attemptId);
+  }
+
+  #script(attemptId: number): HubScript {
+    return this.scripts.get(attemptId) ?? this.defaultScript;
+  }
+
+  #call(command: CdpCommand): unknown {
+    const declaration = String(command.params.functionDeclaration ?? "");
+    const args = (command.params.arguments as Array<{ value: unknown }>).map((arg) => arg.value);
+    if (declaration === RELEASE) {
+      this.releasedInPage.push(Number(args[0]));
+      return { result: { type: "boolean", value: true } };
+    }
+    const [attemptId, url, kind, headers] = args as [number, string, string, Array<[string, string]>];
+    this.issued.push({ attemptId, url, kind, headers });
+    const script = this.#script(attemptId);
+    if (script.then === "never_pauses") return { result: { type: "boolean", value: true } };
+    setImmediate(() => this.#start(attemptId, url, kind, headers));
+    return { result: { type: "boolean", value: true } };
+  }
+
+  #start(attemptId: number, issued: string, kind: string, headers: Array<[string, string]>): void {
+    const n = ++this.#n;
+    const [bare, fragment = ""] = issued.split("#");
+    const cls = kind === "api" ? "api" : "cdn";
+    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method: "GET", headers: Object.fromEntries(headers), cls, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
+    this.#requests.push(main);
+    this.cdp.emit("Network.requestWillBeSent", { requestId: main.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method: "GET" }, initiator: { type: "script" } }, this.session);
+    const script = this.#script(attemptId);
+    if (script.preflight !== undefined) {
+      const preflight: HubModelRequest = { ...main, role: "preflight", interceptionId: `I-${n}p`, networkId: `P-${n}`, method: "OPTIONS", headers: { "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization" } };
+      this.#requests.push(preflight);
+      this.cdp.emit("Network.requestWillBeSent", { requestId: preflight.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method: "OPTIONS" }, initiator: { type: "preflight", requestId: main.networkId } }, this.session);
+      this.#pause(preflight, fragment);
+      return;
+    }
+    this.#pause(main, fragment);
+  }
+
+  #pause(request: HubModelRequest, fragment: string): void {
+    this.cdp.emit("Fetch.requestPaused", {
+      requestId: request.interceptionId,
+      networkId: request.networkId,
+      request: { url: request.url, urlFragment: `#${fragment}`, method: request.method, headers: request.headers },
+      resourceType: request.cls === "api" ? "XHR" : "Image",
+      frameId: "F1",
+    });
+  }
+
+  #byInterception(id: unknown): HubModelRequest | undefined {
+    return this.#requests.find((request) => request.interceptionId === id && !request.ended);
+  }
+
+  #continue(command: CdpCommand): unknown {
+    const request = this.#byInterception(command.params.requestId);
+    if (!request || request.stage !== "request") return { error: { code: -32602, message: "Invalid InterceptionId." } };
+    request.continued = true;
+    request.interceptResponse = command.params.interceptResponse === true;
+    if (typeof command.params.url === "string") request.url = command.params.url;
+    setTimeout(() => this.#afterRelease(request), this.#script(request.attemptId).sendDelayMs ?? 0);
+    return {};
+  }
+
+  /** The request's records through the gate (API) — "up", "held", or
+   *  "refused" (no new tunnel in this window). */
+  #write(request: HubModelRequest, script: HubScript): "up" | "held" | "refused" {
+    if (request.cls === "cdn") {
+      request.sendCount += 1;
+      this.wire.push({ attemptId: request.attemptId, role: request.role, method: request.method, url: request.url });
+      return "up";
+    }
+    let tunnel = request.tunnel ?? 1;
+    if (script.newTunnel && request.tunnel === null) {
+      if (!this.gate.admitsTunnel()) return "refused";
+      tunnel = ++this.#tunnels;
+      this.gate.noteTunnel(tunnel);
+      this.gate.record(tunnel, true, false, true); // ClientHello
+      for (let i = 0; i < 2; i++) {
+        if (this.gate.record(tunnel, true, true, true) !== "up") return "held"; // Finished, preface
+        this.gate.recordDone(tunnel);
+      }
+    }
+    request.tunnel = tunnel;
+    const verdict = this.gate.record(tunnel, true, true, true); // HEADERS
+    if (verdict !== "up") {
+      this.gate.noteHeld(tunnel, 90);
+      return "held";
+    }
+    this.gate.recordDone(tunnel);
+    request.sendCount += 1;
+    this.wire.push({ attemptId: request.attemptId, role: request.role, method: request.method, url: request.url });
+    return "up";
+  }
+
+  #afterRelease(request: HubModelRequest): void {
+    if (request.ended) return;
+    const script = this.#script(request.attemptId);
+    const then = script.then ?? "answer";
+    if (then === "fail_before_send") return this.#end(request, "net::ERR_TUNNEL_CONNECTION_FAILED", false);
+    if (then === "hang_before_send") return;
+    const went = this.#write(request, script);
+    if (went === "refused") return this.#end(request, "net::ERR_TUNNEL_CONNECTION_FAILED", false);
+    if (went === "held") return;
+    this.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: request.networkId, headers: { ...Object.fromEntries(Object.keys(request.headers).map((name) => [name.toLowerCase(), "v"])), "user-agent": "v" } }, this.session);
+    if (then === "retry" && request.role === "main") {
+      // The server refuses the stream; Chrome repeats on the same connection.
+      this.gate.noteServerBytes(request.tunnel ?? 1);
+      if (this.#write(request, script) === "held") return;
+      return;
+    }
+    if (then === "hang_after_send") return;
+    if (then === "fail_after_send") return this.#end(request, "net::ERR_CONNECTION_RESET", false);
+    if (then === "cancel_after_send") return this.#end(request, "net::ERR_ABORTED", true);
+    request.stage = "response";
+    if (request.role === "preflight") {
+      this.cdp.emit("Fetch.requestPaused", {
+        requestId: request.interceptionId,
+        networkId: request.networkId,
+        request: { url: request.url, method: "OPTIONS", headers: request.headers },
+        resourceType: "Preflight",
+        responseStatusCode: script.preflight ?? 204,
+        responseStatusText: "No Content",
+        responseHeaders: [{ name: "access-control-allow-origin", value: "https://fansly.com" }, { name: "access-control-allow-headers", value: "authorization" }],
+      });
+      return;
+    }
+    const body = Buffer.concat(script.chunks ?? [Buffer.from('{"success":true}')]);
+    const headers = [...(script.headers ?? [{ name: "content-type", value: "application/json" }])];
+    if (!script.chunked) headers.push({ name: "content-length", value: String(script.contentLength ?? body.length) });
+    this.cdp.emit("Fetch.requestPaused", {
+      requestId: request.interceptionId,
+      networkId: request.networkId,
+      request: { url: request.url, method: "GET", headers: request.headers },
+      resourceType: request.cls === "api" ? "XHR" : "Image",
+      responseStatusCode: script.status ?? 200,
+      responseStatusText: "OK",
+      responseHeaders: headers,
+    });
+  }
+
+  #fulfill(command: CdpCommand): unknown {
+    const request = this.#byInterception(command.params.requestId);
+    if (!request) return { error: { code: -32602, message: "Invalid InterceptionId." } };
+    const script = this.#script(request.attemptId);
+    request.ended = true;
+    this.#responseReceived(request, script, Number(command.params.responseCode));
+    setImmediate(() => {
+      this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 120 }, this.session);
+      if (request.role !== "preflight") return;
+      const main = this.#requests.find((entry) => entry.attemptId === request.attemptId && entry.role === "main")!;
+      const status = Number(command.params.responseCode);
+      if (status >= 200 && status < 300) this.#pause(main, `hub-${request.attemptId}`);
+      else this.#end(main, "net::ERR_FAILED", false);
+    });
+    return {};
+  }
+
+  #responseReceived(request: HubModelRequest, script: HubScript, status: number): void {
+    if (script.noResponseReceived && request.role === "main") return;
+    const timing = script.timing === undefined ? { requestTime: 1000 + this.#n, sendStart: request.role === "preflight" ? 1.5 : 2.5 } : script.timing;
+    this.cdp.emit(
+      "Network.responseReceived",
+      {
+        requestId: request.networkId,
+        response: {
+          status,
+          ...(timing ? { timing: { requestTime: timing.requestTime, sendStart: timing.sendStart } } : {}),
+          fromDiskCache: script.fromDiskCache === true,
+          fromServiceWorker: script.fromServiceWorker === true,
+          connectionReused: script.connectionReused !== false,
+        },
+      },
+      this.session,
+    );
+    if (request.role === "main") this.cdp.emit("Network.responseReceivedExtraInfo", { requestId: request.networkId, statusCode: script.wireStatus ?? status }, this.session);
+  }
+
+  #continueResponse(command: CdpCommand): unknown {
+    const request = this.#byInterception(command.params.requestId);
+    if (!request || request.stage !== "response") return { error: { code: -32602, message: "Invalid InterceptionId." } };
+    const script = this.#script(request.attemptId);
+    this.#responseReceived(request, script, script.status ?? 200);
+    void this.#body(request, script);
+    return {};
+  }
+
+  async #body(request: HubModelRequest, script: HubScript): Promise<void> {
+    const chunks = script.chunks ?? [Buffer.from('{"success":true}')];
+    let total = 0;
+    for (const [index, chunk] of chunks.entries()) {
+      if (script.chunkDelayMs) await new Promise((resolve) => setTimeout(resolve, script.chunkDelayMs));
+      else await new Promise((resolve) => setImmediate(resolve));
+      if (request.ended) return;
+      total += chunk.length;
+      const streamed = this.armed.has(request.networkId) && !script.unstreamed;
+      const data = script.brokenChunk && index === 0 ? chunk.subarray(0, Math.max(0, chunk.length - 1)) : chunk;
+      this.cdp.emit("Network.dataReceived", { requestId: request.networkId, dataLength: chunk.length, encodedDataLength: chunk.length, ...(streamed ? { data: data.toString("base64") } : {}) }, this.session);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    if (request.ended) return;
+    if (script.then === "body_fails") return this.#end(request, "net::ERR_CONNECTION_CLOSED", false);
+    request.ended = true;
+    this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: total + 200 }, this.session);
+  }
+
+  #failCommand(command: CdpCommand): unknown {
+    const request = this.#byInterception(command.params.requestId);
+    if (!request) return { error: { code: -32602, message: "Invalid InterceptionId." } };
+    this.#end(request, command.params.errorReason === "Aborted" ? "net::ERR_ABORTED" : "net::ERR_FAILED", false);
+    return {};
+  }
+
+  #end(request: HubModelRequest, errorText: string, canceled: boolean): void {
+    if (request.ended) return;
+    request.ended = true;
+    setImmediate(() => this.cdp.emit("Network.loadingFailed", { requestId: request.networkId, errorText, canceled }, this.session));
+  }
+}
+
+/** The engine's side for Hub requests: what the operator sends it (`check`,
+ *  `sent`, a result it could not keep), and its answer to each check — an
+ *  admission for 15 s by default, or whatever `answer` says (null: none). */
+export class FakeHubEngine {
+  readonly messages: Array<Record<string, unknown>> = [];
+  generation = 1;
+  up = true;
+  answer: (check: Record<string, unknown>) => Record<string, unknown> | null = (check) => ({ type: "checkResult", ownerGeneration: this.generation, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+  /** Where answers go (HubRequests.onCheckResult). */
+  deliver: (result: never) => void = () => undefined;
+
+  link(): { up: () => boolean; generation: () => number; send: (message: object) => boolean } {
+    return {
+      up: () => this.up,
+      generation: () => this.generation,
+      send: (message) => {
+        const record = message as Record<string, unknown>;
+        this.messages.push(record);
+        if (record.type === "check") {
+          const answer = this.answer(record);
+          if (answer !== null) setImmediate(() => this.deliver(answer as never));
+        }
+        return this.up;
+      },
+    };
+  }
+
+  of(type: string): Array<Record<string, unknown>> {
+    return this.messages.filter((message) => message.type === type);
+  }
+}
+
+/** A server that answers a TLS 1.3 ServerHello and keeps what it gets (what
+ *  the gate let up a tunnel to the API). */
+export async function tlsLikeServer(): Promise<{ port: number; received: () => Buffer; close: () => Promise<void> }> {
+  const chunks: Buffer[] = [];
+  const sockets = new Set<Socket>();
+  const server = createTcpServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk) => chunks.push(chunk));
+    const body = Buffer.concat([Buffer.from([0x03, 0x03]), Buffer.alloc(32, 7), Buffer.from([0]), Buffer.from([0x13, 0x01, 0x00, 0x00, 0x06, 0x00, 0x2b, 0x00, 0x02, 0x03, 0x04])]);
+    const handshake = Buffer.concat([Buffer.from([0x02, 0, 0, body.length]), body]);
+    socket.write(Buffer.concat([Buffer.from([0x16, 0x03, 0x03, 0, handshake.length]), handshake]));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  return {
+    port: typeof address === "object" && address ? address.port : 0,
+    received: () => Buffer.concat(chunks),
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
 }

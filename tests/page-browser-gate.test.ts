@@ -228,6 +228,33 @@ describe("a window", () => {
     expect(heldCuts).toHaveLength(2);
   });
 
+  it("cuts, as it closes, a new connection its request never went up (stage 1, amendment 21) — never one that carried it", () => {
+    const cutTunnels: number[] = [];
+    gate.cutTunnel = (tunnel) => {
+      cutTunnels.push(tunnel);
+      return true;
+    };
+    const events: string[] = [];
+    gate.onEvent = (event) => events.push(event.kind);
+    gate.open("w1", now + 15_000, 0);
+    gate.noteTunnel(NEW);
+    expect(record(NEW, 517, null, 22)).toBe("up"); // its ClientHello: the request went nowhere yet
+    gate.close("w1");
+    expect(cutTunnels).toEqual([NEW]);
+    expect(events).toContain("unused_cut");
+    gate.open("w2", now + 15_000, 0);
+    gate.noteTunnel(NEW + 1);
+    record(NEW + 1, 517, null, 22);
+    record(NEW + 1, 58);
+    record(NEW + 1, 70);
+    expect(record(NEW + 1, HEADERS)).toBe("up");
+    gate.close("w2");
+    // A warm connection's window opens none.
+    gate.open("w3", now + 15_000, 0);
+    gate.close("w3");
+    expect(cutTunnels).toEqual([NEW]);
+  });
+
   it("is gone with a reset (the exit closed, control lost)", () => {
     gate.open("w", now + 15_000, 0);
     gate.reset();

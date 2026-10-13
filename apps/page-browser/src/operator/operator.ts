@@ -18,11 +18,19 @@
 // Steps 8–10 (the site loads, the session is confirmed, ready) come with
 // later PRs; this operator stops at the open exit and never navigates.
 //
-// What holds in this PR, whatever happens:
-// - No request leaves without the engine's admission. No path admits one
-//   yet (site requests: PR 7; Hub's: PR 9), so every paused request but a
-//   self-test probe is failed, and the send gate opens no window: no API
-//   record leaves.
+// Hub's requests (hub-requests/, PR 9; plan §4.2): the engine's `send` runs
+// in the site's tab under the engine's admission (`check`), the gate's
+// window holding its deadline; its outcome is kept in the buffer and sent
+// once durable, the body first. They need the site in the work tab and its
+// live session (plan §4.7), which only the PR that loads the site brings:
+// until then every `send` is answered, not sent ("the site is not loaded").
+//
+// What holds, whatever happens:
+// - No request leaves without the engine's admission. A Hub request goes
+//   only by its `check` and through the gate's window; the site's requests
+//   have no admitting path yet (PR 7) and are failed — the session is
+//   learned from them as they stop — and so is every other paused request
+//   but a self-test probe.
 // - A page starts only on the engine's restartBrowser; a failure stops it
 //   and retries after 10 s, 30 s, 2 min, then every 5 min; a halt (the
 //   engine's stopPage, a changed exit IP) holds until the next
@@ -49,8 +57,10 @@ import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferUnavailab
 import { OutcomeReplay } from "../buffer/replay.ts";
 import { EventStream } from "../buffer/stream.ts";
 import { Cdp, type HolderLink } from "../cdp/client.ts";
-import { BrowserControl } from "../cdp/control.ts";
+import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
+import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
+import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
 import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
@@ -121,6 +131,8 @@ export interface OperatorDeps {
   timings?: Partial<OperatorTimings>;
   /** Tests: the buffer's disk, its room, how often it looks, its retries. */
   buffer?: Pick<BufferOptions, "diskFree" | "minFreeBytes" | "checkEveryMs" | "resumePercent" | "maxPages" | "openRetryMs" | "retryMs">;
+  /** Tests: the Hub requests' waits and limits. */
+  hubTimings?: Partial<HubTimings>;
   log?: Logger;
 }
 
@@ -165,12 +177,15 @@ export class Operator {
   readonly stream: EventStream;
   readonly replay: OutcomeReplay;
   readonly paused: PausedRequests;
+  /** Hub's requests through the site's tab (plan §4.2). */
+  readonly hub: HubRequests;
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
   readonly #log: Logger;
   readonly #apiHost: string;
   readonly #exitIpTarget: ExitIpTarget;
   readonly #extension: ExtensionChecks;
+  readonly #classify: HostClassifier;
   #params: OperatorParams = DEFAULT_PARAMS;
   #settings: EngineSettings | null = null;
   /** The current start; a newer one, a stop or a failure supersedes it. */
@@ -212,6 +227,7 @@ export class Operator {
     this.#apiHost = deps.apiHost ?? FANSLY_HOSTS.api[0];
     this.#exitIpTarget = deps.exitIpTarget ?? IPIFY;
     this.#extension = deps.extension ?? EXTENSION_CHECKS;
+    this.#classify = deps.classify ?? classifyFanslyHost;
     registerSecret(this.config.rpcToken);
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
 
@@ -232,7 +248,7 @@ export class Operator {
     };
 
     this.egress = new Egress({
-      classify: deps.classify ?? classifyFanslyHost,
+      classify: this.#classify,
       onRecord: (record) =>
         this.journals.connection({
           id: record.id,
@@ -317,6 +333,10 @@ export class Operator {
         quiesce: () => this.#quiesce(),
         onCommand: (command) => this.#onCommand(command),
         onBuffer: (message) => this.#onBuffer(message),
+        onHub: (message) => {
+          if (message.type === "send") this.hub.onSend(message);
+          else this.hub.onCheckResult(message);
+        },
         onLink: (up, reason) => {
           // A new connection subscribes anew; the outcomes not acknowledged
           // go to it again (spec §6.2), a page at a time.
@@ -324,6 +344,8 @@ export class Operator {
           this.#log(up ? "engine.linked" : "engine.lost", { reason, admissionsOpen: this.admissionsOpen() });
           if (!up) {
             this.replay.disconnected();
+            // No check is answered any more: what waits for one fails.
+            this.hub.linkLost();
             return;
           }
           this.#sendState();
@@ -360,20 +382,59 @@ export class Operator {
       onOpened: () => this.#onBufferOpened(),
       onCommitted: ({ events, outcomes }) => {
         if (events > 0) this.stream.pump();
-        // A few at a time, as attempts end: sent as they come.
-        for (const json of outcomes) this.rpc.sendRaw(json);
+        // As attempts end: one more delivery round, each outcome after its
+        // body, read from the file (replay.ts).
+        if (outcomes.length > 0) this.replay.live(outcomes);
       },
     });
     this.stream = new EventStream(this.buffer, (json) => this.rpc.sendRaw(json), {
       maxEvents: DEFAULT_PARAMS.eventBatch.maxEvents,
       maxBytes: DEFAULT_PARAMS.eventBatch.maxBytes,
     });
-    this.replay = new OutcomeReplay(this.buffer, {
-      epoch: () => this.rpc.epoch,
-      send: (json) => this.rpc.sendRaw(json),
-      backlog: () => this.rpc.backlog(),
-      drained: () => this.rpc.drained(),
+    this.replay = new OutcomeReplay(
+      this.buffer,
+      {
+        epoch: () => this.rpc.epoch,
+        send: (json) => this.rpc.sendRaw(json),
+        sendBinary: (frame) => this.rpc.sendBinary(frame),
+        backlog: () => this.rpc.backlog(),
+        drained: () => this.rpc.drained(),
+      },
+      { stateOf: (attemptId) => this.hub.recoverState(attemptId) },
+    );
+
+    this.hub = new HubRequests({
+      cdp: this.cdp,
+      resolve: (request, decision) => this.paused.resolve(request, decision),
+      gate: this.egress.gate,
+      cut: (cls, reason) => this.egress.cutClass(cls, reason),
+      classify: this.#classify,
+      exitOpen: () => this.egress.exitOpen,
+      buffer: this.buffer,
+      site: {
+        notReady: () => this.#siteNotReady(),
+        tabSession: () => this.control.workTab?.sessionId ?? null,
+        world: () => {
+          const tab = this.control.workTab;
+          return tab ? this.control.isolatedWorld(tab, WORLD) : Promise.reject(new Error("no work tab"));
+        },
+      },
+      link: {
+        up: () => this.rpc.linkUp,
+        generation: () => this.rpc.generation,
+        send: (message) => this.rpc.send(message),
+      },
+      fault: (reason, note) => this.#requestFault(reason, note),
+      alarm: (kind, detail) => this.#alarm(kind, detail),
+      sessionChanged: () => this.#sendState(),
+      ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
     });
+    this.egress.gate.onEvent = (event) => {
+      // The send as the gate saw it is the Hub request's (and PR 7's site
+      // requests'); what it held or cut goes to the log.
+      this.hub.onGateEvent(event);
+      if (event.kind !== "first_bytes" && event.kind !== "announced") this.#log("gate", { kind: event.kind, window: event.window, ...event.detail });
+    };
   }
 
   /** Listen (the exit closed), link to the holder, and stand until the
@@ -395,6 +456,7 @@ export class Operator {
     if (this.#stopped) return;
     this.#stopped = true;
     this.egress.closeExit("the operator stops");
+    this.hub.endAll("the operator stops");
     this.#cancelRun();
     this.#clearRetry();
     this.#health.stop();
@@ -426,7 +488,7 @@ export class Operator {
       retryAtWall: snapshot.retryAtWall,
       exitOpen: this.egress.exitOpen,
       mode: "automation",
-      sessionFingerprint: null,
+      sessionFingerprint: this.hub.session.fingerprint,
       accountId: null,
       exitIp: this.#exitIp,
       chromeVersion: this.#chromeVersion,
@@ -486,6 +548,7 @@ export class Operator {
     const exitWasOpen = this.egress.exitOpen;
     const gate = this.egress.gate.state;
     this.egress.closeExit(`control lost: ${detail}`);
+    this.hub.endAll(`control lost: ${detail}`);
     if (!this.#controlExpected) {
       this.#log("control.closed", { detail });
       return;
@@ -521,6 +584,7 @@ export class Operator {
       if (run !== this.#run || this.#stopped) throw new Cancelled();
     };
     this.egress.closeExit("a start");
+    this.hub.endAll("a new start of the page");
     this.#health.stop();
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
@@ -691,6 +755,7 @@ export class Operator {
    *  the exit closed until the engine starts it. */
   async #stand(note: string): Promise<void> {
     this.egress.closeExit(note);
+    this.hub.endAll(note);
     this.#cancelRun();
     const run = this.#run;
     this.#clearRetry();
@@ -714,6 +779,7 @@ export class Operator {
    *  is tried again after the backoff. */
   async #fail(reason: StopReason, note: string): Promise<void> {
     this.egress.closeExit(note);
+    this.hub.endAll(note);
     if (this.page.halted || this.#stopped) return;
     this.#cancelRun();
     const run = this.#run;
@@ -736,6 +802,7 @@ export class Operator {
    *  quits as on a user's quit (its profile is written); `kill`: at once. */
   async #halt(reason: StopReason, note: string, how: "stop" | "kill"): Promise<void> {
     this.egress.closeExit(note);
+    this.hub.endAll(note);
     this.#cancelRun();
     const run = this.#run;
     this.#clearRetry();
@@ -788,33 +855,74 @@ export class Operator {
 
   // ── the interception ───────────────────────────────────────────────────
 
-  /** No path admits a request in this operator yet: whatever is not a
-   *  self-test probe the self-test waits for, or the environment check's
-   *  own page (answered here, never sent), is failed. */
+  /** Hub's requests go by their path (hub-requests/); the site's own have
+   *  none yet (PR 7) — the live session is learned from those to the API —
+   *  and are failed, like whatever is not a self-test probe the self-test
+   *  waits for, or the environment check's own page (answered here, never
+   *  sent). A response stage only a Hub request asked for. */
   #decide(request: PausedRequest): PausedDecision {
+    if (request.stage === "response") return this.hub.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "a response stage nobody asked for" };
     const envPage = this.envCheck.onPaused(request);
     if (envPage) return envPage;
     const probe = this.probes.onPaused(request);
     if (probe === "continue") return { action: "continue" };
     if (probe === "fail") return { action: "fail", reason: "BlockedByClient", why: "a self-test probe that may not go on" };
-    return { action: "fail", reason: "BlockedByClient", why: "no admission: no request is admitted by this operator yet" };
+    const hub = this.hub.decide(request);
+    if (hub) return hub;
+    if (this.#classify(hostAndPath(request.url).host) === "api") this.hub.noteSiteRequest(request);
+    return { action: "fail", reason: "BlockedByClient", why: "no admission: the site's requests have no admitting path yet" };
   }
 
+  /** One line per resolution: the host (a Hub request's real one) and path,
+   *  never the query, the fragment or a header. */
   #journalRequest(request: PausedRequest, decision: PausedDecision): void {
-    const { host, path } = hostAndPath(request.url);
+    const { host: seen, path } = hostAndPath(request.url);
+    const host = seen.endsWith(PLACEHOLDER_SUFFIX) ? seen.slice(0, -PLACEHOLDER_SUFFIX.length) : seen;
     const probe = /^#pb-selftest-/.test(request.urlFragment);
+    const hub = this.hub.describe(request);
     const line = { method: request.method, host, path, resourceType: request.resourceType };
     switch (decision.action) {
       case "continue":
-        this.journals.request({ ...line, admission: probe ? "self-test probe (exit closed)" : null, decision: "continued", result: "released to the closed exit" });
+        this.journals.request({ ...line, admission: hub ?? (probe ? "self-test probe (exit closed)" : null), decision: "continued", result: hub ? "released under its admission" : "released to the closed exit" });
         return;
       case "fail":
-        this.journals.request({ ...line, admission: null, decision: "failed", result: `${decision.reason}: ${decision.why}` });
+        this.journals.request({ ...line, admission: hub, decision: "failed", result: `${decision.reason}: ${decision.why}` });
         return;
       case "fulfill":
-        this.journals.request({ ...line, admission: "environment check (answered here, not sent)", decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
+        this.journals.request({ ...line, admission: hub ?? "environment check (answered here, not sent)", decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
+        return;
+      case "continueResponse":
+        this.journals.request({ ...line, admission: hub, decision: "continued", result: "the answer went on to the page, its body captured" });
+        return;
+      case "hold":
         return;
     }
+  }
+
+  /** Why a Hub request may not start now, or null: the page is up, and the
+   *  site is in the work tab (plan §4.1, step 8 — a later PR loads it). */
+  #siteNotReady(): string | null {
+    if (!this.admissionsOpen()) return `no admissions (${this.page.halted ? "halted" : this.page.step}${this.rpc.linkUp ? "" : ", no engine link"})`;
+    const tab = this.control.workTab;
+    if (!tab) return "no work tab";
+    let origin = "";
+    try {
+      origin = new URL(tab.url).origin;
+    } catch {
+      // not the site
+    }
+    return origin === SITE_ORIGIN ? null : "the site is not loaded in the work tab";
+  }
+
+  /** A Hub request the operator cannot vouch for (hub-requests/): the exit
+   *  closes now, in this turn. A request Chrome may still hold dies with the
+   *  browser, and the page starts again — the strict rule, until the owner's
+   *  decision №16 says otherwise; headers that differ from the site's stop
+   *  it for the owner (plan §4.7). */
+  #requestFault(reason: "request_unended" | "header_mismatch", note: string): void {
+    this.egress.closeExit(note);
+    if (reason === "header_mismatch") void this.#halt("header_mismatch", note, "stop");
+    else void this.#fail("request_unended", note);
   }
 
   // ── the engine ─────────────────────────────────────────────────────────
@@ -883,7 +991,11 @@ export class Operator {
     // (a Hub deploy is one).
     if (this.#starting) this.#standing = this.#stand("a new owner of the page");
     await this.#standing;
-    const last = this.egress.gate.lastSend;
+    // The earlier owners' Hub requests: refused if not released, ended
+    // (their limits hold them to it) if they were.
+    await this.hub.quiesce(this.rpc.generation);
+    const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend].filter((send): send is { mono: number; wall: number } => send !== null);
+    const last = sends.length === 0 ? null : sends.reduce((a, b) => (b.mono > a.mono ? b : a));
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
 

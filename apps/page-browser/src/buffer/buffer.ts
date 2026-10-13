@@ -42,17 +42,40 @@
 // I/O failures are tried again with a growing pause; a corrupt or too new
 // file is left exactly as it is, for the owner.
 //
-// Bodies (BodyRef in `site.response` and `result`) are not stored here yet:
-// the PRs that capture them (7, 9) add a `bodies` table with a migration
-// (schema.ts) and send their parts as binary frames before the batch that
-// names them (plan §4.13); the caps count them then.
+// Bodies (BodyRef in `result`, and in `site.response` with PR 7) are files
+// of the buffer volume (bodies.ts): written as they arrive, sealed only
+// whole, and named by the outcome stored after the seal; the outcome's
+// bytes count its body's, so the caps do too. They go to the engine as
+// binary frames before the JSON that names them (replay.ts), and their file
+// goes with the outcome's resultAck.
+//
+// Hub attempts (PR 9) leave their steps here too (`markAttempt`: received,
+// issued in the page, released to the network), each written before it is
+// taken: a repeated `send` does nothing twice across restarts, and the
+// engine's `recover` learns which requests never left (store.ts).
 
 import { readFileSync, statfsSync } from "node:fs";
+import { join } from "node:path";
 
 import type { BufferEvent, Result, SiteDone, WsDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
+import { BodyFiles, type BodyReader, type BodyWriter } from "./bodies.ts";
 import type { Migration } from "./schema.ts";
-import { BufferStore, openFailure, type Commit, type NewEventRow, type NewOutcomeRow, type OpenCause, type StoredEvent, type StoredOutcome } from "./store.ts";
+import {
+  BufferStore,
+  openFailure,
+  type AttemptMark,
+  type AttemptRecord,
+  type AttemptStep,
+  type Commit,
+  type NewEventRow,
+  type NewOutcomeRow,
+  type OpenCause,
+  type StoredEvent,
+  type StoredOutcome,
+} from "./store.ts";
+
+export type { AttemptRecord, AttemptStep };
 
 /** Why a write is refused: a cap (`buffer_full`), the disk (`disk_full`),
  *  or a buffer that could not be opened (`buffer_unavailable`). */
@@ -125,6 +148,8 @@ export interface BufferOptions {
   commitFault?: (batch: Commit) => Error | null;
   /** Tests: an error for the first read after an open (store.ts). */
   totalsFault?: () => Error | null;
+  /** Tests: an error for a read of a body's part (bodies.ts). */
+  bodyReadFault?: (bodyId: string, part: number) => Error | null;
   /** The pauses before a failed open is tried again (locked, I/O). */
   openRetryMs?: readonly number[];
   /** The pauses before a failed commit is tried again. */
@@ -143,8 +168,22 @@ export interface BufferOptions {
   onOpened?: () => void;
   /** 50 % or 80 % of a cap crossed upwards. */
   onAlarm?: (alarm: BufferAlarm) => void;
-  /** A batch is durable: its events may be streamed, its outcomes sent. */
-  onCommitted?: (committed: { events: number; outcomes: string[] }) => void;
+  /** A batch is durable: its events may be streamed, its outcomes sent
+   *  (each after its body). */
+  onCommitted?: (committed: { events: number; outcomes: CommittedOutcome[] }) => void;
+}
+
+/** An outcome stored by a commit: its JSON, and the body it names. */
+export interface CommittedOutcome {
+  attemptId: number;
+  json: string;
+  bodyId: string | null;
+}
+
+/** A body an outcome names, as `putOutcome` takes it. */
+export interface OutcomeBody {
+  bodyId: string;
+  bytes: number;
 }
 
 export const DEFAULT_CAPS: BufferCaps = { bytes: 2 * 1024 * 1024 * 1024, ageMs: 72 * 3600_000, alarmPercents: [50, 80] };
@@ -163,6 +202,11 @@ const RETRY_MS: readonly number[] = [100, 200, 500, 1000, 2000, 5000];
 /** 1024 pages of 4 KiB: a few milliseconds of the event loop per step. */
 const RECLAIM_PAGES = 1024;
 const RECLAIM_EVERY_MS = 10;
+/** Hub attempts are forgotten a day after their outcome's resultAck, and a
+ *  week after they came whatever they are; looked at every 10 minutes. */
+const ATTEMPT_ACKED_KEEP_MS = 24 * 3600_000;
+const ATTEMPT_KEEP_MS = 7 * 24 * 3600_000;
+const ATTEMPT_PURGE_EVERY_MS = 10 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const EVENT_KINDS = new Set(["ws.open", "ws.in", "ws.close", "site.response"]);
 const OUTCOME_TYPES = new Set(["result", "siteDone", "wsDone"]);
@@ -187,10 +231,18 @@ interface PendingOutcome {
   json: string;
   atWall: number;
   bytes: number;
+  body: OutcomeBody | null;
   resolve: (durable: Durable) => void;
 }
 
-type Pending = PendingEvent | PendingOutcome;
+interface PendingMark {
+  type: "mark";
+  mark: AttemptMark;
+  bytes: number;
+  resolve: (durable: Durable) => void;
+}
+
+type Pending = PendingEvent | PendingOutcome | PendingMark;
 
 function defaultDiskFree(dir: string): number {
   const stats = statfsSync(dir);
@@ -237,6 +289,12 @@ export class EventBuffer {
   readonly #onOpened: NonNullable<BufferOptions["onOpened"]>;
   /** Null while the buffer cannot be opened. */
   #store: BufferStore | null = null;
+  /** The bodies' files; null while the buffer cannot be opened. */
+  #bodies: BodyFiles | null = null;
+  /** Steps of Hub attempts not committed yet. */
+  #pendingMarks = new Map<number, AttemptStep[]>();
+  #lastPurge = 0;
+  #purgeDue = false;
   #unavailable: BufferUnavailable | null = null;
   #knownId: string;
   #started = false;
@@ -402,8 +460,13 @@ export class EventBuffer {
       this.#oldestEventWall = totals.oldestEventWall;
       this.#oldestOutcomeWall = totals.oldestOutcomeWall;
       this.#walDirty = true;
-      this.#log("opened", { bufferId: store.id, schema: store.schema.version, created: store.schema.created, lastSeq: store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes });
+      // What a crash left between a body's seal and its outcome's commit, or
+      // between a deletion and its file, goes now.
+      const bodies = new BodyFiles(join(options.dir, "bodies"), options.bodyReadFault);
+      const swept = bodies.sweep(new Set(store.bodyIds()));
+      this.#log("opened", { bufferId: store.id, schema: store.schema.version, created: store.schema.created, lastSeq: store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes, bodiesSwept: swept });
       this.#store = store;
+      this.#bodies = bodies;
       opened = null;
       return true;
     } catch (error) {
@@ -463,8 +526,10 @@ export class EventBuffer {
   }
 
   /** An attempt's outcome, kept until the engine's resultAck. The first
-   *  outcome of an attempt stands: a second one is not stored again. */
-  putOutcome(outcome: Outcome): Appended {
+   *  outcome of an attempt stands: a second one is not stored again. `body`:
+   *  the sealed body it names (bodies.ts) — its bytes count in the caps; the
+   *  caller removes its file when the outcome is not stored. */
+  putOutcome(outcome: Outcome, body: OutcomeBody | null = null): Appended {
     if (!OUTCOME_TYPES.has(outcome.type) || !Number.isSafeInteger(outcome.attemptId)) throw new Error("not an attempt's outcome");
     const pending = this.#pendingOutcomes.get(outcome.attemptId);
     if (pending) return { ok: true, durable: new Promise((resolve) => (pending.resolve = chain(pending.resolve, resolve))) };
@@ -477,7 +542,98 @@ export class EventBuffer {
       return { ok: false, reason: "disk_full" };
     }
     const json = JSON.stringify(outcome);
-    return this.#accept({ type: "outcome", attemptId: outcome.attemptId, outcomeType: outcome.type, json, atWall: this.#now(), bytes: utf8Bytes(json), resolve: () => undefined });
+    return this.#accept({ type: "outcome", attemptId: outcome.attemptId, outcomeType: outcome.type, json, atWall: this.#now(), bytes: utf8Bytes(json) + (body?.bytes ?? 0), body, resolve: () => undefined });
+  }
+
+  /** A step of a Hub attempt, durable before the step is taken (store.ts):
+   *  received, issued in the page, released to the network. Refused like
+   *  any write when the buffer takes none. */
+  markAttempt(attemptId: number, step: AttemptStep): Appended {
+    if (!Number.isSafeInteger(attemptId)) throw new Error("not an attempt id");
+    const appended = this.#accept({ type: "mark", mark: { attemptId, atWall: this.#now(), step }, bytes: 0, resolve: () => undefined });
+    if (appended.ok) this.#pendingMarks.set(attemptId, [...(this.#pendingMarks.get(attemptId) ?? []), step]);
+    return appended;
+  }
+
+  /** What the buffer knows of a Hub attempt — its steps, committed or not,
+   *  and whether its outcome is kept — or null when nothing. */
+  attempt(attemptId: number): (AttemptRecord & { outcome: boolean }) | null {
+    const store = this.#store;
+    if (this.#closed || store === null) return null;
+    let stored: AttemptRecord | null;
+    let outcome: boolean;
+    try {
+      stored = store.attempt(attemptId);
+      outcome = this.#pendingOutcomes.has(attemptId) || store.hasOutcome(attemptId);
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return null;
+    }
+    const steps = this.#pendingMarks.get(attemptId) ?? [];
+    if (stored === null && steps.length === 0 && !outcome) return null;
+    return {
+      issued: (stored?.issued ?? false) || steps.some((step) => step !== "received"),
+      released: (stored?.released ?? false) || steps.includes("released"),
+      acked: stored?.acked ?? false,
+      outcome,
+    };
+  }
+
+  /** A new body's file (bodies.ts), or null while the buffer cannot be
+   *  opened or its directory written. */
+  beginBody(): BodyWriter | null {
+    const bodies = this.#bodies;
+    if (this.#closed || bodies === null) return null;
+    try {
+      return bodies.begin();
+    } catch (error) {
+      this.#log("body.unwritable", { error: errorMessage(error) });
+      return null;
+    }
+  }
+
+  /** A stored body, open for one transmission (bodies.ts), or null when it
+   *  is not there. Other failures throw. */
+  openBody(bodyId: string): BodyReader | null {
+    return this.#bodies?.open(bodyId) ?? null;
+  }
+
+  /** The order number of the last outcome stored (0: none): what a
+   *  delivery round goes up to (replay.ts). */
+  get lastOutcomeSeq(): number {
+    return this.#store?.lastOutcomeSeq ?? 0;
+  }
+
+  /** Stored outcomes after `afterSeq` and up to `uptoSeq`, in the order
+   *  they were stored, a page at a time (replay.ts). */
+  outcomesBySeq(afterSeq: number, uptoSeq: number, maxCount: number, maxBytes: number): StoredOutcome[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.outcomesBySeq(afterSeq, uptoSeq, maxCount, maxBytes);
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
+    }
+  }
+
+  /** A stored body's size, or null when it is not there. */
+  bodySize(bodyId: string): number | null {
+    return this.#bodies?.size(bodyId) ?? null;
+  }
+
+  /** Part `part` of a stored body, or null when it is not there. */
+  readBody(bodyId: string, part: number, partBytes: number): Buffer | null {
+    return this.#bodies?.read(bodyId, part, partBytes) ?? null;
+  }
+
+  /** A sealed body nothing names any more (its outcome was not stored). */
+  removeBody(bodyId: string): void {
+    try {
+      this.#bodies?.remove(bodyId);
+    } catch (error) {
+      this.#log("body.remove_failed", { error: errorMessage(error) });
+    }
   }
 
   #accept(item: Pending): Appended {
@@ -604,6 +760,10 @@ export class EventBuffer {
     } catch (error) {
       this.#log("reclaim.unknown", { error: errorMessage(error) });
     }
+    if (this.#now() - this.#lastPurge >= ATTEMPT_PURGE_EVERY_MS && !this.#purgeDue) {
+      this.#purgeDue = true;
+      this.#schedule();
+    }
     const level = this.#level();
     this.#raiseAlarms(level);
     if (this.#full === null) {
@@ -642,7 +802,8 @@ export class EventBuffer {
 
   #oldestAgeMs(): number {
     const walls = [this.#oldestEventWall, this.#oldestOutcomeWall].filter((wall): wall is number => wall !== null);
-    for (const item of this.#pending) walls.push(item.atWall);
+    // Marks of Hub attempts are no record of their own: they do not age.
+    for (const item of this.#pending) if (item.type !== "mark") walls.push(item.atWall);
     if (walls.length === 0) return 0;
     return Math.max(0, this.#now() - Math.min(...walls));
   }
@@ -755,20 +916,31 @@ export class EventBuffer {
     const items = this.#pending;
     const deleteTo = this.#ackedUpTo > 0 && this.#firstSeq !== null && this.#firstSeq <= this.#ackedUpTo ? Math.min(this.#ackedUpTo, this.#firstSeq + DELETE_CHUNK - 1) : null;
     const deleteOutcomes = [...this.#outcomeAcks];
-    if (items.length === 0 && deleteTo === null && deleteOutcomes.length === 0) return true;
+    const purge = this.#purgeDue ? { ackedBefore: this.#now() - ATTEMPT_ACKED_KEEP_MS, before: this.#now() - ATTEMPT_KEEP_MS } : null;
+    if (items.length === 0 && deleteTo === null && deleteOutcomes.length === 0 && purge === null) return true;
     this.#pending = [];
     this.#pendingBytes = 0;
     this.#pendingOutcomes.clear();
     this.#outcomeAcks.clear();
+    // Marks that fail with their commit were never written: their producers
+    // hear so (`durable`), and nothing here remembers them.
+    this.#pendingMarks = new Map();
+    this.#purgeDue = false;
 
     const events: NewEventRow[] = [];
     const outcomes: NewOutcomeRow[] = [];
+    const marks: AttemptMark[] = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
     let seq = store.lastSeq;
     let previousWall = store.lastWall;
     for (const item of items) {
       if (item.type === "outcome") {
-        outcomes.push({ attemptId: item.attemptId, atWall: item.atWall, type: item.outcomeType, json: item.json, bytes: item.bytes });
+        outcomes.push({ attemptId: item.attemptId, atWall: item.atWall, type: item.outcomeType, json: item.json, bytes: item.bytes, bodyId: item.body?.bodyId ?? null, bodyBytes: item.body?.bytes ?? null });
+        settled.push({ item, seq: null });
+        continue;
+      }
+      if (item.type === "mark") {
+        marks.push(item.mark);
         settled.push({ item, seq: null });
         continue;
       }
@@ -785,14 +957,19 @@ export class EventBuffer {
 
     let committed;
     try {
-      committed = store.commit({ events, outcomes, deleteEventsUpTo: deleteTo, deleteOutcomes });
+      committed = store.commit({ events, outcomes, marks, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
+      if (purge !== null) this.#purgeDue = true;
       for (const { item } of settled) item.resolve({ ok: false, reason: "disk_full" });
       this.#storageFailed(error, "write");
       this.#retryLater();
       return false;
     }
+    if (purge !== null) this.#lastPurge = this.#now();
+    // The bodies of acknowledged outcomes: their rows are gone, their files
+    // go now (a crash in between leaves them to the next open's sweep).
+    for (const bodyId of committed.deletedBodies) this.removeBody(bodyId);
     this.#commits += 1;
     this.#retries = 0;
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
@@ -818,7 +995,12 @@ export class EventBuffer {
       // Committed all the same; the file cannot be read now.
       this.#storageFailed(error, "read");
     }
-    this.#notify("committed", () => this.#onCommitted({ events: events.length, outcomes: outcomes.filter((outcome) => insertedOutcomes.has(outcome.attemptId)).map((outcome) => outcome.json) }));
+    this.#notify("committed", () =>
+      this.#onCommitted({
+        events: events.length,
+        outcomes: outcomes.filter((outcome) => insertedOutcomes.has(outcome.attemptId)).map((outcome) => ({ attemptId: outcome.attemptId, json: outcome.json, bodyId: outcome.bodyId })),
+      }),
+    );
     // The alarms as soon as a batch crosses a threshold, not at the next check.
     this.#raiseAlarms(this.#level());
     const deleted = committed.deletedEvents > 0 || committed.deletedOutcomes > 0;
