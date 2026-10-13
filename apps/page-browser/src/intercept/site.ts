@@ -1285,7 +1285,7 @@ export class SiteRequests {
   #failReplaced(): void {
     for (const op of [...this.#ops.values()]) {
       if (op.done || op.stage === "released" || !this.documents.replaced(op.document)) continue;
-      this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: "not used: its document was replaced while it waited" });
+      this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: op.attemptId === null ? "its document was replaced while it waited" : "not used: its document was replaced while it waited" });
     }
   }
 
