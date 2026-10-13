@@ -46,7 +46,14 @@
 //    while its deadline is ahead. The preflight's answer is handed on with
 //    Fetch.fulfillRequest (stage 1, amendment 3: Chrome 155 kills its
 //    network service when a preflight's interception job is continued);
-//    a non-2xx answer to it is its operation's answer.
+//    a non-2xx answer to it is its operation's answer. Chrome names the
+//    request a preflight was made for (`initiator.requestId`), and tells of
+//    that request's end even while only its preflight is paused or in
+//    flight: a request the page aborts while it waits ends its operation at
+//    once — its preflight, still paused in Chrome, is failed, never
+//    released — and one aborted while its preflight is in flight ends with
+//    the preflight's answer (the sender's word; Chrome 155 reports no other
+//    end of a preflight handed on by fulfill).
 //
 // The answer of a route "with platform data" (the map's `platformData`) is
 // kept, never held up: the body's stream (Network.streamResourceContent) is
@@ -240,12 +247,20 @@ interface SiteOp {
   fromServiceWorker: boolean;
   wireStatus: number | null;
   recoveredNotSent: boolean;
+  /** The request ended (the page aborted it, Chrome's CORS check failed
+   *  it) while its preflight was in flight: the operation ends with the
+   *  preflight's answer. */
+  mainGone: string | null;
   expired: boolean;
   noResponse: boolean;
   timedOut: boolean;
   cutByUs: boolean;
   /** The row of its id is in the buffer (written before its siteAdmit). */
   kept: boolean;
+  /** Its request paused after its preflight (it is being released). */
+  mainPaused: boolean;
+  /** The wait for its request after the preflight's answer is running. */
+  mainWaited: boolean;
   timers: Set<NodeJS.Timeout>;
   limitTimer: NodeJS.Timeout | null;
   requestTimerArmed: boolean;
@@ -331,6 +346,12 @@ export class SiteRequests {
     this.#log = deps.log ?? makeLog("site");
     this.documents = new Documents(deps.cdp);
     this.documents.onReplaced = () => this.#failReplaced();
+    this.documents.onPreflight = (preflightId, requestId) => {
+      // The request of an operation that began with this preflight: its end
+      // is the operation's, whichever of the two Chrome told of first.
+      const op = this.#opOf(preflightId);
+      if (op !== null && !op.done && op.firstRole === "preflight" && op.roles.get(preflightId) === "preflight") this.#own(op, requestId, "main");
+    };
     const cdp = deps.cdp;
     cdp.on("Network.requestWillBeSent", (event) => this.#onWillBeSent(event));
     cdp.on("Network.requestWillBeSentExtraInfo", (event) => this.#onExtraInfo(event));
@@ -388,7 +409,7 @@ export class SiteRequests {
         break;
     }
     if (!preflight) {
-      const waiting = this.#takeAwaiting(keyOf(request.method, request.url));
+      const waiting = this.#takeAwaiting(request.networkId, keyOf(request.method, request.url));
       if (waiting !== null) {
         waiting.held.add(request);
         if (request.networkId !== null) this.#own(waiting, request.networkId, "main");
@@ -450,7 +471,8 @@ export class SiteRequests {
   onAdmitResult(result: SiteAdmitResult): void {
     const op = this.#ops.get(result.siteRequestId);
     if (!op || op.done || op.stage !== "asked" || op.askedEpoch !== this.#deps.link.epoch()) {
-      const why = op ? (op.done ? "it ended" : `it is ${op.stage}${op.askedEpoch !== this.#deps.link.epoch() ? " on another connection" : ""}`) : (this.#gone.get(result.siteRequestId) ?? "no site request waits for this admission");
+      const gone = this.#gone.get(result.siteRequestId);
+      const why = op ? (op.done ? "its request ended" : `its request is ${op.stage}${op.askedEpoch !== this.#deps.link.epoch() ? " on another connection" : ""}`) : gone !== undefined ? `its request had ended (${gone})` : "no site request waits for this admission";
       this.#log("admit.late", { siteRequestId: result.siteRequestId, admit: result.admit, why });
       // An admission given to nothing ends at once: the engine must not wait
       // for a request that is not there.
@@ -664,11 +686,14 @@ export class SiteRequests {
       fromServiceWorker: false,
       wireStatus: null,
       recoveredNotSent: false,
+      mainGone: null,
       expired: false,
       noResponse: false,
       timedOut: false,
       cutByUs: false,
       kept: false,
+      mainPaused: false,
+      mainWaited: false,
       timers: new Set(),
       limitTimer: null,
       requestTimerArmed: false,
@@ -678,6 +703,8 @@ export class SiteRequests {
     };
     this.#ops.set(id, op);
     if (request.networkId !== null) this.#own(op, request.networkId, role);
+    const requestId = role === "preflight" ? this.documents.requestOf(request.networkId) : null;
+    if (requestId !== null) this.#own(op, requestId, "main");
     this.#log("pause", { siteRequestId: id, role, method: op.method, route: op.route, operation: op.operation });
     // The body's stream, armed now, before the admission is asked.
     if (role === "main" && op.platformData) op.capture = this.#arm(op, request);
@@ -804,6 +831,13 @@ export class SiteRequests {
     const phrase = response.statusText ? { phrase: response.statusText } : {};
     if (phys.role === "preflight") {
       await this.#deps.resolve(request, { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a site request's preflight answer, handed on", ...phrase });
+      if (op.done) return;
+      // The preflight's end, by the sender's word (Chrome 155 tells no other
+      // of one handed on so).
+      phys.ended = true;
+      this.#deps.gate.close(phys.window);
+      if (op.mainGone !== null) return this.#afterPreflight(op, op.mainGone);
+      this.#awaitMain(op);
       return;
     }
     const location = header(response.headers, "location");
@@ -986,11 +1020,7 @@ export class SiteRequests {
     this.#deps.gate.close(phys.window);
     if (op.done || !phys.released) return;
     if (phys.role === "preflight") {
-      if (op.main === null) {
-        this.#timer(op, this.#timings.mainWaitMs, () => {
-          if (op.main === null && !op.done) this.#afterPreflight(op, "the request did not follow its preflight");
-        });
-      }
+      this.#awaitMain(op);
       return;
     }
     this.#answered(op, op.capture === null ? null : this.#whole(op, "finished"));
@@ -1008,10 +1038,18 @@ export class SiteRequests {
     const errorText = String(params.errorText ?? "");
     const canceled = params.canceled === true;
     if (!phys.released) {
-      // Failed before its pause or release: Chrome's CORS check after the
-      // preflight, or the page dropped it.
-      if (phys.role === "main" && op.preflight !== null) return this.#afterPreflight(op, `the request failed before it was released: ${errorText}`);
-      return this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: `the request failed before it was released: ${errorText}` });
+      // Ended before its pause or release: the page aborted it, or Chrome's
+      // CORS check after the preflight failed it.
+      const why = `the request ended before it was released: ${errorText}`;
+      if (phys.role === "main" && op.preflight !== null) {
+        // Its preflight is in flight: the operation ends with its answer.
+        if (!op.preflight.answered && !op.preflight.ended) {
+          op.mainGone = why;
+          return;
+        }
+        return this.#afterPreflight(op, why);
+      }
+      return this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: why });
     }
     if (phys.answered) {
       if (phys.role === "preflight") return;
@@ -1302,13 +1340,34 @@ export class SiteRequests {
     this.#awaitingMain.set(op.key, [...(this.#awaitingMain.get(op.key) ?? []), op.id]);
   }
 
-  #takeAwaiting(key: string): SiteOp | null {
+  /** The preflight was answered: its request follows soon, or never. */
+  #awaitMain(op: SiteOp): void {
+    if (op.done || op.main !== null || op.mainWaited) return;
+    op.mainWaited = true;
+    this.#timer(op, this.#timings.mainWaitMs, () => {
+      if (op.main === null && !op.done && !op.mainPaused) this.#afterPreflight(op, "the request did not follow its preflight");
+    });
+  }
+
+  /** The operation whose preflight went and whose request this is: by the
+   *  id Chrome named at the preflight, else by its method and URL. */
+  #takeAwaiting(networkId: string | null, key: string): SiteOp | null {
+    const linked = this.#opOf(networkId);
+    if (linked !== null && !linked.done && linked.firstRole === "preflight" && linked.main === null && linked.stage === "released" && !linked.mainPaused) {
+      this.#dropAwaiting(linked);
+      linked.mainPaused = true;
+      return linked;
+    }
+    // Chrome named another operation's request, or none: never a guess
+    // across operations.
+    if (linked !== null) return null;
     const ids = this.#awaitingMain.get(key);
     if (!ids) return null;
     while (ids.length > 0) {
       const op = this.#ops.get(ids.shift()!);
-      if (op && !op.done && op.main === null && op.stage === "released") {
+      if (op && !op.done && op.main === null && op.stage === "released" && !op.mainPaused) {
         if (ids.length === 0) this.#awaitingMain.delete(key);
+        op.mainPaused = true;
         return op;
       }
     }

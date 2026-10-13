@@ -11,6 +11,8 @@ import type { CdpCommand, FakeCdpPort } from "./page-browser-fakes.ts";
 export interface SiteScript {
   /** A CORS preflight first, answered with this status. */
   preflight?: number;
+  /** The preflight's answer comes this long after it went. */
+  preflightDelayMs?: number;
   status?: number;
   headers?: Array<{ name: string; value: string }>;
   /** The body in chunks; its content-length is declared unless `chunked`. */
@@ -132,7 +134,8 @@ export class SiteChrome {
       this.requests.push(preflight);
       this.#willBeSent(preflight, { type: "preflight", requestId: main.networkId }, "");
       this.#willBeSent(main, { type: "script" }, main.loaderId);
-      this.#pause(preflight, "Preflight", options.postData);
+      // Chrome 155 pauses a preflight with its request's resource type.
+      this.#pause(preflight, resourceType);
       (main as SiteModelRequest & { resourceType?: string }).resourceType = resourceType;
       return main;
     }
@@ -247,10 +250,8 @@ export class SiteChrome {
         request.outcome = "continued";
         request.ended = true;
         this.unfulfilledPreflights += 1;
-        this.#responseReceived(request, script.preflight ?? 204);
         setImmediate(() => {
-          this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 120 }, request.session);
-          if (request.main) this.#pause(request.main, (request.main as SiteModelRequest & { resourceType?: string }).resourceType ?? "XHR");
+          if (request.main && !request.main.ended) this.#pause(request.main, (request.main as SiteModelRequest & { resourceType?: string }).resourceType ?? "XHR");
         });
         return;
       }
@@ -261,15 +262,18 @@ export class SiteChrome {
     }
     request.stage = "response";
     if (request.role === "preflight") {
-      this.cdp.emit("Fetch.requestPaused", {
-        requestId: request.interceptionId,
-        networkId: request.networkId,
-        request: { url: request.url, method: "OPTIONS", headers: request.headers },
-        resourceType: "Preflight",
-        responseStatusCode: script.preflight ?? 204,
-        responseStatusText: "No Content",
-        responseHeaders: [{ name: "access-control-allow-origin", value: "https://fansly.com" }],
-      });
+      setTimeout(() => {
+        if (request.ended) return;
+        this.cdp.emit("Fetch.requestPaused", {
+          requestId: request.interceptionId,
+          networkId: request.networkId,
+          request: { url: request.url, method: "OPTIONS", headers: request.headers },
+          resourceType: "XHR",
+          responseStatusCode: script.preflight ?? 204,
+          responseStatusText: "No Content",
+          responseHeaders: [{ name: "access-control-allow-origin", value: "https://fansly.com" }, ...(script.headers ?? []).filter((entry) => entry.name.toLowerCase() === "retry-after")],
+        });
+      }, script.preflightDelayMs ?? 0);
       return;
     }
     const body = Buffer.concat(script.chunks ?? [Buffer.from('{"success":true,"response":[]}')]);
@@ -311,16 +315,33 @@ export class SiteChrome {
     if (!request) return { error: { code: -32602, message: "Invalid InterceptionId." } };
     request.outcome = "fulfilled";
     request.ended = true;
-    this.#responseReceived(request, Number(command.params.responseCode));
+    if (request.role !== "preflight") {
+      // A request answered here (a redirect made final): its end follows.
+      this.#responseReceived(request, Number(command.params.responseCode));
+      setImmediate(() => this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 120 }, request.session));
+      return {};
+    }
+    // Chrome 155 tells nothing more of a preflight handed on by fulfill —
+    // no responseReceived, no loadingFinished: its request pauses next, or
+    // fails Chrome's CORS check, or was aborted meanwhile and never comes.
     setImmediate(() => {
-      this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: 120 }, request.session);
-      if (request.role !== "preflight" || request.main === null) return;
-      const status = Number(command.params.responseCode);
       const main = request.main;
+      if (main === null || main.ended) return;
+      const status = Number(command.params.responseCode);
       if (status >= 200 && status < 300) this.#pause(main, (main as SiteModelRequest & { resourceType?: string }).resourceType ?? "XHR");
       else this.#end(main, "net::ERR_FAILED", false);
     });
     return {};
+  }
+
+  /** The page aborts a request (XMLHttpRequest.abort, a route left): Chrome
+   *  tells of the request's end by its own id — also while only its
+   *  preflight is paused or in flight, and that preflight goes on as it
+   *  was: still paused, or answered later. */
+  abort(main: SiteModelRequest): void {
+    if (main.ended) return;
+    main.ended = true;
+    this.cdp.emit("Network.loadingFailed", { requestId: main.networkId, errorText: "net::ERR_ABORTED", canceled: true }, main.session);
   }
 
   #continueResponse(command: CdpCommand): unknown {

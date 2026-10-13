@@ -396,7 +396,7 @@ describe("a CORS preflight (owner decision №1)", () => {
     const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204, chunks: [JSON_BODY] } });
     const [done] = await doneOf(w);
     expect(w.engine.of("siteAdmit")).toHaveLength(1);
-    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ method: "GET", resourceType: "Preflight", route: "messages.page", sessionFingerprint: null });
+    expect(w.engine.of("siteAdmit")[0]).toMatchObject({ method: "GET", resourceType: "XHR", route: "messages.page", sessionFingerprint: null });
     expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight", "main"]);
     expect(w.chrome.preflightOf(request)!.outcome).toBe("fulfilled");
     expect(done).toMatchObject({ sent: true, status: 200, body: "buffered" });
@@ -410,8 +410,48 @@ describe("a CORS preflight (owner decision №1)", () => {
     w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 429, headers: [{ name: "retry-after", value: "30" }] } });
     const [done] = await doneOf(w);
     expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight"]);
-    expect(done).toMatchObject({ sent: true, status: 429, body: "not_platform_data", error: null });
+    expect(done).toMatchObject({ sent: true, status: 429, retryAfter: "30", body: "not_platform_data", error: null });
     expect(siteResponses(w.buffer)).toEqual([]);
+  });
+
+  it("the page aborts a request that waits for its admission, its preflight still paused: ended at once, the preflight failed in Chrome and never released, a late admission not used", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204 } });
+    const preflight = w.chrome.preflightOf(request)!;
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    w.chrome.abort(request);
+    await until(() => preflight.outcome === "failed", 3000, "the paused preflight to be failed");
+    expect(w.site.live).toBe(0);
+    expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", result: "the request ended before it was released: net::ERR_ABORTED" }));
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(w.engine.of("siteAdmit")[0]!.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 73 });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 73, sent: false });
+    expect(w.chrome.wire).toEqual([]);
+    expect(w.faults).toEqual([]);
+  });
+
+  it("the page aborts a request whose preflight is in flight: the operation ends with the preflight's answer — the sender's word — and never hangs", async () => {
+    const w = await world({ timings: { mainWaitMs: 5000, opLimitMs: 5000 } });
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204, preflightDelayMs: 150 } });
+    await until(() => w.chrome.wire.length === 1, 3000, "the preflight on the wire");
+    w.chrome.abort(request);
+    const [done] = await doneOf(w);
+    expect(w.chrome.preflightOf(request)!.outcome).toBe("fulfilled");
+    expect(done).toMatchObject({ sent: true, status: null, error: { afterSendStart: true, message: "the request ended before it was released: net::ERR_ABORTED" }, body: "not_platform_data" });
+    expect(w.chrome.wire.map((entry) => entry.role)).toEqual(["preflight"]);
+    expect(w.faults).toEqual([]);
+    expect(w.site.live).toBe(0);
+  });
+
+  it("a request that never follows its answered preflight ends its operation after a wait (Chrome tells no end of a preflight handed on by fulfill)", async () => {
+    const w = await world({ timings: { mainWaitMs: 150, opLimitMs: 5000 } });
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204 } });
+    // The request is gone without a word (its document went).
+    request.ended = true;
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ sent: true, status: null, error: { message: "the request did not follow its preflight" } });
+    expect(w.faults).toEqual([]);
   });
 
   it("a request whose session is not the one its admission was asked under is not released: the session changed between the preflight and the request", async () => {

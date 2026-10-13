@@ -46,6 +46,8 @@ export class Documents {
   readonly #replaced = new Map<string, true>();
   /** Told when a frame's document is replaced. */
   onReplaced: () => void = () => undefined;
+  /** Told when Chrome names the request a preflight was made for. */
+  onPreflight: (preflightId: string, requestId: string) => void = () => undefined;
 
   constructor(cdp: CdpPort) {
     cdp.on("Network.requestWillBeSent", (event) => this.#onWillBeSent(event));
@@ -63,6 +65,12 @@ export class Documents {
     if (loader !== null) return this.#replaced.has(loader);
     if (mark.frameId === null || mark.frameId === "") return false;
     return (this.#frames.get(mark.frameId)?.navigations ?? 0) > mark.navigations;
+  }
+
+  /** The request a preflight was made for (its network id), once Chrome
+   *  said so; null until then. */
+  requestOf(preflightId: string | null): string | null {
+    return preflightId === null ? null : (this.#preflightOf.get(preflightId) ?? null);
   }
 
   /** A new browser: nothing of the old one counts. */
@@ -86,7 +94,10 @@ export class Documents {
     const params = event.params as { requestId?: unknown; loaderId?: unknown; initiator?: { type?: unknown; requestId?: unknown } };
     if (typeof params.requestId !== "string") return;
     remember(this.#loaderOf, params.requestId, typeof params.loaderId === "string" ? params.loaderId : "");
-    if (params.initiator?.type === "preflight" && typeof params.initiator.requestId === "string") remember(this.#preflightOf, params.requestId, params.initiator.requestId);
+    if (params.initiator?.type === "preflight" && typeof params.initiator.requestId === "string") {
+      remember(this.#preflightOf, params.requestId, params.initiator.requestId);
+      this.onPreflight(params.requestId, params.initiator.requestId);
+    }
   }
 
   #onNavigated(event: CdpEvent): void {
