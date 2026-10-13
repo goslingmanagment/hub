@@ -427,24 +427,24 @@ describe("fan-notes-fill on the gateway", () => {
     const built = buildAnthropicGatewayStreamRequest(body());
     expect(built).toMatchObject({
       model: "claude-sonnet-5-5",
-      max_tokens: 8000,
+      max_tokens: 16000,
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "low" },
     });
     expect(built).not.toHaveProperty("temperature");
   });
 
-  it("keeps a modest visible cap and a low temperature where the model takes them", () => {
+  it("keeps a visible cap sized for merge-mode quotes and a low temperature where the model takes them", () => {
     expect(resolveAnthropicGatewayRequestTuning({
       providerModelId: "claude-haiku-4-5",
       feature: "fan-notes-fill",
       temperature: 0.2,
       reasoningEffort: "off",
-    })).toEqual({ maxTokens: 2000, temperature: 0.2 });
+    })).toEqual({ maxTokens: 6000, temperature: 0.2 });
     expect(buildAnthropicGatewayStreamRequest(body({ model: "anthropic:claude-haiku-4-5", reasoningEffort: "off" })))
-      .toMatchObject({ max_tokens: 2000, temperature: 0.2 });
+      .toMatchObject({ max_tokens: 6000, temperature: 0.2 });
     expect(buildOpenrouterGatewayStreamRequest(body({ model: "openrouter:openai/gpt-4o-mini", reasoningEffort: "off" })))
-      .toMatchObject({ max_tokens: 2000, temperature: 0.2 });
+      .toMatchObject({ max_tokens: 6000, temperature: 0.2 });
   });
 });
 
