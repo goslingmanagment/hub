@@ -382,9 +382,16 @@ describe("the image", () => {
       QuicAllowed: false,
       WebRtcIPHandling: "disable_non_proxied_udp",
       NetworkPredictionOptions: 2,
+      // Every http:// navigation upgraded: the page leaves only over TLS.
+      HttpsOnlyMode: "force_enabled",
       PasswordManagerEnabled: false,
       PasswordLeakDetectionEnabled: false,
       BrowserSignin: 0,
+      // No window or profile where the rules extension does not run:
+      // extensions are off in Incognito and in guest windows (PR 6).
+      IncognitoModeAvailability: 1,
+      BrowserGuestModeEnabled: false,
+      BrowserAddPersonEnabled: false,
       SyncDisabled: true,
       DownloadRestrictions: 3,
       RestoreOnStartup: 4,
@@ -422,6 +429,9 @@ describe("the stand's checks of the image", () => {
     expect(rulesCheck).toContain("for (const row of CLOSED_ROWS.filter((entry) => entry.methods.includes(ANY_METHOD))) {");
     expect(rulesCheck).toContain("for (const closure of GENERAL_CLOSURES)");
     expect(rulesCheck).toContain('if (!chromeGone() && !takeOver) throw new Error("Chrome is running');
+    // No window without the extension (Ctrl+Shift+N), TLS only, and the
+    // environment check's page under those policies, on the real Chrome.
+    for (const name of ["no_window_without_the_extension", "env_check_page_works", "http_navigation_upgraded"]) expect(rulesCheck).toContain(`check("${name}"`);
     // It leaves the page as a standing one, whatever happened.
     const last = rulesCheck.slice(rulesCheck.indexOf("} finally {"));
     expect(last).toContain('svc("-d", CHROME)');

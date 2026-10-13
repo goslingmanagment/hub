@@ -12,7 +12,7 @@ import { ExtensionFiles } from "../apps/page-browser/src/egress/extension-files.
 import { Egress } from "../apps/page-browser/src/egress/proxy.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { extensionId, packCrx3, publicKeyDer, unzip, updateManifest, verifyCrx3, zip } from "../apps/page-browser/src/extension/crx.ts";
-import { buildPackage, checkVersion, CRX_PATH, manifestFor, PACKAGE_FILES, policyWith, UPDATE_PATH, UPDATE_URL } from "../apps/page-browser/src/extension/package.ts";
+import { buildPackage, checkVersion, CRX_PATH, manifestFor, NO_WINDOW_WITHOUT_THE_EXTENSION, PACKAGE_FILES, policyWith, UPDATE_PATH, UPDATE_URL } from "../apps/page-browser/src/extension/package.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { dropUnrecordedExtensionDirs } from "../apps/page-browser/src/profile/extension-dirs.ts";
 import { quiet } from "./helpers/page-browser-fakes.ts";
@@ -159,6 +159,17 @@ describe("the package", () => {
     expect({ ...withIt, ExtensionSettings: policy.ExtensionSettings }).toEqual(policy);
     expect(() => policyWith(policy, "not-an-id")).toThrow();
   });
+
+  it("refuses a policy under which a window could run without the extension: Incognito, a guest, a new person", () => {
+    const policy = JSON.parse(readFileSync(path.join(app, "policies/hub.json"), "utf8")) as Record<string, unknown>;
+    expect(NO_WINDOW_WITHOUT_THE_EXTENSION).toEqual({ IncognitoModeAvailability: 1, BrowserGuestModeEnabled: false, BrowserAddPersonEnabled: false });
+    expect(policy).toMatchObject(NO_WINDOW_WITHOUT_THE_EXTENSION);
+    for (const [name, wrong] of [["IncognitoModeAvailability", 0], ["IncognitoModeAvailability", 2], ["IncognitoModeAvailability", undefined], ["BrowserGuestModeEnabled", true], ["BrowserGuestModeEnabled", undefined], ["BrowserAddPersonEnabled", true], ["BrowserAddPersonEnabled", undefined]] as const) {
+      const changed: Record<string, unknown> = { ...policy, [name]: wrong };
+      if (wrong === undefined) delete changed[name];
+      expect(() => policyWith(changed, "a".repeat(32)), `${name}: ${String(wrong)}`).toThrow(new RegExp(name));
+    }
+  });
 });
 
 describe("the build into the image (extension/build.ts)", () => {
@@ -184,6 +195,8 @@ describe("the build into the image (extension/build.ts)", () => {
       const settings = (JSON.parse(readFileSync(policy, "utf8")) as { ExtensionSettings: Record<string, { installation_mode: string }> }).ExtensionSettings;
       expect(Object.keys(settings)).toEqual(["*", id]);
       expect(settings[id]!.installation_mode).toBe("force_installed");
+      // The image's policy keeps every window with the extension.
+      expect(JSON.parse(readFileSync(policy, "utf8"))).toMatchObject({ ...NO_WINDOW_WITHOUT_THE_EXTENSION, HttpsOnlyMode: "force_enabled" });
       expect(JSON.parse(result.stdout)).toMatchObject({ id, rules: buildRules().length });
       // Nothing of a private key anywhere it wrote.
       for (const file of readdirSync(out)) expect(readFileSync(path.join(out, file)).includes("PRIVATE KEY"), file).toBe(false);

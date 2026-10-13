@@ -86,20 +86,52 @@ export const READ_METHODS: readonly string[] = ["GET", "HEAD", "OPTIONS"];
  *  preflights (a HEAD is not in the map). */
 export const API_OPEN_METHODS: readonly string[] = ["GET", "OPTIONS"];
 
-/** Local and private destinations (plan §4.5): refused by the proxy even
- *  with the exit open, and by the extension (its rules work on the address
- *  in the request only). Kept as text the rules builder turns into DNR
- *  expressions and the proxy into its checks: one list for both. */
+/** Local, private and special-use destinations (plan §4.5): refused by the
+ *  proxy even with the exit open, and by the extension. Kept as text the
+ *  rules builder turns into DNR expressions and the proxy into its checks:
+ *  one list for both.
+ *
+ *  Both refuse the address IN THE REQUEST — a name, or a literal address.
+ *  What the page's SOCKS5 resolves a name to is not seen: DNS is resolved at
+ *  the page's proxy by design (plan §4.5 — the operator passes the name and
+ *  never resolves it; resolving it here would change the page's DNS
+ *  behaviour), and the private addresses behind that proxy are its
+ *  provider's network, not Hub's — the container's own rules let the
+ *  operator reach only the SOCKS5's address and port (spec §2.1). */
 export const LOCAL = {
   /** Names: these and every name under them; a name without a dot too. */
   names: ["localhost", "local", "internal", "home.arpa"],
-  /** IPv4: the leading octets of a range, as expressions (the dots are
-   *  separators, the rest is matched by the address's other octets). */
-  ipv4: ["0", "10", "127", "169\\.254", "192\\.168", "172\\.(1[6-9]|2[0-9]|3[01])", "100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])", "22[4-9]", "2[3-5][0-9]"],
-  /** IPv6 (lower case): unspecified and loopback, and these prefixes —
-   *  mapped IPv4, unique local, link-local, multicast. */
+  /** IPv4 (IANA's special-purpose registry, the ranges that are not
+   *  reachable on the internet): the leading octets of a range, as
+   *  expressions (the dots are separators, the rest is matched by the
+   *  address's other octets) — this network, private, loopback,
+   *  link-local, shared address space, IETF protocol assignments,
+   *  documentation, benchmarking, multicast and reserved. */
+  ipv4: [
+    "0",
+    "10",
+    "127",
+    "169\\.254",
+    "192\\.168",
+    "172\\.(1[6-9]|2[0-9]|3[01])",
+    "100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])",
+    "192\\.0\\.0",
+    "192\\.0\\.2",
+    "198\\.1[89]",
+    "198\\.51\\.100",
+    "203\\.0\\.113",
+    "22[4-9]",
+    "2[3-5][0-9]",
+  ],
+  /** IPv6 (lower case, as a URL or a CONNECT writes it): unspecified and
+   *  loopback, and these prefixes — mapped IPv4, unique local, link-local,
+   *  multicast, documentation (2001:db8::/32), discard-only (100::/64). A
+   *  prefix is matched on the text: a group written without its leading
+   *  zeros (`fca::`) is taken too — more is closed, never less. Left out:
+   *  NAT64's 64:ff9b::/96, which stands for global IPv4 addresses only
+   *  (RFC 6052, §3.1: never for private ones). */
   ipv6Exact: ["::", "::1"],
-  ipv6Prefixes: ["::ffff:", "fc", "fd", "fe8", "fe9", "fea", "feb", "ff"],
+  ipv6Prefixes: ["::ffff:", "fc", "fd", "fe8", "fe9", "fea", "feb", "ff", "2001:db8:", "100::"],
 } as const;
 
 /** Special-use names that exist nowhere (RFC 6761, 9476): the proxy refuses
@@ -421,6 +453,11 @@ export const GENERAL_CLOSURES: ReadonlyArray<{ rule: string; what: string; examp
       { method: "GET", url: "http://[fd00::1]/" },
       { method: "GET", url: "http://router.local/" },
       { method: "GET", url: "http://intranet/" },
+      { method: "GET", url: "https://198.18.0.1/" },
+      { method: "GET", url: "https://203.0.113.7/" },
+      { method: "GET", url: "https://192.0.0.8/" },
+      { method: "GET", url: "http://[2001:db8::1]/" },
+      { method: "GET", url: "http://[100::1]/" },
     ],
   },
 ];

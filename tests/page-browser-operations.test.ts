@@ -55,13 +55,13 @@ describe("hosts (spec §2.1, decision №2)", () => {
     // Any other host under fansly.com is Fansly's: through, writes closed.
     for (const host of ["www.fansly.com", "leaderboard.fansly.com", "evil-apiv3.fansly.com", "x.chatws.fansly.com"]) expect(classifyHost(host), host).toBe("site");
     // Not Fansly's: through the page's SOCKS5, journaled.
-    for (const host of ["www.googletagmanager.com", "fonts.gstatic.com", "widget.intercom.io", "update.googleapis.com", "apiv3.fansly.com.evil.net", "notfansly.com", "203.0.113.7", "2001:db8::1"]) {
+    for (const host of ["www.googletagmanager.com", "fonts.gstatic.com", "widget.intercom.io", "update.googleapis.com", "apiv3.fansly.com.evil.net", "notfansly.com", "1.1.1.1", "2606:4700:4700::1111"]) {
       expect(classifyHost(host), host).toBe("third_party");
     }
   });
 
   it("refuses local, private and special-use names — the placeholder of Hub's requests among them", () => {
-    for (const host of ["localhost", "a.localhost", "printer.local", "db.internal", "router.home.arpa", "intranet", "127.0.0.1", "10.0.0.1", "172.16.5.4", "172.31.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "::1", "[::1]", "::", "fd00::1", "fe80::1", "::ffff:7f00:1", "ff02::1", ""]) {
+    for (const host of ["localhost", "a.localhost", "printer.local", "db.internal", "router.home.arpa", "intranet", "127.0.0.1", "10.0.0.1", "172.16.5.4", "172.31.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "::1", "[::1]", "::", "fd00::1", "fe80::1", "::ffff:7f00:1", "ff02::1", "", "192.0.0.8", "192.0.2.10", "198.18.0.1", "198.19.255.255", "198.51.100.9", "203.0.113.7", "2001:db8::1", "[2001:db8:85a3::8a2e:370:7334]", "100::1", "100::"]) {
       expect(isLocalAddress(host), host).toBe(true);
       expect(classifyHost(host), host).toBe("denied");
     }
@@ -70,7 +70,7 @@ describe("hosts (spec §2.1, decision №2)", () => {
       expect(isLocalHost(host), host).toBe(true);
       expect(classifyHost(host), host).toBe("denied");
     }
-    for (const host of ["172.15.0.1", "172.32.0.1", "100.63.0.1", "100.128.0.1", "11.0.0.1", "223.255.255.1", "example.com", "local.example.com", "fe00::1", "2001:db8::1"]) expect(isLocalHost(host), host).toBe(false);
+    for (const host of ["172.15.0.1", "172.32.0.1", "100.63.0.1", "100.128.0.1", "11.0.0.1", "223.255.255.1", "example.com", "local.example.com", "fe00::1", "192.0.1.1", "192.0.3.1", "198.17.0.1", "198.20.0.1", "198.51.101.1", "203.0.114.1", "2001:db9::1", "1000::1", "100:0:0:1::1", "64:ff9b::808:808", "2606:4700:4700::1111"]) expect(isLocalHost(host), host).toBe(false);
   });
 
   it("has one row per host with a role, each with its source", () => {

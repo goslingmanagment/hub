@@ -187,7 +187,18 @@ export function buildRules(): DnrRule[] {
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}([^/@]*\\.)?(${LOCAL.names.map(escapeRegex).join("|")})${HOST_END}`));
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}[^./@:\\[\\]]+${HOST_END}`));
   for (const range of LOCAL.ipv4) rules.push(block(PRIORITY.local, `${WEB_ORIGIN}${range}\\.[0-9.]*(:[0-9]+)?/`));
-  rules.push(block(PRIORITY.local, `${WEB_ORIGIN}\\[(${LOCAL.ipv6Exact.map(escapeRegex).join("|")}|(${LOCAL.ipv6Prefixes.map(escapeRegex).join("|")})[^\\]]*)\\](:[0-9]+)?/`));
+  rules.push(block(PRIORITY.local, `${WEB_ORIGIN}\\[(${LOCAL.ipv6Exact.map(escapeRegex).join("|")})\\](:[0-9]+)?/`));
+  // The prefixes in as few rules as the expressions' budget allows.
+  const ipv6Rule = (prefixes: readonly string[]) => `${WEB_ORIGIN}\\[(${prefixes.map(escapeRegex).join("|")})[^\\]]*\\](:[0-9]+)?/`;
+  let prefixes: string[] = [];
+  for (const prefix of LOCAL.ipv6Prefixes) {
+    if (prefixes.length > 0 && regexCost(ipv6Rule([...prefixes, prefix]), false) > REGEX_BUDGET) {
+      rules.push(block(PRIORITY.local, ipv6Rule(prefixes)));
+      prefixes = [];
+    }
+    prefixes.push(prefix);
+  }
+  if (prefixes.length > 0) rules.push(block(PRIORITY.local, ipv6Rule(prefixes)));
   return rules.map((rule, index) => {
     const cost = regexCost(rule.condition.regexFilter, rule.condition.isUrlFilterCaseSensitive);
     if (cost > REGEX_BUDGET) throw new Error(`rule ${index + 1}: its expression costs ${cost}, over the budget of ${REGEX_BUDGET} — Chrome would drop the rule: ${rule.condition.regexFilter}`);

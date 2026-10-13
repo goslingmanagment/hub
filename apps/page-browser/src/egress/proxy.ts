@@ -26,14 +26,18 @@
 // - Every other host the site loads goes through as a plain tunnel: Fansly's
 //   page, static files and media, and third-party hosts as any browser's
 //   would (owner decision №2); the hosts the map of operations closes are
-//   refused (policy/operations.ts, spec §2.1).
+//   refused (policy/operations.ts, spec §2.1). A third-party name is
+//   resolved by the page's SOCKS5, not here: the refusal of local and
+//   private destinations holds for the address in the request.
 // - Each tunnel is one line of the connection journal: host, port, opened,
 //   closed, bytes both ways, what was held, the result.
 //
 // On this port the operator also serves the rules extension's package to
 // Chrome's policy (extension-files.ts, PR 6): a direct request for one of
 // its two files. Any other plain HTTP request — Chrome's proxied http:// —
-// is refused.
+// is refused: the page leaves only over TLS. Chrome's policy upgrades every
+// http:// navigation to https (HttpsOnlyMode), and a plain subresource of
+// an https page is Chrome's own mixed-content block (spec §2.1).
 
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
@@ -511,6 +515,12 @@ export class Egress {
     };
     const socks = this.#socks;
     if (!this.#exitOpen || socks === null) return this.#refuse(record, client, "refused: exit closed");
+    // Local and private addresses are refused as the request names them — a
+    // name or a literal (policy/operations.ts `LOCAL`). A name goes to the
+    // page's SOCKS5 as it is and is resolved there (plan §4.5): what it
+    // resolves to is not seen here, and need not be — a private address
+    // behind the page's proxy is its provider's network, not Hub's, and this
+    // container reaches nothing but that proxy (init-net; spec §2.1).
     if (local) return this.#refuse(record, client, "refused: local or private address");
     if (refusedClass(cls)) return this.#refuse(record, client, cls === "closed" ? "refused: host closed by the map" : "refused: special-use name");
     // Each socket of the site is its own tunnel, admitted by the engine.

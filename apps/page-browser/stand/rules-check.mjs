@@ -40,6 +40,11 @@
 //                 let it through (the operator and the engine decide those).
 //  4. With an interception in place, as the operator's own: the self-test's
 //     probes the extension cancels never reach it; its permitted probe does.
+//  5. No window without the extension, and TLS only (spec §8.1): the
+//     policies applied; Ctrl+Shift+N opens nothing (Incognito would run
+//     without extensions); the environment check's page still works under
+//     them; an http:// navigation is upgraded to https, and when that
+//     fails no plain request leaves.
 //
 // Prints one JSON object; exits 1 if anything failed.
 
@@ -49,6 +54,7 @@ import { createServer } from "node:net";
 
 const SRC = process.env.PB_SRC ?? "/opt/page-browser/src";
 const DIST = process.env.PB_EXTENSION_DIR ?? "/opt/page-browser/extension/dist";
+const POLICY = "/etc/opt/chrome/policies/managed/hub.json";
 const CDP = "http://127.0.0.1:9222";
 const PROXY_PORT = 3128;
 const CHROME = "/run/service/chrome";
@@ -170,6 +176,28 @@ class Cdp {
   }
   close() {
     this.#ws.close();
+  }
+}
+
+/** Chrome's policies as chrome://policy shows them: name → value text. */
+async function policyRows(cdp) {
+  const { targetId, sessionId } = await cdp.tab("chrome://policy/");
+  try {
+    const rows = await cdp.evaluateUntil(sessionId, `(() => {
+      const rows = [];
+      const walk = (node) => {
+        if (node.shadowRoot) walk(node.shadowRoot);
+        for (const child of node.children ?? []) {
+          if (child.classList?.contains("policy") && child.classList.contains("row")) rows.push([child.querySelector(".name")?.textContent.trim() ?? "", child.querySelector(".value")?.textContent.trim() ?? ""]);
+          walk(child);
+        }
+      };
+      walk(document.body);
+      return rows;
+    })()`, (value) => Array.isArray(value) && value.length > 0);
+    return new Map(rows);
+  } finally {
+    await cdp.send("Target.closeTarget", { targetId }).catch(() => undefined);
   }
 }
 
@@ -486,6 +514,77 @@ try {
   report.probes = { total: results.length, failed };
   // Everything Chrome brought the listener, besides the probes' own: its
   // own service traffic (journaled by the proxy in production).
+  // ── 5. no window without the extension; TLS only (spec §8.1) ──────────
+  // The policies as Chrome applied them: by name and value (the words of
+  // the other columns follow the page's language).
+  const policyFile = JSON.parse(readFileSync(POLICY, "utf8"));
+  const shown = await policyRows(cdp);
+  const wanted = ["IncognitoModeAvailability", "BrowserGuestModeEnabled", "BrowserAddPersonEnabled", "HttpsOnlyMode"];
+  const applied = Object.fromEntries(wanted.map((name) => [name, shown.get(name) ?? null]));
+  const appliedOk = wanted.every((name) => name in policyFile && applied[name] !== null && applied[name] === JSON.stringify(policyFile[name]).replace(/^"|"$/g, ""));
+  // Ctrl+Shift+N, as a person on the owner's screen presses it: no new
+  // window may open, in no other browser context (Incognito runs without
+  // extensions). Without the policy it opens one (seen on Chrome 155).
+  const { targetInfos: before } = await cdp.send("Target.getTargets");
+  const home = before.find((target) => target.targetId === site.targetId);
+  await cdp.send("Page.bringToFront", {}, site.sessionId);
+  for (const type of ["rawKeyDown", "keyUp"]) await cdp.send("Input.dispatchKeyEvent", { type, modifiers: 2 | 8, key: "N", code: "KeyN", windowsVirtualKeyCode: 78, nativeVirtualKeyCode: 78 }, site.sessionId);
+  await sleep(2000);
+  const { targetInfos: after } = await cdp.send("Target.getTargets");
+  const opened = after.filter((target) => target.type === "page" && !before.some((known) => known.targetId === target.targetId));
+  check("no_window_without_the_extension", appliedOk && opened.length === 0, {
+    applied,
+    opened: opened.map((target) => ({ url: target.url, otherContext: target.browserContextId !== home?.browserContextId })),
+  });
+
+  // The environment check's page (src/env/check.ts) under these policies:
+  // a throwaway context, http://127.0.0.1/pb-env-check answered at the
+  // browser target's interception — not upgraded, a secure context, the
+  // position given.
+  {
+    const { sessionId: browser } = await cdp.send("Target.attachToBrowserTarget");
+    const pausedUrls = [];
+    const answerCheck = (message) => {
+      if (message.method !== "Fetch.requestPaused" || message.sessionId !== browser) return;
+      pausedUrls.push(message.params.request.url);
+      void cdp.send("Fetch.fulfillRequest", { requestId: message.params.requestId, responseCode: 200, responseHeaders: [{ name: "content-type", value: "text/html" }], body: Buffer.from('<!doctype html><meta charset="utf-8"><title>pb-env</title>').toString("base64") }, browser).catch(() => undefined);
+    };
+    cdp.listeners.add(answerCheck);
+    await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*://127.0.0.1/pb-env-check*" }] }, browser);
+    let env = null;
+    let context = null;
+    try {
+      context = (await cdp.send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
+      await cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: "http://127.0.0.1", browserContextId: context });
+      const { targetId } = await cdp.send("Target.createTarget", { url: "http://127.0.0.1/pb-env-check#pb-env-rules-check", browserContextId: context });
+      const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+      await cdp.send("Emulation.setGeolocationOverride", { latitude: 52.52, longitude: 13.405, accuracy: 10 }, sessionId);
+      env = await cdp.evaluateUntil(sessionId, "({ href: location.href, secure: isSecureContext, title: document.title })", (value) => value?.title === "pb-env");
+      env.position = await cdp.evaluate(sessionId, "new Promise((resolve) => navigator.geolocation.getCurrentPosition((p) => resolve([p.coords.latitude, p.coords.longitude]), (e) => resolve('error ' + e.code), { timeout: 3000 }))");
+    } catch (error) {
+      env = { error: String(error) };
+    } finally {
+      if (context !== null) await cdp.send("Target.disposeBrowserContext", { browserContextId: context }).catch(() => undefined);
+      await cdp.send("Fetch.disable", {}, browser).catch(() => undefined);
+      cdp.listeners.delete(answerCheck);
+    }
+    check("env_check_page_works", env?.href === "http://127.0.0.1/pb-env-check#pb-env-rules-check" && env.secure === true && JSON.stringify(env.position) === "[52.52,13.405]" && pausedUrls.every((url) => url.startsWith("http://127.0.0.1/")), { env, pausedUrls });
+  }
+
+  // An http:// navigation to a public host is upgraded to https; when
+  // https fails, Chrome stops on its warning — no plain request leaves.
+  {
+    const tab = await cdp.tab("about:blank");
+    const from = listener.lines.length;
+    await cdp.send("Page.navigate", { url: "http://pb-check-http.example.com/start" }, tab.sessionId).catch(() => undefined);
+    await waitFor(() => listener.lines.slice(from).some((line) => line.includes("pb-check-http.example.com")), 5000, 50);
+    await sleep(1500);
+    const lines = listener.lines.slice(from).filter((line) => line.includes("pb-check-http.example.com"));
+    const location = await cdp.evaluate(tab.sessionId, "location.href").catch((error) => String(error));
+    await cdp.send("Target.closeTarget", { targetId: tab.targetId }).catch(() => undefined);
+    check("http_navigation_upgraded", lines.length > 0 && lines.every((line) => line.startsWith("CONNECT pb-check-http.example.com:443 ")), { lines, location });
+  }
+
   report.listener = { lines: listener.lines.length, hosts: [...new Set(listener.lines.map((line) => line.split(" ")[1]))].sort() };
   cdp.close();
 } catch (error) {

@@ -237,8 +237,10 @@ describe("the identity of the two layers (spec §2.7)", () => {
       { method: "PUT", url: "https://api-iam.intercom.io/messenger/web/ping" },
       { method: "GET", url: "wss://nexus-websocket-a.intercom.io/pubsub/x", type: "websocket" },
       { method: "GET", url: "https://update.googleapis.com/service/update2/json" },
-      { method: "GET", url: "https://203.0.113.7/" },
-      { method: "GET", url: "https://[2001:db8::1]/" },
+      { method: "GET", url: "https://1.1.1.1/" },
+      { method: "GET", url: "https://[2606:4700:4700::1111]/" },
+      { method: "GET", url: "https://198.20.0.1/" },
+      { method: "GET", url: "https://[64:ff9b::808:808]/" },
     ];
     for (const request of open) {
       const what = `${request.method} ${request.url}`;
@@ -354,12 +356,18 @@ describe("the identity of the two layers (spec §2.7)", () => {
       "0.0.0.0",
       "224.0.0.251",
       "203.0.113.7",
+      "198.18.0.1",
+      "192.0.0.8",
+      "1.1.1.1",
+      "198.20.0.1",
       "[::1]",
       "[::1]:3128",
       "[fd00::1]",
       "[fe80::1]",
       "[::ffff:127.0.0.1]",
       "[2001:db8::1]",
+      "[100::1]",
+      "[2606:4700:4700::1111]",
     ];
     const schemes = ["https", "http", "wss", "ws"];
     const methods = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "PROPFIND"];

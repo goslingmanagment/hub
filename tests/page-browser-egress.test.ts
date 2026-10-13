@@ -347,7 +347,10 @@ describe("hosts", () => {
       expect(localOrPrivate(host, port), `${host}:${port}`).toBe(true);
     }
     expect(localOrPrivate("fansly.com", 443)).toBe(false);
-    expect(localOrPrivate("203.0.113.7", 443)).toBe(false);
-    expect(localOrPrivate("2001:db8::1", 443)).toBe(false);
+    expect(localOrPrivate("1.1.1.1", 443)).toBe(false);
+    expect(localOrPrivate("2606:4700:4700::1111", 443)).toBe(false);
+    // Special-use literals (IANA's registry): documentation, benchmarking,
+    // IETF assignments, discard-only.
+    for (const host of ["192.0.0.8", "192.0.2.10", "198.18.0.1", "198.19.1.1", "198.51.100.9", "203.0.113.7", "2001:db8::1", "100::1"]) expect(localOrPrivate(host, 443), host).toBe(true);
   });
 });

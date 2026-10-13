@@ -76,10 +76,19 @@ export function buildPackage(options: { template: Record<string, unknown>; rules
   return { id, version, manifest, rules, crx, updateXml: updateManifest({ id, version, codebase: `${EXTENSION_ORIGIN}${CRX_PATH}`, sha256 }) };
 }
 
+/** The policies without which a window or a profile could run where the
+ *  rules extension does not (spec §8.1): extensions are off in Incognito
+ *  and in guest windows, force-installed ones too. */
+export const NO_WINDOW_WITHOUT_THE_EXTENSION = { IncognitoModeAvailability: 1, BrowserGuestModeEnabled: false, BrowserAddPersonEnabled: false } as const;
+
 /** Chrome's policies with the extension force-installed from the operator
- *  and every other blocked (spec §8.1). */
+ *  and every other blocked (spec §8.1). A policy that leaves a window
+ *  without the extension is refused: the image does not build. */
 export function policyWith(policy: Record<string, unknown>, id: string): Record<string, unknown> {
   if (!/^[a-p]{32}$/.test(id)) throw new Error(`not an extension ID: ${id}`);
+  for (const [name, value] of Object.entries(NO_WINDOW_WITHOUT_THE_EXTENSION)) {
+    if (policy[name] !== value) throw new Error(`the policy must set ${name} to ${JSON.stringify(value)}: a window without the rules extension would be possible`);
+  }
   return {
     ...policy,
     ExtensionSettings: {
