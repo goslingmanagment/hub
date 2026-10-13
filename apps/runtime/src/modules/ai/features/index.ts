@@ -992,6 +992,7 @@ export async function prepareAiFeatureStream(
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
+    noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.

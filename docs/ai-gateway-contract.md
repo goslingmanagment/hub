@@ -1015,6 +1015,34 @@ chat. The client sends the labels; the hub assembles the prompt
   `fan-notes-fill` (`fan-notes-fill requires noteFields`) and refused on every
   other feature (`<feature> does not accept noteFields`), both 400
   `bad_request`.
+- `noteValues` (optional, `fan-notes-fill` only): the questionnaire's current
+  value per label, index-aligned with `noteFields`: `""` for an empty field and
+  for a template field the note does not have yet. Each value is trimmed, then
+  0-2000 UTF-16 code units (`AI_NOTE_VALUE_MAX_CHARS`), with no line break
+  (`\r`, `\n`, U+2028, U+2029): a value is one line of the note. Any other
+  character is allowed, `<`, `>` and `&` included; the prompt escapes them like
+  all untrusted text (the transcript too), so the model reads `&lt;`, `&gt;`
+  and `&amp;` and writes that form back in a value it keeps and in a quote it
+  copies: the client decodes the three before it compares a value or locates a
+  quote. A value outside these rules, or a list of 0 or more than 30, is a
+  schema 400. A list whose length differs from `noteFields`
+  is a 400 `bad_request` (`noteValues must hold exactly one value per
+  noteFields label`); every other feature refuses the field (`<feature> does
+  not accept noteValues`).
+- Two modes, chosen by `noteValues`. Absent (legacy mode, the released
+  extension 2.10.1 and older): the prompt is the one those clients were built
+  against, byte for byte (pinned by digest in `tests/ai-fan-notes-fill.test.ts`).
+  Present, even with every value empty (merge mode, the 2026-10-13 notes-fill
+  spec): the task lists `Label: value` per field and the prompt adds the merge
+  rules. A current value is the chatter's record and stays true unless the fan
+  later contradicts it; a field the chat adds nothing to comes back exactly as
+  listed; any other field is rewritten in Russian keeping every fact, a fact
+  that belongs elsewhere moving to the right listed field or to «Другое»;
+  markers it does not understand («Sexting 1») stay as written. Facts that go
+  stale carry the month they were said, `(MM.YYYY)`, read from the
+  transcript's day lines `--- YYYY-MM-DD ---` (the client adds them in merge
+  mode; they are the only source of dates). The prompt also defines «Локация»,
+  «График», «Планы и даты» and «Другое».
 - Context as for a full Recap: on Fansly the client sends `clientContext` with
   the whole conversation it read (`transcriptCoverage` usually
   `full-history`), the spending and subscription blocks and the bio, plus
@@ -1023,11 +1051,23 @@ chat. The client sends the labels; the hub assembles the prompt
   bio; it never reads the stored dossier, image notes, the display name or the
   chatter's saved name. OnlyFans reads the hub archive with the deep window.
   The only product gate is an empty chat (`gate_min_messages`, at least 1).
-- Answer: exactly one `Label: value` line per requested label, in order, the
-  label as sent (after trimming), nothing else. A value is short and in
-  Russian; a label the chat says nothing about comes back as `Label: ` (the
+- Answer, legacy mode: exactly one `Label: value` line per requested label, in
+  order, the label as sent (after trimming), nothing else. A value is short and
+  in Russian; a label the chat says nothing about comes back as `Label: ` (the
   model may drop the trailing space). The client merges: an empty field takes
   the value, a filled one is never overwritten.
+- Answer, merge mode: one `Label: value` line per requested label, in order,
+  each followed by zero to three quote lines `> «…»`, then at most two proposed
+  fields `+ Label: value` (a Russian label of one to three words, at most 60
+  characters, no `:`, `<`, `>` or `&`, not equal to a listed label in any
+  case), each followed by its quote lines; nothing else. A value returned
+  unchanged is the listed value exactly as listed (escaped form included); a
+  new or rewritten value is in Russian. A quote follows only a new or changed
+  value: a verbatim fragment, at most 200 characters, of one of the fan's own
+  messages (a `Fan:` line, as escaped in the transcript), never translated;
+  none for a fact taken from the bio or the spending data. The prompt asks; the
+  hub does not check the answer: the client parses it, locates each quote in
+  the transcript it sent and shows rewrites of filled fields as suggestions.
 - Model: `anthropic:claude-sonnet-5-5` at `low` reasoning by default
   (`DEFAULT_FEATURE_MODELS` / `DEFAULT_FEATURE_REASONING`); a request's `model`
   and `reasoningEffort` override it. Prompt blocks are sent uncached.

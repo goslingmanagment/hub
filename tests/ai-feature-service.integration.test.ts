@@ -3985,6 +3985,48 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     expect(rows[0]).toEqual({ conversation_ref: "group-777", fan_ref: "fan-42" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("merges into the current values when the request carries noteValues", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const noteValues = ["  Mike ", "Austin & <TX>", "", "", "", "", "", "Sexting 1"];
+    const res = await post("fan-notes-fill", notesPayload({
+      noteValues,
+      clientContext: {
+        ...notesPayload().clientContext,
+        transcript: "--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin\n[10:05] Model: hey Mike",
+      },
+    }));
+    expect(res.statusCode, res.body).toBe(200);
+    const blocks = capture.input!.body.prompt.userBlocks;
+    const task = blocks.at(-1)!.text;
+    // Trimmed by the contract, escaped by the prompt, empty ones bare.
+    expect(task).toContain([
+      "<note_fields>",
+      "Имя: Mike",
+      "Локация: Austin &amp; &lt;TX&gt;",
+      "Возраст:",
+      "Работа:",
+      "Хобби:",
+      "Фетиши:",
+      "Характеристика:",
+      "Медиа: Sexting 1",
+      "</note_fields>",
+    ].join("\n"));
+    expect(task).toContain(`Output exactly ${NOTE_FIELDS.length} field lines`);
+    const user = blocks.map((block) => block.text).join("");
+    expect(user).toContain("## Current Values");
+    expect(user).toContain("--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin");
+    // The values reach the task block only.
+    for (const block of blocks.slice(0, -1)) {
+      expect(block.text).not.toContain("Sexting 1\n");
+      expect(block.text).not.toContain("Austin &amp;");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps the request's model and reasoning overrides", async (context) => {
     if (!testDb) {
       context.skip();
