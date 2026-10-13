@@ -59,6 +59,51 @@ export async function beginFanslyWsConnection(db: Database, input: { id: string;
         where c.page_id=${input.pageId} order by c.started_at desc limit 1),clock_timestamp()))`);
 }
 
+/** A site socket's connection on a browser page (Project Browser, plan §3.2
+ * «Кадры сокета», 0273): the row opens on the operator's `ws.open`, marked
+ * `origin = 'browser'` with the operator's connection id. Idempotent by that
+ * id within the page: a `ws.open` delivered again opens nothing twice (false).
+ * As for the engine's own socket, another open row of the page is closed
+ * `abandoned` at its last proof of liveness (one socket of a page at a time),
+ * and gap_since is taken from the previous row of the page. `startedAt` is
+ * when the operator saw the socket open (never later than the database's
+ * clock). */
+export async function beginBrowserWsConnection(db: Database, input: {
+  id: string; pageId: number; generation: string; browserConnectionId: string; startedAt: Date;
+}): Promise<boolean> {
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const known = await tx.execute(sql`select c.id from fansly_ws_connections c
+      where c.page_id=${input.pageId} and c.browser_connection_id=${input.browserConnectionId}::uuid`);
+    if (known.rows.length > 0) return false;
+    await tx.execute(sql`with abandoned as (update fansly_ws_connections
+        set closed_at=greatest(last_guard_at,last_capture_at),stop_reason='abandoned'
+        where page_id=${input.pageId} and closed_at is null)
+      insert into fansly_ws_connections(id,page_id,generation,origin,browser_connection_id,started_at,last_guard_at,gap_since)
+      select ${input.id}::uuid,${input.pageId},${input.generation},'browser',${input.browserConnectionId}::uuid,
+        s.at,s.at,coalesce(
+          (select coalesce(c.closed_at,c.last_guard_at) from fansly_ws_connections c
+            where c.page_id=${input.pageId} order by c.started_at desc limit 1),s.at)
+      from (select least(clock_timestamp(),${input.startedAt.toISOString()}::timestamptz) as at) s
+      on conflict (page_id, browser_connection_id) where browser_connection_id is not null do nothing`);
+    return true;
+  });
+}
+
+/** The operator's `ws.close` of a site socket (0273): the row closes at the
+ * instant the operator saw it close (never before it opened, never after the
+ * database's clock), once. False: no open row of that connection. */
+export async function finishBrowserWsConnection(db: Database, input: {
+  pageId: number; browserConnectionId: string; closedAt: Date; reason: string;
+}): Promise<boolean> {
+  const result = await db.execute(sql`update fansly_ws_connections
+      set closed_at=greatest(started_at, least(clock_timestamp(), ${input.closedAt.toISOString()}::timestamptz)),
+        stop_reason=${input.reason}
+    where page_id=${input.pageId} and browser_connection_id=${input.browserConnectionId}::uuid and closed_at is null
+    returning id`);
+  return result.rows.length === 1;
+}
+
 export async function captureFanslyWsFrame(db: Database, input: {
   connectionId: string; pageId: number; generation: string; accountRef: string;
   ordinal: number; frame: string; receivedAt: Date;

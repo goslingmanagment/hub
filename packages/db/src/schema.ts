@@ -400,6 +400,38 @@ export const egressEndpoints = pgTable("egress_endpoints", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// 0275 (Project Browser, plan §3.4): one row per browser profile — its
+// container, the page it serves (null until bound), the operator's last
+// state, and the page's RPC tokens and KasmVNC password, each an encrypted
+// JSON envelope (as egress_endpoints.encrypted_auth).
+export const pageBrowsers = pgTable("page_browsers", {
+  profileId: uuid("profile_id").primaryKey(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "set null" }).unique(),
+  container: text("container").notNull().unique(),
+  step: text("step"),
+  stopReason: text("stop_reason"),
+  mode: text("mode").$type<"automation" | "manual_login">().notNull().default("automation"),
+  exitOpen: boolean("exit_open").notNull().default(false),
+  sessionFingerprint: text("session_fingerprint"),
+  accountId: text("account_id"),
+  exitIp: text("exit_ip"),
+  chromeVersion: text("chrome_version"),
+  operatorVersion: text("operator_version"),
+  selftestOk: boolean("selftest_ok"),
+  selftestAt: timestamp("selftest_at", { withTimezone: true }),
+  selftestFailed: text("selftest_failed"),
+  bufferBytes: bigint("buffer_bytes", { mode: "number" }),
+  bufferOldestAgeMs: bigint("buffer_oldest_age_ms", { mode: "number" }),
+  lastStateAt: timestamp("last_state_at", { withTimezone: true }),
+  linkError: text("link_error"),
+  encryptedEngineToken: text("encrypted_engine_token").notNull(),
+  encryptedApiToken: text("encrypted_api_token").notNull(),
+  encryptedVncPassword: text("encrypted_vnc_password").notNull(),
+  keyVersion: integer("key_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+});
+
 export const notificationIncidents = pgTable(
   "notification_incidents",
   {
@@ -1129,7 +1161,9 @@ export const syncAttempts = pgTable(
     pauseMs: integer("pause_ms").notNull(),
     admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     sentAt: timestamp("sent_at", { withTimezone: true }),
-    sendMark: text("send_mark").$type<"request_start" | "completion_fallback" | "shadow">(),
+    // 0272: `transport_reported` — the instant a page's browser reported the
+    // request left (Project Browser).
+    sendMark: text("send_mark").$type<"request_start" | "completion_fallback" | "transport_reported" | "shadow">(),
     sendMonoOffsetMs: doublePrecision("send_mono_offset_ms"),
     gapPrevMs: doublePrecision("gap_prev_ms"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -1155,6 +1189,9 @@ export const syncAttempts = pgTable(
     // 0271 (Project Browser): whose request — a work's send, the page's own
     // site request, or an operation of the owner's manual login.
     origin: text("origin").$type<"engine" | "site" | "login">().notNull().default("engine"),
+    // 0272 (Project Browser): the operator's id of a request the engine did
+    // not choose (a site request, a site socket).
+    browserRequestId: text("browser_request_id"),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),
@@ -4218,6 +4255,8 @@ export const OBSERVATION_SOURCES = [
   "operator",
   "ofapi_capture",
   "fansly_ws",
+  // 0274 (Project Browser): an answer to the page's own site request.
+  "browser_site",
 ] as const;
 export type ObservationSource = (typeof OBSERVATION_SOURCES)[number];
 
