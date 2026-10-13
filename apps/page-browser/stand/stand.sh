@@ -54,7 +54,9 @@ else
   REV=dev
 fi
 TOOLS_IMAGE="pb-suite/tools:$REV"
-PAGE_IMAGE="pb-suite/page-browser:$REV"
+# PB_SUITE_PAGE_IMAGE: another page image for `up` (an operator PR's, built
+# from its own tree), the suites of this tree run against it.
+PAGE_IMAGE="${PB_SUITE_PAGE_IMAGE:-pb-suite/page-browser:$REV}"
 
 guard_ok() {
   [[ "$MODE" == server ]] || return 0
@@ -140,6 +142,7 @@ up() {
     grep -q '^page-browser ' /sys/kernel/security/apparmor/profiles || fail "the AppArmor profile is not loaded (stand.sh apparmor-load)"
   fi
   docker image inspect "$TOOLS_IMAGE" "$PAGE_IMAGE" >/dev/null 2>&1 || fail "no $TOOLS_IMAGE or $PAGE_IMAGE: stand.sh build"
+  [[ "$PAGE_IMAGE" == "pb-suite/page-browser:$REV" ]] || log "the pages run $PAGE_IMAGE (PB_SUITE_PAGE_IMAGE), not this tree's image"
   [[ -z "$(docker ps -aq --filter "label=agency.stand.name=$PROJECT")" ]] || fail "$PROJECT exists already: stand.sh down $stand"
   for subnet in "$net.0.0/24" "$net.1.0/24"; do
     if docker network ls -q | xargs -r docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' | grep -q " $subnet "; then
@@ -253,7 +256,11 @@ in_runner() {
     docker exec "$(runner)" sh -c "$cmd 2>&1 | tee /stand/results/$script-$name.log"
   else
     docker exec -d "$(runner)" sh -c "$cmd > /stand/results/$script-$name.log 2>&1"
-    log "started: $WORK/results/$script-$name.log; verdict: stand.sh verify $stand $name"
+    if [[ "$script" == series.ts ]]; then
+      log "started: $WORK/results/$script-$name.log; verdict: stand.sh verify $stand $name"
+    else
+      log "started: $WORK/results/$script-$name.log; report: $WORK/results/load/$name/report.json"
+    fi
   fi
 }
 

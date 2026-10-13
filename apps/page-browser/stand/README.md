@@ -52,7 +52,10 @@ apps/page-browser/stand/stand.sh down t1           # results stay in ~/code/.cac
 ```
 
 `<rev>` is the tree's commit (`-dirty` with uncommitted changes under
-`apps/page-browser`). Series options: `--runs N` (default 20), `--seed N`
+`apps/page-browser`). `PB_SUITE_PAGE_IMAGE=<tag> stand.sh up …` runs this
+tree's suites against another page image — an operator PR's, built from its
+own tree (PR 6's `069a3873` passed every scenario once that way: its
+self-test, with the rules extension, passes under the stand's names and CA). Series options: `--runs N` (default 20), `--seed N`
 (recorded; the same seed draws the same moments), `--only a,b`,
 `--except a,b`. A run that could not be set up before its fault is not
 counted and is replaced (at most N + 2 more).
