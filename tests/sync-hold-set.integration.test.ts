@@ -312,7 +312,7 @@ async function runEveryPageRowUpdate(
     ["captureAttempt", pageId, async () => expect(await captureAttempt(db, {
       attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start", httpStatus: 200, applyState: "none",
     })).toMatchObject({ captured: true })],
-    // A page's own site request (Project Browser, 0270): its admission stamps
+    // A page's own site request (Project Browser, 0271): its admission stamps
     // the page's last admission.
     ["insertSiteAdmission", pageId, () => target.db.transaction(async (raw) => {
       const tx = raw as unknown as Database;

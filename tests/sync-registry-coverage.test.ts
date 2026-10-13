@@ -627,7 +627,7 @@ describe("shadow mode is gone (step 4, S4-23)", () => {
       }
     }
     // The only writers of the two tables: demand, the standing rows, an
-    // admission, and the admission of a page's own site request (0270).
+    // admission, and the admission of a page's own site request (0271).
     expect(inserts).toHaveLength(4);
     const [demand, standing] = inserts.filter((insert) => insert.startsWith("sync_work("));
     for (const insert of [demand!, standing!]) {
