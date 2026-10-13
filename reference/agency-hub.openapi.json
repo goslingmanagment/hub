@@ -113979,6 +113979,49 @@
                       "pattern": "^[1-9]\\d{0,29}$"
                     }
                   },
+                  "coverageCheck": {
+                    "type": "object",
+                    "properties": {
+                      "window": {
+                        "maxItems": 60,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,29}$"
+                            },
+                            "dir": {
+                              "type": "string",
+                              "enum": [
+                                "fan",
+                                "model"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "dir"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "deletedIds": {
+                        "maxItems": 60,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        }
+                      }
+                    },
+                    "required": [
+                      "window",
+                      "deletedIds"
+                    ],
+                    "additionalProperties": false
+                  },
                   "liveTextContext": {
                     "type": "object",
                     "properties": {
