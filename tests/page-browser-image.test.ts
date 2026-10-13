@@ -416,7 +416,10 @@ describe("the stand's checks of the image", () => {
   it("the rules check asks the image's own map for what must be cancelled, and never a container whose Chrome runs unasked", () => {
     expect(rulesCheck).toContain("await import(`${SRC}/policy/operations.ts`)");
     expect(rulesCheck).toContain('const SRC = process.env.PB_SRC ?? "/opt/page-browser/src";');
-    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS) for (const method of row.methods)");
+    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS) for (const method of methodsOf(row))");
+    // A closed read is asked for by a GET too, as a page and in other spellings.
+    expect(rulesCheck).toContain('const methodsOf = (row) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] : row.methods);');
+    expect(rulesCheck).toContain("for (const row of CLOSED_ROWS.filter((entry) => entry.methods.includes(ANY_METHOD))) {");
     expect(rulesCheck).toContain("for (const closure of GENERAL_CLOSURES)");
     expect(rulesCheck).toContain('if (!chromeGone() && !takeOver) throw new Error("Chrome is running');
     // It leaves the page as a standing one, whatever happened.

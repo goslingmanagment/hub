@@ -23,10 +23,13 @@
 //  3. From a page of the site's own origin (https://fansly.com, answered
 //     here, never fetched), every example of the map of operations the
 //     image carries (src/policy/operations.ts):
-//       closed  each row closed one by one, by each of its methods; each
-//               general closure (API writes, Fansly writes, the closed
-//               hosts, the socket host, local addresses); a form posted as
-//               a click would post it (a main frame)
+//       closed  each row closed one by one, by each of its methods — the
+//               four closed reads by a GET too, from a script, opened as a
+//               page (a link in an e-mail) and in other spellings of their
+//               paths; each general closure (API writes, an escaped plain
+//               character in an API path, Fansly writes, the closed hosts,
+//               the socket host, local addresses); a form posted as a click
+//               would post it (a main frame)
 //               → Chrome reports ERR_BLOCKED_BY_CLIENT (for a socket it
 //                 gives no reason: it only fails) and brings the listener
 //                 nothing for that host;
@@ -228,7 +231,7 @@ let chromeStarted = false;
 let operatorStopped = false;
 let listener = null;
 try {
-  const { CLOSED_ROWS, GENERAL_CLOSURES, CATALOGUE_ROWS, LOGIN_ROWS, LOGIN_SCREEN_ROWS, API_HOST, API_BASE, SOCKET_HOST } = await import(`${SRC}/policy/operations.ts`);
+  const { ANY_METHOD, CLOSED_ROWS, GENERAL_CLOSURES, CATALOGUE_ROWS, LOGIN_ROWS, LOGIN_SCREEN_ROWS, API_HOST, API_BASE, SOCKET_HOST } = await import(`${SRC}/policy/operations.ts`);
   const { PLACEHOLDER_SUFFIX } = await import(`${SRC}/hub-requests/page.ts`);
   const { NEVER_PATH, UNKNOWN_WRITE_PATH } = await import(`${SRC}/selftest/selftest.ts`);
   const imageId = readFileSync(`${DIST}/id`, "utf8").trim();
@@ -345,9 +348,10 @@ try {
   let n = 0;
   const results = [];
   /** One request, the way `how` makes it: "fetch" from the site's page,
-   *  "plain" (fetch from the page of no origin), "socket", or "form" — a
-   *  form posted in a tab of its own, as a click would. What Chrome said of
-   *  its end, and what it brought the listener for its host. */
+   *  "plain" (fetch from the page of no origin), "socket", "form" — a form
+   *  posted in a tab of its own, as a click would — or "page": the address
+   *  opened in a tab of its own, as a link would. What Chrome said of its
+   *  end, and what it brought the listener for its host. */
   async function request(method, url, how, fragment = "") {
     const mark = String(++n);
     const marked = `${url}${url.includes("?") ? "&" : "?"}pbrc=${mark}${fragment}`;
@@ -361,6 +365,11 @@ try {
       closeTab = tab.targetId;
       await cdp.send("Network.enable", {}, tab.sessionId);
       await cdp.evaluate(tab.sessionId, `(() => { const form = document.createElement("form"); form.method = ${JSON.stringify(method)}; form.action = ${JSON.stringify(marked)}; document.documentElement.appendChild(form); form.submit(); })()`);
+    } else if (how === "page") {
+      const tab = await cdp.tab("about:blank");
+      closeTab = tab.targetId;
+      await cdp.send("Network.enable", {}, tab.sessionId);
+      await cdp.send("Page.navigate", { url: marked }, tab.sessionId).catch(() => undefined);
     } else {
       const body = method === "GET" || method === "HEAD" || method === "OPTIONS" ? "" : `, headers: { "content-type": "application/json" }, body: "{}"`;
       const init = how === "plain" ? `{ method: ${JSON.stringify(method)}, mode: "no-cors" }` : `{ method: ${JSON.stringify(method)}, credentials: "include"${body} }`;
@@ -384,8 +393,23 @@ try {
 
   const api = (path) => `https://${API_HOST}${API_BASE}${path}`;
   const sample = (template) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
-  // Closed one by one (spec §2.5), by every method of the row.
-  for (const row of CLOSED_ROWS) for (const method of row.methods) await probe(`closed: ${method} ${row.template} (${row.what})`, "closed", method, api(row.example), "fetch");
+  // Closed one by one (spec §2.5), by every method of the row: a row of
+  // every method by a read too.
+  const methodsOf = (row) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] : row.methods);
+  for (const row of CLOSED_ROWS) for (const method of methodsOf(row)) await probe(`closed: ${method} ${row.template} (${row.what})`, "closed", method, api(row.example), "fetch");
+  // The closed reads — nothing but their own rules stands before a GET:
+  // opened as a page, in other spellings of the path, on Hub's placeholder.
+  for (const row of CLOSED_ROWS.filter((entry) => entry.methods.includes(ANY_METHOD))) {
+    const path = row.example;
+    await probe(`closed read, opened as a page: ${path}`, "closed", "GET", `${api(path)}?token=abc`, "page");
+    for (const spelling of [`${path}/`, path.toUpperCase(), path.replaceAll("/", "//"), `${path.slice(0, -1)}%${path.charCodeAt(path.length - 1).toString(16)}`, path.replace(/\/(?=[^/]*$)/, "%2F")]) {
+      await probe(`closed read, spelled ${spelling}`, "closed", "GET", api(spelling), "fetch");
+    }
+    await probe(`closed read, spelled ${path.toUpperCase()}, opened as a page`, "closed", "GET", api(path.toUpperCase()), "page");
+    await probe(`closed read, on the placeholder host: ${path}`, "closed", "GET", `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${path}`, "fetch");
+    // Another path is a read like any other.
+    await probe(`open: not the closed read ${path}d`, "open", "GET", api(`${path}d`), "fetch");
+  }
   // The same from a click, and on Hub's placeholder host.
   for (const row of CLOSED_ROWS.slice(0, 6)) await probe(`closed, a posted form: ${row.template}`, "closed", "POST", api(row.example), "form");
   await probe("closed, on the placeholder host", "closed", "POST", `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${CLOSED_ROWS[0].example}`, "fetch");
@@ -402,6 +426,8 @@ try {
   const reads = ["messaging.groups", "group.detail", "account.me", "followers.page", "post.replies"].map((route) => CATALOGUE_ROWS.find((row) => row.route === route));
   for (const row of [...reads, ...LOGIN_SCREEN_ROWS]) await probe(`open: GET ${row.template} → ${row.route}`, "open", "GET", api(sample(row.template)), "fetch");
   await probe("open: an API read outside the catalogue", "open", "GET", api("/mediastories/following"), "fetch");
+  await probe("open: an API read with an escape a client writes (a non-ASCII letter)", "open", "GET", api("/pb-check/%D0%B0"), "fetch");
+  await probe("open: an API read opened as a page", "open", "GET", api("/account/me"), "page");
   await probe("open: a preflight", "open", "OPTIONS", api("/account/me"), "fetch");
   for (const row of LOGIN_ROWS) await probe(`open: POST ${row.template} → ${row.route}`, "open", "POST", api(row.template), "fetch");
   await probe("open: the site's socket", "open", "GET", `wss://${SOCKET_HOST}/?v=3`, "socket");
@@ -446,10 +472,16 @@ try {
   const failed = results.filter((result) => !result.pass);
   const named = (pattern) => results.filter((result) => pattern.test(result.name));
   check("closed_one_by_one", named(/^closed/).every((result) => result.pass), { probes: named(/^closed/).length });
+  const closedReads = named(/^closed(: (GET|HEAD|OPTIONS) | read)/);
+  check("closed_reads", closedReads.length >= 40 && closedReads.every((result) => result.pass), {
+    probes: closedReads.length,
+    // One row's probes in full, as a sample of what each showed.
+    sample: closedReads.filter((result) => result.url.includes("/emails/") || result.url.includes("/EMAILS/")).map((result) => ({ name: result.name, how: result.how, errors: result.errors, left: result.left })),
+  });
   check("row_6_read_typing_status_unknown_write", [/^closed: POST \/message\/ack /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].every((pattern) => named(pattern).length === 1 && named(pattern)[0].pass), {
     probes: [/^closed: POST \/message\/ack /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].flatMap((pattern) => named(pattern)).map((result) => ({ name: result.name, errors: result.errors, left: result.left })),
   });
-  check("general_closures", named(/^(api_writes|fansly_writes|closed_hosts|socket_host|local)/).every((result) => result.pass), { probes: named(/^(api_writes|fansly_writes|closed_hosts|socket_host|local)/).length });
+  check("general_closures", named(/^(api_writes|api_spelling|fansly_writes|closed_hosts|socket_host|local)/).every((result) => result.pass), { probes: named(/^(api_writes|api_spelling|fansly_writes|closed_hosts|socket_host|local)/).length });
   check("open_left_open", named(/^open/).every((result) => result.pass), { probes: named(/^open/).length });
   report.probes = { total: results.length, failed };
   // Everything Chrome brought the listener, besides the probes' own: its

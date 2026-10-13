@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANY_METHOD,
   API_BASE,
   API_HOST,
   API_ROWS,
@@ -167,50 +168,121 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
 });
 
 describe("the rows closed one by one (spec §2.5)", () => {
-  it("are the spec's operations, each with its methods, an example under its own template, and a source", () => {
-    expect(CLOSED_ROWS.map((row) => row.template)).toEqual([
-      "/message/ack",
-      "/message/ack/all",
-      "/notifications/ack",
-      "/groups/users/readreceipts",
-      "/message/typing",
-      "/status",
-      "/account/emailchange/**",
-      "/account/disable",
-      "/payments/payoutmethods/**",
-      "/login/password*/**",
-      "/twofa/**",
+  const writes = ["POST", "PUT", "PATCH", "DELETE"];
+  /** The methods a row closes, an "every method" row by these. */
+  const methodsOf = (row: (typeof CLOSED_ROWS)[number]) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "PROPFIND"] : [...row.methods]);
+
+  it("are the prototype's \"never\" list without the payouts: the writes by their four methods, four reads by every method", () => {
+    expect(CLOSED_ROWS.map((row) => `${row.methods.join("|")} ${row.template}`)).toEqual([
+      "POST|PUT|PATCH|DELETE /message/ack",
+      "POST|PUT|PATCH|DELETE /message/ack/all",
+      "POST|PUT|PATCH|DELETE /notifications/ack",
+      "POST|PUT|PATCH|DELETE /groups/users/readreceipts",
+      "POST|PUT|PATCH|DELETE /message/typing",
+      "POST|PUT|PATCH|DELETE /status",
+      "POST|PUT|PATCH|DELETE /message/like",
+      "POST|PUT|PATCH|DELETE /message/like/remove",
+      "POST|PUT|PATCH|DELETE /account/emailchange/**",
+      "POST|PUT|PATCH|DELETE /account/disable",
+      "POST|PUT|PATCH|DELETE /payments/payoutmethods/**",
+      "POST|PUT|PATCH|DELETE /account/wallets/transaction/refund",
+      "POST|PUT|PATCH|DELETE /payments/wallets*/**",
+      "POST|PUT|PATCH|DELETE /login/password*/**",
+      "POST|PUT|PATCH|DELETE /twofa/**",
+      "POST|PUT|PATCH|DELETE /session/close",
+      "POST|PUT|PATCH|DELETE /logout",
+      "POST|PUT|PATCH|DELETE /management/**",
+      "POST|PUT|PATCH|DELETE /webpush/delete",
+      "POST|PUT|PATCH|DELETE /thirdpartyconnect/**",
+      "* /emails/unsubscribe",
+      "* /account/verifynsfw",
+      "* /intercom/authorize",
+      "* /zendesk/authorize",
     ]);
+    expect(ANY_METHOD).toBe("*");
     for (const row of CLOSED_ROWS) {
-      expect(row, row.template).toMatchObject({ mode: "closed", route: null, platformData: false, methods: ["POST", "PUT", "PATCH", "DELETE"] });
+      expect(row, row.template).toMatchObject({ mode: "closed", route: null, platformData: false });
       expect(row.example, row.template).toMatch(/^\//);
       expect(templateMatches(parseTemplate(row.template), closedSegments(row.example!), true), row.template).toBe(true);
       expect(row.source, row.template).not.toBe("");
       expect(row.what, row.template).not.toBe("");
     }
-    // No permanent "never": payouts left the list (decision №2), and reading
-    // the payout methods stays a read of the catalogue.
-    expect(CLOSED_ROWS.some((row) => /payout\/requests|wallets/.test(row.template))).toBe(false);
+    // Every entry of the prototype's rules (extension/build-rules.mjs on
+    // proto/project-browser), by an example of each — but the payouts.
+    const prototype = ["message/ack", "message/ack/all", "message/typing", "message/like", "message/like/remove", "status", "notifications/ack", "groups/users/readreceipts", "account/disable", "account/emailchange/x", "account/wallets/transaction/refund", "login/password", "login/passwordreset", "twofa", "twofa/x", "session/close", "management/x", "webpush/delete", "payments/wallets", "payments/walletsx/y", "thirdpartyconnect/x", "logout"];
+    for (const path of prototype) for (const method of writes) expect(closedRowOf(method, `/${path}`), `${method} ${path}`).not.toBeNull();
+    for (const path of ["emails/unsubscribe", "account/verifynsfw", "intercom/authorize", "zendesk/authorize"]) {
+      for (const method of ["GET", "HEAD", "OPTIONS", ...writes, "PROPFIND"]) expect(closedRowOf(method, `/${path}`)?.methods, `${method} ${path}`).toEqual([ANY_METHOD]);
+    }
+    // No permanent "never": the payouts left the list (decision №2) — only
+    // the general rule for writes holds them — and reading the payout
+    // methods and requests stays a read of the catalogue.
+    for (const path of ["/payments/payout", "/payments/payout/requests", "/payments/payouts", "/payouts", "/payouts/request", "/payouts/1/cancel"]) {
+      for (const method of writes) {
+        expect(closedRowOf(method, path), `${method} ${path}`).toBeNull();
+        expect(decide({ method, url: api(path) }, "automation"), `${method} ${path}`).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_writes" });
+      }
+    }
+    expect(closedRowOf("POST", "/payments/payoutmethods")?.what).toMatch(/payout details/);
     expect(decide({ method: "GET", url: api("/payments/payoutmethods") }, "automation")).toMatchObject({ action: "admit", route: "payouts.methods" });
+    expect(decide({ method: "GET", url: api("/payments/payout/requests") }, "automation")).toMatchObject({ action: "admit", route: "payouts.requests" });
   });
 
   it("are refused in both modes, by every method of the row and in every spelling", () => {
     for (const row of CLOSED_ROWS) {
-      for (const method of row.methods) {
-        for (const decision of both(method, api(row.example!))) expect(decision, `${method} ${row.example}`).toMatchObject({ action: "refuse", refusal: "closed", rule: expect.stringMatching(/^closed: /) });
+      for (const method of methodsOf(row)) {
+        for (const decision of both(method, api(row.example!))) expect(decision, `${method} ${row.example}`).toMatchObject({ action: "refuse", refusal: "closed", rule: `closed: ${row.methods.join("|")} ${row.template}` });
       }
     }
     const spellings = ["/message/ack", "/message/ack/", "/message//ack", "//message/ack", "/MESSAGE/Ack", "/message/%61ck", "/message%2Fack", "/message/ack?x=1", "/message/ack#f"];
     for (const path of spellings) expect(closedRowOf("POST", path)?.template, path).toBe("/message/ack");
     expect(decide({ method: "post", url: `https://${API_HOST}//api//v1//message//ack` }, "automation")).toMatchObject({ action: "refuse", refusal: "closed", rule: "closed: POST|PUT|PATCH|DELETE /message/ack" });
     // A prefix segment and a rest.
-    for (const path of ["/login/password", "/login/passwordreset", "/login/password/change/now", "/twofa", "/twofa/disable", "/account/emailchange", "/account/emailchange/a/b", "/payments/payoutmethods/9"]) {
+    for (const path of ["/login/password", "/login/passwordreset", "/login/password/change/now", "/twofa", "/twofa/disable", "/account/emailchange", "/account/emailchange/a/b", "/payments/payoutmethods/9", "/payments/wallets", "/payments/wallets/1/withdraw", "/management", "/management/a/b"]) {
       expect(closedRowOf("POST", path), path).not.toBeNull();
     }
     // Not closed by a row: the login operations, and other paths.
-    for (const path of ["/login", "/login/twofa", "/message/acknowledge", "/statuses", "/message", "/account/emailchanges"]) expect(closedRowOf("POST", path), path).toBeNull();
+    for (const path of ["/login", "/login/twofa", "/message/acknowledge", "/statuses", "/message", "/account/emailchanges", "/message/likes", "/logouts", "/sessions/close", "/payments/wallet"]) expect(closedRowOf("POST", path), path).toBeNull();
     // A read is not a closed write.
-    expect(closedRowOf("GET", "/message/ack")).toBeNull();
+    for (const row of CLOSED_ROWS.filter((entry) => !entry.methods.includes(ANY_METHOD))) expect(closedRowOf("GET", row.example!), row.template).toBeNull();
+  });
+
+  it("the four closed reads are the only reads the map does not open — and a read of the login screens next to a closed write stays open", () => {
+    const closedReads = CLOSED_ROWS.filter((row) => row.methods.includes(ANY_METHOD)).map((row) => row.template);
+    expect(closedReads).toEqual(["/emails/unsubscribe", "/account/verifynsfw", "/intercom/authorize", "/zendesk/authorize"]);
+    for (const path of closedReads) {
+      for (const spelling of [path, `${path}/`, `${path}?token=abc&ngsw-bypass=true`, `${path}#x`, path.toUpperCase(), path.replace("/", "//")]) {
+        for (const method of ["GET", "HEAD", "OPTIONS", "POST"]) {
+          for (const decision of both(method, api(spelling))) expect(decision, `${method} ${spelling}`).toMatchObject({ action: "refuse", refusal: "closed", rule: `closed: * ${path}` });
+        }
+      }
+    }
+    // Every other read: the catalogue's and the site's own, in automation.
+    for (const row of CATALOGUE_ROWS) expect(decide({ method: "GET", url: api(sample(row.template)) }, "automation"), row.template).toMatchObject({ action: "admit", operation: "read" });
+    for (const path of ["/emails", "/emails/unsubscribed", "/emails/unsubscribe/extra", "/xemails/unsubscribe", "/account/verify", "/intercom", "/zendesk/authorized", "/message/like", "/logout", "/session/close", "/management/list", "/status"]) {
+      expect(decide({ method: "GET", url: api(path) }, "automation"), path).toMatchObject({ action: "admit", route: "site.other", operation: "read" });
+    }
+    // The providers of the login screens: a read, in both modes; a write
+    // under the same path is closed by its row.
+    for (const decision of both("GET", api("/thirdpartyconnect/providers"))) expect(decision).toMatchObject({ action: "admit", route: "site.other", operation: "read" });
+    for (const decision of both("POST", api("/thirdpartyconnect/providers"))) expect(decision).toMatchObject({ action: "refuse", refusal: "closed", rule: "closed: POST|PUT|PATCH|DELETE /thirdpartyconnect/**" });
+  });
+
+  it("an API path with an escape of a plain character or of a slash is closed by every method: no closed row can be spelled around", () => {
+    for (const path of ["/emails/%75nsubscribe", "/emails/%55NSUBSCRIBE", "/emails%2Funsubscribe", "/emails%2funsubscribe", "/intercom/authori%7ae", "/account/%6De", "/account/me%2E", "/%61ccount/me", "/account/stats%5Fx", "/x%7Ey", "/x%2Dy", "/x%30"]) {
+      for (const method of ["GET", "OPTIONS", "POST"]) {
+        for (const decision of both(method, api(path))) expect(decision, `${method} ${path}`).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_spelling" });
+      }
+    }
+    expect(decide({ method: "GET", url: `https://${API_HOST}/%61pi/v1/account/me` }, "automation")).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_spelling" });
+    // An escape a client does write — a space, a non-ASCII letter, a
+    // reserved character — is no such spelling; nor is one in the query.
+    for (const path of ["/tag/%D0%B0%D0%B1", "/search/a%20b", "/x%2Cy", "/x%40y", "/x%25y", "/x%3Ay", "/account?usernames=%61bc&q=%2F"]) {
+      expect(decide({ method: "GET", url: api(path) }, "automation"), path).toMatchObject({ action: "admit", route: expect.any(String), operation: "read" });
+    }
+    // Not the API's: Fansly's static files and third-party hosts spell their paths as they like.
+    expect(decide({ method: "GET", url: "https://fansly.com/%61ssets/x.js" }, "automation")).toMatchObject({ action: "pass" });
+    expect(decide({ method: "GET", url: "https://cdn.example.net/%61.js" }, "automation")).toMatchObject({ action: "pass" });
   });
 
   it("has the self-test's probe among them", () => {
@@ -255,7 +327,7 @@ describe("the operator's decisions (plan §4.3)", () => {
   });
 
   it("refuses every general closure's example in both modes, and names the rule", () => {
-    expect(GENERAL_CLOSURES.map((closure) => closure.rule)).toEqual(["api_writes", "fansly_writes", "closed_hosts", "socket_host", "local"]);
+    expect(GENERAL_CLOSURES.map((closure) => closure.rule)).toEqual(["api_writes", "api_spelling", "fansly_writes", "closed_hosts", "socket_host", "local"]);
     for (const closure of GENERAL_CLOSURES) {
       expect(closure.examples.length, closure.rule).toBeGreaterThan(2);
       for (const example of closure.examples) {

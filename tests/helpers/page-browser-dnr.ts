@@ -2,8 +2,8 @@ import type { DnrRule } from "../../apps/page-browser/src/policy/rules.ts";
 
 // Chrome's declarativeNetRequest for the rules extension's rules, as far as
 // they use it (apps/page-browser/src/policy/rules.ts): regexFilter with its
-// case flag, requestDomains, request methods and resource types; the rule
-// of the highest priority decides, and at equal priority allow goes before
+// case flag, request methods and resource types; the rule of the highest
+// priority decides, and at equal priority allow goes before
 // block. Chrome matches a URL in its canonical form — an authority always
 // ends at a slash — which `new URL` gives too. The stand holds this model to
 // the real Chrome (apps/page-browser/stand/rules-check.mjs).
@@ -26,10 +26,6 @@ export function dnrMatches(rule: DnrRule, request: DnrRequest): boolean {
   const method = METHODS.has(lower) ? lower : "other";
   if (condition.requestMethods && !(condition.requestMethods as string[]).includes(method)) return false;
   if (condition.excludedRequestMethods && (condition.excludedRequestMethods as string[]).includes(method)) return false;
-  if (condition.requestDomains) {
-    const host = url.hostname;
-    if (!condition.requestDomains.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
-  }
   return new RegExp(condition.regexFilter, condition.isUrlFilterCaseSensitive ? "" : "i").test(url.href);
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, isLocalHost, LOGIN_ROWS, LOGIN_SCREEN_ROWS, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, isLocalHost, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost, RESOURCE_TYPES, rulesJson, type DnrRule } from "../apps/page-browser/src/policy/rules.ts";
 import { NEVER_PATH, UNKNOWN_WRITE_PATH } from "../apps/page-browser/src/selftest/selftest.ts";
 import { dnrBlocks, dnrMatches, dnrRule, type DnrRequest } from "./helpers/page-browser-dnr.ts";
@@ -18,6 +18,9 @@ const level = (priority: number) => rules.filter((rule) => rule.priority === pri
 const api = (path: string) => `https://${API_HOST}${API_BASE}${path}`;
 const placeholder = (path: string) => `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${path}`;
 const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
+/** The methods a row closes, an "every method" row by these. */
+const methodsOf = (row: ApiRow) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "PROPFIND"] : [...row.methods]);
+const closedReads = CLOSED_ROWS.filter((row) => row.methods.includes(ANY_METHOD));
 const cdpType = (type: string | undefined) => (type === "websocket" ? "WebSocket" : type === "main_frame" ? "Document" : "XHR");
 /** The map closes it: in both modes, whatever the operator's mode. */
 const mapCloses = (request: DnrRequest): boolean => {
@@ -30,16 +33,17 @@ const mapCloses = (request: DnrRequest): boolean => {
 describe("the rules", () => {
   it("are the levels of the spec, strictly apart, ids from 1", () => {
     expect(rules.map((rule) => rule.id)).toEqual(rules.map((_, index) => index + 1));
-    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 300, 250, 200, 100]);
-    expect(PRIORITY).toEqual({ closed: 400, login: 300, open: 250, general: 200, local: 100 });
+    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 250, 200, 100]);
+    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, open: 250, general: 200, local: 100 });
     // At equal priority DNR prefers allow: no level mixes the two.
     for (const priority of new Set(rules.map((rule) => rule.priority))) expect(new Set(level(priority).map((rule) => rule.action.type)).size, String(priority)).toBe(1);
     expect(level(400).every((rule) => rule.action.type === "block")).toBe(true);
+    expect(level(350).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(300).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(250).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(200).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(100).every((rule) => rule.action.type === "block")).toBe(true);
-    expect(level(400)).toHaveLength(CLOSED_ROWS.length);
+    expect(level(400)).toHaveLength(CLOSED_ROWS.length * 2);
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
   });
 
@@ -57,9 +61,8 @@ describe("the rules", () => {
     for (const rule of [...level(300), ...level(250)]) {
       expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(true);
       expect(rule.condition.regexFilter, String(rule.id)).toMatch(/^\^(https|wss):\/\/[a-z0-9\\.-]+\/.*\$$/);
-      expect(rule.condition.requestDomains).toBeUndefined();
     }
-    for (const rule of [...level(400), ...level(200), ...level(100)]) expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(false);
+    for (const rule of [...level(400), ...level(350), ...level(200), ...level(100)]) expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(false);
     expect(level(300).map((rule) => rule.condition.regexFilter)).toEqual(["^https://apiv3\\.fansly\\.com/api/v1/login/?([?#].*)?$", "^https://apiv3\\.fansly\\.com/api/v1/login/twofa/?([?#].*)?$"]);
     expect(level(300).every((rule) => JSON.stringify(rule.condition.requestMethods) === '["post"]')).toBe(true);
     expect(level(250).map((rule) => [rule.condition.regexFilter, rule.condition.requestMethods])).toEqual([
@@ -77,7 +80,7 @@ describe("the rules", () => {
   it("give Hub's placeholder host what the API has: its reads, and every closed row", () => {
     expect(dnrBlocks(rules, { method: "GET", url: `${placeholder("/account/me")}?ngsw-bypass=true#hub-77` })).toBe(false);
     expect(dnrBlocks(rules, { method: "OPTIONS", url: placeholder("/account/me") })).toBe(false);
-    for (const row of CLOSED_ROWS) for (const method of row.methods) expect(dnrRule(rules, { method, url: placeholder(row.example!) })?.priority, row.template).toBe(PRIORITY.closed);
+    for (const row of CLOSED_ROWS) for (const method of methodsOf(row)) expect(dnrRule(rules, { method, url: placeholder(row.example!) })?.priority, row.template).toBe(PRIORITY.closed);
     expect(dnrBlocks(rules, { method: "POST", url: placeholder("/anything") })).toBe(true);
     expect(dnrBlocks(rules, { method: "POST", url: `https://cdn3.fansly.com${PLACEHOLDER_SUFFIX}/x` })).toBe(true);
     expect(dnrBlocks(rules, { method: "GET", url: `https://cdn3.fansly.com${PLACEHOLDER_SUFFIX}/x.jpg` })).toBe(false);
@@ -94,7 +97,7 @@ describe("the rules", () => {
     expect(parsed).toEqual(rules);
     for (const rule of parsed) {
       expect(Object.keys(rule).sort()).toEqual(["action", "condition", "id", "priority"]);
-      for (const key of Object.keys(rule.condition)) expect(["regexFilter", "isUrlFilterCaseSensitive", "requestDomains", "requestMethods", "excludedRequestMethods", "resourceTypes"]).toContain(key);
+      for (const key of Object.keys(rule.condition)) expect(["regexFilter", "isUrlFilterCaseSensitive", "requestMethods", "excludedRequestMethods", "resourceTypes"]).toContain(key);
       expect(rule.condition.regexFilter).toMatch(/^[\x20-\x7e]+$/);
     }
     expect(rulesJson()).toBe(rulesJson());
@@ -140,25 +143,39 @@ describe("the cost of an expression (Chrome drops a rule over its memory limit, 
 });
 
 describe("the identity of the two layers (spec §2.7)", () => {
-  it("level 1 and the rows closed one by one are one set: each row's own rule, by its methods, on both API hosts", () => {
+  it("level 1 and the rows closed one by one are one set: each row's own two rules — the API host's and its placeholder's — by the row's methods", () => {
     const closedLevel = level(PRIORITY.closed);
+    const hosts = [api, placeholder];
     const pairs: Array<[number, number]> = [];
     CLOSED_ROWS.forEach((row, rowIndex) => {
-      closedLevel.forEach((rule, ruleIndex) => {
-        if (dnrMatches(rule, { method: row.methods[0]!, url: api(row.example!) })) pairs.push([rowIndex, ruleIndex]);
+      hosts.forEach((on, hostIndex) => {
+        closedLevel.forEach((rule, ruleIndex) => {
+          if (dnrMatches(rule, { method: methodsOf(row)[0]!, url: on(row.example!) })) pairs.push([rowIndex * 2 + hostIndex, ruleIndex]);
+        });
       });
     });
-    // A bijection: every row has exactly one rule, every rule one row.
-    expect(pairs).toEqual(CLOSED_ROWS.map((_, index) => [index, index]));
+    // A bijection: every row on each host has exactly one rule, every rule
+    // one row and one host.
+    expect(pairs).toEqual(closedLevel.map((_, index) => [index, index]));
+    expect(closedLevel).toHaveLength(CLOSED_ROWS.length * 2);
     CLOSED_ROWS.forEach((row, index) => {
-      const rule = closedLevel[index]!;
-      expect(rule.condition.requestMethods, row.template).toEqual(row.methods.map((method) => method.toLowerCase()));
-      expect(rule.condition.requestDomains, row.template).toEqual([API_HOST, `${API_HOST}${PLACEHOLDER_SUFFIX}`]);
-      for (const method of row.methods) expect(dnrMatches(rule, { method, url: api(row.example!) }), `${method} ${row.template}`).toBe(true);
-      // Not by a method the row does not close, not on another host.
-      expect(dnrMatches(rule, { method: "GET", url: api(row.example!) }), row.template).toBe(false);
-      expect(dnrMatches(rule, { method: "POST", url: `https://fansly.com${API_BASE}${row.example!}` }), row.template).toBe(false);
+      const every = row.methods.includes(ANY_METHOD);
+      hosts.forEach((on, hostIndex) => {
+        const rule = closedLevel[index * 2 + hostIndex]!;
+        // A row of every method names none: DNR then takes them all.
+        expect(rule.condition.requestMethods, row.template).toEqual(every ? undefined : row.methods.map((method) => method.toLowerCase()));
+        expect(rule.condition.excludedRequestMethods, row.template).toBeUndefined();
+        // The host as it is, right after the scheme: no other host's path.
+        expect(rule.condition.regexFilter.startsWith(hostIndex === 0 ? "^https://apiv3\\.fansly\\.com/+api/+v1/+" : "^https://apiv3\\.fansly\\.com\\.pb-hold\\.invalid/+api/+v1/+"), rule.condition.regexFilter).toBe(true);
+        for (const method of methodsOf(row)) expect(dnrMatches(rule, { method, url: on(row.example!) }), `${method} ${row.template}`).toBe(true);
+        // Not by a method the row does not close, not on another host.
+        expect(dnrMatches(rule, { method: "GET", url: on(row.example!) }), row.template).toBe(every);
+        for (const other of [`https://fansly.com${API_BASE}${row.example!}`, `https://x.${API_HOST}${API_BASE}${row.example!}`, `https://${API_HOST}.evil.net${API_BASE}${row.example!}`]) {
+          expect(dnrMatches(rule, { method: "POST", url: other }), other).toBe(false);
+        }
+      });
     });
+    expect(closedReads.map((row) => row.template)).toEqual(["/emails/unsubscribe", "/account/verifynsfw", "/intercom/authorize", "/zendesk/authorize"]);
   });
 
   it("no login rule matches a closed row, and no closed rule a login operation", () => {
@@ -176,7 +193,7 @@ describe("the identity of the two layers (spec §2.7)", () => {
   it("every closed row has an example, and both layers cancel it in both modes — by every method, from a script and from a click", () => {
     for (const row of CLOSED_ROWS) {
       expect(row.example, row.template).toBeTruthy();
-      for (const method of row.methods) {
+      for (const method of methodsOf(row)) {
         for (const type of ["xmlhttprequest", "main_frame", "sub_frame", "ping", "other"]) {
           const request = { method, url: api(row.example!), type };
           expect(dnrRule(rules, request), `${method} ${row.example} ${type}`).toMatchObject({ priority: PRIORITY.closed, action: { type: "block" } });
@@ -195,7 +212,7 @@ describe("the identity of the two layers (spec §2.7)", () => {
         const request: DnrRequest = { method: example.method, url: example.url, ...(example.type ? { type: example.type } : {}) };
         const what = `${closure.rule}: ${example.method} ${example.url}`;
         expect(dnrBlocks(rules, request), what).toBe(true);
-        expect(dnrRule(rules, request)?.priority, what).toBe(closure.rule === "local" ? PRIORITY.local : PRIORITY.general);
+        expect(dnrRule(rules, request)?.priority, what).toBe(closure.rule === "local" ? PRIORITY.local : closure.rule === "api_spelling" ? PRIORITY.spelling : PRIORITY.general);
         expect(mapCloses(request), what).toBe(true);
       }
     }
@@ -227,6 +244,65 @@ describe("the identity of the two layers (spec §2.7)", () => {
       const what = `${request.method} ${request.url}`;
       expect(dnrBlocks(rules, request), what).toBe(false);
       expect(mapCloses(request), what).toBe(false);
+    }
+  });
+
+  it("a closed read is closed in every spelling Chrome can issue of it — level 250 would open any other — and no other read is", () => {
+    // Level 250 opens a GET under /api/v1 whatever its path: nothing but
+    // level 1 and the escapes' level stands before a closed read.
+    expect(level(PRIORITY.spelling).map((rule) => rule.condition.regexFilter)).toEqual([`^https://apiv3\\.fansly\\.com/[^?#]*%(${PLAIN_ESCAPES})`, `^https://apiv3\\.fansly\\.com\\.pb-hold\\.invalid/[^?#]*%(${PLAIN_ESCAPES})`]);
+    // Every method, every type: nothing in the condition but the expression.
+    for (const rule of level(PRIORITY.spelling)) expect(Object.keys(rule.condition).sort()).toEqual(["isUrlFilterCaseSensitive", "regexFilter", "resourceTypes"]);
+    const hex = (char: string, upper: boolean) => `%${char.charCodeAt(0).toString(16)[upper ? "toUpperCase" : "toLowerCase"]()}`;
+    for (const row of closedReads) {
+      const path = row.example!;
+      const letters = [...path].map((char, index) => ({ char, index })).filter(({ char }) => /[a-z]/.test(char));
+      const spellings = [
+        path,
+        `${path}/`,
+        `${path}//`,
+        `${path}?token=abc`,
+        `${path}?ngsw-bypass=true#x`,
+        `${path}#x`,
+        path.toUpperCase(),
+        path.replace(/[aeiou]/g, (vowel) => vowel.toUpperCase()),
+        path.replaceAll("/", "//"),
+        path.replaceAll("/", "///"),
+        // Each letter of the path escaped in turn, in either case of the
+        // letter and of the hex digits; each slash escaped.
+        ...letters.flatMap(({ char, index }) => [false, true].flatMap((upper) => [char, char.toUpperCase()].map((letter) => `${path.slice(0, index)}${hex(letter, upper)}${path.slice(index + 1)}`))),
+        path.replace(/\/(?=[^/]*$)/, "%2F"),
+        path.replace(/\/(?=[^/]*$)/, "%2f"),
+        `${path}%2F`,
+        [...path].map((char) => (char === "/" ? char : hex(char, true))).join(""),
+      ];
+      expect(spellings.length).toBeGreaterThan(60);
+      for (const spelling of spellings) {
+        for (const method of ["GET", "HEAD", "OPTIONS", "POST"]) {
+          for (const [type, url] of [["xmlhttprequest", api(spelling)], ["main_frame", api(spelling)], ["xmlhttprequest", placeholder(spelling)]] as const) {
+            const request = { method, url, type };
+            expect(dnrBlocks(rules, request), `the extension: ${method} ${url} (${type})`).toBe(true);
+            expect([PRIORITY.closed, PRIORITY.spelling, PRIORITY.general]).toContain(dnrRule(rules, request)!.priority);
+            if (url.startsWith(`https://${API_HOST}/`)) expect(mapCloses(request), `the map: ${method} ${url}`).toBe(true);
+          }
+        }
+      }
+      // In its plain spellings it is its own row's rule that cancels a GET.
+      for (const spelling of [path, `${path}/`, path.toUpperCase(), path.replaceAll("/", "//"), `${path}?token=abc`]) expect(dnrRule(rules, { method: "GET", url: api(spelling), type: "main_frame" })?.priority, spelling).toBe(PRIORITY.closed);
+      // What is another path stays a read for both layers: a longer or a
+      // shorter name, a segment more, a `;` suffix (to a server that drops
+      // one it would be the closed path: Fansly's is not known to).
+      for (const other of [`${path}d`, `${path}/extra`, `/x${path}`, path.slice(0, path.lastIndexOf("/")), `${path};x=1`, `${path}.json`]) {
+        const request = { method: "GET", url: api(other) };
+        expect(dnrBlocks(rules, request), other).toBe(false);
+        expect(mapCloses(request), other).toBe(false);
+      }
+    }
+    // An escape a client does write is no closed spelling, nor is an escape in the query.
+    for (const path of ["/tag/%D0%B0%D0%B1", "/search/a%20b", "/x%2Cy", "/x%40y", "/x%25y", "/account?usernames=%61bc&next=%2Femails%2Funsubscribe"]) {
+      const request = { method: "GET", url: api(path) };
+      expect(dnrBlocks(rules, request), path).toBe(false);
+      expect(mapCloses(request), path).toBe(false);
     }
   });
 
@@ -319,6 +395,27 @@ describe("the identity of the two layers (spec §2.7)", () => {
       "/api/v1/status",
       "/api/v1/twofa/disable",
       "/api/v1/message",
+      "/api/v1/message/like",
+      "/api/v1/logout",
+      "/api/v1/management/x",
+      "/api/v1/thirdpartyconnect/providers",
+      "/api/v1/payments/wallets",
+      "/api/v1/payments/payout/requests",
+      "/api/v1/emails/unsubscribe",
+      "/api/v1/emails/unsubscribe/",
+      "/api/v1/emails/unsubscribe?token=abc",
+      "/api/v1/EMAILS/Unsubscribe",
+      "/api/v1//emails//unsubscribe",
+      "/api/v1/emails/%75nsubscribe",
+      "/api/v1/emails%2Funsubscribe",
+      "/api/v1/emails/unsubscribe;x=1",
+      "/api/v1/emails/unsubscribed",
+      "/api/v1/account/verifynsfw",
+      "/api/v1/intercom/authorize",
+      "/api/v1/zendesk/authorize#x",
+      "/api/v1/account/%6De",
+      "/api/v1/tag/%D0%B0",
+      "/%61pi/v1/account/me",
       "/upload",
     ];
     let compared = 0;
@@ -342,9 +439,9 @@ describe("the identity of the two layers (spec §2.7)", () => {
         }
       }
     }
-    expect(compared).toBeGreaterThan(30_000);
-    expect(closed).toBeGreaterThan(10_000);
-    expect(compared - closed).toBeGreaterThan(5_000);
+    expect(compared).toBeGreaterThan(50_000);
+    expect(closed).toBeGreaterThan(20_000);
+    expect(compared - closed).toBeGreaterThan(10_000);
   });
 
   it("special-use names are the proxy's to refuse: the extension leaves them, so Hub's placeholder can be issued", () => {

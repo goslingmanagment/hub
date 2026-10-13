@@ -5,7 +5,11 @@
 // manual access too. Strictly different priorities, since at equal priority
 // DNR prefers allow:
 //
-//   400 block  the rows closed one by one (spec §2.5): method and path
+//   400 block  the rows closed one by one (spec §2.5): method and path —
+//              four of them by every method, the only closed reads
+//   350 block  an API path with an escape of a plain character or of a
+//              slash: no client writes one, and behind it a closed read
+//              would pass level 250
 //   300 allow  the login operations: POST and their exact paths
 //   250 allow  API reads and their preflights (GET, OPTIONS under /api/v1),
 //              and the site's socket (wss://wsv3.fansly.com/)
@@ -28,8 +32,14 @@
 // - the blocks of level 200 take a host in any spelling (a user, a port, a
 //   trailing dot, any scheme): they may close more, never less;
 // - a closed row's block needs to hold only where an allow rule could open:
-//   the exact hosts (`requestDomains`), HTTPS; its path in any case, with
-//   runs of slashes.
+//   HTTPS and the host as it is — one rule for the API host and one for its
+//   placeholder; its path in any case, with runs of slashes. Level 250
+//   opens a read in any spelling of its path, so
+//   a closed read's rule must hold every spelling Chrome can issue that a
+//   server may take for the row's path: any case and runs of slashes it
+//   reads itself, an escaped plain character or slash level 350 closes for
+//   every path — which is also how the operator's table reads a path
+//   (operations.ts `closedSegments`, `PLAIN_ESCAPES`).
 // A resource type list is explicit: without one DNR skips main_frame, and a
 // form posted by a click is a main frame.
 //
@@ -40,10 +50,10 @@
 // `REGEX_BUDGET` — so the image does not build with a rule Chrome would
 // drop — and the stand asks Chrome itself (stand/rules-check.mjs).
 
-import { API_BASE, API_HOST, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, SOCKET_HOST, type ApiRow } from "./operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, type ApiRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
-export const PRIORITY = { closed: 400, login: 300, open: 250, general: 200, local: 100 } as const;
+export const PRIORITY = { closed: 400, spelling: 350, login: 300, open: 250, general: 200, local: 100 } as const;
 
 /** Every resource type of DNR (Chrome 155). */
 export const RESOURCE_TYPES = ["main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest", "ping", "csp_report", "media", "websocket", "webtransport", "webbundle", "other"] as const;
@@ -53,8 +63,6 @@ export type DnrMethod = "connect" | "delete" | "get" | "head" | "options" | "pat
 export interface DnrCondition {
   regexFilter: string;
   isUrlFilterCaseSensitive: boolean;
-  /** These hosts and the hosts under them. */
-  requestDomains?: string[];
   requestMethods?: DnrMethod[];
   excludedRequestMethods?: DnrMethod[];
   resourceTypes: string[];
@@ -111,15 +119,15 @@ const TOLERANT_BASE = API_BASE.split("/")
   .map((part) => `/+${escapeRegex(part)}`)
   .join("");
 
-function closedRule(row: ApiRow): Omit<DnrRule, "id"> {
+function closedRule(row: ApiRow, host: string): Omit<DnrRule, "id"> {
   return {
     priority: PRIORITY.closed,
     action: { type: "block" },
     condition: {
-      regexFilter: `^https://[^/]+${TOLERANT_BASE}${tolerantPath(row.template)}`,
+      regexFilter: `^https://${escapeRegex(host)}${TOLERANT_BASE}${tolerantPath(row.template)}`,
       isUrlFilterCaseSensitive: false,
-      requestDomains: [...API_HOSTS],
-      requestMethods: row.methods.map(method),
+      // No methods named: every method, a read too.
+      ...(row.methods.includes(ANY_METHOD) ? {} : { requestMethods: row.methods.map(method) }),
       resourceTypes: [...RESOURCE_TYPES],
     },
   };
@@ -149,8 +157,10 @@ export function buildRules(): DnrRule[] {
     action: { type: "block" },
     condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: all, ...more },
   });
-  // 400: closed one by one.
-  for (const row of CLOSED_ROWS) rules.push(closedRule(row));
+  // 400: closed one by one, on the API host and on its placeholder.
+  for (const row of CLOSED_ROWS) for (const host of API_HOSTS) rules.push(closedRule(row, host));
+  // 350: an API path with an escape of a plain character or of a slash.
+  for (const host of API_HOSTS) rules.push(block(PRIORITY.spelling, `^https://${escapeRegex(host)}/[^?#]*%(${PLAIN_ESCAPES})`));
   // 300: the login operations.
   for (const row of LOGIN_ROWS) rules.push(loginRule(row));
   // 250: API reads and preflights, on the API host and on its placeholder;

@@ -17,11 +17,14 @@
 //     it not look suspicious"); only local, private and special-use
 //     addresses are refused;
 //   - every API read is allowed: the catalogue's routes and, outside it,
-//     `site.other` (spec §2.4, decision №3);
+//     `site.other` (spec §2.4, decision №3) — but for the four reads that are
+//     no reads (spec §2.5): they change state or hand a token to a third
+//     party on a GET, and are closed by every method;
 //   - writes are closed FOR NOW, except the login operations: each opens by a
 //     decision of its own when it is needed. There is no permanent "never":
-//     what was "never" is closed until a separate decision (spec §2.5), and
-//     payouts left that list.
+//     what the prototype held as "never" is closed one by one until a
+//     separate decision (spec §2.5) — all of it but the payouts, which left
+//     that list ("the rest I would keep closed for now, just not forever").
 //
 // Modes of a row (spec §2): "automation", "manual_login", "both"; "closed" —
 // refused in both until the owner opens it.
@@ -283,13 +286,18 @@ export const LOGIN_ROWS: readonly ApiRow[] = [
   { methods: ["POST"], template: "/login/twofa", mode: "manual_login", route: "auth.twofa", platformData: false, what: "the 2FA code", source: "spec §2.4; stage 1, §9" },
 ];
 
-/** Every other API read, and the preflights (spec §2.4). */
+/** Every other API read, and the preflights (spec §2.4). The only reads
+ *  `GET /**` does not open are the four rows of `CLOSED_ROWS` closed by
+ *  every method, and a path in a spelling no client writes (`PLAIN_ESCAPES`):
+ *  the closed rows and that spelling are decided before these. */
 export const OPEN_ROWS: readonly ApiRow[] = [
   { methods: ["GET"], template: "/**", mode: "automation", route: SITE_OTHER_ROUTE, platformData: true, what: "an API read outside the catalogue", source: "spec §2.4; decision №3" },
   { methods: ["OPTIONS"], template: "/**", mode: "both", route: null, platformData: false, what: "a CORS preflight: under its request's admission", source: "spec §2.4; decision №1" },
 ];
 
 const WRITES = ["POST", "PUT", "PATCH", "DELETE"];
+/** In a closed row's methods: every method, a GET and its preflight too. */
+export const ANY_METHOD = "*";
 
 function closed(template: string, example: string, what: string, source: string, methods: readonly string[] = WRITES): ApiRow {
   return { methods, template, mode: "closed", route: null, platformData: false, what, source, example };
@@ -298,8 +306,10 @@ function closed(template: string, example: string, what: string, source: string,
 const BUNDLE = "the site's public bundle (prototype, 2026-10-11)";
 
 /** Closed one by one until the owner opens each (spec §2.5): in both modes,
- *  during manual access and without the operator. While every write but the
- *  login is closed anyway, these stay closed when writes start to open. */
+ *  during manual access and without the operator. The list is the
+ *  prototype's "never" without the payouts (decision №2). While every write
+ *  but the login is closed anyway, these stay closed when writes start to
+ *  open; the last four are closed by every method — the only closed reads. */
 export const CLOSED_ROWS: readonly ApiRow[] = [
   // Read marks: the site sends them by itself; open, they would clear the
   // chatters' unread.
@@ -309,14 +319,29 @@ export const CLOSED_ROWS: readonly ApiRow[] = [
   closed("/groups/users/readreceipts", "/groups/users/readreceipts", "a read receipt", BUNDLE),
   closed("/message/typing", "/message/typing", "typing", "spec §2.5; plan §4.6"),
   closed("/status", "/status", "the presence status", "spec §2.5; plan §4.6"),
-  // The account: its e-mail, its deletion, its payout details.
+  closed("/message/like", "/message/like", "a like of a message", BUNDLE),
+  closed("/message/like/remove", "/message/like/remove", "a like of a message taken back", BUNDLE),
+  // The account: its e-mail, its deletion, its payout details, its money.
   closed("/account/emailchange/**", "/account/emailchange/request", "an e-mail change", `spec §2.5; ${BUNDLE}`),
   closed("/account/disable", "/account/disable", "the account's deletion", `spec §2.5; ${BUNDLE}`),
   closed("/payments/payoutmethods/**", "/payments/payoutmethods", "the payout details (a write to the payout methods)", "spec §2.5: the catalogue's read of them, written"),
+  closed("/account/wallets/transaction/refund", "/account/wallets/transaction/refund", "a refund of a transaction", BUNDLE),
+  closed("/payments/wallets*/**", "/payments/wallets/1/withdraw", "the wallets", BUNDLE),
   // The password and the 2FA settings (entering them at a login is a login
-  // operation, above).
+  // operation, above); the sessions; who manages the page; other sign-ins.
   closed("/login/password*/**", "/login/password/change", "a password change", `spec §2.5; ${BUNDLE}`),
   closed("/twofa/**", "/twofa/disable", "the 2FA settings", `spec §2.5; ${BUNDLE}`),
+  closed("/session/close", "/session/close", "a session closed", BUNDLE),
+  closed("/logout", "/logout", "the logout", BUNDLE),
+  closed("/management/**", "/management/invite", "the page's management", BUNDLE),
+  closed("/webpush/delete", "/webpush/delete", "a push subscription removed", BUNDLE),
+  // Writes only: reading the providers is a read of the login screens.
+  closed("/thirdpartyconnect/**", "/thirdpartyconnect/connect", "a third-party sign-in", BUNDLE),
+  // Reads that are no reads: closed by every method.
+  closed("/emails/unsubscribe", "/emails/unsubscribe", "an unsubscribe by link (a GET that changes state)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
+  closed("/account/verifynsfw", "/account/verifynsfw", "the content filter's verification (a GET that changes state)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
+  closed("/intercom/authorize", "/intercom/authorize", "the support widget's authorisation (a token for a third party)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
+  closed("/zendesk/authorize", "/zendesk/authorize", "the support desk's authorisation (a token for a third party)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
 ];
 
 /** Every API row, closed ones first: the order the operator decides in. */
@@ -340,6 +365,17 @@ export const GENERAL_CLOSURES: ReadonlyArray<{ rule: string; what: string; examp
       { method: "GET", url: "https://apiv3.fansly.com:8443/api/v1/account/me" },
       { method: "GET", url: "http://apiv3.fansly.com/api/v1/account/me" },
       { method: "POST", url: "https://apiv3.fansly.com/api/v1/LOGIN" },
+    ],
+  },
+  {
+    rule: "api_spelling",
+    what: "an API path with an escape of a plain character or of a slash: no client writes one, and a server may read it as the character — a closed read could hide behind it",
+    examples: [
+      { method: "GET", url: "https://apiv3.fansly.com/api/v1/emails/%75nsubscribe" },
+      { method: "GET", url: "https://apiv3.fansly.com/api/v1/emails%2Funsubscribe" },
+      { method: "GET", url: "https://apiv3.fansly.com/api/v1/intercom/authori%7Ae" },
+      { method: "GET", url: "https://apiv3.fansly.com/api/v1/account/%6De" },
+      { method: "POST", url: "https://apiv3.fansly.com/api/v1/message/%61ck" },
     ],
   },
   {
@@ -449,8 +485,14 @@ function engineSegments(apiPath: string): string[] {
   return trimmed.split("/").slice(1);
 }
 
-/** Percent-encoded letters, digits, `-._~` and the slash. */
-const DECODED = /%(2[DdEeFf]|3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|5[Ff]|6[1-9A-Fa-f]|7[0-9Aa]|7[Ee])/g;
+/** The escapes of plain characters — letters, digits, `-._~` — and of the
+ *  slash, as the two hex digits after `%` (in any case). No client writes
+ *  them, and a server may read each as its character: on the API a path
+ *  with one is closed by both layers, so no closed row can be spelled around
+ *  — a closed read above all, which no general rule stands behind. */
+export const PLAIN_ESCAPES = "2[def]|3[0-9]|4[1-9a-f]|5[0-9af]|6[1-9a-f]|7[0-9ae]";
+const PLAIN_ESCAPE = new RegExp(`%(${PLAIN_ESCAPES})`, "i");
+const DECODED = new RegExp(`%(${PLAIN_ESCAPES})`, "gi");
 
 /** An API path as the closed rows read it, so that no spelling slips past
  *  them: percent-encoded letters, digits, `-._~` and slashes decoded, runs
@@ -488,7 +530,7 @@ const COMPILED_EXACT = compile([...CATALOGUE_ROWS]).sort((a, b) => {
 export function closedRowOf(method: string, apiPath: string): ApiRow | null {
   const verb = method.toUpperCase();
   const parts = closedSegments(apiPath);
-  return COMPILED_CLOSED.find((entry) => entry.row.methods.includes(verb) && templateMatches(entry.template, parts, true))?.row ?? null;
+  return COMPILED_CLOSED.find((entry) => (entry.row.methods.includes(verb) || entry.row.methods.includes(ANY_METHOD)) && templateMatches(entry.template, parts, true))?.row ?? null;
 }
 
 /** The route of an API read, the engine's way: a catalogue route, else
@@ -553,6 +595,8 @@ function decideApi(url: URL, method: string, mode: OperatorMode): MapDecision {
   // port, its name as it is, no user.
   if (url.protocol !== "https:" || url.port !== "" || url.hostname !== API_HOST || url.username !== "" || url.password !== "") return refuse("the API only by HTTPS, on its port, by its own name");
   const path = url.pathname;
+  // A spelling no client writes (the rules extension closes it too).
+  if (PLAIN_ESCAPE.test(path)) return { action: "refuse", refusal: "closed", rule: "api_spelling", why: "an API path with an escape of a plain character or of a slash" };
   // Closed rows first, by their tolerant reading of the whole path.
   const tolerant = closedSegments(path);
   if (tolerant[0] === "api" && tolerant[1] === "v1") {
