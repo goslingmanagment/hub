@@ -114,6 +114,48 @@ describe("paused requests", () => {
     expect(indeterminate).toEqual([]);
   });
 
+  it("held by the path that owns them are resolved by it later — the response stage too — and acknowledged only then", async () => {
+    const { chrome, holder, operator } = await setUp();
+    const held: PausedRequest[] = [];
+    const { cdp, paused, decided } = operator((request) => {
+      held.push(request);
+      return { action: "hold" };
+    });
+    await cdp.connect();
+    chrome.event("Fetch.requestPaused", {
+      requestId: "interception-9",
+      networkId: "R9",
+      request: { url: "https://apiv3.fansly.com.pb-hold.invalid/api/v1/account/me", urlFragment: "#hub-9", method: "GET", headers: { authorization: "t0ken-value", accept: "x" } },
+      resourceType: "XHR",
+    });
+    await until(() => held.length === 1);
+    expect(held[0]).toMatchObject({ stage: "request", urlFragment: "#hub-9", headers: { authorization: "t0ken-value", accept: "x" }, response: null });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(chrome.sent("Fetch.continueRequest")).toEqual([]);
+    expect(decided).toEqual([]);
+    expect(holder.holder?.stats.stored).toBe(1);
+    expect(await paused.resolve(held[0]!, { action: "continue", params: { url: "https://apiv3.fansly.com/api/v1/account/me", interceptResponse: true } })).toBe("answered");
+    expect(chrome.sent("Fetch.continueRequest")[0]?.params).toEqual({ requestId: "interception-9", url: "https://apiv3.fansly.com/api/v1/account/me", interceptResponse: true });
+    await until(() => holder.holder?.stats.stored === 0, 2000, "the acknowledgement");
+    chrome.event("Fetch.requestPaused", {
+      requestId: "interception-9",
+      networkId: "R9",
+      request: { url: "https://apiv3.fansly.com/api/v1/account/me", method: "GET", headers: {} },
+      resourceType: "XHR",
+      responseStatusCode: 302,
+      responseStatusText: "Found",
+      responseHeaders: [{ name: "Location", value: "/elsewhere" }, { name: "Vary", value: "a" }, { name: "Vary", value: "b" }],
+    });
+    await until(() => held.length === 2);
+    expect(held[1]).toMatchObject({ stage: "response", response: { status: 302, statusText: "Found", errorReason: null, headers: [{ name: "Location", value: "/elsewhere" }, { name: "Vary", value: "a" }, { name: "Vary", value: "b" }] } });
+    // A request's decision at the response stage is a fail; the response's own goes.
+    expect(await paused.resolve(held[1]!, { action: "continueResponse" })).toBe("answered");
+    expect(chrome.sent("Fetch.continueResponse")[0]?.params).toEqual({ requestId: "interception-9" });
+    expect(await paused.resolve({ ...held[1]!, requestId: "interception-10" }, { action: "continue" })).toBe("answered");
+    expect(chrome.sent("Fetch.failRequest").map((command) => command.params.requestId)).toEqual(["interception-10"]);
+    expect(decided.map(([, action]) => action)).toEqual(["continue", "continueResponse", "fail"]);
+  });
+
   it("at the response stage, unasked for, are failed", async () => {
     const { chrome, operator } = await setUp();
     const { cdp } = operator(() => ({ action: "continue" }));
