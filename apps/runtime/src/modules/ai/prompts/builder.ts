@@ -565,7 +565,19 @@ function greetingTask(
  * keep that rule for NEW facts in merge mode and leave room for the chatter's
  * recorded values. Slots glued to the end of a line (intro, mergeRules,
  * mergeFields) open with their own line breaks and are empty in legacy mode. Static kernel-owned text, never built from
- * request data; no long dashes (the house ban on em and en dashes in prompts). */
+ * request data; no long dashes (the house ban on em and en dashes in prompts).
+ *
+ * One fact in one field (2026-10-13, owner's review of real output: the same
+ * fact landed in «Фетиши», «Медиа» and «Характеристика»). The template defined
+ * «Характеристика» as what the fan likes and pays for, while the agency's
+ * chatters use that field for what kind of fan he is and how to talk to him.
+ * So the «Характеристика» and «Медиа» definitions are slots too
+ * (characterField, mediaField): legacy mode keeps the template's original two
+ * lines; merge mode defines «Характеристика» as who the fan is and makes
+ * «Медиа» the one place for purchases, prices and the subscription, and one
+ * «Current Values» bullet forbids stating a fact in two fields or adding one a
+ * current value already holds. How much the merge mode writes is unchanged
+ * (owner's ruling: the output is not to get shorter). */
 interface NoteFillTexts {
   factSource: string;
   statedRule: string;
@@ -574,6 +586,8 @@ interface NoteFillTexts {
   valueRule: string;
   emptyRule: string;
   mergeRules: string;
+  characterField: string;
+  mediaField: string;
   mergeFields: string;
   outputShape: string;
   outputRules: string;
@@ -589,6 +603,8 @@ const NOTE_FILL_LEGACY_TEXTS: NoteFillTexts = {
   valueRule: 'Write each value in Russian and keep it short: a few words, never more than one line. Keep names, places and brands exactly as the fan wrote them.',
   emptyRule: 'When nothing in the conversation answers a field, leave its value empty: the label, the colon and a space, nothing after them. Never write a placeholder such as «неизвестно», «нет данных» or «не указано», a dash, or a question mark.',
   mergeRules: '',
+  characterField: 'what the fan likes and what he pays for, in one line. You may combine the preferences he stated with what the spending data shows he pays for.',
+  mediaField: 'what content he bought and what content he likes (types and themes), from the transcript and the spending data.',
   mergeFields: '',
   outputShape: `One line per requested field, in the order the task lists them, and nothing else:
 
@@ -615,6 +631,7 @@ The task gives every field with its current value: what the chatter has recorded
 - A current value is what the chatter recorded, and the one source besides the fan's own words: he may know it from outside this chat, so it stays true unless the fan himself contradicts it later in the conversation.
 - When the chat adds nothing to a field and nothing in it has to move to another field, answer it with a single \`=\` as its value: \`Label: =\`. The field then keeps its current value exactly as recorded, whatever its language. Never rewrite a field only to translate, reword, reorder or tidy it.
 - Otherwise rewrite the field in Russian: every fact of its current value, translated, plus the new facts from the chat. A fact the fan contradicted is replaced by his latest statement.
+- One fact, one field. Never state the same fact in two fields: put it in the field whose definition below fits it best. A fact that a current value already holds, in any field, is not new: do not add it again.
 - A fact of a current value that belongs to another listed field by the field definitions below may move there. One that fits no listed field moves to «Другое», or stays in its field when «Другое» is not listed. A moved fact must appear in the field it moved to: nothing of a current value is dropped, except what the fan himself contradicted.
 - Text in a current value that you do not understand, such as a chatter's marker like «Sexting 1», stays in its field exactly as written.
 - An empty current value is filled from the chat, like a new field. An empty field the chat says nothing about stays empty (\`Label:\`), never \`=\`.
@@ -626,6 +643,8 @@ The transcript has a day line \`--- YYYY-MM-DD ---\` before the first message of
 - Facts that go stale (where he lives or stays, his job, his schedule, his plans) carry the month and year he said them, in parentheses: «Флорида (08.2026)». Take them from the day line above the message that states the fact. With no day line above it, write no date; never guess one.
 - When the fan restates a dated fact later, the fact takes the later date.
 - A date alone is no reason to rewrite a field: an undated fact of a current value gets its date only when you rewrite its field anyway.`,
+  characterField: 'what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices, subscription or content tastes (those are «Медиа») and never his fetishes (those are «Фетиши»).',
+  mediaField: 'what content he bought, as the transcript\'s `purchased` tags and the spending and subscription data show it, and what content he says he likes (types and themes). Purchases, prices and his subscription are recorded here and nowhere else.',
   mergeFields: `
 - Локация: where he lives or stays, as «город, штат или регион, страна», as far as he said it.
 - График: when he works, sleeps and is free, as he told it (shifts, days off, hours).
@@ -687,6 +706,8 @@ function noteFillSlots(input: PromptBuildInput): Record<string, string> {
     noteFillValueRule: '',
     noteFillEmptyRule: '',
     noteFillMergeRules: '',
+    noteFillCharacterField: '',
+    noteFillMediaField: '',
     noteFillMergeFields: '',
     noteFillOutputShape: '',
     noteFillOutputRules: '',
@@ -705,6 +726,8 @@ function noteFillSlots(input: PromptBuildInput): Record<string, string> {
     noteFillValueRule: texts.valueRule,
     noteFillEmptyRule: texts.emptyRule,
     noteFillMergeRules: texts.mergeRules,
+    noteFillCharacterField: texts.characterField,
+    noteFillMediaField: texts.mediaField,
     noteFillMergeFields: texts.mergeFields,
     noteFillOutputShape: texts.outputShape,
     noteFillOutputRules: texts.outputRules,
