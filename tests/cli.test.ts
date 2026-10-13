@@ -1413,6 +1413,22 @@ describe("CLI parsing", () => {
     expect(cliMocks.createAppContext).not.toHaveBeenCalled();
   });
 
+  it("ai:feature-smoke checks fan-notes-fill values, one per label, before any I/O", async () => {
+    const smoke = (...extra: string[]) => {
+      const program = buildProgram();
+      program.exitOverride();
+      return program.parseAsync([
+        "ai:feature-smoke", "--feature", "fan-notes-fill", "--page", "svc-fs",
+        "--conversation", "group-1", "--as-user-id", "1", "--note-fields", "Имя,Локация,График", ...extra,
+      ], { from: "user" });
+    };
+    // '|'-separated, since a value holds commas: two values for three labels.
+    await expect(smoke("--note-values", "Ethan|Australia, Brisbane"))
+      .rejects.toThrow("--note-values: 2 values for 3 --note-fields labels; give one per label");
+    await expect(smoke("--note-values", `Ethan|${"я".repeat(2_001)}|`)).rejects.toThrow("--note-values:");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
   it("ai:feature-smoke requires --fan for fan-notes-fill on a FANSLY page", async () => {
     cliMocks.findPageByLabel.mockResolvedValueOnce({
       page: { id: 44, label: "svc-fs", platform: "fansly" },

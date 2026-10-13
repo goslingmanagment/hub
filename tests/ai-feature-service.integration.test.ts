@@ -3985,6 +3985,48 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     expect(rows[0]).toEqual({ conversation_ref: "group-777", fan_ref: "fan-42" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("merges into the current values when the request carries noteValues", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const noteValues = ["  Mike ", "Austin & <TX>", "", "", "", "", "", "Sexting 1"];
+    const res = await post("fan-notes-fill", notesPayload({
+      noteValues,
+      clientContext: {
+        ...notesPayload().clientContext,
+        transcript: "--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin\n[10:05] Model: hey Mike",
+      },
+    }));
+    expect(res.statusCode, res.body).toBe(200);
+    const blocks = capture.input!.body.prompt.userBlocks;
+    const task = blocks.at(-1)!.text;
+    // Trimmed by the contract, escaped by the prompt, empty ones bare.
+    expect(task).toContain([
+      "<note_fields>",
+      "Имя: Mike",
+      "Локация: Austin &amp; &lt;TX&gt;",
+      "Возраст:",
+      "Работа:",
+      "Хобби:",
+      "Фетиши:",
+      "Характеристика:",
+      "Медиа: Sexting 1",
+      "</note_fields>",
+    ].join("\n"));
+    expect(task).toContain(`Output exactly ${NOTE_FIELDS.length} field lines`);
+    const user = blocks.map((block) => block.text).join("");
+    expect(user).toContain("## Current Values");
+    expect(user).toContain("--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin");
+    // The values reach the task block only.
+    for (const block of blocks.slice(0, -1)) {
+      expect(block.text).not.toContain("Sexting 1\n");
+      expect(block.text).not.toContain("Austin &amp;");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps the request's model and reasoning overrides", async (context) => {
     if (!testDb) {
       context.skip();
@@ -4011,6 +4053,33 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
       const stray = await post(feature, notesPayload());
       expect(stray.statusCode, stray.body).toBe(400);
       expect(stray.json().message).toBe(`${feature} does not accept noteFields`);
+    }
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes noteValues only on fan-notes-fill, one per label, before any provider call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const values = (first: string) => [first, ...NOTE_FIELDS.slice(1).map(() => "")];
+    const short = await post("fan-notes-fill", notesPayload({ noteValues: ["Mike"] }));
+    expect(short.statusCode, short.body).toBe(400);
+    expect(short.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    const long = await post("fan-notes-fill", notesPayload({ noteValues: [...values("Mike"), ""] }));
+    expect(long.statusCode, long.body).toBe(400);
+    expect(long.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    for (const feature of ["fan-summary", "help-me", "fast-reply", "chat-review"]) {
+      const stray = await post(feature, notesPayload({ noteFields: undefined, noteValues: values("Mike") }));
+      expect(stray.statusCode, stray.body).toBe(400);
+      expect(stray.json().message).toBe(`${feature} does not accept noteValues`);
+    }
+    // The contract's own rules: a schema 400 whatever the feature.
+    for (const noteValues of [[], values("Mike\nR"), values("x".repeat(2_001)), [...values("Mike"), 42]]) {
+      const res = await post("fan-notes-fill", notesPayload({ noteValues }));
+      expect(res.statusCode, JSON.stringify(noteValues).slice(0, 80)).toBe(400);
     }
     expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);

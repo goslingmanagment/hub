@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { Command, InvalidArgumentError } from "commander";
 import { PgBoss } from "pg-boss";
 
-import { aiNoteFieldsSchema } from "@agency_hub_core/contracts";
+import { aiNoteFieldsSchema, aiNoteValuesSchema } from "@agency_hub_core/contracts";
 import {
   assertDomainEventTargetMonthsAttached,
   createModel,
@@ -1209,6 +1209,7 @@ export function buildProgram() {
     .option("--fan <ref>", "canonical fan ref (Fansly: separate from the --conversation groupId)")
     .option("--model <model>", "gateway model override")
     .option("--note-fields <labels>", "fan-notes-fill: comma-separated questionnaire labels, e.g. \"Имя,Локация,Возраст\"")
+    .option("--note-values <values>", "fan-notes-fill merge mode: the current value per --note-fields label, '|'-separated (values hold commas), empty for an empty field, e.g. \"Ethan|Australia, Brisbane|\"")
     .action(async (options) => {
       // Fail fast with a clear CLI message instead of a server 400: the T5 gate
       // rejects coach-chat without a chatterQuestion before any provider call.
@@ -1228,6 +1229,21 @@ export function buildProgram() {
       }
       if (options.feature === "fan-notes-fill" && noteFields === undefined) {
         throw new Error("fan-notes-fill requires --note-fields <labels>");
+      }
+      // Merge mode: one value per label, in the labels' order, checked like
+      // the labels (the contract's rules, then the service's alignment).
+      let noteValues: string[] | undefined;
+      if (options.noteValues !== undefined) {
+        const parsed = aiNoteValuesSchema.safeParse(String(options.noteValues).split("|"));
+        if (!parsed.success) {
+          throw new Error(`--note-values: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        }
+        if (noteFields === undefined || parsed.data.length !== noteFields.length) {
+          throw new Error(
+            `--note-values: ${parsed.data.length} values for ${noteFields?.length ?? 0} --note-fields labels; give one per label`,
+          );
+        }
+        noteValues = parsed.data;
       }
       const app = await createAppContext();
       try {
@@ -1279,6 +1295,7 @@ export function buildProgram() {
             ...(options.fan ? { fanRef: options.fan } : {}),
             ...(options.model ? { model: options.model } : {}),
             ...(noteFields ? { noteFields } : {}),
+            ...(noteValues ? { noteValues } : {}),
           },
         );
         const preparedMs = Date.now() - startedAt;

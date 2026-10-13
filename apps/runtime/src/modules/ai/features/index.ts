@@ -138,6 +138,11 @@ export interface AiFeatureRequestBody {
   /** fan-notes-fill only, and required there: the questionnaire labels of the
    * fan's native note, in output order (trimmed and checked by the contract). */
   noteFields?: string[];
+  /** fan-notes-fill only, optional there: the questionnaire's current value
+   * per label, index-aligned with `noteFields` ("" for an empty field). Present,
+   * the prompt merges into them (merge mode); absent, it is the released
+   * clients' prompt byte for byte. Trimmed and one line each (the contract). */
+  noteValues?: string[];
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
@@ -233,18 +238,29 @@ export function assertGreetingRequestShape(
 /** fan-notes-fill (the Fansly notes panel's «fill with AI»): the questionnaire
  * labels are the whole task, so the feature REQUIRES `noteFields`, and every
  * other feature REFUSES them, so a stray list can never reshape a Reply or a
- * Recap prompt. The labels' own rules (count, length, characters, repeats) are
- * the contract's. Pure, like the greeting rules above. */
+ * Recap prompt. The current values (`noteValues`, merge mode) are optional on
+ * fan-notes-fill, one per label, so they never pair a value with the wrong
+ * label; every other feature refuses them too. The lists' own rules (count,
+ * length, characters, repeats) are the contract's. Pure, like the greeting
+ * rules above. */
 export function assertNoteFieldsRequestShape(
   feature: OperationFeature,
-  body: Pick<AiFeatureRequestBody, "noteFields">,
+  body: Pick<AiFeatureRequestBody, "noteFields" | "noteValues">,
 ): void {
   if (feature === "fan-notes-fill") {
     if (body.noteFields === undefined || body.noteFields.length === 0) {
       throw new BadRequestError("fan-notes-fill requires noteFields");
     }
-  } else if (body.noteFields !== undefined) {
+    if (body.noteValues !== undefined && body.noteValues.length !== body.noteFields.length) {
+      throw new BadRequestError("noteValues must hold exactly one value per noteFields label");
+    }
+    return;
+  }
+  if (body.noteFields !== undefined) {
     throw new BadRequestError(`${feature} does not accept noteFields`);
+  }
+  if (body.noteValues !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteValues`);
   }
 }
 
@@ -976,6 +992,7 @@ export async function prepareAiFeatureStream(
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
+    noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.
