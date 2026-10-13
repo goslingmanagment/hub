@@ -6,9 +6,9 @@
 # it, one Compose project each.
 #
 # - Its own Compose project (pb-suite-<stand>) and its own networks, both
-#   internal: nothing on them has a route out of the host, nothing is shared
-#   with Hub's networks. The stand's Fansly is its only "internet", and it
-#   connects nowhere else.
+#   internal and isolated: nothing on them has a route out of the host or to
+#   the host itself, nothing is shared with Hub's networks. The stand's
+#   Fansly is its only "internet", and it connects nowhere else.
 # - Its own Postgres: "the database is unavailable" stops only this one.
 # - Every container has CPU, memory and process limits and no swap; none
 #   restarts by itself — after a reboot the stand stays down.
@@ -26,21 +26,33 @@ x-stand: &stand
   security_opt:
     - no-new-privileges:true
 
+# Both networks are internal AND isolated (Docker's gateway mode): an
+# internal network alone still gives its bridge an address on the host, and a
+# container reaches whatever the host listens on at 0.0.0.0 through it — on
+# the production server that is sshd and Hub's Caddy. Isolated, the bridge
+# has no address: nothing of the host is reachable (runner/isolation.ts
+# checks it on every `stand.sh up`). Every container has a fixed address
+# above .1, where the gateway would have been.
+x-isolated: &isolated
+  internal: true
+  enable_ipv6: false
+  labels:
+    agency.stand: pb-suite
+  driver_opts:
+    com.docker.network.bridge.gateway_mode_ipv4: isolated
+    com.docker.network.bridge.gateway_mode_ipv6: isolated
+
 networks:
   control:
-    internal: true
-    labels:
-      agency.stand: pb-suite
+    <<: *isolated
     ipam:
       config:
         - subnet: ${PB_SUITE_NET_CONTROL:?}.0/24
   # Production's pb-egress keeps its containers apart (enable_icc=false)
   # and has a gateway to the pages' SOCKS5s; here the SOCKS5 is the stand's
-  # Fansly on the same internal network, so its containers do talk.
+  # Fansly on the same network, so its containers do talk.
   egress:
-    internal: true
-    labels:
-      agency.stand: pb-suite
+    <<: *isolated
     ipam:
       config:
         - subnet: ${PB_SUITE_NET_EGRESS:?}.0/24

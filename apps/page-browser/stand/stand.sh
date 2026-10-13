@@ -13,7 +13,7 @@
 #   stand.sh verify <stand> <name>          the verdict of a finished series
 #   stand.sh status [<stand>]
 #   stand.sh down <stand>                   everything of that stand but its results
-#   stand.sh guard-start | guard-stop | clear-trip | apparmor-load   (server)
+#   stand.sh guard-start | guard-stop | clear-trip | apparmor-load | builder-remove   (server)
 #
 # Nothing of the stand starts on the server while the guard (guard.sh) is
 # not watching Hub, or after it tripped. Every container, network and volume
@@ -58,11 +58,16 @@ TOOLS_IMAGE="pb-suite/tools:$REV"
 # from its own tree), the suites of this tree run against it.
 PAGE_IMAGE="${PB_SUITE_PAGE_IMAGE:-pb-suite/page-browser:$REV}"
 
+# A file's modification time, seconds (GNU stat, then BSD's).
+mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
 guard_ok() {
   [[ "$MODE" == server ]] || return 0
   systemctl is-active --quiet "$GUARD_UNIT" || fail "the guard is not running (stand.sh guard-start)"
   [[ ! -f "$GUARD_DIR/TRIPPED" ]] || fail "the guard tripped: $(tail -1 "$GUARD_DIR/TRIPPED")"
-  [[ -n "$(find "$GUARD_DIR/last" -newermt '15 seconds ago' 2>/dev/null)" ]] || fail "the guard has not measured for 15 s"
+  (( $(date +%s) - $(mtime "$GUARD_DIR/last") <= 15 )) || fail "the guard has not measured for 15 s"
 }
 
 stand_vars() {
@@ -89,15 +94,28 @@ runner() {
 
 # ── build ─────────────────────────────────────────────────────────────────
 
+# The server's builds run in one BuildKit container, named so that this
+# script and the guard find it: buildx_buildkit_<BUILDER>0. It has no
+# stand label (buildx sets none), so it is stopped by name — after a build,
+# on any exit of one, by guard-stop, and by the guard when it trips.
+BUILDER_CONTAINER="buildx_buildkit_${BUILDER}0"
+
+stop_builder() {
+  if docker ps -q --filter "name=^${BUILDER_CONTAINER}\$" | grep -q .; then
+    docker stop -t 2 "$BUILDER_CONTAINER" >/dev/null 2>&1 || true
+    log "the builder is stopped"
+  fi
+}
+
 build() {
   guard_ok
-  local vendor tmp=""
+  local vendor
   if [[ "$MODE" == local ]]; then
     local cache="${PB_VENDOR_CACHE:-$HOME/code/.cache/page-browser}"
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' RETURN
-    cp "$cache"/chrome/*.deb "$cache"/kasmvnc/*.deb "$cache"/s6-overlay/*.tar.xz "$tmp"/
-    vendor="$tmp"
+    BUILD_TMP="$(mktemp -d)"
+    trap 'rm -rf "$BUILD_TMP"' EXIT
+    cp "$cache"/chrome/*.deb "$cache"/kasmvnc/*.deb "$cache"/s6-overlay/*.tar.xz "$BUILD_TMP"/
+    vendor="$BUILD_TMP"
     log "building $TOOLS_IMAGE"
     docker build -q -t "$TOOLS_IMAGE" -f "$STAND_DIR/Dockerfile.tools" "$STAND_DIR" >/dev/null
     log "building $PAGE_IMAGE"
@@ -105,6 +123,9 @@ build() {
   else
     vendor="$PB_SUITE_HOME/vendor"
     [[ -z "$(docker ps -q --filter "label=$LABEL")" ]] || fail "stand containers are running: builds wait for them"
+    # However the build ends — done, failed, interrupted — the builder does
+    # not stay running: it holds 2 CPU and 3 GB only while it builds.
+    trap stop_builder EXIT
     docker buildx inspect "$BUILDER" >/dev/null 2>&1 \
       || docker buildx create --name "$BUILDER" --driver docker-container \
            --driver-opt cpu-period=100000 --driver-opt cpu-quota=200000 \
@@ -115,8 +136,6 @@ build() {
     docker buildx build --builder "$BUILDER" --load -t "$TOOLS_IMAGE" -f "$STAND_DIR/Dockerfile.tools" "$STAND_DIR"
     log "building $PAGE_IMAGE"
     docker buildx build --builder "$BUILDER" --load --build-context vendor="$vendor" --build-arg OPERATOR_VERSION="$REV" -t "$PAGE_IMAGE" "$SRC"
-    # The builder holds its CPUs and memory only while it builds.
-    docker stop "buildx_buildkit_${BUILDER}0" >/dev/null
   fi
   log "built $TOOLS_IMAGE and $PAGE_IMAGE"
 }
@@ -219,6 +238,12 @@ EOF
 
   log "starting $PROJECT (revision $REV, $MODE)"
   infra up -d --wait >/dev/null
+  # Internal and isolated, as created: no gateway, no address on the host.
+  for network in "${PROJECT}_control" "${PROJECT}_egress"; do
+    local made
+    made="$(docker network inspect -f '{{.Internal}} {{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}} {{json .IPAM.Config}}' "$network")"
+    [[ "$made" == "true isolated "* && "$made" != *Gateway* ]] || fail "$network is not internal and isolated, without a gateway: $made"
+  done
   for page in "${pages[@]}"; do
     if [[ "$page" == disk ]]; then
       # Started by the runner only for its scenarios.
@@ -288,6 +313,7 @@ status() {
     systemctl is-active "$GUARD_UNIT" || true
     cat "$GUARD_DIR/last" 2>/dev/null || true
     [[ -f "$GUARD_DIR/TRIPPED" ]] && echo "TRIPPED: $(tail -1 "$GUARD_DIR/TRIPPED")"
+    docker ps -a --filter "name=^${BUILDER_CONTAINER}\$" --format '{{.Names}}\t{{.Status}}'
   fi
   local filter="label=$LABEL"
   [[ -n "${1:-}" ]] && { stand_vars "$1"; filter="label=agency.stand.name=$PROJECT"; }
@@ -344,6 +370,9 @@ guard_stop() {
   ids="$(docker ps -q --filter "label=$LABEL")"
   # shellcheck disable=SC2086
   [[ -z "$ids" ]] || docker stop -t 5 $ids >/dev/null
+  # Nothing of the stand runs unwatched: the builder too, before the guard goes.
+  stop_builder
+  [[ -z "$(docker ps -q --filter "label=$LABEL")$(docker ps -q --filter "name=^${BUILDER_CONTAINER}\$")" ]] || fail "stand containers or the builder still run: the guard stays"
   systemctl stop "$GUARD_UNIT" 2>/dev/null || true
   echo "guard stopped"
 }
@@ -369,5 +398,6 @@ case "$command" in
   guard-stop) guard_stop ;;
   clear-trip) server_only clear-trip; rm -f "$GUARD_DIR/TRIPPED"; echo "trip cleared" ;;
   apparmor-load) apparmor_load ;;
+  builder-remove) server_only builder-remove; stop_builder; docker buildx rm "$BUILDER" >/dev/null 2>&1 || true; echo "builder removed" ;;
   *) sed -n '2,22p' "$0"; exit 2 ;;
 esac

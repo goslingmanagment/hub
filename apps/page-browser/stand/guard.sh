@@ -20,6 +20,10 @@ set -uo pipefail
 
 DIR="${PB_GUARD_DIR:-/opt/pb-suite/guard}"
 URL="${PB_GUARD_URL:-http://127.0.0.1:3000/api/v1/health}"
+# Where the host's memory and load are read, and PB_GUARD_ONCE=1 for one
+# measurement and out: the guard's own test (tests/page-browser-stand-scripts.test.ts).
+MEMINFO="${PB_GUARD_MEMINFO:-/proc/meminfo}"
+LOADAVG="${PB_GUARD_LOADAVG:-/proc/loadavg}"
 INTERVAL_S=5
 MAX_ONE_MS=500
 MAX_AVG_MS=50
@@ -32,6 +36,8 @@ BUILDER=buildx_buildkit_pb-suite-builder0
 mkdir -p "$DIR"
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$DIR/guard.log"; }
 
+# Everything of the stand that runs: its containers (by label) and the
+# builds' BuildKit container (buildx gives it no label: by its name).
 stop_stand() {
   local ids
   ids="$(timeout 10 docker ps -q --filter "label=$STAND_LABEL")"
@@ -39,6 +45,7 @@ stop_stand() {
   [[ -n "$ids" ]] && timeout 30 docker stop -t 3 $ids >/dev/null 2>&1
   if timeout 10 docker ps -q --filter "name=^${BUILDER}\$" | grep -q .; then
     timeout 30 docker stop -t 2 "$BUILDER" >/dev/null 2>&1
+    log "stopped: the builder"
   fi
   [[ -n "$ids" ]] && log "stopped: $(echo "$ids" | wc -w) stand containers"
 }
@@ -63,8 +70,8 @@ while true; do
   sum=0; max=0
   for s in "${samples[@]}"; do sum=$((sum + s)); (( s > max )) && max=$s; done
   avg=$((sum / ${#samples[@]}))
-  available="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
-  load="$(cut -d' ' -f1 /proc/loadavg)"
+  available="$(awk '/^MemAvailable:/ { print $2 }' "$MEMINFO")"
+  load="$(cut -d' ' -f1 "$LOADAVG")"
 
   reason=""
   if [[ "$code" != "200" ]]; then reason="Hub health answered '${code}'"
@@ -87,5 +94,6 @@ while true; do
     log "sample: last=${ms} ms max30s=${max} ms avg30s=${avg} ms available=$((available / 1024)) MiB load=${load}"
     minute_start=$SECONDS
   fi
+  [[ "${PB_GUARD_ONCE:-0}" == 1 ]] && exit 0
   sleep $(( INTERVAL_S - (SECONDS - started) > 0 ? INTERVAL_S - (SECONDS - started) : 0 ))
 done

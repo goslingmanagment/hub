@@ -3,6 +3,11 @@
 //
 //  1. No route out: a connection to an address on the internet fails at
 //     once (the stand's networks are internal).
+//  1b. No way to the host: the stand's bridges have no address on the host
+//     (Docker's isolated gateway mode), so what the host listens on at
+//     0.0.0.0 — sshd and Hub's Caddy on the production server — cannot be
+//     reached. The address a bridge would have (.1 of each subnet) must not
+//     answer at all on 22, 80 and 443: a refusal is an answer of the host.
 //  2. The SOCKS5 connects nothing but the stand's names: example.com is
 //     refused.
 //  3. Fansly's names through the SOCKS5 are the stand's: with the stand's CA
@@ -94,6 +99,15 @@ try {
 } catch (error) {
   check("the exit-IP service answers the pinned address", false, String(error));
 }
+
+/** The address the bridge of an address's network would have on the host. */
+const bridgeOf = (ip: string) => `${ip.split(".").slice(0, 3).join(".")}.1`;
+const hostProbes = await Promise.all(
+  [...new Set([bridgeOf(topology.engineIp), bridgeOf(topology.socksIp), ...(process.env.STAND_HOST_BRIDGES ?? "").split(",").filter(Boolean)])].flatMap((host) => [22, 80, 443].map(async (port) => ({ host, port, got: await noRoute(host, port) }))),
+);
+// Unreachable: no connection, and no refusal either.
+const answered = hostProbes.filter((probe) => probe.got === null || probe.got === "ECONNREFUSED" || probe.got === "ECONNRESET");
+check("no way to the host through the stand's bridges", answered.length === 0, hostProbes.map((probe) => `${probe.host}:${probe.port} ${probe.got ?? "connected"}`).join(", "));
 
 for (const result of results) console.log(`${result.pass ? "ok  " : "FAIL"} ${result.check}: ${result.detail}`);
 process.exit(results.every((result) => result.pass) ? 0 : 1);
