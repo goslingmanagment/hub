@@ -155122,7 +155122,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile; 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
+        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -155136,6 +155136,11 @@
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "conversationRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "fanRef": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200

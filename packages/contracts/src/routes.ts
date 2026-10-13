@@ -741,6 +741,15 @@ export const voiceNoteCreateBodySchema = z.object({
   // any non-UUID string can reach Postgres and raise a raw 22P02 → 500.
   clientRequestId: z.string().uuid(),
   conversationRef: z.string().min(1).max(200),
+  // chat-extension R20 HF-4а: the fan the render is for, named apart from the
+  // chat. The new client names the Fansly group as `conversationRef` and the
+  // fan here; the source generation must be of this very pair, and the page's
+  // capture must not hold the group as another fan's chat (409
+  // `conversation_fan_mismatch`). Optional: without it `conversationRef` is
+  // the fan's own id (the released Fansly extension's form), admitted exactly
+  // as before. Not part of the request hash: the hash's source generation
+  // already carries its fan.
+  fanRef: z.string().min(1).max(200).optional(),
   sourceGenerationRef: z.string().min(1).max(200),
   script: z.string().min(1).max(8000),
 });
@@ -6712,7 +6721,9 @@ const baseRouteSchemas = {
       + "detached). A replay of an already-admitted request re-runs no admission gate. "
       + "Structured error codes (in the body `error` field): 400 voice_script_invalid / "
       + "voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 "
-      + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
+      + "idempotency_mismatch (same id, different request) / voice_no_profile / "
+      + "conversation_fan_mismatch (a request with `fanRef`: the page's capture holds "
+      + "the group `conversationRef` names as another fan's chat); 429 "
       + "voice_quota_denied; 503 voice_provider_unavailable (live flag on but "
       + "ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is "
       + "unconfigured, or an active erasure temporarily owns the page writer "
