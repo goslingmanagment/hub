@@ -155,6 +155,8 @@ export interface BufferOptions {
   commitFault?: (batch: Commit) => Error | null;
   /** Tests: an error for the first read after an open (store.ts). */
   totalsFault?: () => Error | null;
+  /** Tests: an error to fail a write of the sent mark with (store.ts). */
+  markFault?: () => Error | null;
   /** Tests: an error for a read of a body's part (bodies.ts). */
   bodyReadFault?: (bodyId: string, part: number) => Error | null;
   /** The pauses before a failed open is tried again (locked, I/O). */
@@ -505,6 +507,7 @@ export class EventBuffer {
         ...(options.maxPages !== undefined ? { maxPages: options.maxPages } : {}),
         ...(options.commitFault ? { commitFault: options.commitFault } : {}),
         ...(options.totalsFault ? { totalsFault: options.totalsFault } : {}),
+        ...(options.markFault ? { markFault: options.markFault } : {}),
       });
       opened = store;
       const totals = store.totals();

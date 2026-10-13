@@ -171,6 +171,8 @@ export interface StoreOptions {
   /** Tests: an error for `totals` to throw (a read failing right after the
    *  open). */
   totalsFault?: () => Error | null;
+  /** Tests: an error to fail a write of the sent mark with. */
+  markFault?: () => Error | null;
 }
 
 const WAL_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -218,6 +220,7 @@ export class BufferStore {
   readonly #allConnections: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
+  readonly #markFault: StoreOptions["markFault"];
   readonly #nowWall: () => number;
   #lastSeq: number;
   #lastWall: number | null;
@@ -294,6 +297,7 @@ export class BufferStore {
       this.#bodyIds = db.prepare("SELECT body_id FROM outcomes WHERE body_id IS NOT NULL");
       this.#commitFault = options.commitFault;
       this.#totalsFault = options.totalsFault;
+      this.#markFault = options.markFault;
       this.#nowWall = options.now;
       syncIdFile(options.idFile, this.id);
     } catch (error) {
@@ -335,6 +339,8 @@ export class BufferStore {
     const db = this.#db;
     db.exec("BEGIN IMMEDIATE");
     try {
+      const fault = this.#markFault?.();
+      if (fault) throw fault;
       this.#setMeta.run(String(upto), "sent_max");
       db.exec("COMMIT");
       this.#sentMax = upto;

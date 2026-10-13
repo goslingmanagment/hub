@@ -67,7 +67,7 @@ function all(buffer: EventBuffer): Array<Record<string, unknown>> {
 }
 
 /** A buffer whose committed batches go to a stream with a recording sink. */
-function streamed(root: string, options: Partial<BufferOptions> = {}, stream: { maxEvents?: number; maxBytes?: number; inFlightBatches?: number } = {}) {
+function streamed(root: string, options: Partial<BufferOptions> = {}, stream: { maxEvents?: number; maxBytes?: number; inFlightBatches?: number; markRetryMs?: readonly number[] } = {}) {
   let pump = () => undefined as void;
   const buffer = open(root, { ...options, onCommitted: () => pump() });
   const sent: Array<{ type: string; bufferId: string; events: Array<Record<string, unknown>>; bytes: number }> = [];
@@ -372,6 +372,43 @@ describe("the sent mark (schema v4)", () => {
     stream.pump();
     expect(seqs()).toEqual([1, 2, 3]);
     expect(buffer.sentMax).toBe(3);
+  });
+
+  it("a one-off failure writing the mark while the buffer is full does not stop its drain: the stream tries again on its own", async () => {
+    let markAttempts = 0;
+    const { buffer, stream, seqs } = streamed(
+      dir(),
+      {
+        caps: { bytes: 10_000, ageMs: 3_600_000, alarmPercents: [50, 80] },
+        markFault: () => (++markAttempts === 1 ? new Error("disk I/O error") : null),
+      },
+      { markRetryMs: [20] },
+    );
+    // The backlog fills the buffer: no new event is taken any more.
+    let count = 0;
+    for (;;) {
+      const appended = buffer.append(wsFrame(count + 1, 900));
+      if (!appended.ok) break;
+      await appended.durable;
+      count += 1;
+      buffer.check();
+    }
+    expect(buffer.refusal()).toBe("buffer_full");
+    expect(count).toBeGreaterThan(5);
+    expect(stream.subscribe(subscribe(buffer.id, 0))).toBeNull();
+    // The first mark failed: nothing went, and nothing is on its way.
+    expect(markAttempts).toBe(1);
+    expect(seqs()).toEqual([]);
+    expect(stream.position).toMatchObject({ sentSeq: 0, inFlight: 0 });
+    // Nothing else pumps a full buffer: no commit (no event is taken), no
+    // ack (nothing was sent), and the checks only wait for room.
+    buffer.check();
+    buffer.check();
+    expect(buffer.append(wsFrame(0)).ok).toBe(false);
+    await until(() => seqs().length === count, 2_000, "the stream resumed on its own");
+    expect(markAttempts).toBe(2);
+    expect(buffer.sentMax).toBe(count);
+    expect(seqs()).toEqual(Array.from({ length: count }, (_, n) => n + 1));
   });
 
   it("a crash between the mark and the send: the mark covers what may have gone, and an engine's position within it is taken", async () => {

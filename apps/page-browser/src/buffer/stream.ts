@@ -23,6 +23,11 @@
 //   have committed what was sent. A file restored from before keeps its old
 //   mark, so however far its numbers grow, an old position never
 //   acknowledges — deletes — its new events (PR 13, Astra's review).
+// - A mark that could not be written is tried again by the stream itself,
+//   after a growing pause (`markRetryMs`, the last one repeats; logged) —
+//   also while the buffer is full: a full buffer takes no new event and has
+//   no batch on its way, so nothing else would pump it, and only a send
+//   lets it drain.
 // - At most a few batches are on their way unacknowledged: the engine's
 //   commits pace the stream, and the rest waits in the buffer (a Hub deploy,
 //   a database outage: the socket is not broken, plan §4.4, step 7).
@@ -39,6 +44,9 @@ export interface StreamOptions {
   maxBytes?: number;
   /** Batches sent and not yet acknowledged, at most. */
   inFlightBatches?: number;
+  /** The pauses before a sent mark that could not be written is tried
+   *  again (the last one repeats). */
+  markRetryMs?: readonly number[];
   log?: Logger;
 }
 
@@ -52,6 +60,8 @@ interface Subscription {
 }
 
 export const STREAM_IN_FLIGHT = 4;
+/** The pauses before an unwritten sent mark is tried again. */
+export const STREAM_MARK_RETRY_MS: readonly number[] = [250, 500, 1000, 2000, 5000];
 
 export class EventStream {
   readonly #buffer: EventBuffer;
@@ -63,6 +73,10 @@ export class EventStream {
   #maxBytes: number;
   #sub: Subscription | null = null;
   #pumping = false;
+  readonly #markRetryMs: readonly number[];
+  /** Writes of the sent mark that failed in a row. */
+  #markFailures = 0;
+  #markTimer: NodeJS.Timeout | null = null;
 
   constructor(buffer: EventBuffer, send: (json: string) => boolean, options: StreamOptions = {}) {
     this.#buffer = buffer;
@@ -71,6 +85,7 @@ export class EventStream {
     this.#maxEvents = options.maxEvents ?? 500;
     this.#maxBytes = options.maxBytes ?? 1024 * 1024;
     this.#inFlightBatches = options.inFlightBatches ?? STREAM_IN_FLIGHT;
+    this.#markRetryMs = options.markRetryMs ?? STREAM_MARK_RETRY_MS;
   }
 
   /** The engine's batch size (plan §4.14), within sane bounds. */
@@ -94,6 +109,10 @@ export class EventStream {
   reset(): void {
     if (this.#sub) this.#log("stream.ended", { sentSeq: this.#sub.sentSeq, ackedSeq: this.#sub.ackedSeq });
     this.#sub = null;
+    // The next subscription pumps by itself.
+    if (this.#markTimer) clearTimeout(this.#markTimer);
+    this.#markTimer = null;
+    this.#markFailures = 0;
   }
 
   /** Returns the refusal to send, or null: the stream runs. */
@@ -141,9 +160,16 @@ export class EventStream {
         const events = this.#buffer.readEvents(sub.sentSeq, this.#maxEvents, this.#maxBytes - envelope.length - 2);
         if (events.length === 0) return;
         // Nothing goes past the durable mark: it is raised first, over
-        // everything stored now; not raised, nothing goes (tried again with
-        // the next commit).
-        if (events.at(-1)!.seq > this.#buffer.sentMax && !this.#buffer.raiseSentMax()) return;
+        // everything stored now; not raised, nothing goes — and the stream
+        // tries again itself after a pause (a full buffer has no commit and
+        // no ack to pump it).
+        if (events.at(-1)!.seq > this.#buffer.sentMax) {
+          if (!this.#buffer.raiseSentMax()) {
+            this.#retryMark();
+            return;
+          }
+          this.#markFailures = 0;
+        }
         if (!this.#send(`${envelope}${events.map((event) => event.json).join(",")}]}`)) {
           this.reset();
           return;
@@ -154,6 +180,19 @@ export class EventStream {
     } finally {
       this.#pumping = false;
     }
+  }
+
+  /** The sent mark could not be written: pump again after a pause, once. */
+  #retryMark(): void {
+    if (this.#markTimer) return;
+    const wait = this.#markRetryMs[Math.min(this.#markFailures, this.#markRetryMs.length - 1)] ?? 1000;
+    this.#markFailures += 1;
+    this.#log("stream.mark.unwritten", { failures: this.#markFailures, retryInMs: wait, sentMax: this.#buffer.sentMax, lastSeq: this.#buffer.lastSeq });
+    this.#markTimer = setTimeout(() => {
+      this.#markTimer = null;
+      this.pump();
+    }, wait);
+    this.#markTimer.unref();
   }
 
   #refuse(of: EventsRefused["of"], reason: EventsRefused["reason"], givenBufferId: string, givenSeq: number): EventsRefused {
