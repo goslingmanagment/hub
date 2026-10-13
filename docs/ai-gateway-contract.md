@@ -133,8 +133,8 @@ what it was, so a client built before the frame never meets it.
 - Shape: the one frame that is not strict. A later key is dropped by an installed SDK instead of
   failing its stream, and the vocabularies are open strings. The known values are exported from the
   SDK (`AI_CONTEXT_SOURCES`, `CLIENT_COVERAGE_LEVELS`, `AI_KNOWN_FAN_MESSAGE_STATES`,
-  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`); a client reads an unknown one as
-  "unknown".
+  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`, `AI_CONTEXT_PAIR_STATES`); a client reads
+  an unknown one as "unknown".
 
 | Field | Meaning |
 |---|---|
@@ -143,11 +143,12 @@ what it was, so a client built before the frame never meets it.
 | `servedHead` | Newest message of the served window: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
 | `archiveHead` | Diagnostics only: the plain archive reader's newest row. With `source: "union"` the model may have read past it. |
 | `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
-| `coverage` | How much of the chat's history the hub can vouch for, from `ofapi_message_coverage` (`services/client-coverage.ts`). `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers. `partial`: a standing proof that does not vouch for the whole history. `unknown`: no proof, a revoked one, one under a proof policy the hub no longer accepts, or a failed lookup. A page without the capture lane (Fansly) always reads `unknown`. |
+| `coverage` | How much of the chat's history the hub can vouch for, from the per-chat history proof of the page's platform (`services/client-coverage.ts`); a failed lookup reads `unknown`. OnlyFans, from `ofapi_message_coverage`: `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers; `partial`: a standing proof that does not vouch for the whole history; `unknown`: no proof, a revoked one, or one under a proof policy the hub no longer accepts. Fansly, from the Sync Engine's chain (the thread's effective `page_dm_threads.history_state`, chat-extension R20 HF-8д): `complete` when the chain is proven down to the chat's first message, `unknown` otherwise (a `partial` chain proves only a newest stretch; `unverified`, `none` and a chat without a thread prove nothing). Fansly never reads `partial`. |
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
 | `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
 | `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
+| `pair` | Fansly only, when the request names a `fanRef`: what the hub vouches for about the pair `conversationRef` (the group) ↔ `fanRef` (below). `verified`: the page's thread of the group has this fan. `unverified`: the page holds no thread of the group, or one whose fan the hub does not know yet. Absent on OnlyFans and without `fanRef`. |
 
 `knownFanMessageIds` (body, optional, 1 to 10 distinct numeric ids) names fan messages the client
 saw in the open chat before it asked. Ids only: no text travels, nothing is added to the prompt and
@@ -160,6 +161,13 @@ in and the ids are ignored. Each id is judged against the transcript that served
 | `deleted` | Not in the window, and tombstoned for this conversation in one of the hub's stores. The Fansly socket overlay counts only when it served (`source: live_union`). |
 | `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, cut by the Coach prompt budget, or only in a store the serving reader did not read). |
 | `unknown` | The hub cannot tell: the stores could not be read, or the window holds the id as the model's own message. |
+
+Message ids are exact on the whole path. A message id is the platform's id as its store keeps it,
+from the store to the prompt and the frame: the transcript keys, deduplicates and orders messages
+by that string (a decimal id compares by its value, never through a JavaScript number), and an id
+of `knownFanMessageIds` matches a window ref only as the same string. Fansly ids (18-19 digits)
+pass 2^53, where two different ids can be one double; each stays its own message and gets its own
+answer. OnlyFans ids are far below 2^53, so their transcripts are what they were.
 
 `included` is the only answer that says the model read the message. The same window serves every
 retry of a request, so an id the hub holds but that lies before the window stays `absent` however
@@ -178,48 +186,87 @@ lookup): no platform request, no queued platform work and no change to a chat's 
 Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
 generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
 
-### Feature-lane transcript depth (`messageCount`, full Recap)
+### Feature-lane conversation pair on Fansly (chat-extension R20 HF-9)
 
-`messageCount` is the window a request asks for (5 to 3000). The hub's two transcript readers (the
+On Fansly a chat is a group with an id of its own. A request whose transcript the hub loads itself
+(no `clientContext`) names the group as `conversationRef` and the fan as `fanRef`: the hub reads
+the transcript by the one and the fan's spend, subscription, name and dossier by the other. Before
+any context loads, after the page was admitted, the hub reads the page's thread of the group
+(`page_dm_threads` by `platform_account_id` and `platform_conversation_id`, hidden threads
+included) and compares its fan (`partner_platform_user_id`) with `fanRef` as exact strings:
+
+| The page's thread of the group | Answer |
+|---|---|
+| has this fan | served; `pair: verified` |
+| has another fan | 409 `conversation_fan_mismatch`: nothing is generated, nothing is recorded |
+| none (a chat the hub has not captured yet), or its fan is not known | served; `pair: unverified` |
+
+The answer is recorded as `params.contextManifest.conversationPair` (`verified` or `unverified`) and
+rides the `context_v1` frame as `pair` for a caller that advertised `context-v1`. A failed read is
+not swallowed: the request fails as any failed context load does. Not checked, and answered exactly
+as before: a request with `clientContext` (the released Fansly extension sends its own transcript,
+with `conversationRef` the group or the fan's id), an OnlyFans request, and a request without
+`fanRef`.
+
+### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
+
+`messageCount` is the window a request asks for (5 to 5000). The hub's two transcript readers (the
 archive reader and the union reader) cap every window at 1500 messages, whatever was asked: a
-request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`.
+request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`
+(`requested`, and `served`: the number of messages the transcript actually holds).
 
-One request reads past that cap, up to 3000 messages: the full Recap. All of these must hold:
+Two requests read past that cap, up to 5000 messages, on OnlyFans and Fansly alike
+(`apps/runtime/src/services/ai-transcript-depth.ts`). Both need:
 
-- the feature is `fan-summary` and the request is not `summaryMode: "short"` (the short Recap keeps
-  its window of 300);
-- the page is an OnlyFans page and the hub loads the transcript itself (a request with
-  `clientContext` brings its own transcript and is not read by the hub's readers at all);
-- the caller advertised `context-v1`;
-- the owner's live setting `aiTranscriptDeepMaxRows` is `3000`. It takes exactly `1500` or `3000`
-  and rests at `1500`.
+- a caller that advertised `context-v1`;
+- a transcript the hub loads itself: a request with `clientContext` brings its own transcript and is
+  not read by the hub's readers at all (the released Fansly extension sends up to 3000 messages
+  this way, unchanged).
 
-Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features, a Fansly page's
-hub-loaded transcript (the socket overlay union included), and every client that does not send
-`context-v1`. The released desktop lets a chatter set its deep window as high as 3000; such a Recap
-is served 1500, before and after the owner raises the setting.
+and then:
 
-A request that names no `messageCount` keeps the full Recap's default window of 1500. A client that
-wants the deeper read asks for it, up to the bootstrap's `limits.deepMax`, which is the value of
-`aiTranscriptDeepMaxRows` (`GET /api/v1/client/bootstrap`).
+- **the full Recap** (`fan-summary`, not `summaryMode: "short"`; the short Recap keeps its window of
+  300) reads up to the owner's live setting `aiTranscriptDeepMaxRows`. It takes exactly `1500`,
+  `3000` or `5000` and rests at `1500`; one value for both platforms.
+- **the notes fill** (`fan-notes-fill`) reads up to the same value, but never fewer than 3000: the
+  Fansly extension 2.10.1 fills its notes from the 3000 messages it reads itself, and its successor,
+  which lets the hub read, must not see less.
+
+On a Fansly page the hub's transcript is the archive, or, on a page in `fanslyLiveOverlayReadPages`,
+the archive joined with the socket messages it does not hold yet (`source: "live_union"`); both take
+the deeper cap. Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features,
+and every client that does not send `context-v1`. The released desktop lets a chatter set its deep
+window as high as 3000; such a Recap is served 1500, before and after the owner raises the setting.
+
+A request that names no `messageCount` keeps its feature's default window (1500 for the full Recap
+and the notes fill). A client that wants the deeper read asks for it: the full Recap up to the
+bootstrap's `limits.deepMax`, which is the value of `aiTranscriptDeepMaxRows`
+(`GET /api/v1/client/bootstrap`); the notes fill up to `max(3000, limits.deepMax)`. A larger
+`messageCount` is served at the cap.
 
 The recorded generation tells what was read: `params.requestedCount` is the window the request
 resolved to (not clipped by the cap), `params.keptCount` is the number of messages the prompt held,
 and `params.contextManifest.archiveCount` / `unionCount` are the rows each reader returned.
 
-Cost: at 3000 the transcript of a full Recap is up to twice as long. The per-request ceiling
-(`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply unchanged, to the
-longer prompt. The read itself is the same statement and plan at either cap: both readers fetch the
-whole conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are
-resolved before the cap).
+Cost: the deeper the read, the longer the prompt. Measured on production (2026-10-13), the heaviest
+5000-message window of a chat holds 374k characters of text (75 a message); a full Recap of it is a
+prompt of about 460k characters, about 200k input tokens on the Recap's model (Opus 5.5; production
+Recaps tokenize at 2.0 to 2.7 characters a token). By that model's list price a full Recap of that
+chat costs about $0.42 at 1500, $0.67 at 3000 and $1.00 at 5000, the answer included. The
+per-request ceiling (`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply
+unchanged, to the longer prompt; the cost preflight of that Recap is $0.94 against the $5 default.
+The read itself is the same statement and plan at every cap: both readers fetch the whole
+conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are resolved
+before the cap).
 
 Size: those ceilings bound what a request may cost, not how large its prompt is. The gateway does
 not measure a prompt against the model's context window; the cost preflight's token estimate (4
-characters per token) is used for the price alone. Nothing shortens a full Recap's transcript to fit
-(only Coach has a prompt budget), so a prompt larger than the window of the model the request runs
-on is refused by the provider and the generation fails. At 3000 messages a hub-loaded transcript is
-up to twice as long as any the readers served before. The window to check before raising the
-setting is the Recap model's: the feature default, or the `model` a request names.
+characters per token) is used for the price alone, and it counts only half to two thirds of the
+tokens a real chat transcript takes. Nothing shortens a full Recap's transcript to fit (only Coach has a prompt budget), so a prompt
+larger than the window of the model the request runs on is refused by the provider and the
+generation fails. The Recap's model (Opus 5.5) has a 1M-token window: the heaviest 5000-message
+Recap above takes about a quarter of it with the answer's 24k-token budget, and fits even if every
+byte of its text were a token. A request that names another `model` carries that model's window.
 
 ### Feature-lane fresh text (`liveTextContext`)
 
@@ -363,9 +410,14 @@ The chat extension's narrow device token (chat-extension H-3, `client: "chat-ext
 reaches `/api/v1/ai/features/:feature` only through the owner's switches, checked before any context
 load, quota reservation or provider call (`services/client-ai-switch.ts`). `coach-chat`,
 `fan-summary` and `chat-review` run the full check of the page's `coach` / `recap` / `review` flag
-(`requireClientFeature`); every other feature needs `chatExtensionEnabled` and an
-`x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or above `chatExtensionMinVersion`. A
-refusal is `409 client_feature_disabled` with its `reason`. The raw gateway stream is not on the
+(`requireClientFeature`). On Fansly (R20 HF-12; the request's `platform`, which the route holds to
+the page's own before any context load) `fast-reply`, `improve-draft`, `hi-greeting` and `ping` run
+the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-notes-fill` of
+`notesFill`: three flags that exist on Fansly alone. Every other feature, and on OnlyFans those six,
+needs `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
+above `chatExtensionMinVersion`. A refusal is `409 client_feature_disabled` with its `reason`. The
+check runs once, when the generation is asked for: an owner's change while it streams holds from the
+next request, and the generation already admitted finishes. The raw gateway stream is not on the
 narrow token's route list at all. The restricted generation record of a narrow token carries
 `params.clientProfile = "chat-extension"`; a full token's params are unchanged.
 

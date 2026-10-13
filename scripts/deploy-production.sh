@@ -898,7 +898,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # EXCLUSIVE, so the running engine's journal is never held for a scan. The
   # previous image never names `origin` and never writes the class 'site';
   # nothing writes a site attempt yet, so it runs unchanged after a rollback.
-  "0270_sync_attempts_origin.sql"
+  "0271_sync_attempts_origin.sql"
+  # R20 HF-7д0: three nullable columns without a default on message_archive
+  # and its shadow (catalog only). The previous image names its columns in
+  # every insert, update and copy of both tables and maps named fields of its
+  # `select ma.*` reads, so it runs unchanged beside them; rows it projects
+  # leave the markers as they are (unknown until observed again).
+  "0270_message_archive_fansly_markers.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

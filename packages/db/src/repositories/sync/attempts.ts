@@ -1098,7 +1098,7 @@ export interface SyncSendCounts {
   requests: number;
   planned: number;
   /** The page's own site requests and login operations (Project Browser,
-   *  0270): sent through the page's browser under the engine's admission. */
+   *  0271): sent through the page's browser under the engine's admission. */
   site: number;
   byResource: Record<string, number>;
 }

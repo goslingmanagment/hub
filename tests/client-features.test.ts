@@ -35,6 +35,10 @@ const OF_PAGE: ClientFeaturePage = { label: "lora-of", platform: "onlyfans", pla
 const FANSLY_PAGE: ClientFeaturePage = { label: "lora-fansly", platform: "fansly", platformAccountId: null };
 /** An OnlyFans page whose platform account id is not known. */
 const UNBOUND_OF_PAGE: ClientFeaturePage = { label: "nova-of", platform: "onlyfans", platformAccountId: null };
+/** A Fansly page whose platform account id is known (every Fansly page on prod has one). */
+const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansly", platformAccountId: "123456789012345678" };
+/** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly alone. */
+const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
 const EVERY_CAPABILITY: readonly string[] = CLIENT_HUB_CAPABILITY_NAMES;
 const NO_BINDINGS = {};
 
@@ -55,13 +59,14 @@ describe("chat-extension feature evaluation", () => {
     }
   });
 
-  it("with the code defaults every feature is off: disabled on OnlyFans, platform_unsupported on Fansly", () => {
+  it("with the code defaults every feature is off: disabled where it exists, platform_unsupported elsewhere", () => {
     const served = SERVED_CLIENT_CAPABILITIES;
     const onlyFans = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: OF_PAGE, served });
     const fansly = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: FANSLY_PAGE, served });
     for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
-      expect(onlyFans[flag], flag).toEqual({ available: false, reason: "disabled" });
-      expect(fansly[flag], flag).toEqual({ available: false, reason: "platform_unsupported" });
+      const fanslyOnly = FANSLY_ONLY_FLAGS.includes(flag);
+      expect(onlyFans[flag], flag).toEqual({ available: false, reason: fanslyOnly ? "platform_unsupported" : "disabled" });
+      expect(fansly[flag], flag).toEqual({ available: false, reason: fanslyOnly ? "disabled" : "platform_unsupported" });
     }
     expect(Object.values(clientBootstrapFlags(CLIENT_FEATURE_CODE_DEFAULTS))).toEqual(
       CLIENT_FEATURE_FLAG_NAMES.map(() => false),
@@ -150,6 +155,87 @@ describe("chat-extension feature evaluation", () => {
     for (const reason of reasons) {
       expect(CLIENT_FEATURE_UNAVAILABLE_REASONS).toContain(reason);
     }
+  });
+});
+
+describe("[R20 HF-12] the flags of Fansly's own AI generations", () => {
+  const served = SERVED_CLIENT_CAPABILITIES;
+
+  it("on a Fansly page: off with the master switch, flag_off without the page's row, available with it", () => {
+    const evaluate = (input: ClientFeatureSettings, flag: "drafts" | "voice" | "notesFill") =>
+      evaluateClientFeature({ settings: input, page: BOUND_FANSLY_PAGE, flag, served });
+    for (const flag of ["drafts", "voice", "notesFill"] as const) {
+      const row = settings({ features: { "lora-1": { [flag]: true } } });
+      expect(evaluate({ ...row, enabled: false }, flag), flag).toEqual({ available: false, reason: "disabled" });
+      expect(evaluate(settings({}), flag), flag).toEqual({ available: false, reason: "flag_off" });
+      expect(evaluate(settings({ features: { "lora-1": { [flag]: false } } }), flag), flag)
+        .toEqual({ available: false, reason: "flag_off" });
+      // Another page's row does not reach this page.
+      expect(evaluate(settings({ features: { "lora-2": { [flag]: true } } }), flag), flag)
+        .toEqual({ available: false, reason: "flag_off" });
+      expect(evaluate(row, flag), flag).toEqual({ available: true });
+      // Nothing the hub must serve first: the owner's row alone decides.
+      expect(evaluateClientFeature({ settings: row, page: BOUND_FANSLY_PAGE, flag, served: [] }), flag)
+        .toEqual({ available: true });
+    }
+    // One flag does not open another.
+    expect(evaluate(settings({ features: { "lora-1": { drafts: true } } }), "voice"))
+      .toEqual({ available: false, reason: "flag_off" });
+  });
+
+  it("on an OnlyFans page they do not exist, whatever the owner's rows say", () => {
+    const on = settings({ features: { "*": { drafts: true, voice: true, notesFill: true }, "lora-of": { drafts: true } } });
+    for (const flag of ["drafts", "voice", "notesFill"] as const) {
+      expect(evaluateClientFeature({ settings: on, page: OF_PAGE, flag, served }), flag)
+        .toEqual({ available: false, reason: "platform_unsupported" });
+    }
+  });
+
+  it("the owner's rows of lora-of and lora-vip-of (prod, 2026-10-13) evaluate as before; the new flags read platform_unsupported there", () => {
+    // `chatExtensionFeatures` on prod, read only, 2026-10-13: the two pilot
+    // pages, 13 flags each, no "*" row. Stored as is, untouched by HF-12.
+    const pilotRow = {
+      insertion: true, spenders: true, fanPanel: true, sound: true, wsTap: true, review: true, coach: true,
+      recap: true, preview: true, stats: true, newcomers: true, freshText: true, splitAll: true,
+    };
+    const { switches, problems } = readClientSwitches({
+      chatExtensionEnabled: true,
+      chatExtensionFeatures: JSON.stringify({ "lora-vip-of": pilotRow, "lora-of": pilotRow }),
+    });
+    expect(problems).toEqual([]);
+    const available = { available: true };
+    const flagOff = { available: false, reason: "flag_off" };
+    const unsupported = { available: false, reason: "platform_unsupported" };
+    for (const page of [
+      { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },
+      { label: "lora-vip-of", platform: "onlyfans", platformAccountId: "100000002" },
+    ] satisfies ClientFeaturePage[]) {
+      expect(evaluateClientPageFeatures({ settings: switches.settings, page, served }), page.label).toEqual({
+        // Before HF-12, unchanged.
+        insertion: available,
+        freshText: available,
+        newcomers: available,
+        spenders: available,
+        stats: available,
+        preview: available,
+        previewSend: flagOff,
+        previewSendMarkAiGenerated: flagOff,
+        fanPanel: available,
+        navigation: flagOff,
+        wsTap: available,
+        sound: available,
+        coach: available,
+        recap: available,
+        review: available,
+        splitAll: available,
+        // HF-12: Fansly's own.
+        drafts: unsupported,
+        voice: unsupported,
+        notesFill: unsupported,
+      });
+    }
+    // No top-level flag moves: the rows are per page.
+    expect(Object.values(clientBootstrapFlags(switches.settings)).every((on) => on === false)).toBe(true);
   });
 });
 

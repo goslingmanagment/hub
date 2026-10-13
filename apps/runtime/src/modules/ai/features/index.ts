@@ -52,6 +52,7 @@ import {
   applyLiveTextContext,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
+  checkAiConversationPair,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
@@ -312,7 +313,7 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // Short recap also bounds its INPUT window: the compact template promises the
 // model "300 recent messages max are provided", so the archive lane must not
 // pull the deep default (1500) — or a caller-supplied messageCount up to the
-// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+// 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
 /** Decision #204: the Help button became a coach preset turn. The canonical
@@ -442,6 +443,17 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
+
+  // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
+  // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
+  // A pair the page's capture contradicts is refused (409
+  // `conversation_fan_mismatch`) before any context loads; a pair the hub
+  // cannot vouch for yet is served, and the manifest and the context_v1 frame
+  // say `unverified`. The client-context lane (the released Fansly extension
+  // sends its own transcript) is not read here: its requests are unchanged.
+  const conversationPair = isFanslyRequest && body.clientContext === undefined
+    ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
+    : null;
 
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
@@ -656,14 +668,14 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
-    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
-    // full Recap of a context-v1 client reads past it, and only where the owner
-    // raised `aiTranscriptDeepMaxRows`; for every other request this is
-    // undefined and nothing is read.
+    // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
+    // Only the full Recap and the notes fill of a context-v1 client read past
+    // it, on either platform: the Recap where the owner raised
+    // `aiTranscriptDeepMaxRows`, the notes fill to at least 3000. For every
+    // other request this is undefined and nothing is read.
     const maxRows = await resolveAiTranscriptMaxRows(app, {
       feature,
       summaryMode: body.summaryMode,
-      isFanslyRequest,
       capabilities: options?.capabilities,
     });
     // Uses the resolved window computed above (short fan-summary already clamped
@@ -767,6 +779,9 @@ export async function prepareAiFeatureStream(
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
+  }
+  if (conversationPair !== null) {
+    contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
@@ -1144,6 +1159,7 @@ export async function prepareAiFeatureStream(
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
       ...(liveText !== undefined ? { live: liveText.live } : {}),
+      ...(conversationPair !== null ? { pair: conversationPair } : {}),
     });
   }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
