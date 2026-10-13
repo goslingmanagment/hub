@@ -531,6 +531,31 @@ describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", (
     ]);
   });
 
+  it("a stream that delivers nothing though the answer has a body (the site's service worker passing it on) is a mark, never an empty fact; an answer without a body is whole", async () => {
+    const w = await world();
+    const done = [
+      // Its length declared: none of it came.
+      await run(w, "/account/me", { deliversNothing: true, chunks: [JSON_BODY] }),
+      // Nothing declared, nothing came: not known to be empty.
+      await run(w, "/notifications", { deliversNothing: true, chunked: true, chunks: [JSON_BODY] }),
+      // No body by its status, and one declared empty.
+      await run(w, "/subscribers", { status: 204, chunked: true, chunks: [] }),
+      await run(w, "/polls", { chunks: [] }),
+    ];
+    expect(done.map((entry) => [entry.status, entry.body])).toEqual([
+      [200, "incomplete"],
+      [200, "incomplete"],
+      [204, "buffered"],
+      [200, "buffered"],
+    ]);
+    expect(siteResponses(w.buffer).map((response) => [response.complete, response.body.decodedBytes, response.bodyId === null])).toEqual([
+      [false, 0, true],
+      [false, 0, true],
+      [true, 0, false],
+      [true, 0, false],
+    ]);
+  });
+
   it("from the browser's cache, revalidated by the server, through the site's service worker: the source says which", async () => {
     const w = await world();
     w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { wireStatus: 304 } });

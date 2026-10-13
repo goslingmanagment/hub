@@ -65,7 +65,11 @@
 // chunk carried its data, as long as it said (plan §4.2, step 7) — or, for
 // a body the page read as a stream (that ends in CDP as a cancel after the
 // answer, stage 1, amendment 8), when an identity body has the length it
-// declared, or the body is a whole JSON object or array. A body that is not
+// declared, or the body is a whole JSON object or array. Whatever its end,
+// what came must be what the answer declared, and nothing may have come
+// only where the answer has no body: a request of the site's service worker
+// that passes its answer on reads nothing of it (Chrome 155 reports the
+// bytes on the page's own request, which never stops in Fetch). A body that is not
 // whole is never kept as a fact: `site.response` with `complete: false` and
 // no body is the mark the engine's intake turns into a hole seen in Hub and
 // a backfill (PR 13). There is no size limit for keeping it: the site has
@@ -917,16 +921,35 @@ export class SiteRequests {
   }
 
   /** Is the body whole? `ended`: by loadingFinished, or by a cancel after
-   *  the answer (a body the page read as a stream, stage 1, amendment 8). */
+   *  the answer (a body the page read as a stream, stage 1, amendment 8).
+   *  Whatever the end: what came must be what the answer declared (an
+   *  identity body's length), and a body that came empty must be one the
+   *  answer says is empty — a stream whose request nobody reads here (the
+   *  site's service worker passing its answer on to the page: Chrome 155
+   *  reports its bytes on the page's own request, which never stops in
+   *  Fetch) delivers nothing, and ends as finished all the same. */
   #whole(op: SiteOp, ended: "finished" | "canceled"): boolean {
     const capture = op.capture;
     if (capture === null || capture.writer === null || !capture.armed || capture.broken !== null) return false;
-    if (ended === "finished") return true;
     const headers = op.main?.headers ?? [];
     const encoding = (header(headers, "content-encoding") ?? "identity").trim().toLowerCase();
-    const declared = header(headers, "content-length");
-    if (encoding === "identity" && declared !== null && /^\d+$/.test(declared.trim())) return capture.decoded === Number(declared.trim());
-    if (capture.decoded === 0 || capture.decoded > SHAPE_CHECK_MAX) return false;
+    const length = header(headers, "content-length")?.trim() ?? null;
+    const declared = encoding === "identity" && length !== null && /^\d+$/.test(length) ? Number(length) : null;
+    if (declared !== null) {
+      if (capture.decoded !== declared) {
+        this.#log("body.not_whole", { siteRequestId: op.id, why: `${capture.decoded} bytes came, ${declared} declared` });
+        return false;
+      }
+      return true;
+    }
+    if (capture.decoded === 0) {
+      // Nothing declared and nothing came: whole only for an answer that
+      // has no body by its status.
+      const status = op.main?.status ?? 0;
+      return status === 204 || status === 205 || status === 304 || length === "0";
+    }
+    if (ended === "finished") return true;
+    if (capture.decoded > SHAPE_CHECK_MAX) return false;
     // A whole JSON object or array: no proper prefix of one is one.
     const text = this.#readWritten(capture);
     if (text === null) return false;

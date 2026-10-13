@@ -30,6 +30,10 @@ export interface SiteScript {
   then?: "answer" | "hang_before_send" | "hang_after_send" | "fail_before_send" | "fail_after_send" | "cancel_after_send" | "body_fails" | "cancel_after_answer" | "retry";
   /** Chunks without their data (the stream not armed). */
   unstreamed?: boolean;
+  /** Chrome tells of bytes received but of no decoded data at all (the
+   *  site's service worker passes the answer on: its own request reads
+   *  nothing, the page's — which never stops in Fetch — gets the body). */
+  deliversNothing?: boolean;
   brokenChunk?: boolean;
   chunkDelayMs?: number;
   /** Network.requestWillBeSent comes this long after the pause (the
@@ -357,6 +361,16 @@ export class SiteChrome {
     const chunks = script.chunks ?? [Buffer.from('{"success":true,"response":[]}')];
     let total = 0;
     const read: Buffer[] = [];
+    if (script.deliversNothing) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (request.ended) return;
+      const bytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      this.cdp.emit("Network.dataReceived", { requestId: request.networkId, dataLength: 0, encodedDataLength: bytes }, request.session);
+      request.ended = true;
+      this.pageRead.set(request.networkId, Buffer.concat(chunks));
+      this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: bytes + 200 }, request.session);
+      return;
+    }
     for (const [index, chunk] of chunks.entries()) {
       if (script.chunkDelayMs) await new Promise((resolve) => setTimeout(resolve, script.chunkDelayMs));
       else await new Promise((resolve) => setImmediate(resolve));
