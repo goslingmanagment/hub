@@ -240,7 +240,9 @@ describe("AI gateway stream helper (protocol conformance on a fake stream)", () 
   }
 
   it("feature stream writes the capability list in constant order, without repeats", async () => {
-    expect(AI_STREAM_CAPABILITIES).toEqual(["debug-input-v1", "context-v1", "split-all-v1", "coverage-check-v1"]);
+    expect(AI_STREAM_CAPABILITIES).toEqual([
+      "debug-input-v1", "context-v1", "split-all-v1", "coverage-check-v1", "hi-start-proof-v1",
+    ]);
     // Old callers: unchanged wire.
     expect(await capabilitiesHeaderFor({})).toBeNull();
     expect(await capabilitiesHeaderFor({ debugPromptEcho: false })).toBeNull();
@@ -260,6 +262,9 @@ describe("AI gateway stream helper (protocol conformance on a fake stream)", () 
     // R20 HF-8в: the coverage check's token, after the others whatever the caller's order.
     expect(await capabilitiesHeaderFor({ capabilities: ["coverage-check-v1", "context-v1"] }))
       .toBe("context-v1, coverage-check-v1");
+    // R20 HF-5: the start proof's token comes last.
+    expect(await capabilitiesHeaderFor({ capabilities: ["hi-start-proof-v1", "coverage-check-v1", "context-v1"] }))
+      .toBe("context-v1, coverage-check-v1, hi-start-proof-v1");
     // A value outside the constant (an untyped JS caller) is never sent.
     expect(await capabilitiesHeaderFor({ capabilities: ["future-v9" as never, "context-v1"] })).toBe("context-v1");
     expect(await capabilitiesHeaderFor({ capabilities: ["future-v9" as never] })).toBeNull();

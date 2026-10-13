@@ -108,6 +108,7 @@ function facts(overrides: {
       decode: { receipts: 200, debt: 0 },
       unconfirmed: { count: 0, oldestVisibleAt: null },
       unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
+      bufferHalted: null,
       ...overrides.live,
     },
     chats: {
@@ -255,6 +256,9 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({ live: { socket: { up: false, lastAliveAt: null } } }))).toEqual({ live_degraded: "socket_down" });
     expect(evaluate(facts({ live: { decode: { receipts: 200, debt: 2 } } }))).toEqual({});
     expect(evaluate(facts({ live: { decode: { receipts: 200, debt: 3 } } }))).toEqual({ live_degraded: "protocol_changed" });
+    // A page browser's buffer nothing is taken of (Project Browser PR 13).
+    expect(evaluate(facts({ live: { bufferHalted: { bufferId: "b", reason: "ahead", at: at(-MINUTE) } } })))
+      .toEqual({ live_degraded: "browser_buffer_halted" });
     const quarantined = evaluatePageAlerts(facts({ journal: { quarantined: { "dm-messages.head": 2 } } }), registry);
     expect(quarantined).toEqual([expect.objectContaining({
       subKey: "live_degraded",

@@ -113970,6 +113970,16 @@
                       "pattern": "^[^\\r\\n\\u2028\\u2029:<>&]*$"
                     }
                   },
+                  "noteValues": {
+                    "minItems": 1,
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 2000,
+                      "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+                    }
+                  },
                   "knownFanMessageIds": {
                     "minItems": 1,
                     "maxItems": 10,
@@ -114021,6 +114031,77 @@
                       "deletedIds"
                     ],
                     "additionalProperties": false
+                  },
+                  "startProof": {
+                    "type": "object",
+                    "properties": {
+                      "v": {
+                        "type": "number",
+                        "enum": [
+                          1
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "tab-short-page",
+                          "pass-empty-page"
+                        ]
+                      },
+                      "groupId": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      },
+                      "startWitnessId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "coveredCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "personalCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "automatedIds": {
+                        "maxItems": 120,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        }
+                      }
+                    },
+                    "required": [
+                      "v",
+                      "source",
+                      "groupId",
+                      "startWitnessId",
+                      "coveredCount",
+                      "personalCount",
+                      "automatedIds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "personalMessageCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "fanAvatarUrl": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "pattern": "^https:\\/\\/[a-z0-9-]+\\.fansly\\.com\\/"
                   },
                   "liveTextContext": {
                     "type": "object",
@@ -121283,7 +121364,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with `deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest `summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a day after the walk's first page (taking a page does not renew a walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first page again. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with `deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest `summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a day after the walk's first page (taking a page does not renew a walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first page again. With `conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), the feed reads that conversation, `target` repeats it, and a cursor is valid only for the same conversation and fan. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
         "parameters": [
           {
             "schema": {
@@ -121314,6 +121395,15 @@
             },
             "in": "query",
             "name": "summaryWindow",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "conversationRef",
             "required": false
           },
           {
@@ -121356,6 +121446,10 @@
                           "type": "string"
                         },
                         "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "conversationRef": {
                           "type": "string",
                           "pattern": "^[1-9]\\d{0,29}$"
                         }
@@ -121778,7 +121872,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no generation, no AI spend. Answers the freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the page, whoever generated them. A recap generated from context only its caller saw is never selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells whether the fan's latest dossier on this page has exactly the full recap's text. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Read-only and database-only: no platform request, no generation, no AI spend. Answers the freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the page, whoever generated them. A recap generated from context only its caller saw is never selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells whether the fan's latest dossier on this page has exactly the full recap's text. With `conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), and only recaps of that conversation stored about this fan, or keyed by the fan itself, are selected. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
         "parameters": [
           {
             "schema": {
@@ -121788,6 +121882,15 @@
             },
             "in": "query",
             "name": "personaDefinitionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "conversationRef",
             "required": false
           },
           {
@@ -123441,7 +123544,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no generation, no AI spend. The caller names one of its own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a `reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this text, the answer is `existing` and nothing is written. The generation's record appears shortly after the stream's `done` frame; until then, a request that names its `clientRequestId` is answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the record was never written, so a client bounds its repeats. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "description": "Database-only: no platform request, no generation, no AI spend. The caller names one of its own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a `reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this text, the answer is `existing` and nothing is written. The generation's record appears shortly after the stream's `done` frame; until then, a request that names its `clientRequestId` is answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the record was never written, so a client bounds its repeats. With `conversation-recaps-v1`, `conversationRef` names the conversation the generation was made in, apart from the fan (on Fansly the group id): the pair is checked before the generation is read (409 `conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their own, 400 without it), and a generation of that conversation that names this fan is found too. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -123457,6 +123560,10 @@
                   "clientRequestId": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  },
+                  "conversationRef": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,29}$"
                   }
                 },
                 "required": [
@@ -155122,7 +155229,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile; 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
+        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -155136,6 +155243,11 @@
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "conversationRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "fanRef": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200

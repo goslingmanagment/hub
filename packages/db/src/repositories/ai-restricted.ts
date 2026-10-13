@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiAcceptanceEvents, aiGenerationContent } from "../schema.ts";
@@ -101,6 +101,23 @@ export interface FreshestRecapsInput {
   /** Opaque identity of the resolved persona. Omitted only for rollout
    * compatibility with callers predating persona-scoped recap status. */
   personaDefinitionId?: string;
+  /**
+   * chat-extension R20 HF-10: only the recaps stored about this fan. A row is
+   * the fan's when it names the fan (`fan_ref`), or names no fan and is keyed
+   * by the fan (`conversation_ref`): the rule of the dossier's generation proof
+   * (fan-profiles.ts), so a recap selected with it can always prove this fan's
+   * dossier. Omitted: every row of the conversations, as before (the recap
+   * status, the shared recaps read on OnlyFans).
+   */
+  fanRef?: string;
+}
+
+/** `ai_generation_content` rows stored about this fan: they name it, or name no fan and are keyed by it. */
+export function generationOfFanPredicate(fanRef: string): SQL {
+  return or(
+    eq(aiGenerationContent.fanRef, fanRef),
+    and(isNull(aiGenerationContent.fanRef), eq(aiGenerationContent.conversationRef, fanRef)),
+  )!;
 }
 
 export interface FreshestRecaps {
@@ -153,6 +170,7 @@ function recapSlotWhere(input: FreshestRecapsInput, mode: "full" | "short") {
     eq(aiGenerationContent.pageId, input.pageId),
     inArray(aiGenerationContent.conversationRef, input.conversationRefs),
     usableFanSummaryPredicate(mode),
+    ...(input.fanRef !== undefined ? [generationOfFanPredicate(input.fanRef)] : []),
     ...(input.personaDefinitionId
       ? [sql`${aiGenerationContent.params} ->> 'personaDefinitionId' = ${input.personaDefinitionId}`]
       : []),

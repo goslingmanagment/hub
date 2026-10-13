@@ -15,9 +15,9 @@ import {
 } from "@agency_hub_core/db";
 
 import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
-import { AdmissionHeldError, pageErrorState, type CommitDeps } from "./commit.ts";
+import { AdmissionHeldError, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
 import { onOutcome } from "./errors.ts";
-import type { Admission, SlotGrant } from "./pacer.ts";
+import type { SlotGrant } from "./pacer.ts";
 import type { SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
 import { routeAdmissionView, type RouteClocks } from "./route-policy.ts";
 import type { RouteKeySpec } from "./route-policy.ts";
@@ -125,6 +125,7 @@ export async function admitSite(
         siteRequestId: classified.request.id,
         manualLogin: manual,
       },
+      browserRequestId: classified.request.id,
       settingMs: grant.settingMs,
       jitterU: grant.jitterU,
       pauseMs: grant.pauseMs,
@@ -160,9 +161,9 @@ export async function siteEnd(site: SiteAdmissionPort, id: string, signal: Abort
  */
 export async function commitSiteEnd(
   d: CommitDeps,
-  input: { attemptId: number; armed: Admission; end: SiteRequestEnd; classified: ClassifiedSiteRequest },
+  input: { attemptId: number; send: CaptureSend; end: SiteRequestEnd; classified: Pick<ClassifiedSiteRequest, "route" | "exempt"> },
 ): Promise<void> {
-  const { attemptId, armed, end, classified } = input;
+  const { attemptId, send: armed, end, classified } = input;
   if (end.kind === "aborted_before_send") {
     d.metrics.increment("sync_site_not_sent", {});
     await inTx(d.db, async (tx) => {
@@ -175,15 +176,14 @@ export async function commitSiteEnd(
   const now = d.clock.wallNow();
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    const sent = armed.sentMono !== null;
     const captured = await captureAttempt(tx, {
       attemptId,
       pageId: d.pageId,
       outcome: end.kind === "response" ? "response" : "transport_error",
-      sent,
+      sent: armed.sent,
       sentAt: armed.sentWall,
       sendMark: armed.sendMark,
-      sendMonoOffsetMs: armed.sentMono === null ? null : armed.sentMono - armed.issuedMono,
+      sendMonoOffsetMs: armed.sendMonoOffsetMs,
       gapPrevMs: armed.gapPrevMs,
       httpStatus: end.kind === "response" ? end.status : null,
       retryAfterMs: end.kind === "response" ? end.retryAfterMs : null,

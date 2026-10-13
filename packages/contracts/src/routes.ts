@@ -38,7 +38,12 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap and what follows); same spread.
-import { clientNumericIdSchema, clientOpenToken, clientRouteSchemas } from "./routes-client.ts";
+import {
+  clientNumericIdSchema,
+  clientOpenToken,
+  clientRouteSchemas,
+  compareClientNumericIds,
+} from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -741,6 +746,15 @@ export const voiceNoteCreateBodySchema = z.object({
   // any non-UUID string can reach Postgres and raise a raw 22P02 → 500.
   clientRequestId: z.string().uuid(),
   conversationRef: z.string().min(1).max(200),
+  // chat-extension R20 HF-4а: the fan the render is for, named apart from the
+  // chat. The new client names the Fansly group as `conversationRef` and the
+  // fan here; the source generation must be of this very pair, and the page's
+  // capture must not hold the group as another fan's chat (409
+  // `conversation_fan_mismatch`). Optional: without it `conversationRef` is
+  // the fan's own id (the released Fansly extension's form), admitted exactly
+  // as before. Not part of the request hash: the hash's source generation
+  // already carries its fan.
+  fanRef: z.string().min(1).max(200).optional(),
   sourceGenerationRef: z.string().min(1).max(200),
   script: z.string().min(1).max(8000),
 });
@@ -2285,6 +2299,20 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // `noteFields` (30 labels x 60 code units, about 11KB at six bytes) is, and so
 // is R20 HF-8в's `coverageCheck` (120 ids of digits, about 5KB).
 //
+// fan-notes-fill merge mode adds `noteValues`: 30 values x 2,000 code units =
+// 60k more, 360KB at six bytes each. The worst schema-valid body is then ~2.05M
+// code units, measured 12.51MB, which 12 MiB (12.58MB) still clears by about
+// 0.07MB. That margin is thin now: a later field of any real size raises the
+// limit with it.
+//
+// R20 HF-5 adds the start proof of Hi on Fansly (`startProof`: a witness and
+// 120 automatic ids of digits, about 4KB), its count and the fan's avatar at
+// the top level (`fanAvatarUrl`: 4,096 code units after a fixed host, 24.5KB at
+// six bytes each): 29KB. The test also counts, since then, the greeting fields
+// of `clientContext` it had left out (two names and that lane's own avatar,
+// 27KB). The worst schema-valid body is measured 12.56MB, which 12 MiB still
+// clears by about 18KB: the next field of any size raises the limit.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
@@ -2323,6 +2351,24 @@ export const aiNoteFieldsSchema = z.array(aiNoteFieldLabelSchema)
     (labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length,
     { message: "noteFields repeat (labels compare case-insensitively)" },
   );
+
+// fan-notes-fill merge mode: the questionnaire's current values, index-aligned
+// with `noteFields` (the service refuses a list of another length), `""` for an
+// empty field and for a template field the note does not have yet. A value is
+// one line of the note, so it holds no line break; any other character may
+// appear, `<`, `>` and `&` included (the prompt escapes them like all
+// untrusted text). Values are trimmed here, like the labels.
+/** Per value, after trimming, in UTF-16 code units. */
+export const AI_NOTE_VALUE_MAX_CHARS = 2_000;
+
+const aiNoteValueSchema = z.string()
+  .trim()
+  .max(AI_NOTE_VALUE_MAX_CHARS)
+  .regex(/^[^\r\n\u2028\u2029]*$/, "A note value holds no line break");
+
+export const aiNoteValuesSchema = z.array(aiNoteValueSchema)
+  .min(1)
+  .max(AI_NOTE_FIELDS_MAX);
 
 // An instant as the client writes it: ISO 8601 with seconds and an explicit
 // offset, at most nine fractional digits. The house `isoTimestamp` is a bare
@@ -2378,6 +2424,85 @@ export const aiCoverageCheckSchema = z.object({
   }
 });
 
+// chat-extension R20 HF-5 — Hi on Fansly: the client's proof of the start of a
+// conversation. The hub's Fansly history is pull-cadenced and rarely reaches a
+// chat's first message, so the client proves the start from what its page
+// already loaded, and counts the personal messages there: its open tab, by a
+// fresh end of the history shorter than a page and the continuous observation
+// since (`tab-short-page`), or its walk of the history to the empty page
+// (`pass-empty-page`). The hub checks the ids against the history it holds and
+// the count against the Hi limit (docs/ai-gateway-contract.md, "Hi on Fansly").
+// Ids only, never a text.
+//
+// The schema is the client's own, field by field and rule by rule
+// (chat-extension `packages/contracts/src/fansly.ts`, `StartProofV1Schema`);
+// tests/fixtures/ai-hi-start-proof-matrix.json holds the bodies both accept
+// and both refuse.
+/** Who proved the start. */
+export const AI_START_PROOF_SOURCES = ["tab-short-page", "pass-empty-page"] as const;
+/** How many ids `startProof.automatedIds` may name: the newest ones. */
+export const AI_START_PROOF_AUTOMATED_IDS_MAX = 120;
+/** A pass counts personal messages among the last 30 of the history it walked. */
+export const AI_START_PROOF_PASS_PERSONAL_WINDOW = 30;
+/** `reason` of a `gate_hi_greeting_limit` refusal on the start-proof lane:
+ *  `history_unproven` (no proof, or one the hub's history contradicts) and
+ *  `too_many_personal` (the proof counts more personal messages than Hi
+ *  allows). Open on the wire: a client reads an unknown reason as a refusal. */
+export const AI_HI_GREETING_REFUSAL_REASONS = ["history_unproven", "too_many_personal"] as const;
+
+export const aiStartProofV1Schema = z.object({
+  v: z.literal(1),
+  source: z.enum(AI_START_PROOF_SOURCES),
+  /** The chat the proof is of: the request's `conversationRef`. */
+  groupId: clientNumericIdSchema,
+  /** The first message of the conversation as the source saw it. Tab: the
+   *  oldest message of the short fresh end. Pass: the earliest message of the
+   *  whole history it walked. Null only when the whole history is empty. */
+  startWitnessId: clientNumericIdSchema.nullable(),
+  /** Messages from the start that the tab or the pass saw. */
+  coveredCount: z.number().int().min(0),
+  /** Personal messages: the fan's always, the model's unless automatic (a
+   *  welcome or a mass send). Tab: over the whole proven history. Pass: among
+   *  the last AI_START_PROOF_PASS_PERSONAL_WINDOW messages of the history it
+   *  walked, as the released Fansly extension counts them. */
+  personalCount: z.number().int().min(0),
+  /** The newest automatic messages, oldest first. */
+  automatedIds: z.array(clientNumericIdSchema).max(AI_START_PROOF_AUTOMATED_IDS_MAX),
+}).strict().superRefine((value, ctx) => {
+  const automated = value.automatedIds;
+  // The witness is there exactly when the history is not empty, and no
+  // automatic message is older than it.
+  const first = automated[0];
+  if (
+    (value.startWitnessId === null) !== (value.coveredCount === 0)
+    || (value.startWitnessId !== null && first !== undefined
+      && compareClientNumericIds(value.startWitnessId, first) > 0)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["startWitnessId"],
+      message: "startWitnessId is null only for an empty history, and no automated message is older than it",
+    });
+  }
+  // The counts fit the history they come from; the pass counts its last 30.
+  const ascending = automated.every((id, index) => (
+    index === 0 || compareClientNumericIds(automated[index - 1]!, id) < 0
+  ));
+  const countsHold = ascending
+    && automated.length <= value.coveredCount
+    && value.personalCount <= value.coveredCount
+    && (value.source === "pass-empty-page"
+      ? value.personalCount <= AI_START_PROOF_PASS_PERSONAL_WINDOW
+      : value.personalCount + automated.length <= value.coveredCount);
+  if (!countsHold) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["personalCount"],
+      message: "counts stay within coveredCount, automatedIds ascend without repeats, and a pass counts its last 30",
+    });
+  }
+});
+
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   pageLabel: z.string().min(1).max(120),
@@ -2423,6 +2548,13 @@ export const aiFeatureStreamBodySchema = z.object({
   // fan-notes-fill only, and required there: the questionnaire labels to fill,
   // in output order (above). Any other feature refuses the field with a 400.
   noteFields: aiNoteFieldsSchema.optional(),
+  // fan-notes-fill only, and optional there: the questionnaire's current value
+  // per label, one per `noteFields` entry in the same order (above). Present,
+  // the prompt merges the chat into these values (merge mode); absent, it is
+  // the released clients' prompt, byte for byte. Any other feature refuses the
+  // field with a 400, and so does fan-notes-fill when the two lists differ in
+  // length.
+  noteValues: aiNoteValuesSchema.optional(),
   // chat-extension H-4b: ids only, never text. Fan messages the client saw in
   // the open chat before it asked for this generation, newest first. The hub
   // answers each one in the `context_v1` frame (`knownFanMessages`) from the
@@ -2439,6 +2571,22 @@ export const aiFeatureStreamBodySchema = z.object({
   // a caller that advertised both `context-v1` and `coverage-check-v1`, and
   // ignored otherwise, as `knownFanMessageIds` is without the frame.
   coverageCheck: aiCoverageCheckSchema.optional(),
+  // chat-extension R20 HF-5 — Hi on Fansly (above). These three are read only
+  // on `hi-greeting`, on a Fansly page, without `clientContext`, from a caller
+  // that advertised `hi-start-proof-v1`; anywhere else each is a 400 with a
+  // machine reason. With that capability the hub admits Hi on Fansly by the
+  // proof (its start checked against the hub's history, at most 10 personal
+  // messages) and by nothing else: without a proof the answer is
+  // `gate_hi_greeting_limit` with reason `history_unproven`.
+  startProof: aiStartProofV1Schema.optional(),
+  // The same count at the top level, as the released clients carry it in
+  // `clientContext.personalMessageCount`. It proves nothing by itself, and
+  // beside a proof it must equal `startProof.personalCount`.
+  personalMessageCount: z.number().int().min(0).optional(),
+  // The fan's avatar as the page already loaded it; rides to the provider as
+  // an image, exactly as `clientContext.fanAvatarUrl` does. The hub never
+  // fetches the URL.
+  fanAvatarUrl: fanslyAvatarUrlSchema.optional(),
   // chat-extension H-4c: the fresh text of the open chat (above). Accepted
   // only on fast-reply, improve-draft, hi-greeting and ping, never beside
   // clientContext, and only from a caller that advertised `context-v1`:
@@ -6712,7 +6860,9 @@ const baseRouteSchemas = {
       + "detached). A replay of an already-admitted request re-runs no admission gate. "
       + "Structured error codes (in the body `error` field): 400 voice_script_invalid / "
       + "voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 "
-      + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
+      + "idempotency_mismatch (same id, different request) / voice_no_profile / "
+      + "conversation_fan_mismatch (a request with `fanRef`: the page's capture holds "
+      + "the group `conversationRef` names as another fan's chat); 429 "
       + "voice_quota_denied; 503 voice_provider_unavailable (live flag on but "
       + "ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is "
       + "unconfigured, or an active erasure temporarily owns the page writer "
@@ -8693,6 +8843,7 @@ export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSc
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
 export type AiCoverageCheck = z.infer<typeof aiCoverageCheckSchema>;
+export type AiStartProofV1 = z.infer<typeof aiStartProofV1Schema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;

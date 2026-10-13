@@ -39,6 +39,7 @@ import {
   conversationFeedSourceOf,
   decodeConversationFeedCursor,
   encodeConversationFeedCursor,
+  feedCursorConversationScope,
   toClientFeedItem,
   type ConversationFeedCursorState,
 } from "../apps/runtime/src/services/conversation-feed.ts";
@@ -184,8 +185,12 @@ describe("archive feed contract (H-9c)", () => {
       // be scope-checked, so the strict query refuses them instead of ignoring them.
       { pageLabel: "mia-of" },
       { fanRef: "777000888" },
-      { conversationRef: "777000888" },
       { userId: "1" },
+      // R20 HF-10: the conversation is a client id, in its one shape.
+      { conversationRef: "" },
+      { conversationRef: "0650" },
+      { conversationRef: "group-900" },
+      { conversationRef: "6".repeat(31) },
       // No other way to move through the feed than the cursor.
       { offset: "50" },
       { before: "9001" },
@@ -194,6 +199,20 @@ describe("archive feed contract (H-9c)", () => {
     for (const query of refused) {
       expect(clientConversationFeedQuerySchema.safeParse(query).success, JSON.stringify(query)).toBe(false);
     }
+  });
+
+  it("[R20 HF-10] takes the conversation apart from the fan and repeats it in the target; a frozen client still parses the page", () => {
+    // A Fansly group id: 18 digits, past 2^53, kept as text.
+    expect(clientConversationFeedQuerySchema.parse({ conversationRef: "650000000000000001", limit: "20" }))
+      .toEqual({ conversationRef: "650000000000000001", limit: 20 });
+    const sample = clientSample();
+    const named = { ...sample, target: { pageLabel: "lora-of", fanRef: "700000000000000001", conversationRef: "650000000000000001" } };
+    expect(clientConversationFeedResponseSchema.parse(named)).toEqual(named);
+    // The client's frozen page schema is not strict: it reads the page and drops the key it does not know.
+    expect(frozenFeedPageSchema.parse(named).target).toEqual({ pageLabel: "lora-of", fanRef: "700000000000000001" });
+    expect(clientConversationFeedResponseSchema.safeParse({
+      ...sample, target: { pageLabel: "lora-of", fanRef: FAN, conversationRef: "group-900" },
+    }).success).toBe(false);
   });
 
   it("answers a page the client parses, and parses the client's own sample", () => {
@@ -521,6 +540,36 @@ describe("archive feed cursor (H-9c)", () => {
       { ...scope, archiveGeneration: 4 },
     ]) {
       expect(refusal(() => decodeConversationFeedCursor(ring, cursor, { scope: other, now: at(60_000) }))).toBe("signature");
+    }
+  });
+
+  it("[R20 HF-10] binds a walk of a conversation with an id of its own to the conversation and the fan; the fan's own chat keeps its scope", () => {
+    const GROUP = "650000000000000001";
+    const FANSLY_FAN = "700000000000000001";
+    const OTHER_FANSLY_FAN = "700000000000000002";
+    // The fan's own chat: the scope every cursor issued before HF-10 was signed for.
+    expect(feedCursorConversationScope({ kind: "fan", conversationRef: FAN, fanRef: FAN })).toEqual({ fanRef: FAN });
+    const fanCursor = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    const sameScope = { ...scope, ...feedCursorConversationScope({ kind: "fan", conversationRef: FAN, fanRef: FAN }) };
+    expect(decodeConversationFeedCursor(ring, fanCursor, { scope: sameScope, now: at(60_000) })).toEqual(state);
+
+    const pairScope = (conversationRef: string, fanRef: string) => ({
+      ...scope,
+      ...feedCursorConversationScope({ kind: "pair", conversationRef, fanRef, pair: "verified" }),
+    });
+    const pairCursor = encodeConversationFeedCursor(ring, { scope: pairScope(GROUP, FANSLY_FAN), state, now: at(0) });
+    expect(decodeConversationFeedCursor(ring, pairCursor, { scope: pairScope(GROUP, FANSLY_FAN), now: at(60_000) }))
+      .toEqual(state);
+    for (const other of [
+      pairScope(GROUP, OTHER_FANSLY_FAN),
+      pairScope("650000000000000002", FANSLY_FAN),
+      // The group named as its own fan, the fan's own chat, and the fan alone.
+      pairScope(GROUP, GROUP),
+      pairScope(FANSLY_FAN, FANSLY_FAN),
+      { ...scope, fanRef: FANSLY_FAN },
+      { ...scope, fanRef: GROUP },
+    ]) {
+      expect(refusal(() => decodeConversationFeedCursor(ring, pairCursor, { scope: other, now: at(60_000) }))).toBe("signature");
     }
   });
 

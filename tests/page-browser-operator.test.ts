@@ -745,9 +745,11 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     await until(() => s.operator.buffer.lastSeq === 1, 3000, "the operator's start gap");
     for (let n = 1; n < 30; n++) s.operator.buffer.append(wsFrame(n));
     await durable(s.operator.buffer.append(wsFrame(30)));
-    // state.buffer is real now.
-    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes > 0);
-    expect(state.buffer).toEqual({ bytes: s.operator.buffer.stats().bytes, oldestAgeMs: expect.any(Number) });
+    // state.buffer is real now: a state sent after the writes carries their
+    // bytes (an earlier one may carry the start gap's alone).
+    const bytes = s.operator.buffer.stats().bytes;
+    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes === bytes);
+    expect(state.buffer).toEqual({ bytes, oldestAgeMs: expect.any(Number) });
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
     await until(() => seqs(s.engine).length === 31, 5000, "31 events");
     expect(seqs(s.engine)).toEqual(Array.from({ length: 31 }, (_, n) => n + 1));

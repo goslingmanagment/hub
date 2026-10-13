@@ -164,8 +164,16 @@ export class QuotaDeniedError extends AppError {
 // wording structurally; the message strings stay stable for clients that
 // still match on them (#120 follow-up).
 export class ProductGateError extends AppError {
-  constructor(message: string, code: `gate_${string}`) {
+  /** Documented structured extension (docs/error-handling.md §3): a machine
+   * reason beside the gate's code, serialized only when non-null. chat-extension
+   * R20 HF-5 uses it for the start-proof lane of `gate_hi_greeting_limit`
+   * (AI_HI_GREETING_REFUSAL_REASONS: `history_unproven`, `too_many_personal`).
+   * Every other gate stays reason-less and keeps the plain envelope. */
+  readonly reason: string | null;
+
+  constructor(message: string, code: `gate_${string}`, options?: { reason?: string | null }) {
     super(message, 400, code);
+    this.reason = options?.reason ?? null;
   }
 }
 
@@ -240,6 +248,10 @@ export class ContextConflictError extends AppError {
 // nothing is generated. 409: the request contradicts what the hub holds; the
 // same request is refused again, and the client resolves the chat's fan anew.
 // The message names neither id: never the fan the hub holds for the group.
+// R20 HF-10: a client read by conversation (recaps, the dossier save, the
+// feed) is refused the same way, before anything is read, for a Fansly group
+// of another fan, and on OnlyFans for a conversation that is not the fan's own
+// chat (client-conversation.ts).
 export class ConversationFanMismatchError extends AppError {
   constructor() {
     super(

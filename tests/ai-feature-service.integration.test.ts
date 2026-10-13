@@ -3085,6 +3085,101 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("Fansly media in the kernel transcript (chat-extension R20 HF-7a)", () => {
+  // Predicate of the new behaviour: a Fansly page and the transcript the hub
+  // loads itself (no clientContext). The released Fansly extension (2.10.1)
+  // sends its own transcript in clientContext, Reply as fan/fan and Coach as
+  // group/fan: its prompts do not move with the archive's media. An OnlyFans
+  // archive row keeps its bytes whatever its stored media list says.
+  const group = "880003";
+
+  async function promptOf(feature: string, body: Record<string, unknown>) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { clientRequestId: randomUUID(), ...body },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return capture.input!.body.prompt;
+  }
+
+  it("labels a Fansly row's stored media on the kernel lane only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3)`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain, price_mills)
+       values ($1, 'fansly', $2, '7801', $3, false, now() - interval '10 minutes', 'look at this', null),
+              ($1, 'fansly', $2, '7802', null, true, now() - interval '5 minutes', 'unlock me', 15000)`,
+      [fanslyPageId, group, FAN],
+    );
+    const kernel = async () => JSON.stringify(await promptOf("fast-reply", {
+      pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN,
+    }));
+    const legacyContext = {
+      transcript: "[10:00] Fan: look at this\n[10:05] Model: unlock me",
+      messageCount: 2,
+      fanDisplayName: "Legacy Fan",
+      fanSpendingData: "",
+      fanSubscriptionData: "",
+    };
+    const legacy = async () => [
+      await promptOf("fast-reply", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: FAN, messageCount: 100, clientContext: legacyContext,
+      }),
+      await promptOf("coach-chat", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN, messageCount: 100,
+        chatterQuestion: "What should I send next?", clientContext: legacyContext,
+      }),
+    ];
+
+    const kernelBefore = await kernel();
+    expect(kernelBefore).toContain("Fan: look at this");
+    expect(kernelBefore).toContain("Model: [PPV $15.00, unknown] unlock me");
+    const legacyBefore = await legacy();
+
+    // The two rows' media as the Fansly material head stores them (prod shape).
+    for (const [ref, media] of [
+      ["7801", [{ id: "810000000000000001", type: "image/jpeg", canView: true, isReady: null, duration: null }]],
+      ["7802", [{ id: "810000000000000002", type: "video/mp4", canView: true, isReady: null, duration: 12.5 }]],
+    ] as const) {
+      await testDb.pool.query(
+        `update message_archive set media_metadata = $3::jsonb where account_id = $1 and message_ref = $2`,
+        [fanslyPageId, ref, JSON.stringify(media)],
+      );
+    }
+
+    const kernelAfter = await kernel();
+    expect(kernelAfter).toContain("Fan: [Photo] look at this");
+    expect(kernelAfter).toContain("Model: [Video - PPV $15.00, unknown] unlock me");
+    // The 2.10.1 requests are what they were.
+    expect(await legacy()).toEqual(legacyBefore);
+
+    // OnlyFans: a stored media list on an archive row adds no label.
+    await seedConversation();
+    await testDb.pool.query(
+      `update message_archive set media_metadata = '[{"id": 7001, "type": "photo"}]'::jsonb
+       where account_id = $1 and message_ref = '9002'`,
+      [pageId],
+    );
+    const onlyFans = JSON.stringify(await promptOf("fast-reply", {
+      pageLabel: "svc-of", platform: "onlyfans", conversationRef: FAN, messageCount: 50,
+    }));
+    expect(onlyFans).toContain("Model: hey you");
+    expect(onlyFans).not.toContain("[Photo]");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("a chat Fansly no longer serves, on the client-context lane (arena vanished chat, plan §5)", () => {
   // The released fansly-chat client sends its own transcript (clientContext).
   // The hub keeps it exactly as sent and only appends the one-line status of a
@@ -3985,6 +4080,48 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     expect(rows[0]).toEqual({ conversation_ref: "group-777", fan_ref: "fan-42" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("merges into the current values when the request carries noteValues", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const noteValues = ["  Mike ", "Austin & <TX>", "", "", "", "", "", "Sexting 1"];
+    const res = await post("fan-notes-fill", notesPayload({
+      noteValues,
+      clientContext: {
+        ...notesPayload().clientContext,
+        transcript: "--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin\n[10:05] Model: hey Mike",
+      },
+    }));
+    expect(res.statusCode, res.body).toBe(200);
+    const blocks = capture.input!.body.prompt.userBlocks;
+    const task = blocks.at(-1)!.text;
+    // Trimmed by the contract, escaped by the prompt, empty ones bare.
+    expect(task).toContain([
+      "<note_fields>",
+      "Имя: Mike",
+      "Локация: Austin &amp; &lt;TX&gt;",
+      "Возраст:",
+      "Работа:",
+      "Хобби:",
+      "Фетиши:",
+      "Характеристика:",
+      "Медиа: Sexting 1",
+      "</note_fields>",
+    ].join("\n"));
+    expect(task).toContain(`Output exactly ${NOTE_FIELDS.length} field lines`);
+    const user = blocks.map((block) => block.text).join("");
+    expect(user).toContain("## Current Values");
+    expect(user).toContain("--- 2026-09-14 ---\n[10:00] Fan: im Mike, 34, from Austin");
+    // The values reach the task block only.
+    for (const block of blocks.slice(0, -1)) {
+      expect(block.text).not.toContain("Sexting 1\n");
+      expect(block.text).not.toContain("Austin &amp;");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps the request's model and reasoning overrides", async (context) => {
     if (!testDb) {
       context.skip();
@@ -4011,6 +4148,33 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
       const stray = await post(feature, notesPayload());
       expect(stray.statusCode, stray.body).toBe(400);
       expect(stray.json().message).toBe(`${feature} does not accept noteFields`);
+    }
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes noteValues only on fan-notes-fill, one per label, before any provider call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const values = (first: string) => [first, ...NOTE_FIELDS.slice(1).map(() => "")];
+    const short = await post("fan-notes-fill", notesPayload({ noteValues: ["Mike"] }));
+    expect(short.statusCode, short.body).toBe(400);
+    expect(short.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    const long = await post("fan-notes-fill", notesPayload({ noteValues: [...values("Mike"), ""] }));
+    expect(long.statusCode, long.body).toBe(400);
+    expect(long.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    for (const feature of ["fan-summary", "help-me", "fast-reply", "chat-review"]) {
+      const stray = await post(feature, notesPayload({ noteFields: undefined, noteValues: values("Mike") }));
+      expect(stray.statusCode, stray.body).toBe(400);
+      expect(stray.json().message).toBe(`${feature} does not accept noteValues`);
+    }
+    // The contract's own rules: a schema 400 whatever the feature.
+    for (const noteValues of [[], values("Mike\nR"), values("x".repeat(2_001)), [...values("Mike"), 42]]) {
+      const res = await post("fan-notes-fill", notesPayload({ noteValues }));
+      expect(res.statusCode, JSON.stringify(noteValues).slice(0, 80)).toBe(400);
     }
     expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);

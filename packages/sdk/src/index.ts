@@ -72,8 +72,11 @@ export {
 // The AI context frame's known values (routes.ts, `context_v1`): its open
 // tokens narrow to these, and `knownFanMessageIds` takes at most the MAX.
 // AI_COVERAGE_CHECK_*: the caps and answers of the body's `coverageCheck`.
+// AI_START_PROOF_*: the caps of the body's `startProof` (Hi on Fansly);
+// AI_HI_GREETING_REFUSAL_REASONS: the reasons of its gate's refusal.
 // AI_LIVE_TEXT_*: the caps of the body's `liveTextContext` (fresh text).
-// AI_NOTE_FIELD*: the caps of the body's `noteFields` (fan-notes-fill).
+// AI_NOTE_FIELD*: the caps of the body's `noteFields` (fan-notes-fill);
+// AI_NOTE_VALUE_MAX_CHARS: the cap of each of its `noteValues`.
 export {
   AI_CONTEXT_LIVE_STATUSES,
   AI_CONTEXT_PAIR_STATES,
@@ -84,12 +87,17 @@ export {
   AI_COVERAGE_CHECK_WINDOW_MAX,
   AI_COVERAGE_CHECK_WINDOW_STATES,
   AI_FAN_LANGUAGE_EVIDENCE,
+  AI_HI_GREETING_REFUSAL_REASONS,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   AI_KNOWN_FAN_MESSAGE_STATES,
   AI_LIVE_TEXT_MAX_CHARS,
   AI_LIVE_TEXT_MAX_ITEMS,
   AI_NOTE_FIELD_LABEL_MAX_CHARS,
   AI_NOTE_FIELDS_MAX,
+  AI_NOTE_VALUE_MAX_CHARS,
+  AI_START_PROOF_AUTOMATED_IDS_MAX,
+  AI_START_PROOF_PASS_PERSONAL_WINDOW,
+  AI_START_PROOF_SOURCES,
 } from "@agency_hub_core/contracts";
 // The chat extension's health report (routes-client.ts). No route carries it:
 // it rides one ingest batch of its own once the bootstrap lists

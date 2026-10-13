@@ -60,6 +60,7 @@ import {
   FANSLY_WIRE_IDS,
   fanslyWireSpec,
   isFanslyErrorEnvelope,
+  readFanslyWireResponse,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRead,
@@ -965,6 +966,96 @@ function failedBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): 
   }).value;
 }
 
+/** The whole text of an answer, nothing cut: the only copy of a fact kept
+ *  as it came. */
+function wholeBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): Record<string, unknown> {
+  return replaceJournalUnstorableText({
+    status: outcome.status,
+    contentType: outcome.headers["content-type"] ?? null,
+    retryAfter: outcome.headers["retry-after"] ?? null,
+    bodyText: outcome.bodyText,
+    truncated: false,
+  }).value;
+}
+
+/**
+ * An answer kept as a fact that nothing applies, as the journal keeps the
+ * route's answer — the complete body through the capture codec (the trims by
+ * kind, the CDN tokens stripped, unpaired surrogates replaced) when it reads
+ * as the route's answer, else its whole text — with what it is (`about`: its
+ * disposition, its source). The operator drops its copy once this commits,
+ * so nothing of it is cut (Project Browser PR 13: Astra's review).
+ */
+function keptAnswerPayload(
+  d: CommitDeps,
+  input: {
+    spec: FanslyWireId;
+    kind: string;
+    outcome: Extract<FanslyWireOutcome, { kind: "response" }>;
+    request: RequestPlan;
+    module: ResourceModule | null;
+    about: Record<string, unknown>;
+  },
+): Record<string, unknown> {
+  const { outcome } = input;
+  if (input.module !== null) {
+    try {
+      const read = readFanslyWireResponse(fanslyWireSpec(input.spec) as never, input.request.params as never, outcome);
+      if (read.kind === "accepted" || read.kind === "contract_violation") {
+        const answer = (d.capture ?? defaultCaptureCodec).prepare({
+          spec: input.spec,
+          kind: input.kind,
+          response: read.response,
+          contractAccepted: read.kind === "accepted",
+          request: input.request,
+          ownRef: d.ownRef,
+          module: input.module,
+        });
+        return { ...input.about, status: outcome.status, contentType: outcome.headers["content-type"] ?? null, answer };
+      }
+    } catch {
+      // Not the route's answer for this request: its whole text below.
+    }
+  }
+  return { ...input.about, ...wholeBody(outcome) };
+}
+
+/** What a capture records of the send (tx 2): the pacer's admission of a
+ *  request in flight (`captureSendOf`), or what a sender that kept the
+ *  outcome reported of it after the engine started again (Project Browser
+ *  PR 13, `engine/held-outcomes.ts`). */
+export interface CaptureSend {
+  /** The request reached the network, or may have. */
+  sent: boolean;
+  /** Its send instant on the wall clock (the completion's for
+   *  `completion_fallback`). */
+  sentWall: Date | null;
+  sendMark: "request_start" | "completion_fallback" | "transport_reported" | null;
+  /** Monotonic admission issue → send (null: not measured). */
+  sendMonoOffsetMs: number | null;
+  /** Monotonic gap to this owner's previous send (null: not measured). */
+  gapPrevMs: number | null;
+  /** Monotonic send → capture (null: not measured). */
+  durationMs: number | null;
+  /** The pause and the setting it was admitted under (I1's check). */
+  pauseMs: number;
+  settingMs: number | null;
+}
+
+/** The send facts of the pacer's admission, now. */
+export function captureSendOf(d: CommitDeps, armed: Admission): CaptureSend {
+  return {
+    sent: armed.sentMono !== null,
+    sentWall: armed.sentWall,
+    sendMark: armed.sendMark,
+    sendMonoOffsetMs: armed.sentMono === null ? null : armed.sentMono - armed.issuedMono,
+    gapPrevMs: armed.gapPrevMs,
+    durationMs: armed.sentMono === null ? null : d.clock.monoNow() - armed.sentMono,
+    pauseMs: armed.pauseMs,
+    settingMs: armed.settingMs,
+  };
+}
+
 /**
  * Capture an outcome (tx 2): the raw answer as an observation (2xx under
  * the spec's kind, anything else under `<kind>:failed`; a transport error or
@@ -975,7 +1066,7 @@ function failedBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): 
 export async function capture(
   d: CommitDeps,
   admission: AdmissionRecord,
-  armed: Admission,
+  armed: CaptureSend,
   outcome: Exclude<FanslyWireOutcome, { kind: "aborted_before_send" }>,
   module: ResourceModule,
 ): Promise<CaptureResult> {
@@ -989,14 +1080,30 @@ export async function capture(
       : { subjectScopedAuthStatuses: admission.spec.subjectScopedAuthStatuses }),
   });
   const read: FanslyWireRead<unknown> | null = classified.read;
-  const sent = armed.sentMono !== null;
-  const durationMs = armed.sentMono === null ? null : d.clock.monoNow() - armed.sentMono;
+  const sent = armed.sent;
+  const durationMs = armed.durationMs;
   // A route that journals nothing (`capture`: the Upgrade, a CDN hop) writes
   // no observation, whatever it answered: its answer lives in memory until
   // the apply right after (design S3-04 item 3; owner decision №17).
   const journaled = wireSpec.kind === null || wireSpec.capture !== undefined ? null : wireSpec.kind;
   let observationPayload: { kind: string; payload: unknown } | null = null;
-  if (outcome.kind === "response" && read !== null && journaled !== null) {
+  if (outcome.kind === "response" && outcome.unconfirmed !== undefined && journaled !== null) {
+    // A page browser's answer the server did not confirm: kept, under its
+    // own kind and with its disposition, never as the route's answer — the
+    // apply never sees it, the work is read again.
+    // The operator drops its copy once this commits: the complete answer.
+    observationPayload = {
+      kind: `${journaled}:unconfirmed`,
+      payload: keptAnswerPayload(d, {
+        spec: admission.request.spec,
+        kind: journaled,
+        outcome,
+        request: admission.request,
+        module,
+        about: { source: outcome.unconfirmed, disposition: "rejected_not_applied" },
+      }),
+    };
+  } else if (outcome.kind === "response" && read !== null && journaled !== null) {
     observationPayload = read.kind === "accepted" || read.kind === "contract_violation"
       ? {
         kind: journaled,
@@ -1037,7 +1144,7 @@ export async function capture(
       sent,
       sentAt: armed.sentWall,
       sendMark: armed.sendMark,
-      sendMonoOffsetMs: armed.sentMono === null ? null : armed.sentMono - armed.issuedMono,
+      sendMonoOffsetMs: armed.sendMonoOffsetMs,
       gapPrevMs: armed.gapPrevMs,
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
@@ -1199,6 +1306,54 @@ export async function capture(
       ? { response: read.response, parsed: read.value }
       : null,
   };
+}
+
+/**
+ * The answer of an outcome a sender kept (Project Browser PR 13,
+ * `engine/held-outcomes.ts`) that is not its attempt's to apply: it came
+ * under another session than the request was prepared for (`foreign_session`,
+ * never attributed to the request's, plan §3.2), or after its attempt was
+ * settled without it (`late`: closed `unknown`, its work read again since).
+ * The platform answered: the answer is kept as a fact under
+ * `<kind>:<disposition>` — complete, through the capture codec
+ * (`keptAnswerPayload`), since the operator's copy goes once this commits —
+ * and nothing applies it. Idempotent by the attempt. False: nothing to keep
+ * (not a response, or a route the journal does not keep).
+ */
+export async function journalHeldAnswer(
+  d: CommitDeps,
+  attempt: Pick<SyncAttemptRow, "id" | "resource" | "operation" | "request">,
+  outcome: FanslyWireOutcome,
+  disposition: "late" | "foreign_session",
+): Promise<boolean> {
+  if (outcome.kind !== "response" || !(FANSLY_WIRE_IDS as readonly string[]).includes(attempt.operation)) return false;
+  const spec = attempt.operation as FanslyWireId;
+  const wire = fanslyWireSpec(spec);
+  if (wire.kind === null || wire.capture !== undefined) return false;
+  const module = d.registry.spec(attempt.resource) === null ? null : await d.registry.module(attempt.resource).catch(() => null);
+  const payload = keptAnswerPayload(d, {
+    spec,
+    kind: wire.kind,
+    outcome,
+    request: requestOfAttempt(attempt),
+    module,
+    about: { attemptId: attempt.id, disposition: disposition === "late" ? "late_not_applied" : "rejected_foreign_session" },
+  });
+  await inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "share" });
+    await insertObservation(tx, {
+      source: "pull",
+      producer: `fansly-sync:${attempt.resource}`,
+      platform: "fansly",
+      accountId: d.pageId,
+      nativeAccountRef: d.ownRef,
+      kind: `${wire.kind}:${disposition}`,
+      payload,
+      payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+      idempotencyKey: `fansly-sync:${d.pageId}:attempt:${attempt.id}:${disposition}`,
+    });
+  });
+  return true;
 }
 
 /** Whether a served answer holds text Postgres cannot store as is (a U+0000

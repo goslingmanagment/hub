@@ -171,6 +171,8 @@ export interface StoreOptions {
   /** Tests: an error for `totals` to throw (a read failing right after the
    *  open). */
   totalsFault?: () => Error | null;
+  /** Tests: an error to fail a write of the sent mark with. */
+  markFault?: () => Error | null;
 }
 
 const WAL_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -218,10 +220,12 @@ export class BufferStore {
   readonly #allConnections: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
+  readonly #markFault: StoreOptions["markFault"];
   readonly #nowWall: () => number;
   #lastSeq: number;
   #lastWall: number | null;
   #lastOutcomeSeq: number;
+  #sentMax: number;
   #closed = false;
 
   constructor(options: StoreOptions) {
@@ -247,7 +251,7 @@ export class BufferStore {
       // so the pairs (id, number) never repeat (plan §4.4) — even when the
       // file was lost and the old id stayed behind.
       db.exec("BEGIN IMMEDIATE");
-      db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('buffer_id', ?), ('created_wall', ?), ('last_seq', '0'), ('last_wall', '')").run(randomUUID(), String(options.now()));
+      db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('buffer_id', ?), ('created_wall', ?), ('last_seq', '0'), ('last_wall', ''), ('sent_max', '0')").run(randomUUID(), String(options.now()));
       db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('opened_wall', ?)").run(String(options.now()));
       db.exec("COMMIT");
     } catch (error) {
@@ -264,6 +268,7 @@ export class BufferStore {
       const lastWall = meta("last_wall");
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
       this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
+      this.#sentMax = Number(meta("sent_max") || "0");
       this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
       this.#admitConnection = db.prepare("INSERT OR REPLACE INTO ws_connections (connection_id, attempt_id, opened, at_wall) VALUES (?, ?, 0, ?)");
       this.#openConnection = db.prepare("UPDATE ws_connections SET opened = 1 WHERE connection_id = ?");
@@ -292,6 +297,7 @@ export class BufferStore {
       this.#bodyIds = db.prepare("SELECT body_id FROM outcomes WHERE body_id IS NOT NULL");
       this.#commitFault = options.commitFault;
       this.#totalsFault = options.totalsFault;
+      this.#markFault = options.markFault;
       this.#nowWall = options.now;
       syncIdFile(options.idFile, this.id);
     } catch (error) {
@@ -317,6 +323,35 @@ export class BufferStore {
 
   get closed(): boolean {
     return this.#closed;
+  }
+
+  /** The highest number ever handed to a stream (schema v4); it never goes
+   *  back. */
+  get sentMax(): number {
+    return this.#sentMax;
+  }
+
+  /** Raise the sent mark to `upto`, durably (its own transaction, one
+   *  fsync), before anything past the old mark is sent. Throws when it
+   *  cannot be written: nothing past the old mark may go then. */
+  raiseSentMax(upto: number): void {
+    if (upto <= this.#sentMax) return;
+    const db = this.#db;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const fault = this.#markFault?.();
+      if (fault) throw fault;
+      this.#setMeta.run(String(upto), "sent_max");
+      db.exec("COMMIT");
+      this.#sentMax = upto;
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // SQLite rolled it back itself
+      }
+      throw error;
+    }
   }
 
   /** One transaction, one fsync. Throws (and leaves nothing of itself) when
@@ -394,6 +429,7 @@ export class BufferStore {
     const lastWall = value("last_wall");
     this.#lastWall = lastWall === "" ? null : Number(lastWall);
     this.#lastOutcomeSeq = Number(value("last_outcome_seq") || "0");
+    this.#sentMax = Number(value("sent_max") || "0");
   }
 
   /** Events after `afterSeq` in order: at most `maxEvents`, and no more

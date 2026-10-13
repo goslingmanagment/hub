@@ -4,6 +4,7 @@ import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
   AiLiveTextContext,
+  AiStartProofV1,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
@@ -51,18 +52,25 @@ import {
   type MediaNotesGate,
   type MediaNotesManifest,
   applyLiveTextContext,
+  assertHiStartProof,
+  assertHiStartProofRequestShape,
+  assertHiStartProofSent,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
   computePingSummary,
+  hiStartProofDecides,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  loadFanslySpendingContext,
+  loadFanslySubscriptionContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  loadFanslyFanIdentity,
   readAiChatAccess,
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
@@ -138,6 +146,11 @@ export interface AiFeatureRequestBody {
   /** fan-notes-fill only, and required there: the questionnaire labels of the
    * fan's native note, in output order (trimmed and checked by the contract). */
   noteFields?: string[];
+  /** fan-notes-fill only, optional there: the questionnaire's current value
+   * per label, index-aligned with `noteFields` ("" for an empty field). Present,
+   * the prompt merges into them (merge mode); absent, it is the released
+   * clients' prompt byte for byte. Trimmed and one line each (the contract). */
+  noteValues?: string[];
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
@@ -145,6 +158,14 @@ export interface AiFeatureRequestBody {
    *  in the `context_v1` frame for a caller that advertised
    *  `coverage-check-v1`, never read into the prompt. */
   coverageCheck?: AiCoverageCheck;
+  /** chat-extension R20 HF-5, hi-greeting on Fansly without `clientContext`,
+   *  for a caller that advertised `hi-start-proof-v1` (context/hi-start-proof.ts):
+   *  the client's proof of the conversation's start, the same count of personal
+   *  messages at the top level, and the fan's avatar (rides to the provider as
+   *  an image; never fetched here). Refused anywhere else. */
+  startProof?: AiStartProofV1;
+  personalMessageCount?: number;
+  fanAvatarUrl?: string;
   /** chat-extension H-4c: the fresh text of the open chat (OnlyFans; Fansly
    * since R20 HF-8б), merged into the hub's transcript for this generation
    * only (context/live-text.ts). */
@@ -233,18 +254,29 @@ export function assertGreetingRequestShape(
 /** fan-notes-fill (the Fansly notes panel's «fill with AI»): the questionnaire
  * labels are the whole task, so the feature REQUIRES `noteFields`, and every
  * other feature REFUSES them, so a stray list can never reshape a Reply or a
- * Recap prompt. The labels' own rules (count, length, characters, repeats) are
- * the contract's. Pure, like the greeting rules above. */
+ * Recap prompt. The current values (`noteValues`, merge mode) are optional on
+ * fan-notes-fill, one per label, so they never pair a value with the wrong
+ * label; every other feature refuses them too. The lists' own rules (count,
+ * length, characters, repeats) are the contract's. Pure, like the greeting
+ * rules above. */
 export function assertNoteFieldsRequestShape(
   feature: OperationFeature,
-  body: Pick<AiFeatureRequestBody, "noteFields">,
+  body: Pick<AiFeatureRequestBody, "noteFields" | "noteValues">,
 ): void {
   if (feature === "fan-notes-fill") {
     if (body.noteFields === undefined || body.noteFields.length === 0) {
       throw new BadRequestError("fan-notes-fill requires noteFields");
     }
-  } else if (body.noteFields !== undefined) {
+    if (body.noteValues !== undefined && body.noteValues.length !== body.noteFields.length) {
+      throw new BadRequestError("noteValues must hold exactly one value per noteFields label");
+    }
+    return;
+  }
+  if (body.noteFields !== undefined) {
     throw new BadRequestError(`${feature} does not accept noteFields`);
+  }
+  if (body.noteValues !== undefined) {
+    throw new BadRequestError(`${feature} does not accept noteValues`);
   }
 }
 
@@ -474,7 +506,17 @@ export async function prepareAiFeatureStream(
         "gate_voice_unsupported_platform",
       );
     }
-    if (!body.fanRef?.trim() || body.conversationRef !== body.fanRef) {
+    // The script's record carries the fan (the render's source check and the
+    // fan's erasure read it), so the fan is always named. chat-extension R20
+    // HF-4а: a request whose transcript the hub loads itself may name the
+    // group (`conversationRef`) and the fan apart, because its pair was
+    // checked above (a contradicted pair is already 409). The client-context
+    // lane keeps the one form the released Fansly extension sends, the fan's
+    // id as both refs, and its refusal answers as before.
+    if (
+      !body.fanRef?.trim()
+      || (body.conversationRef !== body.fanRef && conversationPair === null)
+    ) {
       throw new ProductGateError(
         "voice-script requires matching, nonblank conversationRef and fanRef",
         "gate_voice_identity_required",
@@ -519,6 +561,22 @@ export async function prepareAiFeatureStream(
   }
 
   assertGreetingRequestShape(feature, body, isFanslyRequest);
+  // chat-extension R20 HF-5: on this lane the client's proof of the
+  // conversation's start decides Hi (the gate below), and the fan's avatar may
+  // ride at the top level. Its body fields are refused everywhere else, so
+  // off the lane every request is answered as it was.
+  const hiStartProofLane = {
+    feature,
+    isFanslyRequest,
+    hasClientContext: body.clientContext !== undefined,
+    capabilities: options?.capabilities,
+  };
+  assertHiStartProofRequestShape({ ...hiStartProofLane, body });
+  const hiByStartProof = hiStartProofDecides(hiStartProofLane);
+  if (hiByStartProof) {
+    // Without a proof Hi is refused whatever the hub holds: before any context loads.
+    assertHiStartProofSent(body.startProof);
+  }
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -527,6 +585,7 @@ export async function prepareAiFeatureStream(
     fanDisplayName: string;
     fanBio: string | undefined;
     fanCustomName: string | undefined;
+    fanUsername: string | undefined;
     pingSegment: PingSegment | undefined;
     fanSilenceDays: number | undefined;
   };
@@ -615,6 +674,7 @@ export async function prepareAiFeatureStream(
       fanDisplayName: clientContext.fanDisplayName,
       fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
       fanCustomName: clientContext.fanCustomName,
+      fanUsername: clientContext.fanUsername,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
@@ -712,31 +772,61 @@ export async function prepareAiFeatureStream(
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
-    const spending = policy.includesEarnings
-      ? await loadSpendingContext(app, { pageId, fanRef })
-      : null;
-    const subscription = policy.includesEarnings
-      ? await loadSubscriptionContext(app, { pageId, fanRef })
-      : null;
+    // chat-extension R20 HF-7г: on Fansly the two blocks are the released
+    // extension's own shape, from the ledger and the captured subscriptions
+    // (context/fansly-money.ts); a deep feature also reads its months by type.
+    // OnlyFans keeps its loaders and its bytes.
+    const spending = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySpendingContext(app, { pageId, fanRef, deep: policy.messageCountBucket === "deep" })
+        : await loadSpendingContext(app, { pageId, fanRef });
+    const subscription = !policy.includesEarnings
+      ? null
+      : isFanslyRequest
+        ? await loadFanslySubscriptionContext(app, { pageId, fanRef })
+        : await loadSubscriptionContext(app, { pageId, fanRef });
     // One clock for the segment and the silence (Decision #127); readers
     // that show the conversation call the same helper.
     const pingSummary = policy.usesPingSegment
       ? computePingSummary(transcript.messages, Date.now())
+      : null;
+    // chat-extension R20 HF-7б: on Fansly the hub forms the fan's identity as
+    // the released extension sends it in clientContext: the name by its rule,
+    // the username beside it for Hi, the page's saved name, the stored bio
+    // (context/fansly-fan-identity.ts). OnlyFans keeps its loaders: one name,
+    // no saved name and no username line.
+    const fanslyFan = isFanslyRequest
+      ? await loadFanslyFanIdentity(app, { pageId, fanRef, feature, includesFanBio: policy.includesFanBio })
       : null;
     contextValues = {
       transcript: transcript.transcript,
       messageCount: transcript.messages.length,
       fanSpendingData: spending?.block ?? "",
       fanSubscriptionData: subscription?.block ?? "",
-      fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
-      fanBio: policy.includesFanBio
-        ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
-        : undefined,
-      // Kernel-context platforms carry no chatter-saved fan name today.
-      fanCustomName: undefined,
+      ...(fanslyFan !== null
+        ? {
+          fanDisplayName: fanslyFan.identity.fanDisplayName,
+          fanBio: fanslyFan.identity.fanBio,
+          fanCustomName: fanslyFan.identity.fanCustomName,
+          fanUsername: fanslyFan.identity.fanUsername,
+        }
+        : {
+          fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
+          fanBio: policy.includesFanBio
+            ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
+            : undefined,
+          fanCustomName: undefined,
+          fanUsername: undefined,
+        }),
       pingSegment: pingSummary?.segment,
       fanSilenceDays: pingSummary?.fanSilenceDays ?? undefined,
     };
+    if (fanslyFan !== null) {
+      // Where the name came from and how old the hub's copies are, never the
+      // values. Only on this lane: every other generation records what it did.
+      contextManifest = { ...(contextManifest ?? {}), fanIdentity: fanslyFan.manifest };
+    }
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.
     const ofItems = listOnlyFansMediaNoteItems(transcript.messages, transcript.mediaByMessage);
@@ -798,7 +888,27 @@ export async function prepareAiFeatureStream(
     );
   }
   if (feature === "hi-greeting") {
-    assertHiGreetingFreshness(body, contextValues.messageCount);
+    if (hiByStartProof) {
+      // chat-extension R20 HF-5: the proof's start against the history the hub
+      // holds, then its count of personal messages against the limit; the
+      // number of messages in the hub's own transcript is not the gate here.
+      // The lane has no clientContext, so the hub loaded the transcript itself.
+      if (!kernelTranscript) {
+        throw new Error("hi-greeting start-proof lane reached without a hub-loaded transcript");
+      }
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        hiStartProof: await assertHiStartProof(app, {
+          pageId,
+          conversationRef: body.conversationRef,
+          proof: body.startProof,
+          coverageCheck: body.coverageCheck,
+          served: kernelTranscript.context.served,
+        }),
+      };
+    } else {
+      assertHiGreetingFreshness(body, contextValues.messageCount);
+    }
   }
   // Decision #295: OnlyFans Ping is manual outreach at the chatter's discretion.
   // Keep the existing Fansly reactivation gate and the real segment on both lanes.
@@ -858,10 +968,16 @@ export async function prepareAiFeatureStream(
         body.conversationRef,
         ...(body.fanRef ? [body.fanRef] : []),
       ];
+      // R20 HF-10: with a pair the hub checked (HF-9: a Fansly request whose
+      // transcript the hub loads itself), only the recaps stored about its fan,
+      // as the client's recaps read selects them for the same pair. Every other
+      // request attaches what it did before.
+      const pairFanRef = conversationPair !== null ? body.fanRef ?? undefined : undefined;
       const found = await getFreshestUsableRecaps(app.db, {
         pageId,
         conversationRefs,
         personaDefinitionId: persona.definitionId,
+        ...(pairFanRef !== undefined ? { fanRef: pairFanRef } : {}),
       });
       const fullAt = found.full?.createdAt?.getTime() ?? null;
       const shortAt = found.short?.createdAt?.getTime() ?? null;
@@ -939,7 +1055,7 @@ export async function prepareAiFeatureStream(
     fanDisplayName: contextValues.fanDisplayName,
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
-    fanUsername: body.clientContext?.fanUsername,
+    fanUsername: contextValues.fanUsername,
     greetingVariantCount,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
@@ -960,6 +1076,7 @@ export async function prepareAiFeatureStream(
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
+    noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
   });
 
   // The whole-Coach prompt budget may shed a recap after repository selection.
@@ -1038,6 +1155,10 @@ export async function prepareAiFeatureStream(
   }
 
   const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
+  // The fan's avatar for Hi, as an image for the provider: the released Fansly
+  // extension's inside `clientContext`, the start-proof lane's at the top
+  // level (R20 HF-5; refused off the lane, above). Never both, never fetched.
+  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? (hiByStartProof ? body.fanAvatarUrl : undefined);
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
@@ -1109,7 +1230,7 @@ export async function prepareAiFeatureStream(
     prompt: {
       systemBlocks: prompt.systemBlocks,
       userBlocks: prompt.userBlocks,
-      ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
+      ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
     },
   };
   // chat-extension H-4c: featureParams for every feature, not fan-summary
@@ -1129,7 +1250,7 @@ export async function prepareAiFeatureStream(
           systemBlocks: prompt.systemBlocks,
           userBlocks: prompt.userBlocks,
           contextManifest: contextManifest ?? null,
-          ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
+          ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
         };
         app.logger.info({
           feature,

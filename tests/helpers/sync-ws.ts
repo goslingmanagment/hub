@@ -8,7 +8,7 @@ import { bindFanslyUpgradeLease } from "../../apps/runtime/src/services/egress/f
 import type { FanslyReceiverSocket } from "../../apps/runtime/src/services/fansly-ws/connection.ts";
 import type { LivePageLinks, SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
 import { REQUEST_TIMEOUT_MS } from "../../apps/runtime/src/sync/engine/pacer.ts";
-import type { PageTransport, SendHooks, TransportOutcome } from "../../apps/runtime/src/sync/engine/ports.ts";
+import type { PageTransport, SendAdmission, SendHooks, TransportOutcome } from "../../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
   type EngineRegistry,
@@ -203,8 +203,8 @@ export async function createWsHarnessTransport(
       if (isWsMarker(request.params)) return { spec: request.spec, url: WS_MARKER_URL, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS };
       return rest.prepare(request);
     },
-    async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
-      if (req.url !== WS_MARKER_URL) return rest.send(req, hooks, signal);
+    async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome> {
+      if (req.url !== WS_MARKER_URL) return rest.send(req, hooks, signal, admission);
       if (links.ws === null) return { kind: "aborted_before_send", refusal: "lease_inactive" };
       return links.ws.handshake(hooks, signal);
     },

@@ -84,6 +84,13 @@ const SANCTIONED_DELETER_FILES = [
   // Plan §2.5 send guard: Map/Set.delete forget this process's lease handles
   // once their completion is written. No SQL deletion.
   "apps/runtime/src/services/fansly-send-guard/engine.ts",
+  // Project Browser (stage 3 PR 12): Map/Set.delete forget the RPC client's
+  // attempt handlers, partial bodies and listeners, the browser transport's
+  // acknowledged attempts, the socket source's open connections. No SQL
+  // deletion: the operator keeps an outcome until its resultAck.
+  "apps/runtime/src/services/egress/page-browser-rpc.ts",
+  "apps/runtime/src/sync/fansly/browser-transport.ts",
+  "apps/runtime/src/sync/fansly/ws/browser-source.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

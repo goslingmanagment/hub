@@ -69,6 +69,7 @@ export function wsConnectPlan(state: WsSourceState | null, now: Date, notBefore:
  *  and a success. */
 const HANDSHAKE_FAILURES: ReadonlySet<string> = new Set([
   "network",
+  "unconfirmed",
   "subject_failure",
   "subject_terminal",
   "envelope_unsuccessful",

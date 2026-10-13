@@ -175,15 +175,20 @@ export class SiteTurns {
   }
 }
 
-/** The end of a site request as the pacer and the capture take it. The
- *  operator reports no send instant yet (stage 3 PR 12): a request that may
- *  have gone out counts as sent at its completion, the safe upper bound. */
+/** The end of a site request as the pacer and the capture take it: the send
+ *  counts at the instant the browser reported (`transport_reported`, stage 3
+ *  PR 12); a request that may have gone out without one counts as sent at
+ *  its completion, the safe upper bound. */
 export function transportOutcomeOfSite(end: SiteRequestEnd): TransportOutcome {
   switch (end.kind) {
     case "response":
-      return { kind: "response", status: end.status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "completion_fallback" };
+      return typeof end.sentMono === "number" && Number.isFinite(end.sentMono)
+        ? { kind: "response", status: end.status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "transport_reported", sentMono: end.sentMono }
+        : { kind: "response", status: end.status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "completion_fallback" };
     case "transport_error":
-      return { kind: "transport_error", sent: end.sent, message: end.message };
+      return end.sent && typeof end.sentMono === "number" && Number.isFinite(end.sentMono)
+        ? { kind: "transport_error", sent: true, message: end.message, sentMono: end.sentMono }
+        : { kind: "transport_error", sent: end.sent, message: end.message };
     case "aborted_before_send":
       return { kind: "aborted_before_send", refusal: "lease_inactive" };
   }

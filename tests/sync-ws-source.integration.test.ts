@@ -307,6 +307,9 @@ describe("the page's socket in the sync process", () => {
         checks.calls += 1;
         return null;
       },
+      grant: () => {
+        throw new Error("the Upgrade is written in this process: its check, never a grant");
+      },
     };
 
     // The stored credentials are not the ones the admission's check passed

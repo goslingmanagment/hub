@@ -905,6 +905,41 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # `select ma.*` reads, so it runs unchanged beside them; rows it projects
   # leave the markers as they are (unknown until observed again).
   "0270_message_archive_fansly_markers.sql"
+  # Project Browser PR 12: sync_attempts.browser_request_id (nullable, no
+  # default: catalog only) and send_mark's check widened to
+  # 'transport_reported'. No-transaction like 0271: each DDL waits at most 1 s
+  # for its lock (retried ~60 s), the check is added NOT VALID and validated
+  # apart. The previous image never names the column, never writes the value
+  # and reads send_mark as text; nothing sends through a page's browser before
+  # the transport switch (PR 14), so it runs unchanged after a rollback.
+  "0272_sync_attempts_browser_send.sql"
+  # Project Browser PR 12: fansly_ws_connections.origin (constant default
+  # 'node': catalog only) and browser_connection_id (nullable uuid), their
+  # check and a partial unique index — a small table, under a 5 s
+  # lock_timeout. The previous image inserts and reads the table by named
+  # columns (its rows satisfy the check as they are); nothing writes a browser
+  # row before the transport switch, so it runs unchanged after a rollback.
+  "0273_fansly_ws_connections_browser.sql"
+  # Project Browser PR 12: observations.source's check gains 'browser_site',
+  # swapped NOT VALID in one ALTER that waits at most 1 s for its lock
+  # (retried ~60 s), as 0196 widened it. The previous image never writes the
+  # value (its writer comes with PR 13) and reads the column as text, so it
+  # runs unchanged after a rollback.
+  "0274_observations_source_browser_site.sql"
+  # Project Browser PR 12: the new page_browsers table (a profile's container,
+  # its page, the operator's last state, the page's RPC tokens and KasmVNC
+  # password, encrypted). The previous image never names it, and nothing
+  # writes a row before the page browsers' deploy script makes profiles, so
+  # it runs unchanged after a rollback.
+  "0275_page_browsers.sql"
+  # Project Browser PR 13: page_browsers gains the engine's intake position
+  # (events_buffer_id, events_acked_seq with a constant default, events_last_wall,
+  # events_gap_since, events_updated_at, and a halted buffer's
+  # events_halted_buffer_id/_reason/_at) and their check — a tiny table, under
+  # a 5 s lock_timeout. The previous image never names the columns and
+  # updates the table by named columns; nothing takes a page's buffer before
+  # the transport switch (PR 14), so it runs unchanged after a rollback.
+  "0276_page_browser_intake.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

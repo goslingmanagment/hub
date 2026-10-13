@@ -1002,12 +1002,15 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     // the walk: those are ids of hub-wide sequences, and in the clear they
     // would tell a chatter how many messages the whole hub holds.
     const envelope = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
-      payload: { st: Record<string, unknown> };
+      payload: { iat: number; st: Record<string, unknown> };
     };
     expect(Object.keys(envelope.payload.st).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
     expect(envelope.payload.st.alg).toBe("aes-256-gcm");
+    // `iat` is when the cursor was issued, in the clear by design: its digits
+    // are no leak, and now and then they spell a message id.
+    expect(envelope.payload.iat).toEqual(expect.any(Number));
     const readable = [
-      JSON.stringify(envelope),
+      JSON.stringify({ ...envelope, payload: { ...envelope.payload, iat: undefined } }),
       Buffer.from(String(envelope.payload.st.ciphertext), "base64").toString("latin1"),
     ].join("\n");
     expect(readable).not.toMatch(
@@ -1196,9 +1199,11 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
       // The page and the fan are the path's; naming them in the query is refused, not ignored.
       [FAN, { pageLabel: "mia-of" }],
       [FAN, { fanRef: OTHER_FAN }],
-      [FAN, { conversationRef: OTHER_FAN }],
       [FAN, { userId: 1 }],
       [FAN, { offset: 50 }],
+      // R20 HF-10: the conversation is a client id, in its one shape.
+      [FAN, { conversationRef: "group-900" }],
+      [FAN, { conversationRef: "0777" }],
     ] as const) {
       const response = await feed(grishaToken, { fan, query });
       const label = `${fan} ${JSON.stringify(query)}`;
@@ -1206,6 +1211,12 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
       expect(errorResponseSchema.safeParse(response.json()).success, label).toBe(true);
       expect(response.body, label).not.toContain("ARCHIVED TEXT");
     }
+    // R20 HF-10: on OnlyFans the chat IS the fan, so another chat named beside
+    // the fan is another fan's (tests/client-conversation-reads.integration.test.ts).
+    const otherChat = await feed(grishaToken, { query: { conversationRef: OTHER_FAN } });
+    expect(otherChat.statusCode, otherChat.body).toBe(409);
+    expect(errorResponseSchema.parse(otherChat.json()).error).toBe("conversation_fan_mismatch");
+    expect(otherChat.body).not.toContain("ARCHIVED TEXT");
     // The bounds themselves are served.
     expect((await feedOk(grishaToken, { query: { limit: 1, summaryWindow: 5 } })).summary!.window.requested).toBe(5);
     expect((await feedOk(grishaToken, { query: { limit: 100, summaryWindow: 1500 } })).summary!.window.requested).toBe(1500);

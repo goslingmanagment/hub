@@ -122,13 +122,24 @@ export interface FanslySendGuard {
 /** Why a send check refused a dispatch. The first three are every lease's;
  *  `pace` (closer than S × (1 + u) to the previous send) and `takeover_floor`
  *  (before the first-send floor after an ownership takeover) are the Sync
- *  Engine pacer's, which reuses this check contract (`composeFanslySendCheck`). */
+ *  Engine pacer's, which reuses this check contract (`composeFanslySendCheck`).
+ *  The last four are a page browser's (Project Browser, plan §3.2, spec §6):
+ *  `session_mismatch` — the site's live session is not the one the request
+ *  was prepared for, `credentials_changed` — the page's stored credentials
+ *  (its account, its proxy) changed since it was prepared, `generation_stale`
+ *  — the browser serves a newer owner of the page, `transport_unavailable` —
+ *  the browser could not take the request at all (no link, not ready).
+ *  Nothing left in any of them. */
 export type FanslySendRefusalReason =
   | "lease_inactive"
   | "lease_used"
   | "send_deadline_passed"
   | "pace"
-  | "takeover_floor";
+  | "takeover_floor"
+  | "session_mismatch"
+  | "credentials_changed"
+  | "generation_stale"
+  | "transport_unavailable";
 
 /** A dispatch the lease's send check refused. Nothing was written to the
  *  socket for it. */
