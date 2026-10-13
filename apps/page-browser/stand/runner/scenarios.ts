@@ -333,7 +333,10 @@ async function databaseDown(ctx: Ctx): Promise<ScenarioOutcome> {
     engine.sendIssued(pending);
   });
   const checks: Record<string, string[]> = {};
-  const downMs = 3000 + Math.round(ctx.random() * 3000);
+  // Longer than the engine's connection attempt (5 s, runner/pg.ts): a
+  // commit tried at the start of the outage fails before the database is
+  // back, never just waits it out.
+  const downMs = 6000 + Math.round(ctx.random() * 3000);
   await sleep(downMs);
   await ctx.docker.action(postgres, "start");
   const back = await ctx.store.reachable(30_000);
