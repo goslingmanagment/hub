@@ -309,3 +309,42 @@ export async function setPageBrowserSettings(
   `);
   return result.rows.length === 1;
 }
+
+/** A live page on its browser, and whether its operator answered its current
+ *  owner's hello with `quiesced` (0277). */
+export interface BrowserPageHandover {
+  pageId: number;
+  pageLabel: string | null;
+  ownerGeneration: bigint;
+  handoverGeneration: bigint | null;
+  /** The current owner's hand-over is confirmed by the operator. */
+  quiesced: boolean;
+}
+
+/** Every live page whose transport is its browser (of `pageIds`, when
+ *  given), with its hand-over (`sync ownership confirm-stopped` waits for
+ *  them, plan §4.7). */
+export async function listBrowserPageHandovers(db: Database, input: { pageIds?: readonly number[] } = {}): Promise<BrowserPageHandover[]> {
+  const filter = input.pageIds === undefined ? sql`` : sql`and sp.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])`;
+  const result = await db.execute<{ pageId: string; pageLabel: string | null; ownerGeneration: string; handoverGeneration: string | null }>(sql`
+    select sp.page_id::text as "pageId", p.label as "pageLabel", sp.owner_generation::text as "ownerGeneration",
+           b.handover_generation::text as "handoverGeneration"
+      from sync_pages sp
+      left join pages p on p.id = sp.page_id
+      left join page_browsers b on b.page_id = sp.page_id
+     where sp.transport = 'browser' and sp.mode = 'live'
+       ${filter}
+     order by sp.page_id
+  `);
+  return result.rows.map((row) => {
+    const ownerGeneration = BigInt(row.ownerGeneration);
+    const handoverGeneration = row.handoverGeneration === null ? null : BigInt(row.handoverGeneration);
+    return {
+      pageId: Number(row.pageId),
+      pageLabel: row.pageLabel,
+      ownerGeneration,
+      handoverGeneration,
+      quiesced: ownerGeneration > 0n && handoverGeneration === ownerGeneration,
+    };
+  });
+}

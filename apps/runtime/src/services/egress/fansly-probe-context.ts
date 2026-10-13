@@ -76,6 +76,37 @@ export async function readFanslyPageGeneration(db: Database, pageLabel: string) 
   return probeGeneration(await readStoredProbePage(db, pageLabel));
 }
 
+/**
+ * What a credentials change of the page stands on (its CAS base, step 3b
+ * ruling 5): the stored-credentials digest above when a session is stored —
+ * the same value, so every page with one is as before — and, for a page with
+ * no session stored (connected through its browser, Project Browser owner
+ * decision №12), the digest of the page and its proxy alone. Refused like
+ * the digest for an unknown, non-Fansly or proxyless page.
+ */
+export async function readFanslyPageBase(db: Database, pageLabel: string): Promise<string> {
+  const stored = await findPageByLabel(db, pageLabel);
+  if (!stored) throw new NotFoundError(`Page "${pageLabel}" not found`);
+  assertFanslyPage(stored.page, `Page "${pageLabel}" is not a Fansly page`);
+  if (!stored.proxy) {
+    throw new ProxyMissingError(`Page "${pageLabel}" has no assigned proxy; Fansly probe refused`);
+  }
+  if (stored.credentials) return probeGeneration({ page: stored.page, credentials: stored.credentials, proxy: stored.proxy });
+  return createHash("sha256").update(JSON.stringify({
+    pageId: stored.page.id,
+    platform: stored.page.platform,
+    nativeAccountId: stored.page.platformAccountId,
+    credentials: null,
+    proxy: {
+      id: stored.proxy.id,
+      url: stored.proxy.url,
+      ciphertext: stored.proxy.encryptedAuth,
+      keyVersion: stored.proxy.keyVersion,
+      rateLimitScopeKey: stored.proxy.rateLimitScopeKey,
+    },
+  })).digest("hex");
+}
+
 export async function readProbeSnapshot(
   db: Database,
   config: AppContext["config"],

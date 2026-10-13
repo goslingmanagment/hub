@@ -284,7 +284,7 @@ export class OwnershipLostError extends Error {
   }
 }
 
-export type LiveGateClosedReason = "mode" | "guard_owner_engine";
+export type LiveGateClosedReason = "mode" | "guard_owner_engine" | "transport";
 
 /** A live admission without its gates: the page is not `live`, or the step-1
  *  guard row is not owned by the engine (I17). Nothing is admitted. */
@@ -298,8 +298,10 @@ export class LiveGateClosedError extends Error {
     super(
       reason === "mode"
         ? `Fansly sync page ${pageId}: a live admission needs mode 'live' (is '${mode}')`
-        : `Fansly sync page ${pageId}: a live admission needs the send guard owned by `
-          + `'${SYNC_ENGINE_GUARD_OWNER}' (is ${ownerEngine === null ? "unset" : `'${ownerEngine}'`})`,
+        : reason === "transport"
+          ? `Fansly sync page ${pageId}: the page's transport changed; this owner's sender admits nothing more`
+          : `Fansly sync page ${pageId}: a live admission needs the send guard owned by `
+            + `'${SYNC_ENGINE_GUARD_OWNER}' (is ${ownerEngine === null ? "unset" : `'${ownerEngine}'`})`,
     );
     this.name = "LiveGateClosedError";
     this.pageId = pageId;
@@ -706,17 +708,22 @@ export interface LockedSyncPage {
  * page row (`share` for an apply, `no_key_update` for an admission or a
  * capture) and refuse a foreign generation with `OwnershipLostError`. With
  * `live`, also the live gate (I17): the mode must be `live` and the step-1
- * guard row owned by the engine, else `LiveGateClosedError`.
+ * guard row owned by the engine, else `LiveGateClosedError`. With `live` and
+ * `transport` (Project Browser, 0277; the host's actors pass their slot's),
+ * the page's transport must still be that one: an admission of a sender the
+ * page left commits nothing (`LiveGateClosedError` `transport`) — the
+ * transport's change takes the same row lock.
  */
 export async function lockOwnedPage(
   tx: Database,
-  input: { pageId: number; generation: bigint; lock: "share" | "no_key_update"; live?: boolean },
+  input: { pageId: number; generation: bigint; lock: "share" | "no_key_update"; live?: boolean; transport?: SyncPageTransport },
 ): Promise<LockedSyncPage> {
   const lockClause = input.lock === "share" ? sql`for share of sp` : sql`for no key update of sp`;
-  const result = await tx.execute<{ mode: SyncPageMode; ownerGeneration: string; ownerEngine: string | null }>(sql`
+  const transportColumn = input.live === true && input.transport !== undefined ? sql`, sp.transport` : sql``;
+  const result = await tx.execute<{ mode: SyncPageMode; ownerGeneration: string; ownerEngine: string | null; transport?: SyncPageTransport }>(sql`
     select sp.mode,
            sp.owner_generation::text as "ownerGeneration",
-           g.owner_engine as "ownerEngine"
+           g.owner_engine as "ownerEngine"${transportColumn}
       from sync_pages sp
       left join fansly_page_send_guards g on g.page_id = sp.page_id
      where sp.page_id = ${input.pageId}
@@ -730,6 +737,9 @@ export async function lockOwnedPage(
     if (row.mode !== "live") throw new LiveGateClosedError(input.pageId, "mode", row.mode, row.ownerEngine);
     if (row.ownerEngine !== SYNC_ENGINE_GUARD_OWNER) {
       throw new LiveGateClosedError(input.pageId, "guard_owner_engine", row.mode, row.ownerEngine);
+    }
+    if (input.transport !== undefined && row.transport !== input.transport) {
+      throw new LiveGateClosedError(input.pageId, "transport", row.mode, row.ownerEngine);
     }
   }
   return { mode: row.mode, ownerEngine: row.ownerEngine };

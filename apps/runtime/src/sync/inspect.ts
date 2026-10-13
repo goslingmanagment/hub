@@ -8,6 +8,7 @@ import {
   insertAuditEvent,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
+  listBrowserPageHandovers,
   listUnavailableChatGroups,
   listSyncPages,
   readRouteJournal,
@@ -18,6 +19,7 @@ import {
   setSyncPageMode,
   upsertDemand,
   type Database,
+  type BrowserPageHandover,
   type RequeuedSyncWork,
   type SetSyncPageModeResult,
   type SyncAttemptSummary,
@@ -686,4 +688,31 @@ export async function confirmStoppedSyncOwners(
     acquiredBefore: input.acquiredBefore ?? null,
     ...(pageIds === undefined ? {} : { pageIds }),
   });
+}
+
+/** How long `sync ownership confirm-stopped` waits for the browser pages'
+ *  hand-overs by default: the new owner takes a page within seconds of the
+ *  confirmation (`UNCONFIRMED_RETRY_MS`), its operator answers its hello. */
+export const BROWSER_HANDOVER_WAIT_MS = 60_000;
+
+/**
+ * Plan §4.7: for a page on its browser the end of the `sync` process is not
+ * the end of its owner's work — the browser works apart. The deploy's
+ * `confirm-stopped` therefore waits, after its confirmation, until the
+ * operator of every live browser page has answered its current owner's hello
+ * with `quiesced` (the earlier owners' requests are over), or `waitMs`
+ * passes. Nothing is written; until then the new owner sends nothing
+ * through the browser anyway. The pages as they stand at the end.
+ */
+export async function awaitBrowserHandovers(
+  db: Database,
+  input: { pageLabel?: string; waitMs: number; pollMs?: number },
+): Promise<BrowserPageHandover[]> {
+  const pageIds = input.pageLabel === undefined ? undefined : [(await findSyncPageByLabel(db, input.pageLabel)).pageId];
+  const deadline = Date.now() + Math.max(0, input.waitMs);
+  for (;;) {
+    const pages = await listBrowserPageHandovers(db, pageIds === undefined ? {} : { pageIds });
+    if (pages.every((page) => page.quiesced) || Date.now() >= deadline) return pages;
+    await new Promise((resolve) => setTimeout(resolve, input.pollMs ?? 1_000));
+  }
 }

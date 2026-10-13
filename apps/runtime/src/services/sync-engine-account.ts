@@ -12,7 +12,7 @@ import type { AppConfig, FanslySessionBundle, ProxyConfig } from "@agency_hub_co
 import type { IdentityCandidateSecret } from "../sync/fansly/transport.ts";
 import { encryptSyncWorkSecret } from "../sync/requests/secret-params.ts";
 import type { EnqueueAndWaitResult } from "../sync/requests/urgent.ts";
-import { readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
+import { readFanslyPageBase, readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
 import type { AppContext } from "../bootstrap.ts";
 import { AppError, BadRequestError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
@@ -171,10 +171,12 @@ function proofOf(value: unknown): EngineIdentityProof | null {
   return { attemptId, sentAt: at, base };
 }
 
-/** The digest of the page's stored credentials now (`readFanslyPageGeneration`). */
-async function storedGeneration(db: Database, pageLabel: string): Promise<string> {
+/** What a credentials change stands on now (`readFanslyPageBase`): the
+ *  stored credentials' digest, or — no session stored, a page that ran on
+ *  its browser (owner decision №12) — the page's and its proxy's. */
+async function storedBase(db: Database, pageLabel: string): Promise<string> {
   return db.transaction(
-    async (raw) => readFanslyPageGeneration(raw as unknown as Database, pageLabel),
+    async (raw) => readFanslyPageBase(raw as unknown as Database, pageLabel),
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
@@ -196,7 +198,7 @@ export async function runFanslyIdentityCheck(
     ...(candidate.proxy === undefined || candidate.proxy === null ? {} : { proxy: candidate.proxy }),
   };
   const ciphertext = encryptSyncWorkSecret(app.config, secret);
-  const base = await storedGeneration(app.db, page.label);
+  const base = await storedBase(app.db, page.label);
   const { enqueueAndWait, UrgentWorkRefusedError } = await urgent();
   let waited: EnqueueAndWaitResult;
   try {
@@ -272,7 +274,7 @@ export async function saveVerifiedFanslyCredentials(
   return app.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockFanslyCredentialsForSave(tx, page.id);
-    if ((await readFanslyPageGeneration(tx, page.label)) !== verified.proof.base) {
+    if ((await readFanslyPageBase(tx, page.label)) !== verified.proof.base) {
       throw new FanslyCredentialsChangedError(page.label);
     }
     await store(tx);

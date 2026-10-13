@@ -9,6 +9,8 @@ import { createSyncContext, type SyncContext } from "./context.ts";
 import { OWNER_HEARTBEAT_FRESH_MS, ownerRunState, type OwnerRunState, type SyncPageModeView } from "./engine/status.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
 import {
+  awaitBrowserHandovers,
+  BROWSER_HANDOVER_WAIT_MS,
   changeSyncPageModeByOwner,
   changeSyncPagePause,
   changeSyncRegistryOverride,
@@ -23,6 +25,7 @@ import {
   requestSyncProbe,
   requeueSyncWork,
 } from "./inspect.ts";
+import { changeSyncPageTransport } from "./page-transport.ts";
 import { raiseSyncRoute } from "./route-raise.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
@@ -210,6 +213,29 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         deps.print(result.kind === "changed"
           ? `${options.page}: ${result.from} → ${result.to} (the sync host follows within 2 s)`
           : `${options.page}: already ${result.mode}`);
+      });
+    });
+
+  page
+    .command("transport")
+    .description(
+      "which sender a page's requests leave through: node (undici, every page's default) or browser (its own browser); "
+      + "--prepare readies a browser page's way back to node through the owner's session (audited)",
+    )
+    .argument("<page>", "the Fansly page")
+    .argument("<transport>", "node or browser")
+    .option("--prepare", "with node: the page waits under a credentials hold for the owner's session, checked through Node", false)
+    .option("--note <text>", "why (stored with the audit row)")
+    .action(async (pageLabel: string, transport: string, options: { prepare: boolean; note?: string }) => {
+      await withContext(deps, async ({ db }) => {
+        const result = await changeSyncPageTransport(db, {
+          pageLabel,
+          to: transport,
+          prepare: options.prepare,
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+        });
+        deps.print(json({ ...result, follows: "the sync host takes the page again within 2 s, after the request in flight" }));
       });
     });
 
@@ -488,7 +514,12 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
       parseInstant,
     )
     .option("--dry-run", "list what would be confirmed without writing", false)
-    .action(async (options: { runningHosts: string; page?: string; acquiredBefore?: Date; dryRun: boolean }) => {
+    .option(
+      "--quiesced-wait-ms <ms>",
+      `then wait this long for every live browser page's operator to say its previous owner's work is over (default ${BROWSER_HANDOVER_WAIT_MS})`,
+      parsePositiveMs,
+    )
+    .action(async (options: { runningHosts: string; page?: string; acquiredBefore?: Date; dryRun: boolean; quiescedWaitMs?: number }) => {
       await withContext(deps, async ({ db }) => {
         const rows = await confirmStoppedSyncOwners(db, {
           runningHosts: options.runningHosts.split(",").map((host) => host.trim()).filter(Boolean),
@@ -501,6 +532,18 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         deps.print(["page", "generation", "owner_host", options.dryRun ? "would_confirm" : "confirmed"].join("\t"));
         for (const row of rows) {
           deps.print([row.pageLabel ?? String(row.pageId), row.generation.toString(), row.ownerHost ?? "", String(options.dryRun ? true : row.confirmed)].join("\t"));
+        }
+        if (options.dryRun) return;
+        // Plan §4.7: a browser page's hand-over ends with its operator's
+        // quiesced. Pages on node: nothing to wait for, nothing printed.
+        const browsers = await awaitBrowserHandovers(db, {
+          waitMs: options.quiescedWaitMs ?? BROWSER_HANDOVER_WAIT_MS,
+          ...(options.page === undefined ? {} : { pageLabel: options.page }),
+        });
+        if (browsers.length === 0) return;
+        deps.print(["browser_page", "owner_generation", "quiesced"].join("\t"));
+        for (const row of browsers) {
+          deps.print([row.pageLabel ?? String(row.pageId), row.ownerGeneration.toString(), String(row.quiesced)].join("\t"));
         }
       });
     });
