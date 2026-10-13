@@ -1290,6 +1290,9 @@ export class Operator {
       case "closeExit":
         this.#exitHeld = true;
         this.egress.closeExit("the engine's closeExit");
+        // What the site has waiting is cancelled, not kept for the next
+        // open exit (plan §4.5, §4.9); the browser stays.
+        this.site.endAll("the engine's closeExit", false);
         this.#stopIpTimer();
         this.page.exitClosed("the engine's closeExit");
         this.#sendState();

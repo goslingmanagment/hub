@@ -1412,6 +1412,28 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: "no admission within 1500 ms" }));
   });
 
+  it("the engine's closeExit cancels what the site has waiting: nothing of it goes when the exit opens again", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const waiting = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    const ask = await s.engine.waitFor("siteAdmit");
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    await until(() => waiting.outcome === "failed", 3000, "the waiting request to fail");
+    expect(waiting.failReason).toBe("Failed");
+    expect(s.operator.site.live).toBe(0);
+    // A request that comes with the exit closed is failed at once, not kept.
+    const closed = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    await until(() => closed.outcome === "failed", 3000, "the request to fail");
+    expect(await command(s.engine, "openExit")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 5000, "the site loaded again");
+    // The admission of the cancelled one, coming now, is not used.
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: ask.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 8200 });
+    expect(await s.engine.waitFor("siteDone")).toMatchObject({ attemptId: 8200, sent: false });
+    expect(s.engine.of("siteAdmit")).toHaveLength(1);
+    expect(s.chrome.sent("Fetch.continueRequest").some((sent) => sent.params.requestId === waiting.interceptionId || sent.params.requestId === closed.interceptionId)).toBe(false);
+  });
+
   it("the page's proxy fails: what waited for an admission is failed, nothing is asked again, the page fails and starts again", async () => {
     const s = await setUp({ params: { restartBackoffMs: [300] } });
     await started(s);
