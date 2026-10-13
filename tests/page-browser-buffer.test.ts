@@ -67,7 +67,7 @@ function all(buffer: EventBuffer): Array<Record<string, unknown>> {
 }
 
 /** A buffer whose committed batches go to a stream with a recording sink. */
-function streamed(root: string, options: Partial<BufferOptions> = {}, stream: { maxEvents?: number; maxBytes?: number; inFlightBatches?: number } = {}) {
+function streamed(root: string, options: Partial<BufferOptions> = {}, stream: { maxEvents?: number; maxBytes?: number; inFlightBatches?: number; markRetryMs?: readonly number[] } = {}) {
   let pump = () => undefined as void;
   const buffer = open(root, { ...options, onCommitted: () => pump() });
   const sent: Array<{ type: string; bufferId: string; events: Array<Record<string, unknown>>; bytes: number }> = [];
@@ -283,9 +283,13 @@ describe("the stream (plan §4.4, step 4)", () => {
   });
 
   it("takes a subscription's afterSeq as the engine's word: what is before it goes", async () => {
-    const { buffer, stream, seqs } = streamed(dir());
+    const { buffer, stream, sent, seqs } = streamed(dir());
     for (let n = 1; n <= 10; n++) buffer.append(wsFrame(n));
     await buffer.flush();
+    // Sent once; the engine committed up to 6 and its link broke.
+    stream.subscribe(subscribe(buffer.id, 0));
+    stream.reset();
+    sent.length = 0;
     stream.subscribe(subscribe(buffer.id, 6));
     await buffer.flush();
     expect(seqs()).toEqual([7, 8, 9, 10]);
@@ -330,6 +334,133 @@ describe("the stream (plan §4.4, step 4)", () => {
     // A repeated or lower ack is no harm.
     expect(stream.ack(ack(buffer.id, 5))).toBeNull();
     expect(stream.ack(ack(buffer.id, 3))).toBeNull();
+  });
+});
+
+// The engine's intake (PR 13, Astra's review): the buffer keeps durably the
+// highest number it ever sent; a subscription past it is refused.
+describe("the sent mark (schema v4)", () => {
+  it("is raised durably before any event past it is sent, once per advance, and survives a reopen", async () => {
+    const root = dir();
+    const { buffer, stream, seqs } = streamed(root, {}, { maxEvents: 5, inFlightBatches: 1 });
+    for (let n = 1; n <= 12; n++) buffer.append(wsFrame(n));
+    await buffer.flush();
+    expect(buffer.sentMax).toBe(0);
+    stream.subscribe(subscribe(buffer.id, 0));
+    // One batch on its way (1..5), the mark over everything stored then.
+    expect(seqs()).toEqual([1, 2, 3, 4, 5]);
+    expect(buffer.sentMax).toBe(12);
+    stream.ack(ack(buffer.id, 5));
+    expect(seqs().at(-1)).toBe(10);
+    expect(buffer.sentMax).toBe(12);
+    const reopened = await reopen(buffer, root);
+    expect(reopened.sentMax).toBe(12);
+  });
+
+  it("nothing is sent past the mark when it cannot be written; it goes once it can", async () => {
+    const root = dir();
+    let failMarks = true;
+    const { buffer, stream, seqs } = streamed(root);
+    const raise = buffer.raiseSentMax.bind(buffer);
+    buffer.raiseSentMax = () => (failMarks ? false : raise());
+    for (let n = 1; n <= 3; n++) buffer.append(wsFrame(n));
+    await buffer.flush();
+    stream.subscribe(subscribe(buffer.id, 0));
+    expect(seqs()).toEqual([]);
+    expect(buffer.sentMax).toBe(0);
+    failMarks = false;
+    stream.pump();
+    expect(seqs()).toEqual([1, 2, 3]);
+    expect(buffer.sentMax).toBe(3);
+  });
+
+  it("a one-off failure writing the mark while the buffer is full does not stop its drain: the stream tries again on its own", async () => {
+    let markAttempts = 0;
+    const { buffer, stream, seqs } = streamed(
+      dir(),
+      {
+        caps: { bytes: 10_000, ageMs: 3_600_000, alarmPercents: [50, 80] },
+        markFault: () => (++markAttempts === 1 ? new Error("disk I/O error") : null),
+      },
+      { markRetryMs: [20] },
+    );
+    // The backlog fills the buffer: no new event is taken any more.
+    let count = 0;
+    for (;;) {
+      const appended = buffer.append(wsFrame(count + 1, 900));
+      if (!appended.ok) break;
+      await appended.durable;
+      count += 1;
+      buffer.check();
+    }
+    expect(buffer.refusal()).toBe("buffer_full");
+    expect(count).toBeGreaterThan(5);
+    expect(stream.subscribe(subscribe(buffer.id, 0))).toBeNull();
+    // The first mark failed: nothing went, and nothing is on its way.
+    expect(markAttempts).toBe(1);
+    expect(seqs()).toEqual([]);
+    expect(stream.position).toMatchObject({ sentSeq: 0, inFlight: 0 });
+    // Nothing else pumps a full buffer: no commit (no event is taken), no
+    // ack (nothing was sent), and the checks only wait for room.
+    buffer.check();
+    buffer.check();
+    expect(buffer.append(wsFrame(0)).ok).toBe(false);
+    await until(() => seqs().length === count, 2_000, "the stream resumed on its own");
+    expect(markAttempts).toBe(2);
+    expect(buffer.sentMax).toBe(count);
+    expect(seqs()).toEqual(Array.from({ length: count }, (_, n) => n + 1));
+  });
+
+  it("a crash between the mark and the send: the mark covers what may have gone, and an engine's position within it is taken", async () => {
+    const root = dir();
+    let crash = true;
+    const buffer = open(root);
+    // The send itself never happens: the process dies right after the mark.
+    const real = new EventStream(buffer, () => {
+      if (crash) throw new Error("the process died before the send");
+      return true;
+    }, { log: quiet });
+    for (let n = 1; n <= 4; n++) buffer.append(wsFrame(n));
+    await buffer.flush();
+    expect(() => real.subscribe(subscribe(buffer.id, 0))).toThrow(/process died/);
+    crash = false;
+    const reopened = await reopen(buffer, root);
+    expect(reopened.sentMax).toBe(4);
+    const again = new EventStream(reopened, () => true, { log: quiet });
+    expect(again.subscribe(subscribe(reopened.id, 2))).toBeNull();
+  });
+
+  it("an older operator (an image rolled back past the mark) refuses a buffer that keeps it: it would send without raising it", async () => {
+    const root = dir();
+    const buffer = open(root);
+    await seqOf(buffer.append(wsFrame(1)));
+    await buffer.close();
+    const unavailable: BufferUnavailable[] = [];
+    const older = open(root, { migrations: MIGRATIONS.slice(0, 3), openRetryMs: [10], onUnavailable: (reason) => unavailable.push(reason) });
+    older.start();
+    expect(unavailable).toEqual([expect.objectContaining({ cause: "too_new", recoverable: false })]);
+    await older.close();
+  });
+
+  it("refuses a subscription past the mark even once the numbers grew past it: a restored file's new events are never acknowledged by an old position", async () => {
+    const root = dir();
+    const { buffer, stream, seqs } = streamed(root);
+    for (let n = 1; n <= 5; n++) buffer.append(wsFrame(n));
+    await buffer.flush();
+    stream.subscribe(subscribe(buffer.id, 0));
+    expect(buffer.sentMax).toBe(5);
+    stream.reset();
+    // The engine committed up to 10 of this buffer's history before the
+    // file was restored from a backup at 5; the restored buffer grows to 15.
+    for (let n = 6; n <= 15; n++) buffer.append(wsFrame(n));
+    await buffer.flush();
+    expect(buffer.lastSeq).toBe(15);
+    expect(stream.subscribe(subscribe(buffer.id, 10))).toMatchObject({ of: "events.subscribe", reason: "ahead", givenSeq: 10 });
+    await buffer.flush();
+    expect(all(buffer).map((event) => event.seq)).toEqual(Array.from({ length: 15 }, (_, n) => n + 1));
+    // The normal path is unchanged: within the mark, a subscription goes.
+    expect(stream.subscribe(subscribe(buffer.id, 5))).toBeNull();
+    expect(seqs().at(-1)).toBe(15);
   });
 });
 
@@ -736,6 +867,9 @@ describe("the format (plan §4.10)", () => {
     expect(buffer.lastOutcomeSeq).toBe(99);
     await written(buffer.putOutcome(hubResult(5)));
     expect(buffer.outcomesBySeq(99, buffer.lastOutcomeSeq, 10, 1_000_000).map((outcome) => [outcome.attemptId, outcome.seq])).toEqual([[5, 100]]);
+    // A buffer from before the sent mark gets its last number as its mark
+    // (schema v4): the engine's position is at most what was sent.
+    expect(buffer.sentMax).toBe(7);
     stream.subscribe(subscribe(buffer.id, 5));
     expect(seqs()).toEqual([6, 7]);
     expect(await seqOf(buffer.append(wsFrame(8)))).toBe(8);

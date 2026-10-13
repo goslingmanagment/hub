@@ -1,15 +1,23 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import type { EventBuffer } from "../../apps/page-browser/src/buffer/buffer.ts";
+import { EventStream } from "../../apps/page-browser/src/buffer/stream.ts";
 import { GenerationStore } from "../../apps/page-browser/src/rpc/generation.ts";
 import {
   BODY_PART_BYTES,
   encodeBodyFrame,
+  type Ack,
+  type BufferEvent,
   type CheckResult,
+  type EventsRefused,
+  type EventsSubscribe,
   type Hello,
   type Result,
   type Send,
+  type SiteDone,
   type State,
+  type WsDone,
 } from "../../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer } from "../../apps/page-browser/src/rpc/server.ts";
 import { monoMs } from "../../apps/page-browser/src/shared/util.ts";
@@ -24,6 +32,75 @@ import type { PageBrowserLinkSettings } from "../../apps/runtime/src/services/eg
 // — one physical request, logged here as the origin's arrival log — and its
 // result is kept until `resultAck`, delivered to every new connection and
 // resent on `recover`, body frames first.
+//
+// The buffer's event stream (PR 13): the operator's own `EventStream`
+// (`apps/page-browser/src/buffer/stream.ts` — the subscription, the batches,
+// the acks, its refusals) over a buffer in memory (`MemoryEventBuffer`); a
+// test appends events (`append`, `gap`, `siteResponse`), makes the volume
+// anew (`recreateBuffer`), makes the buffer unavailable, or loses acks on
+// the way (`dropAcks`). A site response's body goes as binary frames before
+// the batch that names it. The ends of the site path (`siteDone`,
+// `wsDone`) are kept like results (`holdEnd`).
+
+/** An event as a test appends it: the buffer numbers and stamps it. */
+export type AppendedEvent = BufferEvent extends infer E ? (E extends unknown ? Omit<E, "seq" | "atMono" | "atWall"> : never) : never;
+
+/** The operator's buffer of events in memory, for the operator's own
+ *  `EventStream`: the subset of `EventBuffer` it reads. */
+export class MemoryEventBuffer {
+  id: string;
+  unavailable: { cause: string } | null = null;
+  #events: Array<{ seq: number; json: string; bytes: number; event: BufferEvent }> = [];
+  #lastSeq = 0;
+  /** The highest number acknowledged (by an ack or a subscription). */
+  acknowledged = 0;
+  /** The highest number ever handed to a stream (the operator's durable
+   *  mark, schema v4): a restored file keeps its own. */
+  sentMax = 0;
+
+  constructor(id: string = randomUUID()) {
+    this.id = id;
+  }
+
+  get lastSeq(): number {
+    return this.#lastSeq;
+  }
+
+  /** The events kept (not yet acknowledged), oldest first. */
+  get kept(): BufferEvent[] {
+    return this.#events.map((entry) => entry.event);
+  }
+
+  append(event: AppendedEvent, atWall: number = Date.now()): BufferEvent {
+    const seq = ++this.#lastSeq;
+    const stamped = { seq, atMono: monoMs(), atWall, ...event } as BufferEvent;
+    const json = JSON.stringify(stamped);
+    this.#events.push({ seq, json, bytes: Buffer.byteLength(json), event: stamped });
+    return stamped;
+  }
+
+  raiseSentMax(): boolean {
+    this.sentMax = Math.max(this.sentMax, this.#lastSeq);
+    return true;
+  }
+
+  acknowledge(uptoSeq: number): void {
+    this.acknowledged = Math.max(this.acknowledged, uptoSeq);
+    this.#events = this.#events.filter((entry) => entry.seq > uptoSeq);
+  }
+
+  readEvents(afterSeq: number, maxEvents: number, maxBytes: number): Array<{ seq: number; json: string; bytes: number }> {
+    const out: Array<{ seq: number; json: string; bytes: number }> = [];
+    let bytes = 0;
+    for (const entry of this.#events) {
+      if (entry.seq <= afterSeq) continue;
+      if (out.length >= maxEvents || (out.length > 0 && bytes + entry.bytes + 1 > maxBytes)) break;
+      out.push({ seq: entry.seq, json: entry.json, bytes: entry.bytes });
+      bytes += entry.bytes + 1;
+    }
+    return out;
+  }
+}
 
 export const OPERATOR_TOKEN = "engine-rpc-token-6d1f0c2b8a7e4935a1c0";
 
@@ -89,6 +166,21 @@ export class FakeOperator {
   readonly links: boolean[] = [];
   /** Outcomes kept until their resultAck. */
   readonly held = new Map<number, { result: Result; body: Buffer | null }>();
+  /** The site path's ends kept until their resultAck. */
+  readonly heldEnds = new Map<number, SiteDone | WsDone>();
+  /** The event stream: its buffer, its subscriptions, acks and refusals. */
+  buffer: MemoryEventBuffer = new MemoryEventBuffer("00000000-0000-4000-8000-000000000001");
+  stream: EventStream;
+  readonly subscriptions: EventsSubscribe[] = [];
+  readonly eventAcks: Ack[] = [];
+  readonly refusals: EventsRefused[] = [];
+  /** Acks lost on the way: the next this many never reach the stream. */
+  dropAcks = 0;
+  /** The bodies site responses name, by body id. */
+  readonly bodies = new Map<string, Buffer>();
+  /** The next body sent goes with another body's bytes (a body broken on
+   *  the way: its sha256 does not match). */
+  corruptNextBody = false;
   readonly #waiting = new Map<number, Waiting>();
   live: string | null;
   state: State;
@@ -113,6 +205,9 @@ export class FakeOperator {
   skipSessionCheckAtSend = false;
   /** Deliver results (false: kept, never sent until a recover or a new link). */
   deliverResults = true;
+  /** The session a result reports (null: the one its send named) — another
+   *  session's answer. */
+  resultSession: string | null = null;
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -148,14 +243,27 @@ export class FakeOperator {
       handlers: {
         onHello: (hello) => {
           this.hellos.push(hello);
-          return { bufferId: "00000000-0000-4000-8000-000000000001", state: this.state };
+          return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.state };
         },
         quiesce: async () => ({ lastSendMono: this.physical.at(-1)?.sentMono ?? null, lastSendWall: null }),
         onCommand: async () => ({ ok: false, detail: "not in this fake" }),
         onBuffer: (message) => {
-          if (message.type === "resultAck") {
+          if (message.type === "events.subscribe") {
+            this.subscriptions.push(message);
+            const refused = this.stream.subscribe(message);
+            if (refused !== null) this.#refuse(refused);
+          } else if (message.type === "ack") {
+            if (this.dropAcks > 0) {
+              this.dropAcks -= 1;
+              return;
+            }
+            this.eventAcks.push(message);
+            const refused = this.stream.ack(message);
+            if (refused !== null) this.#refuse(refused);
+          } else if (message.type === "resultAck") {
             this.acks.push(message.attemptId);
             this.held.delete(message.attemptId);
+            this.heldEnds.delete(message.attemptId);
           } else if (message.type === "recover") {
             this.recovers.push([...message.attemptIds]);
             void this.#recover(message.attemptIds);
@@ -167,9 +275,11 @@ export class FakeOperator {
         },
         onLink: (up) => {
           this.links.push(up);
+          this.stream.reset();
           if (up) {
             this.pushState();
             for (const [, kept] of this.held) this.#deliver(kept.result, kept.body);
+            for (const [, end] of this.heldEnds) this.server.send(end);
           } else {
             // No check is answered any more (hub.ts linkLost).
             for (const [attemptId, waiting] of [...this.#waiting]) {
@@ -180,6 +290,76 @@ export class FakeOperator {
         },
       },
     });
+    this.stream = this.#makeStream();
+  }
+
+  #refuse(refused: EventsRefused): void {
+    this.refusals.push(refused);
+    this.server.send(refused);
+  }
+
+  /** The stream over the current buffer; site responses' bodies go first. */
+  #makeStream(): EventStream {
+    return new EventStream(this.buffer as unknown as EventBuffer, (json) => {
+      const batch = JSON.parse(json) as { events: BufferEvent[] };
+      for (const event of batch.events) {
+        if (event.kind !== "site.response") continue;
+        const body = this.bodies.get(event.body.bodyId);
+        if (body === undefined) continue;
+        const sent = this.corruptNextBody ? Buffer.from(`${body.toString("utf8")}!`) : body;
+        this.corruptNextBody = false;
+        sendBody(this.server, event.body.bodyId, sent);
+      }
+      return this.server.sendRaw(json);
+    }, { log: () => undefined });
+  }
+
+  /** An event of the buffer, durable at once; streamed to a subscriber. */
+  append(event: AppendedEvent, atWall?: number): BufferEvent {
+    const stamped = this.buffer.append(event, atWall);
+    this.stream.pump();
+    return stamped;
+  }
+
+  /** A gap mark (spec §6.1): from the event `from` (null: unknown). */
+  gap(reason: Extract<BufferEvent, { kind: "gap" }>["reason"], from: BufferEvent | null, atWall?: number): BufferEvent {
+    return this.append({ kind: "gap", fromSeq: from?.seq ?? null, fromWall: from?.atWall ?? null, reason }, atWall);
+  }
+
+  /** A site response with its body (sent before the batch that names it). */
+  siteResponse(input: { route: string; path: string; query?: string; status?: number; body: string | Buffer; complete?: boolean; source?: "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed"; headers?: Record<string, string>; method?: string }, atWall?: number): BufferEvent {
+    const body = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
+    const bodyId = randomUUID();
+    this.bodies.set(bodyId, body);
+    return this.append({
+      kind: "site.response",
+      siteRequestId: randomUUID(),
+      attemptId: 0,
+      route: input.route,
+      method: input.method ?? "GET",
+      path: input.path,
+      query: input.query ?? "",
+      status: input.status ?? 200,
+      headers: input.headers ?? { "content-type": "application/json" },
+      body: { bodyId, decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") },
+      complete: input.complete ?? true,
+      source: input.source ?? "network",
+      sessionFingerprint: this.live ?? SESSION_A,
+    }, atWall);
+  }
+
+  /** The volume made anew: another buffer id, numbers from 1 again, the old
+   *  buffer's events gone. */
+  recreateBuffer(): MemoryEventBuffer {
+    this.buffer = new MemoryEventBuffer();
+    this.stream = this.#makeStream();
+    return this.buffer;
+  }
+
+  /** The site path's end of an attempt, kept until its resultAck and
+   *  delivered to every new connection and on `recover`. */
+  holdEnd(end: SiteDone | WsDone): void {
+    this.heldEnds.set(end.attemptId, end);
   }
 
   static async start(options: FakeOperatorOptions = {}): Promise<FakeOperator> {
@@ -254,7 +434,7 @@ export class FakeOperator {
   }
 
   #store(send: Send, outcome: Result["outcome"], body: Buffer | null = null): void {
-    const result: Result = { type: "result", attemptId: send.attemptId, sessionFingerprint: send.sessionFingerprint, outcome };
+    const result: Result = { type: "result", attemptId: send.attemptId, sessionFingerprint: this.resultSession ?? send.sessionFingerprint, outcome };
     this.held.set(send.attemptId, { result, body });
     if (this.deliverResults) this.#deliver(result, body);
   }
@@ -268,8 +448,12 @@ export class FakeOperator {
     const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
     for (const attemptId of attemptIds) {
       const kept = this.held.get(attemptId);
+      const end = this.heldEnds.get(attemptId);
       if (kept !== undefined) {
         this.#deliver(kept.result, kept.body);
+        attempts.push({ attemptId, state: "outcome_resent" });
+      } else if (end !== undefined) {
+        this.server.send(end);
         attempts.push({ attemptId, state: "outcome_resent" });
       } else {
         attempts.push({ attemptId, state: this.recoverState(attemptId) });

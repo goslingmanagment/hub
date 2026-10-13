@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { encodeBodyAbandon, encodeBodyFrame, type Result } from "../apps/page-browser/src/rpc/protocol.ts";
+import { encodeBodyAbandon, encodeBodyFrame, type EventsRefused, type Result } from "../apps/page-browser/src/rpc/protocol.ts";
 import { acceptWebSocket } from "../apps/page-browser/src/shared/ws.ts";
 import {
   linkSettingsDigest,
@@ -11,6 +11,7 @@ import {
   PageBrowserLinkError,
   PageBrowserRpcClient,
   systemMonoBridge,
+  type DeliveredEvents,
   type DeliveredResult,
   type LinkStatus,
   type PageBrowserRpcTiming,
@@ -382,6 +383,76 @@ describe("a Hub request", () => {
     fake.server.protocolError("a test drops the engine");
     await until(() => unclaimed.length === 2, 5_000, "the outcome replayed again");
     expect(fake.acks).toEqual([]);
+  });
+});
+
+// The event stream (PR 13): the operator's own EventStream behind the fake.
+describe("the event stream", () => {
+  it("subscribes with the buffer id and the last number, takes batches with their site responses' bodies, and acks", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    const batches: DeliveredEvents[] = [];
+    made.onEvents((delivered) => batches.push(delivered));
+    await up(made);
+    fake.append({ kind: "gap", fromSeq: null, fromWall: null, reason: "operator_start" });
+    const site = fake.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true}" });
+    expect(made.subscribe(fake.buffer.id, 0)).toBe(true);
+    await until(() => batches.flatMap((batch) => batch.events).length === 2, 5_000, "the events");
+    const events = batches.flatMap((batch) => batch.events);
+    expect(events.map((event) => event.seq)).toEqual([1, 2]);
+    const delivered = batches.find((batch) => batch.events.some((event) => event.seq === site.seq))!;
+    expect(delivered.bufferId).toBe(fake.buffer.id);
+    expect(delivered.epoch).toBe(made.epoch);
+    const ref = (site as Extract<typeof site, { kind: "site.response" }>).body;
+    expect(delivered.bodies.get(ref.bodyId)).toEqual({ body: Buffer.from("{\"success\":true}"), problem: null });
+    expect(made.ack(fake.buffer.id, 2)).toBe(true);
+    await until(() => fake.buffer.acknowledged === 2, 5_000, "the ack");
+    expect(fake.buffer.kept).toEqual([]);
+  });
+
+  it("a body broken on the way is handed over with its problem, never as a body", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    const batches: DeliveredEvents[] = [];
+    made.onEvents((delivered) => batches.push(delivered));
+    await up(made);
+    fake.corruptNextBody = true;
+    const site = fake.siteResponse({ route: "site.other", path: "/api/v1/x", body: "{}" }) as Extract<ReturnType<FakeOperator["append"]>, { kind: "site.response" }>;
+    made.subscribe(fake.buffer.id, 0);
+    await until(() => batches.length === 1, 5_000, "the batch");
+    expect(batches[0]!.bodies.get(site.body.bodyId)).toMatchObject({ body: null, problem: expect.stringMatching(/bytes|sha256/) });
+  });
+
+  it("the operator refuses another buffer's subscription and ack, naming its own", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    const refusals: EventsRefused[] = [];
+    made.onEventsRefused((refused) => refusals.push(refused));
+    await up(made);
+    const old = randomUUID();
+    made.subscribe(old, 5);
+    await until(() => refusals.length === 1, 5_000, "the refusal");
+    expect(refusals[0]).toMatchObject({ of: "events.subscribe", reason: "foreign_buffer", bufferId: fake.buffer.id, givenBufferId: old, givenSeq: 5 });
+    made.subscribe(fake.buffer.id, 0);
+    made.ack(old, 3);
+    await until(() => refusals.length === 2, 5_000, "the ack's refusal");
+    expect(refusals[1]).toMatchObject({ of: "ack", reason: "foreign_buffer", bufferId: fake.buffer.id, givenBufferId: old });
+  });
+
+  it("recover collects the site path's ends resent on the way; an end nobody claims goes to the unclaimed listener", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    const unclaimed: number[] = [];
+    made.onUnclaimedOutcome((end) => unclaimed.push(end.attemptId));
+    fake.holdEnd({ type: "siteDone", siteRequestId: randomUUID(), attemptId: 91, sent: true, sentMono: 1_000, sentWall: Date.now(), connectionReused: false, status: 429, retryAfter: "30", error: null, body: "not_platform_data" });
+    fake.holdEnd({ type: "wsDone", connectionId: randomUUID(), attemptId: 92, sent: false, sentMono: null, status: null, error: null, fate: "unknown" });
+    await up(made);
+    // Delivered to the new connection: nobody waits for them.
+    await until(() => unclaimed.length === 2, 5_000, "the ends delivered");
+    const answer = await made.recover([91, 92, 93]);
+    expect(Object.fromEntries(answer.states)).toEqual({ 91: "outcome_resent", 92: "outcome_resent", 93: "unknown" });
+    expect(answer.ends.get(91)).toMatchObject({ type: "siteDone", status: 429, retryAfter: "30" });
+    expect(answer.ends.get(92)).toMatchObject({ type: "wsDone", fate: "unknown" });
   });
 });
 

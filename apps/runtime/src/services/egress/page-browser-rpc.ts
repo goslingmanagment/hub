@@ -10,9 +10,12 @@ import {
   PROTOCOL,
   SUPPORTED_MAJORS,
   type Alarm,
+  type BodyRef,
+  type BufferEvent,
   type Check,
   type CheckResult,
   type EngineToOperator,
+  type EventsRefused,
   type Hello,
   type OperatorParams,
   type OperatorToEngine,
@@ -23,7 +26,9 @@ import {
   type Result,
   type Send,
   type Sent,
+  type SiteDone,
   type State,
+  type WsDone,
 } from "./page-browser-protocol.ts";
 
 // The engine's RPC client to a page's operator (Project Browser, plan §4.13;
@@ -56,12 +61,18 @@ import {
 //   A result whose body did not arrive whole is asked for again once
 //   (`recover`), then handed over without it.
 // - `recover`: the operator resends the outcomes it holds of the attempts
-//   named, then answers with the state of each; the results resent on the
-//   way are collected for the caller.
+//   named, then answers with the state of each; the results — and the site
+//   path's ends, `siteDone` and `wsDone` — resent on the way are collected
+//   for the caller.
+// - The event stream (plan §4.4, PR 13): `events.subscribe` and `ack` with
+//   the buffer's id; each `events` batch goes to the intake's listener with
+//   the bodies its site responses name (their frames come before the batch,
+//   reassembled and checked as a result's), `events.refused` to its own.
 // - `state`, `alarm`, `quiesced`: kept and told to listeners. Messages of the
-//   site path and the event stream (siteAdmit, wsAdmit, events, …) go to a
-//   listener when one is registered and are dropped otherwise: the operator's
-//   own waits refuse what nobody admits.
+//   site path (siteAdmit, wsAdmit, siteDone, wsDone, commandResult) go to a
+//   listener when one is registered — a `siteDone`/`wsDone` without one is
+//   an outcome nobody waits for (`onUnclaimedOutcome`) — and are dropped
+//   otherwise: the operator's own waits refuse what nobody admits.
 
 /** What one hello of a page carries besides the generation (spec §6.1). */
 export interface PageBrowserLinkSettings {
@@ -106,8 +117,11 @@ export const DEFAULT_RPC_TIMING: PageBrowserRpcTiming = {
  *  frame's slack. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024 + BODY_PART_BYTES;
 /** Bodies in the air at once (in parts, or whole and waiting for their
- *  JSON): the operator sends one outcome at a time. */
-export const MAX_PENDING_BODIES = 4;
+ *  JSON): the operator sends one outcome at a time beside one event batch of
+ *  at most 500 events, each naming at most one body (plan §4.14). */
+export const MAX_PENDING_BODIES = 512;
+/** Their bytes together: two of the largest bodies. */
+export const MAX_PENDING_BODY_BYTES = 2 * MAX_BODY_BYTES;
 
 export type LinkStatus =
   | { kind: "idle" }
@@ -148,6 +162,26 @@ export interface RecoverAnswer {
   states: Map<number, RecoverResult["attempts"][number]["state"]>;
   /** The outcomes resent for the attempts asked about, on the way. */
   results: Map<number, DeliveredResult>;
+  /** The site path's ends resent on the way (a site request's `siteDone`, a
+   *  site socket's `wsDone`). */
+  ends: Map<number, SiteDone | WsDone>;
+}
+
+/** A body an event names, as it arrived: whole and checked, or why not. */
+export interface DeliveredBody {
+  body: Buffer | null;
+  problem: string | null;
+}
+
+/** One batch of the operator's event stream (plan §4.4), with the bodies its
+ *  site responses name. */
+export interface DeliveredEvents {
+  bufferId: string;
+  events: BufferEvent[];
+  /** By body id. */
+  bodies: Map<string, DeliveredBody>;
+  /** The connection it came on (`epoch`). */
+  epoch: number;
 }
 
 /** The link went down (or the client closed) before an answer. */
@@ -207,7 +241,7 @@ export interface PageBrowserRpcOptions {
   monoNow?: () => number;
 }
 
-type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" }>;
+type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" | "events" | "events.refused" }>;
 
 interface Assembly {
   parts: Buffer[];
@@ -219,6 +253,7 @@ interface Assembly {
 interface PendingRecover {
   ids: Set<number>;
   results: Map<number, DeliveredResult>;
+  ends: Map<number, SiteDone | WsDone>;
   resolve: (answer: RecoverAnswer) => void;
   reject: (error: Error) => void;
 }
@@ -247,6 +282,8 @@ export class PageBrowserRpcClient {
   #helloDigest: string | null = null;
   readonly #attempts = new Map<number, AttemptHandlers>();
   readonly #bodies = new Map<string, Assembly>();
+  /** The bytes of `#bodies` together. */
+  #bodyBytes = 0;
   /** Results whose body was asked for again (`recover`), by attempt. */
   readonly #reasked = new Set<number>();
   #recover: PendingRecover | null = null;
@@ -255,6 +292,9 @@ export class PageBrowserRpcClient {
   readonly #alarmListeners = new Set<(alarm: Alarm) => void>();
   readonly #linkListeners = new Set<(status: LinkStatus) => void>();
   #unclaimed: ((delivered: DeliveredResult) => void) | null = null;
+  #unclaimedEnd: ((end: SiteDone | WsDone) => void) | null = null;
+  #events: ((delivered: DeliveredEvents) => void) | null = null;
+  #eventsRefused: ((refused: EventsRefused) => void) | null = null;
   #other: ((message: OtherMessage) => void) | null = null;
 
   constructor(options: PageBrowserRpcOptions) {
@@ -330,13 +370,32 @@ export class PageBrowserRpcClient {
     return () => this.#linkListeners.delete(listener);
   }
 
-  /** Results of attempts no handler waits for (replayed outcomes; the
-   *  buffer's intake, PR 13). Without one they are dropped, never acked. */
+  /** Results of attempts no handler waits for (outcomes replayed to a new
+   *  connection: the transport's held outcomes, PR 13). Without one they are
+   *  dropped, never acked. */
   onUnclaimedResult(listener: ((delivered: DeliveredResult) => void) | null): void {
     this.#unclaimed = listener;
   }
 
-  /** The site path's and the event stream's messages (later PRs). */
+  /** A site request's or a site socket's end (`siteDone`, `wsDone`) when no
+   *  site path listens (`onOtherMessage`): an outcome the operator holds that
+   *  nothing waits for (PR 13). Without one it is dropped, never acked. */
+  onUnclaimedOutcome(listener: ((end: SiteDone | WsDone) => void) | null): void {
+    this.#unclaimedEnd = listener;
+  }
+
+  /** The event stream's batches, with their bodies (PR 13). Without a
+   *  listener a batch is dropped, never acked: it comes again. */
+  onEvents(listener: ((delivered: DeliveredEvents) => void) | null): void {
+    this.#events = listener;
+  }
+
+  /** The operator refused a subscription or an ack (`events.refused`). */
+  onEventsRefused(listener: ((refused: EventsRefused) => void) | null): void {
+    this.#eventsRefused = listener;
+  }
+
+  /** The site path's messages (later PRs). */
   onOtherMessage(listener: ((message: OtherMessage) => void) | null): void {
     this.#other = listener;
   }
@@ -390,11 +449,23 @@ export class PageBrowserRpcClient {
     return this.#write({ type: "resultAck", ownerGeneration: this.#generation, attemptId });
   }
 
+  /** The event stream from the event after `afterSeq` of `bufferId` — the
+   *  engine's word that it has every event up to it (plan §4.4). False: no
+   *  link. */
+  subscribe(bufferId: string, afterSeq: number): boolean {
+    return this.#write({ type: "events.subscribe", ownerGeneration: this.#generation, bufferId, afterSeq });
+  }
+
+  /** Every event of `bufferId` up to `uptoSeq` is committed. False: no link. */
+  ack(bufferId: string, uptoSeq: number): boolean {
+    return this.#write({ type: "ack", ownerGeneration: this.#generation, bufferId, uptoSeq });
+  }
+
   /** The outcomes the operator holds of `attemptIds`, resent, and the state
    *  of each. Rejects when the link goes before the answer. */
   recover(attemptIds: readonly number[]): Promise<RecoverAnswer> {
     return new Promise((resolve, reject) => {
-      const pending: PendingRecover = { ids: new Set(attemptIds), results: new Map(), resolve, reject };
+      const pending: PendingRecover = { ids: new Set(attemptIds), results: new Map(), ends: new Map(), resolve, reject };
       this.#recoverQueue.push(pending);
       this.#nextRecover();
     });
@@ -518,6 +589,7 @@ export class PageBrowserRpcClient {
     this.#greeted = false;
     this.#epoch += 1;
     this.#bodies.clear();
+    this.#bodyBytes = 0;
     this.#reasked.clear();
     this.#state = null;
     this.#helloDigest = null;
@@ -615,13 +687,42 @@ export class PageBrowserRpcClient {
         return this.#onResult(message);
       case "recoverResult":
         return this.#onRecoverResult(message);
-      default:
-        if (this.#other !== null) {
-          const other = this.#other;
-          safely(() => other(message));
-        } else {
-          this.#log.debug({ url: this.#o.url, type: message.type }, "page browser link: a message nobody takes yet");
+      case "events":
+        return this.#onEvents(message);
+      case "events.refused":
+        if (this.#eventsRefused !== null) {
+          const listener = this.#eventsRefused;
+          safely(() => listener(message));
         }
+        return;
+      case "siteDone":
+      case "wsDone":
+        return this.#onEnd(message);
+      default:
+        return this.#toOther(message);
+    }
+  }
+
+  /** A site request's or a site socket's end: kept for a recover that asked
+   *  about it, then the site path's — or, with none listening, an outcome
+   *  nothing waits for. */
+  #onEnd(message: SiteDone | WsDone): void {
+    const recovering = this.#recover;
+    if (recovering !== null && recovering.ids.has(message.attemptId)) recovering.ends.set(message.attemptId, message);
+    if (this.#other === null && this.#unclaimedEnd !== null) {
+      const listener = this.#unclaimedEnd;
+      safely(() => listener(message));
+      return;
+    }
+    this.#toOther(message);
+  }
+
+  #toOther(message: OtherMessage): void {
+    if (this.#other !== null) {
+      const other = this.#other;
+      safely(() => other(message));
+    } else {
+      this.#log.debug({ url: this.#o.url, type: message.type }, "page browser link: a message nobody takes yet");
     }
   }
 
@@ -701,6 +802,7 @@ export class PageBrowserRpcClient {
     }
     let assembly = this.#bodies.get(bodyId);
     if (part === 0) {
+      if (assembly !== undefined) this.#bodyBytes -= assembly.bytes;
       assembly = { parts: [], next: 0, bytes: 0, done: false };
       this.#bodies.delete(bodyId);
       this.#bodies.set(bodyId, assembly);
@@ -712,7 +814,9 @@ export class PageBrowserRpcClient {
     assembly.parts.push(data);
     assembly.next += 1;
     assembly.bytes += data.length;
+    this.#bodyBytes += data.length;
     if (assembly.bytes > MAX_BODY_BYTES) return this.#protocolError(`body ${bodyId} over ${MAX_BODY_BYTES} bytes`);
+    if (this.#bodyBytes > MAX_PENDING_BODY_BYTES) return this.#protocolError(`more than ${MAX_PENDING_BODY_BYTES} bytes of bodies in the air`);
     if (last) assembly.done = true;
   }
 
@@ -720,9 +824,15 @@ export class PageBrowserRpcClient {
    *  the assemblies either way. */
   #takeBody(result: Result): { body: Buffer | null; problem: string | null } {
     if (result.outcome.kind !== "response") return { body: null, problem: null };
-    const ref = result.outcome.body;
+    return this.#takeBodyRef(result.outcome.body);
+  }
+
+  /** The body `ref` names, whole and checked, or why not. Taken out of the
+   *  assemblies either way. */
+  #takeBodyRef(ref: BodyRef): { body: Buffer | null; problem: string | null } {
     const assembly = this.#bodies.get(ref.bodyId);
     this.#bodies.delete(ref.bodyId);
+    if (assembly !== undefined) this.#bodyBytes -= assembly.bytes;
     if (assembly === undefined) return { body: null, problem: "its body did not arrive" };
     if (!assembly.done) return { body: null, problem: "its body did not arrive whole" };
     const body = Buffer.concat(assembly.parts, assembly.bytes);
@@ -759,6 +869,24 @@ export class PageBrowserRpcClient {
     this.#deliver(delivered);
   }
 
+  /** A batch of the event stream: the bodies its site responses name taken
+   *  out of the assemblies (their frames came first), then the batch to the
+   *  intake. */
+  #onEvents(message: Extract<OperatorToEngine, { type: "events" }>): void {
+    const bodies = new Map<string, DeliveredBody>();
+    for (const event of message.events) {
+      if (event.kind !== "site.response" || bodies.has(event.body.bodyId)) continue;
+      bodies.set(event.body.bodyId, this.#takeBodyRef(event.body));
+    }
+    const listener = this.#events;
+    if (listener === null) {
+      this.#log.debug({ url: this.#o.url, events: message.events.length }, "page browser link: an event batch nobody takes; left with the operator");
+      return;
+    }
+    const delivered: DeliveredEvents = { bufferId: message.bufferId, events: message.events, bodies, epoch: this.#epoch };
+    safely(() => listener(delivered));
+  }
+
   #deliver(delivered: DeliveredResult): void {
     const handlers = this.#attempts.get(delivered.result.attemptId);
     if (handlers !== undefined) {
@@ -792,7 +920,7 @@ export class PageBrowserRpcClient {
     if (pending === null) return this.#protocolError("a recoverResult nobody asked for");
     const states = new Map<number, RecoverResult["attempts"][number]["state"]>();
     for (const attempt of message.attempts) states.set(attempt.attemptId, attempt.state);
-    pending.resolve({ states, results: pending.results });
+    pending.resolve({ states, results: pending.results, ends: pending.ends });
     this.#nextRecover();
   }
 }

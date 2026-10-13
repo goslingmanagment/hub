@@ -115,10 +115,26 @@ CREATE TABLE ws_connections (
 ) STRICT;
 `;
 
+/** Version 4 (PR 13, the engine's intake): meta `sent_max` — the highest
+ *  number this buffer ever handed to a stream, raised durably before any
+ *  event past it is sent (stream.ts). A subscription past it is refused
+ *  (`ahead`): the engine can only have committed what was sent, so a file
+ *  restored from before keeps its old mark and is refused however far its
+ *  numbers grow — its new events never acknowledged by an old position.
+ *  A buffer from before has no mark: it is set once, here, to its last
+ *  number — the engine's position is at most what was sent, at most that;
+ *  0 would refuse every legitimate position at the upgrade.
+ *  Readable from 4: an older operator would send without raising the mark,
+ *  and a mark left behind would refuse the engine's own position. */
+const V4 = `
+INSERT OR IGNORE INTO meta (key, value) SELECT 'sent_max', value FROM meta WHERE key = 'last_seq';
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, readableFrom: 1, up: (db) => db.exec(V1) },
   { version: 2, readableFrom: 2, up: (db) => db.exec(V2) },
   { version: 3, readableFrom: 2, up: (db) => db.exec(V3) },
+  { version: 4, readableFrom: 4, up: (db) => db.exec(V4) },
 ];
 
 /** The format of a row's `json` this operator writes. */

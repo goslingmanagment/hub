@@ -11,7 +11,6 @@ import { readBrowserCredentialsGeneration } from "../browser-transport.ts";
 // (`FanslyWsSource`), the site opens its socket in the page's browser, and
 // this source only takes what the operator tells of it.
 //
-// What it does in this PR:
 // - Each connection of the site's socket is a row of fansly_ws_connections
 //   (0273): `origin = 'browser'`, the operator's connection id, the page's
 //   browser credentials generation with the session fingerprint the
@@ -19,20 +18,18 @@ import { readBrowserCredentialsGeneration } from "../browser-transport.ts";
 //   operator's `ws.open` opens it — once: an event delivered again opens
 //   nothing twice — and its `ws.close` closes it at the instant the operator
 //   saw; gap_since is taken from the previous row of the page, as for the
-//   engine's own socket.
+//   engine's own socket, and starts no later than a loss the operator marked
+//   before it (its `gap`, PR 13).
 // - As the page's socket owner it reports `open` while a connection is open,
 //   `idle` otherwise: the engine never opens the socket of a browser page
 //   (`handshake` sends nothing), so `ws.connect` has nothing to do there.
 //
-// What comes with the buffer's intake (PR 13): the events themselves —
-// `events.subscribe`/`ack` over the operator's stream, in order and
-// acknowledged after their commit — the frames, taken by their event id
-// (`browser:<buffer id>:<number>`, fenced by the page and the session, not by
-// an open row: a frame from the buffer may outlive its connection), their
-// receipts and routing as today, the gap marks and the repair at the first
-// confirmed frame after a connect. The admission of the site's socket rides
-// the site path (`engine/site-admission.ts`, route `ws.upgrade`) over the
-// operator's `wsAdmit`/`wsDone`.
+// The events come from the buffer's intake (`fansly/browser-intake.ts`, PR
+// 13), which takes a batch of them in one transaction (`takeIn`) and tells
+// the source once it committed (`committed`); the frames themselves, the gap
+// marks and the repair are the intake's. The admission of the site's socket
+// rides the site path (`engine/site-admission.ts`, route `ws.upgrade`) over
+// the operator's `wsAdmit`/`wsDone`.
 
 export interface BrowserWsSourceDeps {
   db: Database;
@@ -68,39 +65,65 @@ export class BrowserWsSource implements LivePageSocket {
   }
 
   /** One of the operator's socket events, in the order of its stream: a
-   *  connection opened or closed. Other events are the intake's (PR 13). */
+   *  connection opened or closed, in its own transaction. Other events are
+   *  the intake's. */
   async take(event: BufferEvent): Promise<BrowserWsTaken> {
+    const generation = event.kind === "ws.open" ? await this.generationOf(event.sessionFingerprint) : null;
+    const taken = await this.#d.db.transaction(async (raw) => this.takeIn(raw as unknown as Database, event, { generation }));
+    this.committed(event, taken);
+    return taken;
+  }
+
+  /** The page's browser credentials generation of a session fingerprint (null:
+   *  the page is not active, or has no proxy) — read before the transaction
+   *  that takes the `ws.open`, on its own snapshot. */
+  generationOf(sessionFingerprint: string): Promise<string | null> {
+    const generationOf = this.#d.generationOf
+      ?? ((fingerprint: string) => readBrowserCredentialsGeneration(this.#d.db, this.#d.pageId, fingerprint));
+    return generationOf(sessionFingerprint);
+  }
+
+  /** The database's part of `take`, in the caller's transaction (the
+   *  intake's batch): `generation` of a `ws.open` read before it
+   *  (`generationOf`), `gapSince` a loss the operator marked before it. The
+   *  caller tells the source with `committed` once its transaction did. */
+  async takeIn(tx: Database, event: BufferEvent, input: { generation: string | null; gapSince?: Date | null }): Promise<BrowserWsTaken> {
     switch (event.kind) {
       case "ws.open": {
-        const generationOf = this.#d.generationOf
-          ?? ((fingerprint: string) => readBrowserCredentialsGeneration(this.#d.db, this.#d.pageId, fingerprint));
-        const generation = await generationOf(event.sessionFingerprint);
-        if (generation === null) return "page_inactive";
-        const opened = await beginBrowserWsConnection(this.#d.db, {
+        if (input.generation === null) return "page_inactive";
+        const opened = await beginBrowserWsConnection(tx, {
           id: randomUUID(),
           pageId: this.#d.pageId,
-          generation,
+          generation: input.generation,
           browserConnectionId: event.connectionId,
           startedAt: new Date(event.atWall),
+          gapSince: input.gapSince ?? null,
         });
-        // One socket of a page at a time: an open row before it was closed
-        // as abandoned with the insert.
-        this.#open.clear();
-        this.#open.add(event.connectionId);
         return opened ? "opened" : "known";
       }
       case "ws.close": {
-        const closed = await finishBrowserWsConnection(this.#d.db, {
+        const closed = await finishBrowserWsConnection(tx, {
           pageId: this.#d.pageId,
           browserConnectionId: event.connectionId,
           closedAt: new Date(event.atWall),
           reason: event.code === null ? "site_closed" : `site_closed:${event.code}`,
         });
-        this.#open.delete(event.connectionId);
         return closed ? "closed" : "known";
       }
       default:
         return "not_a_connection_event";
+    }
+  }
+
+  /** What a committed transaction took of the site's connections. */
+  committed(event: BufferEvent, taken: BrowserWsTaken): void {
+    if (event.kind === "ws.open" && taken !== "page_inactive") {
+      // One socket of a page at a time: an open row before it was closed
+      // as abandoned with the insert.
+      this.#open.clear();
+      this.#open.add(event.connectionId);
+    } else if (event.kind === "ws.close") {
+      this.#open.delete(event.connectionId);
     }
   }
 

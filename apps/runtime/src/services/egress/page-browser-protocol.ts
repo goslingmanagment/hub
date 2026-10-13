@@ -10,9 +10,9 @@
 // The engine reads every operator message of major 1 (an unknown type or
 // value is a protocol error: the connection closes, spec §6.3 rule 3), and
 // sends only what this operator takes: hello, ping/pong, send, checkResult,
-// resultAck, recover (PR 12). `events.subscribe`/`ack` come with the buffer's
-// intake (PR 13); `siteAdmitResult`, `wsAdmitResult` and `command` with the
-// site path's and the transport switch's wiring.
+// resultAck, recover (PR 12), `events.subscribe` and `ack` (the buffer's
+// intake, PR 13); `siteAdmitResult`, `wsAdmitResult` and `command` come with
+// the site path's and the transport switch's wiring.
 
 export const PROTOCOL = { major: 1, minor: 0 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
