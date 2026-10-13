@@ -16,7 +16,9 @@
 //   is not executed.
 // - The buffer's messages (events.subscribe, ack, resultAck, recover) go to
 //   the operator (buffer/); an event batch is sent as the buffer stored it
-//   (`sendRaw`), not parsed and serialized again.
+//   (`sendRaw`), not parsed and serialized again. What is sent in bulk (the
+//   outcomes replayed, buffer/replay.ts) waits for the socket: `backlog`
+//   and `drained`, for the connection of one `epoch`.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -83,6 +85,8 @@ export class RpcServer {
   #pageId: number | null = null;
   #server: Server | null = null;
   #active: Conn | null = null;
+  /** Changes with the active connection. */
+  #epoch = 0;
   #lastHeard = 0;
   #pingN = 0;
   #pingMs: number;
@@ -112,6 +116,41 @@ export class RpcServer {
   setTiming(pingMs: number, linkLossMs: number): void {
     this.#pingMs = pingMs;
     this.#linkLossMs = linkLossMs;
+  }
+
+  /** Changes whenever the engine's connection does (a hello, a loss): work
+   *  begun for one connection stops when it changes. */
+  get epoch(): number {
+    return this.#epoch;
+  }
+
+  /** Bytes queued for the engine and not yet handed to its socket (0 with
+   *  no engine connected). */
+  backlog(): number {
+    const conn = this.#active;
+    return conn && !conn.ws.closed ? conn.ws.socket.writableLength : 0;
+  }
+
+  /** Settles once the connection's queue has drained, or it is gone. */
+  drained(): Promise<void> {
+    const conn = this.#active;
+    if (!conn || conn.ws.closed || !conn.ws.socket.writableNeedDrain) return Promise.resolve();
+    const socket = conn.ws.socket;
+    return new Promise((resolve) => {
+      const done = () => {
+        socket.off("drain", done);
+        socket.off("close", done);
+        resolve();
+      };
+      socket.once("drain", done);
+      socket.once("close", done);
+    });
+  }
+
+  #setActive(conn: Conn | null): void {
+    if (this.#active === conn) return;
+    this.#active = conn;
+    this.#epoch += 1;
   }
 
   /** To the engine, when one is connected. */
@@ -156,7 +195,7 @@ export class RpcServer {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
     this.#active?.ws.destroy("the operator stops");
-    this.#active = null;
+    this.#setActive(null);
     const server = this.#server;
     this.#server = null;
     if (server) {
@@ -183,7 +222,7 @@ export class RpcServer {
   /** Close a connection; the active one takes the link down with it. */
   #drop(conn: Conn, code: number, reason: string): void {
     const wasActive = this.#active === conn;
-    if (wasActive) this.#active = null;
+    if (wasActive) this.#setActive(null);
     conn.ws.close(code);
     if (wasActive) this.#options.handlers.onLink(false, reason);
   }
@@ -212,7 +251,7 @@ export class RpcServer {
     ws.onClose = (reason) => {
       clearTimeout(helloTimer);
       if (this.#active !== conn) return;
-      this.#active = null;
+      this.#setActive(null);
       this.#log("link.closed", { reason, generation: conn.generation });
       this.#options.handlers.onLink(false, `the connection closed (${reason})`);
     };
@@ -262,13 +301,13 @@ export class RpcServer {
     const replaced = this.#active;
     if (replaced && replaced !== conn) {
       this.#log(hello.ownerGeneration > replaced.generation ? "link.superseded" : "link.replaced", { from: replaced.generation, to: hello.ownerGeneration });
-      this.#active = null;
+      this.#setActive(null);
       replaced.ws.close(CLOSE_SUPERSEDED);
     }
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
     this.#pageId = hello.pageId;
-    this.#active = conn;
+    this.#setActive(conn);
     this.#lastHeard = monoMs();
     this.#lastPingAt = 0;
     const answer = this.#options.handlers.onHello(hello);

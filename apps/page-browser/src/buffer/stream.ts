@@ -91,6 +91,9 @@ export class EventStream {
 
   /** Returns the refusal to send, or null: the stream runs. */
   subscribe(message: EventsSubscribe): EventsRefused | null {
+    // A buffer that cannot be opened has nothing to say about its numbers:
+    // the engine subscribes again once state no longer says so.
+    if (this.#buffer.unavailable) return this.#refuse("events.subscribe", "unavailable", message.bufferId, message.afterSeq);
     if (message.bufferId !== this.#buffer.id) return this.#refuse("events.subscribe", "foreign_buffer", message.bufferId, message.afterSeq);
     // The engine has more than this buffer ever gave: not this buffer's
     // history (a restored file?) — nothing of it is acknowledged.
@@ -103,6 +106,7 @@ export class EventStream {
   }
 
   ack(message: Ack): EventsRefused | null {
+    if (this.#buffer.unavailable) return this.#refuse("ack", "unavailable", message.bufferId, message.uptoSeq);
     if (message.bufferId !== this.#buffer.id) return this.#refuse("ack", "foreign_buffer", message.bufferId, message.uptoSeq);
     const sub = this.#sub;
     if (!sub) return this.#refuse("ack", "not_subscribed", message.bufferId, message.uptoSeq);

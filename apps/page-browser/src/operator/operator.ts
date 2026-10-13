@@ -36,11 +36,17 @@
 //   fills up (its caps, the disk) closes the exit and fails the page with
 //   `buffer_full` or `disk_full`, and the page starts again once there is
 //   room. No admission while the buffer refuses writes (plan §4.3).
+// - A buffer that cannot be opened (locked, a failing disk, a corrupt or too
+//   new file) does not take the operator down: the RPC, the heartbeat and
+//   the proxy (refusing) run, the page stands with `buffer_unavailable`,
+//   the engine is alarmed, no start passes the gate, and the buffer is
+//   opened again when that may help — its file is never touched.
 
 import { closeSync, mkdirSync, openSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
-import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal } from "../buffer/buffer.ts";
+import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferUnavailable, type FullReason } from "../buffer/buffer.ts";
+import { OutcomeReplay } from "../buffer/replay.ts";
 import { EventStream } from "../buffer/stream.ts";
 import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl } from "../cdp/control.ts";
@@ -55,7 +61,7 @@ import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type OperatorParams, type Recover, type RecoverResult, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
@@ -113,8 +119,8 @@ export interface OperatorDeps {
   exitIpTarget?: ExitIpTarget;
   extension?: ExtensionChecks;
   timings?: Partial<OperatorTimings>;
-  /** Tests: the buffer's disk, its room, how often it looks. */
-  buffer?: Pick<BufferOptions, "diskFree" | "minFreeBytes" | "checkEveryMs" | "resumePercent" | "maxPages">;
+  /** Tests: the buffer's disk, its room, how often it looks, its retries. */
+  buffer?: Pick<BufferOptions, "diskFree" | "minFreeBytes" | "checkEveryMs" | "resumePercent" | "maxPages" | "openRetryMs" | "retryMs">;
   log?: Logger;
 }
 
@@ -157,6 +163,7 @@ export class Operator {
    *  producers of PRs 7, 9 and 10 write here. */
   readonly buffer: EventBuffer;
   readonly stream: EventStream;
+  readonly replay: OutcomeReplay;
   readonly paused: PausedRequests;
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
@@ -312,16 +319,21 @@ export class Operator {
         onBuffer: (message) => this.#onBuffer(message),
         onLink: (up, reason) => {
           // A new connection subscribes anew; the outcomes not acknowledged
-          // go to it again (spec §6.2).
+          // go to it again (spec §6.2), a page at a time.
           this.stream.reset();
           this.#log(up ? "engine.linked" : "engine.lost", { reason, admissionsOpen: this.admissionsOpen() });
-          if (up) {
-            this.#sendState();
-            this.#resendOutcomes();
-            // A buffer that filled up before this engine came: it is told.
-            const full = this.buffer.fullness;
-            if (full) this.#alarm("buffer", { ...alarmDetail(full.alarm), full: true, reason: full.reason, detail: full.detail });
+          if (!up) {
+            this.replay.disconnected();
+            return;
           }
+          this.#sendState();
+          this.replay.connected();
+          // A buffer that filled up, or could not be opened, before this
+          // engine came: it is told.
+          const full = this.buffer.fullness;
+          if (full) this.#alarm("buffer", { ...alarmDetail(full.alarm), full: true, reason: full.reason, detail: full.detail });
+          const unavailable = this.buffer.unavailable;
+          if (unavailable) this.#alarm("buffer", unavailableDetail(unavailable));
         },
       },
     });
@@ -344,14 +356,23 @@ export class Operator {
         this.#sendState();
       },
       onRoom: (reason) => this.#onBufferRoom(reason),
+      onUnavailable: (unavailable) => this.#onBufferUnavailable(unavailable),
+      onOpened: () => this.#onBufferOpened(),
       onCommitted: ({ events, outcomes }) => {
         if (events > 0) this.stream.pump();
+        // A few at a time, as attempts end: sent as they come.
         for (const json of outcomes) this.rpc.sendRaw(json);
       },
     });
     this.stream = new EventStream(this.buffer, (json) => this.rpc.sendRaw(json), {
       maxEvents: DEFAULT_PARAMS.eventBatch.maxEvents,
       maxBytes: DEFAULT_PARAMS.eventBatch.maxBytes,
+    });
+    this.replay = new OutcomeReplay(this.buffer, {
+      epoch: () => this.rpc.epoch,
+      send: (json) => this.rpc.sendRaw(json),
+      backlog: () => this.rpc.backlog(),
+      drained: () => this.rpc.drained(),
     });
   }
 
@@ -962,39 +983,44 @@ export class Operator {
         this.buffer.acknowledgeOutcome(message.attemptId);
         return;
       case "recover":
-        void this.#recover(message);
+        // The engine's start (plan §3.2): the outcomes the buffer has go
+        // first, then the answer for each attempt (buffer/replay.ts).
+        this.replay.recover(message.attemptIds);
         return;
     }
   }
 
-  /** The engine's start (plan §3.2): the outcomes the buffer has go first,
-   *  then the answer for each attempt. Without an outcome the answer is
-   *  `unknown`: `not_sent` needs what the Hub requests know of their sends
-   *  (PR 9), and a wrong `not_sent` would let a sent request pass as unsent. */
-  async #recover(message: Recover): Promise<void> {
-    await this.buffer.flush();
-    const ids = [...new Set(message.attemptIds)];
-    const stored = new Map(this.buffer.outcomes(ids).map((outcome) => [outcome.attemptId, outcome.json]));
-    const attempts: RecoverResult["attempts"] = ids.map((attemptId) => {
-      const json = stored.get(attemptId);
-      if (json === undefined) return { attemptId, state: "unknown" };
-      this.rpc.sendRaw(json);
-      return { attemptId, state: "outcome_resent" };
-    });
-    this.#log("recover", { asked: ids.length, resent: stored.size });
-    this.rpc.send({ type: "recoverResult", attempts });
+  /** The buffer could not be opened: the page stands with the exit closed
+   *  until it is — a halt, so a start comes only from the engine, and none
+   *  passes the gate before the buffer opens. */
+  #onBufferUnavailable(unavailable: BufferUnavailable): void {
+    this.egress.closeExit(`the buffer cannot be opened: ${unavailable.detail}`);
+    this.#alarm("buffer", unavailableDetail(unavailable));
+    const note = `the buffer cannot be opened (${unavailable.cause}${unavailable.recoverable ? ", tried again" : ", left for the owner"}): ${unavailable.detail}`;
+    if (this.#controlExpected || this.#starting) void this.#fail("buffer_unavailable", note);
+    // A page that stands for nothing yet (the operator's start) stands for
+    // this; one the engine already asked to start keeps failing at the gate.
+    else if (!this.page.halted && this.page.snapshot.stopReason === null) this.page.halt("buffer_unavailable", note);
+    this.#sendState();
   }
 
-  /** A new connection: every outcome still waiting for its resultAck. */
-  #resendOutcomes(): void {
-    const outcomes = this.buffer.outcomes();
-    for (const outcome of outcomes) this.rpc.sendRaw(outcome.json);
-    if (outcomes.length > 0) this.#log("outcomes.resent", { count: outcomes.length });
+  /** The buffer opened after all: a page that stood for it stands as any
+   *  other (or, if a start failed on it, starts again); the outcomes go to
+   *  the engine, which subscribes again on seeing the state. */
+  #onBufferOpened(): void {
+    const snapshot = this.page.snapshot;
+    this.#log("buffer.opened", { bufferId: this.buffer.id });
+    if (snapshot.stopReason === "buffer_unavailable" && !this.#stopped) {
+      if (snapshot.halted) this.page.stand("the buffer is open");
+      else if (!this.#starting) void this.#launch(false, "the buffer is open");
+    }
+    this.#sendState();
+    if (this.rpc.linkUp) this.replay.connected();
   }
 
   /** Room in the buffer again, its gap written (spec §5, step 4): a page
    *  that stopped for it starts again now, not at its next retry. */
-  #onBufferRoom(reason: BufferRefusal): void {
+  #onBufferRoom(reason: FullReason): void {
     const snapshot = this.page.snapshot;
     this.#sendState();
     if (this.#stopped || this.#starting || snapshot.halted) return;
@@ -1031,6 +1057,10 @@ export class Operator {
       }
     }
   }
+}
+
+function unavailableDetail(unavailable: BufferUnavailable): Record<string, string | number | boolean> {
+  return { unavailable: true, cause: unavailable.cause, recoverable: unavailable.recoverable, attempts: unavailable.attempts, detail: unavailable.detail };
 }
 
 function alarmDetail(alarm: BufferAlarm): Record<string, string | number | boolean> {

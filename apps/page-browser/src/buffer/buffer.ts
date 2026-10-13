@@ -30,19 +30,42 @@
 //      again, a `gap` mark from the last saved event is written first;
 //   4. and the page may start again (`onRoom`).
 //
+// The space acknowledged records leave is given back to the disk in bounded
+// steps for as long as SQLite holds free pages (store.ts `reclaim`); a
+// commit that failed (a full disk) is tried again with a growing pause, so
+// an acknowledgement is never lost to one failed deletion.
+//
+// A buffer that cannot be opened — locked by another process, a failing
+// disk, a corrupt file, a format newer than this operator — does not take
+// the operator down: the buffer is `buffer_unavailable`, refuses every
+// write, the page does not start, and the operator reports it. Locks and
+// I/O failures are tried again with a growing pause; a corrupt or too new
+// file is left exactly as it is, for the owner.
+//
 // Bodies (BodyRef in `site.response` and `result`) are not stored here yet:
 // the PRs that capture them (7, 9) add a `bodies` table with a migration
 // (schema.ts) and send their parts as binary frames before the batch that
 // names them (plan §4.13); the caps count them then.
 
-import { statfsSync } from "node:fs";
+import { readFileSync, statfsSync } from "node:fs";
 
 import type { BufferEvent, Result, SiteDone, WsDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
 import type { Migration } from "./schema.ts";
-import { BufferStore, type NewEventRow, type NewOutcomeRow, type StoredEvent, type StoredOutcome } from "./store.ts";
+import { BufferStore, openFailure, type Commit, type NewEventRow, type NewOutcomeRow, type OpenCause, type StoredEvent, type StoredOutcome } from "./store.ts";
 
-export type BufferRefusal = "buffer_full" | "disk_full";
+/** Why a write is refused: a cap (`buffer_full`), the disk (`disk_full`),
+ *  or a buffer that could not be opened (`buffer_unavailable`). */
+export type BufferRefusal = "buffer_full" | "disk_full" | "buffer_unavailable";
+export type FullReason = Exclude<BufferRefusal, "buffer_unavailable">;
+
+/** A buffer that could not be opened, and whether it is tried again. */
+export interface BufferUnavailable {
+  cause: OpenCause;
+  recoverable: boolean;
+  detail: string;
+  attempts: number;
+}
 
 type WithoutStamp<T> = T extends unknown ? Omit<T, "seq" | "atMono" | "atWall"> : never;
 /** An event as a producer gives it: the buffer numbers and stamps it. */
@@ -98,10 +121,24 @@ export interface BufferOptions {
   migrations?: readonly Migration[];
   /** Tests: SQLite's own "database or disk is full" past this many pages. */
   maxPages?: number;
+  /** Tests: an error to fail a commit with (store.ts). */
+  commitFault?: (batch: Commit) => Error | null;
+  /** The pauses before a failed open is tried again (locked, I/O). */
+  openRetryMs?: readonly number[];
+  /** The pauses before a failed commit is tried again. */
+  retryMs?: readonly number[];
+  /** Free pages given back per step, and the pause between steps. */
+  reclaimPages?: number;
+  reclaimEveryMs?: number;
   /** The buffer stopped taking writes: the page must stop (spec §5, 2). */
-  onFull?: (reason: BufferRefusal, alarm: BufferAlarm, detail: string) => void;
+  onFull?: (reason: FullReason, alarm: BufferAlarm, detail: string) => void;
   /** Room again, the gap written: the page may start again (spec §5, 4). */
-  onRoom?: (reason: BufferRefusal) => void;
+  onRoom?: (reason: FullReason) => void;
+  /** The buffer could not be opened (at start, and again while it lasts
+   *  only when its cause changes). */
+  onUnavailable?: (unavailable: BufferUnavailable) => void;
+  /** A buffer that could not be opened is open now. */
+  onOpened?: () => void;
   /** 50 % or 80 % of a cap crossed upwards. */
   onAlarm?: (alarm: BufferAlarm) => void;
   /** A batch is durable: its events may be streamed, its outcomes sent. */
@@ -119,6 +156,12 @@ const EARLY_ITEMS = 2000;
 const DELETE_CHUNK = 5000;
 /** A re-armed alarm needs the level this far below its threshold. */
 const REARM_FACTOR = 0.9;
+const OPEN_RETRY_MS: readonly number[] = [1000, 2000, 5000, 10_000, 30_000, 60_000];
+const RETRY_MS: readonly number[] = [100, 200, 500, 1000, 2000, 5000];
+/** 1024 pages of 4 KiB: a few milliseconds of the event loop per step. */
+const RECLAIM_PAGES = 1024;
+const RECLAIM_EVERY_MS = 10;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const EVENT_KINDS = new Set(["ws.open", "ws.in", "ws.close", "site.response"]);
 const OUTCOME_TYPES = new Set(["result", "siteDone", "wsDone"]);
 
@@ -156,20 +199,45 @@ function utf8Bytes(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
+/** The id the buffer had when it was last open (its copy in stateDir), or
+ *  "": what helloResult says while the buffer cannot be opened. */
+function rememberedId(idFile: string): string {
+  try {
+    const id = readFileSync(idFile, "utf8").trim();
+    return UUID.test(id) ? id : "";
+  } catch {
+    return "";
+  }
+}
+
+function pause(ladder: readonly number[], index: number): number {
+  return ladder[Math.min(index, ladder.length - 1)] ?? 1000;
+}
+
 export class EventBuffer {
-  readonly id: string;
   readonly dir: string;
-  readonly #store: BufferStore;
+  readonly #options: BufferOptions;
   readonly #log: Logger;
   readonly #now: () => number;
   readonly #diskFree: (dir: string) => number;
   readonly #minFreeBytes: number;
   readonly #resumePercent: number;
   readonly #checkEveryMs: number;
+  readonly #openRetryMs: readonly number[];
+  readonly #retryMs: readonly number[];
+  readonly #reclaimPages: number;
+  readonly #reclaimEveryMs: number;
   readonly #onFull: NonNullable<BufferOptions["onFull"]>;
   readonly #onRoom: NonNullable<BufferOptions["onRoom"]>;
   readonly #onAlarm: NonNullable<BufferOptions["onAlarm"]>;
   readonly #onCommitted: NonNullable<BufferOptions["onCommitted"]>;
+  readonly #onUnavailable: NonNullable<BufferOptions["onUnavailable"]>;
+  readonly #onOpened: NonNullable<BufferOptions["onOpened"]>;
+  /** Null while the buffer cannot be opened. */
+  #store: BufferStore | null = null;
+  #unavailable: BufferUnavailable | null = null;
+  #knownId: string;
+  #started = false;
   #batchMs: number;
   #caps: BufferCaps;
   #pending: Pending[] = [];
@@ -179,17 +247,26 @@ export class EventBuffer {
   /** A commit is due at the next turn (a large batch). */
   #immediate = false;
   #checkTimer: NodeJS.Timeout | null = null;
+  #openTimer: NodeJS.Timeout | null = null;
+  /** A failed commit tried again, with a growing pause. */
+  #retryTimer: NodeJS.Timeout | null = null;
+  #retries = 0;
+  /** Space given back to the disk, step by step. */
+  #reclaimTimer: NodeJS.Timeout | null = null;
+  #reclaimFailures = 0;
+  /** Commits since the WAL was last truncated. */
+  #walDirty = false;
   /** Stored, unacknowledged bytes and counts (the file may be larger). */
-  #bytes: number;
-  #events: number;
-  #outcomes: number;
-  #firstSeq: number | null;
-  #oldestEventWall: number | null;
-  #oldestOutcomeWall: number | null;
+  #bytes = 0;
+  #events = 0;
+  #outcomes = 0;
+  #firstSeq: number | null = null;
+  #oldestEventWall: number | null = null;
+  #oldestOutcomeWall: number | null = null;
   /** The engine acknowledged up to here: deleted with the next commits. */
   #ackedUpTo = 0;
   #outcomeAcks = new Set<number>();
-  #full: BufferRefusal | null = null;
+  #full: FullReason | null = null;
   #fullDetail = "";
   #fullAlarm: BufferAlarm | null = null;
   /** The highest alarm threshold raised and not re-armed (0: none). */
@@ -200,44 +277,45 @@ export class EventBuffer {
 
   constructor(options: BufferOptions) {
     this.dir = options.dir;
+    this.#options = options;
     this.#log = options.log ?? makeLog("buffer");
     this.#now = options.now ?? Date.now;
     this.#diskFree = options.diskFree ?? defaultDiskFree;
     this.#minFreeBytes = options.minFreeBytes ?? DEFAULT_MIN_FREE;
     this.#resumePercent = options.resumePercent ?? 90;
     this.#checkEveryMs = options.checkEveryMs ?? 1000;
+    this.#openRetryMs = options.openRetryMs ?? OPEN_RETRY_MS;
+    this.#retryMs = options.retryMs ?? RETRY_MS;
+    this.#reclaimPages = options.reclaimPages ?? RECLAIM_PAGES;
+    this.#reclaimEveryMs = options.reclaimEveryMs ?? RECLAIM_EVERY_MS;
     this.#onFull = options.onFull ?? (() => undefined);
     this.#onRoom = options.onRoom ?? (() => undefined);
     this.#onAlarm = options.onAlarm ?? (() => undefined);
     this.#onCommitted = options.onCommitted ?? (() => undefined);
+    this.#onUnavailable = options.onUnavailable ?? (() => undefined);
+    this.#onOpened = options.onOpened ?? (() => undefined);
     this.#batchMs = clampBatch(options.batchMs ?? 20);
     this.#caps = normalizeCaps({ ...DEFAULT_CAPS, ...options.caps });
-    this.#store = new BufferStore({
-      dir: options.dir,
-      idFile: options.idFile,
-      operatorVersion: options.operatorVersion ?? "dev",
-      now: this.#now,
-      ...(options.migrations ? { migrations: options.migrations } : {}),
-      ...(options.maxPages !== undefined ? { maxPages: options.maxPages } : {}),
-    });
-    this.id = this.#store.id;
-    const totals = this.#store.totals();
-    this.#bytes = totals.bytes;
-    this.#events = totals.events;
-    this.#outcomes = totals.outcomes;
-    this.#firstSeq = totals.firstSeq;
-    this.#oldestEventWall = totals.oldestEventWall;
-    this.#oldestOutcomeWall = totals.oldestOutcomeWall;
-    this.#log("opened", { bufferId: this.id, schema: this.#store.schema.version, created: this.#store.schema.created, lastSeq: this.#store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes });
+    this.#knownId = rememberedId(options.idFile);
+    this.#open();
   }
 
-  /** The caps looked at now and every second from now on (the operator's
-   *  handlers are in place by then). */
+  /** The caps looked at now and every second from now on, a buffer that
+   *  could not be opened reported (the operator's handlers are in place by
+   *  then). */
   start(): void {
-    if (this.#checkTimer || this.#closed) return;
-    this.check();
+    if (this.#started || this.#closed) return;
+    this.#started = true;
     this.#checkTimer = setInterval(() => this.check(), this.#checkEveryMs);
     this.#checkTimer.unref();
+    const unavailable = this.#unavailable;
+    if (unavailable) {
+      this.#notify("unavailable", () => this.#onUnavailable({ ...unavailable }));
+      this.#scheduleOpen();
+      return;
+    }
+    this.check();
+    this.#maintain();
   }
 
   /** The engine's parameters (plan §4.14). */
@@ -251,36 +329,108 @@ export class EventBuffer {
     return this.#caps;
   }
 
+  /** The buffer's id; while it cannot be opened, the one it had when it was
+   *  last open ("" if none is known). */
+  get id(): string {
+    return this.#store?.id ?? this.#knownId;
+  }
+
   /** The last number given; 0 before the first event. */
   get lastSeq(): number {
-    return this.#store.lastSeq;
+    return this.#store?.lastSeq ?? 0;
+  }
+
+  /** Why the buffer cannot be opened, or null. */
+  get unavailable(): BufferUnavailable | null {
+    return this.#unavailable ? { ...this.#unavailable } : null;
   }
 
   /** Why the buffer takes no writes now, or null. A site request is not
    *  admitted while it is not null (plan §4.3). */
   refusal(): BufferRefusal | null {
-    if (this.#closed) return "disk_full";
+    if (this.#closed || this.#store === null) return "buffer_unavailable";
     return this.#full;
   }
 
   /** Why the buffer is full, as it was said when it filled up. */
-  get fullness(): { reason: BufferRefusal; detail: string; alarm: BufferAlarm } | null {
+  get fullness(): { reason: FullReason; detail: string; alarm: BufferAlarm } | null {
     return this.#full === null || this.#fullAlarm === null ? null : { reason: this.#full, detail: this.#fullDetail, alarm: this.#fullAlarm };
   }
 
   /** What `state.buffer` says (spec §6.1), and more for tools and tests. */
-  stats(): { bytes: number; oldestAgeMs: number; events: number; outcomes: number; pending: number; lastSeq: number; commits: number; full: BufferRefusal | null; freeDiskBytes: number } {
+  stats(): { bytes: number; oldestAgeMs: number; events: number; outcomes: number; pending: number; lastSeq: number; commits: number; full: FullReason | null; unavailable: OpenCause | null; freeDiskBytes: number } {
     return {
       bytes: this.#bytes,
       oldestAgeMs: this.#oldestAgeMs(),
       events: this.#events,
       outcomes: this.#outcomes,
       pending: this.#pending.length,
-      lastSeq: this.#store.lastSeq,
+      lastSeq: this.lastSeq,
       commits: this.#commits,
       full: this.#full,
+      unavailable: this.#unavailable?.cause ?? null,
       freeDiskBytes: this.#freeDisk,
     };
+  }
+
+  // ── opening ────────────────────────────────────────────────────────────
+
+  #open(): boolean {
+    const options = this.#options;
+    try {
+      const store = new BufferStore({
+        dir: options.dir,
+        idFile: options.idFile,
+        operatorVersion: options.operatorVersion ?? "dev",
+        now: this.#now,
+        ...(options.migrations ? { migrations: options.migrations } : {}),
+        ...(options.maxPages !== undefined ? { maxPages: options.maxPages } : {}),
+        ...(options.commitFault ? { commitFault: options.commitFault } : {}),
+      });
+      const totals = store.totals();
+      this.#store = store;
+      this.#knownId = store.id;
+      this.#unavailable = null;
+      this.#bytes = totals.bytes;
+      this.#events = totals.events;
+      this.#outcomes = totals.outcomes;
+      this.#firstSeq = totals.firstSeq;
+      this.#oldestEventWall = totals.oldestEventWall;
+      this.#oldestOutcomeWall = totals.oldestOutcomeWall;
+      this.#walDirty = true;
+      this.#log("opened", { bufferId: store.id, schema: store.schema.version, created: store.schema.created, lastSeq: store.lastSeq, events: this.#events, outcomes: this.#outcomes, bytes: this.#bytes });
+      return true;
+    } catch (error) {
+      const { cause, recoverable } = openFailure(error);
+      const code = (error as { errcode?: unknown }).errcode;
+      const detail = `the buffer could not be opened: ${errorMessage(error)}${typeof code === "number" ? ` (SQLite ${code})` : ""}`;
+      const attempts = (this.#unavailable?.attempts ?? 0) + 1;
+      const changed = this.#unavailable?.cause !== cause;
+      this.#unavailable = { cause, recoverable, detail, attempts };
+      // Logged on the first failure and whenever its cause changes.
+      if (changed) this.#log("unavailable", { cause, recoverable, detail, attempts });
+      if (changed && this.#started) this.#notify("unavailable", () => this.#onUnavailable({ cause, recoverable, detail, attempts }));
+      return false;
+    }
+  }
+
+  /** A lock or an I/O failure may pass: the open is tried again, with a
+   *  growing pause. Nothing is ever done to the file but opening it. */
+  #scheduleOpen(): void {
+    const unavailable = this.#unavailable;
+    if (this.#closed || this.#openTimer || !unavailable?.recoverable) return;
+    this.#openTimer = setTimeout(() => {
+      this.#openTimer = null;
+      if (this.#closed) return;
+      if (!this.#open()) {
+        this.#scheduleOpen();
+        return;
+      }
+      this.check();
+      this.#maintain();
+      this.#notify("opened", () => this.#onOpened());
+    }, pause(this.#openRetryMs, unavailable.attempts - 1));
+    this.#openTimer.unref();
   }
 
   // ── the producers ──────────────────────────────────────────────────────
@@ -305,9 +455,10 @@ export class EventBuffer {
     if (!OUTCOME_TYPES.has(outcome.type) || !Number.isSafeInteger(outcome.attemptId)) throw new Error("not an attempt's outcome");
     const pending = this.#pendingOutcomes.get(outcome.attemptId);
     if (pending) return { ok: true, durable: new Promise((resolve) => (pending.resolve = chain(pending.resolve, resolve))) };
-    if (this.#closed) return { ok: false, reason: "disk_full" };
+    const store = this.#store;
+    if (this.#closed || store === null) return { ok: false, reason: "buffer_unavailable" };
     try {
-      if (this.#store.hasOutcome(outcome.attemptId)) return { ok: true, durable: Promise.resolve({ ok: true, seq: null }) };
+      if (store.hasOutcome(outcome.attemptId)) return { ok: true, durable: Promise.resolve({ ok: true, seq: null }) };
     } catch (error) {
       this.#storageFailed(error, "read");
       return { ok: false, reason: "disk_full" };
@@ -335,20 +486,34 @@ export class EventBuffer {
 
   /** Events in order after `afterSeq`, durable ones only (stream.ts). */
   readEvents(afterSeq: number, maxEvents: number, maxBytes: number): StoredEvent[] {
-    if (this.#closed) return [];
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
     try {
-      return this.#store.readEvents(afterSeq, maxEvents, maxBytes);
+      return store.readEvents(afterSeq, maxEvents, maxBytes);
     } catch (error) {
       this.#storageFailed(error, "read");
       return [];
     }
   }
 
-  /** Stored outcomes (of these attempts, or all), oldest first. */
-  outcomes(attemptIds?: readonly number[]): StoredOutcome[] {
-    if (this.#closed) return [];
+  /** The stored outcomes of these attempts. */
+  outcomes(attemptIds: readonly number[]): StoredOutcome[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
     try {
-      return this.#store.outcomes(attemptIds);
+      return store.outcomes(attemptIds);
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
+    }
+  }
+
+  /** Stored outcomes after this attempt id, a page at a time (replay.ts). */
+  outcomePage(afterAttemptId: number, maxCount: number, maxBytes: number): StoredOutcome[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.outcomePage(afterAttemptId, maxCount, maxBytes);
     } catch (error) {
       this.#storageFailed(error, "read");
       return [];
@@ -358,7 +523,7 @@ export class EventBuffer {
   /** The engine has the events up to this number in Postgres: they go with
    *  the next commit. Only the stream checks the engine's word (stream.ts). */
   acknowledge(uptoSeq: number): void {
-    if (uptoSeq <= this.#ackedUpTo) return;
+    if (this.#store === null || uptoSeq <= this.#ackedUpTo) return;
     this.#ackedUpTo = Math.min(uptoSeq, this.#store.lastSeq);
     this.#schedule();
   }
@@ -366,6 +531,7 @@ export class EventBuffer {
   /** The engine wrote this attempt's outcome (resultAck): it goes with the
    *  next commit. */
   acknowledgeOutcome(attemptId: number): void {
+    if (this.#store === null) return;
     this.#outcomeAcks.add(attemptId);
     this.#schedule();
   }
@@ -377,13 +543,14 @@ export class EventBuffer {
 
   /** For tests and diagnostics: SQLite's own check of the file. */
   integrity(): string {
-    return this.#store.integrity();
+    return this.#store?.integrity() ?? "unavailable";
   }
 
-  /** May the page start (plan §4.1)? Everything written so far is durable
-   *  and there is room. */
+  /** May the page start (plan §4.1)? The buffer is open, everything
+   *  written so far is durable, and there is room. */
   async ready(): Promise<{ ok: true } | { ok: false; reason: BufferRefusal; detail: string }> {
-    if (this.#closed) return { ok: false, reason: "disk_full", detail: "the buffer is closed" };
+    if (this.#closed) return { ok: false, reason: "buffer_unavailable", detail: "the buffer is closed" };
+    if (this.#unavailable) return { ok: false, reason: "buffer_unavailable", detail: this.#unavailable.detail };
     this.#flush();
     this.check();
     if (this.#full) return { ok: false, reason: this.#full, detail: this.#fullDetail };
@@ -392,25 +559,37 @@ export class EventBuffer {
 
   async close(): Promise<void> {
     if (this.#closed) return;
-    if (this.#checkTimer) clearInterval(this.#checkTimer);
-    this.#checkTimer = null;
+    for (const timer of [this.#checkTimer, this.#openTimer, this.#reclaimTimer]) if (timer) clearInterval(timer);
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#checkTimer = this.#openTimer = this.#reclaimTimer = this.#retryTimer = null;
     this.#flush();
     this.#closed = true;
-    for (const item of this.#pending.splice(0)) item.resolve({ ok: false, reason: "disk_full" });
-    this.#store.close();
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+    for (const item of this.#pending.splice(0)) item.resolve({ ok: false, reason: "buffer_unavailable" });
+    this.#store?.close();
   }
 
   // ── the caps ───────────────────────────────────────────────────────────
 
   /** The caps and the disk, now: alarms, full, room again. */
   check(): void {
-    if (this.#closed) return;
+    const store = this.#store;
+    if (this.#closed || store === null) return;
     try {
       this.#freeDisk = this.#diskFree(this.dir);
     } catch (error) {
       // Not knowing is not full: SQLite's own error says when it is.
       this.#freeDisk = Number.POSITIVE_INFINITY;
       this.#log("disk.unknown", { error: errorMessage(error) });
+    }
+    // Space SQLite holds and the disk could have: given back now (a delete
+    // whose reclaim was cut short, a file from before this operator), and
+    // the WAL truncated while the buffer is full.
+    try {
+      if (store.freePages() > 0 || (this.#full !== null && this.#walDirty)) this.#maintain();
+    } catch (error) {
+      this.#log("reclaim.unknown", { error: errorMessage(error) });
     }
     const level = this.#level();
     this.#raiseAlarms(level);
@@ -455,7 +634,7 @@ export class EventBuffer {
     return Math.max(0, this.#now() - Math.min(...walls));
   }
 
-  #enterFull(reason: BufferRefusal, by: BufferAlarm["by"], detail: string): void {
+  #enterFull(reason: FullReason, by: BufferAlarm["by"], detail: string): void {
     if (this.#full !== null) return;
     this.#full = reason;
     this.#fullDetail = detail;
@@ -480,8 +659,40 @@ export class EventBuffer {
     this.#full = null;
     this.#fullDetail = "";
     this.#fullAlarm = null;
-    this.#log("room", { reason, gapSeq: this.#store.lastSeq });
+    this.#log("room", { reason, gapSeq: this.lastSeq });
     this.#notify("room", () => this.#onRoom(reason));
+  }
+
+  // ── giving space back ──────────────────────────────────────────────────
+
+  /** Free pages out of the file and the WAL truncated, one bounded step at
+   *  a time, with a pause between steps: for as long as free pages remain,
+   *  whether or not anything is deleted meanwhile. */
+  #maintain(): void {
+    if (this.#closed || this.#store === null || this.#reclaimTimer) return;
+    this.#reclaimTimer = setTimeout(() => this.#reclaimStep(), this.#reclaimFailures === 0 ? this.#reclaimEveryMs : pause(this.#retryMs, this.#reclaimFailures - 1));
+    this.#reclaimTimer.unref();
+  }
+
+  #reclaimStep(): void {
+    this.#reclaimTimer = null;
+    const store = this.#store;
+    if (this.#closed || store === null) return;
+    let left: number;
+    try {
+      left = store.reclaim(this.#reclaimPages);
+    } catch (error) {
+      // A disk too full for even this: tried again after a growing pause.
+      this.#reclaimFailures += 1;
+      this.#log("reclaim.failed", { error: errorMessage(error), failures: this.#reclaimFailures });
+      this.#maintain();
+      return;
+    }
+    this.#reclaimFailures = 0;
+    this.#walDirty = false;
+    if (left > 0) this.#maintain();
+    // The disk may have room now.
+    if (this.#full !== null) this.check();
   }
 
   // ── the writer ─────────────────────────────────────────────────────────
@@ -502,12 +713,32 @@ export class EventBuffer {
     this.#timer = setTimeout(() => this.#flush(), this.#batchMs);
   }
 
+  /** Acknowledged events or outcomes still to delete. */
+  #deletionsPending(): boolean {
+    return (this.#firstSeq !== null && this.#ackedUpTo >= this.#firstSeq) || this.#outcomeAcks.size > 0;
+  }
+
+  /** A failed commit — and the deletions it carried — tried again after a
+   *  growing pause, whatever the caps say and whether or not the page runs:
+   *  an acknowledgement is not lost to one failure. */
+  #retryLater(): void {
+    if (this.#closed || this.#retryTimer || !this.#deletionsPending()) return;
+    const delay = pause(this.#retryMs, this.#retries);
+    this.#retries += 1;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      this.#flush();
+    }, delay);
+    this.#retryTimer.unref();
+  }
+
   /** One commit: the batch, the acknowledged deletes; then the producers
    *  hear, and the engine gets what is durable. False: the commit failed. */
   #flush(): boolean {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
-    if (this.#closed) return false;
+    const store = this.#store;
+    if (this.#closed || store === null) return false;
     const items = this.#pending;
     const deleteTo = this.#ackedUpTo > 0 && this.#firstSeq !== null && this.#firstSeq <= this.#ackedUpTo ? Math.min(this.#ackedUpTo, this.#firstSeq + DELETE_CHUNK - 1) : null;
     const deleteOutcomes = [...this.#outcomeAcks];
@@ -520,8 +751,8 @@ export class EventBuffer {
     const events: NewEventRow[] = [];
     const outcomes: NewOutcomeRow[] = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
-    let seq = this.#store.lastSeq;
-    let previousWall = this.#store.lastWall;
+    let seq = store.lastSeq;
+    let previousWall = store.lastWall;
     for (const item of items) {
       if (item.type === "outcome") {
         outcomes.push({ attemptId: item.attemptId, atWall: item.atWall, type: item.outcomeType, json: item.json, bytes: item.bytes });
@@ -541,14 +772,19 @@ export class EventBuffer {
 
     let committed;
     try {
-      committed = this.#store.commit({ events, outcomes, deleteEventsUpTo: deleteTo, deleteOutcomes });
+      committed = store.commit({ events, outcomes, deleteEventsUpTo: deleteTo, deleteOutcomes });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
       for (const { item } of settled) item.resolve({ ok: false, reason: "disk_full" });
       this.#storageFailed(error, "write");
+      this.#retryLater();
       return false;
     }
     this.#commits += 1;
+    this.#retries = 0;
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
+    this.#walDirty = true;
     const insertedOutcomes = new Set(committed.insertedOutcomes.map((outcome) => outcome.attemptId));
     this.#bytes += committed.addedBytes - committed.deletedBytes;
     this.#events += events.length - committed.deletedEvents;
@@ -560,11 +796,11 @@ export class EventBuffer {
     for (const { item, seq: given } of settled) item.resolve({ ok: true, seq: given });
     try {
       if (committed.deletedEvents > 0) {
-        const first = this.#store.first();
+        const first = store.first();
         this.#firstSeq = first.seq;
         this.#oldestEventWall = first.atWall;
       }
-      if (committed.insertedOutcomes.length > 0 || committed.deletedOutcomes > 0) this.#oldestOutcomeWall = this.#store.oldestOutcomeWall();
+      if (committed.insertedOutcomes.length > 0 || committed.deletedOutcomes > 0) this.#oldestOutcomeWall = store.oldestOutcomeWall();
     } catch (error) {
       // Committed all the same; the file cannot be read now.
       this.#storageFailed(error, "read");
@@ -572,10 +808,13 @@ export class EventBuffer {
     this.#notify("committed", () => this.#onCommitted({ events: events.length, outcomes: outcomes.filter((outcome) => insertedOutcomes.has(outcome.attemptId)).map((outcome) => outcome.json) }));
     // The alarms as soon as a batch crosses a threshold, not at the next check.
     this.#raiseAlarms(this.#level());
+    const deleted = committed.deletedEvents > 0 || committed.deletedOutcomes > 0;
+    // The space of what was deleted goes back to the disk, step by step.
+    if (deleted) this.#maintain();
     // A long acknowledged backlog: the next step soon.
     if (this.#firstSeq !== null && this.#firstSeq <= this.#ackedUpTo) this.#schedule();
     // Room made by the engine's acks is seen at once, not at the next check.
-    if (this.#full !== null && (committed.deletedEvents > 0 || committed.deletedOutcomes > 0)) queueMicrotask(() => this.check());
+    if (this.#full !== null && deleted) queueMicrotask(() => this.check());
     return true;
   }
 
@@ -596,7 +835,7 @@ export class EventBuffer {
     const detail = `the buffer could not ${what}: ${errorMessage(error)}${typeof code === "number" ? ` (SQLite ${code})` : ""}`;
     this.#log("storage.failed", { what, error: errorMessage(error), errcode: typeof code === "number" ? code : null });
     try {
-      this.#store.reload();
+      this.#store?.reload();
     } catch {
       // the file says nothing more now
     }

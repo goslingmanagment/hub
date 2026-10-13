@@ -12,9 +12,14 @@
 // Additions to spec §6.1, to be made there before an engine reads them:
 // - PR 5: the stop reason `env_mismatch` (state/steps.ts).
 // - PR 11: `events.refused` — the operator's answer to a subscription or an
-//   ack it does not take (a foreign buffer id, an ack past what was sent),
-//   naming its own buffer id; and the alarm kind `buffer` — 50 % and 80 % of
-//   a buffer cap, and a full buffer or disk (spec §5).
+//   ack it does not take (a foreign buffer id, an ack past what was sent, a
+//   buffer that cannot be opened), naming its own buffer id; the alarm kind
+//   `buffer` — 50 % and 80 % of a buffer cap, a full buffer or disk, a
+//   buffer that cannot be opened (spec §5); and the stop reason
+//   `buffer_unavailable` (state/steps.ts). While the buffer cannot be
+//   opened, helloResult's `bufferId` is the one it had when it was last open
+//   ("" if none is known), and the engine subscribes again once `state` no
+//   longer says `buffer_unavailable`.
 //
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4) and the buffer's
@@ -287,11 +292,12 @@ export interface Ack extends FromEngine {
  *  engine starts over with `bufferId`); `ahead` — a subscription past the
  *  last number this buffer gave; `not_subscribed` — an ack before the
  *  subscription on this connection; `beyond_sent` — an ack past what this
- *  subscription sent. Nothing of it is acknowledged. */
+ *  subscription sent; `unavailable` — the buffer cannot be opened (state's
+ *  stop reason `buffer_unavailable`). Nothing of it is acknowledged. */
 export interface EventsRefused {
   type: "events.refused";
   of: "events.subscribe" | "ack";
-  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent";
+  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent" | "unavailable";
   /** This operator's buffer. */
   bufferId: BufferId;
   givenBufferId: BufferId;

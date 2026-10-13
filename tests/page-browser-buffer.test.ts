@@ -1,17 +1,17 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal, type Durable } from "../apps/page-browser/src/buffer/buffer.ts";
+import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal, type BufferUnavailable, type Durable } from "../apps/page-browser/src/buffer/buffer.ts";
 import { BufferVersionError, MIGRATIONS, type Migration } from "../apps/page-browser/src/buffer/schema.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { EventStream } from "../apps/page-browser/src/buffer/stream.ts";
 import type { EventsRefused } from "../apps/page-browser/src/rpc/protocol.ts";
-import { hubResult, quiet, tempDir, wsFrame } from "./helpers/page-browser-fakes.ts";
+import { hubResult, quiet, tempDir, until, wsFrame } from "./helpers/page-browser-fakes.ts";
 
 // The operator's buffer (Project Browser plan §4.4, §4.10, §4.14; spec §5;
 // stage 3, PR 11): events numbered per buffer and kept in order across
@@ -54,6 +54,10 @@ async function seqOf(appended: ReturnType<EventBuffer["append"]>): Promise<numbe
   const durable = await written(appended);
   if (!durable.ok || durable.seq === null) throw new Error("not written");
   return durable.seq;
+}
+
+function outcomesOf(buffer: EventBuffer) {
+  return buffer.outcomePage(0, 1_000_000, Number.MAX_SAFE_INTEGER);
 }
 
 function all(buffer: EventBuffer): Array<Record<string, unknown>> {
@@ -135,10 +139,16 @@ describe("numbering and order", () => {
     expect(await seqOf(buffer.append(wsFrame(1)))).toBe(1);
   });
 
-  it("cannot be opened by a second operator while one holds it", async () => {
+  it("cannot be opened by a second operator while one holds it: that one reports it locked and takes nothing", async () => {
     const root = dir();
-    open(root);
-    expect(() => open(root, { log: quiet })).toThrow(/locked/);
+    const holder = open(root);
+    await seqOf(holder.append(wsFrame(1)));
+    const second = open(root);
+    expect(second.unavailable).toMatchObject({ cause: "locked", recoverable: true, attempts: 1 });
+    expect(second.refusal()).toBe("buffer_unavailable");
+    expect(second.append(wsFrame(2))).toEqual({ ok: false, reason: "buffer_unavailable" });
+    // It says the id the buffer had (its copy), not a new one.
+    expect(second.id).toBe(holder.id);
   });
 });
 
@@ -175,7 +185,7 @@ describe("writes", () => {
     await written(buffer.putOutcome({ type: "siteDone", siteRequestId: "s-1", attemptId: 12, sent: true, sentMono: 1, sentWall: 2, connectionReused: false, status: 200, retryAfter: null, error: null, body: "buffered" }));
     // A second outcome of attempt 11 is not stored again.
     await written(buffer.putOutcome(hubResult(11, 500)));
-    expect(buffer.outcomes().map((outcome) => [outcome.attemptId, (JSON.parse(outcome.json) as { outcome?: { status?: number } }).outcome?.status ?? null])).toEqual([
+    expect(outcomesOf(buffer).map((outcome) => [outcome.attemptId, (JSON.parse(outcome.json) as { outcome?: { status?: number } }).outcome?.status ?? null])).toEqual([
       [11, 200],
       [12, null],
     ]);
@@ -183,8 +193,8 @@ describe("writes", () => {
     buffer.acknowledgeOutcome(11);
     await buffer.flush();
     buffer = await reopen(buffer, root);
-    expect(buffer.outcomes().map((outcome) => outcome.attemptId)).toEqual([12]);
-    expect(buffer.stats().bytes).toBe(buffer.outcomes()[0]!.bytes);
+    expect(outcomesOf(buffer).map((outcome) => outcome.attemptId)).toEqual([12]);
+    expect(buffer.stats().bytes).toBe(outcomesOf(buffer)[0]!.bytes);
     // Outcomes are not events: no number.
     expect(await written(buffer.putOutcome(hubResult(13)))).toEqual({ ok: true, seq: null });
     expect(buffer.lastSeq).toBe(0);
@@ -482,6 +492,108 @@ describe("the caps (spec §5; plan §4.14)", () => {
   });
 });
 
+describe("space, failures and a buffer that cannot be opened (Astra's review of PR 11)", () => {
+  /** What the buffer's files take on the disk: the database and its WAL. */
+  const onDisk = (root: string) => readdirSync(join(root, "store")).reduce((sum, name) => sum + statSync(join(root, "store", name)).size, 0);
+  const sqliteFull = () => Object.assign(new Error("database or disk is full"), { code: "ERR_SQLITE_ERROR", errcode: 13, errstr: "database or disk is full" });
+
+  it("gives the space of acknowledged records back to the disk, step by step, until none is left: a drained buffer is not disk_full any more", async () => {
+    const root = dir();
+    // The disk's free space in units of a reserve (minFreeBytes 1): full
+    // below one unit, room again at two.
+    let capacity = Number.MAX_SAFE_INTEGER;
+    let unit = 1;
+    const buffer = open(root, { diskFree: () => Math.floor((capacity - onDisk(root)) / unit), minFreeBytes: 1, checkEveryMs: 20, reclaimEveryMs: 1 });
+    buffer.start();
+    // Big records: most of the file is theirs.
+    for (let n = 1; n <= 300; n++) buffer.append(wsFrame(n, 64 * 1024));
+    await buffer.flush();
+    const filled = onDisk(root);
+    expect(filled).toBeGreaterThan(20 * 1024 * 1024);
+    // The disk around the buffer fills up: 1 MiB left, a reserve of 45 %
+    // of what the buffer took — room again only once nearly all of it is
+    // the disk's again.
+    capacity = filled + 1024 * 1024;
+    unit = Math.floor(filled * 0.45);
+    buffer.check();
+    expect(buffer.refusal()).toBe("disk_full");
+    // The engine takes everything: the space must reach the disk, not stay
+    // inside SQLite's free pages and its WAL.
+    buffer.acknowledge(buffer.lastSeq);
+    await until(() => buffer.refusal() === null, 10_000, "room on the disk");
+    expect(all(buffer).map((event) => event.kind)).toEqual(["gap"]);
+    // And the rest follows, until no free page is left.
+    await until(() => onDisk(root) < 1024 * 1024, 10_000, "all of it given back");
+    expect(buffer.integrity()).toBe("ok");
+  });
+
+  it("gives back space left from before it opened, with nothing deleted since", async () => {
+    const root = dir();
+    let buffer = open(root);
+    for (let n = 1; n <= 200; n++) buffer.append(wsFrame(n, 32 * 1024));
+    await buffer.flush();
+    await buffer.close();
+    // A previous operator deleted it all and stopped before giving it back.
+    const db = new DatabaseSync(join(root, "store", DB_FILE));
+    db.exec("DELETE FROM events");
+    db.close();
+    const before = onDisk(root);
+    expect(before).toBeGreaterThan(6 * 1024 * 1024);
+    buffer = open(root, { reclaimEveryMs: 1 });
+    buffer.start();
+    await until(() => onDisk(root) < 1024 * 1024, 10_000, "the free pages given back");
+    expect(buffer.integrity()).toBe("ok");
+  });
+
+  it("tries a deletion that failed again until it goes, whatever the caps say — at a start, before any page start", async () => {
+    const root = dir();
+    let now = 10_000_000;
+    const first = open(root, { now: () => now });
+    await seqOf(first.append(wsFrame(1)));
+    await first.close();
+    // The operator starts again three days later: full by age.
+    now += 72 * 3600_000;
+    let faults = 1;
+    const room: string[] = [];
+    const buffer = open(root, {
+      now: () => now,
+      checkEveryMs: 20,
+      retryMs: [50],
+      onRoom: (reason) => room.push(reason),
+      // The engine's ack: its deletion fails once (a full disk).
+      commitFault: (batch) => (batch.deleteEventsUpTo !== null && faults-- > 0 ? sqliteFull() : null),
+    });
+    buffer.start();
+    expect(buffer.refusal()).toBe("buffer_full");
+    buffer.acknowledge(1);
+    await until(() => faults <= 0, 2000, "the deletion to fail once");
+    // Nothing more comes from the engine (its repeated ack would be the
+    // same number): the deletion is tried again by itself.
+    await until(() => buffer.refusal() === null, 3000, "the deletion tried again");
+    expect(room).toEqual(["buffer_full"]);
+    expect(all(buffer).map((event) => [event.seq, event.kind, event.reason])).toEqual([[2, "gap", "buffer_full"]]);
+  });
+
+  it("opens a buffer that was locked once the lock goes, and says so", async () => {
+    const root = dir();
+    const holder = open(root);
+    await seqOf(holder.append(wsFrame(1)));
+    let opened = 0;
+    const unavailable: BufferUnavailable[] = [];
+    const second = open(root, { openRetryMs: [20], onOpened: () => (opened += 1), onUnavailable: (reason) => unavailable.push(reason) });
+    second.start();
+    expect(unavailable).toEqual([expect.objectContaining({ cause: "locked", recoverable: true })]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(second.unavailable?.attempts).toBeGreaterThan(1);
+    expect(unavailable).toHaveLength(1); // the same cause is not said again
+    await holder.close();
+    await until(() => opened === 1, 3000, "the open");
+    expect(second.refusal()).toBeNull();
+    expect(second.lastSeq).toBe(1);
+    expect(await seqOf(second.append(wsFrame(2)))).toBe(2);
+  });
+});
+
 describe("a crash mid-write", () => {
   const child = fileURLToPath(new URL("./helpers/page-browser-buffer-child.ts", import.meta.url));
 
@@ -575,7 +687,7 @@ describe("the format (plan §4.10)", () => {
     expect(buffer.id).toBe("22222222-2222-4222-8222-222222222222");
     expect(buffer.lastSeq).toBe(7);
     expect(buffer.stats()).toMatchObject({ events: 2, outcomes: 1 });
-    expect(buffer.outcomes()[0]!.json).toBe(JSON.stringify(hubResult(99)));
+    expect(outcomesOf(buffer)[0]!.json).toBe(JSON.stringify(hubResult(99)));
     stream.subscribe(subscribe(buffer.id, 5));
     expect(seqs()).toEqual([6, 7]);
     expect(await seqOf(buffer.append(wsFrame(8)))).toBe(8);
@@ -597,7 +709,7 @@ describe("the format (plan §4.10)", () => {
     buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, V2] });
     expect(buffer.id).toBe(id);
     expect(all(buffer).map((event) => event.seq)).toEqual([1, 2, 3]);
-    expect(buffer.outcomes()).toHaveLength(1);
+    expect(outcomesOf(buffer)).toHaveLength(1);
     // Opened again: version 2 is not applied twice.
     buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, V2] });
     expect(await seqOf(buffer.append(wsFrame(4)))).toBe(4);
@@ -622,6 +734,18 @@ describe("the format (plan §4.10)", () => {
     buffer = open(breaking, { migrations: [...MIGRATIONS, { ...V2, readableFrom: 2 }] });
     await seqOf(buffer.append(wsFrame(1)));
     await buffer.close();
-    expect(() => open(breaking, { migrations: MIGRATIONS })).toThrow(BufferVersionError);
+    const before = readFileSync(join(breaking, "store", DB_FILE));
+    const unavailable: BufferUnavailable[] = [];
+    const older = open(breaking, { migrations: MIGRATIONS, openRetryMs: [10], onUnavailable: (reason) => unavailable.push(reason) });
+    older.start();
+    expect(unavailable).toEqual([expect.objectContaining({ cause: "too_new", recoverable: false })]);
+    expect(unavailable[0]!.detail).toMatch(/schema version 2, readable from 2/);
+    expect(await older.ready()).toMatchObject({ ok: false, reason: "buffer_unavailable" });
+    // Not tried again, and the file is as it was: it is the owner's.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(older.unavailable?.attempts).toBe(1);
+    await older.close();
+    expect(readFileSync(join(breaking, "store", DB_FILE)).equals(before)).toBe(true);
+    expect(new BufferVersionError("x")).toBeInstanceOf(Error);
   });
 });

@@ -9,7 +9,7 @@ import type { EventBody } from "../../apps/page-browser/src/buffer/buffer.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
 import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
-import { acceptWebSocket, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
+import { acceptWebSocket, clientHandshake, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
 
 // Fakes for the page browser's unit tests (Project Browser plan §3.3:
 // "the operator with a fake CDP"): Chrome's DevTools endpoint, the page's
@@ -423,8 +423,9 @@ export function wsFrame(n: number, pad = 0, connectionId = "conn-1"): EventBody 
   return { kind: "ws.in", connectionId, frame: `{"t":2,"d":"{\\"n\\":${n}}"}${"x".repeat(pad)}` };
 }
 
-/** A Hub request's outcome, as PR 9 will put it. */
-export function hubResult(attemptId: number, status = 200): Result {
+/** A Hub request's outcome, as PR 9 will put it (`pad`: a header that
+ *  makes it bigger). */
+export function hubResult(attemptId: number, status = 200, pad = 0): Result {
   return {
     type: "result",
     attemptId,
@@ -432,7 +433,7 @@ export function hubResult(attemptId: number, status = 200): Result {
     outcome: {
       kind: "response",
       status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...(pad > 0 ? { "x-pad": "x".repeat(pad) } : {}) },
       body: { bodyId: `00000000-0000-4000-8000-${String(attemptId).padStart(12, "0")}`, decodedBytes: 2, sha256: "b".repeat(64) },
       encodedBytes: 2,
       source: "network",
@@ -440,6 +441,61 @@ export function hubResult(attemptId: number, status = 200): Result {
       sendMark: "transport_reported",
     },
   };
+}
+
+/** The engine's end of the RPC on a raw socket that can stop reading — what
+ *  a slow or stuck engine looks like to the operator: its socket fills. It
+ *  keeps pinging meanwhile, so the link stays up. */
+export class RawEngine {
+  readonly messages: Array<Record<string, unknown>> = [];
+  generation = 1;
+  #socket: Socket | null = null;
+  #ws: WsConnection | null = null;
+  #pings: NodeJS.Timeout | null = null;
+  #n = 0;
+
+  async connect(port: number): Promise<void> {
+    const socket = tcpConnect({ host: "127.0.0.1", port });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    socket.on("error", () => undefined);
+    this.#socket = socket;
+    const ws = await clientHandshake(socket, `127.0.0.1:${port}`, "/rpc", 256 * 1024 * 1024);
+    ws.onText = (payload) => this.messages.push(JSON.parse(payload.toString("utf8")) as Record<string, unknown>);
+    this.#ws = ws;
+    this.#pings = setInterval(() => this.send({ type: "ping", n: ++this.#n, ownerGeneration: this.generation }), 50);
+  }
+
+  send(message: Record<string, unknown>): void {
+    this.#ws?.sendText(JSON.stringify(message));
+  }
+
+  /** Stops reading: what the operator sends waits in the sockets. */
+  pause(): void {
+    this.#socket?.pause();
+  }
+
+  resume(): void {
+    this.#socket?.resume();
+  }
+
+  of(type: string): Array<Record<string, unknown>> {
+    return this.messages.filter((message) => message.type === type);
+  }
+
+  async waitFor(type: string, predicate: (message: Record<string, unknown>) => boolean = () => true, timeoutMs = 5000): Promise<Record<string, unknown>> {
+    let found: Record<string, unknown> | undefined;
+    await until(() => (found = this.of(type).find(predicate)) !== undefined, timeoutMs, `a ${type} message`);
+    return found!;
+  }
+
+  close(): void {
+    if (this.#pings) clearInterval(this.#pings);
+    this.#pings = null;
+    this.#ws?.destroy("the test ends");
+  }
 }
 
 export const SOCKS_USER = "pb-user-7f3a";

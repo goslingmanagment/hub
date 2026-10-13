@@ -1,9 +1,12 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
+import { REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
+import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
@@ -17,6 +20,9 @@ import {
   hello,
   HolderUnderS6,
   hubResult,
+  proxyConnect,
+  quiet,
+  RawEngine,
   RPC_TOKEN,
   SOCKS_PASSWORD,
   SOCKS_USER,
@@ -43,6 +49,8 @@ afterEach(async () => {
 });
 
 interface SetUp {
+  /** The test's directory: the heartbeat is `alive` in it. */
+  dir: string;
   operator: Operator;
   engine: FakeEngine;
   chrome: FakeChrome;
@@ -59,7 +67,17 @@ interface SetUp {
   rpcPort: () => number;
 }
 
-async function setUp(options: { extension?: "required"; exitIp?: () => string | Promise<string>; holderMaxBytes?: number; params?: Record<string, unknown>; buffer?: OperatorDeps["buffer"] } = {}): Promise<SetUp> {
+async function setUp(
+  options: {
+    extension?: "required";
+    exitIp?: () => string | Promise<string>;
+    holderMaxBytes?: number;
+    params?: Record<string, unknown>;
+    buffer?: OperatorDeps["buffer"];
+    /** Before the operator: what its buffer volume holds. */
+    prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
+  } = {},
+): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -116,6 +134,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
     rpcPort = ports.rpcPort;
     return operator;
   };
+  options.prepare?.({ bufferDir: join(temp.dir, "buffer"), stateDir: join(temp.dir, "state") });
   const operator = await newOperator();
   await until(() => operator.cdp.linked, 3000, "the holder link");
   const engine = new FakeEngine();
@@ -123,7 +142,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
   cleanups.push(() => engine.close());
   engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
-  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
+  return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
@@ -765,5 +784,105 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
     await until(() => eventsOf(s.engine).length === 1, 3000, "the gap");
     expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" });
+  });
+});
+
+describe("the buffer under stress (Astra's review of PR 11)", () => {
+  it("replays a large backlog of outcomes a page at a time, waiting for a stuck engine's socket; repeated recovers do not pile up copies", async () => {
+    const s = await setUp();
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the engine to go");
+    // 3000 outcomes of ~6 KB: ~18 MB waiting for their resultAck.
+    const count = 3000;
+    const big = (attemptId: number) => hubResult(attemptId, 200, 6000);
+    for (let id = 1; id < count; id++) s.operator.buffer.putOutcome(big(id));
+    const last = s.operator.buffer.putOutcome(big(count));
+    if (!last.ok) throw new Error("refused");
+    await last.durable;
+    const engine = new RawEngine();
+    cleanups.push(() => engine.close());
+    await engine.connect(s.rpcPort());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    // The engine stops reading (stuck, or slow on its database).
+    engine.pause();
+    const peak = async (ms: number) => {
+      let max = 0;
+      for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 10))) max = Math.max(max, s.operator.rpc.backlog());
+      return max;
+    };
+    // What the operator holds for it stays small: no more than the mark
+    // and one outcome, not the backlog.
+    expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    // The engine asks again and again: the asks are merged, not stacked.
+    const ids = Array.from({ length: count }, (_, n) => n + 1);
+    for (let n = 0; n < 5; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: ids });
+    expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    expect(s.operator.replay.queued).toBeLessThanOrEqual(1);
+    // It reads again: every outcome once from the replay, once for the
+    // merged recover, then one answer that names them all.
+    engine.resume();
+    const answer = await engine.waitFor("recoverResult", () => true, 30_000);
+    expect((answer.attempts as Array<{ state: string }>).every((attempt) => attempt.state === "outcome_resent")).toBe(true);
+    expect((answer.attempts as unknown[]).length).toBe(count);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(engine.of("recoverResult")).toHaveLength(1);
+    expect(engine.of("result")).toHaveLength(2 * count);
+    expect(new Set(engine.of("result").map((result) => result.attemptId)).size).toBe(count);
+  }, 60_000);
+
+  it("a corrupt buffer does not take the operator down: the RPC, the heartbeat and the refusing proxy run, the page stands with buffer_unavailable, the engine is alarmed, Chrome never starts, the file stays as it is", async () => {
+    const garbage = Buffer.from("this is not a database, but the owner's to look at. ".repeat(100));
+    let file = "";
+    const s = await setUp({
+      buffer: { openRetryMs: [20] },
+      prepare: ({ bufferDir }) => {
+        mkdirSync(bufferDir, { recursive: true });
+        file = join(bufferDir, DB_FILE);
+        writeFileSync(file, garbage);
+      },
+    });
+    expect(s.engine.last("helloResult")).toMatchObject({ ok: true, state: { stopReason: "buffer_unavailable", exitOpen: false } });
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "buffer");
+    expect(alarm.detail).toMatchObject({ unavailable: true, cause: "corrupt", recoverable: false });
+    // The heartbeat goes on.
+    const beat = statSync(join(s.dir, "alive")).mtimeMs;
+    await until(() => statSync(join(s.dir, "alive")).mtimeMs > beat, 3000, "a heartbeat");
+    // The proxy is there, and refuses.
+    const { status, socket } = await proxyConnect(s.model.proxyPort, "apiv3.fansly.com:443");
+    socket.destroy();
+    expect(status).toBe(403);
+    // The engine's start goes no further than the gate: no Chrome.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "buffer_unavailable" && !s.operator.page.halted, 5000, "the start to fail at the gate");
+    expect(s.control.calls).not.toContain("start");
+    expect(s.operator.admissionsOpen()).toBe(false);
+    // A subscription is refused, saying why.
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    expect(await s.engine.waitFor("events.refused")).toMatchObject({ reason: "unavailable" });
+    // Not opened again, and the file is exactly as it was.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.buffer.unavailable?.attempts).toBe(1);
+    expect(readFileSync(file).equals(garbage)).toBe(true);
+  });
+
+  it("a locked buffer is opened again once the lock goes: the page then stands as usual and starts on the engine's word", async () => {
+    let holder: EventBuffer | null = null;
+    const s = await setUp({
+      buffer: { openRetryMs: [50] },
+      prepare: ({ bufferDir, stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        holder = new EventBuffer({ dir: bufferDir, idFile: join(stateDir, "buffer-id"), minFreeBytes: 0, log: quiet });
+      },
+    });
+    const held = holder as unknown as EventBuffer;
+    // The id the buffer had, from its copy.
+    expect(s.engine.last("helloResult")).toMatchObject({ bufferId: held.id, state: { stopReason: "buffer_unavailable" } });
+    expect((await s.engine.waitFor("alarm", (message) => message.kind === "buffer")).detail).toMatchObject({ unavailable: true, cause: "locked", recoverable: true });
+    await held.close();
+    await until(() => s.operator.buffer.unavailable === null, 5000, "the open");
+    expect(s.operator.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
+    await s.engine.waitFor("state", (state) => state.stopReason === null);
+    await started(s);
   });
 });

@@ -11,8 +11,14 @@
 //   second operator on the same volume cannot open it (it would give the
 //   same numbers twice). The wal-index lives in the process, no -shm file.
 // - auto_vacuum=INCREMENTAL: acknowledged rows are deleted in chunks and
-//   their pages given back a little at a time (plan §4.4, step 4).
+//   their pages given back a little at a time (plan §4.4, step 4) by
+//   `reclaim`, which the buffer runs in bounded steps for as long as free
+//   pages remain — and truncates the WAL after each, so the disk gets the
+//   space back, not only SQLite.
 // - journal_size_limit: the WAL file shrinks back after a checkpoint.
+// - The open does not wait for a lock (busy_timeout 0): a buffer another
+//   process holds is reported at once and opened again later, not waited
+//   for on the event loop.
 //
 // Synchronous on purpose: the buffer's writer batches (≤ 20 ms, plan §4.14)
 // so the event loop waits for one fsync per batch, not per event. If the
@@ -24,7 +30,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
-import { MIGRATIONS, migrate, ROW_FORMAT, type Migration, type SchemaState } from "./schema.ts";
+import { BufferVersionError, MIGRATIONS, migrate, ROW_FORMAT, type Migration, type SchemaState } from "./schema.ts";
 
 export const DB_FILE = "buffer.sqlite";
 
@@ -85,6 +91,25 @@ export interface Totals {
   oldestOutcomeWall: number | null;
 }
 
+/** Why a buffer could not be opened (buffer.ts reports it). `locked` and
+ *  `io` may pass: the open is tried again. `corrupt` and `too_new` stay for
+ *  the owner: the file is never replaced or deleted. */
+export type OpenCause = "locked" | "corrupt" | "too_new" | "io";
+
+export function openFailure(error: unknown): { cause: OpenCause; recoverable: boolean } {
+  if (error instanceof BufferVersionError) return { cause: "too_new", recoverable: false };
+  const errcode = (error as { errcode?: unknown }).errcode;
+  if (typeof errcode === "number") {
+    const primary = errcode & 0xff;
+    // SQLITE_BUSY, SQLITE_LOCKED
+    if (primary === 5 || primary === 6) return { cause: "locked", recoverable: true };
+    // SQLITE_CORRUPT, SQLITE_NOTADB
+    if (primary === 11 || primary === 26) return { cause: "corrupt", recoverable: false };
+  }
+  // A full or failing disk, a directory that could not be made...
+  return { cause: "io", recoverable: true };
+}
+
 export interface StoreOptions {
   /** The directory of the database (on the buffer volume). */
   dir: string;
@@ -95,10 +120,10 @@ export interface StoreOptions {
   migrations?: readonly Migration[];
   /** Tests: SQLite's own "database or disk is full" past this many pages. */
   maxPages?: number;
+  /** Tests: an error to fail a commit with, inside its transaction. */
+  commitFault?: (batch: Commit) => Error | null;
 }
 
-/** Pages given back to the file system after a delete (4 KiB each). */
-const VACUUM_PAGES = 512;
 const WAL_LIMIT_BYTES = 64 * 1024 * 1024;
 
 function row(statement: StatementSync, ...params: Array<number | string | null>): Record<string, unknown> | undefined {
@@ -125,7 +150,9 @@ export class BufferStore {
   readonly #first: StatementSync;
   readonly #oldestOutcome: StatementSync;
   readonly #outcome: StatementSync;
-  readonly #allOutcomes: StatementSync;
+  readonly #outcomeSizes: StatementSync;
+  readonly #outcomeRange: StatementSync;
+  readonly #commitFault: StoreOptions["commitFault"];
   #lastSeq: number;
   #lastWall: number | null;
   #closed = false;
@@ -136,10 +163,13 @@ export class BufferStore {
     const db = new DatabaseSync(this.path);
     try {
       // The order matters: exclusive before WAL (no shared memory), auto
-      // vacuum before the first table.
+      // vacuum before the first table — and only then: on a file that has
+      // tables it rewrites the header, and a file this operator refuses
+      // (too new, corrupt) must stay exactly as it is. The first read takes
+      // the lock (or finds it taken) and finds a file that is no database.
       db.exec("PRAGMA locking_mode = EXCLUSIVE");
-      db.exec("PRAGMA busy_timeout = 2000");
-      db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+      db.exec("PRAGMA busy_timeout = 0");
+      if ((db.prepare("SELECT count(*) AS n FROM sqlite_schema").get() as { n: number }).n === 0) db.exec("PRAGMA auto_vacuum = INCREMENTAL");
       const mode = (db.prepare("PRAGMA journal_mode = WAL").get() as { journal_mode?: string } | undefined)?.journal_mode;
       if (mode !== "wal") throw new Error(`the buffer could not enter WAL mode (${String(mode)})`);
       db.exec("PRAGMA synchronous = FULL");
@@ -174,7 +204,9 @@ export class BufferStore {
     this.#first = db.prepare("SELECT seq, at_wall FROM events ORDER BY seq LIMIT 1");
     this.#oldestOutcome = db.prepare("SELECT min(at_wall) AS at_wall FROM outcomes");
     this.#outcome = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id = ?");
-    this.#allOutcomes = db.prepare("SELECT attempt_id, json, bytes FROM outcomes ORDER BY at_wall, attempt_id");
+    this.#outcomeSizes = db.prepare("SELECT attempt_id, bytes FROM outcomes WHERE attempt_id > ? ORDER BY attempt_id LIMIT ?");
+    this.#outcomeRange = db.prepare("SELECT attempt_id, json, bytes FROM outcomes WHERE attempt_id > ? AND attempt_id <= ? ORDER BY attempt_id");
+    this.#commitFault = options.commitFault;
     syncIdFile(options.idFile, this.id);
   }
 
@@ -199,6 +231,8 @@ export class BufferStore {
     const result: Committed = { insertedOutcomes: [], addedBytes: 0, deletedBytes: 0, deletedEvents: 0, deletedOutcomes: 0 };
     db.exec("BEGIN IMMEDIATE");
     try {
+      const fault = this.#commitFault?.(batch);
+      if (fault) throw fault;
       let lastSeq = this.#lastSeq;
       let lastWall = this.#lastWall;
       for (const event of batch.events) {
@@ -229,7 +263,6 @@ export class BufferStore {
         this.#setMeta.run(String(lastSeq), "last_seq");
         this.#setMeta.run(lastWall === null ? "" : String(lastWall), "last_wall");
       }
-      if (result.deletedEvents > 0 || result.deletedOutcomes > 0) db.prepare(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`).all();
       db.exec("COMMIT");
       this.#lastSeq = lastSeq;
       this.#lastWall = lastWall;
@@ -269,10 +302,42 @@ export class BufferStore {
     return (this.#readRange.all(afterSeq, upto) as Array<{ seq: number; bytes: number; json: string }>).map((event) => ({ seq: Number(event.seq), json: event.json, bytes: Number(event.bytes) }));
   }
 
-  /** The stored outcomes of these attempts, or all of them (oldest first). */
-  outcomes(attemptIds?: readonly number[]): StoredOutcome[] {
-    const rows = attemptIds === undefined ? (this.#allOutcomes.all() as Array<Record<string, unknown>>) : attemptIds.map((id) => row(this.#outcome, id)).filter((found) => found !== undefined);
-    return rows.map((found) => ({ attemptId: Number(found.attempt_id), json: String(found.json), bytes: Number(found.bytes) }));
+  /** The stored outcomes of these attempts. */
+  outcomes(attemptIds: readonly number[]): StoredOutcome[] {
+    return attemptIds
+      .map((id) => row(this.#outcome, id))
+      .filter((found) => found !== undefined)
+      .map((found) => ({ attemptId: Number(found.attempt_id), json: String(found.json), bytes: Number(found.bytes) }));
+  }
+
+  /** Outcomes after `afterAttemptId` by attempt id, a page at a time: at
+   *  most `maxCount`, no more than `maxBytes` — but always the first. */
+  outcomePage(afterAttemptId: number, maxCount: number, maxBytes: number): StoredOutcome[] {
+    const sizes = this.#outcomeSizes.all(afterAttemptId, Math.max(1, Math.floor(maxCount))) as Array<{ attempt_id: number; bytes: number }>;
+    if (sizes.length === 0) return [];
+    let upto = sizes[0]!.attempt_id;
+    let bytes = sizes[0]!.bytes;
+    for (const size of sizes.slice(1)) {
+      bytes += size.bytes;
+      if (bytes > maxBytes) break;
+      upto = size.attempt_id;
+    }
+    return (this.#outcomeRange.all(afterAttemptId, upto) as Array<{ attempt_id: number; json: string; bytes: number }>).map((found) => ({ attemptId: Number(found.attempt_id), json: found.json, bytes: Number(found.bytes) }));
+  }
+
+  /** Pages SQLite holds free (deleted rows), not yet given back. */
+  freePages(): number {
+    return Number(row(this.#db.prepare("PRAGMA freelist_count"))?.freelist_count ?? 0);
+  }
+
+  /** One bounded step of giving space back: up to `pages` free pages out of
+   *  the file (their own commit), then the WAL checkpointed and truncated —
+   *  in WAL mode the file only shrinks at a checkpoint. Returns the free
+   *  pages left. */
+  reclaim(pages: number): number {
+    this.#db.exec(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(pages))})`);
+    this.#db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").all();
+    return this.freePages();
   }
 
   hasOutcome(attemptId: number): boolean {
