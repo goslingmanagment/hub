@@ -37,7 +37,7 @@ import type { Duplex } from "node:stream";
 
 import { CommandLedger, type CommandOutcome } from "./ledger.ts";
 import type { GenerationStore } from "./generation.ts";
-import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type HubMessage, type OperatorToEngine, type State, type WsAdmitResult } from "./protocol.ts";
+import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type HubMessage, type OperatorToEngine, type SiteAdmitResult, type State, type WsAdmitResult } from "./protocol.ts";
 import { acceptWebSocket, type WsConnection } from "../shared/ws.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
 
@@ -59,6 +59,10 @@ export interface RpcHandlers {
   /** The engine's answer to a socket's admission (PR 10), of this
    *  connection's generation. */
   onSocket?: (message: WsAdmitResult) => void;
+  /** The engine's answer to a site request's admission (PR 14), of this
+   *  connection's generation. Without a handler it is dropped: this
+   *  operator asks for none before PR 7. */
+  onSite?: (message: SiteAdmitResult) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
 }
@@ -416,6 +420,10 @@ export class RpcServer {
       case "wsAdmitResult":
         this.#lastHeard = monoMs();
         this.#options.handlers.onSocket?.(message);
+        return;
+      case "siteAdmitResult":
+        this.#lastHeard = monoMs();
+        this.#options.handlers.onSite?.(message);
         return;
     }
   }
