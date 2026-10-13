@@ -6,8 +6,10 @@
 // page never served, `[Media Bundle: 2 Photos, 1 Video]` for a bundle (its
 // photos and videos among the members the page served; `[Media Bundle]` when
 // none or the bundle itself is unknown), and no label for an attachment that
-// is not media (a tip, a story reply). The PPV suffix and the tip label stay
-// the normalizer's (transcript/normalize.ts).
+// is not media (a tip, a story reply). The tip label stays the normalizer's
+// (transcript/normalize.ts). A paid attachment's PPV mark is its own
+// (context/fansly-ppv.ts, R20 HF-7в); only a message whose attachments the
+// media plane has not recorded yet keeps the normalizer's message-level suffix.
 //
 // The sources, per arm of the transcript:
 //  - a stored row: its `media_metadata` (id, MIME type, `bundle`, `other`);
@@ -103,10 +105,12 @@ export type FanslyTranscriptAttachment =
   | { ref: string; as: "media"; media: FanslyMediaKindRow | null }
   | { ref: string; as: "bundle" };
 
-/** The attachment as the media plane recorded it: its place and content type. */
+/** The attachment as the media plane recorded it: its place and content type
+ *  (and, R20 HF-7в, the permission rows of its media or bundle). */
 export interface FanslyRecordedOffer {
   ordinal: number;
   contentType: number | null;
+  permissionEntries?: readonly unknown[];
 }
 
 /**
@@ -183,37 +187,56 @@ function needsRecordedOffers(mediaMetadata: ReadonlyArray<Record<string, unknown
     || mediaMetadata.some((item) => typeof item.type !== "string" || item.type === "other");
 }
 
+/** The served Fansly messages a media read is asked about. */
+export interface FanslyMediaReadInput {
+  pageId: number;
+  stored: ReadonlyArray<{ messageRef: string; mediaMetadata: ReadonlyArray<Record<string, unknown>> }>;
+  live: ReadonlyArray<{ messageRef: string; attachments: ReadonlyArray<{ contentType: number; contentId: string }> }>;
+}
+
+/** What one media read found: each message's attachments, what the media
+ *  plane recorded of the stored ones, and the kinds of their files. */
+export interface FanslyMessageMedia {
+  /** Message ref → its attachments the transcript shows, in order. */
+  attachments: Map<string, FanslyTranscriptAttachment[]>;
+  /** Stored message ref → content ref → the recorded attachment. */
+  offers: Map<string, Map<string, FanslyRecordedOffer>>;
+  kinds: FanslyMediaKinds;
+}
+
 /**
- * The media label bodies of the served Fansly messages, keyed by message ref
- * (only messages with at least one): the normalizer's
- * `mediaLabelBodiesByMessageId`. Reads the media plane only for what the
- * served rows leave open.
+ * Reads what the served rows leave open: the recorded attachments (by
+ * default only of a row whose order or kinds need them; `allStoredOffers`:
+ * of every stored row with media, R20 HF-7в's per-attachment price) and the
+ * kinds of the files no row named.
  */
-export async function loadFanslyMediaLabelBodies(
+export async function readFanslyMessageMedia(
   app: Pick<AppContext, "db">,
-  input: {
-    pageId: number;
-    stored: ReadonlyArray<{ messageRef: string; mediaMetadata: ReadonlyArray<Record<string, unknown>> }>;
-    live: ReadonlyArray<{ messageRef: string; attachments: ReadonlyArray<{ contentType: number; contentId: string }> }>;
-  },
-): Promise<Map<string, string[]>> {
+  input: FanslyMediaReadInput,
+  options: { allStoredOffers?: boolean } = {},
+): Promise<FanslyMessageMedia> {
   const stored = input.stored.filter((row) => row.mediaMetadata.length > 0);
   const live = input.live.filter((message) => message.attachments.length > 0);
-  const bodies = new Map<string, string[]>();
+  const offers = new Map<string, Map<string, FanslyRecordedOffer>>();
   if (stored.length === 0 && live.length === 0) {
-    return bodies;
+    return { attachments: new Map(), offers, kinds: { bundles: new Map(), media: new Map() } };
   }
 
   const offerRows = await listFanslyMessageOffers(app.db, {
     pageId: input.pageId,
-    messageRefs: stored.filter((row) => needsRecordedOffers(row.mediaMetadata)).map((row) => row.messageRef),
+    messageRefs: stored
+      .filter((row) => options.allStoredOffers === true || needsRecordedOffers(row.mediaMetadata))
+      .map((row) => row.messageRef),
   });
-  const offers = new Map<string, Map<string, FanslyRecordedOffer>>();
   for (const row of offerRows) {
     const byRef = offers.get(row.messageRef) ?? new Map<string, FanslyRecordedOffer>();
     offers.set(row.messageRef, byRef);
     if (!byRef.has(row.contentRef)) {
-      byRef.set(row.contentRef, { ordinal: row.ordinal, contentType: row.contentType });
+      byRef.set(row.contentRef, {
+        ordinal: row.ordinal,
+        contentType: row.contentType,
+        permissionEntries: row.permissionEntries,
+      });
     }
   }
 
@@ -227,11 +250,30 @@ export async function loadFanslyMediaLabelBodies(
   const kinds: FanslyMediaKinds = bundleRefs.length === 0 && mediaRefs.length === 0
     ? { bundles: new Map(), media: new Map() }
     : await readFanslyMediaKinds(app.db, { pageId: input.pageId, bundleRefs, mediaRefs });
+  return { attachments, offers, kinds };
+}
 
-  for (const [messageRef, items] of attachments) {
+/** Message ref → its label bodies, for the messages with at least one. */
+export function fanslyMediaLabelBodiesOf(media: FanslyMessageMedia): Map<string, string[]> {
+  const bodies = new Map<string, string[]>();
+  for (const [messageRef, items] of media.attachments) {
     if (items.length > 0) {
-      bodies.set(messageRef, fanslyAttachmentBodies(items, kinds));
+      bodies.set(messageRef, fanslyAttachmentBodies(items, media.kinds));
     }
   }
   return bodies;
+}
+
+/**
+ * The media label bodies of the served Fansly messages, keyed by message ref
+ * (only messages with at least one): the normalizer's
+ * `mediaLabelBodiesByMessageId`, and the archive feed's captions. Reads the
+ * media plane only for what the served rows leave open. No price or purchase
+ * state: the transcript's are context/fansly-ppv.ts's.
+ */
+export async function loadFanslyMediaLabelBodies(
+  app: Pick<AppContext, "db">,
+  input: FanslyMediaReadInput,
+): Promise<Map<string, string[]>> {
+  return fanslyMediaLabelBodiesOf(await readFanslyMessageMedia(app, input));
 }

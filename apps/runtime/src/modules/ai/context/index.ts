@@ -33,13 +33,15 @@ import {
   type AiContextSource,
   type TranscriptServedSnapshot,
 } from "./context-frame.ts";
-import { loadFanslyMediaLabelBodies, readsMaterialHeadMedia } from "./fansly-media.ts";
+import { readsMaterialHeadMedia } from "./fansly-media.ts";
+import { loadFanslyTranscriptMediaLabels, type FanslyTranscriptMediaLabels } from "./fansly-ppv.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./chat-access.ts";
 export * from "./context-frame.ts";
 export * from "./fansly-fan-identity.ts";
 export * from "./fansly-media.ts";
+export * from "./fansly-ppv.ts";
 export * from "./hi-start-proof.ts";
 export * from "./live-text.ts";
 export * from "./media-notes.ts";
@@ -51,8 +53,10 @@ export * from "./ping-summary.ts";
 // SAME migrated formatters. Where the kernel lacks a vendor field the gap
 // is NAMED here (assumption 1: escalate, never approximate silently):
 //  - PPV purchased-state: message_archive keeps price/tip but not
-//    isOpened/isFree → PPV labels render the 'unknown' state until the
-//    archive learns purchase state (parity harness will surface it).
+//    isOpened/isFree → an OnlyFans archive read renders PPV labels in the
+//    'unknown' state (the union read supplies isOpened). A Fansly row's
+//    paid attachments are marked one by one from the media plane, its
+//    orders and its order-history walks (fansly-ppv.ts, R20 HF-7в).
 //  - Spending `sums`: the desktop passes the vendor's own summary object;
 //    the kernel derives the same sums from its transactions ledger.
 
@@ -266,12 +270,15 @@ export async function loadTranscriptContext(
   // attachments. Fansly rows only: an OnlyFans archive row is shaped without
   // media as before, and the union (OnlyFans) reads OFAPI's media list. A
   // failed read is not a failed generation: the messages serve without their
-  // media labels, and the manifest says so.
-  let fanslyMediaLabels = new Map<string, string[]>();
+  // media labels, and the manifest says so. R20 HF-7в: a paid attachment of a
+  // stored row carries its own purchase mark (fansly-ppv.ts); a failed
+  // purchase read leaves the marks `unknown`, and the manifest says so.
+  let fanslyMedia: FanslyTranscriptMediaLabels | null = null;
   let fanslyMediaError = false;
   try {
-    fanslyMediaLabels = await loadFanslyMediaLabelBodies(app, {
+    fanslyMedia = await loadFanslyTranscriptMediaLabels(app, {
       pageId: input.pageId,
+      conversationRef: input.conversationRef,
       stored: liveUnion !== null
         ? liveUnion.flatMap((item) => item.source === "rest" && readsMaterialHeadMedia(item.row.platform) ? [item.row] : [])
         : serveUnion ? [] : archiveRows.filter((row) => readsMaterialHeadMedia(row.platform)),
@@ -292,7 +299,12 @@ export async function loadTranscriptContext(
     : []);
   const messages = normalizeTranscriptMessages(
     shaped,
-    fanslyMediaLabels.size > 0 ? { mediaLabelBodiesByMessageId: fanslyMediaLabels } : {},
+    fanslyMedia !== null && fanslyMedia.bodies.size > 0
+      ? {
+        mediaLabelBodiesByMessageId: fanslyMedia.bodies,
+        ...(fanslyMedia.ppvMarked.size > 0 ? { mediaLabelBodiesCarryPpv: fanslyMedia.ppvMarked } : {}),
+      }
+      : {},
   ).slice(-limit).map((message) => (
     unconfirmedIds.has(message.id)
       ? { ...message, labels: [...message.labels, UNCONFIRMED_SOCKET_MESSAGE_LABEL] }
@@ -340,6 +352,10 @@ export async function loadTranscriptContext(
     // Only on a failed media read, so every other generation records what it
     // recorded before.
     ...(fanslyMediaError ? { fanslyMediaError: true } : {}),
+    // R20 HF-7в, only when a served Fansly attachment is paid: how many, and
+    // how many of them the hub could call bought or not bought (counts only).
+    ...(fanslyMedia?.ppv ? { fanslyPpv: fanslyMedia.ppv } : {}),
+    ...(fanslyMedia?.ppvError ? { fanslyPpvError: true } : {}),
   };
 
   const mediaByMessage = new Map<string, OnlyFansMessageMedia>();

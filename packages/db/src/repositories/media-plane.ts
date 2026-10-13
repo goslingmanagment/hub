@@ -578,6 +578,10 @@ export interface FanslyMessageOfferRow {
   ordinal: number;
   /** Fansly's attachment `contentType`: 1 a media, 2 a bundle, 7 a tip. */
   contentType: number | null;
+  /** R20 HF-7в: the `permissions.permissionFlags[]` rows the page served for
+   *  the attachment's media or bundle, verbatim (empty when it served none):
+   *  whether the attachment is paid, and its price, are read from them. */
+  permissionEntries: unknown[];
 }
 
 /** The attachments of these Fansly messages of a page, each message's in
@@ -594,8 +598,9 @@ export async function listFanslyMessageOffers(
     media_offer_ref: string;
     offer_ordinal: number;
     offer_type: number | null;
+    permission_entries: unknown;
   }>(sql`
-    select message_ref, media_offer_ref, offer_ordinal, offer_type
+    select message_ref, media_offer_ref, offer_ordinal, offer_type, permission_entries
     from message_media_offers
     where page_id = ${input.pageId}
       and platform = 'fansly'
@@ -608,6 +613,7 @@ export async function listFanslyMessageOffers(
     contentRef: row.media_offer_ref,
     ordinal: Number(row.offer_ordinal),
     contentType: row.offer_type === null ? null : Number(row.offer_type),
+    permissionEntries: Array.isArray(row.permission_entries) ? row.permission_entries : [],
   }));
 }
 
@@ -681,4 +687,138 @@ export async function readFanslyMediaKinds(
     }
   }
   return kinds;
+}
+
+// ── R20 HF-7в: did the Fansly fan buy a paid attachment ─────────────────────
+//
+// «Bought» is an order of the fan in media_orders. «Not bought» needs more than
+// the absence of one: the hub must have read the target's whole order history
+// (the Sync Engine's `purchases.targets` walk, one work row per media or
+// bundle, apps/runtime/src/sync/fansly/resources/purchases.ts) and every order
+// that walk read must have reached media_orders. Three facts per target say
+// whether it has: the target's latest walk, whether every page its walks read
+// is canonicalized (the engine journals a page; the minutely driver turns it
+// into `media.order_observed`), and whether an order of this fan still waits
+// above the media plane's watermark.
+
+/** The Sync Engine's purchase walks (`PURCHASES_TARGETS_KEY`). */
+export const FANSLY_PURCHASE_WALK_RESOURCE = "purchases.targets";
+/** The media-plane projector (`MEDIA_PLANE_PROJECTION`): the writer of media_orders. */
+export const MEDIA_PLANE_PROJECTION_NAME = "media_plane";
+
+export type FanslyPurchaseTargetKind = "media" | "bundle";
+
+/** A target's walk subject, as the purchases resource names it. */
+export function fanslyPurchaseWalkSubject(target: { kind: FanslyPurchaseTargetKind; ref: string }): string {
+  return `${target.kind}:${target.ref}`;
+}
+
+export interface FanslyPurchaseOrderRow {
+  /** The order's media or bundle (a bundle order's bundle id). */
+  mediaOfferRef: string;
+  /** Set when the order row named its bundle apart (`accountMediaBundleId`). */
+  bundleRef: string | null;
+  /** Fansly's order `type`: 1 a single media, 2 a bundle. */
+  orderType: number | null;
+}
+
+export interface FanslyPurchaseWalkRow {
+  /** The latest walk's state and why it closed. */
+  state: string;
+  closeReason: string | null;
+  /** A page one of the target's walks read is not canonicalized yet. */
+  pagesPending: boolean;
+}
+
+export interface FanslyPurchaseFacts {
+  /** The fan's orders of the targets (media_orders). */
+  orders: FanslyPurchaseOrderRow[];
+  /** By walk subject (`media:<id>` | `bundle:<id>`); a target never walked is absent. */
+  walks: Map<string, FanslyPurchaseWalkRow>;
+  /** The targets with an order of the fan the media plane has not projected yet. */
+  ordersPending: Set<string>;
+}
+
+/**
+ * What the hub knows about one fan's purchases of these targets of a Fansly
+ * page. Three indexed reads: media_orders by its key, the targets' walk rows
+ * (`sync_work_key_recent`), and the page's events above the media plane's
+ * watermark (`(account_id, account_seq)`). Shadow walks are not the page's.
+ */
+export async function readFanslyPurchaseFacts(
+  db: Database,
+  input: {
+    pageId: number;
+    buyerRef: string;
+    targets: ReadonlyArray<{ kind: FanslyPurchaseTargetKind; ref: string }>;
+  },
+): Promise<FanslyPurchaseFacts> {
+  const facts: FanslyPurchaseFacts = { orders: [], walks: new Map(), ordersPending: new Set() };
+  if (input.targets.length === 0) {
+    return facts;
+  }
+  const refs = textArrayParam([...new Set(input.targets.map((target) => target.ref))]);
+  const subjects = textArrayParam([...new Set(input.targets.map(fanslyPurchaseWalkSubject))]);
+
+  const orders = await db.execute<{ media_offer_ref: string; bundle_ref: string | null; order_type: number | null }>(sql`
+    select media_offer_ref, bundle_ref, order_type
+    from media_orders
+    where page_id = ${input.pageId}
+      and platform = 'fansly'
+      and buyer_platform_user_id = ${input.buyerRef}
+      and media_offer_ref = any(${refs})
+    order by media_offer_ref, occurred_at
+  `);
+  facts.orders = orders.rows.map((row) => ({
+    mediaOfferRef: row.media_offer_ref,
+    bundleRef: row.bundle_ref,
+    orderType: row.order_type === null ? null : Number(row.order_type),
+  }));
+
+  const walks = await db.execute<{ subject: string; state: string; close_reason: string | null; pages_pending: boolean }>(sql`
+    select distinct on (w.subject) w.subject, w.state, w.close_reason,
+      exists (
+        select 1
+          from sync_work earlier
+          join sync_attempts a on a.work_id = earlier.id
+          join observations o on o.id = a.observation_id and o.received_at = a.observation_received_at
+         where earlier.page_id = w.page_id
+           and earlier.resource = w.resource
+           and earlier.subject = w.subject
+           and earlier.shadow = false
+           and earlier.id <= w.id
+           and o.kind = 'purchase_history'
+           and o.parse_version = 0
+      ) as pages_pending
+    from sync_work w
+    where w.page_id = ${input.pageId}
+      and w.resource = ${FANSLY_PURCHASE_WALK_RESOURCE}
+      and w.shadow = false
+      and w.subject = any(${subjects})
+    order by w.subject, w.id desc
+  `);
+  for (const row of walks.rows) {
+    facts.walks.set(row.subject, {
+      state: row.state,
+      closeReason: row.close_reason,
+      pagesPending: row.pages_pending === true,
+    });
+  }
+
+  const pending = await db.execute<{ ref: string }>(sql`
+    select distinct de.data->>'mediaOfferRef' as ref
+    from domain_events de
+    where de.account_id = ${input.pageId}
+      and de.account_seq > coalesce((
+        select w.high_seq from projection_seq_watermarks w
+         where w.projection = ${MEDIA_PLANE_PROJECTION_NAME} and w.account_id = ${input.pageId}
+      ), 0)
+      and de.type = 'media.order_observed'
+      and de.fan_identity_ref = ${input.buyerRef}
+      and de.data->>'mediaOfferRef' = any(${refs})
+  `);
+  for (const row of pending.rows) {
+    if (row.ref !== null) facts.ordersPending.add(row.ref);
+  }
+  return facts;
 }
