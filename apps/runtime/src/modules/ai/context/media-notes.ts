@@ -262,7 +262,8 @@ export function renderFanslyMediaNotes(input: {
 // ── OnlyFans: the hub builds the labels itself ─────────────────────────────
 
 export interface OnlyFansMessageMedia {
-  messageId: number;
+  /** The transcript's message id: the exact ref (HF-8a). */
+  messageId: string;
   sender: "fan" | "model";
   paid: boolean;
   media: ReadonlyArray<{ id: string; type: string | null }>;
@@ -274,7 +275,7 @@ const OF_KINDS: Record<string, MediaNoteKind> = { photo: "photo", video: "video"
  * PPV bodies are never listed (teasers arrive with H4). */
 export function listOnlyFansMediaNoteItems(
   messages: readonly TranscriptMessage[],
-  mediaByMessage: ReadonlyMap<number, OnlyFansMessageMedia>,
+  mediaByMessage: ReadonlyMap<string, OnlyFansMessageMedia>,
 ): MediaNoteItem[] {
   const items: MediaNoteItem[] = [];
   let n = 0;
@@ -293,7 +294,7 @@ export function listOnlyFansMediaNoteItems(
       items.push({
         n,
         placement: single ? "inline" : "appended",
-        messageId: String(message.id),
+        messageId: message.id,
         sentAt: message.createdAtMs,
         sender: entry.sender,
         kind,
@@ -321,7 +322,7 @@ export function applyOnlyFansMediaNotes(input: {
   // Reuse the Fansly renderer on a per-message label string so both lanes
   // share one set of rules (limits, sanitizing, not-recognized).
   const labelled = input.messages.map((message) => {
-    const items = byMessage.get(String(message.id));
+    const items = byMessage.get(message.id);
     if (!items || items.length === 0) {
       return message;
     }

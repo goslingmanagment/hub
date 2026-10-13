@@ -42,6 +42,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // subscribers" list. With it the hub serves all of `newcomers`; the owner's
   // switches decide from here on.
   "audience-new-v1",
+  // R20 HF-3: the claim route takes a manual greeting group (no AI generation)
+  // and admits the greeting custody by platform (client-claim-admission.ts).
+  // Nothing on Fansly is reachable through it until `newcomers` exists there.
+  "manual-greeting-v1",
 ];
 
 /**

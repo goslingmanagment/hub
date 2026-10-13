@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0270_sync_attempts_origin.sql
+-- 0271_sync_attempts_origin.sql
 --
 -- Project Browser (docs/plans/project-browser/plan.md §3.2; stage 3 PR 8): a
 -- page's browser sends requests the engine did not choose — the site's own
@@ -90,4 +90,4 @@ $do$;
 alter table sync_attempts validate constraint sync_attempts_origin_check;
 -- agency-hub:statement
 comment on column sync_attempts.origin is
-  'Whose request (Project Browser, 0270): engine (a work''s send), site (the page''s own site request) or login (an operation of the owner''s manual login). A site or login attempt has class site and no work.';
+  'Whose request (Project Browser, 0271): engine (a work''s send), site (the page''s own site request) or login (an operation of the owner''s manual login). A site or login attempt has class site and no work.';

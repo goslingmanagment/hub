@@ -4,13 +4,16 @@
 // the parity harness.
 import type { PpvState } from '../types.ts';
 import { htmlToPlainText } from './html.ts';
+import { compareMessageRefs } from './message-ref.ts';
 import type { OfapiChatMessage } from './ofapi-message.ts';
 
 export type TranscriptSender = 'Model' | 'Fan';
 
 /** Legacy-shaped normalized transcript line input; createdAtMs is unix milliseconds (UTC). */
 export interface TranscriptMessage {
-  id: number;
+  /** The platform message id, exactly as its store keeps it (HF-8a): never a
+   *  number, so ids past 2^53 (Fansly) stay apart (message-ref.ts). */
+  id: string;
   createdAtMs: number;
   sender: TranscriptSender;
   text: string;
@@ -23,7 +26,7 @@ export interface NormalizeTranscriptOptions {
    * (caller joins `/transactions` type=tips). Step 1 is `tipAmount` on the
    * message itself; step 3 is a bare '[Tip]'. Amounts are never fabricated.
    */
-  tipAmountsByMessageId?: ReadonlyMap<number, number>;
+  tipAmountsByMessageId?: ReadonlyMap<string, number>;
 }
 
 const SINGLE_MEDIA_LABELS: Record<string, string> = {
@@ -102,19 +105,20 @@ function mediaLabelBody(message: OfapiChatMessage): string | null {
 
 function resolveTipAmount(
   message: OfapiChatMessage,
+  id: string,
   options: NormalizeTranscriptOptions,
 ): number | null {
   if (typeof message.tipAmount === 'number' && message.tipAmount > 0) {
     return message.tipAmount;
   }
-  const joined = options.tipAmountsByMessageId?.get(message.id);
+  const joined = options.tipAmountsByMessageId?.get(id);
   if (typeof joined === 'number' && joined > 0) {
     return joined;
   }
   return null;
 }
 
-function buildLabels(message: OfapiChatMessage, options: NormalizeTranscriptOptions): string[] {
+function buildLabels(message: OfapiChatMessage, id: string, options: NormalizeTranscriptOptions): string[] {
   const labels: string[] = [];
   const body = mediaLabelBody(message);
   const price = message.price ?? 0;
@@ -131,7 +135,7 @@ function buildLabels(message: OfapiChatMessage, options: NormalizeTranscriptOpti
   }
 
   if (message.isTip === true) {
-    const amount = resolveTipAmount(message, options);
+    const amount = resolveTipAmount(message, id, options);
     labels.push(amount !== null ? `[Tip: $${usd(amount)}]` : '[Tip]');
   }
 
@@ -141,27 +145,29 @@ function buildLabels(message: OfapiChatMessage, options: NormalizeTranscriptOpti
 /**
  * OFAPI messages (any page order, duplicates allowed) → ascending transcript
  * messages. Dedupe by id, first occurrence wins; sort ascending by createdAt,
- * tiebreak ascending by id.
+ * tiebreak ascending by id. An id is keyed and ordered as the exact string
+ * (HF-8a): two ids one double cannot tell apart stay two messages.
  */
 export function normalizeTranscriptMessages(
   messages: readonly OfapiChatMessage[],
   options: NormalizeTranscriptOptions = {},
 ): TranscriptMessage[] {
-  const byId = new Map<number, TranscriptMessage>();
+  const byId = new Map<string, TranscriptMessage>();
   for (const message of messages) {
-    if (byId.has(message.id)) {
+    const id = String(message.id);
+    if (byId.has(id)) {
       continue;
     }
-    byId.set(message.id, {
-      id: message.id,
+    byId.set(id, {
+      id,
       createdAtMs: Date.parse(message.createdAt),
       sender: message.isSentByMe ? 'Model' : 'Fan',
       text: htmlToPlainText(message.text ?? ''),
-      labels: buildLabels(message, options),
+      labels: buildLabels(message, id, options),
     });
   }
   return [...byId.values()].sort(
-    (left, right) => left.createdAtMs - right.createdAtMs || left.id - right.id,
+    (left, right) => left.createdAtMs - right.createdAtMs || compareMessageRefs(left.id, right.id),
   );
 }
 
@@ -176,7 +182,7 @@ export function estimateTargetPages(requestedCount: number): number {
 }
 
 /** Pages arrive newest-first; the oldest id on a page is the `id` cursor for the next page. */
-export function extractOldestMessageId(pageMessages: readonly OfapiChatMessage[]): number | null {
+export function extractOldestMessageId(pageMessages: readonly OfapiChatMessage[]): OfapiChatMessage['id'] | null {
   const last = pageMessages[pageMessages.length - 1];
   return last ? last.id : null;
 }

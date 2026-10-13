@@ -10,6 +10,7 @@ import type { AppContext } from "../../../bootstrap.ts";
 import type { AiFeatureContextFrameBody } from "../../../services/ai-gateway.ts";
 import { loadClientConversationCoverage } from "../../../services/client-coverage.ts";
 import { formatTranscript, type TranscriptMessage } from "../prompts/index.ts";
+import type { AiConversationPairState } from "./chat-access.ts";
 
 // chat-extension H-4b — the `context_v1` frame: which transcript snapshot
 // ACTUALLY served a generation. Everything here describes the transcript the
@@ -20,8 +21,8 @@ export type AiContextSource = (typeof AI_CONTEXT_SOURCES)[number];
 export type AiKnownFanMessageState = (typeof AI_KNOWN_FAN_MESSAGE_STATES)[number];
 export type AiFanLanguageEvidence = (typeof AI_FAN_LANGUAGE_EVIDENCE)[number];
 
-/** One message as the frame names it: the ref its store keeps, never the
- *  transcript's numeric id. */
+/** One message as the frame names it: the ref its store keeps, which is the
+ *  transcript's own message id (HF-8a: never a number). */
 export interface AiContextMessageRef {
   messageRef: string;
   occurredAt: Date | null;
@@ -43,24 +44,13 @@ export interface TranscriptServedSnapshot {
 }
 
 /**
- * The transcript's messages under the refs their stores keep. The transcript
- * keys a message by `Number(ref)`; a ref is recovered from the served rows
- * with the transcript's own rules: only rows it can shape (a finite numeric
- * ref and an event time), the first row of a ref wins.
+ * The transcript's messages under the refs their stores keep. A transcript
+ * message's id IS its row's ref, the exact string (HF-8a): two ids a double
+ * cannot tell apart are two messages here and get two answers.
  */
-export function servedWindowOf(
-  rows: ReadonlyArray<{ messageRef: string; occurredAt: Date | null }>,
-  messages: readonly TranscriptMessage[],
-): AiContextMessageRef[] {
-  const refById = new Map<number, string>();
-  for (const row of rows) {
-    const id = Number(row.messageRef);
-    if (Number.isFinite(id) && row.occurredAt !== null && !refById.has(id)) {
-      refById.set(id, row.messageRef);
-    }
-  }
+export function servedWindowOf(messages: readonly TranscriptMessage[]): AiContextMessageRef[] {
   return messages.map((message) => ({
-    messageRef: refById.get(message.id) ?? String(message.id),
+    messageRef: message.id,
     occurredAt: new Date(message.createdAtMs),
     isFromFan: message.sender === "Fan",
   }));
@@ -136,7 +126,8 @@ export function fanLanguageEvidenceOf(messages: readonly TranscriptMessage[]): A
 
 /**
  * One answer per id the client named, in the client's order, judged against
- * the transcript that served the generation:
+ * the transcript that served the generation. An id matches a window ref only
+ * as the same string, never as the same number:
  * - `included`: the served window holds it as a fan message;
  * - `deleted`: not in the window, and tombstoned in this conversation;
  * - `absent`: not in the window (never seen for this conversation, an id of
@@ -184,6 +175,9 @@ export function buildAiContextFrameBody(input: {
    *  when the request sent none. */
   live?: AiFeatureContextFrameBody["live"];
   fanLanguageEvidence: AiFanLanguageEvidence;
+  /** R20 HF-9: the checked pair of a Fansly request (`checkAiConversationPair`);
+   *  absent when no pair was checked. */
+  pair?: AiConversationPairState;
 }): AiFeatureContextFrameBody {
   return {
     source: input.served.source,
@@ -194,6 +188,7 @@ export function buildAiContextFrameBody(input: {
     ...(input.knownFanMessages !== undefined ? { knownFanMessages: input.knownFanMessages } : {}),
     live: input.live ?? { status: "not_sent", accepted: 0, rejected: 0 },
     fanLanguageEvidence: input.fanLanguageEvidence,
+    ...(input.pair !== undefined ? { pair: input.pair } : {}),
   };
 }
 
@@ -219,6 +214,8 @@ export async function loadAiContextFrameBody(
     knownFanMessageIds?: readonly string[];
     /** The frame's `live` block (applyLiveTextContext). */
     live?: AiFeatureContextFrameBody["live"];
+    /** The frame's `pair` (R20 HF-9); absent when no pair was checked. */
+    pair?: AiConversationPairState;
   },
 ): Promise<AiFeatureContextFrameBody> {
   const omitted = Math.min(Math.max(input.omittedByPromptBudget ?? 0, 0), input.served.window.length);
@@ -231,6 +228,7 @@ export async function loadAiContextFrameBody(
   try {
     coverage = await loadClientConversationCoverage(app, {
       pageId: input.pageId,
+      platform: input.platform,
       conversationRef: input.conversationRef,
     });
   } catch (error) {
@@ -272,5 +270,6 @@ export async function loadAiContextFrameBody(
     ...(knownFanMessages !== undefined ? { knownFanMessages } : {}),
     ...(input.live !== undefined ? { live: input.live } : {}),
     fanLanguageEvidence: fanLanguageEvidenceOf(messages),
+    ...(input.pair !== undefined ? { pair: input.pair } : {}),
   });
 }

@@ -2015,6 +2015,10 @@ export const AI_CONTEXT_SOURCES = ["archive", "union", "live_union"] as const;
 export const AI_KNOWN_FAN_MESSAGE_STATES = ["included", "absent", "deleted", "unknown"] as const;
 export const AI_CONTEXT_LIVE_STATUSES = ["not_sent", "disabled", "shadow", "served", "rejected"] as const;
 export const AI_FAN_LANGUAGE_EVIDENCE = ["latin", "cyrillic", "mixed", "unknown"] as const;
+/** chat-extension R20 HF-9: the frame's `pair`. A pair the hub knows to be
+ *  another fan's chat is never served: the request is refused with 409
+ *  `conversation_fan_mismatch` before any context loads. */
+export const AI_CONTEXT_PAIR_STATES = ["verified", "unverified"] as const;
 
 // Feature-lane-only: the transcript snapshot that ACTUALLY served this
 // generation. Emitted right after `meta` (and `debug_input_v1`), before the
@@ -2053,6 +2057,13 @@ export const aiFeatureContextFrameSchema = z.object({
   }),
   /** AI_FAN_LANGUAGE_EVIDENCE. */
   fanLanguageEvidence: clientOpenToken.optional(),
+  /** Fansly, a transcript the hub loads itself, a request that names both
+   *  `conversationRef` (the group) and `fanRef`: whether the hub's capture of
+   *  the page vouches that the group is this fan's chat. `verified`: the
+   *  page's thread of the group has this fan; `unverified`: the hub holds no
+   *  thread of the group on the page, or does not know its fan yet. Absent
+   *  otherwise. AI_CONTEXT_PAIR_STATES. */
+  pair: clientOpenToken.optional(),
 });
 
 // Unknown frames remain fatal for the raw gateway. Only streamAiFeature uses
@@ -2314,7 +2325,10 @@ export const aiFeatureStreamBodySchema = z.object({
   reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
-  messageCount: z.number().int().min(5).max(3000).optional(),
+  // The window the request asks for. The hub's readers cap it (1500 for every
+  // request; deeper only for the full Recap and the notes fill of a context-v1
+  // client, at most 5000: docs/ai-gateway-contract.md, R20 HF-6).
+  messageCount: z.number().int().min(5).max(5000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
   chatterQuestion: z.string().min(1).max(2_000).optional(),

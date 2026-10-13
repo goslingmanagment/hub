@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  CLIENT_GREETING_SEND_RATE,
   applyClientClaimAction,
   createFanslyPage,
   createModel,
@@ -10,13 +11,16 @@ import {
   createUser,
   explainClientLastOwnDispatchQuery,
   readClientFanClaimStatus,
+  readClientPreviewSendRetryAfterMs,
   readDesktopFollowerOutreach,
   resolveClientSendCustody,
   type ClientClaimActionInput,
   type ClientClaimGroup,
 } from "@agency_hub_core/db";
 
+import { clientClaimActionInput } from "../apps/runtime/src/services/client-claim.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
+import * as sdk from "../packages/sdk/src/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 // hub-pr-plan H-7a: the chat-extension lease and custody repository on a real
@@ -27,6 +31,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 
 let harness: StartedTestDatabase;
 let pageId: number;
+let fsPageId: number;
 let me: number;
 let other: number;
 let owner: number;
@@ -42,7 +47,7 @@ beforeAll(async () => {
   harness = started;
   const model = (await createModel(harness.db, { slug: "client-claim", name: "Client claim" }))!;
   pageId = (await createOnlyFansPage(harness.db, { modelId: model.id, label: "client-claim-of" }))!.id;
-  await createFanslyPage(harness.db, { modelId: model.id, label: "client-claim-fs" });
+  fsPageId = (await createFanslyPage(harness.db, { modelId: model.id, label: "client-claim-fs" }))!.id;
   me = (await createUser(harness.db, { username: "claim-me", role: "chatter" }))!.id;
   other = (await createUser(harness.db, { username: "claim-other", role: "chatter" }))!.id;
   owner = (await createUser(harness.db, { username: "claim-owner", role: "owner" }))!.id;
@@ -537,6 +542,237 @@ describe("the claim GET", () => {
       .toMatchObject({ attemptId: newest.attempt_id, state: newest.state.replaceAll("_", "-"), ticket: null });
     expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef: "899999999", userId: busy, instanceId: null, leaseToken: null })).custody)
       .toBeNull();
+  });
+});
+
+describe("a manual greeting on a Fansly page (R20 HF-3)", () => {
+  // The route refuses every Fansly action that starts something until HF-2 lists Fansly for
+  // `newcomers` (tests/client-claim-routes.integration.test.ts). Under it the rules are these: each
+  // body is what the extension's SDK lets out (its own schema), handed to the repository exactly as
+  // the route hands it (clientClaimActionInput), with the rate the platform's admission names.
+  // Fansly fan and message ids are 18 to 19 digits: past a double's exact integers.
+  let fsFanSeq = 5_123_456_789_012_345_000n;
+  const nextFsFan = () => String(++fsFanSeq);
+  let fsMessageSeq = 8_123_456_789_012_345_000n;
+  const nextFsMessage = () => String(++fsMessageSeq);
+  const fingerprintOf = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const manual = (text: string) => ({ kind: "manual", textFingerprint: fingerprintOf(text) });
+  const sdkBody = sdk.routeSchemas.clientFanClaim.body;
+  const fsAct = (fanRef: string, userId: number, body: Record<string, unknown>) =>
+    act(clientClaimActionInput(sdkBody.parse(body), { pageId: fsPageId, fanRef, userId }, CLIENT_GREETING_SEND_RATE));
+  const fsClaim = (fanRef: string, userId: number, instanceId: string, leaseToken: string) =>
+    fsAct(fanRef, userId, { action: "claim", leaseToken, instanceId });
+  const fsDispatch = (fanRef: string, userId: number, body: { instanceId: string; leaseToken: string; text: string; attemptId?: string }) =>
+    fsAct(fanRef, userId, {
+      action: "dispatch", attemptId: body.attemptId ?? randomUUID(), instanceId: body.instanceId, purpose: "greeting",
+      group: manual(body.text), partIndex: 0, textRevision: 2, leaseToken: body.leaseToken, flagRevision: 0,
+    });
+  const fsSent = (fanRef: string, userId: number, attemptId: string, platformMessageId: string, instanceId = I1) =>
+    fsAct(fanRef, userId, { action: "sent", attemptId, instanceId, platformMessageId, evidence: "receipt+echo" });
+  const fsStatus = (fanRef: string, userId = me) =>
+    readClientFanClaimStatus(harness.db, { pageId: fsPageId, fanRef, userId, instanceId: null, leaseToken: null });
+  /** Whatever an AI request would leave behind: a generation's record and its spend. */
+  const aiRows = async () => (await harness.pool.query(`
+    select (select count(*) from ai_generation_content)::int as generations,
+           (select count(*) from ai_usage_events)::int as usage`)).rows[0];
+  const fsCustodyRows = async (fanRef: string) => (await harness.pool.query(
+    `select attempt_id::text, page_id::int, fan_ref, purpose, origin, generation_ref, variant, part_count, part_index,
+       state, platform_message_id, ticket_hash is not null as ticketed
+     from client_send_custody where fan_ref = $1 order by created_at, attempt_id`,
+    [fanRef],
+  )).rows;
+
+  it("goes from claim to sent with no AI request at all, through the SDK's own schema", async () => {
+    const before = await aiRows();
+    const fanRef = nextFsFan();
+    const text = "Привет! Рада, что ты здесь 💛";
+    const groupRef = `manual:${fingerprintOf(text)}`;
+    const leaseToken = randomUUID();
+    expect(await fsClaim(fanRef, me, I1, leaseToken)).toMatchObject({ ok: true, view: { lease: { state: "owned", leaseToken } } });
+    const attemptId = randomUUID();
+    const dispatched = await fsDispatch(fanRef, me, { attemptId, instanceId: I1, leaseToken, text });
+    expect(dispatched).toMatchObject({
+      ok: true,
+      view: {
+        custody: { attemptId, state: "dispatching" },
+        group: { generationRef: groupRef, variant: 0, partCount: 1, sentParts: [], heldParts: [] },
+      },
+    });
+    expect(dispatched.view.custody!.ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const messageId = nextFsMessage();
+    expect(await fsSent(fanRef, me, attemptId, messageId)).toMatchObject({
+      ok: true,
+      view: {
+        greeting: { state: "confirmed", source: "preview-send", messageRef: messageId },
+        custody: { attemptId, state: "sent" },
+        group: { generationRef: groupRef, sentParts: [0], heldParts: [] },
+      },
+    });
+    // Kept as one more group, ids as exact text: no table changed for it.
+    expect(await fsCustodyRows(fanRef)).toEqual([{
+      attempt_id: attemptId, page_id: fsPageId, fan_ref: fanRef, purpose: "greeting", origin: "preview-send",
+      generation_ref: groupRef, variant: 0, part_count: 1, part_index: 0, state: "sent", platform_message_id: messageId,
+      ticketed: true,
+    }]);
+    expect((await harness.pool.query(
+      "select generation_ref, variant, part_count, first_message_ref, source from client_greetings where page_id = $1 and fan_ref = $2",
+      [fsPageId, fanRef],
+    )).rows).toEqual([{ generation_ref: groupRef, variant: 0, part_count: 1, first_message_ref: messageId, source: "preview-send" }]);
+    // Nothing an AI request leaves behind.
+    expect(await aiRows()).toEqual(before);
+    // Everyone reads the fan as greeted, and nobody greets again: not another text, not another person.
+    expect(await fsStatus(fanRef, other)).toMatchObject({ greeting: { state: "confirmed", messageRef: messageId }, custody: null });
+    expect(await fsDispatch(fanRef, me, { instanceId: I1, leaseToken, text: `${text} ` }))
+      .toMatchObject({ ok: false, code: "generation_mismatch" });
+    expect(await fsDispatch(fanRef, me, { instanceId: I1, leaseToken, text })).toMatchObject({ ok: false, code: "part_already_sent" });
+    expect(await fsClaim(fanRef, other, I2, randomUUID())).toMatchObject({ ok: false, code: "greeting_done" });
+  });
+
+  it("two clients press «Отправить» at once: one ticket, so one POST", async () => {
+    const fanRef = nextFsFan();
+    const text = "Hey, thanks for following!";
+    const clients = [
+      { userId: me, instanceId: I1, leaseToken: randomUUID() },
+      { userId: me, instanceId: I2, leaseToken: randomUUID() },
+      { userId: other, instanceId: I2, leaseToken: randomUUID() },
+    ];
+    // Two people and a second install of one of them take the fan at once: one lease.
+    const claims = await Promise.all(clients.map((client) => fsClaim(fanRef, client.userId, client.instanceId, client.leaseToken)));
+    expect(claims.filter((result) => result.ok)).toHaveLength(1);
+    // Each sends its own attempt at once, the same text: one ticket.
+    const sends = await Promise.all(clients.map((client) => fsDispatch(fanRef, client.userId, { ...client, text })));
+    const admitted = sends.filter((result) => result.ok && result.view.custody?.ticket);
+    expect(admitted).toHaveLength(1);
+    // The others meet the lease, or the winner's send once it is in.
+    const refused = sends.flatMap((result) => (result.ok ? [] : [result.code]));
+    expect(refused).toHaveLength(2);
+    for (const code of refused) expect(["claim_busy", "custody_held"]).toContain(code);
+    const winner = clients[claims.findIndex((result) => result.ok)]!;
+    const attemptId = admitted[0]!.view.custody!.attemptId;
+    // A second tab of the winning install, its own attempt under the same lease: held, no ticket.
+    expect(await fsDispatch(fanRef, winner.userId, { ...winner, text })).toMatchObject({
+      ok: false, code: "custody_held", view: { custody: { attemptId, state: "dispatching", ticket: null } },
+    });
+    // The winner lost the answer and asks again: it reads, never a second ticket.
+    expect(await fsDispatch(fanRef, winner.userId, { ...winner, text, attemptId })).toMatchObject({
+      ok: true, view: { custody: { attemptId, state: "dispatching", ticket: null } },
+    });
+    expect((await fsCustodyRows(fanRef)).map((row) => [row.attempt_id, row.state, row.ticketed])).toEqual([[attemptId, "dispatching", true]]);
+  });
+
+  it("an attempt the client cannot vouch for after a restart holds the fan until proof: no retry, no failure", async () => {
+    const fanRef = nextFsFan();
+    const text = "Hi! Welcome 🌸";
+    const leaseToken = randomUUID();
+    await fsClaim(fanRef, me, I1, leaseToken);
+    const attemptId = randomUUID();
+    expect(await fsDispatch(fanRef, me, { attemptId, instanceId: I1, leaseToken, text })).toMatchObject({ ok: true });
+    // The intent was written; the browser died before the answer was known; the ticket ran out.
+    await harness.pool.query("update client_send_custody set ticket_expires_at = now() - interval '1 second' where attempt_id = $1", [attemptId]);
+    await harness.pool.query("update client_fan_leases set expires_at = now() - interval '1 second' where lease_id = $1", [leaseToken]);
+    // After the restart the background reads the fan: its own attempt, held.
+    expect(await fsStatus(fanRef)).toMatchObject({
+      custody: { attemptId, state: "uncertain-held", ticket: null },
+      group: { generationRef: `manual:${fingerprintOf(text)}`, sentParts: [], heldParts: [0] },
+    });
+    expect(await fsStatus(fanRef, other)).toMatchObject({ custody: { attemptId, state: "uncertain-held" } });
+    // Its own repeat only reads.
+    expect(await fsDispatch(fanRef, me, { attemptId, instanceId: I1, leaseToken, text }))
+      .toMatchObject({ ok: true, view: { custody: { attemptId, state: "uncertain-held", ticket: null } } });
+    // A new attempt, its own after a fresh lease or a colleague's, gets no ticket.
+    const again = randomUUID();
+    expect((await fsClaim(fanRef, me, I1, again)).ok).toBe(true);
+    expect(await fsDispatch(fanRef, me, { instanceId: I1, leaseToken: again, text })).toMatchObject({ ok: false, code: "custody_held" });
+    await harness.pool.query("update client_fan_leases set expires_at = now() - interval '1 second' where lease_id = $1", [again]);
+    const theirs = randomUUID();
+    expect((await fsClaim(fanRef, other, I2, theirs)).ok).toBe(true);
+    expect(await fsDispatch(fanRef, other, { instanceId: I2, leaseToken: theirs, text: "Привет!" }))
+      .toMatchObject({ ok: false, code: "custody_held" });
+    // Past the ticket nothing it could report frees the fan: not a proof of failure, not a 2xx that says it failed.
+    for (const body of [
+      { action: "failed", attemptId, instanceId: I1, reason: "not_enqueued" },
+      { action: "failed", attemptId, instanceId: I1, reason: "native_rejected", httpStatus: 403 },
+    ]) {
+      expect(await fsAct(fanRef, me, body), JSON.stringify(body)).toMatchObject({ ok: false, code: "custody_held" });
+    }
+    expect(sdkBody.safeParse({ action: "failed", attemptId, instanceId: I1, reason: "native_rejected", httpStatus: 200 }).success)
+      .toBe(false);
+    expect((await fsCustodyRows(fanRef)).map((row) => [row.attempt_id, row.state])).toEqual([[attemptId, "dispatching"]]);
+    // The late proof (its receipt and echo found after all) ends it.
+    const messageId = nextFsMessage();
+    expect(await fsSent(fanRef, me, attemptId, messageId)).toMatchObject({
+      ok: true, view: { greeting: { state: "confirmed", messageRef: messageId }, custody: { attemptId, state: "sent" } },
+    });
+  });
+
+  it("keeps Fansly ids of 18 and 19 digits apart when they are one double apart", async () => {
+    const [a, b] = ["1234567890123456789", "1234567890123456790"];
+    const [messageA, messageB] = ["9223372036854775806", "9223372036854775807"];
+    expect(Number(a)).toBe(Number(b));
+    expect(Number(messageA)).toBe(Number(messageB));
+    const text = "Hello!";
+    const leaseA = randomUUID();
+    const leaseB = randomUUID();
+    expect((await fsClaim(a, me, I1, leaseA)).ok).toBe(true);
+    // Another fan: not busy, not held.
+    expect((await fsClaim(b, other, I2, leaseB)).ok).toBe(true);
+    const attemptA = randomUUID();
+    const attemptB = randomUUID();
+    expect((await fsDispatch(a, me, { attemptId: attemptA, instanceId: I1, leaseToken: leaseA, text })).ok).toBe(true);
+    expect((await fsDispatch(b, other, { attemptId: attemptB, instanceId: I2, leaseToken: leaseB, text })).ok).toBe(true);
+    expect((await fsSent(a, me, attemptA, messageA)).ok).toBe(true);
+    // A message id is the proof of one send per page: its neighbour is another message.
+    expect((await fsSent(b, other, attemptB, messageB, I2)).ok).toBe(true);
+    expect(await fsStatus(a)).toMatchObject({ greeting: { messageRef: messageA } });
+    expect(await fsStatus(b)).toMatchObject({ greeting: { messageRef: messageB } });
+    expect((await harness.pool.query(
+      "select fan_ref, platform_message_id from client_send_custody where page_id = $1 and fan_ref = any($2::text[]) order by fan_ref",
+      [fsPageId, [a, b]],
+    )).rows).toEqual([{ fan_ref: a, platform_message_id: messageA }, { fan_ref: b, platform_message_id: messageB }]);
+    // An 18-digit id is a fan as well.
+    expect((await fsClaim("512345678901234567", me, I1, randomUUID())).ok).toBe(true);
+    // Erasing one of them takes its rows and leaves its neighbour's.
+    const app = {
+      db: harness.db, pool: harness.pool, config: { lakeDir: "/nonexistent-client-claim-lake" },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    } as never;
+    await executeErasure(app, { scopeType: "fan", platform: "fansly", fanRef: a }, { initiatedBy: owner });
+    const left = async (fanRef: string) => (await harness.pool.query(`
+      select (select count(*) from client_fan_leases where fan_ref = $1)::int as leases,
+             (select count(*) from client_greetings where fan_ref = $1)::int as greetings,
+             (select count(*) from client_send_custody where fan_ref = $1)::int as custody`, [fanRef])).rows[0];
+    expect(await left(a)).toEqual({ leases: 0, greetings: 0, custody: 0 });
+    expect(await left(b)).toEqual({ leases: 1, greetings: 1, custody: 1 });
+  });
+
+  it("a Fansly greeting counts toward its own rate, never toward OnlyFans' sends from the preview", async () => {
+    const user = (await createUser(harness.db, { username: "claim-fs-rate", role: "chatter" }))!.id;
+    const ofReply = () => act({
+      action: "dispatch", pageId, fanRef: nextFan(), userId: user, attemptId: randomUUID(), instanceId: I1,
+      purpose: "preview-reply", group: GROUP, partIndex: 0, textRevision: 1, leaseToken: null, flagRevision: null,
+    });
+    // Six sends from the preview on OnlyFans: the whole of that window.
+    for (let n = 0; n < 6; n += 1) {
+      expect((await ofReply()).ok).toBe(true);
+    }
+    // Thirty-one Fansly greetings at once, each under its own lease: exactly thirty, the six not counted.
+    const fans = Array.from({ length: 31 }, () => ({ fanRef: nextFsFan(), leaseToken: randomUUID() }));
+    const leases = await Promise.all(fans.map((fan) => fsClaim(fan.fanRef, user, I1, fan.leaseToken)));
+    expect(leases.every((result) => result.ok)).toBe(true);
+    const greetings = await Promise.all(fans.map((fan) =>
+      fsDispatch(fan.fanRef, user, { instanceId: I1, leaseToken: fan.leaseToken, text: `Hi ${fan.fanRef}` })));
+    expect(greetings.filter((result) => result.ok)).toHaveLength(30);
+    expect(greetings.filter((result) => !result.ok).map((result) => !result.ok && result.code)).toEqual(["preview_send_rate_limited"]);
+    // And the thirty never held back OnlyFans: its own window is what refuses the seventh.
+    expect(await ofReply()).toMatchObject({ ok: false, code: "preview_send_rate_limited" });
+    // Each window advises on its own wait: OnlyFans' oldest of six came before Fansly's oldest of thirty.
+    const fanslyWait = await readClientPreviewSendRetryAfterMs(harness.db, { userId: user, pageId: fsPageId, rate: CLIENT_GREETING_SEND_RATE });
+    const onlyFansWait = await readClientPreviewSendRetryAfterMs(harness.db, { userId: user, pageId });
+    expect(fanslyWait).toBeLessThanOrEqual(60_000);
+    expect(onlyFansWait).toBeGreaterThan(0);
+    expect(onlyFansWait).toBeLessThan(fanslyWait);
+    expect(await readClientPreviewSendRetryAfterMs(harness.db, { userId: me, pageId: fsPageId, rate: CLIENT_GREETING_SEND_RATE }))
+      .toBe(0);
   });
 });
 

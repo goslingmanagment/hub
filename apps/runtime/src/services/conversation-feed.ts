@@ -404,6 +404,7 @@ async function readFirstPage(
   db: Database,
   input: {
     pageId: number;
+    platform: string;
     conversationRef: string;
     source: ConversationFeedSource;
     snapshot: ConversationFeedSnapshot;
@@ -420,7 +421,10 @@ async function readFirstPage(
     snapshot: input.snapshot,
     limit: input.limit,
   });
-  const coverage: ClientCoverageLevel = await loadClientConversationCoverage({ db }, target);
+  const coverage: ClientCoverageLevel = await loadClientConversationCoverage({ db }, {
+    ...target,
+    platform: input.platform,
+  });
   const threadLastMessageAt = await readConversationFeedThreadLastMessageAt(db, target);
   // Last on purpose: the loader swallows a failed union read (a generation then
   // falls back to the archive), and a failed statement ends this snapshot.
@@ -522,6 +526,7 @@ export async function getClientConversationFeed(
         scope,
         read: await readFirstPage(tx, {
           pageId: page.id,
+          platform: page.platform,
           conversationRef,
           source,
           snapshot,
