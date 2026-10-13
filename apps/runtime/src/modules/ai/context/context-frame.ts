@@ -1,7 +1,10 @@
 import type {
   AI_CONTEXT_SOURCES,
+  AI_COVERAGE_CHECK_DELETED_STATES,
+  AI_COVERAGE_CHECK_WINDOW_STATES,
   AI_FAN_LANGUAGE_EVIDENCE,
   AI_KNOWN_FAN_MESSAGE_STATES,
+  AiCoverageCheck,
   ClientCoverageLevel,
 } from "@agency_hub_core/contracts";
 import { lookupAiKnownMessages, type AiKnownMessageStoreState } from "@agency_hub_core/db";
@@ -20,6 +23,14 @@ import type { AiConversationPairState } from "./chat-access.ts";
 export type AiContextSource = (typeof AI_CONTEXT_SOURCES)[number];
 export type AiKnownFanMessageState = (typeof AI_KNOWN_FAN_MESSAGE_STATES)[number];
 export type AiFanLanguageEvidence = (typeof AI_FAN_LANGUAGE_EVIDENCE)[number];
+export type AiCoverageCheckWindowState = (typeof AI_COVERAGE_CHECK_WINDOW_STATES)[number];
+export type AiCoverageCheckDeletedState = (typeof AI_COVERAGE_CHECK_DELETED_STATES)[number];
+
+/** The frame's `coverageCheck`: one answer per id of the body's lists, in their order. */
+export interface AiCoverageCheckAnswer {
+  window: Array<{ id: string; state: AiCoverageCheckWindowState }>;
+  deleted: Array<{ id: string; state: AiCoverageCheckDeletedState }>;
+}
 
 /** One message as the frame names it: the ref its store keeps, which is the
  *  transcript's own message id (HF-8a: never a number). */
@@ -156,6 +167,64 @@ export function resolveKnownFanMessages(input: {
   });
 }
 
+/**
+ * chat-extension R20 HF-8в: one answer per id of the body's `coverageCheck`,
+ * each list in the client's order, judged against the transcript that served
+ * the generation like `resolveKnownFanMessages` (an id matches a window ref
+ * only as the same string).
+ *
+ * An id of `window` (a message the tab holds):
+ * - `included`: the served window holds it, from the side the tab says;
+ * - `direction_mismatch`: the served window holds it from the other side;
+ * - `outside_window`: not in the window, but held for this conversation (older
+ *   than the window, or cut by the prompt budget);
+ * - `deleted`: not in the window, and tombstoned for this conversation;
+ * - `absent`: not in the window, and not held for this conversation (never
+ *   seen, another chat's, or only in a store the serving reader did not read);
+ * - `unknown`: not in the window, and the stores could not be read.
+ *
+ * An id of `deletedIds` (a message the tab saw deleted):
+ * - `still_served`: the served window holds it: the model read a message the
+ *   tab saw deleted;
+ * - `deleted`: not in the window, and tombstoned for this conversation;
+ * - `absent`: not in the window, and no tombstone for this conversation (the
+ *   model did not read it, whatever else the stores hold);
+ * - `unknown`: not in the window, and the stores could not be read.
+ *
+ * `stores` holds the store state of the ids the window does not hold; null
+ * when that read failed.
+ */
+export function resolveCoverageCheck(input: {
+  check: AiCoverageCheck;
+  window: readonly AiContextMessageRef[];
+  stores: ReadonlyMap<string, AiKnownMessageStoreState> | null;
+}): AiCoverageCheckAnswer {
+  const served = new Map(input.window.map((message) => [message.messageRef, message]));
+  const stored = (id: string) => input.stores?.get(id) ?? "absent";
+  return {
+    window: input.check.window.map(({ id, dir }): AiCoverageCheckAnswer["window"][number] => {
+      const inWindow = served.get(id);
+      if (inWindow) {
+        return { id, state: inWindow.isFromFan === (dir === "fan") ? "included" : "direction_mismatch" };
+      }
+      if (input.stores === null) {
+        return { id, state: "unknown" };
+      }
+      const state = stored(id);
+      return { id, state: state === "present" ? "outside_window" : state };
+    }),
+    deleted: input.check.deletedIds.map((id): AiCoverageCheckAnswer["deleted"][number] => {
+      if (served.has(id)) {
+        return { id, state: "still_served" };
+      }
+      if (input.stores === null) {
+        return { id, state: "unknown" };
+      }
+      return { id, state: stored(id) === "deleted" ? "deleted" : "absent" };
+    }),
+  };
+}
+
 function frameHead(message: AiContextMessageRef | null) {
   return message === null
     ? null
@@ -171,6 +240,9 @@ export function buildAiContextFrameBody(input: {
   requestedCount: number;
   coverage: ClientCoverageLevel;
   knownFanMessages?: Array<{ id: string; state: AiKnownFanMessageState }>;
+  /** R20 HF-8в: the answers to the body's `coverageCheck`; absent unless the
+   *  caller advertised `coverage-check-v1` and sent one. */
+  coverageCheck?: AiCoverageCheckAnswer;
   /** What the hub did with the request's fresh text (live-text.ts); absent
    *  when the request sent none. */
   live?: AiFeatureContextFrameBody["live"];
@@ -186,6 +258,7 @@ export function buildAiContextFrameBody(input: {
     window: { requested: input.requestedCount, served: input.served.window.length },
     coverage: input.coverage,
     ...(input.knownFanMessages !== undefined ? { knownFanMessages: input.knownFanMessages } : {}),
+    ...(input.coverageCheck !== undefined ? { coverageCheck: input.coverageCheck } : {}),
     live: input.live ?? { status: "not_sent", accepted: 0, rejected: 0 },
     fanLanguageEvidence: input.fanLanguageEvidence,
     ...(input.pair !== undefined ? { pair: input.pair } : {}),
@@ -195,8 +268,10 @@ export function buildAiContextFrameBody(input: {
 /**
  * Assembles the frame for a generation whose transcript the hub loaded itself.
  * Database reads only, and only for the page the caller was already admitted
- * to. Both reads fail open: the frame describes a generation, it must never
- * cost one — a failed read reports `unknown`.
+ * to: the coverage row, then one lookup for every named id (of
+ * `knownFanMessageIds` and `coverageCheck`) the window does not hold. Both
+ * reads fail open: the frame describes a generation, it must never cost one —
+ * a failed read reports `unknown`.
  */
 export async function loadAiContextFrameBody(
   app: Pick<AppContext, "db" | "logger">,
@@ -212,6 +287,9 @@ export async function loadAiContextFrameBody(
     omittedByPromptBudget?: number;
     requestedCount: number;
     knownFanMessageIds?: readonly string[];
+    /** R20 HF-8в: the body's `coverageCheck`, passed only for a caller that
+     *  advertised `coverage-check-v1`. */
+    coverageCheck?: AiCoverageCheck;
     /** The frame's `live` block (applyLiveTextContext). */
     live?: AiFeatureContextFrameBody["live"];
     /** The frame's `pair` (R20 HF-9); absent when no pair was checked. */
@@ -235,39 +313,43 @@ export async function loadAiContextFrameBody(
     app.logger.warn({ pageId: input.pageId, err: error }, "ai context frame coverage lookup failed");
   }
 
-  let knownFanMessages: Array<{ id: string; state: AiKnownFanMessageState }> | undefined;
-  if (input.knownFanMessageIds !== undefined) {
-    const servedRefs = new Set(served.window.map((message) => message.messageRef));
-    const outsideWindow = input.knownFanMessageIds.filter((id) => !servedRefs.has(id));
-    let stores: Map<string, AiKnownMessageStoreState> | null = new Map();
-    if (outsideWindow.length > 0) {
-      try {
-        stores = await lookupAiKnownMessages(app.db, {
-          pageId: input.pageId,
-          platform: input.platform,
-          conversationRef: input.conversationRef,
-          messageRefs: outsideWindow,
-          // The stores the serving reader read: the socket overlay hides a
-          // message it tombstoned, so only then does its mark count.
-          liveOverlay: served.source === "live_union",
-        });
-      } catch (error) {
-        stores = null;
-        app.logger.warn({ pageId: input.pageId, err: error }, "ai context frame known-message lookup failed");
-      }
+  // Every named id the window does not hold, from both fields, in one lookup.
+  const servedRefs = new Set(served.window.map((message) => message.messageRef));
+  const outsideWindow = [...new Set([
+    ...(input.knownFanMessageIds ?? []),
+    ...(input.coverageCheck?.window.map((item) => item.id) ?? []),
+    ...(input.coverageCheck?.deletedIds ?? []),
+  ])].filter((id) => !servedRefs.has(id));
+  let stores: Map<string, AiKnownMessageStoreState> | null = new Map();
+  if (outsideWindow.length > 0) {
+    try {
+      stores = await lookupAiKnownMessages(app.db, {
+        pageId: input.pageId,
+        platform: input.platform,
+        conversationRef: input.conversationRef,
+        messageRefs: outsideWindow,
+        // The stores the serving reader read: the socket overlay hides a
+        // message it tombstoned, so only then does its mark count.
+        liveOverlay: served.source === "live_union",
+      });
+    } catch (error) {
+      stores = null;
+      app.logger.warn({ pageId: input.pageId, err: error }, "ai context frame known-message lookup failed");
     }
-    knownFanMessages = resolveKnownFanMessages({
-      ids: input.knownFanMessageIds,
-      window: served.window,
-      stores,
-    });
   }
+  const knownFanMessages = input.knownFanMessageIds === undefined
+    ? undefined
+    : resolveKnownFanMessages({ ids: input.knownFanMessageIds, window: served.window, stores });
+  const coverageCheck = input.coverageCheck === undefined
+    ? undefined
+    : resolveCoverageCheck({ check: input.coverageCheck, window: served.window, stores });
 
   return buildAiContextFrameBody({
     served,
     requestedCount: input.requestedCount,
     coverage,
     ...(knownFanMessages !== undefined ? { knownFanMessages } : {}),
+    ...(coverageCheck !== undefined ? { coverageCheck } : {}),
     ...(input.live !== undefined ? { live: input.live } : {}),
     fanLanguageEvidence: fanLanguageEvidenceOf(messages),
     ...(input.pair !== undefined ? { pair: input.pair } : {}),
