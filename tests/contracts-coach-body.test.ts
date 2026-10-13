@@ -210,8 +210,10 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
   it("a 3-byte-UTF-8 (の) worst case is schema-valid and fits 12 MiB (>4 MiB)", () => {
     // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit -- the byte-per-char worst
     // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
-    // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~5.06MB
-    // before fresh text, ~5.97MB with it, ~6.36MB with the note values.
+    // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~1.69M
+    // units x 3 ~= 5.06MB of text before fresh text; measured with the media
+    // list and JSON framing, 5.27MB before fresh text, 6.18MB with it and
+    // 6.36MB with the note values (60k units, ~0.18MB at three bytes).
     const worstCase = maxBodyFilledWith("の");
     expect(schema.safeParse(worstCase).success, "の worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
