@@ -210,6 +210,7 @@ type SiteRequestId = string;  // UUID; оператор пишет его в б�
 type ConnectionId = string;   // UUID подключения сокета сайта; в буфер до wsAdmit
 type CommandId = string; type BufferId = string; type BodyId = string;  // UUID
 // Тело — двоичные кадры: 16 байт bodyId | 4 байта номер части | 1 байт «последняя» | до 1 МиБ данных.
+// Пустое тело — тоже один кадр, последний (PR 9).
 interface BodyRef { bodyId: BodyId; decodedBytes: number; sha256: Sha256Hex }  // части приходят раньше JSON
 type Mode = "automation" | "manual_login";  // «автоматика», «ручной вход»
 type Step = "exit_closed" | "env_applied" | "chrome_started" | "control_attached" | "selftest_passed"
@@ -218,8 +219,10 @@ type StopReason = "selftest_failed" | "exit_ip_changed" | "proxy_unavailable" | 
   | "holder_overflow" | "buffer_full" | "disk_full" | "chrome_crashed" | "unknown_ws_message"
   | "header_mismatch" | "login_required" | "owner_stop"
   | "env_mismatch"  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
-  | "buffer_unavailable";  // буфер не открылся (занят, ошибка ввода-вывода, повреждён, новее оператора):
-                           // RPC и тревоги работают, выход закрыт, Chrome не запускается (PR 11)
+  | "buffer_unavailable"  // буфер не открылся (занят, ошибка ввода-вывода, повреждён, новее оператора):
+                          // RPC и тревоги работают, выход закрыт, Chrome не запускается (PR 11)
+  | "request_unended";  // отпущенный запрос Hub не закончился за предел или сайт отменил его до ответа:
+                        // выход закрывается, страница перезапускается после паузы (PR 9; решение №16 открыто)
 type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
 type Refusal = "lease_inactive" | "lease_used" | "send_deadline_passed" | "pace" | "takeover_floor"
   | "generation_stale" | "session_mismatch";  // первые пять — packages/fansly/src/send-guard.ts:126-131
@@ -268,7 +271,9 @@ interface Result {
   type: "result"; attemptId: AttemptId; sessionFingerprint: Sha256Hex; outcome:
     | { kind: "response"; status: number; headers: Record<string, string>; body: BodyRef; encodedBytes: number;
         source: ResponseSource; sentMono: MonoMs | null; sendMark: "transport_reported" | "completion_fallback";
-        bodyOverflow?: boolean }  // заголовки — имена в нижнем регистре, повторы через ", "
+        bodyOverflow?: boolean;
+        preflight?: boolean }  // ответ CORS-preflight: сам запрос не ушёл (429 на preflight — 429 операции, №1)
+        // заголовки — имена в нижнем регистре, повторы через ", "; set-cookie не передаётся (PR 9)
     | { kind: "transport_error" | "timeout"; sent: boolean; message: string }
     | { kind: "aborted_before_send"; refusal: Refusal };
 }
