@@ -439,8 +439,10 @@ describe("a CORS preflight (owner decision №1)", () => {
     await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
     await new Promise((resolve) => setTimeout(resolve, 120));
     w.chrome.abort(request);
-    await until(() => preflight.outcome === "failed", 3000, "the paused preflight to be failed");
+    // At once — not when its wait for an admission is over.
+    await until(() => preflight.outcome === "failed", 500, "the paused preflight to be failed");
     expect(w.site.live).toBe(0);
+    expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", result: "the request ended before it was released: net::ERR_ABORTED" }));
     expect(w.chrome.wire).toEqual([]);
   });
 
