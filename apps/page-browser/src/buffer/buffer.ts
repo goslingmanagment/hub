@@ -232,6 +232,13 @@ interface PendingEvent {
   connection?: ConnectionChange;
 }
 
+/** One write of a group (`appendGroup`, PR 10). */
+export type GroupItem =
+  | { event: EventBody; at?: { mono: number; wall: number }; connection?: ConnectionChange }
+  | { gap: GapReason; from: { seq: number | null; wall: number | null } }
+  | { outcome: Outcome }
+  | { connection: ConnectionChange };
+
 /** What a producer says of an event besides the event itself (PR 10). */
 export interface AppendOptions {
   /** A change of the site socket's connection, in the same commit. */
@@ -548,8 +555,59 @@ export class EventBuffer {
     return this.#accept(item);
   }
 
-  /** A change of the site socket's connection on its own (admitted, tied),
-   *  durable when its promise says so. */
+  /** Several writes in one commit, in this order — or none: the group is
+   *  accepted or refused as one, and its durability is the commit's. An
+   *  outcome already stored, or waiting for its commit, is left out (the
+   *  first outcome of an attempt stands). */
+  appendGroup(items: readonly GroupItem[]): Appended {
+    const refused = this.refusal();
+    if (refused) return { ok: false, reason: refused };
+    const store = this.#store!;
+    const group: Pending[] = [];
+    for (const item of items) {
+      if ("event" in item) {
+        if (!EVENT_KINDS.has(item.event.kind)) throw new Error(`not an event a producer appends: ${String(item.event.kind)}`);
+        const body = JSON.stringify(item.event);
+        const pending: PendingEvent = { type: "event", kind: item.event.kind, body, atMono: item.at?.mono ?? monoMs(), atWall: item.at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+        if (item.connection !== undefined) pending.connection = item.connection;
+        group.push(pending);
+      } else if ("gap" in item) {
+        const body = JSON.stringify({ kind: "gap", fromSeq: item.from.seq, fromWall: item.from.wall, reason: item.gap });
+        group.push({ type: "event", kind: "gap", body, atMono: monoMs(), atWall: this.#now(), bytes: stampedBytes(body), resolve: () => undefined, gap: { reason: item.gap, from: item.from } });
+      } else if ("outcome" in item) {
+        const outcome = item.outcome;
+        if (!OUTCOME_TYPES.has(outcome.type) || !Number.isSafeInteger(outcome.attemptId)) throw new Error("not an attempt's outcome");
+        if (this.#pendingOutcomes.has(outcome.attemptId)) continue;
+        try {
+          if (store.hasOutcome(outcome.attemptId)) continue;
+        } catch (error) {
+          this.#storageFailed(error, "read");
+          return { ok: false, reason: "disk_full" };
+        }
+        const json = JSON.stringify(outcome);
+        group.push({ type: "outcome", attemptId: outcome.attemptId, outcomeType: outcome.type, json, atWall: this.#now(), bytes: utf8Bytes(json), body: null, resolve: () => undefined });
+      } else {
+        group.push({ type: "connection", change: item.connection, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+      }
+    }
+    const bytes = group.reduce((sum, item) => sum + item.bytes, 0);
+    if (this.#bytes + this.#pendingBytes + bytes > this.#caps.bytes) {
+      this.#enterFull("buffer_full", "bytes", `${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
+      return { ok: false, reason: "buffer_full" };
+    }
+    const settled = group.map((item) => new Promise<Durable>((resolve) => (item.resolve = resolve)));
+    for (const item of group) {
+      this.#pending.push(item);
+      this.#pendingBytes += item.bytes;
+      if (item.type === "outcome") this.#pendingOutcomes.set(item.attemptId, item);
+    }
+    this.#schedule();
+    const durable = Promise.all(settled).then((all): Durable => all.find((one) => !one.ok) ?? all.filter((one) => one.ok && one.seq !== null).at(-1) ?? { ok: true, seq: null });
+    return { ok: true, durable };
+  }
+
+  /** A change of the site socket's connection on its own (admitted, opened,
+   *  gone), durable when its promise says so. */
   changeConnection(change: ConnectionChange): Appended {
     return this.#accept({ type: "connection", change, atWall: this.#now(), bytes: 0, resolve: () => undefined });
   }

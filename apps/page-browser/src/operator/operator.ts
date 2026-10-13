@@ -76,6 +76,7 @@ import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
+import { BoundaryFile } from "../ws/boundary.ts";
 import { SiteSockets, type SocketStop, type SocketTimings } from "../ws/sockets.ts";
 import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
@@ -478,6 +479,7 @@ export class Operator {
       journal: (line) => this.journals.socket(line),
       alarm: (kind, detail) => this.#alarm(kind, detail),
       stop: (reason, note, how) => this.#socketStop(reason, note, how),
+      startBoundary: new BoundaryFile(join(this.config.stateDir, "start-boundary.json")),
       ...(deps.socketTimings ? { timings: deps.socketTimings } : {}),
     });
     this.egress.gate.onEvent = (event) => {
@@ -514,6 +516,7 @@ export class Operator {
     this.#stopIpTimer();
     if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
     if (this.#stateTimer) clearInterval(this.#stateTimer);
+    this.sockets.close();
     this.cdp.close();
     await this.rpc.close();
     await this.egress.close();
@@ -603,9 +606,9 @@ export class Operator {
         if (!this.cdp.linked) continue;
         if (!this.#socketsRestarted) {
           // What the holder kept of the site's socket from before is behind
-          // (dropped); the connections the buffer kept from before are
-          // ended there, and the gap of this start follows (plan §4.4,
-          // step 6).
+          // (dropped); the gap of this start and the end of the connections
+          // the buffer kept from before go in one commit, tried until
+          // durable (plan §4.4, step 6).
           this.#socketsRestarted = true;
           await this.sockets.afterRestart();
         }
@@ -1231,6 +1234,8 @@ export class Operator {
    *  that stopped for it starts again now, not at its next retry. */
   #onBufferRoom(reason: FullReason): void {
     const snapshot = this.page.snapshot;
+    // The socket's writes that waited for room go first.
+    this.sockets.retryNow();
     this.#sendState();
     if (this.#stopped || this.#starting || snapshot.halted) return;
     if (snapshot.stopReason !== "buffer_full" && snapshot.stopReason !== "disk_full") return;

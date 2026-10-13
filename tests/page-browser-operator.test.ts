@@ -798,10 +798,15 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     expect(s.engine.of("alarm")).toContainEqual(expect.objectContaining({ kind: "buffer", detail: expect.objectContaining({ full: true, reason: "disk_full" }) }));
     free = 10_000;
     await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start");
-    expect(s.operator.buffer.lastSeq).toBe(1);
+    // The buffer's own gap, then the start's — refused while the disk was
+    // full, written once there was room, from its first boundary.
+    await until(() => s.operator.buffer.lastSeq === 2, 3000, "the start's gap");
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
-    await until(() => eventsOf(s.engine).length === 1, 3000, "the gap");
-    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" });
+    await until(() => eventsOf(s.engine).length === 2, 3000, "the gaps");
+    expect(eventsOf(s.engine)).toMatchObject([
+      { kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" },
+      { kind: "gap", seq: 2, fromSeq: null, fromWall: null, reason: "operator_start" },
+    ]);
   });
 });
 
@@ -1152,10 +1157,11 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const client = await connecting;
     expect(client.status).toBe(200);
     await client.tls();
-    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: `WS${attemptId}` }, tab);
+    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000 }, tab);
+    const before = server.received().length;
     client.request();
-    await until(() => server.received().includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
-    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${attemptId}`, response: { status: 101 } }, tab);
+    await until(() => server.received().subarray(before).includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     await client.answered();
     return { client, connectionId: String(ask.connectionId) };
   }
@@ -1194,10 +1200,10 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const client = await connecting;
     expect(client.status).toBe(200);
     await client.tls();
-    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, tab);
+    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, tab);
     client.request();
     await until(() => server.received().includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
-    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, tab);
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     // The authorization and a ping, as Chrome writes them: the socket gate lets them go.
     await client.answered();
     client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
