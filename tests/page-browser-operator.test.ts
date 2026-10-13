@@ -4,7 +4,7 @@ import type { Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Operator } from "../apps/page-browser/src/operator/operator.ts";
+import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import {
@@ -16,12 +16,14 @@ import {
   FakeSocks,
   hello,
   HolderUnderS6,
+  hubResult,
   RPC_TOKEN,
   SOCKS_PASSWORD,
   SOCKS_USER,
   tempDir,
   until,
   writeNetSelftest,
+  wsFrame,
 } from "./helpers/page-browser-fakes.ts";
 
 // The operator core (Project Browser plan §4.1, §4.9, §4.13; stage 3, PR 4)
@@ -57,7 +59,7 @@ interface SetUp {
   rpcPort: () => number;
 }
 
-async function setUp(options: { extension?: "required"; exitIp?: () => string | Promise<string>; holderMaxBytes?: number } = {}): Promise<SetUp> {
+async function setUp(options: { extension?: "required"; exitIp?: () => string | Promise<string>; holderMaxBytes?: number; params?: Record<string, unknown>; buffer?: OperatorDeps["buffer"] } = {}): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -98,12 +100,14 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
         chromeEnvPath: chromeEnv,
         logDir,
         stateDir: join(temp.dir, "state"),
+        bufferDir: join(temp.dir, "buffer"),
         heartbeatPath: join(temp.dir, "alive"),
         operatorVersion: "test",
       },
       chrome: control,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
+      ...(options.buffer ? { buffer: options.buffer } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
     });
     const ports = await operator.start();
@@ -117,7 +121,7 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
 }
@@ -628,5 +632,138 @@ describe("secrets", () => {
     // What is there is the facts.
     expect(everything).toContain("/api/v1/account/me");
     expect(everything).toContain("refused: exit closed");
+  });
+});
+
+describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
+  const bufferHello = (s: SetUp, overrides: Record<string, unknown> = {}, params?: Record<string, unknown>) =>
+    hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD }, ...overrides }, params);
+  const eventsOf = (engine: FakeEngine) => engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
+  const seqs = (engine: FakeEngine) => eventsOf(engine).map((event) => event.seq as number);
+
+  async function reconnect(s: SetUp, previous: FakeEngine = s.engine): Promise<FakeEngine> {
+    previous.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    const again = new FakeEngine();
+    await again.connect(s.rpcPort());
+    cleanups.push(() => again.close());
+    again.send(bufferHello(s));
+    await again.waitFor("helloResult");
+    return again;
+  }
+
+  async function durable(appended: ReturnType<Operator["buffer"]["append"]>): Promise<void> {
+    if (!appended.ok) throw new Error(`refused: ${appended.reason}`);
+    expect(await appended.durable).toMatchObject({ ok: true });
+  }
+
+  it("streams what the producers wrote, in order, to the engine that subscribed; after a reconnect it resumes from the last ack; a foreign buffer's ack is refused", async () => {
+    const s = await setUp();
+    const bufferId = s.engine.last("helloResult")!.bufferId as string;
+    expect(bufferId).toBe(s.operator.buffer.id);
+    for (let n = 1; n < 30; n++) s.operator.buffer.append(wsFrame(n));
+    await durable(s.operator.buffer.append(wsFrame(30)));
+    // state.buffer is real now.
+    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes > 0);
+    expect(state.buffer).toEqual({ bytes: s.operator.buffer.stats().bytes, oldestAgeMs: expect.any(Number) });
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
+    await until(() => seqs(s.engine).length === 30, 5000, "30 events");
+    expect(seqs(s.engine)).toEqual(Array.from({ length: 30 }, (_, n) => n + 1));
+    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "ws.in", connectionId: "conn-1", atWall: expect.any(Number), atMono: expect.any(Number) });
+    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId, uptoSeq: 20 });
+    await until(() => s.operator.buffer.stats().events === 10, 3000, "the acknowledged events to go");
+    // Live: a new event goes out once it is durable.
+    s.operator.buffer.append(wsFrame(31));
+    await until(() => seqs(s.engine).includes(31), 3000, "event 31");
+    // The engine goes and comes back (a Hub deploy): from its last ack.
+    const again = await reconnect(s);
+    again.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 20 });
+    await until(() => seqs(again).length === 11, 5000, "the rest");
+    expect(seqs(again)).toEqual(Array.from({ length: 11 }, (_, n) => n + 21));
+    // The late ack of a buffer from before the volume was made anew.
+    again.send({ type: "ack", ownerGeneration: 1, bufferId: "11111111-1111-4111-8111-111111111111", uptoSeq: 31 });
+    expect(await again.waitFor("events.refused")).toEqual({ type: "events.refused", of: "ack", reason: "foreign_buffer", bufferId, givenBufferId: "11111111-1111-4111-8111-111111111111", givenSeq: 31 });
+    await s.operator.buffer.flush();
+    expect(s.operator.buffer.stats().events).toBe(11);
+    // A restarted operator keeps the buffer, its id and its numbers.
+    await s.operator.stop();
+    const next = await s.newOperator();
+    expect(next.buffer.id).toBe(bufferId);
+    expect(next.buffer.lastSeq).toBe(31);
+  });
+
+  it("sends an attempt's outcome once durable, again on every new connection until its resultAck; recover resends what it has", async () => {
+    const s = await setUp();
+    await durable(s.operator.buffer.putOutcome(hubResult(501)));
+    expect(await s.engine.waitFor("result")).toEqual(hubResult(501));
+    const again = await reconnect(s);
+    await again.waitFor("result", (message) => message.attemptId === 501);
+    again.send({ type: "recover", ownerGeneration: 1, attemptIds: [501, 502, 501] });
+    const recovered = await again.waitFor("recoverResult");
+    expect(recovered.attempts).toEqual([
+      { attemptId: 501, state: "outcome_resent" },
+      { attemptId: 502, state: "unknown" },
+    ]);
+    // The outcome came again before the answer that says so.
+    const order = again.messages.map((message) => message.type);
+    expect(order.lastIndexOf("result")).toBeLessThan(order.indexOf("recoverResult"));
+    expect(again.of("result")).toHaveLength(2);
+    again.send({ type: "resultAck", ownerGeneration: 1, attemptId: 501 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    const third = await reconnect(s, again);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(third.of("result")).toEqual([]);
+  });
+
+  it("full: writes refused, the exit closed, the page stopped with buffer_full and alarms; once the engine takes the backlog, the gap and the page starts again", async () => {
+    const s = await setUp({ params: { bufferCap: { bytes: 20_000, ageMs: 3_600_000, alarmPercents: [50, 80] }, restartBackoffMs: [60_000] }, buffer: { checkEveryMs: 50 } });
+    await started(s);
+    let refused: string | null = null;
+    for (let n = 1; n <= 200 && refused === null; n++) {
+      const appended = s.operator.buffer.append(wsFrame(n, 900));
+      if (appended.ok) await appended.durable;
+      else refused = appended.reason;
+    }
+    expect(refused).toBe("buffer_full");
+    await until(() => s.operator.page.snapshot.stopReason === "buffer_full", 5000, "the stop");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.operator.admissionsOpen()).toBe(false);
+    expect(s.operator.page.halted).toBe(false);
+    await until(() => s.engine.of("alarm").filter((alarm) => alarm.kind === "buffer").length >= 3, 3000, "the alarms");
+    expect(s.engine.of("alarm").map((alarm) => [alarm.kind, (alarm.detail as Record<string, unknown>).percent, (alarm.detail as Record<string, unknown>).full ?? false])).toEqual([
+      ["buffer", 50, false],
+      ["buffer", 80, false],
+      ["buffer", 100, true],
+    ]);
+    // No start while it is full: the engine's restartBrowser fails at the gate.
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+    expect(s.operator.page.snapshot.stopReason).toBe("buffer_full");
+    // The engine takes everything: room, the gap, and the page goes again.
+    const last = s.operator.buffer.lastSeq;
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    await until(() => seqs(s.engine).includes(last), 5000, "the backlog");
+    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId: s.operator.buffer.id, uptoSeq: last });
+    await until(() => eventsOf(s.engine).some((event) => event.kind === "gap"), 5000, "the gap");
+    expect(eventsOf(s.engine).find((event) => event.kind === "gap")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start again");
+    expect(s.operator.admissionsOpen()).toBe(true);
+  });
+
+  it("a full disk keeps the page from starting (disk_full); room again, and it starts", async () => {
+    let free = 500;
+    const s = await setUp({ params: { restartBackoffMs: [60_000] }, buffer: { diskFree: () => free, minFreeBytes: 1000, checkEveryMs: 50 } });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "disk_full", 5000, "the start to fail");
+    expect(s.control.calls).not.toContain("start");
+    expect(s.engine.of("alarm")).toContainEqual(expect.objectContaining({ kind: "buffer", detail: expect.objectContaining({ full: true, reason: "disk_full" }) }));
+    free = 10_000;
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start");
+    expect(s.operator.buffer.lastSeq).toBe(1);
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    await until(() => eventsOf(s.engine).length === 1, 3000, "the gap");
+    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" });
   });
 });

@@ -1,7 +1,8 @@
 // The page operator (plan §3.1, §4.1, §4.9, §4.13): Chrome's only way out
 // (egress/), its control over CDP through the holder (cdp/), the self-test
-// (selftest/), the engine's RPC (rpc/), the journals (logs/) — and the start
-// of plan §4.1, step by step:
+// (selftest/), the engine's RPC (rpc/), the journals (logs/), the buffer and
+// its stream to the engine (buffer/) — and the start of plan §4.1, step by
+// step:
 //
 //   1 exit closed → 2 environment → 3 Chrome started (by s6, on the
 //   operator's command) → 4 control attached → 5 self-test with the exit
@@ -30,11 +31,17 @@
 // - A planned stop closes the exit before CDP goes (plan §4.1). A lost
 //   control — CDP, the holder, its overflow, a browser that stops answering —
 //   closes the exit at once, kills Chrome and retries.
+// - Nothing passes that could not be kept (spec §5): a start waits for the
+//   journals and the buffer to be written and to have room; a buffer that
+//   fills up (its caps, the disk) closes the exit and fails the page with
+//   `buffer_full` or `disk_full`, and the page starts again once there is
+//   room. No admission while the buffer refuses writes (plan §4.3).
 
-import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
+import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal } from "../buffer/buffer.ts";
+import { EventStream } from "../buffer/stream.ts";
 import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
@@ -48,7 +55,7 @@ import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, type AlarmKind, type Command, type Hello, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type OperatorParams, type Recover, type RecoverResult, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
@@ -106,6 +113,8 @@ export interface OperatorDeps {
   exitIpTarget?: ExitIpTarget;
   extension?: ExtensionChecks;
   timings?: Partial<OperatorTimings>;
+  /** Tests: the buffer's disk, its room, how often it looks. */
+  buffer?: Pick<BufferOptions, "diskFree" | "minFreeBytes" | "checkEveryMs" | "resumePercent" | "maxPages">;
   log?: Logger;
 }
 
@@ -144,6 +153,10 @@ export class Operator {
   readonly envCheck: EnvCheck;
   readonly page: PageState;
   readonly journals: Journals;
+  /** What the page captured, until the engine has it (plan §4.4): the
+   *  producers of PRs 7, 9 and 10 write here. */
+  readonly buffer: EventBuffer;
+  readonly stream: EventStream;
   readonly paused: PausedRequests;
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
@@ -151,7 +164,6 @@ export class Operator {
   readonly #apiHost: string;
   readonly #exitIpTarget: ExitIpTarget;
   readonly #extension: ExtensionChecks;
-  readonly #bufferId: string;
   #params: OperatorParams = DEFAULT_PARAMS;
   #settings: EngineSettings | null = null;
   /** The current start; a newer one, a stop or a failure supersedes it. */
@@ -195,7 +207,6 @@ export class Operator {
     this.#extension = deps.extension ?? EXTENSION_CHECKS;
     registerSecret(this.config.rpcToken);
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
-    this.#bufferId = loadBufferId(this.config.stateDir);
 
     this.journals = new Journals({
       dir: this.config.logDir,
@@ -298,11 +309,49 @@ export class Operator {
         onHello: (hello) => this.#onHello(hello),
         quiesce: () => this.#quiesce(),
         onCommand: (command) => this.#onCommand(command),
+        onBuffer: (message) => this.#onBuffer(message),
         onLink: (up, reason) => {
+          // A new connection subscribes anew; the outcomes not acknowledged
+          // go to it again (spec §6.2).
+          this.stream.reset();
           this.#log(up ? "engine.linked" : "engine.lost", { reason, admissionsOpen: this.admissionsOpen() });
-          if (up) this.#sendState();
+          if (up) {
+            this.#sendState();
+            this.#resendOutcomes();
+            // A buffer that filled up before this engine came: it is told.
+            const full = this.buffer.fullness;
+            if (full) this.#alarm("buffer", { ...alarmDetail(full.alarm), full: true, reason: full.reason, detail: full.detail });
+          }
         },
       },
+    });
+
+    // Last: its handlers use everything above.
+    this.buffer = new EventBuffer({
+      dir: this.config.bufferDir,
+      idFile: join(this.config.stateDir, "buffer-id"),
+      operatorVersion: this.config.operatorVersion,
+      batchMs: DEFAULT_PARAMS.bufferBatchMs,
+      caps: DEFAULT_PARAMS.bufferCap,
+      ...deps.buffer,
+      onAlarm: (alarm) => this.#alarm("buffer", alarmDetail(alarm)),
+      onFull: (reason, alarm, detail) => {
+        // Spec §5, steps 1–2: writes are refused already; the exit closes
+        // and the page stops — it starts again once there is room.
+        this.egress.closeExit(`the buffer takes no writes: ${detail}`);
+        this.#alarm("buffer", { ...alarmDetail(alarm), full: true, reason, detail });
+        if (this.#controlExpected || this.#starting) void this.#fail(reason, `the buffer takes no writes: ${detail}`);
+        this.#sendState();
+      },
+      onRoom: (reason) => this.#onBufferRoom(reason),
+      onCommitted: ({ events, outcomes }) => {
+        if (events > 0) this.stream.pump();
+        for (const json of outcomes) this.rpc.sendRaw(json);
+      },
+    });
+    this.stream = new EventStream(this.buffer, (json) => this.rpc.sendRaw(json), {
+      maxEvents: DEFAULT_PARAMS.eventBatch.maxEvents,
+      maxBytes: DEFAULT_PARAMS.eventBatch.maxBytes,
     });
   }
 
@@ -314,8 +363,9 @@ export class Operator {
     const proxyPort = await this.egress.listen(this.config.proxyPort, this.config.proxyHost);
     const rpcPort = await this.rpc.listen(this.config.rpcPort, this.config.rpcHost);
     this.#stateTimer = setInterval(() => this.#sendState(), this.#timings.stateEveryMs);
+    this.buffer.start();
     void this.#linkHolder(true);
-    this.#log("started", { proxyPort, rpcPort, bufferId: this.#bufferId, version: this.config.operatorVersion });
+    this.#log("started", { proxyPort, rpcPort, bufferId: this.buffer.id, version: this.config.operatorVersion });
     return { proxyPort, rpcPort };
   }
 
@@ -333,13 +383,15 @@ export class Operator {
     this.cdp.close();
     await this.rpc.close();
     await this.egress.close();
+    await this.buffer.close();
     await this.journals.close();
   }
 
   /** May a request get an admission now (PR 7, PR 9)? Only with the engine
-   *  heard within 5 s (plan §4.13) and the exit open. */
+   *  heard within 5 s (plan §4.13), the exit open, and the buffer taking
+   *  writes (plan §4.3). */
   admissionsOpen(): boolean {
-    return this.rpc.linkUp && this.egress.exitOpen && this.page.step === "exit_open" && !this.page.halted;
+    return this.rpc.linkUp && this.egress.exitOpen && this.page.step === "exit_open" && !this.page.halted && this.buffer.refusal() === null;
   }
 
   get state(): State {
@@ -358,7 +410,7 @@ export class Operator {
       exitIp: this.#exitIp,
       chromeVersion: this.#chromeVersion,
       operatorVersion: this.config.operatorVersion,
-      buffer: { bytes: 0, oldestAgeMs: 0 },
+      buffer: this.#bufferState(),
       selfTest: selfTest ? { ok: selfTest.ok, atWall: selfTest.atWall, failed: selfTest.failed, ...(notInstalled.length > 0 ? { notInstalled } : {}) } : null,
     };
   }
@@ -452,8 +504,12 @@ export class Operator {
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
     try {
-      // Nothing may pass unrecorded: the journals must be writing.
+      // Nothing may pass unrecorded: the journals must be writing, and the
+      // buffer must be written and have room (spec §5).
       if (!(await this.journals.flushed())) throw new StartFailure("disk_full", "the journals cannot be written");
+      check();
+      const room = await this.buffer.ready();
+      if (!room.ok) throw new StartFailure(room.reason, `the buffer takes no writes: ${room.detail}`);
       check();
       // A Chrome that runs now is a previous start's or nobody's: the page
       // starts with a fresh one.
@@ -774,7 +830,7 @@ export class Operator {
       queueMicrotask(() => void this.#launch(false, why));
     }
     this.#log("engine.settings", { pageId: settings.pageId, pinnedExitIp: settings.pinnedExitIp, socks: `${settings.socks.ip}:${settings.socks.port}`, env: describeEnv(settings.env), changed });
-    return { bufferId: this.#bufferId, state: this.state };
+    return { bufferId: this.buffer.id, state: this.state };
   }
 
   /** The engine's parameters (plan §4.14), within what keeps the page safe. */
@@ -791,6 +847,8 @@ export class Operator {
     this.rpc.setTiming(this.#params.pingMs, this.#params.linkLossMs);
     this.page.setBackoff(this.#params.restartBackoffMs);
     this.control.networkBuffer = this.#params.chromeBodyBuffer;
+    this.buffer.setParams(this.#params.bufferBatchMs, this.#params.bufferCap);
+    this.stream.setBatch(this.#params.eventBatch.maxEvents, this.#params.eventBatch.maxBytes);
     if (this.#ipTimer) this.#armIpTimer();
   }
 
@@ -886,6 +944,70 @@ export class Operator {
     return { ok: result.ok, detail: summary };
   }
 
+  // ── the buffer (plan §4.4; spec §5, §6.2) ──────────────────────────────
+
+  #onBuffer(message: BufferMessage): void {
+    switch (message.type) {
+      case "events.subscribe": {
+        const refused = this.stream.subscribe(message);
+        if (refused) this.rpc.send(refused);
+        return;
+      }
+      case "ack": {
+        const refused = this.stream.ack(message);
+        if (refused) this.rpc.send(refused);
+        return;
+      }
+      case "resultAck":
+        this.buffer.acknowledgeOutcome(message.attemptId);
+        return;
+      case "recover":
+        void this.#recover(message);
+        return;
+    }
+  }
+
+  /** The engine's start (plan §3.2): the outcomes the buffer has go first,
+   *  then the answer for each attempt. Without an outcome the answer is
+   *  `unknown`: `not_sent` needs what the Hub requests know of their sends
+   *  (PR 9), and a wrong `not_sent` would let a sent request pass as unsent. */
+  async #recover(message: Recover): Promise<void> {
+    await this.buffer.flush();
+    const ids = [...new Set(message.attemptIds)];
+    const stored = new Map(this.buffer.outcomes(ids).map((outcome) => [outcome.attemptId, outcome.json]));
+    const attempts: RecoverResult["attempts"] = ids.map((attemptId) => {
+      const json = stored.get(attemptId);
+      if (json === undefined) return { attemptId, state: "unknown" };
+      this.rpc.sendRaw(json);
+      return { attemptId, state: "outcome_resent" };
+    });
+    this.#log("recover", { asked: ids.length, resent: stored.size });
+    this.rpc.send({ type: "recoverResult", attempts });
+  }
+
+  /** A new connection: every outcome still waiting for its resultAck. */
+  #resendOutcomes(): void {
+    const outcomes = this.buffer.outcomes();
+    for (const outcome of outcomes) this.rpc.sendRaw(outcome.json);
+    if (outcomes.length > 0) this.#log("outcomes.resent", { count: outcomes.length });
+  }
+
+  /** Room in the buffer again, its gap written (spec §5, step 4): a page
+   *  that stopped for it starts again now, not at its next retry. */
+  #onBufferRoom(reason: BufferRefusal): void {
+    const snapshot = this.page.snapshot;
+    this.#sendState();
+    if (this.#stopped || this.#starting || snapshot.halted) return;
+    if (snapshot.stopReason !== "buffer_full" && snapshot.stopReason !== "disk_full") return;
+    this.#log("buffer.room", { reason, action: "the start goes again" });
+    void this.#launch(false, `the buffer has room again (${reason})`);
+  }
+
+  #bufferState(): State["buffer"] {
+    const stats = this.buffer.stats();
+    return { bytes: stats.bytes, oldestAgeMs: stats.oldestAgeMs };
+  }
+
   #alarm(kind: AlarmKind, detail: Record<string, string | number | boolean>): void {
     this.#log("alarm", { kind, ...detail });
     this.rpc.send({ type: "alarm", atWall: Date.now(), kind, detail });
@@ -911,17 +1033,6 @@ export class Operator {
   }
 }
 
-/** The buffer's id (plan §4.4): a UUID made once with the volume. */
-function loadBufferId(stateDir: string): string {
-  const path = join(stateDir, "buffer-id");
-  try {
-    const id = readFileSync(path, "utf8").trim();
-    if (/^[0-9a-f-]{36}$/.test(id)) return id;
-  } catch {
-    // made below
-  }
-  const id = randomUUID();
-  writeFileSync(`${path}.tmp`, `${id}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
-  return id;
+function alarmDetail(alarm: BufferAlarm): Record<string, string | number | boolean> {
+  return { percent: Math.round(alarm.percent), by: alarm.by, bytes: alarm.bytes, capBytes: alarm.capBytes, oldestAgeMs: alarm.oldestAgeMs, capAgeMs: alarm.capAgeMs, freeDiskBytes: alarm.freeDiskBytes };
 }

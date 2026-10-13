@@ -22,9 +22,11 @@ export interface OperatorConfig {
   chromeEnvPath: string;
   /** The journals (plan §4.11), on the buffer volume. */
   logDir: string;
-  /** The operator's small state on the buffer volume: the buffer's id, the
-   *  highest owner generation accepted. */
+  /** The operator's small state on the buffer volume: a copy of the
+   *  buffer's id, the highest owner generation accepted. */
   stateDir: string;
+  /** The buffer's database (plan §4.4; buffer/), on the buffer volume. */
+  bufferDir: string;
   /** Touched every second; the watchdog kills an operator that stops. */
   heartbeatPath: string | null;
   operatorVersion: string;
@@ -53,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     chromeEnvPath: envStr("PB_CHROME_ENV", HANDOVER_PATH),
     logDir: envStr("PB_LOG_DIR", "/data/buffer/logs"),
     stateDir: envStr("PB_STATE_DIR", "/data/buffer/operator"),
+    bufferDir: envStr("PB_BUFFER_DIR", "/data/buffer/store"),
     heartbeatPath: envStr("PB_HEARTBEAT", "/run/pb/operator/alive"),
     operatorVersion: envStr("PB_OPERATOR_VERSION", "dev"),
   };

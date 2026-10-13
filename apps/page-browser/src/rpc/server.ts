@@ -14,6 +14,9 @@
 //   the connection is closed — the engine says hello again.
 // - A command runs once per id (rpc/ledger.ts); one past its notAfterMono
 //   is not executed.
+// - The buffer's messages (events.subscribe, ack, resultAck, recover) go to
+//   the operator (buffer/); an event batch is sent as the buffer stored it
+//   (`sendRaw`), not parsed and serialized again.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -21,7 +24,7 @@ import type { Duplex } from "node:stream";
 
 import { CommandLedger, type CommandOutcome } from "./ledger.ts";
 import type { GenerationStore } from "./generation.ts";
-import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type Command, type Hello, type HelloResult, type OperatorToEngine, type State } from "./protocol.ts";
+import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type OperatorToEngine, type State } from "./protocol.ts";
 import { acceptWebSocket, type WsConnection } from "../shared/ws.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
 
@@ -33,6 +36,9 @@ export interface RpcHandlers {
    *  resolves with the moment of its last send. */
   quiesce: (previousGeneration: number) => Promise<{ lastSendMono: number | null; lastSendWall: number | null }>;
   onCommand: (command: Command) => Promise<CommandOutcome>;
+  /** The buffer's messages (PR 11): events.subscribe, ack, resultAck,
+   *  recover — of this connection's generation. */
+  onBuffer: (message: BufferMessage) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
 }
@@ -113,6 +119,15 @@ export class RpcServer {
     const conn = this.#active;
     if (!conn || conn.ws.closed) return false;
     return conn.ws.sendText(JSON.stringify(message));
+  }
+
+  /** A message already serialized (an event batch, a stored outcome): true
+   *  when an engine is connected to take it — queued, maybe not written yet. */
+  sendRaw(json: string): boolean {
+    const conn = this.#active;
+    if (!conn || conn.ws.closed) return false;
+    conn.ws.sendText(json);
+    return true;
   }
 
   listen(port: number, host = "0.0.0.0"): Promise<number> {
@@ -295,6 +310,13 @@ export class RpcServer {
       case "command":
         this.#lastHeard = monoMs();
         this.#onCommand(message);
+        return;
+      case "events.subscribe":
+      case "ack":
+      case "resultAck":
+      case "recover":
+        this.#lastHeard = monoMs();
+        this.#options.handlers.onBuffer(message);
         return;
     }
   }
