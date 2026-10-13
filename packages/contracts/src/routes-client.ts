@@ -67,11 +67,18 @@ export type ClientCursorRefusalReason = (typeof CLIENT_CURSOR_REFUSAL_REASONS)[n
 const count = z.number().int().nonnegative();
 const positive = z.number().int().positive();
 
-/** Known names: documentation and the client's narrowing. On the wire they are open strings. */
+/**
+ * Known names: documentation and the client's narrowing. On the wire they are open strings.
+ *
+ * `drafts`, `voice` and `notesFill` exist on Fansly only (R20 HF-12): the
+ * narrow token's Reply, Fix, Hi and Ping, its voice script and its notes fill
+ * on a Fansly page. On OnlyFans those generations need no flag of their own.
+ */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
   "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
   "coach", "recap", "review", "splitAll",
+  "drafts", "voice", "notesFill",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",

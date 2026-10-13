@@ -269,6 +269,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     await requireClientTokenAiFeature(appContext, request, principal, {
       feature: request.params.feature,
       pageLabel: request.body.pageLabel,
+      platform: request.body.platform,
     });
     const stream = await prepareAiFeatureStream(
       appContext,

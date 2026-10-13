@@ -410,9 +410,14 @@ The chat extension's narrow device token (chat-extension H-3, `client: "chat-ext
 reaches `/api/v1/ai/features/:feature` only through the owner's switches, checked before any context
 load, quota reservation or provider call (`services/client-ai-switch.ts`). `coach-chat`,
 `fan-summary` and `chat-review` run the full check of the page's `coach` / `recap` / `review` flag
-(`requireClientFeature`); every other feature needs `chatExtensionEnabled` and an
-`x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or above `chatExtensionMinVersion`. A
-refusal is `409 client_feature_disabled` with its `reason`. The raw gateway stream is not on the
+(`requireClientFeature`). On Fansly (R20 HF-12; the request's `platform`, which the route holds to
+the page's own before any context load) `fast-reply`, `improve-draft`, `hi-greeting` and `ping` run
+the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-notes-fill` of
+`notesFill`: three flags that exist on Fansly alone. Every other feature, and on OnlyFans those six,
+needs `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
+above `chatExtensionMinVersion`. A refusal is `409 client_feature_disabled` with its `reason`. The
+check runs once, when the generation is asked for: an owner's change while it streams holds from the
+next request, and the generation already admitted finishes. The raw gateway stream is not on the
 narrow token's route list at all. The restricted generation record of a narrow token carries
 `params.clientProfile = "chat-extension"`; a full token's params are unchanged.
 
