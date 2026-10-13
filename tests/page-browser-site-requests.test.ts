@@ -431,6 +431,19 @@ describe("a CORS preflight (owner decision №1)", () => {
     expect(w.faults).toEqual([]);
   });
 
+  it("Chrome names a preflight's request after the preflight paused (the sessions' order is not guaranteed): the request's abort still ends its operation", async () => {
+    const w = await world();
+    w.engine.answer = () => null;
+    const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204, willBeSentDelayMs: 60 } });
+    const preflight = w.chrome.preflightOf(request)!;
+    await until(() => w.engine.of("siteAdmit").length === 1, 3000, "the ask");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    w.chrome.abort(request);
+    await until(() => preflight.outcome === "failed", 3000, "the paused preflight to be failed");
+    expect(w.site.live).toBe(0);
+    expect(w.chrome.wire).toEqual([]);
+  });
+
   it("the page aborts a request whose preflight is in flight: the operation ends with the preflight's answer — the sender's word — and never hangs", async () => {
     const w = await world({ timings: { mainWaitMs: 5000, opLimitMs: 5000 } });
     const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204, preflightDelayMs: 150 } });
