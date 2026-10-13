@@ -1045,6 +1045,22 @@ chat. The client sends the labels; the hub assembles the prompt
   transcript's day lines `--- YYYY-MM-DD ---` (the client adds them in merge
   mode; they are the only source of dates). The prompt also defines «Локация»,
   «График», «Планы и даты» and «Другое».
+- One fact in one field, merge mode only (2026-10-13, after the owner's review
+  of real output, where the same fact landed in «Фетиши», «Медиа» and
+  «Характеристика»). The two modes define two fields differently, so those
+  template lines are slots (`{noteFillCharacterField}`,
+  `{noteFillMediaField}`). Legacy mode keeps its definitions: «Характеристика»
+  is what the fan likes and pays for, «Медиа» what he bought and likes. Merge
+  mode: «Характеристика» is what kind of fan he is and how to talk to him, in
+  his own stated terms (the agency chatters' own use of the field), never his
+  purchases, prices, subscription, content tastes or fetishes; «Медиа» is what
+  content he bought (by the transcript's `purchased` tags and the spending and
+  subscription data) and what content he says he likes, and the one place for
+  purchases, prices and the subscription. One «Current Values» rule goes with
+  them: a fact is stated in one field, the one whose definition fits it best,
+  and a fact a current value already holds, in any field, is not added again.
+  How much the mode writes is unchanged (the owner's ruling: the output is not
+  to get shorter), and so are the request and the answer format.
 - Context as for a full Recap: on Fansly the client sends `clientContext` with
   the whole conversation it read (`transcriptCoverage` usually
   `full-history`), the spending and subscription blocks and the bio, plus
