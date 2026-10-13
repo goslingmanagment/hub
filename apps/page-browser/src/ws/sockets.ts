@@ -80,7 +80,9 @@
 //    it (CDP may never say). A connection's closing is known at once, in
 //    memory: what CDP still says of it afterwards is dropped and counted.
 //  - `gap` where frames may be missing (spec §6.1 reasons), from the last
-//    event of the socket saved before the break: `operator_start` at every
+//    event of the socket saved before the break — never the moment a late
+//    word of CDP is taken: with no event before, the boundary is unknown
+//    (`fromSeq`/`fromWall` null): `operator_start` at every
 //    start of the operator (from the last event saved before it);
 //    `chrome_restart` when the browser goes under an open connection, or
 //    under a socket whose end CDP had not shown (its 101 and frames may be
@@ -251,7 +253,13 @@ export interface SocketDeps {
 /** A place in the stream: an event's number once durable, its wall time. */
 interface Mark {
   seq: number | null;
-  wall: number;
+  wall: number | null;
+}
+
+/** A gap's boundary when no moment saved before the loss is known: left
+ *  unknown (spec §6.1), never "now". */
+function unknownBoundary(): Mark {
+  return { seq: null, wall: null };
 }
 
 interface Admission {
@@ -1012,7 +1020,7 @@ export class SiteSockets {
       // Its tunnel is gone (or its admission ended): the answer only tells
       // how its handshake went; what it carried is not kept.
       socket.state = "answered";
-      this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
+      this.#uncovered ??= this.#last ?? unknownBoundary();
       this.#done(admission, { sent: true, status: null, error: "the tunnel ended with the handshake's answer 101: not kept" });
       this.#settle(admission);
       return null;
@@ -1059,7 +1067,7 @@ export class SiteSockets {
     }
     if (socket.admission === null) return this.#drop("a frame of a socket not bound");
     if (socket.state !== "open") {
-      if (socket.state === "answered") this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
+      if (socket.state === "answered") this.#uncovered ??= this.#last ?? unknownBoundary();
       return this.#drop("a frame of a socket not kept");
     }
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
@@ -1179,11 +1187,13 @@ export class SiteSockets {
     const connectionId = admission.id;
     this.#open.delete(connectionId);
     const stamp = at ?? { mono: monoMs(), wall: wallMs() };
-    // The connection's last event; what may be missing from it on until the
-    // next connection opens. Its number once the close is durable.
+    // What may be missing until the next connection opens: from the last
+    // event of the socket before this close — a moment saved before the
+    // loss, not the close's (CDP may tell it late; a close of ours is now).
+    this.#uncovered ??= this.#last ?? unknownBoundary();
+    // The connection's last event: its number once the close is durable.
     const mark: Mark = { seq: null, wall: stamp.wall };
     this.#last = mark;
-    this.#uncovered = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
     const durable = this.#end(
@@ -1229,18 +1239,26 @@ export class SiteSockets {
       this.#deps.journal({ connectionId, event: "closed", detail: why });
     }
     if (ids.length === 0 && !lost) return;
+    // The browser's gap from the last event saved before — taken when the
+    // first try goes: every write before the closes has settled by then,
+    // and nothing of these connections comes after. What may be missing
+    // until the next connection opens is from the same moment (unknown
+    // until then — never the time of these closes).
+    const from = unknownBoundary();
+    let taken = false;
+    this.#uncovered ??= from;
     this.#last = mark;
-    this.#uncovered = mark;
-    let from: { seq: number | null; wall: number | null } | null = null;
     const key = `chrome:${++this.#chromeGaps}`;
     for (const id of ids) this.#ending.set(id, key);
     this.#write(
       key,
       () => {
-        // Taken when the first try goes: every write before the closes has
-        // settled by then, and nothing of these connections comes after.
-        from ??= { ...this.#saved };
-        return [{ gap: "chrome_restart", from }, ...ids.map((connectionId): GroupItem => ({ event: { kind: "ws.close", connectionId, code: null, reason: null }, at: stamp, connection: { connectionId, gone: true } }))];
+        if (!taken) {
+          taken = true;
+          from.seq = this.#saved.seq;
+          from.wall = this.#saved.wall;
+        }
+        return [{ gap: "chrome_restart", from: { seq: from.seq, wall: from.wall } }, ...ids.map((connectionId): GroupItem => ({ event: { kind: "ws.close", connectionId, code: null, reason: null }, at: stamp, connection: { connectionId, gone: true } }))];
       },
       (written) => {
         for (const id of ids) {
@@ -1498,7 +1516,7 @@ export class SiteSockets {
     this.#closedUntilChrome = why;
     // What its socket carried is not in the stream: the next connection's
     // gap covers it.
-    this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
+    this.#uncovered ??= this.#last ?? unknownBoundary();
     const connectionId = admission?.id ?? null;
     this.#log("socket.unaccounted", { connectionId, why });
     this.#deps.journal({ connectionId, event: "failed", detail: `not accounted for: ${why}` });

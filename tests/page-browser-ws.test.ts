@@ -455,8 +455,9 @@ describe("the handshake's outcome (wsDone)", () => {
     // What the first socket carried is not in the stream: the browser's gap
     // when it went, and the reconnect's before the next.
     expect(w.events()).toMatchObject([
-      { kind: "gap", reason: "chrome_restart", fromSeq: null },
-      { kind: "gap", reason: "ws_reconnect", fromSeq: 1 },
+      { kind: "gap", reason: "chrome_restart", fromSeq: null, fromWall: null },
+      // No socket event saved before the loss: the boundary is unknown.
+      { kind: "gap", reason: "ws_reconnect", fromSeq: null, fromWall: null },
       { kind: "ws.open", attemptId: 84 },
     ]);
   });
@@ -612,6 +613,9 @@ describe("the handshake's outcome (wsDone)", () => {
     await opened(w, "WS2", 98);
     await until(() => w.events().length === 4, 3000, "B's open");
     expect(w.events().map((event) => `${String(event.kind)}${event.kind === "gap" ? `:${String(event.reason)}` : ""}`)).toEqual(["gap:operator_start", "gap:chrome_restart", "gap:ws_reconnect", "ws.open"]);
+    // Both from the moment saved before the loss — none here: unknown.
+    expect(w.events()[1]).toMatchObject({ fromSeq: null, fromWall: null });
+    expect(w.events()[2]).toMatchObject({ fromSeq: null, fromWall: null });
     expect(w.events().filter((event) => event.kind === "ws.in")).toEqual([]);
     expect(w.outcome(97)).toMatchObject({ sent: true, status: null });
   });
@@ -658,6 +662,34 @@ describe("the handshake's outcome (wsDone)", () => {
     expect(w.stops).toMatchObject([{ reason: "ws_unaccounted", note: expect.stringContaining(why) }]);
     await w.buffer.flush();
     expect(w.events().filter((event) => event.kind === "ws.in")).toEqual([]);
+  });
+
+  it("Astra's round 7: a late first 101 after its tunnel ended — the frames lost before it are under the next gap, whose boundary is unknown, never the moment the 101 was taken", async () => {
+    const w = await world();
+    await w.sockets.afterRestart();
+    const connecting = siteOpens(w, "WS1");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    const connectionId = w.answer({ admit: true, attemptId: 101 });
+    const client = await connecting;
+    await client.tls();
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    client.request();
+    await until(() => w.server.received().includes(SOCKET_FILL.request));
+    // Chrome got the 101 and a frame; the tunnel ended; CDP tells them late.
+    w.egress.cutSocket(connectionId, "closed by the server");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"lost"}' } }, "S1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
+    await until(() => !w.sockets.busy, 3000, "A accounted for");
+    expect(w.stops).toEqual([]);
+    client.destroy();
+    await opened(w, "WS2", 102);
+    await until(() => w.events().length === 3, 3000, "B's open");
+    const events = w.events();
+    expect(events.map((event) => `${String(event.kind)}${event.kind === "gap" ? `:${String(event.reason)}` : ""}`)).toEqual(["gap:operator_start", "gap:ws_reconnect", "ws.open"]);
+    expect(events[1]).toMatchObject({ fromSeq: null, fromWall: null });
+    expect(events.filter((event) => event.kind === "ws.in")).toEqual([]);
   });
 
   it("a tunnel that is not TLS is cut before anything goes", async () => {
@@ -755,7 +787,8 @@ describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
       "ws.close",
     ]);
     expect(events[0]).toMatchObject({ fromSeq: null, fromWall: null });
-    expect(events[4]).toMatchObject({ fromSeq: 4, fromWall: events[3]!.atWall });
+    // From the last event before the close (a moment saved before the loss).
+    expect(events[4]).toMatchObject({ fromSeq: 3, fromWall: events[2]!.atWall });
     expect(events[6]).toMatchObject({ fromSeq: 6, fromWall: events[5]!.atWall });
     // The second connection's admission ended with the browser too.
     expect(w.outcome(42)).toMatchObject({ status: 101 });
