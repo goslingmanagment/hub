@@ -31,17 +31,21 @@
 // - PR 10: no `wsAdmit` before the site's live session is known (its
 //   `sessionFingerprint` is never null from this operator): the socket gate
 //   lets the authorization go only at the live token's size. The stop
-//   reason `ws_guard_failed` (state/steps.ts).
-//   `wsAdmit.url` and `context` are CDP's word on the oldest socket of the
-//   host still waiting to connect — the CONNECT itself names only the host;
-//   the socket is tied to its admission at its handshake (ws/sockets.ts). A
+//   reasons `ws_guard_failed` and `ws_unaccounted` (state/steps.ts).
+//   `wsAdmit` goes one socket at a time: a CONNECT that comes while the
+//   socket before it is not accounted for waits, and is asked once it is
+//   (its `waitDeadlineMono` counts from the CONNECT). `wsAdmit.url` and
+//   `context` are CDP's word on the oldest socket of the host still waiting
+//   to connect — a label: the CONNECT itself names only the host; the socket
+//   is bound to its admission at its handshake (ws/sockets.ts). A
 //   `wsAdmitResult` admits only on the connection it was asked on: an engine
-//   connection that changes or goes refuses every socket still waiting, and
+//   connection that changes or goes refuses every socket asked on it, and
 //   an admission that finds its socket gone gets `wsDone` with `sent:
 //   false`. Every connection that opened is closed in the stream exactly
-//   once: by CDP's word, when the browser goes under it, or — by an
-//   operator that starts again, its Chrome gone — before its
-//   `operator_start` gap. An admitted connection that never opened in the
+//   once, after its `ws.open`: by CDP's word, when the browser goes under it
+//   (after a `chrome_restart` gap, in one commit), or — by an operator that
+//   starts again, its Chrome gone — after its `operator_start` gap, in one
+//   commit. An admitted connection that never opened in the
 //   stream before such a restart gets `wsDone` with `fate: "unknown"` (an
 //   addition): whether its handshake went is not known — `sent` is false
 //   because nothing proves it went, `status` null; the engine takes it as

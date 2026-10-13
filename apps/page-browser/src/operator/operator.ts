@@ -475,6 +475,7 @@ export class Operator {
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
+      socketHost: (host) => this.#classify(host) === "ws",
       cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
       alarm: (kind, detail) => this.#alarm(kind, detail),
@@ -1003,9 +1004,15 @@ export class Operator {
   /** The site's socket stops the page (ws/): a message the guard did not let
    *  go — or that went past it — or a context the guard could not go into.
    *  The exit closes now, in this turn; the page stands until the engine
-   *  starts it again (spec §2.6; stage 1, amendment 17). */
+   *  starts it again (spec §2.6; stage 1, amendment 17). A socket that
+   *  could not be accounted for is a failure instead: Chrome goes with
+   *  whatever it holds of that socket, and the page starts again. */
   #socketStop(reason: SocketStop, note: string, how: "stop" | "kill"): void {
     this.egress.closeExit(note);
+    if (reason === "ws_unaccounted") {
+      void this.#fail(reason, note);
+      return;
+    }
     if (this.page.halted && this.page.snapshot.stopReason === reason) return;
     void this.#halt(reason, note, how);
   }

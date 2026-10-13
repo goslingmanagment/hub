@@ -84,6 +84,7 @@ async function setUp(
     holderMaxBytes?: number;
     params?: Record<string, unknown>;
     buffer?: OperatorDeps["buffer"];
+    socketTimings?: OperatorDeps["socketTimings"];
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -136,6 +137,7 @@ async function setUp(
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
       ...(options.buffer ? { buffer: options.buffer } : {}),
+      ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
     });
     const ports = await operator.start();
@@ -1319,7 +1321,32 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", decision: "failed", result: "BlockedByClient: the socket host serves sockets only" }));
   });
 
-  it("a new Chrome after one that had a connection marks the gap; the open connection is closed in the stream", async () => {
+  it("a socket that cannot be accounted for — a handshake on its tunnel CDP never shows — fails the page: the exit closed, Chrome started again, nothing reassigned", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [300] }, socketTimings: { bindWaitMs: 200 } });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await siteSession(s, tab);
+    s.chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, tab);
+    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
+    await until(() => s.engine.of("wsAdmit").length === 1, 5000, "the admission asked");
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: s.engine.of("wsAdmit")[0]!.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId: 4500 });
+    const client = await connecting;
+    expect(client.status).toBe(200);
+    await client.tls();
+    // The request goes up its tunnel; CDP never shows the handshake.
+    client.request();
+    await until(() => s.operator.page.snapshot.stopReason === "ws_unaccounted", 5000, "the failure");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.control.calls).toContain("kill");
+    expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
+    await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "exit_open", 10_000, "Chrome started again");
+    client.destroy();
+  });
+
+  it("a browser that goes under an open connection marks the gap — from its last event — then closes it in the stream", async () => {
     const s = await setUp();
     const server = await socketServer();
     cleanups.push(server.close);
@@ -1334,8 +1361,8 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
     const events = () => s.engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
     await until(() => events().length === 4, 5000, "4 events");
-    expect(events().map((event) => (event.kind === "gap" ? `gap:${String(event.reason)}` : event.kind))).toEqual(["gap:operator_start", "ws.open", "ws.close", "gap:chrome_restart"]);
-    expect(events()[3]).toMatchObject({ fromSeq: 3 });
+    expect(events().map((event) => (event.kind === "gap" ? `gap:${String(event.reason)}` : event.kind))).toEqual(["gap:operator_start", "ws.open", "gap:chrome_restart", "ws.close"]);
+    expect(events()[2]).toMatchObject({ fromSeq: 2, fromWall: events()[1]!.atWall });
     client.destroy();
   });
 });
