@@ -6,11 +6,17 @@ import {
   bindPageBrowser,
   findPageBrowser,
   findPageBrowserByPage,
+  getSyncPageTransport,
   insertObservation,
   insertPageBrowser,
   insertSiteAdmission,
+  listSyncPageTransports,
+  pageBrowserEnvOf,
+  recordPageBrowserHandover,
   recordPageBrowserLinkError,
   recordPageBrowserState,
+  setPageBrowserSettings,
+  setSyncPageTransport,
   storeProxyConfig,
   type Database,
 } from "@agency_hub_core/db";
@@ -30,7 +36,8 @@ import { HARNESS_ENCRYPTION_KEY, HARNESS_OWN_REF, harnessConfig, seedHarnessPage
 // The data of PR 12 (Project Browser plan §3.4; 0272–0275): send_mark's
 // `transport_reported` and the operator's request id on sync_attempts, the
 // observation source `browser_site`, the page_browsers table with its
-// sealed secrets, and the hello's settings read from them.
+// sealed secrets, and the hello's settings read from them. And of PR 14
+// (0277): a page's transport and the operator's word on a hand-over.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -224,5 +231,96 @@ describe("the hello's settings (services/egress/page-browser-link.ts)", () => {
     await expect(read()).rejects.toBeInstanceOf(PageBrowserNotConfiguredError);
     await profile(pageId);
     await expect(read()).rejects.toThrow(/not a SOCKS5/);
+  });
+});
+
+describe("sync_pages.transport and the hand-over mark (0277)", () => {
+  it("every page is on node until the lever says otherwise; the change is made under the page's row lock and wakes its actor", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("transport-page");
+    expect(await getSyncPageTransport(db(), pageId)).toBe("node");
+    expect([...(await listSyncPageTransports(db())).values()]).toEqual(["node"]);
+
+    const listener = await testDb.pool.connect();
+    const woken: string[] = [];
+    try {
+      await listener.query("listen fansly_sync_work");
+      listener.on("notification", (message) => woken.push(message.payload ?? ""));
+      const changed = await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" }));
+      expect(changed).toEqual({ kind: "changed", from: "node", to: "browser" });
+      expect(await getSyncPageTransport(db(), pageId)).toBe("browser");
+      expect(await listSyncPageTransports(db())).toEqual(new Map([[pageId, "browser"]]));
+      await expect.poll(() => woken).toContain(String(pageId));
+    } finally {
+      listener.release();
+    }
+
+    expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" })))
+      .toEqual({ kind: "unchanged", transport: "browser" });
+    expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "node" })))
+      .toEqual({ kind: "changed", from: "browser", to: "node" });
+    expect(await db().transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId: 999_999, to: "browser" })))
+      .toEqual({ kind: "no_page" });
+    await expect(setSyncPageTransport(db(), { pageId, to: "carrier-pigeon" as never })).rejects.toThrow(/Unknown Fansly sync page transport/);
+    // The column itself takes the two values and no other.
+    await expect(testDb.pool.query("update sync_pages set transport = 'undici' where page_id = $1", [pageId]))
+      .rejects.toThrow(/sync_pages_transport_check/);
+  });
+
+  it("a change rolled back with its transaction changes nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("transport-rollback");
+    await expect(db().transaction(async (tx) => {
+      await setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" });
+      throw new Error("the lever's audit row failed");
+    })).rejects.toThrow(/audit row failed/);
+    expect(await getSyncPageTransport(db(), pageId)).toBe("node");
+    expect(await getSyncPageTransport(db(), 999_999)).toBeNull();
+  });
+
+  it("keeps the pinned exit IP and the environment the hello carries; refuses what is not one", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("settings-page");
+    const profileId = await profile(pageId, "page-browser-settings-page");
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ pinnedExitIp: null, pinnedExitIpAt: null, env: null });
+    expect(await setPageBrowserSettings(db(), { profileId, pinnedExitIp: "203.0.113.9", env: ENV })).toBe(true);
+    const set = (await findPageBrowser(db(), profileId))!;
+    expect(set.pinnedExitIp).toBe("203.0.113.9");
+    expect(set.pinnedExitIpAt).toBeInstanceOf(Date);
+    expect(pageBrowserEnvOf(set.env)).toEqual(ENV);
+    // A field left out keeps its value; a pin taken away takes its instant.
+    expect(await setPageBrowserSettings(db(), { profileId, pinnedExitIp: null })).toBe(true);
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ pinnedExitIp: null, pinnedExitIpAt: null });
+    expect(pageBrowserEnvOf((await findPageBrowser(db(), profileId))!.env)).toEqual(ENV);
+    await expect(setPageBrowserSettings(db(), { profileId, pinnedExitIp: "not-an-ip" })).rejects.toThrow(/Not an IP/);
+    await expect(setPageBrowserSettings(db(), { profileId, env: { ...ENV, languages: [] } })).rejects.toThrow(/Not a browser environment/);
+    expect(pageBrowserEnvOf({ timeZone: "UTC", languages: ["en"], geolocation: { latitude: 91, longitude: 0, accuracyM: 1 } })).toBeNull();
+    await expect(testDb.pool.query("update page_browsers set env = '[]'::jsonb where profile_id = $1", [profileId]))
+      .rejects.toThrow(/page_browsers_env_check/);
+    expect(await setPageBrowserSettings(db(), { profileId: "00000000-0000-4000-8000-00000000dead", pinnedExitIp: "203.0.113.9" })).toBe(false);
+  });
+
+  it("keeps the newest owner generation the operator answered with quiesced, never an earlier one", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await page("handover-page");
+    const profileId = await profile(pageId, "page-browser-handover-page");
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ handoverGeneration: null, handoverQuiescedAt: null, handoverLastSendAt: null });
+
+    const lastSendAt = new Date("2026-10-13T10:00:00.500Z");
+    expect(await recordPageBrowserHandover(db(), { profileId, generation: 7n, lastSendAt })).toBe(true);
+    const first = (await findPageBrowser(db(), profileId))!;
+    expect(first.handoverGeneration).toBe(7n);
+    expect(first.handoverLastSendAt?.toISOString()).toBe(lastSendAt.toISOString());
+    expect(first.handoverQuiescedAt).toBeInstanceOf(Date);
+
+    // Said again for the same owner: there already. An earlier owner's word
+    // written late: not taken.
+    expect(await recordPageBrowserHandover(db(), { profileId, generation: 7n, lastSendAt: null })).toBe(true);
+    expect(await recordPageBrowserHandover(db(), { profileId, generation: 6n, lastSendAt: null })).toBe(false);
+    expect((await findPageBrowser(db(), profileId))!.handoverLastSendAt?.toISOString()).toBe(lastSendAt.toISOString());
+
+    expect(await recordPageBrowserHandover(db(), { profileId, generation: 8n, lastSendAt: null })).toBe(true);
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ handoverGeneration: 8n, handoverLastSendAt: null });
+    expect(await recordPageBrowserHandover(db(), { profileId: "00000000-0000-4000-8000-00000000dead", generation: 1n, lastSendAt: null })).toBe(false);
   });
 });

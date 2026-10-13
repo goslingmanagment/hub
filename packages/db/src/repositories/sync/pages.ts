@@ -50,6 +50,18 @@ import {
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
 export type SyncPageMode = (typeof SYNC_PAGE_MODES)[number];
 
+/** Which sender a page's requests leave through (0277; Project Browser plan
+ *  §3.2): `node` — undici from the `sync` process, the default and what every
+ *  page ran on before the column; `browser` — the page's own browser, through
+ *  its operator. One at a time: the host ends the page's slot and takes the
+ *  page again (a new owner generation, the takeover floor) when it changes.
+ *  Read on its own (`listSyncPageTransports`, `getSyncPageTransport`), not
+ *  with the page row: the page row's statements are the ones every image
+ *  since the hold set shares (tests/sync-hold-set.integration.test.ts runs
+ *  this build's acquisition on the schema before the drop of 0245). */
+export const SYNC_PAGE_TRANSPORTS = ["node", "browser"] as const;
+export type SyncPageTransport = (typeof SYNC_PAGE_TRANSPORTS)[number];
+
 /** Session advisory lock namespace of page ownership: (58215, pageId). */
 export const SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE = 58_215;
 
@@ -360,6 +372,60 @@ export async function listSyncPages(
      order by p.label nulls last, sp.page_id
   `);
   return result.rows.map(normalizePageRow);
+}
+
+// ── transport ─────────────────────────────────────────────────────────────────
+
+export type SetSyncPageTransportResult =
+  | { kind: "changed"; from: SyncPageTransport; to: SyncPageTransport }
+  | { kind: "unchanged"; transport: SyncPageTransport }
+  | { kind: "no_page" };
+
+/**
+ * The page's transport (0277), changed under its row lock — FOR NO KEY
+ * UPDATE, the lock every actor transaction of the page starts with, so the
+ * change orders itself with the page's admissions. Run inside the caller's
+ * transaction: the owner's lever (`sync page transport`) writes its audit row
+ * with it. The host follows on its next pass (≤ 2 s): it ends the page's slot
+ * and takes the page again with the other transport — a new owner generation
+ * and the takeover floor (I5). Wakes the page's actor.
+ */
+export async function listSyncPageTransports(db: Database): Promise<Map<number, SyncPageTransport>> {
+  const result = await db.execute<{ pageId: string; transport: SyncPageTransport }>(sql`
+    select page_id::text as "pageId", transport from sync_pages
+  `);
+  return new Map(result.rows.map((row) => [Number(row.pageId), row.transport]));
+}
+
+/** The page's transport (null: no engine row). */
+export async function getSyncPageTransport(db: Database, pageId: number): Promise<SyncPageTransport | null> {
+  const result = await db.execute<{ transport: SyncPageTransport }>(sql`
+    select transport from sync_pages where page_id = ${pageId}
+  `);
+  return result.rows[0]?.transport ?? null;
+}
+
+export async function setSyncPageTransport(
+  tx: Database,
+  input: { pageId: number; to: SyncPageTransport },
+): Promise<SetSyncPageTransportResult> {
+  if (!(SYNC_PAGE_TRANSPORTS as readonly string[]).includes(input.to)) {
+    throw new Error(`Unknown Fansly sync page transport: ${String(input.to)}`);
+  }
+  const current = await tx.execute<{ transport: SyncPageTransport }>(sql`
+    select transport from sync_pages where page_id = ${input.pageId} for no key update
+  `);
+  const from = current.rows[0]?.transport;
+  if (from === undefined) return { kind: "no_page" };
+  if (from === input.to) return { kind: "unchanged", transport: from };
+  await tx.execute(sql`
+    update sync_pages
+       set transport = ${input.to},
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+  `);
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { kind: "changed", from, to: input.to };
 }
 
 // ── mode ──────────────────────────────────────────────────────────────────────

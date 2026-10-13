@@ -504,4 +504,27 @@ describe("database migration invariants", () => {
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0276_page_browser_intake.sql"');
   });
+
+  it("keeps the page transport column (Project Browser PR 14) brief, defaulted to node, and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const transport = statementsOf(await readFile("packages/db/migrations/0277_sync_pages_transport.sql", "utf8"));
+    // A row lock of a running actor is waited for briefly, never queued behind.
+    expect(transport).toContain("set local lock_timeout = '5s';");
+    // A constant default: catalog only, and every existing page stays on node.
+    expect(transport).toContain("alter table sync_pages add column if not exists transport text not null default 'node';");
+    expect(transport).toMatch(/add constraint sync_pages_transport_check\s+check \(transport in \('node', 'browser'\)\) not valid;/);
+    expect(transport).toContain("alter table sync_pages validate constraint sync_pages_transport_check;");
+    // No statement moves a page off node: only the owner's lever does.
+    expect(transport).not.toMatch(/update\s+sync_pages/i);
+    for (const column of ["pinned_exit_ip text", "pinned_exit_ip_at timestamptz", "env jsonb", "handover_generation bigint",
+      "handover_quiesced_at timestamptz", "handover_last_send_at timestamptz"]) {
+      expect(transport).toContain(`add column if not exists ${column}`);
+      // Nullable without a default: catalog only.
+      expect(transport.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
+    }
+    // The read role sees the new columns (page_browsers is granted by column).
+    expect(transport).toMatch(/grant select \(pinned_exit_ip, pinned_exit_ip_at, env, handover_generation, handover_quiesced_at, handover_last_send_at\)\s+on page_browsers to read_only;/);
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0277_sync_pages_transport.sql"');
+  });
 });

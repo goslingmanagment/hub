@@ -438,6 +438,16 @@ export const pageBrowsers = pgTable("page_browsers", {
   eventsHaltedBufferId: uuid("events_halted_buffer_id"),
   eventsHaltedReason: text("events_halted_reason"),
   eventsHaltedAt: timestamp("events_halted_at", { withTimezone: true }),
+  // 0277 (Project Browser PR 14): the hello's settings beside the proxy
+  // (`setPageBrowserSettings`).
+  pinnedExitIp: text("pinned_exit_ip"),
+  pinnedExitIpAt: timestamp("pinned_exit_ip_at", { withTimezone: true }),
+  env: jsonbSafe("env").$type<Record<string, unknown>>(),
+  // 0277 (Project Browser PR 14): the newest owner generation the operator
+  // answered with `quiesced` (`recordPageBrowserHandover`).
+  handoverGeneration: bigint("handover_generation", { mode: "bigint" }),
+  handoverQuiescedAt: timestamp("handover_quiesced_at", { withTimezone: true }),
+  handoverLastSendAt: timestamp("handover_last_send_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -999,6 +1009,9 @@ export const syncPages = pgTable(
     wsRouterCursor: bigint("ws_router_cursor", { mode: "number" }).notNull().default(0),
     // 0235 (step 3, owner decision №8): DM exclusion reasons lifted on the page.
     liftedDmExclusions: text("lifted_dm_exclusions").array().notNull().default(sql`'{}'::text[]`),
+    // 0277 (Project Browser PR 14): which sender the page's requests leave
+    // through — undici from `sync`, or the page's own browser.
+    transport: text("transport").$type<"node" | "browser">().notNull().default("node"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   },
@@ -1009,6 +1022,7 @@ export const syncPages = pgTable(
       "sync_pages_lifted_dm_exclusions_check",
       sql`${table.liftedDmExclusions} <@ array['partner_missing_from_aggregation_accounts', 'partner_unresolvable_from_account_lookup']::text[]`,
     ),
+    transportCheck: check("sync_pages_transport_check", sql`${table.transport} in ('node', 'browser')`),
   }),
 );
 

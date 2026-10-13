@@ -915,6 +915,8 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
     const table = schema.slice(schema.indexOf('export const syncPages = pgTable('), schema.indexOf('export const syncHolds = pgTable('));
     expect([...table.matchAll(/check\(\s*"([a-z_]+)"/g)].map((match) => match[1])).toEqual([
       "sync_pages_mode_check", "sync_pages_cycle_pos_check", "sync_pages_lifted_dm_exclusions_check",
+      // 0277 (Project Browser PR 14): the page's transport — not a hold.
+      "sync_pages_transport_check",
     ]);
   });
 

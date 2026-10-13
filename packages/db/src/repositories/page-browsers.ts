@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -34,14 +36,37 @@ export interface PageBrowserRow {
   encryptedApiToken: string;
   encryptedVncPassword: string;
   keyVersion: number;
+  /** The exit IP the owner pinned for the page (0277; `hello.pinnedExitIp`)
+   *  and when; null until pinned. */
+  pinnedExitIp: string | null;
+  pinnedExitIpAt: Date | null;
+  /** The browser's environment (0277; `hello.env`), as stored; read through
+   *  `pageBrowserEnvOf`. Null until set. */
+  env: Record<string, unknown> | null;
+  /** The newest owner generation of the page whose hello the operator
+   *  answered with `quiesced` (0277; plan §4.7): the earlier owners' requests
+   *  are over. Null: none yet. */
+  handoverGeneration: bigint | null;
+  /** When the engine heard that `quiesced`. */
+  handoverQuiescedAt: Date | null;
+  /** The browser's last send as it named it (null: it knows of none). */
+  handoverLastSendAt: Date | null;
 }
 
-type SqlRow = Omit<PageBrowserRow, "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs"> & {
+type SqlRow = Omit<
+  PageBrowserRow,
+  "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
+  | "pinnedExitIpAt"
+> & {
+  pinnedExitIpAt: Date | string | null;
   pageId: string | null;
   selftestAt: Date | string | null;
   lastStateAt: Date | string | null;
   bufferBytes: string | null;
   bufferOldestAgeMs: string | null;
+  handoverGeneration: string | null;
+  handoverQuiescedAt: Date | string | null;
+  handoverLastSendAt: Date | string | null;
 };
 
 const columns = sql`
@@ -67,7 +92,13 @@ const columns = sql`
   b.encrypted_engine_token as "encryptedEngineToken",
   b.encrypted_api_token as "encryptedApiToken",
   b.encrypted_vnc_password as "encryptedVncPassword",
-  b.key_version as "keyVersion"
+  b.key_version as "keyVersion",
+  b.pinned_exit_ip as "pinnedExitIp",
+  b.pinned_exit_ip_at as "pinnedExitIpAt",
+  b.env,
+  b.handover_generation::text as "handoverGeneration",
+  b.handover_quiesced_at as "handoverQuiescedAt",
+  b.handover_last_send_at as "handoverLastSendAt"
 `;
 
 function dateOf(value: Date | string | null): Date | null {
@@ -86,6 +117,11 @@ function rowOf(row: SqlRow): PageBrowserRow {
     lastStateAt: dateOf(row.lastStateAt),
     bufferBytes: numberOf(row.bufferBytes),
     bufferOldestAgeMs: numberOf(row.bufferOldestAgeMs),
+    pinnedExitIpAt: dateOf(row.pinnedExitIpAt),
+    env: row.env !== null && typeof row.env === "object" && !Array.isArray(row.env) ? row.env : null,
+    handoverGeneration: row.handoverGeneration === null ? null : BigInt(row.handoverGeneration),
+    handoverQuiescedAt: dateOf(row.handoverQuiescedAt),
+    handoverLastSendAt: dateOf(row.handoverLastSendAt),
   };
 }
 
@@ -187,6 +223,87 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
 export async function recordPageBrowserLinkError(db: Database, input: { profileId: string; linkError: string | null }): Promise<boolean> {
   const result = await db.execute(sql`
     update page_browsers set link_error = ${input.linkError}, updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * The operator answered the hello of owner `generation` with `quiesced`
+ * (plan §4.7, §4.13; 0277): the earlier owners' requests are over and nothing
+ * of them is in flight. Kept on the profile's row for the deploy's
+ * `sync ownership confirm-stopped`, which waits for it, and for the status.
+ * Never moves back: an earlier owner's word written late changes nothing.
+ * True: recorded (or already there for this generation).
+ */
+export async function recordPageBrowserHandover(
+  db: Database,
+  input: { profileId: string; generation: bigint; lastSendAt: Date | null },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers
+       set handover_generation = ${input.generation.toString()}::bigint,
+           handover_quiesced_at = clock_timestamp(),
+           handover_last_send_at = ${input.lastSendAt === null ? null : input.lastSendAt.toISOString()}::timestamptz,
+           updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid
+       and (handover_generation is null or handover_generation < ${input.generation.toString()}::bigint)
+    returning profile_id
+  `);
+  if (result.rows.length === 1) return true;
+  const current = await db.execute<{ generation: string | null }>(sql`
+    select handover_generation::text as generation from page_browsers where profile_id = ${input.profileId}::uuid
+  `);
+  return current.rows[0]?.generation === input.generation.toString();
+}
+
+/** A browser's environment (spec §6.1 `hello.env`; plan §4.1 step 2). */
+export interface PageBrowserEnv {
+  timeZone: string;
+  languages: string[];
+  geolocation: { latitude: number; longitude: number; accuracyM: number };
+}
+
+/** The stored environment, whole and well-formed, or null. */
+export function pageBrowserEnvOf(stored: Record<string, unknown> | null): PageBrowserEnv | null {
+  if (stored === null) return null;
+  const { timeZone, languages, geolocation } = stored as { timeZone?: unknown; languages?: unknown; geolocation?: unknown };
+  if (typeof timeZone !== "string" || timeZone.length === 0) return null;
+  if (!Array.isArray(languages) || languages.length === 0 || !languages.every((tag) => typeof tag === "string" && tag.length > 0)) return null;
+  const geo = geolocation as { latitude?: unknown; longitude?: unknown; accuracyM?: unknown } | null | undefined;
+  if (geo === null || typeof geo !== "object") return null;
+  const { latitude, longitude, accuracyM } = geo;
+  if (typeof latitude !== "number" || !Number.isFinite(latitude) || latitude < -90 || latitude > 90) return null;
+  if (typeof longitude !== "number" || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) return null;
+  if (typeof accuracyM !== "number" || !Number.isFinite(accuracyM) || accuracyM <= 0) return null;
+  return { timeZone, languages: [...(languages as string[])], geolocation: { latitude, longitude, accuracyM } };
+}
+
+/**
+ * What the engine's hello tells the page's operator besides its proxy
+ * (0277): the pinned exit IP and the environment. Fields left undefined keep
+ * their value; a pin stamps its instant. False: no such profile.
+ */
+export async function setPageBrowserSettings(
+  db: Database,
+  input: { profileId: string; pinnedExitIp?: string | null; env?: PageBrowserEnv | null },
+): Promise<boolean> {
+  if (input.pinnedExitIp !== undefined && input.pinnedExitIp !== null && isIP(input.pinnedExitIp) === 0) {
+    throw new Error(`Not an IP address: ${input.pinnedExitIp}`);
+  }
+  if (input.env !== undefined && input.env !== null && pageBrowserEnvOf(input.env as unknown as Record<string, unknown>) === null) {
+    throw new Error("Not a browser environment: timeZone, languages and geolocation {latitude, longitude, accuracyM}");
+  }
+  const pin = input.pinnedExitIp !== undefined;
+  const env = input.env !== undefined;
+  const result = await db.execute(sql`
+    update page_browsers
+       set pinned_exit_ip = case when ${pin} then ${input.pinnedExitIp ?? null}::text else pinned_exit_ip end,
+           pinned_exit_ip_at = case when ${pin} then (case when ${input.pinnedExitIp ?? null}::text is null then null else clock_timestamp() end)
+                                    else pinned_exit_ip_at end,
+           env = case when ${env} then ${input.env === undefined || input.env === null ? null : JSON.stringify(input.env)}::jsonb else env end,
+           updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid
     returning profile_id
   `);

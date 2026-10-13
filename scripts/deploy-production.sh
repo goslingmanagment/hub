@@ -940,6 +940,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # updates the table by named columns; nothing takes a page's buffer before
   # the transport switch (PR 14), so it runs unchanged after a rollback.
   "0276_page_browser_intake.sql"
+  # Project Browser PR 14: sync_pages.transport (constant default 'node':
+  # catalog only; its check added NOT VALID and validated over a handful of
+  # rows) and page_browsers' hand-over columns (nullable, no default), under a
+  # 5 s lock_timeout. The previous image never names the columns and no lever
+  # of it writes 'browser', so every page is on 'node' when it runs again: it
+  # runs unchanged after a rollback of the deploy that applies this. (Once a
+  # page is on 'browser', an image older than this release must not run it.)
+  "0277_sync_pages_transport.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

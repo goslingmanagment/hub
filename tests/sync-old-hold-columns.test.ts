@@ -213,6 +213,8 @@ describe("the statements that write the page row", () => {
       "update captureAttempt",
       "insert ensureSyncPage",
       "insert ensureFanslySyncPages",
+      // The page's transport (Project Browser, 0277): the owner's lever.
+      "update setSyncPageTransport",
       "update setSyncPageMode",
       "insert createLiveSyncPage",
       "update trustSyncPageCredentials",

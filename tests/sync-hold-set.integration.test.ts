@@ -32,6 +32,7 @@ import {
   setRegistryOverride,
   setResourceHold,
   setSyncPageMode,
+  setSyncPageTransport,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncPages,
   trustSyncPageCredentials,
@@ -252,7 +253,7 @@ const UPDATES = [
   "acquireSyncPageOwnership", "heartbeatSyncPageOwner", "trustSyncPageCredentials", "recordSyncPageIdentityProof",
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
   "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
-  "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode",
+  "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode", "setSyncPageTransport",
 ];
 
 /** Run every function that updates a page row over a live page (the engine's
@@ -329,6 +330,9 @@ async function runEveryPageRowUpdate(
     })).toMatchObject([{ pageId, confirmed: true }])],
     ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db, { pageId: offPage, to: "off", changedBy: "test" }))
       .toMatchObject({ kind: "changed", from: "shadow", to: "off" })],
+    // The page's transport (Project Browser, 0277), the owner's lever.
+    ["setSyncPageTransport", pageId, async () => expect(await db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "browser" })))
+      .toMatchObject({ kind: "changed", from: "node", to: "browser" })],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 
