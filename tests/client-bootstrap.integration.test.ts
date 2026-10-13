@@ -56,8 +56,20 @@ let leadId = 0;
 let ownerId = 0;
 const pageIds: Record<string, number> = {};
 
-const everyFeature = (reason: string) => Object.fromEntries(
-  CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, { available: false, reason }]),
+/** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly
+ *  alone; fresh text (R20 HF-8б) on both; every other flag on OnlyFans alone. */
+const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
+const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
+const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
+  BOTH_PLATFORM_FLAGS.includes(flag) || (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on
+);
+/** Every flag off on a page of platform `on`: for `reason` where the flag
+ *  exists, `platform_unsupported` where it does not. */
+const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") => Object.fromEntries(
+  CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, {
+    available: false,
+    reason: flagExistsOn(flag, on) ? reason : "platform_unsupported",
+  }]),
 );
 
 async function bootstrap(headers: Record<string, string>, via: ApiServer = server!) {
@@ -196,7 +208,7 @@ describe("GET /api/v1/client/bootstrap", () => {
         platform: "fansly",
         platformAccountId: null,
         bindingRevision: 1,
-        features: everyFeature("platform_unsupported"),
+        features: everyFeature("disabled", "fansly"),
       },
       {
         pageId: pageIds["lora-of"],
@@ -220,6 +232,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       claimRenewSec: 40,
       claimActivityWindowSec: 120,
       previewSendPerMinute: 6,
+      greetingSendPerMinute: 30,
       navInsertTimeoutSec: 20,
       dispatchTicketSec: 10,
       previewSendReceiptProfiles: [],
@@ -230,7 +243,9 @@ describe("GET /api/v1/client/bootstrap", () => {
     // Coach drafts (H-10; the flag itself is off at rest), the caller's own
     // AI spend (H-15), the Spenders statistics (H-8b), the awaiting-reply
     // queue (H-8c), the archive feed of one conversation (H-9c), the greeting
-    // lease and send custody (H-7b) and the "new subscribers" list (H-7c).
+    // lease and send custody (H-7b), the "new subscribers" list (H-7c), the
+    // manual greeting group with the custody's admission by platform (R20 HF-3)
+    // and the AI stream's window coverage check (R20 HF-8в).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -243,6 +258,8 @@ describe("GET /api/v1/client/bootstrap", () => {
       "archive-feed-v1",
       "preview-send-custody-v1",
       "audience-new-v1",
+      "manual-greeting-v1",
+      "coverage-check-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

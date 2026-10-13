@@ -347,6 +347,47 @@ describe("client_health histogram checks against the registry", () => {
     }
   });
 
+  it("merges the four Fansly metrics (HF-13) by their exact names and bounds, and nothing near them", () => {
+    const fansly = ["frameParseMs", "xhrParseMs", "snapshotMs", "snapshotRoundTripMs"] as const;
+    for (const metric of fansly) {
+      expect(clientHealthHistogramDropReason(histogramFor(metric, [0.1, 2, 5])), metric).toBeNull();
+    }
+    // Names are exact: a near miss is still a metric the hub does not know.
+    const frame = histogramFor("frameParseMs", [0.05]);
+    for (const metric of ["frameParseMS", "frameParse", "snapshotRoundtripMs", "fansly.frameParseMs"]) {
+      expect(clientHealthHistogramDropReason({ ...frame, metric }), metric).toBe("unknown_metric");
+    }
+    // A Fansly metric on another metric's bounds of the same length is not merged.
+    const snapshot = histogramFor("snapshotMs", [1]);
+    const otherBounds = [...CLIENT_HEALTH_PERF_METRICS.ttfcMs.bounds, 90_000];
+    expect(otherBounds).toHaveLength(snapshot.bounds.length);
+    expect(clientHealthHistogramDropReason({ ...snapshot, bounds: otherBounds, counts: snapshot.counts.map(() => 0), count: 0, sum: 0, max: 0 }))
+      .toBe("bounds_mismatch");
+  });
+
+  it("folds a Fansly tab's histograms under its own host, apart from the ChatSpace tab's rows", () => {
+    const frame = histogramFor("frameParseMs", [0.004, 0.03, 0.1, 0.1004, 2, 2.4, 60]);
+    const insertFansly = histogramFor("insertMs", [20]);
+    const insertChatspace = histogramFor("insertMs", [10, 40, 90]);
+    const { rollups, dropped } = foldClientHealthReports([
+      report({ hostKind: "fansly-web", build: "main-AbCdEfGh", perf: [frame, insertFansly] }),
+      report({ perf: [insertChatspace] }),
+    ]);
+    expect(dropped).toEqual([]);
+    const fanslyGroup = { ...GROUP, hostKind: "fansly-web", hostBuild: "main-AbCdEfGh" };
+    expect(rollups.contract).toEqual([
+      { ...fanslyGroup, reports: 1, failedReports: 0 },
+      { ...GROUP, reports: 1, failedReports: 0 },
+    ]);
+    expect(perfRow(rollups.perf, "frameParseMs")).toEqual({
+      ...fanslyGroup, metric: "frameParseMs", schemaVersion: 1, unit: "ms",
+      bounds: frame.bounds, counts: frame.counts, count: 7, sum: frame.sum, max: 60,
+    });
+    // One metric on two hosts is two rows, never one set of buckets.
+    const inserts = rollups.perf.filter((row) => row.metric === "insertMs");
+    expect(inserts.map((row) => [row.hostKind, row.count, row.max])).toEqual([["fansly-web", 1, 20], ["chatspace", 3, 90]]);
+  });
+
   it("drops a schema version or bounds the registry does not hold for the metric", () => {
     const base = histogramFor("insertMs", [10]);
     expect(clientHealthHistogramDropReason({ ...base, schemaVersion: 2 })).toBe("unknown_schema_version");

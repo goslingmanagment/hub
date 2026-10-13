@@ -330,6 +330,26 @@ export async function listPageThreadChains(
 }
 
 /**
+ * The effective history state of one chat of a page, found by the chat's id
+ * (the thread's unique key: page, `platform_conversation_id`); null when the
+ * page holds no thread under that id. One indexed read. The chat-extension's
+ * coverage word for a Fansly chat comes from it (runtime
+ * services/client-coverage.ts).
+ */
+export async function readConversationHistoryState(
+  db: Database,
+  input: { pageId: number; conversationRef: string },
+): Promise<ThreadHistoryState | null> {
+  const result = await db.execute<{ historyState: ThreadHistoryState }>(sql`
+    select ${effectiveHistoryStateSql("t")} as "historyState"
+      from page_dm_threads t
+     where t.platform_account_id = ${input.pageId}
+       and t.platform_conversation_id = ${input.conversationRef}
+  `);
+  return result.rows[0]?.historyState ?? null;
+}
+
+/**
  * Drop a thread's chain (a new epoch, nothing proven): the state goes back to
  * `unverified` when the hub holds messages of the thread, else `none`.
  * Request anchors of the old epoch are then cleared by the caller (§7.1.6).

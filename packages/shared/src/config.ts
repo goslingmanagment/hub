@@ -357,11 +357,11 @@ const envSchema = z.object({
   // AI_TRANSCRIPT_FRESH_UNION_MODE: the PATCH lane owns transitions (stepwise
   // up through shadow, any rollback), and clearing the override resolves to off.
   AI_LIVE_TEXT_CONTEXT_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
-  // chat-extension H-6: how many messages the full Recap of an OnlyFans chat
-  // may read: 1500 (the AI readers' cap for everyone) or 3000. Two values, not
-  // a range: 3000 is the readers' hard ceiling and the window the client
-  // offers. Keep the env at 1500; the owner raises it in the console.
-  AI_TRANSCRIPT_DEEP_MAX_ROWS: z.enum(["1500", "3000"]).default("1500"),
+  // chat-extension H-6, R20 HF-6: how many messages the full Recap may read, on
+  // OnlyFans and Fansly alike: 1500 (the AI readers' cap for everyone), 3000 or
+  // 5000. Steps, not a range: 5000 is the readers' hard ceiling. Keep the env at
+  // 1500; the owner raises it in the console.
+  AI_TRANSCRIPT_DEEP_MAX_ROWS: z.enum(["1500", "3000", "5000"]).default("1500"),
   // H-11b: keep the extension's client_health reports as hourly rollups with
   // no user. Off = reports are accepted and dropped.
   CHAT_EXTENSION_HEALTH_INGEST_ENABLED: booleanSchema.default(false),
@@ -569,8 +569,8 @@ export interface AppConfig {
   chatExtensionPreviewSendReceiptProfiles?: string;
   /** chat-extension H-4c: what the AI lane does with a client's fresh text (live-wired). */
   aiLiveTextContextMode?: "off" | "shadow" | "serve";
-  /** chat-extension H-6: the row cap of the full Recap's transcript read (live-wired). */
-  aiTranscriptDeepMaxRows?: "1500" | "3000";
+  /** chat-extension H-6, R20 HF-6: the row cap of the full Recap's transcript read (live-wired). */
+  aiTranscriptDeepMaxRows?: "1500" | "3000" | "5000";
   /** Keep client_health reports as hourly rollups with no user (H-11b); default false. */
   chatExtensionHealthIngestEnabled?: boolean;
 }

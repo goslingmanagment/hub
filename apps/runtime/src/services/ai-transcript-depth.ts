@@ -1,20 +1,27 @@
 import type { AiStreamCapability } from "@agency_hub_core/contracts";
-import { AI_TRANSCRIPT_DEEP_MAX_ROWS, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS } from "@agency_hub_core/db";
+import { ARCHIVE_AI_TRANSCRIPT_MAX_ROWS } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
-// chat-extension H-6 — how deep the full Recap reads.
+// chat-extension H-6, R20 HF-6: how deep the full Recap and the notes fill read.
 //
-// The AI transcript readers stop at 1500 messages. One request reads deeper,
-// up to 3000: the full Recap of an OnlyFans chat, asked for by a client that
-// advertises `context-v1`, and only once the owner has raised
-// `aiTranscriptDeepMaxRows`. Everything else reads what it read before: the
-// short Recap (300), Review and Coach (1500), the reply features, a client
-// without `context-v1` (a desktop whose deep window is set to 3000 gets 1500,
-// as it always did), and Fansly, whose transcript the client sends itself or
-// the socket overlay reads.
+// The AI transcript readers stop at 1500 messages. Two requests read deeper,
+// and only from a client that advertises `context-v1` and lets the hub load
+// the transcript itself (no `clientContext`), on OnlyFans and Fansly alike:
+//
+// - the full Recap reads up to the owner's `aiTranscriptDeepMaxRows` (1500,
+//   3000 or 5000; one setting for both platforms);
+// - the notes fill (`fan-notes-fill`) reads up to that value, but never fewer
+//   than 3000: the Fansly extension 2.10.1 fills its notes from 3000 messages
+//   it reads itself, and its successor must not see less of the chat.
+//
+// Everything else reads what it read before: the short Recap (300), Review and
+// Coach (1500), the reply features, a client without `context-v1` (a desktop
+// whose deep window is set to 3000 gets 1500, as it always did), and every
+// request that brings its own transcript in `clientContext` (the released
+// Fansly extension's, up to 3000 messages), which the hub's readers never read.
 //
 // The owner's value is read in two places, the AI feature stream and the
 // bootstrap's `limits.deepMax`, through the one function below: the number a
@@ -23,17 +30,22 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 type DepthConfig = Pick<AppConfig, "aiTranscriptDeepMaxRows">;
 type DepthApp = Pick<AppContext, "db" | "config" | "logger">;
 
+/** The owner's values above the readers' own cap, and the depth each reads as. */
+const RAISED_DEPTHS: ReadonlyMap<unknown, number> = new Map<unknown, number>([["3000", 3000], ["5000", 5000]]);
+
+/** The notes fill never reads fewer messages than this from a context-v1 client
+ *  (the depth the released Fansly extension fills its notes from). */
+export const FAN_NOTES_FILL_MIN_DEEP_ROWS = 3000;
+
 /**
  * The owner's `aiTranscriptDeepMaxRows` as a row count. Pure.
  *
- * Anything that is not a clear "3000" is the readers' ordinary cap, a missing
- * or unreadable value included: the deeper read is an addition, so the safe
- * answer is the depth every generation had before.
+ * Anything that is not a clear "3000" or "5000" is the readers' ordinary cap,
+ * a missing or unreadable value included: the deeper read is an addition, so
+ * the safe answer is the depth every generation had before.
  */
 export function aiTranscriptDeepMaxRowsOf(config: DepthConfig): number {
-  return config.aiTranscriptDeepMaxRows === String(AI_TRANSCRIPT_DEEP_MAX_ROWS)
-    ? AI_TRANSCRIPT_DEEP_MAX_ROWS
-    : ARCHIVE_AI_TRANSCRIPT_MAX_ROWS;
+  return RAISED_DEPTHS.get(config.aiTranscriptDeepMaxRows) ?? ARCHIVE_AI_TRANSCRIPT_MAX_ROWS;
 }
 
 /**
@@ -51,20 +63,19 @@ export async function loadAiTranscriptDeepMaxRows(app: DepthApp): Promise<number
   }
 }
 
-/** What decides whether a request may read past the ordinary cap. */
+/** What decides whether a request may read past the ordinary cap. The
+ *  platform is not part of it: one rule for OnlyFans and Fansly. */
 export interface AiTranscriptDepthRequest {
   feature: string;
   /** `fan-summary` only: absent = the full Recap. */
   summaryMode: "short" | undefined;
-  /** From the feature service's single platform-branch site. */
-  isFanslyRequest: boolean;
   /** Parsed `x-kernel-ai-capabilities` of the request. */
   capabilities: ReadonlySet<AiStreamCapability> | undefined;
 }
 
 /**
- * Whether the request is the one that may read deep: the full Recap of an
- * OnlyFans chat from a client that advertises `context-v1`. Pure.
+ * Whether the request is one that may read deep: the full Recap or the notes
+ * fill, from a client that advertises `context-v1`. Pure.
  *
  * `context-v1` is what tells a new client from a released one. A released
  * client may already send `messageCount: 3000` for its Recap (the desktop's
@@ -72,16 +83,26 @@ export interface AiTranscriptDepthRequest {
  * change cost, because the hub was updated.
  */
 export function mayReadDeepTranscript(request: AiTranscriptDepthRequest): boolean {
-  return request.feature === "fan-summary"
-    && request.summaryMode !== "short"
-    && !request.isFanslyRequest
-    && request.capabilities?.has("context-v1") === true;
+  if (request.capabilities?.has("context-v1") !== true) {
+    return false;
+  }
+  return (request.feature === "fan-summary" && request.summaryMode !== "short")
+    || request.feature === "fan-notes-fill";
 }
 
 /**
- * The row cap to hand the transcript readers for this request: the owner's
- * value where it is raised and the request may read deep, `undefined` (the
- * readers' own cap) otherwise.
+ * The row cap of a deep read for this feature, given the owner's depth. Pure.
+ * The full Recap reads the owner's depth; the notes fill reads it too, but
+ * never fewer than `FAN_NOTES_FILL_MIN_DEEP_ROWS`.
+ */
+export function deepTranscriptRowsOf(feature: string, ownerDepth: number): number {
+  return feature === "fan-notes-fill" ? Math.max(FAN_NOTES_FILL_MIN_DEEP_ROWS, ownerDepth) : ownerDepth;
+}
+
+/**
+ * The row cap to hand the transcript readers for this request: its feature's
+ * deep depth where the request may read deep and that depth is above the
+ * ordinary cap, `undefined` (the readers' own cap) otherwise.
  *
  * The owner's value is read only for a request that could use it, so every
  * other generation makes exactly the reads it made before.
@@ -93,6 +114,6 @@ export async function resolveAiTranscriptMaxRows(
   if (!mayReadDeepTranscript(request)) {
     return undefined;
   }
-  const maxRows = await loadAiTranscriptDeepMaxRows(app);
+  const maxRows = deepTranscriptRowsOf(request.feature, await loadAiTranscriptDeepMaxRows(app));
   return maxRows > ARCHIVE_AI_TRANSCRIPT_MAX_ROWS ? maxRows : undefined;
 }

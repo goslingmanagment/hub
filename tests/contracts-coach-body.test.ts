@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_COVERAGE_CHECK_DELETED_MAX,
+  AI_COVERAGE_CHECK_WINDOW_MAX,
   AI_FEATURE_CLIENT_MEDIA_MAX_ITEMS,
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
@@ -142,6 +144,19 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
       { length: AI_KNOWN_FAN_MESSAGE_IDS_MAX },
       (_, index) => `${index + 1}`.padEnd(30, "9"),
     ),
+    // R20 HF-8в, the window coverage check: 60 window ids with their side and
+    // 60 deleted ids, 120 distinct 30-digit ids in all (no id may repeat
+    // across the two lists). Digits only, so ~5KB whatever `unit` is.
+    coverageCheck: {
+      window: Array.from({ length: AI_COVERAGE_CHECK_WINDOW_MAX }, (_, index) => ({
+        id: `1${String(index).padStart(29, "0")}`,
+        dir: "model" as const,
+      })),
+      deletedIds: Array.from(
+        { length: AI_COVERAGE_CHECK_DELETED_MAX },
+        (_, index) => `2${String(index).padStart(29, "0")}`,
+      ),
+    },
     // 20 x (2k question + 64k answer) = the 1.32M-code-unit bulk.
     coachHistory: Array.from({ length: 20 }, () => ({
       question: unit.repeat(2_000),
@@ -206,9 +221,9 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // lone surrogate. "\ud800" is a legal JSON string value (1 UTF-16 code unit,
     // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
     // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB of text (10.33MB with the
-    // media list and framing) before fresh text, 12.13MB with it. The former
+    // media list and framing) before fresh text, 12.15MB with it. The former
     // 8 MiB limit would have 413'd this contract-valid body; 12 MiB (12.58MB)
-    // still clears it, by about 0.45MB.
+    // still clears it, by about 0.43MB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -218,6 +233,18 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // maxBodyFilledWith above: this is the assertion that then says whether the
     // limit must rise with it.
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
+  });
+
+  it("the coverage check is about 5KB of that worst case (R20 HF-8в)", () => {
+    const withCheck = maxBodyFilledWith("\ud800");
+    const { coverageCheck, ...withoutCheck } = withCheck;
+    expect(coverageCheck.window).toHaveLength(60);
+    expect(coverageCheck.deletedIds).toHaveLength(60);
+    const added = Buffer.byteLength(JSON.stringify(withCheck), "utf8")
+      - Buffer.byteLength(JSON.stringify(withoutCheck), "utf8");
+    // 120 ids of 30 digits, the sides and the JSON framing.
+    expect(added).toBeGreaterThan(120 * 30);
+    expect(added).toBeLessThan(8 * 1024);
   });
 
   it("fresh text alone is 1.8MB of that worst case (critic item 4)", () => {
