@@ -95,7 +95,10 @@ describe("readDmLiveUnion merge", () => {
   it("merges both newest-first lists by instant, then id, and keeps `limit`", async () => {
     const { items, execute } = await union({
       // R20 HF-7d0: "106" carried both automation markers (field_mask bits 16 and 32, plus content).
-      overlay: [overlayRow("106", 50, { message_type: 2, correlation_id: "500", field_mask: 1 | 16 | 32 }),
+      // R20 HF-7a: and two attachments, beside what the column could hold but the decoder never writes.
+      overlay: [overlayRow("106", 50, { message_type: 2, correlation_id: "500", field_mask: 1 | 8 | 16 | 32,
+        attachments: [{ contentType: 2, contentId: "901" }, { contentType: 1, contentId: "900" },
+          { contentType: "1", contentId: "902" }, { contentType: 1, contentId: "" }, null] }),
         overlayRow("104", 30), overlayRow("102", 10)],
       store: [{ id: "105", at: at(40) }, { id: "103", at: at(30) }, { id: "101", at: at(0) }],
       limit: 4,
@@ -108,10 +111,12 @@ describe("readDmLiveUnion merge", () => {
       platformMessageId: "106", platformConversationId: "800", senderPlatformUserId: "700", senderRole: "fan",
       createdAt: at(50), content: "live 106", inReplyToMessageId: null, apiUnavailable: false,
       markers: { type: 2, typeObserved: true, correlationId: "500", correlationIdObserved: true },
+      attachments: [{ contentType: 2, contentId: "901" }, { contentType: 1, contentId: "900" }],
     } });
     // A row whose frame carried neither key reads unknown, not "no marker".
     expect(items[2]).toMatchObject({ source: "live", message: { platformMessageId: "104",
-      markers: { type: null, typeObserved: false, correlationId: null, correlationIdObserved: false } } });
+      markers: { type: null, typeObserved: false, correlationId: null, correlationIdObserved: false },
+      attachments: [] } });
   });
 
   it("prefers the REST row when both reads hold the message, and keeps each list's own order", async () => {

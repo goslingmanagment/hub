@@ -325,6 +325,30 @@ What differs from the extension's blocks:
 Not changed: a request with `clientContext` (its two blocks are the client's, byte for byte), and
 OnlyFans (`loadSpendingContext`, `loadSubscriptionContext`).
 
+### Feature-lane media on Fansly (chat-extension R20 HF-7a)
+
+On a Fansly page the transcript the hub loads itself (no `clientContext`) shows a message's
+attachments as the released Fansly extension (2.10.1) shows them in the transcript it sends: one
+label per attachment, in the message's order, before the text. `[Photo]`, `[Video]`, `[Audio]`;
+`[Media]` for a media of no known kind or one the page never served; `[Media Bundle: 2 Photos,
+1 Video]` for a bundle, counting the photos and videos among its members the page served
+(`[Media Bundle]` when there are none). An attachment that is not media (a tip's, a story reply's)
+has no label; a tip reads `[Tip: $X.XX]` as before. A paid message's suffix (` - PPV $X.XX, state`)
+goes on its first label: the archive keeps one price per message, its first priced attachment's.
+The state stays `unknown` until the hub reads Fansly purchases into the transcript.
+
+The labels come from the hub's stores: the archive row's `media_metadata` (what each attachment is:
+its MIME type, a bundle, or `other`) and the media plane of the same observations
+(`message_media_offers`: the attachments' order and content type; `creator_media_bundles` and
+`creator_media`: a bundle's members). On a page in `fanslyLiveOverlayReadPages` a socket message
+the archive does not hold yet is labelled from its attachments' ids by the same tables, with no
+price (money is REST-only): a file the hub has not seen reads `[Media]` until the message's REST
+copy arrives. A failed read of those tables does not fail the generation: the messages serve
+without media labels and `params.contextManifest.fanslyMediaError` is `true`.
+
+Unchanged: a request with `clientContext` (its transcript is the client's), and OnlyFans (the
+archive reader shapes its rows without their media list, as before; the union reads OFAPI's).
+
 ### Feature-lane transcript depth (`messageCount`, full Recap, notes fill)
 
 `messageCount` is the window a request asks for (5 to 5000). The hub's two transcript readers (the
