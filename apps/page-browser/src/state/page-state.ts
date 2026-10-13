@@ -101,6 +101,14 @@ export class PageState {
     this.#set("exit_ip_verified", null, null, false, note);
   }
 
+  /** Back to a lower step the page still stands on, at or above the open
+   *  exit (plan §4.1, steps 8–10): the site's session changed (back to
+   *  `site_loaded`), the site is loaded anew (back to `exit_open`). */
+  back(to: Step, note: string): void {
+    if (this.#halted || !atLeast(to, "exit_open") || stepIndex(to) >= stepIndex(this.#step)) return;
+    this.#set(to, null, null, false, note);
+  }
+
   /** A failure: back to step 1, a retry after the backoff. Returns the
    *  moment of the retry (wall clock). */
   fail(reason: StopReason, note: string): number {
