@@ -1097,6 +1097,9 @@ export interface SyncSendCounts {
   urgent: number;
   requests: number;
   planned: number;
+  /** The page's own site requests and login operations (Project Browser,
+   *  0271): sent through the page's browser under the engine's admission. */
+  site: number;
   byResource: Record<string, number>;
 }
 
@@ -1105,7 +1108,7 @@ export async function countSendsSince(
   db: Database,
   input: { pageId: number; since: Date },
 ): Promise<SyncSendCounts> {
-  const result = await db.execute<{ class: SyncEngineWorkClass; resource: string; sends: number }>(sql`
+  const result = await db.execute<{ class: SyncEngineWorkClass | "site"; resource: string; sends: number }>(sql`
     select a.class, a.resource, count(*)::int as sends
       from sync_attempts a
      where a.page_id = ${input.pageId}
@@ -1113,7 +1116,7 @@ export async function countSendsSince(
        and a.sent_at >= ${input.since}::timestamptz
      group by a.class, a.resource
   `);
-  const counts: SyncSendCounts = { urgent: 0, requests: 0, planned: 0, byResource: {} };
+  const counts: SyncSendCounts = { urgent: 0, requests: 0, planned: 0, site: 0, byResource: {} };
   for (const row of result.rows) {
     const sends = Number(row.sends);
     counts[row.class] += sends;
