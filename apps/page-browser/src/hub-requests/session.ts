@@ -35,6 +35,7 @@
 
 import { createHash } from "node:crypto";
 
+import { authorizationBytes } from "../egress/socket-gate.ts";
 import { registerSecret } from "../shared/secrets.ts";
 
 /** Fansly's key of fansly-client-check (public bundle, 2026-10-11). */
@@ -147,6 +148,14 @@ export class SiteSession {
   /** The live session's fingerprint, or null when none was seen. */
   get fingerprint(): string | null {
     return this.#fingerprint;
+  }
+
+  /** The bytes of the site socket's authorization with the live token —
+   *  what the socket gate lets go once a connection (egress/socket-gate.ts);
+   *  null: no live session. The token itself stays here. */
+  socketAuthorizationBytes(): number | null {
+    const token = this.#template === null ? undefined : header(this.#template, "authorization");
+    return token === undefined || token === "" ? null : authorizationBytes(token);
   }
 
   /** Our fansly-client-check matched the site's own (null: not seen yet). */

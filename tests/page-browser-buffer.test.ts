@@ -675,6 +675,39 @@ describe("a crash mid-write", () => {
   }, 60_000);
 });
 
+describe("the site socket's events (PR 10)", () => {
+  it("an event of an origin already here is not written again — waiting for its commit, or committed, across a reopen", async () => {
+    const root = dir();
+    let buffer = open(root);
+    const first = buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" });
+    const again = buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" });
+    expect(await seqOf(first)).toBe(1);
+    expect(await seqOf(again)).toBe(1);
+    buffer = await reopen(buffer, root);
+    expect(await seqOf(buffer.append(wsFrame(1), undefined, { origin: "S1|WS1#41" }))).toBe(1);
+    expect(await seqOf(buffer.append(wsFrame(2), undefined, { origin: "S1|WS1#42" }))).toBe(2);
+    expect(all(buffer).map((event) => event.seq)).toEqual([1, 2]);
+    await buffer.close();
+  });
+
+  it("opens and closes a socket's row in the commit of its ws.open and ws.close", async () => {
+    const root = dir();
+    let buffer = open(root);
+    const connection = { connectionId: "conn-a", attemptId: 7 };
+    await written(buffer.append({ kind: "ws.open", connectionId: "conn-a", attemptId: 7, sessionFingerprint: "f".repeat(64) }, undefined, { socket: { key: "S1|WS1", open: connection } }));
+    expect(buffer.socketOf("S1|WS1")).toEqual(connection);
+    buffer = await reopen(buffer, root);
+    expect(buffer.openSockets()).toEqual([{ key: "S1|WS1", ...connection }]);
+    // Not committed yet: still open in the file.
+    const closing = buffer.append({ kind: "ws.close", connectionId: "conn-a", code: null, reason: null }, undefined, { socket: { key: "S1|WS1", open: null } });
+    expect(buffer.socketOf("S1|WS1")).toEqual(connection);
+    await written(closing);
+    expect(buffer.socketOf("S1|WS1")).toBeNull();
+    expect(buffer.openSockets()).toEqual([]);
+    await buffer.close();
+  });
+});
+
 describe("the format (plan §4.10)", () => {
   /** Schema version 1 as PR 11 writes it — frozen here: a later operator
    *  must still read a buffer made like this. */
@@ -740,15 +773,14 @@ describe("the format (plan §4.10)", () => {
     expect(buffer.id).toBe(id);
     expect(all(buffer).map((event) => event.seq)).toEqual([1, 2, 3]);
     expect(outcomesOf(buffer)).toHaveLength(1);
-    // Opened again: version 2 is not applied twice.
+    // Opened again: no version is applied twice.
     buffer = await reopen(buffer, root, { migrations: [...MIGRATIONS, NEXT] });
     expect(await seqOf(buffer.append(wsFrame(4)))).toBe(4);
     await buffer.close();
     const db = new DatabaseSync(join(root, "store", DB_FILE));
     expect(db.prepare("SELECT version, readable_from FROM schema_version ORDER BY version").all().map((row) => ({ ...row }))).toEqual([
-      { version: 1, readable_from: 1 },
-      { version: 2, readable_from: 2 },
-      { version: 3, readable_from: 1 },
+      ...MIGRATIONS.map((migration) => ({ version: migration.version, readable_from: migration.readableFrom })),
+      { version: NEXT.version, readable_from: 1 },
     ]);
     db.close();
   });
@@ -770,7 +802,7 @@ describe("the format (plan §4.10)", () => {
     const older = open(breaking, { migrations: MIGRATIONS, openRetryMs: [10], onUnavailable: (reason) => unavailable.push(reason) });
     older.start();
     expect(unavailable).toEqual([expect.objectContaining({ cause: "too_new", recoverable: false })]);
-    expect(unavailable[0]!.detail).toMatch(/schema version 3, readable from 3/);
+    expect(unavailable[0]!.detail).toContain(`schema version ${NEXT.version}, readable from ${NEXT.version}`);
     expect(await older.ready()).toMatchObject({ ok: false, reason: "buffer_unavailable" });
     // Not tried again, and the file is as it was: it is the owner's.
     await new Promise((resolve) => setTimeout(resolve, 100));

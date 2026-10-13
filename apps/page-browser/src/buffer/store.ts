@@ -59,6 +59,16 @@ export interface NewEventRow {
   kind: string;
   json: string;
   bytes: number;
+  /** The Chrome message it was made of (schema.ts, v3), or null. */
+  origin: string | null;
+}
+
+/** A site socket opened (its connection) or closed (null) in the stream
+ *  (schema.ts, v3). */
+export interface SocketRow {
+  key: string;
+  open: { connectionId: string; attemptId: number } | null;
+  atWall: number;
 }
 
 export interface NewOutcomeRow {
@@ -94,6 +104,8 @@ export interface Commit {
   outcomes: NewOutcomeRow[];
   /** Steps of Hub attempts (schema.ts, v2). */
   marks?: AttemptMark[];
+  /** The site's sockets opened and closed with these events (v3). */
+  sockets?: SocketRow[];
   /** Delete the events up to this number (acknowledged), or nothing. */
   deleteEventsUpTo: number | null;
   /** Delete these outcomes (their resultAck came). */
@@ -195,6 +207,11 @@ export class BufferStore {
   readonly #bodyIds: StatementSync;
   readonly #outcomeSeqSizes: StatementSync;
   readonly #outcomeSeqRange: StatementSync;
+  readonly #originSeq: StatementSync;
+  readonly #openSocket: StatementSync;
+  readonly #closeSocket: StatementSync;
+  readonly #socketOf: StatementSync;
+  readonly #openSockets: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
   readonly #nowWall: () => number;
@@ -243,7 +260,12 @@ export class BufferStore {
       const lastWall = meta("last_wall");
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
       this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
-      this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
+      this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json, origin) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?)`);
+      this.#originSeq = db.prepare("SELECT seq FROM events WHERE origin = ? LIMIT 1");
+      this.#openSocket = db.prepare("INSERT OR REPLACE INTO ws_sockets (socket_key, connection_id, attempt_id, at_wall) VALUES (?, ?, ?, ?)");
+      this.#closeSocket = db.prepare("DELETE FROM ws_sockets WHERE socket_key = ?");
+      this.#socketOf = db.prepare("SELECT connection_id, attempt_id FROM ws_sockets WHERE socket_key = ?");
+      this.#openSockets = db.prepare("SELECT socket_key, connection_id, attempt_id FROM ws_sockets ORDER BY at_wall, socket_key");
       this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes, seq) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?, ?)`);
       this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
       this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
@@ -308,7 +330,7 @@ export class BufferStore {
       let lastOutcomeSeq = this.#lastOutcomeSeq;
       for (const event of batch.events) {
         if (event.seq !== lastSeq + 1) throw new Error(`event ${event.seq} does not follow ${lastSeq}`);
-        this.#insertEvent.run(event.seq, event.atWall, event.kind, event.bytes, event.json);
+        this.#insertEvent.run(event.seq, event.atWall, event.kind, event.bytes, event.json, event.origin);
         lastSeq = event.seq;
         lastWall = event.atWall;
         result.addedBytes += event.bytes;
@@ -322,6 +344,10 @@ export class BufferStore {
       if (lastOutcomeSeq !== this.#lastOutcomeSeq) this.#setMeta.run(String(lastOutcomeSeq), "last_outcome_seq");
       for (const mark of batch.marks ?? []) {
         this.#mark.run(mark.attemptId, mark.atWall, mark.step === "received" ? 0 : 1, mark.step === "released" ? 1 : 0);
+      }
+      for (const socket of batch.sockets ?? []) {
+        if (socket.open === null) this.#closeSocket.run(socket.key);
+        else this.#openSocket.run(socket.key, socket.open.connectionId, socket.open.attemptId, socket.atWall);
       }
       if (batch.deleteEventsUpTo !== null) {
         const gone = row(this.#sumUpTo, batch.deleteEventsUpTo);
@@ -431,6 +457,23 @@ export class BufferStore {
   /** Every body a stored outcome names (the rest of bodies/ goes). */
   bodyIds(): string[] {
     return (this.#bodyIds.all() as Array<{ body_id: string }>).map((found) => found.body_id);
+  }
+
+  /** The number of the event made of this Chrome message, if it is here. */
+  originSeq(origin: string): number | null {
+    const found = row(this.#originSeq, origin);
+    return found === undefined ? null : Number(found.seq);
+  }
+
+  /** The connection a site socket opened in the stream, if it is open. */
+  socketOf(key: string): { connectionId: string; attemptId: number } | null {
+    const found = row(this.#socketOf, key);
+    return found === undefined ? null : { connectionId: String(found.connection_id), attemptId: Number(found.attempt_id) };
+  }
+
+  /** Every site socket open in the stream, oldest first. */
+  openSockets(): Array<{ key: string; connectionId: string; attemptId: number }> {
+    return (this.#openSockets.all() as Array<{ socket_key: string; connection_id: string; attempt_id: number }>).map((found) => ({ key: found.socket_key, connectionId: found.connection_id, attemptId: Number(found.attempt_id) }));
   }
 
   /** Pages SQLite holds free (deleted rows), not yet given back. */

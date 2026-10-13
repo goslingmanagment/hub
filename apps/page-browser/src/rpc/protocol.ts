@@ -28,20 +28,22 @@
 //   one binary frame, the last. Headers of a response leave out
 //   `set-cookie`.
 //
-// - PR 10: `ws.open.sessionFingerprint` may be null — no session of the
-//   site was seen when the socket opened (the site opens its socket before
-//   the login too; the engine decides whether to admit it, and `wsAdmit`
-//   says null). The stop reason `ws_guard_failed` (state/steps.ts).
+// - PR 10: no `wsAdmit` before the site's live session is known (its
+//   `sessionFingerprint` is never null from this operator): the socket gate
+//   lets the authorization go only at the live token's size. The stop
+//   reason `ws_guard_failed` (state/steps.ts).
 //   `wsAdmit.url` and `context` are CDP's word on the oldest socket of the
 //   host still waiting to connect — the CONNECT itself names only the host;
 //   the socket is tied to its admission at its handshake (ws/sockets.ts). A
 //   `wsAdmitResult` admits only on the connection it was asked on: an engine
 //   connection that changes or goes refuses every socket still waiting, and
 //   an admission that finds its socket gone gets `wsDone` with `sent:
-//   false`. After a `gap` with reason `operator_start` or `chrome_restart`,
-//   no connection opened before it is open any more, whether or not its
-//   `ws.close` came (a restarted operator does not know the previous one's
-//   connections).
+//   false`. Every connection that opened is closed in the stream: by CDP's
+//   word, when the browser goes under it, or — after a restart of the
+//   operator — before its `operator_start` gap. `alarm.detail` of
+//   `unknown_ws_message` says where it was caught: `left: false` and `at:
+//   "proxy"` for a record the socket gate held, `left: true` for one CDP
+//   says left.
 //
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
@@ -340,8 +342,7 @@ export interface EventsRefused {
   givenSeq: number;
 }
 export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
-  /** `sessionFingerprint` null: no session of the site seen yet (PR 10). */
-  | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex | null }
+  | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
   | { kind: "ws.in"; connectionId: ConnectionId; frame: string }
   | { kind: "ws.close"; connectionId: ConnectionId; code: number | null; reason: string | null }
   | { kind: "gap"; fromSeq: number | null; fromWall: WallMs | null; reason: "ws_reconnect" | "operator_start" | "chrome_restart" | "buffer_full" | "disk_full" }

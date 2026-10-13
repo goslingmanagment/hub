@@ -16,7 +16,11 @@
 // drops it and reports its shape (never its content: an authorization
 // carries the token) to the operator through a CDP binding, which it takes
 // and removes from the global object before the site runs. The operator
-// then closes the exit and stops the page (`unknown_ws_message`).
+// then closes the exit and stops the page (`unknown_ws_message`). It is the
+// first layer, not the only one: a context it could not go into (a frame
+// created at the bottom of an exhausted stack throws before it runs) sends
+// with the native send, and the proxy's socket gate (egress/socket-gate.ts)
+// holds what that context writes outside the page's JavaScript.
 //
 // Nothing else of WebSocket is touched: the constructor, the instances, the
 // events and every other property stay native. A new connection waits for

@@ -98,9 +98,34 @@ CREATE TABLE hub_attempts (
 CREATE INDEX hub_attempts_by_age ON hub_attempts (at_wall);
 `;
 
+/** Version 3 (PR 10): the site's socket.
+ *  - events.origin: the Chrome message an event was made of — its socket
+ *    (CDP session and request id) and the holder's number of the message —
+ *    so a message the holder delivers again after an operator restart (it
+ *    was not acknowledged: its event was not durable yet, or the
+ *    acknowledgement did not reach the holder) is not written twice.
+ *  - ws_sockets: the site's connections open in the stream — Chrome's
+ *    socket, the connection id and attempt of its ws.open — written in the
+ *    commit of ws.open and deleted in the commit of ws.close. Frames
+ *    delivered again after a restart find their connection here, and a
+ *    restarted operator closes in the stream the connections of the Chrome
+ *    that went with the previous one.
+ *  Readable from 2: an older operator writes no socket events. */
+const V3 = `
+ALTER TABLE events ADD COLUMN origin TEXT;
+CREATE INDEX events_by_origin ON events (origin) WHERE origin IS NOT NULL;
+CREATE TABLE ws_sockets (
+  socket_key TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  attempt_id INTEGER NOT NULL,
+  at_wall INTEGER NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, readableFrom: 1, up: (db) => db.exec(V1) },
   { version: 2, readableFrom: 2, up: (db) => db.exec(V2) },
+  { version: 3, readableFrom: 2, up: (db) => db.exec(V3) },
 ];
 
 /** The format of a row's `json` this operator writes. */

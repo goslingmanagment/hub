@@ -4,7 +4,10 @@
 // restarted operator gets the unhandled ones again. `Fetch.requestPaused` is
 // acknowledged only once its request is continued or failed
 // (cdp/paused.ts), so a restarted operator learns about every request that
-// is still paused.
+// is still paused. A path may take over the acknowledgement of other events
+// the same way (`holdAcks`): the site socket's events are acknowledged once
+// what they wrote to the buffer is durable (ws/sockets.ts), so a restarted
+// operator gets again what had not been kept.
 //
 // Messages numbered up to the holder's `lastSeq` at hello arrived before
 // this operator instance existed: a replay. A command's reply among them is
@@ -32,7 +35,11 @@ export type EventHandler = (event: CdpEvent) => void;
 export interface CdpPort {
   send<T = Record<string, unknown>>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T>;
   on(method: string, handler: EventHandler): void;
-  ack(seq: number): void;
+  /** Acknowledge a message to the holder; `now`: at once, not batched. */
+  ack(seq: number, now?: boolean): void;
+  /** Events of this method are acknowledged by their handler (`ack`), not
+   *  once it ran. */
+  holdAcks(method: string): void;
 }
 
 export class CdpError extends Error {
@@ -86,6 +93,8 @@ export class Cdp implements CdpPort {
   #nextId = 1 + Math.floor(Math.random() * 1_000_000_000);
   readonly #pending = new Map<number, Pending>();
   readonly #handlers = new Map<string, EventHandler[]>();
+  /** Methods whose events their handler acknowledges. */
+  readonly #heldAcks = new Set<string>(["Fetch.requestPaused"]);
   #ackBatch: number[] = [];
   #ackTimer: NodeJS.Timeout | null = null;
   #cdpUp = false;
@@ -211,11 +220,20 @@ export class Cdp implements CdpPort {
     this.#handlers.set(method, list);
   }
 
-  /** Acknowledge a message to the holder (batched, ≤ 20 ms). */
-  ack(seq: number): void {
+  /** Acknowledge a message to the holder (batched, ≤ 20 ms; `now`: written
+   *  to the link at once, with whatever waits). */
+  ack(seq: number, now = false): void {
     this.#ackBatch.push(seq);
+    if (now) {
+      this.flushAcks();
+      return;
+    }
     if (this.#ackTimer) return;
     this.#ackTimer = setTimeout(() => this.flushAcks(), 20);
+  }
+
+  holdAcks(method: string): void {
+    this.#heldAcks.add(method);
   }
 
   flushAcks(): void {
@@ -275,9 +293,10 @@ export class Cdp implements CdpPort {
       replayed: seq <= this.#lastSeq,
     };
     if (typeof message.sessionId === "string") event.sessionId = message.sessionId;
-    // A paused request stays unacknowledged until it is resolved; every
-    // other message is done once its handlers ran.
-    const holdAck = event.method === "Fetch.requestPaused";
+    // A paused request stays unacknowledged until it is resolved, an event
+    // whose handler took its acknowledgement over until that handler says;
+    // every other message is done once its handlers ran.
+    const holdAck = this.#heldAcks.has(event.method);
     for (const handler of this.#handlers.get(event.method) ?? []) {
       try {
         handler(event);

@@ -28,11 +28,13 @@
 // The site's socket (ws/, PR 10; plan §4.3, §4.4; mandatory condition №3):
 // the guard (inpage/ws-guard.js) goes into every tab, frame and worker
 // before the site's code, and lets no message but spec §2.6's leave — the
-// first other one stops the page; each socket's CONNECT waits at the proxy
-// for the engine's `wsAdmit`, and its handshake goes only before the
-// admission's deadline; its frames go from CDP into the buffer, its
-// handshake's outcome to the engine as `wsDone`, and gaps mark where frames
-// may be missing.
+// first other one stops the page; the proxy's socket gate holds the same
+// allow-list outside the page's JavaScript, record by record; each socket's
+// CONNECT waits at the proxy for the engine's `wsAdmit`, and its handshake
+// goes only before the admission's deadline; its frames go from CDP into
+// the buffer — acknowledged to the holder once durable, written once when
+// the holder delivers them again after a restart — its handshake's outcome
+// to the engine as `wsDone`, and gaps mark where frames may be missing.
 //
 // What holds, whatever happens:
 // - No request leaves without the engine's admission. A Hub request goes
@@ -220,6 +222,9 @@ export class Operator {
   /** The linked holder's Chrome connection closed: that holder exits (s6
    *  starts a fresh one), and its link closes soon. */
   #holderSpent = false;
+  /** The site socket's part of this operator's start was done (after the
+   *  holder's first replay). */
+  #socketsRestarted = false;
   #stopped = false;
   #linking = false;
   /** Chrome runs under the operator's control: losing it is a failure. */
@@ -465,6 +470,7 @@ export class Operator {
       link: { send: (message) => this.rpc.send(message) },
       notAdmitting: () => (this.admissionsOpen() ? null : this.#noAdmissionWhy()),
       sessionFingerprint: () => this.hub.session.fingerprint,
+      authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
       cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
@@ -489,9 +495,6 @@ export class Operator {
     const rpcPort = await this.rpc.listen(this.config.rpcPort, this.config.rpcHost);
     this.#stateTimer = setInterval(() => this.#sendState(), this.#timings.stateEveryMs);
     this.buffer.start();
-    // Whatever the site's socket said while no operator listened is not in
-    // the stream (plan §4.4, step 6).
-    this.sockets.operatorStarted();
     void this.#linkHolder(true);
     this.#log("started", { proxyPort, rpcPort, bufferId: this.buffer.id, version: this.config.operatorVersion });
     return { proxyPort, rpcPort };
@@ -596,6 +599,13 @@ export class Operator {
         // The link may have gone during the replay or the cleanup; its loss
         // could not start another link while this one ran: link again.
         if (!this.cdp.linked) continue;
+        if (!this.#socketsRestarted) {
+          // What the holder kept of the site's socket from before is in the
+          // stream now; the connections of the Chrome before are closed
+          // there, and the gap of this start follows (plan §4.4, step 6).
+          this.#socketsRestarted = true;
+          await this.sockets.afterRestart();
+        }
         return;
       }
     } finally {

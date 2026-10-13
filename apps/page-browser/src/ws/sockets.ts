@@ -14,7 +14,9 @@
 //     and the wait's end (`siteAdmitWaitMs`, 60 s). Nothing is asked when no
 //     admission may be given: no engine heard for 5 s (plan §4.9 — what is
 //     open stays open), the exit closed, the page not up, the buffer taking
-//     no writes. The CONNECT is refused then.
+//     no writes — or no live session of the site yet: the socket gate could
+//     not let its authorization go (egress/socket-gate.ts), and a socket
+//     before the login is of no use to Hub. The CONNECT is refused then.
 //  2. `wsAdmitResult`: refused — the CONNECT is refused; admitted — with the
 //     deadline still ahead, the tunnel opens and its handshake request may go
 //     only before the deadline (egress/proxy.ts; spec §9). An answer counts
@@ -42,7 +44,7 @@
 // JS — into the buffer, in the order CDP gives them; each is durable before
 // anything depends on it, and nothing of them is logged:
 //  - `ws.open` at the 101: the connection id, the attempt id, the session's
-//    fingerprint (null before the site has one: an addition to spec §6.1);
+//    fingerprint;
 //  - `ws.in` — every incoming text frame as it is (Fansly's socket speaks
 //    text; a binary frame is counted, not kept);
 //  - `ws.close` when CDP says the socket closed — or when the browser goes
@@ -54,16 +56,36 @@
 //    one of the same Chrome closed — from that one's last event. A buffer
 //    that fills up writes its own (`buffer_full`, `disk_full`).
 //
-// Outgoing messages: the guard in the page (inpage/ws-guard.js) lets only
-// spec §2.6's go and reports the first other one: it never left, and the
-// page stops (`unknown_ws_message`, an alarm, the exit closed). CDP's word
-// on what did leave (Network.webSocketFrameSent) goes to the journal as a
-// shape — kind, opcode, size — and a message there that the guard should not
-// have let go means the guard was bypassed: the same alarm, the page killed.
+// Each of those events is acknowledged to the CDP holder only once what it
+// wrote is durable (the client's `holdAcks`): an operator that dies before
+// gets it again from the holder. Every event carries the holder's message
+// it was made of (`origin`, buffer.ts): one delivered again is not written
+// twice. Its row is still there to be recognised: the acknowledgement is
+// written to the holder in the turn its commit is heard, and the row goes
+// only with the engine's ack of it, which no turn before that can bring. Its ws.open and ws.close also open and close the socket's row in
+// the buffer, so a restarted operator finds the connection of a frame
+// delivered again (it knows no admission of the previous one), and closes
+// in the stream — before its `operator_start` gap — the connections the
+// previous Chrome left open (`afterRestart`: that Chrome is gone).
+//
+// Outgoing messages, three layers:
+//  1. the guard in the page (inpage/ws-guard.js) lets only spec §2.6's go
+//     and reports the first other one: it never left, and the page stops
+//     (`unknown_ws_message`, an alarm, the exit closed);
+//  2. the socket gate in the proxy (egress/socket-gate.ts) — outside the
+//     page's JavaScript, for a context the guard did not go into: every
+//     record after the handshake must be one of spec §2.6's messages or
+//     Chrome's own control frames by its size (the authorization's from the
+//     live token, once); anything else is held, the tunnel cut, the page
+//     killed, an alarm;
+//  3. CDP's word on what did leave (Network.webSocketFrameSent) goes to the
+//     journal as a shape — kind, opcode, size — and a message there that
+//     should not have left (one of a size the gate could not tell apart)
+//     means both were passed by: the same alarm, the page killed.
 
 import { randomUUID } from "node:crypto";
 
-import type { Appended, EventBody, GapReason } from "../buffer/buffer.ts";
+import type { AppendOptions, Appended, EventBody, GapReason } from "../buffer/buffer.ts";
 import type { CdpEvent, CdpPort } from "../cdp/client.ts";
 import type { SocketTicket, SocketTunnelEvent } from "../egress/proxy.ts";
 import type { SocketLine } from "../logs/journal.ts";
@@ -84,10 +106,27 @@ const DEFAULT_TIMINGS: SocketTimings = { admitWaitMs: 60_000, handshakeGraceMs: 
 
 /** The buffer as the socket uses it. */
 export interface SocketBuffer {
-  append(event: EventBody, at?: { mono: number; wall: number }): Appended;
+  append(event: EventBody, at?: { mono: number; wall: number }, options?: AppendOptions): Appended;
   markGap(reason: GapReason, from?: { seq: number | null; wall: number | null }): Appended;
   putOutcome(outcome: WsDone): Appended;
+  /** A socket's connection open in the stream (committed), if any. */
+  socketOf(key: string): { connectionId: string; attemptId: number } | null;
+  openSockets(): Array<{ key: string; connectionId: string; attemptId: number }>;
+  /** Everything accepted so far committed. */
+  flush(): Promise<void>;
 }
+
+/** The events of the site's socket: their acknowledgement to the holder is
+ *  this path's (`holdAcks`). */
+const SOCKET_EVENTS = [
+  "Network.webSocketCreated",
+  "Network.webSocketWillSendHandshakeRequest",
+  "Network.webSocketHandshakeResponseReceived",
+  "Network.webSocketFrameReceived",
+  "Network.webSocketFrameSent",
+  "Network.webSocketFrameError",
+  "Network.webSocketClosed",
+] as const;
 
 /** The engine, as the RPC has it. */
 export interface SocketLink {
@@ -104,6 +143,9 @@ export interface SocketDeps {
   notAdmitting: () => string | null;
   /** The live session of the site (hub-requests/session.ts). */
   sessionFingerprint: () => string | null;
+  /** The bytes of the socket's authorization with the live token (the
+   *  socket gate's rule); null: no live session. */
+  authorizationBytes: () => number | null;
   /** A target's type by its session ("page", "iframe", "worker"...). */
   targetType: (sessionId: string | null) => string | null;
   /** Cuts one socket's tunnel (egress/proxy.ts). */
@@ -140,6 +182,10 @@ interface Admission {
   graceTimer: NodeJS.Timeout | null;
   socket: CdpSocket | null;
   status: number | null;
+  /** The live session when it was asked (there is always one then). */
+  fingerprint: string;
+  /** The extensions the server's answer negotiated (CDP's word), if any. */
+  extensions: string | null;
 }
 
 /** A socket as CDP shows it. */
@@ -171,6 +217,16 @@ function hostOf(url: string): string {
   }
 }
 
+/** The extensions a handshake's answer negotiated (its header's value, cut
+ *  short: a name and its parameters, nothing secret), or null. */
+function extensionsOf(headers: unknown): string | null {
+  if (headers === null || typeof headers !== "object") return null;
+  for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (name.toLowerCase() === "sec-websocket-extensions" && typeof value === "string" && value !== "") return value.slice(0, 80);
+  }
+  return null;
+}
+
 function contextOf(type: string | null): WsAdmit["context"] {
   if (type === "iframe") return "frame";
   if (type === "worker" || type === "shared_worker" || type === "service_worker") return "worker";
@@ -195,9 +251,9 @@ export class SiteSockets {
   #uncovered: Mark | null = null;
   /** A connection opened since the last gap mark. */
   #openedSinceGap = false;
-  /** The operator's start gap is still to be written (the buffer was not
-   *  open). */
-  #startGapPending = false;
+  /** The operator's start (closes and its gap) is still to be written: the
+   *  buffer was not open. */
+  #startPending = false;
   #lastHandshake: { mono: number; wall: number } | null = null;
   #binaryFrames = 0;
 
@@ -207,13 +263,37 @@ export class SiteSockets {
     this.#now = deps.now ?? monoMs;
     this.#timings = { ...DEFAULT_TIMINGS, ...deps.timings };
     const cdp = deps.cdp;
-    cdp.on("Network.webSocketCreated", (event) => this.#onCreated(event));
-    cdp.on("Network.webSocketWillSendHandshakeRequest", (event) => this.#onWillSendHandshake(event));
-    cdp.on("Network.webSocketHandshakeResponseReceived", (event) => this.#onHandshakeResponse(event));
-    cdp.on("Network.webSocketFrameReceived", (event) => this.#onFrameReceived(event));
-    cdp.on("Network.webSocketFrameSent", (event) => this.#onFrameSent(event));
-    cdp.on("Network.webSocketFrameError", (event) => this.#onFrameError(event));
-    cdp.on("Network.webSocketClosed", (event) => this.#onClosed(event));
+    const handlers: Record<(typeof SOCKET_EVENTS)[number], (event: CdpEvent) => Promise<unknown> | null> = {
+      "Network.webSocketCreated": (event) => this.#onCreated(event),
+      "Network.webSocketWillSendHandshakeRequest": (event) => this.#onWillSendHandshake(event),
+      "Network.webSocketHandshakeResponseReceived": (event) => this.#onHandshakeResponse(event),
+      "Network.webSocketFrameReceived": (event) => this.#onFrameReceived(event),
+      "Network.webSocketFrameSent": (event) => this.#onFrameSent(event),
+      "Network.webSocketFrameError": (event) => this.#onFrameError(event),
+      "Network.webSocketClosed": (event) => this.#onClosed(event),
+    };
+    for (const method of SOCKET_EVENTS) {
+      cdp.holdAcks(method);
+      cdp.on(method, (event) => this.#take(event, handlers[method]));
+    }
+  }
+
+  /** One event of the socket: acknowledged to the holder once what it wrote
+   *  is durable (or could not be written — the buffer's own gap covers it),
+   *  at once when it wrote nothing. */
+  #take(event: CdpEvent, handle: (event: CdpEvent) => Promise<unknown> | null): void {
+    let durable: Promise<unknown> | null = null;
+    try {
+      durable = handle(event);
+    } finally {
+      const cdp = this.#deps.cdp;
+      if (durable === null) cdp.ack(event.seq);
+      else
+        void durable.then(
+          () => cdp.ack(event.seq, true),
+          () => cdp.ack(event.seq, true),
+        );
+    }
   }
 
   /** The engine's wait for a socket's admission (its params). */
@@ -241,7 +321,8 @@ export class SiteSockets {
 
   /** A CONNECT to the socket host: its admission, or why it is refused. */
   admit(host: string, port: number): SocketTicket | string {
-    const refused = this.#deps.notAdmitting();
+    const fingerprint = this.#deps.sessionFingerprint();
+    const refused = this.#deps.notAdmitting() ?? (fingerprint === null || this.#deps.authorizationBytes() === null ? "no session of the site yet: its socket could not authorize" : null);
     if (refused !== null) {
       this.#log("admit.refused", { host, why: refused });
       this.#deps.journal({ connectionId: null, event: "refused", detail: `no admission asked: ${refused}` });
@@ -266,6 +347,8 @@ export class SiteSockets {
       graceTimer: null,
       socket: null,
       status: null,
+      fingerprint: fingerprint!,
+      extensions: null,
     };
     if (socket !== null) socket.guessedBy = id;
     this.#admissions.set(id, admission);
@@ -273,10 +356,10 @@ export class SiteSockets {
     admission.waitTimer = setTimeout(() => this.#endAsk(admission, "the wait for the engine's admission is over"), wait);
     const url = socket?.url ?? `wss://${host}${port === 443 ? "" : `:${port}`}/`;
     const context = socket?.context ?? "page";
-    this.#deps.link.send({ type: "wsAdmit", connectionId: id, url, context, sessionFingerprint: this.#deps.sessionFingerprint(), requestedMono: now, waitDeadlineMono: now + wait });
+    this.#deps.link.send({ type: "wsAdmit", connectionId: id, url, context, sessionFingerprint: admission.fingerprint, requestedMono: now, waitDeadlineMono: now + wait });
     this.#log("admit.asked", { connectionId: id, url: urlForLogLine(url), context });
     this.#deps.journal({ connectionId: id, event: "asked", context, detail: urlForLogLine(url) });
-    return { id, granted, event: (event) => this.#onTunnel(admission, event) };
+    return { id, granted, event: (event) => this.#onTunnel(admission, event), rules: () => ({ authorizationBytes: this.#deps.authorizationBytes() }) };
   }
 
   // ── the engine ─────────────────────────────────────────────────────────
@@ -357,20 +440,30 @@ export class SiteSockets {
 
   // ── the page's lifetime ────────────────────────────────────────────────
 
-  /** The operator started: the stream may have missed anything since its
-   *  last saved event (plan §4.4, step 6). */
-  operatorStarted(): void {
-    const marked = this.#deps.buffer.markGap("operator_start");
-    // A buffer that cannot be opened yet gets it once it opens; a full one
-    // writes its own gap when there is room.
-    this.#startGapPending = !marked.ok && marked.reason === "buffer_unavailable";
+  /** The operator started and had what the holder kept from before it (its
+   *  replay; operator.ts): the connections the previous Chrome left open in
+   *  the stream are closed there — that Chrome is gone — and the stream may
+   *  have missed anything since its last saved event (plan §4.4, step 6). */
+  async afterRestart(): Promise<void> {
+    const buffer = this.#deps.buffer;
+    await buffer.flush();
+    const open = new Set([...this.#sockets.values()].filter((socket) => socket.open).map((socket) => socket.key));
+    for (const left of buffer.openSockets()) {
+      if (open.has(left.key)) continue;
+      this.#append({ kind: "ws.close", connectionId: left.connectionId, code: null, reason: null }, null, { socket: { key: left.key, open: null } });
+      this.#log("socket.closed", { connectionId: left.connectionId, why: "the previous operator's Chrome is gone" });
+    }
+    const marked = buffer.markGap("operator_start");
+    // A buffer that cannot be opened yet gets it all once it opens; a full
+    // one writes its own gap when there is room.
+    this.#startPending = !marked.ok && marked.reason === "buffer_unavailable";
     this.#uncovered = null;
     this.#openedSinceGap = false;
   }
 
   /** The buffer opened after all (operator.ts #onBufferOpened). */
   bufferOpened(): void {
-    if (this.#startGapPending) this.operatorStarted();
+    if (this.#startPending) void this.afterRestart();
   }
 
   /** A new Chrome starts: a connection of the previous one is gone. */
@@ -390,7 +483,11 @@ export class SiteSockets {
       if (admission.stage === "asking") this.#endAsk(admission, `the page stopped: ${reason}`);
       else if (admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: admission.status, error: `the page stopped: ${reason}` });
     }
-    for (const socket of this.#sockets.values()) if (socket.open) this.#close(socket, `the page stopped: ${reason}`);
+    for (const socket of this.#sockets.values()) {
+      if (!socket.open || socket.admission === null) continue;
+      socket.open = false;
+      this.#close(socket.key, socket.admission.id, `the page stopped: ${reason}`, null);
+    }
     this.#sockets.clear();
   }
 
@@ -428,6 +525,19 @@ export class SiteSockets {
         admission.handshake = { mono: event.mono, wall: event.wall };
         if (this.#lastHandshake === null || event.mono > this.#lastHandshake.mono) this.#lastHandshake = { mono: event.mono, wall: event.wall };
         return;
+      case "refused": {
+        // The socket gate held a record: it never left, the tunnel is cut.
+        // Something in the page sent what the guard should have stopped
+        // (it did not go into that context): the page is not trusted.
+        const context = admission.socket?.context ?? "unknown";
+        const detail: Record<string, string | number | boolean> = { at: "proxy", recordBytes: event.recordBytes, why: event.why, context, left: false };
+        if (admission.extensions !== null) detail.extensions = admission.extensions;
+        this.#log("record.held", { connectionId: admission.id, ...detail });
+        this.#deps.journal({ connectionId: admission.id, event: "blocked", context, detail: `the socket gate held a record of ${event.recordBytes} bytes: ${event.why}` });
+        this.#deps.stop("unknown_ws_message", `the socket gate held a record the page wrote (${event.why}); it was not sent`, "kill");
+        this.#deps.alarm("unknown_ws_message", detail);
+        return;
+      }
       case "ended":
         admission.tunnelEnded = event.result;
         if (admission.stage === "asking") {
@@ -449,18 +559,37 @@ export class SiteSockets {
   }
 
   // ── CDP ────────────────────────────────────────────────────────────────
+  //
+  // Each handler returns the durability of what it wrote (the holder hears
+  // of the event only then), or null when it wrote nothing.
 
   #key(event: CdpEvent): string | null {
     const requestId = (event.params as { requestId?: unknown }).requestId;
     return typeof requestId === "string" ? `${event.sessionId ?? ""}|${requestId}` : null;
   }
 
-  #onCreated(event: CdpEvent): void {
+  /** The Chrome message an event of the stream is made of: its socket and
+   *  the holder's number of the message (the same when it is delivered
+   *  again). */
+  #origin(event: CdpEvent, key: string): string {
+    return `${key}#${event.seq}`;
+  }
+
+  /** When Chrome saw it (Network.MonotonicTime is CLOCK_MONOTONIC, as the
+   *  operator's clock), else now: a message delivered again keeps its time. */
+  #at(event: CdpEvent): { mono: number; wall: number } {
+    const now = monoMs();
+    const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
+    const mono = Number.isFinite(seen) && seen <= now + 1000 && seen >= now - 3_600_000 ? seen : now;
+    return { mono, wall: Math.round(wallMs() - (now - mono)) };
+  }
+
+  #onCreated(event: CdpEvent): null {
     // A previous instance's: its Chrome is killed.
-    if (event.replayed) return;
+    if (event.replayed) return null;
     const key = this.#key(event);
     const url = String((event.params as { url?: unknown }).url ?? "");
-    if (key === null || this.#sockets.has(key)) return;
+    if (key === null || this.#sockets.has(key)) return null;
     this.#sockets.set(key, {
       key,
       url,
@@ -476,10 +605,12 @@ export class SiteSockets {
       const oldest = [...this.#sockets.values()].find((socket) => !socket.open);
       if (oldest) this.#sockets.delete(oldest.key);
     }
+    return null;
   }
 
+  /** The socket this operator knows of the event (not for a message of a
+   *  previous instance's). */
   #socket(event: CdpEvent): CdpSocket | null {
-    if (event.replayed) return null;
     const key = this.#key(event);
     return key === null ? null : (this.#sockets.get(key) ?? null);
   }
@@ -498,19 +629,20 @@ export class SiteSockets {
     return false;
   }
 
-  #onWillSendHandshake(event: CdpEvent): void {
-    if (event.replayed) return;
+  #onWillSendHandshake(event: CdpEvent): null {
+    if (event.replayed) return null;
     const key = this.#key(event);
-    if (key === null) return;
+    if (key === null) return null;
     let socket = this.#sockets.get(key);
     if (!socket) {
       // Its creation was not seen (the operator came later): taken as is.
       this.#onCreated(event);
       socket = this.#sockets.get(key);
-      if (!socket) return;
+      if (!socket) return null;
     }
-    if (socket.admission !== null || socket.lost) return;
-    const untied = [...this.#admissions.values()].filter((admission) => admission.stage === "admitted" && admission.socket === null && (socket.host === "" || admission.host === socket.host));
+    if (socket.admission !== null || socket.lost) return null;
+    const host = socket.host;
+    const untied = [...this.#admissions.values()].filter((admission) => admission.stage === "admitted" && admission.socket === null && (host === "" || admission.host === host));
     const admission = untied[0];
     if (!admission) {
       // A handshake through no admitted tunnel the operator knows of (its
@@ -520,28 +652,31 @@ export class SiteSockets {
       this.#log("socket.untied", { url: urlForLogLine(socket.url), context: socket.context });
       this.#deps.journal({ connectionId: null, event: "failed", context: socket.context, detail: "a handshake with no admitted socket to tie it to" });
       this.#uncovered ??= this.#last ?? { seq: null, wall: wallMs() };
-      return;
+      return null;
     }
     if (untied.length > 1) this.#log("socket.tie_ambiguous", { admissions: untied.length, chosen: admission.id });
     socket.admission = admission;
     admission.socket = socket;
+    return null;
   }
 
-  #onHandshakeResponse(event: CdpEvent): void {
-    const socket = this.#socket(event);
-    const status = Number((event.params as { response?: { status?: unknown } }).response?.status);
-    if (!socket) return;
+  #onHandshakeResponse(event: CdpEvent): Promise<unknown> | null {
+    const socket = event.replayed ? null : this.#socket(event);
+    if (!socket) return null;
+    const response = (event.params as { response?: { status?: unknown; headers?: unknown } }).response;
+    const status = Number(response?.status);
     const admission = socket.admission;
     if (admission === null) {
       if (socket.lost && status === 101) this.#log("socket.untied_open", { url: urlForLogLine(socket.url) });
-      return;
+      return null;
     }
     admission.status = Number.isInteger(status) ? status : null;
+    admission.extensions = extensionsOf(response?.headers);
     if (status !== 101) {
       this.#done(admission, { sent: true, status: admission.status, error: `the handshake was answered ${String(admission.status)}` });
-      return;
+      return null;
     }
-    if (admission.attemptId === null) return;
+    if (admission.attemptId === null) return null;
     // The stream's break since the previous connection closed goes first.
     const uncovered = this.#uncovered;
     if (uncovered !== null) {
@@ -550,25 +685,43 @@ export class SiteSockets {
     }
     socket.open = true;
     this.#openedSinceGap = true;
-    this.#append({ kind: "ws.open", connectionId: admission.id, attemptId: admission.attemptId, sessionFingerprint: this.#deps.sessionFingerprint() });
+    const durable = this.#append(
+      { kind: "ws.open", connectionId: admission.id, attemptId: admission.attemptId, sessionFingerprint: this.#deps.sessionFingerprint() ?? admission.fingerprint },
+      this.#at(event),
+      { origin: this.#origin(event, socket.key), socket: { key: socket.key, open: { connectionId: admission.id, attemptId: admission.attemptId } } },
+    );
     this.#done(admission, { sent: true, status: 101, error: null });
+    return durable;
   }
 
-  #onFrameReceived(event: CdpEvent): void {
-    const socket = this.#socket(event);
-    if (!socket?.open || socket.admission === null) return;
+  /** The connection of an event's socket: this operator's, or — for a
+   *  message the holder kept from before it, or a socket it did not see
+   *  open — the one the stream has open (the buffer's socket row). */
+  #connectionOf(event: CdpEvent): { key: string; connectionId: string; socket: CdpSocket | null } | null {
+    const key = this.#key(event);
+    if (key === null) return null;
+    const socket = this.#sockets.get(key) ?? null;
+    if (socket !== null && socket.open && socket.admission !== null) return { key, connectionId: socket.admission.id, socket };
+    if (socket !== null && !event.replayed) return null;
+    const stored = this.#deps.buffer.socketOf(key);
+    return stored === null ? null : { key, connectionId: stored.connectionId, socket: null };
+  }
+
+  #onFrameReceived(event: CdpEvent): Promise<unknown> | null {
+    const connection = this.#connectionOf(event);
+    if (connection === null) return null;
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
     if (response?.opcode !== 1 || typeof response.payloadData !== "string") {
       // Not text: Fansly's socket sends none; counted, its content not kept.
       this.#binaryFrames += 1;
-      if (this.#binaryFrames === 1 || this.#binaryFrames % 100 === 0) this.#log("frame.not_text", { connectionId: socket.admission.id, opcode: Number(response?.opcode), count: this.#binaryFrames });
-      return;
+      if (this.#binaryFrames === 1 || this.#binaryFrames % 100 === 0) this.#log("frame.not_text", { connectionId: connection.connectionId, opcode: Number(response?.opcode), count: this.#binaryFrames });
+      return null;
     }
-    this.#append({ kind: "ws.in", connectionId: socket.admission.id, frame: response.payloadData });
+    return this.#append({ kind: "ws.in", connectionId: connection.connectionId, frame: response.payloadData }, this.#at(event), { origin: this.#origin(event, connection.key) });
   }
 
-  #onFrameSent(event: CdpEvent): void {
-    if (event.replayed) return;
+  #onFrameSent(event: CdpEvent): null {
+    if (event.replayed) return null;
     const socket = this.#socket(event);
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
     const opcode = Number(response?.opcode);
@@ -576,69 +729,72 @@ export class SiteSockets {
     const connectionId = socket?.admission?.id ?? null;
     if (opcode !== 1 && opcode !== 2) {
       this.#deps.journal({ connectionId, event: "out", message: { kind: "other", opcode, bytes: payload.length } });
-      return;
+      return null;
     }
     const kind = opcode === 2 ? "binary" : messageKind(payload);
     this.#deps.journal({ connectionId, event: "out", message: { kind, opcode, bytes: opcode === 1 ? Buffer.byteLength(payload) : Math.floor((payload.length * 3) / 4) } });
-    if (kind === "ping" || kind === "auth") return;
-    // It left: the guard in the page was passed by. The page cannot be
-    // trusted any more.
+    if (kind === "ping" || kind === "auth") return null;
+    // It left: the guard in the page and the socket gate were both passed
+    // by (a message of a size the gate cannot tell apart). The page cannot
+    // be trusted any more.
     const shape = opcode === 1 ? shapeFields(shapeOf(payload)) : { form: "binary" };
     this.#log("frame.sent_unknown", { connectionId, ...shape });
     this.#deps.stop("unknown_ws_message", "an unknown socket message left the page past the guard", "kill");
     this.#deps.alarm("unknown_ws_message", { ...shape, context: socket?.context ?? "unknown", left: true });
+    return null;
   }
 
-  #onFrameError(event: CdpEvent): void {
-    const socket = this.#socket(event);
+  #onFrameError(event: CdpEvent): null {
+    const socket = event.replayed ? null : this.#socket(event);
     const admission = socket?.admission ?? null;
     const message = String((event.params as { errorMessage?: unknown }).errorMessage ?? "").slice(0, 160);
-    if (admission === null || admission.stage !== "admitted") return;
+    if (admission === null || admission.stage !== "admitted") return null;
     const status = Number(/response code: (\d{3})/.exec(message)?.[1] ?? NaN);
     this.#done(admission, { sent: admission.handshake !== null, status: Number.isInteger(status) ? status : admission.status, error: message || "the handshake failed" });
+    return null;
   }
 
-  #onClosed(event: CdpEvent): void {
+  #onClosed(event: CdpEvent): Promise<unknown> | null {
+    const connection = this.#connectionOf(event);
     const socket = this.#socket(event);
-    if (!socket) return;
-    this.#sockets.delete(socket.key);
-    if (socket.open) {
-      this.#close(socket, "closed");
-      return;
+    if (socket !== null) this.#sockets.delete(socket.key);
+    if (connection !== null) {
+      if (connection.socket !== null) connection.socket.open = false;
+      return this.#close(connection.key, connection.connectionId, "closed", this.#at(event), this.#origin(event, connection.key));
     }
-    const admission = socket.admission;
+    const admission = socket?.admission ?? null;
     if (admission !== null && admission.stage === "admitted") this.#done(admission, { sent: admission.handshake !== null, status: admission.status, error: "the socket closed before its handshake's answer" });
+    return null;
   }
 
   // ── the stream ─────────────────────────────────────────────────────────
 
-  #append(body: EventBody): Mark | null {
-    const at = { mono: monoMs(), wall: wallMs() };
-    const appended = this.#deps.buffer.append(body, at);
+  /** An event into the buffer; its durability, or null when it was not
+   *  taken (the buffer stops the page itself, and its own gap follows once
+   *  there is room). */
+  #append(body: EventBody, at: { mono: number; wall: number } | null, options: AppendOptions): Promise<unknown> | null {
+    const stamp = at ?? { mono: monoMs(), wall: wallMs() };
+    const appended = this.#deps.buffer.append(body, stamp, options);
     if (!appended.ok) {
-      // The buffer stops the page itself; its own gap follows once there is room.
       this.#log("event.unkept", { kind: body.kind, reason: appended.reason });
       return null;
     }
-    const mark: Mark = { seq: null, wall: at.wall };
+    const mark: Mark = { seq: null, wall: stamp.wall };
     this.#last = mark;
-    void appended.durable.then((durable) => {
+    return appended.durable.then((durable) => {
       if (durable.ok) mark.seq = durable.seq;
       else this.#log("event.unkept", { kind: body.kind, reason: durable.reason });
     });
-    return mark;
   }
 
-  /** A connection's end in the stream; what comes after it until the next
-   *  connection opens may be missing. */
-  #close(socket: CdpSocket, why: string): void {
-    socket.open = false;
-    const admission = socket.admission;
-    if (admission === null) return;
-    const mark = this.#append({ kind: "ws.close", connectionId: admission.id, code: null, reason: null });
-    this.#uncovered = mark ?? this.#last;
-    this.#log("socket.closed", { connectionId: admission.id, why });
-    this.#deps.journal({ connectionId: admission.id, event: "closed", attemptId: admission.attemptId, detail: why });
+  /** A connection's end in the stream (its socket's row goes with it); what
+   *  comes after it until the next connection opens may be missing. */
+  #close(key: string, connectionId: string, why: string, at: { mono: number; wall: number } | null, origin?: string): Promise<unknown> | null {
+    const durable = this.#append({ kind: "ws.close", connectionId, code: null, reason: null }, at, { socket: { key, open: null }, ...(origin === undefined ? {} : { origin }) });
+    this.#uncovered = this.#last;
+    this.#log("socket.closed", { connectionId, why });
+    this.#deps.journal({ connectionId, event: "closed", detail: why });
+    return durable;
   }
 
   // ── admissions ─────────────────────────────────────────────────────────

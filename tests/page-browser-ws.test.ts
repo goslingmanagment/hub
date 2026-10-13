@@ -3,16 +3,33 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
-import { CdpError } from "../apps/page-browser/src/cdp/client.ts";
+import { Cdp, CdpError } from "../apps/page-browser/src/cdp/client.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { Egress, type TunnelRecord } from "../apps/page-browser/src/egress/proxy.ts";
+import { authorizationBytes, clientFrameBytes, recordOverhead, SocketRecordGate } from "../apps/page-browser/src/egress/socket-gate.ts";
 import type { SocketLine } from "../apps/page-browser/src/logs/journal.ts";
 import type { WsAdmitResult } from "../apps/page-browser/src/rpc/protocol.ts";
 import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import { guardExpression } from "../apps/page-browser/src/ws/guard.ts";
 import { GuardInstaller } from "../apps/page-browser/src/ws/install.ts";
-import { SiteSockets, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
-import { FakeCdpPort, FakeSocketLink, FakeSocks, quiet, SOCKET_FILL, SocketTunnelClient, SOCKS_PASSWORD, SOCKS_USER, tempDir, tlsLikeServer, UNANSWERED, until } from "./helpers/page-browser-fakes.ts";
+import { SiteSockets, type SocketBuffer, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
+import {
+  FakeCdpPort,
+  FakeChrome,
+  FakeSocketLink,
+  FakeSocks,
+  HolderUnderS6,
+  quiet,
+  SOCKET_FILL,
+  socketServer,
+  SocketTunnelClient,
+  SOCKS_PASSWORD,
+  SOCKS_USER,
+  tempDir,
+  TLS13_OVERHEAD,
+  UNANSWERED,
+  until,
+} from "./helpers/page-browser-fakes.ts";
 
 // The site's socket under the engine's admission (Project Browser plan §4.3,
 // §4.4, §4.9; spec §2.3, §6.1, §9; mandatory condition №3; stage 1,
@@ -33,6 +50,8 @@ afterEach(async () => {
 const FINGERPRINT = "f".repeat(64);
 const TOKEN = "eyJ-socket-token-value-9f8e7d6c5b4a";
 const AUTH = JSON.stringify({ t: 1, d: JSON.stringify({ token: TOKEN, v: 3 }) });
+/** The live session's token, as the site's API requests carry it. */
+const SESSION_TOKEN = "MTA4NDU4OTk3MjEyNjE2NzA0MDoxOjI6MjZhNjU0M2Q0YWZmYzQyOWNiZWE0OWRmYjFmNmI4";
 const FRAME_SECRET = "frame-content-marker-7c3b";
 const URL_WS = "wss://wsv3.fansly.com/?v=3";
 
@@ -41,7 +60,7 @@ interface World {
   egress: Egress;
   proxyPort: number;
   socks: FakeSocks;
-  server: Awaited<ReturnType<typeof tlsLikeServer>>;
+  server: Awaited<ReturnType<typeof socketServer>>;
   buffer: EventBuffer;
   sockets: SiteSockets;
   link: FakeSocketLink;
@@ -51,20 +70,20 @@ interface World {
   stops: Array<{ reason: string; note: string; how: string; exitOpen: boolean }>;
   lines: string[];
   admitting: { why: string | null };
-  session: { fingerprint: string | null };
+  session: { fingerprint: string | null; token: string | null };
   /** The engine's answer to the latest (or a given) wsAdmit. */
   answer: (fields: Partial<WsAdmitResult> & { admit: boolean }, connectionId?: string) => string;
   events: () => Array<Record<string, unknown>>;
   outcome: (attemptId: number) => Record<string, unknown> | null;
 }
 
-async function world(options: { timings?: Partial<SocketTimings> } = {}): Promise<World> {
+async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number } = {}): Promise<World> {
   const temp = tempDir("pb-ws-");
   cleanups.push(temp.remove);
   const lines: string[] = [];
   setLogSink((line) => lines.push(line));
   const cdp = new FakeCdpPort();
-  const server = await tlsLikeServer();
+  const server = await socketServer(options.tls12Suite === undefined ? {} : { tls12Suite: options.tls12Suite });
   cleanups.push(server.close);
   const socks = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
   await socks.start();
@@ -79,7 +98,7 @@ async function world(options: { timings?: Partial<SocketTimings> } = {}): Promis
   const stops: World["stops"] = [];
   const link = new FakeSocketLink();
   const admitting = { why: null as string | null };
-  const session = { fingerprint: FINGERPRINT as string | null };
+  const session = { fingerprint: FINGERPRINT as string | null, token: SESSION_TOKEN as string | null };
   let sockets: SiteSockets | null = null;
   const egress = new Egress({ classify: classifyFanslyHost, admitSocket: (host, port) => sockets!.admit(host, port), onRecord: (record) => records.push(record), log: makeLog("egress") });
   const proxyPort = await egress.listen(0);
@@ -93,10 +112,11 @@ async function world(options: { timings?: Partial<SocketTimings> } = {}): Promis
   ]);
   sockets = new SiteSockets({
     cdp,
-    buffer,
+    buffer: options.buffer ? options.buffer(buffer) : buffer,
     link,
     notAdmitting: () => admitting.why,
     sessionFingerprint: () => session.fingerprint,
+    authorizationBytes: () => (session.token === null ? null : authorizationBytes(session.token)),
     targetType: (sessionId) => (sessionId === null ? null : (types.get(sessionId) ?? null)),
     cutTunnel: (connectionId, reason) => egress.cutSocket(connectionId, reason),
     journal: (line) => journal.push(line),
@@ -409,14 +429,15 @@ describe("frames (plan §4.4)", () => {
     client.destroy();
   });
 
-  it("ws.open says no session when the site has none yet (an addition to spec §6.1)", async () => {
+  it("no admission is asked before the site's session is known: its socket could not authorize (the socket gate)", async () => {
     const w = await world();
     w.session.fingerprint = null;
-    await opened(w);
-    await w.buffer.flush();
-    await until(() => w.events().length === 1);
-    expect(w.events()[0]).toMatchObject({ kind: "ws.open", sessionFingerprint: null });
-    expect(w.link.of("wsAdmit")[0]).toMatchObject({ sessionFingerprint: null });
+    w.session.token = null;
+    const client = await siteOpens(w);
+    expect(client.status).toBe(403);
+    expect(w.link.of("wsAdmit")).toEqual([]);
+    await until(() => w.records.length === 1);
+    expect(w.records[0]?.result).toBe("refused: socket not admitted (no session of the site yet: its socket could not authorize)");
   });
 
   it("an open connection stays when the engine's link goes (plan §4.9): its frames keep coming into the buffer", async () => {
@@ -439,7 +460,7 @@ describe("frames (plan §4.4)", () => {
 describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
   it("at the operator's start, before a connection that follows a closed one, and after a Chrome that had one — each from the last event before the break", async () => {
     const w = await world();
-    w.sockets.operatorStarted();
+    await w.sockets.afterRestart();
     let client = await opened(w, "WS1", 41);
     w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"a"}' } }, "S1");
     w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
@@ -674,5 +695,288 @@ describe("the guard into every context (ws/install.ts)", () => {
       { report: { k: "blocked_send", where: "", shape: { form: "text", len: 4, msgType: null, keys: null, dKeys: null } }, target: { sessionId: "S1", type: "page" } },
     ]);
     expect(guard.installed).toBe(1);
+  });
+});
+
+describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's review of PR 10, P1)", () => {
+  /** An open connection whose page has no guard: Chrome writes whatever the
+   *  page's native send gives it, as TLS 1.3 records. */
+  async function unguarded(w: World): Promise<SocketTunnelClient> {
+    const client = await opened(w);
+    await client.answered();
+    return client;
+  }
+
+  it("a forbidden message from a context the guard did not go into never reaches Fansly: held, the tunnel cut, the page killed with an alarm — the authorization and the pings before it went", async () => {
+    const w = await world();
+    const client = await unguarded(w);
+    client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
+    client.message(1, SOCKET_FILL.ping);
+    client.message(1, SOCKET_FILL.ping);
+    await until(() => w.server.received().includes(SOCKET_FILL.ping), 3000, "the pings at the server");
+    expect(w.server.received().includes(SOCKET_FILL.authorization)).toBe(true);
+    // A chat room's subscription: 40 bytes of payload.
+    client.message(40, SOCKET_FILL.forbidden);
+    await client.closed;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(w.stops).toEqual([{ reason: "unknown_ws_message", note: expect.stringContaining("it was not sent"), how: "kill", exitOpen: true }]);
+    expect(w.alarms).toEqual([{ kind: "unknown_ws_message", detail: { at: "proxy", recordBytes: TLS13_OVERHEAD + clientFrameBytes(40), why: "a message of no allowed size", context: "page", left: false } }]);
+    expect(w.records.at(-1)).toMatchObject({ cls: "ws", result: `cut: the socket gate held a record of ${TLS13_OVERHEAD + clientFrameBytes(40)} bytes (a message of no allowed size)` });
+    expect(w.journal.at(-1)).toMatchObject({ event: "blocked", detail: expect.stringContaining("the socket gate held a record") });
+  });
+
+  it("coalesced frames — two messages in one record — fail closed", async () => {
+    const w = await world();
+    const client = await unguarded(w);
+    client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
+    await until(() => w.server.received().includes(SOCKET_FILL.authorization), 3000, "the authorization at the server");
+    client.message([1, 1], SOCKET_FILL.ping);
+    await client.closed;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(w.server.received().includes(SOCKET_FILL.authorization)).toBe(true);
+    expect(w.server.received().includes(SOCKET_FILL.ping)).toBe(false);
+    expect(w.stops).toHaveLength(1);
+  });
+
+  it("records let up before a held one in the same write still go; the held one and what follows never do", async () => {
+    const w = await world();
+    const client = await unguarded(w);
+    const record = (payload: number, fill: number) => Buffer.concat([Buffer.from([23, 3, 3, (TLS13_OVERHEAD + clientFrameBytes(payload) - 5) >> 8, (TLS13_OVERHEAD + clientFrameBytes(payload) - 5) & 0xff]), Buffer.alloc(TLS13_OVERHEAD + clientFrameBytes(payload) - 5, fill)]);
+    client.socket.write(Buffer.concat([record(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization), record(1, SOCKET_FILL.ping), record(30, SOCKET_FILL.forbidden), record(1, 0x78)]));
+    await client.closed;
+    await until(() => w.server.received().includes(SOCKET_FILL.ping), 3000, "the records before the held one");
+    expect(w.server.received().includes(SOCKET_FILL.authorization)).toBe(true);
+    expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(w.server.received().includes(0x78)).toBe(false);
+  });
+
+  it("the authorization goes once a connection, at the live token's size only", async () => {
+    const twice = await world();
+    const client = await unguarded(twice);
+    client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
+    client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.forbidden);
+    await client.closed;
+    expect(twice.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(twice.alarms[0]?.detail).toMatchObject({ why: "a second authorization-sized message on the connection" });
+    // Another token's size (a session the operator does not know).
+    const other = await world();
+    const second = await unguarded(other);
+    second.message(authorizationBytes(`${SESSION_TOKEN}xx`), SOCKET_FILL.forbidden);
+    await second.closed;
+    expect(other.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    // The session gone meanwhile: no authorization at all.
+    const gone = await world();
+    const third = await unguarded(gone);
+    gone.session.token = null;
+    third.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.forbidden);
+    await third.closed;
+    expect(gone.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(gone.alarms[0]?.detail).toMatchObject({ why: "a message that is not the ping, and no live session to authorize" });
+  });
+
+  it("Chrome's own control frames go: an empty pong or close, a close with its code (1001 when the page goes), TLS alerts; a pong echoing a ping's payload is held", async () => {
+    const w = await world();
+    const client = await unguarded(w);
+    client.message(0, 0x61);
+    client.message(2, 0x62);
+    // A TLS 1.3 alert (close_notify): 24 bytes, too small for any frame.
+    client.socket.write(Buffer.concat([Buffer.from([23, 3, 3, 0, 19]), Buffer.alloc(19, 0x63)]));
+    client.socket.write(Buffer.concat([Buffer.from([21, 3, 3, 0, 2]), Buffer.alloc(2, 0x64)]));
+    await until(() => w.server.received().includes(0x64), 3000, "the alert at the server");
+    for (const fill of [0x61, 0x62, 0x63]) expect(w.server.received().includes(fill)).toBe(true);
+    client.message(4, SOCKET_FILL.forbidden);
+    await client.closed;
+    expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+  });
+
+  it("a socket whose TLS the gate cannot measure (a CBC suite) is cut before its handshake request", async () => {
+    const w = await world({ tls12Suite: 0xc013 });
+    const connecting = siteOpens(w);
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 101 });
+    const client = await connecting;
+    client.socket.write(Buffer.concat([Buffer.from([22, 3, 3, 0, 195]), Buffer.alloc(195, SOCKET_FILL.clientHello)]));
+    client.socket.resume();
+    await client.closed;
+    expect(w.records.at(-1)).toMatchObject({ result: "cut: a TLS the socket gate cannot measure (1.2, suite 0xc013)" });
+    await until(() => w.outcome(101) !== null);
+    expect(w.outcome(101)).toMatchObject({ sent: false });
+  });
+
+  it("measures records by the version and suite the server chose", () => {
+    expect([recordOverhead(true, 0x1301), recordOverhead(true, 0x1303), recordOverhead(false, 0xc02f), recordOverhead(false, 0xcca8), recordOverhead(false, 0xc013), recordOverhead(true, 0x1304)]).toEqual([22, 22, 29, 21, null, null]);
+    expect([clientFrameBytes(0), clientFrameBytes(1), clientFrameBytes(125), clientFrameBytes(126), clientFrameBytes(65_535), clientFrameBytes(65_536)]).toEqual([6, 7, 131, 134, 65_543, 65_550]);
+    expect(authorizationBytes("abc")).toBe(Buffer.byteLength(JSON.stringify({ t: 1, d: JSON.stringify({ token: "abc", v: 3 }) })));
+    const gate = new SocketRecordGate(29);
+    const rules = { authorizationBytes: 110 };
+    expect(gate.decide(23, 29 + 7, rules)).toEqual({ up: true, record: "ping" });
+    expect(gate.decide(23, 29 + 6, rules)).toEqual({ up: true, record: "empty_control" });
+    expect(gate.decide(23, 29 + 8, rules)).toEqual({ up: true, record: "close_code" });
+    expect(gate.decide(23, 31, rules)).toEqual({ up: true, record: "tls" });
+    expect(gate.decide(21, 500, rules)).toEqual({ up: true, record: "tls" });
+    expect(gate.decide(22, 100, rules)).toMatchObject({ up: false });
+    expect(gate.decide(23, 29 + 116, rules)).toEqual({ up: true, record: "authorization" });
+    expect(gate.decide(23, 29 + 116, rules)).toMatchObject({ up: false });
+    expect(gate.decide(23, 29 + 9, rules)).toMatchObject({ up: false });
+  });
+});
+
+describe("the holder's acknowledgement and its replay (Astra's review of PR 10, P1)", () => {
+  const CONNECTION = "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+  const SOCKET_KEY = "S1|WS1";
+
+  /** The site socket's writes as a SocketBuffer over the real one, a slow
+   *  disk or a crash in between: `holding` keeps their durability back until
+   *  `release`; a frame whose text has a `lose` marker is lost before its
+   *  commit (the operator died first). */
+  class ControlledBuffer implements SocketBuffer {
+    readonly inner: EventBuffer;
+    holding = false;
+    readonly lose = new Set<string>();
+    readonly held: Array<() => void> = [];
+    constructor(inner: EventBuffer) {
+      this.inner = inner;
+    }
+    append(...[event, at, options]: Parameters<SocketBuffer["append"]>): ReturnType<SocketBuffer["append"]> {
+      if (event.kind === "ws.in" && [...this.lose].some((marker) => event.frame.includes(marker))) return { ok: true, durable: new Promise(() => undefined) };
+      const appended = this.inner.append(event, at, options);
+      if (!appended.ok || !this.holding) return appended;
+      return { ok: true, durable: appended.durable.then((durable) => new Promise((resolve) => this.held.push(() => resolve(durable)))) };
+    }
+    release(): void {
+      for (const resolve of this.held.splice(0)) resolve();
+    }
+    markGap(...args: Parameters<SocketBuffer["markGap"]>): ReturnType<SocketBuffer["markGap"]> {
+      return this.inner.markGap(...args);
+    }
+    putOutcome(...args: Parameters<SocketBuffer["putOutcome"]>): ReturnType<SocketBuffer["putOutcome"]> {
+      return this.inner.putOutcome(...args);
+    }
+    socketOf(key: string): ReturnType<SocketBuffer["socketOf"]> {
+      return this.inner.socketOf(key);
+    }
+    openSockets(): ReturnType<SocketBuffer["openSockets"]> {
+      return this.inner.openSockets();
+    }
+    flush(): Promise<void> {
+      return this.inner.flush();
+    }
+  }
+
+  async function holderWorld() {
+    const temp = tempDir("pb-ws-holder-");
+    cleanups.push(temp.remove);
+    setLogSink(() => undefined);
+    const chrome = new FakeChrome();
+    await chrome.boot();
+    cleanups.push(() => chrome.shutdown());
+    const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
+    await holder.start();
+    cleanups.push(() => holder.stop());
+    await until(() => chrome.live !== undefined, 3000, "the holder's DevTools connection");
+    const openBuffer = () => {
+      const buffer = new EventBuffer({ dir: join(temp.dir, "buffer"), idFile: join(temp.dir, "buffer-id"), batchMs: 5, log: quiet });
+      buffer.start();
+      return buffer;
+    };
+    const stored = () => holder.holder!.stats.stored;
+    return { chrome, holder, openBuffer, stored };
+  }
+
+  async function operatorSide(holder: HolderUnderS6, buffer: SocketBuffer): Promise<{ cdp: Cdp; sockets: SiteSockets }> {
+    const cdp = new Cdp({ socketPath: holder.socketPath, commandTimeoutMs: 500, log: quiet });
+    const sockets = new SiteSockets({
+      cdp,
+      buffer,
+      link: new FakeSocketLink(),
+      notAdmitting: () => null,
+      sessionFingerprint: () => FINGERPRINT,
+      authorizationBytes: () => authorizationBytes(SESSION_TOKEN),
+      targetType: () => "page",
+      cutTunnel: () => false,
+      journal: () => undefined,
+      alarm: () => undefined,
+      stop: () => undefined,
+      log: quiet,
+    });
+    await cdp.connect();
+    await cdp.replayEnded;
+    return { cdp, sockets };
+  }
+
+  /** A connection open in the stream, as an earlier operator left it. */
+  async function openConnection(buffer: EventBuffer): Promise<void> {
+    buffer.append({ kind: "ws.open", connectionId: CONNECTION, attemptId: 7, sessionFingerprint: FINGERPRINT }, undefined, { socket: { key: SOCKET_KEY, open: { connectionId: CONNECTION, attemptId: 7 } } });
+    await buffer.flush();
+  }
+
+  function frame(chrome: FakeChrome, text: string): void {
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: text }) } }, "S1");
+  }
+
+  const kinds = (buffer: EventBuffer) => buffer.readEvents(0, 1000, 10_000_000).map((event) => JSON.parse(event.json) as Record<string, unknown>);
+
+  it("a frame is acknowledged to the holder only once it is durable", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    await openConnection(buffer);
+    const controlled = new ControlledBuffer(buffer);
+    controlled.holding = true;
+    const { cdp } = await operatorSide(holder, controlled);
+    cleanups.push(() => cdp.close());
+    await until(() => stored() === 0, 3000, "nothing kept");
+    frame(chrome, "f-1");
+    await until(() => controlled.held.length === 1, 3000, "the frame's write");
+    // Written, not yet durable — as long as an fsync takes: the holder keeps it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(stored()).toBe(1);
+    controlled.release();
+    await until(() => stored() === 0, 3000, "the acknowledgement after the write is durable");
+    expect(kinds(buffer).map((event) => event.kind)).toEqual(["ws.open", "ws.in"]);
+  });
+
+  it("after an operator restart, what the holder kept is written — once: a frame lost before its commit is written, one durable but not acknowledged is not written again; the connection is closed in the stream before the start's gap", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const first = openBuffer();
+    await openConnection(first);
+    // The first operator: two frames kept and acknowledged...
+    const controlled = new ControlledBuffer(first);
+    controlled.lose.add("lost-3");
+    const a = await operatorSide(holder, controlled);
+    frame(chrome, "frame-1");
+    frame(chrome, "frame-2");
+    await until(() => kinds(first).length === 3 && stored() === 0, 3000, "two frames kept and acknowledged");
+    // ...a third that dies with it before its commit, a fourth whose commit
+    // came but whose acknowledgement did not reach the holder.
+    frame(chrome, "lost-3");
+    controlled.holding = true;
+    frame(chrome, "frame-4");
+    await until(() => controlled.held.length === 1, 3000, "the fourth frame's write");
+    await first.flush();
+    a.cdp.close();
+    controlled.release();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stored()).toBe(2);
+    await first.close();
+    // The operator starts again on the same buffer and holder.
+    const second = openBuffer();
+    cleanups.push(() => second.close());
+    const b = await operatorSide(holder, second);
+    cleanups.push(() => b.cdp.close());
+    await until(() => stored() === 0, 3000, "what was kept acknowledged");
+    await b.sockets.afterRestart();
+    await second.flush();
+    const events = kinds(second);
+    const frames = events.filter((event) => event.kind === "ws.in").map((event) => JSON.parse(String(event.frame)).d as string);
+    expect(frames.sort()).toEqual(["frame-1", "frame-2", "frame-4", "lost-3"]);
+    expect(events.slice(-2)).toMatchObject([
+      { kind: "ws.close", connectionId: CONNECTION, code: null, reason: null },
+      { kind: "gap", reason: "operator_start" },
+    ]);
+    expect(events.every((event) => event.kind !== "ws.in" || event.connectionId === CONNECTION)).toBe(true);
+    // The replayed frame keeps the time Chrome saw it, not the restart's.
+    expect(second.openSockets()).toEqual([]);
   });
 });

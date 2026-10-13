@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import type { EventBody } from "../../apps/page-browser/src/buffer/buffer.ts";
 import { CdpError, CdpUnanswered, type CdpEvent, type CdpPort, type EventHandler } from "../../apps/page-browser/src/cdp/client.ts";
 import type { ApiGate } from "../../apps/page-browser/src/egress/gate.ts";
+import { clientFrameBytes } from "../../apps/page-browser/src/egress/socket-gate.ts";
 import { ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
@@ -938,6 +939,13 @@ export class FakeCdpPort implements CdpPort {
     this.acks.push(seq);
   }
 
+  /** Methods a path took the acknowledgement of over. */
+  readonly heldAcks = new Set<string>();
+
+  holdAcks(method: string): void {
+    this.heldAcks.add(method);
+  }
+
   emit(method: string, params: Record<string, unknown>, sessionId?: string): void {
     const event: CdpEvent = { method, params, seq: ++this.#seq, replayed: false };
     if (sessionId !== undefined) event.sessionId = sessionId;
@@ -1360,7 +1368,52 @@ export function tlsRecord(type: number, size: number, fill: number): Buffer {
 
 /** What each of Chrome's records on a socket's tunnel is filled with: the
  *  server can tell what reached it. */
-export const SOCKET_FILL = { clientHello: 0x11, finished: 0x22, request: 0x33, frame: 0x44 } as const;
+export const SOCKET_FILL = { clientHello: 0x11, finished: 0x22, request: 0x33, frame: 0x44, authorization: 0x66, ping: 0x77, forbidden: 0x99 } as const;
+
+/** TLS 1.3 (AES-128-GCM, what socketServer's hello chooses): a record is
+ *  its frame and 22 bytes. */
+export const TLS13_OVERHEAD = 22;
+
+/** The site socket's host behind the page's SOCKS5: a TLS 1.3 ServerHello
+ *  (AES-128-GCM) at once, its answer to the handshake request (a record
+ *  standing for the 101) once the request reached it, and records of its
+ *  own on demand. It keeps what reached it. */
+export async function socketServer(options: { tls12Suite?: number } = {}): Promise<{ port: number; received: () => Buffer; send: (record: Buffer) => void; close: () => Promise<void> }> {
+  const chunks: Buffer[] = [];
+  const sockets = new Set<Socket>();
+  const server = createTcpServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.on("close", () => sockets.delete(socket));
+    let answered = false;
+    socket.on("data", (chunk) => {
+      chunks.push(chunk);
+      if (!answered && chunk.includes(SOCKET_FILL.request)) {
+        answered = true;
+        socket.write(tlsRecord(23, 150, 0x55));
+      }
+    });
+    const suite = options.tls12Suite;
+    const tail = suite === undefined ? Buffer.from([0x13, 0x01, 0x00, 0x00, 0x06, 0x00, 0x2b, 0x00, 0x02, 0x03, 0x04]) : Buffer.from([suite >> 8, suite & 0xff, 0x00]);
+    const body = Buffer.concat([Buffer.from([0x03, 0x03]), Buffer.alloc(32, 7), Buffer.from([0]), tail]);
+    const handshake = Buffer.concat([Buffer.from([0x02, 0, 0, body.length]), body]);
+    socket.write(Buffer.concat([Buffer.from([0x16, 0x03, 0x03, 0, handshake.length]), handshake]));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  return {
+    port: typeof address === "object" && address ? address.port : 0,
+    received: () => Buffer.concat(chunks),
+    send: (record) => {
+      for (const socket of sockets) socket.write(record);
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
 
 /** Chrome's side of a socket's tunnel through the operator's proxy, as TLS
  *  records (TLS 1.3 against tlsLikeServer): its ClientHello, the server's
@@ -1385,14 +1438,25 @@ export class SocketTunnelClient {
     return new SocketTunnelClient(status, socket);
   }
 
+  /** What the server sent back through the tunnel. */
+  readonly inbound: Buffer[] = [];
+
   /** The TLS handshake: ClientHello, the server's hello, the Finished. */
   async tls(): Promise<void> {
     this.socket.write(tlsRecord(22, 200, SOCKET_FILL.clientHello));
     await new Promise<void>((resolve) => {
-      this.socket.once("data", () => resolve());
+      this.socket.on("data", (chunk: Buffer) => {
+        this.inbound.push(chunk);
+        resolve();
+      });
       this.socket.resume();
     });
     this.socket.write(tlsRecord(23, 58, SOCKET_FILL.finished));
+  }
+
+  /** The server's answer to the handshake request came through (socketServer's 101). */
+  answered(timeoutMs = 3000): Promise<void> {
+    return until(() => Buffer.concat(this.inbound).includes(0x55), timeoutMs, "the handshake's answer");
   }
 
   /** The handshake request: one big application-data record. */
@@ -1400,8 +1464,11 @@ export class SocketTunnelClient {
     this.socket.write(tlsRecord(23, 300, SOCKET_FILL.request));
   }
 
-  frame(): void {
-    this.socket.write(tlsRecord(23, 120, SOCKET_FILL.frame));
+  /** One record carrying frames of these payload sizes (two or more: a
+   *  coalesced write), as Chrome writes them over TLS 1.3. */
+  message(payloads: number | number[], fill: number = SOCKET_FILL.frame): void {
+    const frames = (Array.isArray(payloads) ? payloads : [payloads]).reduce((sum, payload) => sum + clientFrameBytes(payload), 0);
+    this.socket.write(tlsRecord(23, TLS13_OVERHEAD + frames, fill));
   }
 
   destroy(): void {

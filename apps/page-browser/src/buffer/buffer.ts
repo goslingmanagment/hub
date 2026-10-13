@@ -49,6 +49,14 @@
 // binary frames before the JSON that names them (replay.ts), and their file
 // goes with the outcome's resultAck.
 //
+// The site's socket (PR 10) gives each of its events the Chrome message it
+// was made of (`origin`): an event whose origin is already here — written,
+// or waiting for its commit — is not written again, so a message the holder
+// delivers again after an operator restart lands once. Its ws.open and
+// ws.close also open and close the socket's row (`socket`, schema.ts v3) in
+// the same commit: a restarted operator finds the connection of a frame
+// delivered again, and the connections the previous Chrome left open.
+//
 // Hub attempts (PR 9) leave their steps here too (`markAttempt`: received,
 // issued in the page, released to the network), each written before it is
 // taken: a repeated `send` does nothing twice across restarts, and the
@@ -69,6 +77,7 @@ import {
   type AttemptStep,
   type Commit,
   type NewEventRow,
+  type SocketRow,
   type NewOutcomeRow,
   type OpenCause,
   type StoredEvent,
@@ -222,6 +231,18 @@ interface PendingEvent {
   resolve: (durable: Durable) => void;
   /** A gap mark: its "from" is the event before it, unless given. */
   gap?: { reason: GapReason; from: { seq: number | null; wall: number | null } | null };
+  origin?: string;
+  socket?: { key: string; open: { connectionId: string; attemptId: number } | null };
+}
+
+/** What a producer says of an event besides the event itself (PR 10). */
+export interface AppendOptions {
+  /** The Chrome message it was made of: an event of an origin already
+   *  written, or waiting for its commit, is not written again. */
+  origin?: string;
+  /** The site socket it opens (its connection) or closes (null), written
+   *  in the same commit. */
+  socket?: { key: string; open: { connectionId: string; attemptId: number } | null };
 }
 
 interface PendingOutcome {
@@ -293,6 +314,8 @@ export class EventBuffer {
   #bodies: BodyFiles | null = null;
   /** Steps of Hub attempts not committed yet. */
   #pendingMarks = new Map<number, AttemptStep[]>();
+  /** Events of an origin waiting for their commit. */
+  #pendingOrigins = new Map<string, PendingEvent>();
   #lastPurge = 0;
   #purgeDue = false;
   #unavailable: BufferUnavailable | null = null;
@@ -511,11 +534,58 @@ export class EventBuffer {
 
   // ── the producers ──────────────────────────────────────────────────────
 
-  /** An event of the stream, stamped now unless `at` says when. */
-  append(event: EventBody, at?: { mono: number; wall: number }): Appended {
+  /** An event of the stream, stamped now unless `at` says when. One of an
+   *  origin already here is not written again: its durability is the first
+   *  one's. */
+  append(event: EventBody, at?: { mono: number; wall: number }, options: AppendOptions = {}): Appended {
     if (!EVENT_KINDS.has(event.kind)) throw new Error(`not an event a producer appends: ${String(event.kind)}`);
+    const origin = options.origin;
+    if (origin !== undefined) {
+      const pending = this.#pendingOrigins.get(origin);
+      if (pending) return { ok: true, durable: new Promise((resolve) => (pending.resolve = chain(pending.resolve, resolve))) };
+      const store = this.#store;
+      if (!this.#closed && store !== null) {
+        try {
+          const seq = store.originSeq(origin);
+          if (seq !== null) return { ok: true, durable: Promise.resolve({ ok: true, seq }) };
+        } catch (error) {
+          this.#storageFailed(error, "read");
+          return { ok: false, reason: "disk_full" };
+        }
+      }
+    }
     const body = JSON.stringify(event);
-    return this.#accept({ type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined });
+    const item: PendingEvent = { type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+    if (origin !== undefined) item.origin = origin;
+    if (options.socket !== undefined) item.socket = options.socket;
+    const appended = this.#accept(item);
+    if (appended.ok && origin !== undefined) this.#pendingOrigins.set(origin, item);
+    return appended;
+  }
+
+  /** The connection a site socket opened in the stream, if it is open there
+   *  (committed). */
+  socketOf(key: string): { connectionId: string; attemptId: number } | null {
+    const store = this.#store;
+    if (this.#closed || store === null) return null;
+    try {
+      return store.socketOf(key);
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return null;
+    }
+  }
+
+  /** Every site socket open in the stream (committed), oldest first. */
+  openSockets(): Array<{ key: string; connectionId: string; attemptId: number }> {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.openSockets();
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
+    }
   }
 
   /** A gap mark: the stream broke after `from` (default: the event just
@@ -735,6 +805,7 @@ export class EventBuffer {
     this.#closed = true;
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
+    this.#pendingOrigins.clear();
     for (const item of this.#pending.splice(0)) item.resolve({ ok: false, reason: "buffer_unavailable" });
     this.#store?.close();
   }
@@ -921,6 +992,7 @@ export class EventBuffer {
     this.#pending = [];
     this.#pendingBytes = 0;
     this.#pendingOutcomes.clear();
+    this.#pendingOrigins.clear();
     this.#outcomeAcks.clear();
     // Marks that fail with their commit were never written: their producers
     // hear so (`durable`), and nothing here remembers them.
@@ -930,6 +1002,7 @@ export class EventBuffer {
     const events: NewEventRow[] = [];
     const outcomes: NewOutcomeRow[] = [];
     const marks: AttemptMark[] = [];
+    const sockets: SocketRow[] = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
     let seq = store.lastSeq;
     let previousWall = store.lastWall;
@@ -950,14 +1023,15 @@ export class EventBuffer {
       }
       seq += 1;
       const json = `{"seq":${seq},"atMono":${item.atMono},"atWall":${item.atWall},${body.slice(1)}`;
-      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json) });
+      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json), origin: item.origin ?? null });
+      if (item.socket) sockets.push({ key: item.socket.key, open: item.socket.open, atWall: item.atWall });
       settled.push({ item, seq });
       previousWall = item.atWall;
     }
 
     let committed;
     try {
-      committed = store.commit({ events, outcomes, marks, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
+      committed = store.commit({ events, outcomes, marks, sockets, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
       if (purge !== null) this.#purgeDue = true;
