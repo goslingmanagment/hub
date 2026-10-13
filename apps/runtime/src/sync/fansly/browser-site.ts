@@ -14,7 +14,11 @@ import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason,
 //   site socket's CONNECT held at the proxy) is a pending request of the
 //   page: its id, method, host class and path; asked when the operator
 //   paused it (its own clock, moved to the engine's), so the engine's wait
-//   (`SITE_WAIT_MS`) counts from there. A socket is a GET of the socket host
+//   (`SITE_WAIT_MS`) counts from there — and never past the operator's own
+//   absolute deadline (`waitDeadlineMono`: a socket's counts from its
+//   CONNECT, before the operator asks), which the choice reads and the grant
+//   checks again right before it is answered: a request past it is refused
+//   (`wait_expired`) and ends not sent. A socket is a GET of the socket host
 //   (route `ws.upgrade`, as the engine's own socket's Upgrade). The manual
 //   login is the operator's mode in its last `state`.
 // - The same id asked again (the operator repeats it after a reconnect)
@@ -160,6 +164,16 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
   grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void {
     const entry = this.#entries.get(id);
     if (entry === undefined || entry.state !== "pending") return;
+    const waitDeadline = entry.request.waitDeadlineMono;
+    if (waitDeadline !== undefined && this.#o.monoNow() >= waitDeadline) {
+      // Its wait ended between the choice and the grant: the browser fails
+      // it; nothing goes under this admission.
+      entry.state = "granted";
+      entry.attemptId = admission.attemptId;
+      this.#answerRefusal(entry, "wait_expired");
+      this.#finish(entry, { kind: "aborted_before_send", reason: "wait_expired" });
+      return;
+    }
     entry.state = "granted";
     entry.attemptId = admission.attemptId;
     const deadlineMono = this.#o.bridge.toKernel(this.#o.monoNow() + Math.max(0, admission.sendWithinMs));
@@ -251,6 +265,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
         host: host ?? "api",
         path: message.path,
         askedMono: this.#askedMono(message.pausedMono),
+        waitDeadlineMono: this.#o.bridge.fromKernel(message.waitDeadlineMono),
         manualLogin: this.#manualLogin(),
       },
       epoch,
@@ -278,7 +293,15 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     }
     const entry: Entry = {
       kind: "ws",
-      request: { id: message.connectionId, method: "GET", host: "ws", path, askedMono: this.#askedMono(message.requestedMono), manualLogin: this.#manualLogin() },
+      request: {
+        id: message.connectionId,
+        method: "GET",
+        host: "ws",
+        path,
+        askedMono: this.#askedMono(message.requestedMono),
+        waitDeadlineMono: this.#o.bridge.fromKernel(message.waitDeadlineMono),
+        manualLogin: this.#manualLogin(),
+      },
       epoch: this.#o.client.epoch,
       state: "pending",
       attemptId: null,

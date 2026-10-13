@@ -14,8 +14,9 @@ import { CYCLE } from "./scheduler.ts";
 //   leaves empty. The cycle pointer itself is not touched.
 // - Within the class, requests go by the time they were asked; one whose
 //   route its budget keeps closed is passed over, not admitted out of turn.
-// - A request waits at most `SITE_WAIT_MS`; it is refused at once when it
-//   cannot pass within what is left of that wait: the page paused, a hold of
+// - A request waits at most `SITE_WAIT_MS`, and never past its own deadline
+//   when the browser names one (`waitDeadlineMono`); it is refused at once
+//   when it cannot pass within what is left of that wait: the page paused, a hold of
 //   the page or of its route longer than the rest, a request no route
 //   admits, the hour's ceiling reached.
 // - The manual login (the operator's mode): the login operations and the
@@ -114,7 +115,10 @@ export function decideSite(pending: readonly PendingSiteRequest[], ctx: SiteCont
   let admit: ClassifiedSiteRequest | null = null;
   const ordered = [...pending].sort((a, b) => a.askedMono - b.askedMono);
   for (const request of ordered) {
-    const leftMs = SITE_WAIT_MS - (ctx.nowMono - request.askedMono);
+    const leftMs = Math.min(
+      SITE_WAIT_MS - (ctx.nowMono - request.askedMono),
+      request.waitDeadlineMono === undefined ? Number.POSITIVE_INFINITY : request.waitDeadlineMono - ctx.nowMono,
+    );
     if (leftMs <= 0) {
       refuse.push({ id: request.id, reason: "waited_too_long" });
       continue;

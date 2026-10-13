@@ -72,6 +72,18 @@ describe("the decision at a slot", () => {
     expect(decideSite([request({ askedMono: NOW_MONO - SITE_WAIT_MS })], context())).toEqual({ admit: null, refuse: [{ id: "r1", reason: "waited_too_long" }] });
   });
 
+  it("never admits past the browser's own deadline, however fresh the engine's wait (Astra PR 14, P2)", () => {
+    // Asked just now, but its own wait (from the CONNECT) ended a moment ago.
+    expect(decideSite([request({ askedMono: NOW_MONO, waitDeadlineMono: NOW_MONO - 1 })], context()))
+      .toEqual({ admit: null, refuse: [{ id: "r1", reason: "waited_too_long" }] });
+    // 1 s of its own wait left, its route opens in 2 s: refused at once.
+    const closed = () => ({ at: new Date(NOW.getTime() + 2_000) });
+    expect(decideSite([request({ askedMono: NOW_MONO, waitDeadlineMono: NOW_MONO + 1_000 })], context({ routeOpensAt: closed })))
+      .toEqual({ admit: null, refuse: [{ id: "r1", reason: "route_held" }] });
+    // Before it: admitted.
+    expect(decideSite([request({ askedMono: NOW_MONO, waitDeadlineMono: NOW_MONO + 1_000 })], context()).admit?.request.id).toBe("r1");
+  });
+
   it("refuses the site's requests under the owner's pause, a credentials hold and checks-only", () => {
     for (const ctx of [context({ pausedAll: true }), context({ pageHeld: { kind: "credentials" } }), context({ checksOnly: true })]) {
       const decision = decideSite([request()], ctx);
