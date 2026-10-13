@@ -223,6 +223,7 @@ type StopReason = "selftest_failed" | "exit_ip_changed" | "proxy_unavailable" | 
   | "env_mismatch"  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
   | "buffer_unavailable"  // буфер не открылся (занят, ошибка ввода-вывода, повреждён, новее оператора):
                           // RPC и тревоги работают, выход закрыт, Chrome не запускается (PR 11)
+  | "ws_guard_failed"  // обёртка сокета не встала в контекст сайта: страница стоит (PR 10)
   | "request_unended";  // отпущенный запрос Hub не закончился за предел или сайт отменил его до ответа:
                         // выход закрывается, страница перезапускается после паузы (PR 9; решение №16 открыто)
 type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
@@ -303,11 +304,13 @@ interface SiteDone {
 // ── сокет сайта ──
 interface WsAdmit { type: "wsAdmit"; connectionId: ConnectionId; url: string; context: "page" | "frame" | "worker";
   sessionFingerprint: Sha256Hex | null; requestedMono: MonoMs; waitDeadlineMono: MonoMs }
+  // оператор просит допуск только когда знает живую сессию сайта (размер авторизации), поэтому отпечаток есть всегда (PR 10)
 type WsAdmitResult = FromEngine & { type: "wsAdmitResult"; connectionId: ConnectionId }
   & ((Admit & { attemptId: AttemptId }) | { admit: false; reason: string; retryNotBeforeWall: WallMs | null });
 /** Исход Upgrade: 101 — открыт; 401/403 — остановка страницы auth; 429 — удержание ws.upgrade. */
 interface WsDone { type: "wsDone"; connectionId: ConnectionId; attemptId: AttemptId; sent: boolean;
-  sentMono: MonoMs | null; status: number | null; error: string | null }
+  sentMono: MonoMs | null; status: number | null; error: string | null;
+  fate?: "unknown" }  // оператор перезапустился после допуска: ушло ли рукопожатие, неизвестно — как unknown у recover (PR 10)
 // ── поток событий (план §4.4) ──
 interface EventsSubscribe extends FromEngine { type: "events.subscribe"; bufferId: BufferId; afterSeq: number }
 interface Events { type: "events"; bufferId: BufferId; events: BufferEvent[] }  // ≤ 500 событий или 1 МБ
