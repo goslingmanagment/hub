@@ -9,6 +9,7 @@ import {
   AI_LIVE_TEXT_MAX_ITEMS,
   AI_NOTE_FIELD_LABEL_MAX_CHARS,
   AI_NOTE_FIELDS_MAX,
+  AI_NOTE_VALUE_MAX_CHARS,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
   routeSchemas,
@@ -138,6 +139,9 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
       { length: AI_NOTE_FIELDS_MAX },
       (_, index) => `${unit.repeat(AI_NOTE_FIELD_LABEL_MAX_CHARS - 2)}${String(index).padStart(2, "0")}`,
     ),
+    // fan-notes-fill merge mode: one current value per label, each at the
+    // 2,000-code-unit cap. 60k code units, ~360KB at six bytes a unit.
+    noteValues: Array.from({ length: AI_NOTE_FIELDS_MAX }, () => unit.repeat(AI_NOTE_VALUE_MAX_CHARS)),
     // Ids are digits only, so their worst case does not depend on `unit`:
     // ten distinct 30-digit ids.
     knownFanMessageIds: Array.from(
@@ -207,7 +211,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit -- the byte-per-char worst
     // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
     // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~5.06MB
-    // before fresh text, ~5.97MB with it.
+    // before fresh text, ~5.97MB with it, ~6.36MB with the note values.
     const worstCase = maxBodyFilledWith("の");
     expect(schema.safeParse(worstCase).success, "の worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -221,9 +225,9 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // lone surrogate. "\ud800" is a legal JSON string value (1 UTF-16 code unit,
     // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
     // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB of text (10.33MB with the
-    // media list and framing) before fresh text, 12.15MB with it. The former
-    // 8 MiB limit would have 413'd this contract-valid body; 12 MiB (12.58MB)
-    // still clears it, by about 0.43MB.
+    // media list and framing) before fresh text, 12.15MB with it, 12.51MB with
+    // the notes fill's values. The former 8 MiB limit would have 413'd this
+    // contract-valid body; 12 MiB (12.58MB) still clears it, by about 0.07MB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -245,6 +249,17 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // 120 ids of 30 digits, the sides and the JSON framing.
     expect(added).toBeGreaterThan(120 * 30);
     expect(added).toBeLessThan(8 * 1024);
+  });
+
+  it("the notes fill's current values are about 360KB of that worst case", () => {
+    const withValues = maxBodyFilledWith("\ud800");
+    const { noteValues, ...withoutValues } = withValues;
+    expect(noteValues).toHaveLength(30);
+    const added = Buffer.byteLength(JSON.stringify(withValues), "utf8")
+      - Buffer.byteLength(JSON.stringify(withoutValues), "utf8");
+    // 30 x 2000 code units x 6 bytes, plus the quotes, commas and the key.
+    expect(added).toBeGreaterThan(30 * 2_000 * 6);
+    expect(added).toBeLessThan(30 * 2_000 * 6 + 1024);
   });
 
   it("fresh text alone is 1.8MB of that worst case (critic item 4)", () => {

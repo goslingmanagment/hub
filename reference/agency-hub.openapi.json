@@ -113970,6 +113970,16 @@
                       "pattern": "^[^\\r\\n\\u2028\\u2029:<>&]*$"
                     }
                   },
+                  "noteValues": {
+                    "minItems": 1,
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 2000,
+                      "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+                    }
+                  },
                   "knownFanMessageIds": {
                     "minItems": 1,
                     "maxItems": 10,

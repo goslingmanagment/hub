@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_NOTE_FIELD_LABEL_MAX_CHARS,
   AI_NOTE_FIELDS_MAX,
+  AI_NOTE_VALUE_MAX_CHARS,
   aiFeatureStreamBodySchema,
   aiUsageBatchBodySchema,
   type AiGatewayStreamBody,
@@ -26,8 +27,9 @@ import { buildOpenrouterGatewayStreamRequest } from "../apps/runtime/src/service
 import { BadRequestError } from "../apps/runtime/src/services/errors.ts";
 
 // fan-notes-fill: the Fansly notes panel's «fill with AI». The request carries
-// the questionnaire labels (`noteFields`); the hub assembles the prompt and
-// streams one `Label: value` line per label.
+// the questionnaire labels (`noteFields`) and, in merge mode, their current
+// values (`noteValues`); the hub assembles the prompt and streams one
+// `Label: value` line per label.
 
 const FIELDS = ["Имя", "Локация", "Возраст", "Работа", "Хобби", "Фетиши", "Характеристика", "Медиа"];
 
@@ -94,6 +96,65 @@ describe("noteFields on the wire (aiFeatureStreamBodySchema)", () => {
   });
 });
 
+describe("noteValues on the wire (aiFeatureStreamBodySchema)", () => {
+  const VALUES = ["Ethan", "Australia, Brisbane", "", "", "", "", "Māori & Dutch, Japan at the end of the year", "Sexting 1"];
+  const parse = (noteValues: unknown) => aiFeatureStreamBodySchema.safeParse(request({ noteValues }));
+
+  it("accepts one value per label, empty ones included, and keeps them in order", () => {
+    const parsed = parse(VALUES);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(parsed.data?.noteValues).toEqual(VALUES);
+    // Absent is the released clients' request (2.10.1), accepted as before.
+    const legacy = aiFeatureStreamBodySchema.safeParse(request());
+    expect(legacy.success).toBe(true);
+    expect(legacy.data).not.toHaveProperty("noteValues");
+  });
+
+  it("trims each value, so a value with only whitespace is an empty value", () => {
+    expect(parse(["  Ethan ", "\tBrisbane", "   "]).data?.noteValues).toEqual(["Ethan", "Brisbane", ""]);
+    // A trailing line break is whitespace, trimmed like any other.
+    expect(parse(["Ethan\r\n", "Brisbane\u2028", "Sexting 1\u2029"]).data?.noteValues).toEqual(["Ethan", "Brisbane", "Sexting 1"]);
+  });
+
+  it("bounds each trimmed value to 0..2000 code units and the list to 1..30 values", () => {
+    expect(AI_NOTE_VALUE_MAX_CHARS).toBe(2_000);
+    expect(parse(["я".repeat(2_000)]).success).toBe(true);
+    expect(parse([` ${"я".repeat(2_000)} `]).success).toBe(true);
+    expect(parse(["я".repeat(2_001)]).success).toBe(false);
+    // Code units, not characters: an astral character counts two.
+    expect(parse(["😀".repeat(1_000)]).success).toBe(true);
+    expect(parse([`${"😀".repeat(1_000)}я`]).success).toBe(false);
+    expect(parse([""]).success).toBe(true);
+    expect(parse([]).success).toBe(false);
+    expect(parse(Array.from({ length: 30 }, () => "")).success).toBe(true);
+    expect(parse(Array.from({ length: 31 }, () => "")).success).toBe(false);
+    expect(parse([42]).success).toBe(false);
+    expect(parse([null]).success).toBe(false);
+    expect(parse("Ethan").success).toBe(false);
+  });
+
+  it("refuses a line break inside a value and takes every other character", () => {
+    for (const value of ["Ethan\nSmith", "Ethan\rSmith", "Ethan\u2028Smith", "Ethan\u2029Smith", "a\r\nb"]) {
+      expect(parse([value]).success, JSON.stringify(value)).toBe(false);
+    }
+    for (const value of [
+      "<b>VIP</b> & co",
+      "4 on 4 off: nights",
+      "«Sexting 1»",
+      "Флорида (08.2026)",
+      "tab\tinside",
+      "it's \"quoted\"",
+      "Любимое — кино",
+      "Cities Skylines 2 / Knockout / NRL",
+      "😀 emoji",
+    ]) {
+      const parsed = parse([value]);
+      expect(parsed.success, JSON.stringify(value)).toBe(true);
+      expect(parsed.data?.noteValues, JSON.stringify(value)).toEqual([value]);
+    }
+  });
+});
+
 describe("noteFields in the feature service", () => {
   it("is required for fan-notes-fill", () => {
     expect(() => assertNoteFieldsRequestShape("fan-notes-fill", {})).toThrow(BadRequestError);
@@ -107,6 +168,45 @@ describe("noteFields in the feature service", () => {
       expect(() => assertNoteFieldsRequestShape(feature, {}), feature).not.toThrow();
       expect(() => assertNoteFieldsRequestShape(feature, { noteFields: FIELDS }), feature).toThrow(BadRequestError);
       expect(() => assertNoteFieldsRequestShape(feature, { noteFields: FIELDS }), feature)
+        .toThrow(`${feature} does not accept noteFields`);
+    }
+  });
+});
+
+describe("noteValues in the feature service", () => {
+  const VALUES = FIELDS.map((_, index) => (index % 2 === 0 ? "" : `value ${index}`));
+  const MISMATCH = "noteValues must hold exactly one value per noteFields label";
+
+  it("is optional on fan-notes-fill: absent is the released request, accepted as before", () => {
+    expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: FIELDS })).not.toThrow();
+  });
+
+  it("takes exactly one value per label, all empty included", () => {
+    expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: FIELDS, noteValues: VALUES })).not.toThrow();
+    expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: FIELDS, noteValues: FIELDS.map(() => "") }))
+      .not.toThrow();
+    expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: ["Имя"], noteValues: ["Ethan"] })).not.toThrow();
+  });
+
+  it("refuses a list of another length with a 400, before any provider call", () => {
+    for (const noteValues of [VALUES.slice(1), [...VALUES, ""], ["Ethan"], []]) {
+      expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: FIELDS, noteValues }), String(noteValues.length))
+        .toThrow(BadRequestError);
+      expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteFields: FIELDS, noteValues }), String(noteValues.length))
+        .toThrow(MISMATCH);
+    }
+    // Values never stand in for the labels.
+    expect(() => assertNoteFieldsRequestShape("fan-notes-fill", { noteValues: ["Ethan"] }))
+      .toThrow("fan-notes-fill requires noteFields");
+  });
+
+  it("is refused by every other feature, by name", () => {
+    for (const feature of OPERATION_FEATURES.filter((name) => name !== "fan-notes-fill")) {
+      expect(() => assertNoteFieldsRequestShape(feature, { noteValues: VALUES }), feature).toThrow(BadRequestError);
+      expect(() => assertNoteFieldsRequestShape(feature, { noteValues: VALUES }), feature)
+        .toThrow(`${feature} does not accept noteValues`);
+      // With the labels too, the labels are named first.
+      expect(() => assertNoteFieldsRequestShape(feature, { noteFields: FIELDS, noteValues: VALUES }), feature)
         .toThrow(`${feature} does not accept noteFields`);
     }
   });

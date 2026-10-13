@@ -2294,6 +2294,12 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // `noteFields` (30 labels x 60 code units, about 11KB at six bytes) is, and so
 // is R20 HF-8в's `coverageCheck` (120 ids of digits, about 5KB).
 //
+// fan-notes-fill merge mode adds `noteValues`: 30 values x 2,000 code units =
+// 60k more, 360KB at six bytes each. The worst schema-valid body is then ~2.05M
+// code units, measured 12.51MB, which 12 MiB (12.58MB) still clears by about
+// 0.07MB. That margin is thin now: a later field of any real size raises the
+// limit with it.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
@@ -2332,6 +2338,24 @@ export const aiNoteFieldsSchema = z.array(aiNoteFieldLabelSchema)
     (labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length,
     { message: "noteFields repeat (labels compare case-insensitively)" },
   );
+
+// fan-notes-fill merge mode: the questionnaire's current values, index-aligned
+// with `noteFields` (the service refuses a list of another length), `""` for an
+// empty field and for a template field the note does not have yet. A value is
+// one line of the note, so it holds no line break; any other character may
+// appear, `<`, `>` and `&` included (the prompt escapes them like all
+// untrusted text). Values are trimmed here, like the labels.
+/** Per value, after trimming, in UTF-16 code units. */
+export const AI_NOTE_VALUE_MAX_CHARS = 2_000;
+
+const aiNoteValueSchema = z.string()
+  .trim()
+  .max(AI_NOTE_VALUE_MAX_CHARS)
+  .regex(/^[^\r\n\u2028\u2029]*$/, "A note value holds no line break");
+
+export const aiNoteValuesSchema = z.array(aiNoteValueSchema)
+  .min(1)
+  .max(AI_NOTE_FIELDS_MAX);
 
 // An instant as the client writes it: ISO 8601 with seconds and an explicit
 // offset, at most nine fractional digits. The house `isoTimestamp` is a bare
@@ -2432,6 +2456,13 @@ export const aiFeatureStreamBodySchema = z.object({
   // fan-notes-fill only, and required there: the questionnaire labels to fill,
   // in output order (above). Any other feature refuses the field with a 400.
   noteFields: aiNoteFieldsSchema.optional(),
+  // fan-notes-fill only, and optional there: the questionnaire's current value
+  // per label, one per `noteFields` entry in the same order (above). Present,
+  // the prompt merges the chat into these values (merge mode); absent, it is
+  // the released clients' prompt, byte for byte. Any other feature refuses the
+  // field with a 400, and so does fan-notes-fill when the two lists differ in
+  // length.
+  noteValues: aiNoteValuesSchema.optional(),
   // chat-extension H-4b: ids only, never text. Fan messages the client saw in
   // the open chat before it asked for this generation, newest first. The hub
   // answers each one in the `context_v1` frame (`knownFanMessages`) from the

@@ -4015,6 +4015,33 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("takes noteValues only on fan-notes-fill, one per label, before any provider call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const values = (first: string) => [first, ...NOTE_FIELDS.slice(1).map(() => "")];
+    const short = await post("fan-notes-fill", notesPayload({ noteValues: ["Mike"] }));
+    expect(short.statusCode, short.body).toBe(400);
+    expect(short.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    const long = await post("fan-notes-fill", notesPayload({ noteValues: [...values("Mike"), ""] }));
+    expect(long.statusCode, long.body).toBe(400);
+    expect(long.json().message).toBe("noteValues must hold exactly one value per noteFields label");
+    for (const feature of ["fan-summary", "help-me", "fast-reply", "chat-review"]) {
+      const stray = await post(feature, notesPayload({ noteFields: undefined, noteValues: values("Mike") }));
+      expect(stray.statusCode, stray.body).toBe(400);
+      expect(stray.json().message).toBe(`${feature} does not accept noteValues`);
+    }
+    // The contract's own rules: a schema 400 whatever the feature.
+    for (const noteValues of [[], values("Mike\nR"), values("x".repeat(2_001)), [...values("Mike"), 42]]) {
+      const res = await post("fan-notes-fill", notesPayload({ noteValues }));
+      expect(res.statusCode, JSON.stringify(noteValues).slice(0, 80)).toBe(400);
+    }
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("refuses labels the contract does not allow, and a fansly request without fanRef", async (context) => {
     if (!testDb) {
       context.skip();
