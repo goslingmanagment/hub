@@ -46,6 +46,11 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // and admits the greeting custody by platform (client-claim-admission.ts).
   // Nothing on Fansly is reachable through it until `newcomers` exists there.
   "manual-greeting-v1",
+  // R20 HF-8в: the AI feature stream takes `coverageCheck` and answers each of
+  // its ids in the `context_v1` frame, for a caller that advertises
+  // `coverage-check-v1` in `x-kernel-ai-capabilities`. Ids only: nothing reaches
+  // the prompt, nothing is stored.
+  "coverage-check-v1",
 ];
 
 /**

@@ -364,7 +364,7 @@ describe("fresh-text store lookup", () => {
     ];
     const input = {
       pageId: pages[0]!.id,
-      platform: "onlyfans",
+      platform: "onlyfans" as const,
       conversationRef: FAN,
       messageRefs,
       otherPageIds: null,
@@ -404,5 +404,240 @@ describe("fresh-text store lookup", () => {
     const own = await explainAiLiveTextMessagesQuery(testDb.db, { ...input, otherPageIds: [pages[0]!.id] });
     expect(own.match(/Index Cond: .*= ANY \('\{1000001,/g)).toHaveLength(3);
     expect(own.match(/dm_message_archive_platform_account_message_uniq/g)).toHaveLength(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+// chat-extension R20 HF-8б: the same lookup for a Fansly page. A Fansly
+// conversation ref is the group id, which names the chat itself; the page's
+// socket overlay (dm_live_messages) is one more store of the page, read only
+// where the caller says it served the transcript.
+describe("[R20 HF-8б] fresh-text store lookup on a Fansly page", () => {
+  /** Fansly ids are 18-digit snowflakes, past what a double holds exactly. */
+  const GROUP = "300000000000000001";
+  const OTHER_GROUP = "300000000000000009";
+  const FANSLY_FAN = "400000000000000002";
+  const CREATOR = "500000000000000003";
+  const LIVE_AT = new Date("2026-10-04T10:00:09.000Z");
+  const id = (n: number) => String(880_000_000_000_000_000n + BigInt(n));
+
+  async function seedFanslyPage(label: string, account: string | null = CREATOR) {
+    const model = await createModel(testDb!.db, { slug: label, name: label });
+    const page = (await createFanslyPage(testDb!.db, { modelId: model!.id, label }))!;
+    await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [account, page.id]);
+    return page;
+  }
+
+  /** A socket overlay row. `stub`: a deletion frame that came before (or
+   *  without) the create: no sender, no time, no text; `group: null` when the
+   *  frame named none. `mine: null`: the socket did not know the page's own
+   *  account, so it could not tell the sender. */
+  async function liveRow(pageId: number, ref: string, input: {
+    group?: string | null; mine?: boolean | null; deleted?: boolean; stub?: boolean; at?: Date;
+  } = {}) {
+    const group = input.group === undefined ? GROUP : input.group;
+    const stub = input.stub ?? false;
+    const mine = input.mine === undefined ? false : input.mine;
+    await testDb!.pool.query(
+      `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id,
+         is_sent_by_page, created_at, content, decoder_version, first_visible_at, deleted_at)
+       values ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9)`,
+      [pageId, ref, group, stub ? null : mine ? CREATOR : FANSLY_FAN, stub ? null : mine,
+        stub ? null : input.at ?? LIVE_AT, stub ? null : "live", stub ? null : new Date(),
+        input.deleted ? new Date() : null],
+    );
+  }
+
+  function fanslyLookup(pageId: number, messageRefs: string[], input: {
+    group?: string; others?: readonly number[] | null; liveOverlay?: boolean;
+  } = {}) {
+    return lookupAiLiveTextMessages(testDb!.db, {
+      pageId,
+      platform: "fansly",
+      conversationRef: input.group ?? GROUP,
+      messageRefs,
+      otherPageIds: input.others === undefined ? [] : input.others,
+      liveOverlay: input.liveOverlay ?? true,
+    });
+  }
+
+  it("reads the overlay only where it served the transcript", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyPage("live-fs");
+    await liveRow(page.id, id(1));
+    await liveRow(page.id, id(2), { deleted: true });
+    await liveRow(page.id, id(3), { group: OTHER_GROUP });
+    const refs = [id(1), id(2), id(3)];
+    // The archive served (the page's readers do not read the overlay, or the
+    // switch could not be read): the overlay judges nothing.
+    expect(Object.fromEntries(await fanslyLookup(page.id, refs, { liveOverlay: false }))).toEqual({
+      [id(1)]: UNSEEN, [id(2)]: UNSEEN, [id(3)]: UNSEEN,
+    });
+    expect(Object.fromEntries(await fanslyLookup(page.id, refs))).toEqual({
+      [id(1)]: { ...UNSEEN, isSentByMe: false, occurredAt: LIVE_AT },
+      [id(2)]: { ...UNSEEN, deleted: true, isSentByMe: false, occurredAt: LIVE_AT },
+      [id(3)]: { ...UNSEEN, foreign: true },
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a deletion only the socket knows reads deleted, whatever group its mark names", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyPage("live-fs");
+    const other = await seedFanslyPage("live-fs-2", "500000000000000004");
+    // Sent and deleted while the archive never held it.
+    await liveRow(page.id, id(11), { deleted: true });
+    // A deletion frame before any create: a stub, with this group or with none.
+    await liveRow(page.id, id(12), { stub: true, deleted: true });
+    await liveRow(page.id, id(13), { stub: true, deleted: true, group: null });
+    // Archived live; the socket saw it deleted since. The live union hides it on that mark.
+    await archiveRow(page.id, id(14), { platform: "fansly", conv: GROUP });
+    await liveRow(page.id, id(14), { stub: true, deleted: true });
+    // A deletion mark of another page is that page's.
+    await liveRow(other.id, id(15), { deleted: true });
+    // A deleted message of another group: another chat's, and gone.
+    await liveRow(page.id, id(16), { group: OTHER_GROUP, deleted: true });
+
+    const states = await fanslyLookup(page.id, [id(11), id(12), id(13), id(14), id(15), id(16)]);
+    expect(Object.fromEntries(states)).toEqual({
+      [id(11)]: { ...UNSEEN, deleted: true, isSentByMe: false, occurredAt: LIVE_AT },
+      [id(12)]: { ...UNSEEN, deleted: true },
+      [id(13)]: { ...UNSEEN, deleted: true },
+      [id(14)]: { ...UNSEEN, deleted: true, isSentByMe: false, occurredAt: ARCHIVE_AT },
+      [id(15)]: UNSEEN,
+      [id(16)]: { ...UNSEEN, foreign: true, deleted: true },
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("places a message of this group by its sender and time; a row of another group is another chat's", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyPage("live-fs");
+    // The socket alone: the fan's, the page's, and one whose sender the socket could not tell.
+    await liveRow(page.id, id(21));
+    await liveRow(page.id, id(22), { mine: true });
+    await liveRow(page.id, id(23), { mine: null });
+    // Both the archive and the socket: the archive's time, the one every reader orders by.
+    await archiveRow(page.id, id(24), { platform: "fansly", conv: GROUP });
+    await liveRow(page.id, id(24));
+    // They disagree on the sender: nobody is named; the archive still places it.
+    await archiveRow(page.id, id(25), { platform: "fansly", conv: GROUP, mine: true });
+    await liveRow(page.id, id(25));
+    // A content-pending archive stub without a chat names nothing; the socket does.
+    await archiveRow(page.id, id(26), { platform: "fansly", conv: null, pending: true, at: null });
+    await liveRow(page.id, id(26), { mine: true });
+    // Another group of the page: in either store, foreign and nothing more.
+    await liveRow(page.id, id(27), { group: OTHER_GROUP });
+    await archiveRow(page.id, id(28), { platform: "fansly", conv: OTHER_GROUP });
+    // A deletion stub that names another group.
+    await liveRow(page.id, id(29), { stub: true, deleted: true, group: OTHER_GROUP });
+
+    const refs = [id(21), id(22), id(23), id(24), id(25), id(26), id(27), id(28), id(29)];
+    expect(Object.fromEntries(await fanslyLookup(page.id, refs))).toEqual({
+      [id(21)]: { ...UNSEEN, isSentByMe: false, occurredAt: LIVE_AT },
+      [id(22)]: { ...UNSEEN, isSentByMe: true, occurredAt: LIVE_AT },
+      [id(23)]: { ...UNSEEN, occurredAt: LIVE_AT },
+      [id(24)]: { ...UNSEEN, isSentByMe: false, occurredAt: ARCHIVE_AT },
+      [id(25)]: { ...UNSEEN, occurredAt: ARCHIVE_AT },
+      [id(26)]: { ...UNSEEN, isSentByMe: true, occurredAt: LIVE_AT },
+      [id(27)]: { ...UNSEEN, foreign: true },
+      [id(28)]: { ...UNSEEN, foreign: true },
+      [id(29)]: { ...UNSEEN, foreign: true, deleted: true },
+    });
+    // Asked for the group they belong to, the other group's ids are its own.
+    expect(Object.fromEntries(await fanslyLookup(page.id, [id(27), id(28)], { group: OTHER_GROUP }))).toEqual({
+      [id(27)]: { ...UNSEEN, isSentByMe: false, occurredAt: LIVE_AT },
+      [id(28)]: { ...UNSEEN, isSentByMe: false, occurredAt: ARCHIVE_AT },
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("another page's row under this group is this chat seen from that page; under another group, another chat", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyPage("live-fs");
+    const sibling = await seedFanslyPage("live-fs-2", "500000000000000004");
+    const unknown = await seedFanslyPage("live-fs-3", null);
+    // Two pages of this hub write to each other: one group, held by both pages.
+    await archiveRow(sibling.id, id(31), { platform: "fansly", conv: GROUP, mine: true });
+    // The sibling's other chats, and a page whose account is unknown: a group
+    // id names the chat whoever the page is, so only the group decides.
+    await archiveRow(sibling.id, id(32), { platform: "fansly", conv: OTHER_GROUP });
+    await archiveRow(unknown.id, id(33), { platform: "fansly", conv: GROUP });
+    await archiveRow(unknown.id, id(34), { platform: "fansly", conv: OTHER_GROUP });
+    // Another page's socket is that page's: only its archive is read.
+    await liveRow(sibling.id, id(35), { group: OTHER_GROUP });
+
+    const refs = [id(31), id(32), id(33), id(34), id(35)];
+    const foreign = async (others: readonly number[] | null) => Object.fromEntries(
+      [...await fanslyLookup(page.id, refs, { others })].map(([ref, state]) => [ref, state.foreign]),
+    );
+    const none = { [id(31)]: false, [id(32)]: false, [id(33)]: false, [id(34)]: false, [id(35)]: false };
+    expect(await foreign([])).toEqual(none);
+    expect(await foreign([sibling.id])).toEqual({ ...none, [id(32)]: true });
+    expect(await foreign(null)).toEqual({ ...none, [id(32)]: true, [id(34)]: true });
+    // Another page's row places the id and nothing else: its sender and time are that page's.
+    for (const [, state] of await fanslyLookup(page.id, refs, { others: null })) {
+      expect(state).toMatchObject({ deleted: false, isSentByMe: null, occurredAt: null });
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("without the overlay the statement does not name it: every OnlyFans lookup, and a Fansly page off the overlay", async (context) => {
+    if (!testDb) return context.skip();
+    // Only a live_union transcript sets `liveOverlay`, and only a Fansly page
+    // reads the overlay (platformHasLiveOverlay): an OnlyFans lookup never has it.
+    const page = await seedPage("live-of", { ofapi: "acct_live" });
+    const fansly = await seedFanslyPage("live-fs");
+    for (const asked of [
+      { pageId: page.id, platform: "onlyfans" as const, conversationRef: FAN, messageRefs: ["701"], otherPageIds: null },
+      { pageId: fansly.id, platform: "fansly" as const, conversationRef: GROUP, messageRefs: [id(1)], otherPageIds: null },
+    ]) {
+      const plan = await explainAiLiveTextMessagesQuery(testDb.db, asked);
+      expect(plan, asked.platform).not.toContain("dm_live_messages");
+      expect(await explainAiLiveTextMessagesQuery(testDb.db, { ...asked, liveOverlay: false }), asked.platform).toBe(plan);
+      expect(await explainAiLiveTextMessagesQuery(testDb.db, { ...asked, liveOverlay: true }), asked.platform)
+        .toContain("dm_live_messages");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("probes the overlay by its primary key", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedFanslyPage("live-fs");
+    const other = await seedFanslyPage("live-fs-2", "500000000000000004");
+    for (const [pageId, base] of [[page.id, 1_000_000], [other.id, 5_000_000]] as const) {
+      await testDb.pool.query(
+        `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id,
+           is_sent_by_page, created_at, content, decoder_version, first_visible_at)
+         select $1::bigint, ($3::int + g)::text, case when g <= 5000 then $2 else (700000 + g % 40)::text end, $4, false,
+                now() - (g || ' seconds')::interval, 'live ' || g, 1, now()
+         from generate_series(1, 25000) g`,
+        [pageId, GROUP, base, FANSLY_FAN],
+      );
+      await testDb.pool.query(
+        `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, backfill_source)
+         select $1, 'fansly', case when g <= 5000 then $2 else 'conv-' || (g % 40) end, ($3::int + 500000 + g)::text, 'fan', false,
+                now() - (g || ' seconds')::interval, 'spread ' || g, 'seed'
+         from generate_series(1, 25000) g`,
+        [pageId, GROUP, base],
+      );
+    }
+    await testDb.pool.query("analyze dm_live_messages, message_archive, pages");
+
+    const input = {
+      pageId: page.id,
+      platform: "fansly" as const,
+      conversationRef: GROUP,
+      messageRefs: ["1000001", "1000002", "1500001", "5000001", "1", "2", "3"],
+      otherPageIds: null,
+      liveOverlay: true,
+    };
+    const plan = await explainAiLiveTextMessagesQuery(testDb.db, input);
+    expect(plan).toContain("dm_live_messages_pkey");
+    expect(plan).toMatch(/Index Cond: .*page_id = .*platform_message_id = ANY \('\{1000001,/);
+    expect(plan).not.toMatch(/Seq Scan on dm_live_messages\b/);
+    expect(plan).not.toContain("dm_live_messages_thread");
+    expect(plan).not.toMatch(/Seq Scan on message_archive\b/);
+    expect(Object.fromEntries(await lookupAiLiveTextMessages(testDb.db, input))).toMatchObject({
+      "1000001": { foreign: false, deleted: false, isSentByMe: false },
+      "1500001": { foreign: false, deleted: false, isSentByMe: false },
+      // The other page's socket is not read.
+      "5000001": UNSEEN,
+      "1": UNSEEN,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

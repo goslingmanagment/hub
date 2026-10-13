@@ -73,6 +73,8 @@ const positive = z.number().int().positive();
  * `drafts`, `voice` and `notesFill` exist on Fansly only (R20 HF-12): the
  * narrow token's Reply, Fix, Hi and Ping, its voice script and its notes fill
  * on a Fansly page. On OnlyFans those generations need no flag of their own.
+ * `freshText` exists on both (Fansly since R20 HF-8б); every other flag on
+ * OnlyFans only.
  */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
@@ -84,6 +86,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
+  "coverage-check-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
