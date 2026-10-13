@@ -217,7 +217,9 @@ type Step = "exit_closed" | "env_applied" | "chrome_started" | "control_attached
 type StopReason = "selftest_failed" | "exit_ip_changed" | "proxy_unavailable" | "proxy_auth" | "cdp_lost"
   | "holder_overflow" | "buffer_full" | "disk_full" | "chrome_crashed" | "unknown_ws_message"
   | "header_mismatch" | "login_required" | "owner_stop"
-  | "env_mismatch";  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
+  | "env_mismatch"  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
+  | "buffer_unavailable";  // буфер не открылся (занят, ошибка ввода-вывода, повреждён, новее оператора):
+                           // RPC и тревоги работают, выход закрыт, Chrome не запускается (PR 11)
 type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
 type Refusal = "lease_inactive" | "lease_used" | "send_deadline_passed" | "pace" | "takeover_floor"
   | "generation_stale" | "session_mismatch";  // первые пять — packages/fansly/src/send-guard.ts:126-131
@@ -239,6 +241,8 @@ interface Hello extends FromEngine {
 }
 type HelloResult = { type: "helloResult" } & (
   | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State }
+  // bufferId при недоступном буфере — последний известный или "": движок подписывается заново, когда
+  // state перестаёт сообщать buffer_unavailable
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] });
 /** После hello нового поколения: прежнее завершено или отменено; от lastSendMono — пауза передачи. */
 interface Quiesced { type: "quiesced"; previousGeneration: number; lastSendMono: MonoMs | null; lastSendWall: WallMs | null }
@@ -305,7 +309,7 @@ interface Ack extends FromEngine { type: "ack"; bufferId: BufferId; uptoSeq: num
 /** Отказ на подписку или подтверждение: чужой буфер, номер впереди буфера, ack без подписки или дальше
  *  отправленного. Называет ID буфера оператора — движок начинает с него заново (PR 11). */
 interface EventsRefused { type: "events.refused"; of: "events.subscribe" | "ack";
-  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent"; bufferId: BufferId;
+  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent" | "unavailable"; bufferId: BufferId;
   givenBufferId: BufferId; givenSeq: number }
 type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
   | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
