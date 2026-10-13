@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { NEVER_PATH, runSelfTest, UNKNOWN_WRITE_PATH, type SelfTestDeps } from "../apps/page-browser/src/selftest/selftest.ts";
+import { EXTENSION_CHECKS, NEVER_PATH, runSelfTest, UNKNOWN_WRITE_PATH, type SelfTestDeps } from "../apps/page-browser/src/selftest/selftest.ts";
 import type { ProbeKind, ProbeOutcome } from "../apps/page-browser/src/selftest/probes.ts";
 
 // The self-test with the exit closed (Project Browser plan §4.1, step 5):
 // each mechanism checked on its own, and the verdict says which one stopped
-// the request. The rules extension arrives with PR 6: until then its checks
-// are "not_installed" — never "passed".
+// the request. The rules extension is in the image since PR 6 and required;
+// for an image without it its checks are "not_installed" — never "passed".
 
 const refusedByClosedExit: ProbeOutcome = { paused: true, errorText: "net::ERR_TUNNEL_CONNECTION_FAILED", blockedReason: null, answered: false };
 const blockedByExtension: ProbeOutcome = { paused: false, errorText: "net::ERR_BLOCKED_BY_CLIENT", blockedReason: "other", answered: false };
@@ -30,7 +30,11 @@ function deps(overrides: Partial<SelfTestDeps> & { outcomes?: Partial<Record<Pro
 }
 
 describe("the self-test", () => {
-  it("passes on the closed exit and the kernel check, and reports the extension as not installed", async () => {
+  it("requires the rules extension: the operator's default since the image carries it (PR 6)", () => {
+    expect(EXTENSION_CHECKS).toBe("required");
+  });
+
+  it("for an image without the extension: passes on the closed exit and the kernel check, and reports the extension as not installed", async () => {
     const test = deps();
     const result = await runSelfTest(test);
     expect(result.ok).toBe(true);

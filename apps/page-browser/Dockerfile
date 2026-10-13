@@ -63,6 +63,17 @@ COPY s6/ /etc/s6-overlay/
 # (Node's type stripping), no dependencies.
 COPY src/ /opt/page-browser/src/
 
+# The rules extension (plan §4.6; spec §2.7): rules.json from the map of
+# operations (src/policy/), packed and signed here (extension/build.ts), and
+# the policy entry that force-installs its ID from the operator's own port —
+# every other extension stays blocked. The signing key is made in this
+# step's process and is gone with it: it is in no layer, and the extension's
+# ID is this image's own (why: extension/build.ts).
+COPY extension/ /opt/page-browser/extension/
+RUN node --no-warnings /opt/page-browser/extension/build.ts \
+      --out /opt/page-browser/extension/dist \
+      --policy /etc/opt/chrome/policies/managed/hub.json
+
 # A failed oneshot (the egress rules, their kernel check) stops the
 # container; Chrome gets its 5 s to exit on a stop (stage 1, amendment 28).
 ARG OPERATOR_VERSION=dev

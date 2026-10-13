@@ -83,6 +83,15 @@ while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
 done
 [ -S /tmp/.X11-unix/X99 ] || fail "no X server"
 
+# The rules extension's version directories the profile does not name go
+# before every start (stage 1, amendment 24; src/profile/): a Chrome that
+# keeps dying young would fill the profile with them and then could not
+# install the extension at all. As pb-chrome — the profile is that user's
+# alone; a failure here never stops Chrome's start.
+/command/s6-setuidgid pb-chrome env -i HOME=/home/pb-chrome PATH=/usr/local/bin:/usr/bin:/bin \
+  node --no-warnings /opt/page-browser/src/profile/main.ts /data/profile \
+  || echo "chrome: extension directories not checked" >&2
+
 # The profile's lock (Singleton*) stays: the container's host name is the
 # profile's own, so Chrome itself takes over the lock of a Chrome that is
 # gone (stage 1, amendment 33), and still refuses a profile another Chrome

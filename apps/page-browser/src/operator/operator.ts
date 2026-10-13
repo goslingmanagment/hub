@@ -83,6 +83,7 @@ import { EnvCheck } from "../env/check.ts";
 import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
+import { ExtensionFiles } from "../egress/extension-files.ts";
 import { classifyFanslyHost, FANSLY_HOSTS, type HostClassifier } from "../egress/hosts.ts";
 import { Egress } from "../egress/proxy.ts";
 import { SocksError, type SocksConfig } from "../egress/socks5.ts";
@@ -184,6 +185,8 @@ export class Operator {
   readonly config: OperatorConfig;
   readonly chrome: ChromeControl;
   readonly egress: Egress;
+  /** The rules extension's package on the proxy's port (plan §4.6). */
+  readonly extension: ExtensionFiles;
   readonly rpc: RpcServer;
   readonly cdp: Cdp;
   readonly control: BrowserControl;
@@ -274,8 +277,11 @@ export class Operator {
       this.#sendState();
     };
 
+    // The rules extension's package, for Chrome's policy (PR 6).
+    this.extension = new ExtensionFiles(this.config.extensionDir, this.#log);
     this.egress = new Egress({
       classify: this.#classify,
+      serve: (req, res) => this.extension.serve(req, res),
       admitSocket: (host, port) => this.sockets.admit(host, port),
       onRecord: (record) =>
         this.journals.connection({
