@@ -20,8 +20,13 @@ import { FakeClock, FakeOwnership, seededRandom } from "./helpers/sync-fakes.ts"
 // [2 000, 60 000] ms (also in the middle of a wait), aborted waits, redirect
 // hops, transports without an onRequestStart mark (the true send instant is
 // then somewhere before the completion), network failures before and after
-// the bytes left, and ownership losses followed by a takeover. After every
-// ACTUAL send the invariants are checked:
+// the bytes left, and ownership losses followed by a takeover — and the
+// page's browser (Project Browser, stage 3 PR 12): granted without a send
+// mark, it connects and sends later, or not at all, and reports when the
+// request left (`transport_reported`, never before the truth: the operator
+// reports the gate's first bytes, and the bridge to the engine's clock rounds
+// up) or nothing (the completion counts). After every ACTUAL send the
+// invariants are checked:
 //   I1  gap to the previous actual send ≥ ceil(S × (1 + u)) ≥ S ≥ 2 000 ms,
 //       S and u being those of the later admission;
 //   I2  the send is not before the previous request completed;
@@ -62,6 +67,7 @@ describe("sync pacer property: 10⁶ admissions, 0 violations", () => {
     let sends = 0;
     let refusals = 0;
     let fallbacks = 0;
+    let browserReports = 0;
     let aborts = 0;
     let takeovers = 1;
     let minRatio = Number.POSITIVE_INFINITY;
@@ -125,7 +131,33 @@ describe("sync pacer property: 10⁶ admissions, 0 violations", () => {
 
       let outcome: TransportOutcome;
       const mode = random();
-      if (mode < 0.85) {
+      if (mode < 0.08) {
+        // The page's browser: the grant, then the browser's own connect and
+        // preflight; it may not send at all (its live session changed).
+        const refusal = pacer.checkRemoteGrant(admission);
+        if (refusal !== null) {
+          refusals += 1;
+          outcome = { kind: "aborted_before_send", refusal: refusal.reason };
+        } else if (random() < 0.05) {
+          outcome = { kind: "aborted_before_send", refusal: "session_mismatch" };
+        } else {
+          clock.advance(random() * 1_500);
+          const leftAt = clock.monoNow();
+          recordSend(index, leftAt, grant);
+          clock.advance(random() * 3_000);
+          const report = random();
+          if (report < 0.85) {
+            browserReports += 1;
+            outcome = { kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono: leftAt + (report < 0.6 ? 0 : random() * 2) };
+          } else if (report < 0.92) {
+            browserReports += 1;
+            outcome = { kind: "transport_error", sent: true, message: "the link went", sentMono: leftAt };
+          } else {
+            fallbacks += 1;
+            outcome = { kind: "transport_error", sent: true, message: "no result" };
+          }
+        }
+      } else if (mode < 0.85) {
         // A normal dispatch: the check runs at onRequestStart.
         const refusal = pacer.check(admission);
         if (refusal !== null) {
@@ -191,6 +223,7 @@ describe("sync pacer property: 10⁶ admissions, 0 violations", () => {
     expect(minRatio).toBeGreaterThanOrEqual(1);
     expect(refusals).toBeGreaterThan(0);
     expect(fallbacks).toBeGreaterThan(0);
+    expect(browserReports).toBeGreaterThan(ADMISSIONS * 0.05);
     expect(aborts).toBeGreaterThan(0);
     expect(takeovers).toBeGreaterThan(10);
     expect(reads).toBeGreaterThan(ADMISSIONS);
