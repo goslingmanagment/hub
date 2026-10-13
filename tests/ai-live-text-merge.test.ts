@@ -421,7 +421,7 @@ describe("assertLiveTextRequestShape", () => {
   const withFrame = new Set<AiStreamCapability>(["context-v1"]);
   const shape = (overrides: Partial<Parameters<typeof assertLiveTextRequestShape>[0]> = {}) => () => (
     assertLiveTextRequestShape({
-      feature: "fast-reply", isFanslyRequest: false, hasClientContext: false, capabilities: withFrame, ...overrides,
+      feature: "fast-reply", hasClientContext: false, capabilities: withFrame, ...overrides,
     })
   );
   const refusal = (run: () => void) => {
@@ -445,10 +445,14 @@ describe("assertLiveTextRequestShape", () => {
     }
   });
 
-  it("refuses a Fansly page and a request that brings its own clientContext", () => {
+  it("refuses a request that brings its own clientContext; no platform is refused here (R20 HF-8б)", () => {
     const notAllowed = { status: 400, code: "bad_request", reason: "live_text_not_allowed" };
-    expect(refusal(shape({ isFanslyRequest: true }))).toEqual(notAllowed);
     expect(refusal(shape({ hasClientContext: true }))).toEqual(notAllowed);
+    // Which platforms have fresh text is the freshText flag's (client-features.ts),
+    // read by the owner's switch: the shape takes no platform at all, so the
+    // request the new extension makes on Fansly (a draft feature on the hub's
+    // own transcript, with the frame) passes it like an OnlyFans one.
+    expect(refusal(shape())).toBeNull();
   });
 
   it("requires the capability that carries the answer, and checks it last", () => {
@@ -456,7 +460,7 @@ describe("assertLiveTextRequestShape", () => {
     expect(refusal(shape({ capabilities: undefined }))).toEqual(required);
     expect(refusal(shape({ capabilities: new Set<AiStreamCapability>(["debug-input-v1", "split-all-v1"]) }))).toEqual(required);
     // A request wrong in two ways names the one a newer client could not fix.
-    for (const wrong of [{ feature: "coach-chat" as const }, { isFanslyRequest: true }, { hasClientContext: true }]) {
+    for (const wrong of [{ feature: "coach-chat" as const }, { hasClientContext: true }]) {
       expect(refusal(shape({ ...wrong, capabilities: undefined }))).toMatchObject({ reason: "live_text_not_allowed" });
     }
   });
@@ -545,7 +549,10 @@ describe("liveTextContext body field", () => {
 describe("fresh text switches", () => {
   it("is served by the hub, and still inert: the mode rests off", () => {
     expect(SERVED_CLIENT_CAPABILITIES).toContain("live-text-v1");
-    expect(CLIENT_FEATURE_REQUIREMENTS.freshText).toEqual({ platforms: ["onlyfans"], capabilities: ["live-text-v1"] });
+    // R20 HF-8б: on Fansly too, behind the same capability and each page's own flag.
+    expect(CLIENT_FEATURE_REQUIREMENTS.freshText).toEqual({
+      platforms: ["onlyfans", "fansly"], capabilities: ["live-text-v1"],
+    });
     expect(getDescriptor("aiLiveTextContextMode")).toMatchObject({
       default: "off", runtimeApply: "live", enumValues: ["off", "shadow", "serve"],
     });

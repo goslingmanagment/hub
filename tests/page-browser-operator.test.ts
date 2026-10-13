@@ -1273,6 +1273,8 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const refused = await SocketTunnelClient.connect(s.model.proxyPort);
     expect(refused.status).toBe(403);
     expect(s.engine.of("wsAdmit")).toHaveLength(1);
+    // The journal's line is written asynchronously: wait for it, do not race it.
+    await until(() => journal(s.logDir, "connections").some((line) => line.result === "refused: socket not admitted (no engine link)"), 3000, "the refusal journaled");
     expect(journal(s.logDir, "connections").at(-1)).toMatchObject({ host: "wsv3.fansly.com", refused: true, result: "refused: socket not admitted (no engine link)" });
     // The open one: still a tunnel, its frames still kept.
     expect(s.operator.sockets.openConnections).toBe(1);

@@ -99,7 +99,8 @@ return it as JSON on success.
 
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
-`packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`). A token is
+`packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
+`coverage-check-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -116,6 +117,10 @@ authorization.
 - `split-all-v1` lets `replyMode: "preferSplit"` reach `ping`, `hi-greeting` and `coach-chat` on a
   page whose owner switched the `splitAll` flag on (see "Split for Ping, Hi and Coach drafts"
   below). It adds no frame.
+- `coverage-check-v1` adds the `coverageCheck` answers to the `context_v1` frame, so it means
+  something only beside `context-v1` (see "Feature-lane window coverage check" below). The
+  bootstrap lists the same name among the capabilities this hub serves: a client sends the body's
+  `coverageCheck` only to a hub that lists it, since an older hub's strict body refuses the field.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -133,8 +138,9 @@ what it was, so a client built before the frame never meets it.
 - Shape: the one frame that is not strict. A later key is dropped by an installed SDK instead of
   failing its stream, and the vocabularies are open strings. The known values are exported from the
   SDK (`AI_CONTEXT_SOURCES`, `CLIENT_COVERAGE_LEVELS`, `AI_KNOWN_FAN_MESSAGE_STATES`,
-  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`, `AI_CONTEXT_PAIR_STATES`); a client reads
-  an unknown one as "unknown".
+  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`, `AI_CONTEXT_PAIR_STATES`,
+  `AI_COVERAGE_CHECK_WINDOW_STATES`, `AI_COVERAGE_CHECK_DELETED_STATES`); a client reads an unknown
+  one as "unknown".
 
 | Field | Meaning |
 |---|---|
@@ -145,8 +151,9 @@ what it was, so a client built before the frame never meets it.
 | `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
 | `coverage` | How much of the chat's history the hub can vouch for, from the per-chat history proof of the page's platform (`services/client-coverage.ts`); a failed lookup reads `unknown`. OnlyFans, from `ofapi_message_coverage`: `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers; `partial`: a standing proof that does not vouch for the whole history; `unknown`: no proof, a revoked one, or one under a proof policy the hub no longer accepts. Fansly, from the Sync Engine's chain (the thread's effective `page_dm_threads.history_state`, chat-extension R20 HF-8д): `complete` when the chain is proven down to the chat's first message, `unknown` otherwise (a `partial` chain proves only a newest stretch; `unverified`, `none` and a chat without a thread prove nothing). Fansly never reads `partial`. |
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
+| `coverageCheck` | `{ window, deleted }`: one `{ id, state }` per id of the body's `coverageCheck.window` and `coverageCheck.deletedIds`, each list in the body's order (below). Only for a caller that advertised `coverage-check-v1` and sent the field; absent otherwise. |
 | `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
-| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
+| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected, matched? }`. `matched` (chat-extension R20 HF-8б): the client's items the hub's own transcript already held, from the same sender; present only when the hub merged the text (`shadow`, `served`, `rejected`), absent for `not_sent` and `disabled`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
 | `pair` | Fansly only, when the request names a `fanRef`: what the hub vouches for about the pair `conversationRef` (the group) ↔ `fanRef` (below). `verified`: the page's thread of the group has this fan. `unverified`: the page holds no thread of the group, or one whose fan the hub does not know yet. Absent on OnlyFans and without `fanRef`. |
 
@@ -185,6 +192,48 @@ The frame is built from database reads only (the transcript loader, the coverage
 lookup): no platform request, no queued platform work and no change to a chat's unread state.
 Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
 generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
+
+### Feature-lane window coverage check (chat-extension R20 HF-8в)
+
+`coverageCheck` (body, optional) names what the client's open tab holds of the chat: `window`, up to
+60 messages of both sides as `{ id, dir }` (`dir`: `fan` or `model`; media-only messages count; empty
+for a chat with no messages), and `deletedIds`, up to 60 messages the tab saw deleted there. Ids are
+canonical numeric ids, each named once across both lists; anything else is a 400 from the schema.
+Ids only: no text travels, nothing is added to the prompt and nothing is stored. The field is
+accepted on every feature and answered, in the `context_v1` frame, only to a caller that advertised
+both `context-v1` and `coverage-check-v1`; otherwise it is ignored, so every other stream stays
+byte for byte what it was. Like the frame, it is answered only for a transcript the hub loaded
+itself (no `clientContext`).
+
+Each id gets exactly one answer, in its own list, in the body's order, judged against the
+transcript that served the generation (after the Coach prompt budget's cut, as `window.served`) and
+the same conversation-scoped store lookup as `knownFanMessageIds`:
+
+| `coverageCheck.window[].state` | Meaning |
+|---|---|
+| `included` | The served window holds the id, sent by the side the client says. |
+| `direction_mismatch` | The served window holds the id, sent by the other side. |
+| `outside_window` | Not in the served window, but the hub holds it for this conversation: older than the window, or cut by the Coach prompt budget. |
+| `deleted` | Not in the served window, and tombstoned for this conversation. |
+| `absent` | Not in the served window, and the hub does not hold it for this conversation (never seen, another chat's, or only in a store the serving reader did not read). |
+| `unknown` | Not in the served window, and the stores could not be read. |
+
+| `coverageCheck.deleted[].state` | Meaning |
+|---|---|
+| `still_served` | The served window holds the id: the model read a message the client saw deleted. |
+| `deleted` | Not in the served window, and tombstoned for this conversation. |
+| `absent` | Not in the served window, and no tombstone for this conversation: the model did not read it, whatever else the stores hold. |
+| `unknown` | Not in the served window, and the stores could not be read. |
+
+The ids of `knownFanMessageIds` and of both lists that the served window does not hold are looked up
+together, once per generation (at most 130 ids, the lookup's cap). An id of another chat on the same
+page reads `absent`, as above; a failed lookup answers `unknown` and never fails the generation.
+
+How the client reads these answers (a window miss, a stale context, an unchecked id, and their order)
+is one table shared with the hub: `tests/fixtures/ai-coverage-check-matrix.json`. The hub proves its
+answers against it (`tests/ai-coverage-check.test.ts`); the client copies the file verbatim for its
+verdict (chat-extension P8b2) and reads the same verdicts from it. A change to the answers is a
+change to that file.
 
 ### Feature-lane conversation pair on Fansly (chat-extension R20 HF-9)
 
@@ -271,9 +320,11 @@ byte of its text were a token. A request that names another `model` carries that
 ### Feature-lane fresh text (`liveTextContext`)
 
 The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
-reads the open OnlyFans chat sends its last confirmed messages with the request, and the hub merges
-them into the transcript it loaded itself, for that one generation
-(`apps/runtime/src/modules/ai/context/live-text.ts`).
+reads the open chat sends its last confirmed messages with the request, and the hub merges them
+into the transcript it loaded itself, for that one generation
+(`apps/runtime/src/modules/ai/context/live-text.ts`). OnlyFans since H-4c; Fansly since
+chat-extension R20 HF-8б, on the hub's own transcript only (the released Fansly extension sends
+its whole transcript as `clientContext`, and fresh text beside it is refused).
 
 Body field (optional, strict):
 
@@ -302,7 +353,6 @@ Refused before any context loads, after the page was admitted (a client bug, nev
 | Case | Answer |
 |---|---|
 | a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
-| a page that is not OnlyFans | 400 `bad_request`, reason `live_text_not_allowed` |
 | together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
 | no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
 
@@ -316,7 +366,10 @@ generations. Two conditions, both read per generation:
 - `aiLiveTextContextMode` (`off` | `shadow` | `serve`, rests `off`; stepped up one mode at a time,
   rolled back freely, like `aiTranscriptFreshUnionMode`);
 - the page's `freshText` flag in `chatExtensionFeatures`, by the evaluation the bootstrap announces
-  (master switch, flag, platform, binding, the `live-text-v1` capability).
+  (master switch, flag, platform, binding, the `live-text-v1` capability). The flag exists on
+  OnlyFans and on Fansly (R20 HF-8б; before it a Fansly page was refused with
+  `live_text_not_allowed`); one mode serves both, and a page reads its flag like every other
+  flag (its own row, else the `"*"` row).
 
 | `live.status` | Meaning |
 |---|---|
@@ -336,10 +389,20 @@ The merge, in `serve` and `shadow` alike:
   names message ids only. "Another chat" is another conversation of the same page, or a chat of
   another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
   each other archive the same message under both; that is the same chat from its other side, not a
-  conflict. A page the caller cannot read is not consulted. Another page is read in both of its
-  message stores (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is
-  refused even when it is made only of messages seconds old.
+  conflict: on OnlyFans each page archives it with the other page's account as the conversation,
+  on Fansly both archive it under the one group id (a group names the chat itself, so the same
+  group on another page is this chat and any other group is another chat). A page the caller
+  cannot read is not consulted. Another page is read in both of its message stores
+  (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is refused even
+  when it is made only of messages seconds old.
 - A tombstone is never restored: an id deleted in any store of the page is rejected.
+- Fansly (R20 HF-8б): where the socket overlay served the transcript (`source: "live_union"`), the
+  page's overlay (`dm_live_messages`) is one more store of the page. Its deletion mark rejects an
+  item whatever group the mark names, a deletion that only the socket knows included; a row under
+  another group of the page is another chat (a conflict); a row under this group places the
+  message in it with its sender and time, after both archives. Where the overlay did not serve
+  (the page is not in `fanslyLiveOverlayReadPages`, or that switch could not be read), it is not
+  consulted, exactly as for the frame's answers.
 - A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
   as an archive row does (tags and entities out). An item whose text is empty after that, whose id
   or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
@@ -354,8 +417,10 @@ The merge, in `serve` and `shadow` alike:
   as if it were new stays before the window and is cut (`outsideWindow`), and a message only the
   webhook store holds joins at the place the hub's own reader would give it. Such an item still
   carries the client's text, and a generation that served it is scoped like any other.
-- `accepted` counts the client's items the served window holds. Items cut by the window are neither
-  accepted nor rejected.
+- `accepted` counts the client's items the served window holds; `matched` (the frame, R20 HF-8б)
+  counts the items the hub's transcript already held. Items cut by the window are neither accepted
+  nor rejected nor matched: `sent = accepted + rejected + matched + outsideWindow`, the last one in
+  the manifest only.
 
 Where the client's text lives: in the restricted record of that one generation
 (`ai_generation_content.prompt_blocks`), and nowhere else. It is written to no message archive, no
@@ -373,8 +438,8 @@ client reads are the ids the hub archives; `matched: 0` beside a non-empty archi
 not, and `serve` must wait.
 
 The store lookup (`lookupAiLiveTextMessages`, `packages/db/src/repositories/ai-live-context.ts`) is
-one statement of point lookups on the stores' unique keys, for the ids the transcript does not
-hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
+one statement of point lookups on the stores' unique keys (the Fansly overlay by its primary key),
+for the ids the transcript does not hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
 (`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
 reads only: no platform request, no queued platform work, no change to a chat's unread state.
 

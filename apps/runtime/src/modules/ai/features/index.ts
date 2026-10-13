@@ -1,4 +1,5 @@
 import type {
+  AiCoverageCheck,
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
@@ -140,8 +141,13 @@ export interface AiFeatureRequestBody {
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
-  /** chat-extension H-4c: the fresh text of the open OnlyFans chat, merged
-   * into the hub's transcript for this generation only (context/live-text.ts). */
+  /** chat-extension R20 HF-8в: the window coverage check, ids only; answered
+   *  in the `context_v1` frame for a caller that advertised
+   *  `coverage-check-v1`, never read into the prompt. */
+  coverageCheck?: AiCoverageCheck;
+  /** chat-extension H-4c: the fresh text of the open chat (OnlyFans; Fansly
+   * since R20 HF-8б), merged into the hub's transcript for this generation
+   * only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
@@ -432,13 +438,13 @@ export async function prepareAiFeatureStream(
   const pageId = stored.page.id;
 
   // chat-extension H-4c: fresh text is refused where it can never be used
-  // (the feature, the platform, beside clientContext, without the frame that
-  // answers it), before any context loads. The owner's switch is not a
-  // refusal: switched off, the text is ignored further down.
+  // (the feature, beside clientContext, without the frame that answers it),
+  // before any context loads. The owner's switch is not a refusal: switched
+  // off, the text is ignored further down. Either platform (R20 HF-8б): where
+  // fresh text exists is its flag's.
   if (body.liveTextContext !== undefined) {
     assertLiveTextRequestShape({
       feature,
-      isFanslyRequest,
       hasClientContext: body.clientContext !== undefined,
       capabilities: options?.capabilities,
     });
@@ -1158,6 +1164,11 @@ export async function prepareAiFeatureStream(
       }),
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+      // chat-extension R20 HF-8в: answered only to a caller that advertised
+      // `coverage-check-v1`; anyone else gets the frame it got before.
+      ...(body.coverageCheck !== undefined && options?.capabilities?.has("coverage-check-v1") === true
+        ? { coverageCheck: body.coverageCheck }
+        : {}),
       ...(liveText !== undefined ? { live: liveText.live } : {}),
       ...(conversationPair !== null ? { pair: conversationPair } : {}),
     });

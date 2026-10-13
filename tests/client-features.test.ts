@@ -39,6 +39,8 @@ const UNBOUND_OF_PAGE: ClientFeaturePage = { label: "nova-of", platform: "onlyfa
 const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansly", platformAccountId: "123456789012345678" };
 /** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly alone. */
 const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
+/** The flags on both platforms: fresh text (R20 HF-8б). Every other flag is OnlyFans alone. */
+const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
 const EVERY_CAPABILITY: readonly string[] = CLIENT_HUB_CAPABILITY_NAMES;
 const NO_BINDINGS = {};
 
@@ -64,9 +66,10 @@ describe("chat-extension feature evaluation", () => {
     const onlyFans = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: OF_PAGE, served });
     const fansly = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: FANSLY_PAGE, served });
     for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
-      const fanslyOnly = FANSLY_ONLY_FLAGS.includes(flag);
-      expect(onlyFans[flag], flag).toEqual({ available: false, reason: fanslyOnly ? "platform_unsupported" : "disabled" });
-      expect(fansly[flag], flag).toEqual({ available: false, reason: fanslyOnly ? "disabled" : "platform_unsupported" });
+      const onOnlyFans = !FANSLY_ONLY_FLAGS.includes(flag);
+      const onFansly = FANSLY_ONLY_FLAGS.includes(flag) || BOTH_PLATFORM_FLAGS.includes(flag);
+      expect(onlyFans[flag], flag).toEqual({ available: false, reason: onOnlyFans ? "disabled" : "platform_unsupported" });
+      expect(fansly[flag], flag).toEqual({ available: false, reason: onFansly ? "disabled" : "platform_unsupported" });
     }
     expect(Object.values(clientBootstrapFlags(CLIENT_FEATURE_CODE_DEFAULTS))).toEqual(
       CLIENT_FEATURE_FLAG_NAMES.map(() => false),
@@ -236,6 +239,52 @@ describe("[R20 HF-12] the flags of Fansly's own AI generations", () => {
     }
     // No top-level flag moves: the rows are per page.
     expect(Object.values(clientBootstrapFlags(switches.settings)).every((on) => on === false)).toBe(true);
+  });
+});
+
+describe("[R20 HF-8б] fresh text on a Fansly page", () => {
+  const served = SERVED_CLIENT_CAPABILITIES;
+  const evaluate = (input: ClientFeatureSettings, page: ClientFeaturePage = BOUND_FANSLY_PAGE, capabilities = served) =>
+    evaluateClientFeature({ settings: input, page, flag: "freshText", served: capabilities });
+
+  it("exists there: off with the master switch, flag_off without the page's row, available with it", () => {
+    const row = settings({ features: { "lora-1": { freshText: true } } });
+    expect(evaluate({ ...row, enabled: false })).toEqual({ available: false, reason: "disabled" });
+    expect(evaluate(settings({}))).toEqual({ available: false, reason: "flag_off" });
+    expect(evaluate(settings({ features: { "lora-1": { freshText: false } } })))
+      .toEqual({ available: false, reason: "flag_off" });
+    // An OnlyFans page's row does not reach the Fansly page, nor does another flag.
+    expect(evaluate(settings({ features: { "lora-of": { freshText: true }, "lora-1": { drafts: true } } })))
+      .toEqual({ available: false, reason: "flag_off" });
+    expect(evaluate(row)).toEqual({ available: true });
+    // The same capability as on OnlyFans: without it the hub is not ready.
+    expect(evaluate(row, BOUND_FANSLY_PAGE, [])).toEqual({ available: false, reason: "hub_not_ready" });
+    // Every Fansly page on prod has its account id; one without it cannot be bound.
+    expect(evaluate(settings({ features: { "lora-fansly": { freshText: true } } }), FANSLY_PAGE))
+      .toEqual({ available: false, reason: "binding_missing" });
+  });
+
+  it("OnlyFans pages read it exactly as before", () => {
+    const row = settings({ features: { "lora-of": { freshText: true } } });
+    expect(evaluate(row, OF_PAGE)).toEqual({ available: true });
+    expect(evaluate(settings({}), OF_PAGE)).toEqual({ available: false, reason: "flag_off" });
+    expect(evaluate({ ...row, enabled: false }, OF_PAGE)).toEqual({ available: false, reason: "disabled" });
+    expect(evaluate(row, OF_PAGE, [])).toEqual({ available: false, reason: "hub_not_ready" });
+  });
+
+  it("the owner's rows on prod (2026-10-13) leave every Fansly page without it: nothing turns on at merge", () => {
+    // `chatExtensionFeatures` on prod, read only, 2026-10-13: the two OnlyFans
+    // pilot pages, no "*" row, no Fansly page.
+    const pilotRow = {
+      insertion: true, spenders: true, fanPanel: true, sound: true, wsTap: true, review: true, coach: true,
+      recap: true, preview: true, stats: true, newcomers: true, freshText: true, splitAll: true,
+    };
+    const { switches } = readClientSwitches({
+      chatExtensionEnabled: true,
+      chatExtensionFeatures: JSON.stringify({ "lora-vip-of": pilotRow, "lora-of": pilotRow }),
+    });
+    expect(evaluate(switches.settings)).toEqual({ available: false, reason: "flag_off" });
+    expect(evaluate(switches.settings, OF_PAGE)).toEqual({ available: true });
   });
 });
 
