@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 
+import type { EventBody } from "../../apps/page-browser/src/buffer/buffer.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
+import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
 import { acceptWebSocket, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
 
 // Fakes for the page browser's unit tests (Project Browser plan §3.3:
@@ -413,6 +415,31 @@ export class FakeEngine {
   close(): void {
     this.ws?.close();
   }
+}
+
+/** A frame of the site's socket, as PR 10 will append it: number `n`,
+ *  padded to make it bigger. */
+export function wsFrame(n: number, pad = 0, connectionId = "conn-1"): EventBody {
+  return { kind: "ws.in", connectionId, frame: `{"t":2,"d":"{\\"n\\":${n}}"}${"x".repeat(pad)}` };
+}
+
+/** A Hub request's outcome, as PR 9 will put it. */
+export function hubResult(attemptId: number, status = 200): Result {
+  return {
+    type: "result",
+    attemptId,
+    sessionFingerprint: "a".repeat(64),
+    outcome: {
+      kind: "response",
+      status,
+      headers: { "content-type": "application/json" },
+      body: { bodyId: `00000000-0000-4000-8000-${String(attemptId).padStart(12, "0")}`, decodedBytes: 2, sha256: "b".repeat(64) },
+      encodedBytes: 2,
+      source: "network",
+      sentMono: 1000,
+      sendMark: "transport_reported",
+    },
+  };
 }
 
 export const SOCKS_USER = "pb-user-7f3a";

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { builtinModules, stripTypeScriptTypes } from "node:module";
+import { isBuiltin, stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -164,7 +164,6 @@ describe("the operator's code (apps/page-browser/src)", () => {
 
   it("imports Node's built-ins and its own files only, each by its .ts name", () => {
     expect(existsSync(path.join(app, "package.json"))).toBe(false);
-    const builtins = new Set(builtinModules);
     for (const file of sources) {
       for (const match of readFileSync(file, "utf8").matchAll(/^(?:import|export)\s[^"';]*?from\s+"([^"]+)"/gm)) {
         const specifier = match[1]!;
@@ -174,7 +173,8 @@ describe("the operator's code (apps/page-browser/src)", () => {
           const target = path.resolve(path.dirname(file), specifier);
           expect(target.startsWith(src + path.sep) && existsSync(target), where).toBe(true);
         } else {
-          expect(specifier.startsWith("node:") && builtins.has(specifier.slice(5)), where).toBe(true);
+          // isBuiltin: `node:sqlite` (the buffer) exists only with its prefix.
+          expect(specifier.startsWith("node:") && isBuiltin(specifier), where).toBe(true);
         }
       }
     }

@@ -1,0 +1,122 @@
+// The buffer's file format (plan §4.4, §4.10): a SQLite database whose
+// schema has a version, and a forward-only list of migrations. A newer
+// operator reads an older buffer — it migrates it, one version at a time,
+// each in its own transaction. An older operator (the image rolled back, plan
+// §4.10) may open a newer buffer only when every migration it lacks says it
+// can (`readableFrom`); otherwise it refuses the buffer and the page stands.
+//
+// The rows keep their own `format` too: `json` of format 1 is the event or
+// the outcome exactly as protocol 1.x sends it (rpc/protocol.ts), so a batch
+// is sent as stored, without parsing it again.
+
+import type { DatabaseSync } from "node:sqlite";
+
+export interface Migration {
+  /** The schema version this migration makes (1, 2, ... — no gaps). */
+  version: number;
+  /** The lowest schema version an operator must know to still use a buffer
+   *  at this version. A migration that only adds (a table, a nullable
+   *  column, an index) keeps it; one an older operator would write wrongly
+   *  (a NOT NULL column without a default, a changed meaning) raises it to
+   *  its own version. */
+  readableFrom: number;
+  /** Runs inside the migration's transaction. */
+  up: (db: DatabaseSync) => void;
+}
+
+/** Version 1 (PR 11).
+ *  - meta: the buffer's id, the last number given and its moment (they
+ *    outlive the events they describe: numbers are never given twice).
+ *  - schema_version: every migration applied, with the lowest version that
+ *    can still use the buffer.
+ *  - events: the stream of plan §4.4 — numbered, sent and deleted in order.
+ *  - outcomes: the attempts' outcomes (result, siteDone, wsDone) until the
+ *    engine's resultAck (plan §4.2; spec §6.2).
+ *  `bytes` comes before `json`: a batch's size is read without walking the
+ *  overflow pages of big rows. */
+const V1 = `
+CREATE TABLE meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) STRICT;
+CREATE TABLE schema_version (
+  version INTEGER PRIMARY KEY,
+  readable_from INTEGER NOT NULL,
+  applied_wall INTEGER NOT NULL,
+  operator_version TEXT NOT NULL
+) STRICT;
+CREATE TABLE events (
+  seq INTEGER PRIMARY KEY,
+  at_wall INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  format INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  json TEXT NOT NULL
+) STRICT;
+CREATE TABLE outcomes (
+  attempt_id INTEGER PRIMARY KEY,
+  at_wall INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  format INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  json TEXT NOT NULL
+) STRICT;
+CREATE INDEX outcomes_by_age ON outcomes (at_wall);
+`;
+
+export const MIGRATIONS: readonly Migration[] = [{ version: 1, readableFrom: 1, up: (db) => db.exec(V1) }];
+
+/** The format of a row's `json` this operator writes. */
+export const ROW_FORMAT = 1;
+
+/** The buffer was made by an operator this one cannot follow. */
+export class BufferVersionError extends Error {}
+
+export interface SchemaState {
+  /** The buffer's schema version after the migrations. */
+  version: number;
+  /** The lowest version that can use it. */
+  readableFrom: number;
+  /** The newest version this operator knows. */
+  known: number;
+  /** The database was empty: version 1 made it. */
+  created: boolean;
+}
+
+function scalar(db: DatabaseSync, sql: string): unknown {
+  const row = db.prepare(sql).get() as Record<string, unknown> | undefined;
+  return row === undefined ? undefined : Object.values(row)[0];
+}
+
+/** Brings the database to the newest known version, or checks that this
+ *  operator may use a newer one. */
+export function migrate(db: DatabaseSync, migrations: readonly Migration[], operatorVersion: string, now: () => number): SchemaState {
+  migrations.forEach((migration, index) => {
+    if (migration.version !== index + 1) throw new Error(`the migrations are not numbered 1..n (${migration.version} at ${index})`);
+  });
+  const known = migrations.length;
+  const fresh = scalar(db, "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_version'") === 0;
+  const current = fresh ? 0 : Number(scalar(db, "SELECT coalesce(max(version), 0) FROM schema_version"));
+  if (current > known) {
+    const readableFrom = Number(scalar(db, "SELECT coalesce(max(readable_from), 0) FROM schema_version"));
+    if (readableFrom > known) throw new BufferVersionError(`the buffer is at schema version ${current}, readable from ${readableFrom}; this operator knows up to ${known}`);
+    return { version: current, readableFrom, known, created: false };
+  }
+  for (const migration of migrations.slice(current)) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      migration.up(db);
+      db.prepare("INSERT INTO schema_version (version, readable_from, applied_wall, operator_version) VALUES (?, ?, ?, ?)").run(migration.version, migration.readableFrom, now(), operatorVersion);
+      db.exec("COMMIT");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // SQLite rolled it back itself
+      }
+      throw error;
+    }
+  }
+  const readableFrom = Number(scalar(db, "SELECT coalesce(max(readable_from), 0) FROM schema_version"));
+  return { version: known, readableFrom, known, created: fresh };
+}
