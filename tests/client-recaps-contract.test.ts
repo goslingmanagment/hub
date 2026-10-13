@@ -182,7 +182,10 @@ describe("shared recaps contract", () => {
   });
 
   it("is served, with the dossier save (H-5): Recap is available where the owner switched it on, and only there", () => {
-    expect(CLIENT_FEATURE_REQUIREMENTS.recap.capabilities).toEqual(["shared-recaps-v1", "recap-profile-v1"]);
+    expect(CLIENT_FEATURE_REQUIREMENTS.recap.onlyfans?.capabilities).toEqual(["shared-recaps-v1", "recap-profile-v1"]);
+    // R20 HF-2: on Fansly the recaps and the dossier save are reads by conversation (HF-10).
+    expect(CLIENT_FEATURE_REQUIREMENTS.recap.fansly?.capabilities)
+      .toEqual(["shared-recaps-v1", "recap-profile-v1", "conversation-recaps-v1"]);
     expect(SERVED_CLIENT_CAPABILITIES).toEqual(expect.arrayContaining(["shared-recaps-v1", "recap-profile-v1"]));
     const page = { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" } as const;
     const recap = (settings: Parameters<typeof evaluateClientFeature>[0]["settings"]) => evaluateClientFeature({

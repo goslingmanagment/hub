@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { errorResponseSchema } from "@agency_hub_core/contracts";
+import { CLIENT_FEATURE_FLAG_NAMES, errorResponseSchema } from "@agency_hub_core/contracts";
 import {
   createFanslyPage,
   createModel,
@@ -519,5 +519,159 @@ describe("[R20 HF-12] unchanged: OnlyFans and the full token", () => {
     expect(await answers()).toEqual(atRest);
     setSwitches({ ...PROD_ROWS, "lora-1": { drafts: true, voice: true, notesFill: true } });
     expect(await answers()).toEqual(atRest);
+  }, AI_TEST_TIMEOUT_MS);
+});
+
+describe("[R20 HF-2] the narrow token's AI on a Fansly page: the page's own row alone, and no Help", () => {
+  /** Every chat-extension flag on. */
+  const EVERYTHING = Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, true]));
+  /** Coach, Recap and Review: their flags exist on Fansly since HF-2. */
+  const DEEP_CALLS: ReadonlyArray<{ name: string; feature: string; flag: "coach" | "recap" | "review"; body?: Record<string, unknown> }> = [
+    { name: "Coach", feature: "coach-chat", flag: "coach", body: { chatterQuestion: "what next?" } },
+    { name: "Recap", feature: "fan-summary", flag: "recap", body: { summaryMode: "short" } },
+    { name: "Review", feature: "chat-review", flag: "review" },
+  ];
+  const deepCall = (call: (typeof DEEP_CALLS)[number]) => generate({
+    token: narrowToken,
+    feature: call.feature,
+    pageLabel: "lora-1",
+    platform: "fansly",
+    body: { conversationRef: FANSLY_GROUP, fanRef: FANSLY_FAN, ...call.body },
+  });
+  /** Help, as each client would ask it on the Fansly page. */
+  const narrowHelp = (extra: { pageLabel?: string; clientVersion?: string | null } = {}) => generate({
+    token: narrowToken,
+    feature: "help-me",
+    pageLabel: extra.pageLabel ?? "lora-1",
+    platform: "fansly",
+    clientVersion: extra.clientVersion,
+    body: { conversationRef: FANSLY_GROUP, fanRef: FANSLY_FAN },
+  });
+  /** The released Fansly extension 2.10.1's Help: its full token, its header, its own transcript. */
+  const oldHelp = () => generate({
+    token: fullToken,
+    feature: "help-me",
+    pageLabel: "lora-1",
+    platform: "fansly",
+    clientVersion: "chatgoose-extension/2.10.1",
+    body: {
+      conversationRef: FANSLY_FAN,
+      isRegeneration: false,
+      clientContext: {
+        transcript: "[2026-10-12 18:00] fan: hey\n[2026-10-12 18:01] you: hi there",
+        messageCount: 2,
+        fanSpendingData: "",
+        fanSubscriptionData: "",
+        fanDisplayName: "fan_one",
+      },
+    },
+  });
+
+  it("the owner's \"*\" row, with every flag on, opens no generation on a Fansly page: flag_off before any spend", async (context) => {
+    if (!server) return context.skip();
+    const before = await generationCount();
+    capture.prompts = [];
+    // Every flag on for every page, and on the OnlyFans pages' own rows: none is the Fansly page's row.
+    for (const rows of [{ "*": EVERYTHING }, { "*": EVERYTHING, "lora-of": EVERYTHING, "lora-2": EVERYTHING }]) {
+      setSwitches(rows);
+      for (const call of FANSLY_CALLS) {
+        expectFeatureRefused(await fanslyCall(call), "flag_off", call.name);
+      }
+      for (const call of DEEP_CALLS) {
+        expectFeatureRefused(await deepCall(call), "flag_off", call.name);
+      }
+    }
+    expect(capture.prompts).toEqual([]);
+    expect(await generationCount()).toBe(before);
+
+    // The same "*" row is every OnlyFans page's, as before: Reply there is past the switch.
+    const onlyFans = await generate({
+      token: narrowToken, feature: "fast-reply", pageLabel: "lora-of", platform: "onlyfans",
+      body: { conversationRef: OF_FAN, replyTone: "casual" },
+    });
+    expectPastSwitch(onlyFans, "lora-of Reply under the \"*\" row");
+
+    // The page's own row: each generation by its own flag, the "*" row still saying nothing here.
+    setSwitches({ "*": EVERYTHING, "lora-1": { drafts: true, voice: true, notesFill: true } });
+    for (const call of FANSLY_CALLS) {
+      expectPastSwitch(await fanslyCall(call), call.name);
+    }
+    for (const call of DEEP_CALLS) {
+      expectFeatureRefused(await deepCall(call), "flag_off", call.name);
+    }
+    // And its `false` holds under a "*" that says on.
+    setSwitches({ "*": EVERYTHING, "lora-1": { ...EVERYTHING, drafts: false } });
+    expectFeatureRefused(await fanslyCall(FANSLY_CALLS[0]!), "flag_off", "drafts: false under \"*\": true");
+  }, AI_TEST_TIMEOUT_MS);
+
+  it("Coach, Recap and Review on Fansly wait for the page's own coach, recap and review rows", async (context) => {
+    if (!server) return context.skip();
+    for (const call of DEEP_CALLS) {
+      // The other two flags on, this one not: the switch refuses this generation alone.
+      const others = Object.fromEntries(DEEP_CALLS.filter((other) => other !== call).map((other) => [other.flag, true]));
+      setSwitches({ ...PROD_ROWS, "lora-1": { ...others, drafts: true } });
+      expectFeatureRefused(await deepCall(call), "flag_off", call.name);
+      // With its row the same request is past the switch (what the generation then needs is the feature's own).
+      setSwitches({ ...PROD_ROWS, "lora-1": { [call.flag]: true } });
+      const admitted = await deepCall(call);
+      expect(admitted.body, call.name).not.toContain("client_feature_disabled");
+      // The master switch and the version still decide.
+      setSwitches({ ...PROD_ROWS, "lora-1": { [call.flag]: true } }, false);
+      expectFeatureRefused(await deepCall(call), "disabled", call.name);
+    }
+  }, AI_TEST_TIMEOUT_MS);
+
+  it("Help: the narrow token's is refused on Fansly whatever the switches say; OnlyFans and the full token keep it", async (context) => {
+    if (!server) return context.skip();
+    const before = await generationCount();
+    capture.prompts = [];
+    // No switch lifts it: at rest, the master switch on, every flag on for the page and for every page.
+    for (const [rows, enabled] of [
+      [{}, false],
+      [PROD_ROWS, true],
+      [{ "*": EVERYTHING, "lora-1": EVERYTHING }, true],
+    ] as const) {
+      setSwitches(rows, enabled);
+      expectFeatureRefused(await narrowHelp(), "platform_unsupported", "the narrow token's Help on Fansly");
+      // The platform answers first: before the version, and for a page the caller is not granted.
+      expectFeatureRefused(await narrowHelp({ clientVersion: "chat-extension/1.1.9" }), "platform_unsupported", "an outdated extension");
+      expectFeatureRefused(await narrowHelp({ pageLabel: "lora-2" }), "platform_unsupported", "a page not granted");
+    }
+    expect(capture.prompts).toEqual([]);
+    expect(await generationCount()).toBe(before);
+
+    // OnlyFans, as before HF-2: the narrow token's Help needs the master switch and the version alone.
+    const onlyFansHelp = (clientVersion?: string | null) => generate({
+      token: narrowToken, feature: "help-me", pageLabel: "lora-of", platform: "onlyfans", clientVersion,
+      body: { conversationRef: OF_FAN },
+    });
+    setSwitches(PROD_ROWS);
+    expectPastSwitch(await onlyFansHelp(), "lora-of Help");
+    expectFeatureRefused(await onlyFansHelp("chat-extension/1.1.9"), "client_outdated", "lora-of Help");
+    setSwitches(PROD_ROWS, false);
+    expectFeatureRefused(await onlyFansHelp(), "disabled", "lora-of Help");
+
+    // The released Fansly extension 2.10.1 (a full token) keeps Help on Fansly: the same answer
+    // and the same prompt whatever the chat-extension switches say.
+    const answers: Array<{ status: number; prompt: Prompt | undefined; text: string }> = [];
+    for (const [rows, enabled, minVersion] of [
+      [{}, false, "0.0.0"],
+      [PROD_ROWS, true, "1.2.0"],
+      [{ "*": EVERYTHING, "lora-1": EVERYTHING }, true, "9.9.9"],
+    ] as const) {
+      setSwitches(rows, enabled, minVersion);
+      capture.prompts = [];
+      const response = await oldHelp();
+      expect(response.statusCode, response.body).toBe(200);
+      answers.push({
+        status: response.statusCode,
+        prompt: capture.prompts[0],
+        text: frames(response).filter((frame) => frame.type === "content_delta").map((frame) => frame.text).join(""),
+      });
+    }
+    expect(answers[0]!.text).toBe("sure thing, babe");
+    expect(answers[0]!.prompt).toBeDefined();
+    expect(answers[1]).toEqual(answers[0]);
+    expect(answers[2]).toEqual(answers[0]);
   }, AI_TEST_TIMEOUT_MS);
 });

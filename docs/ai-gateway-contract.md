@@ -617,7 +617,8 @@ generations. Two conditions, both read per generation:
   (master switch, flag, platform, binding, the `live-text-v1` capability). The flag exists on
   OnlyFans and on Fansly (R20 HF-8б; before it a Fansly page was refused with
   `live_text_not_allowed`); one mode serves both, and a page reads its flag like every other
-  flag (its own row, else the `"*"` row).
+  flag: its own row, else the `"*"` row on OnlyFans; a Fansly page reads its own row alone (R20
+  HF-2).
 
 | `live.status` | Meaning |
 |---|---|
@@ -723,13 +724,19 @@ The chat extension's narrow device token (chat-extension H-3, `client: "chat-ext
 reaches `/api/v1/ai/features/:feature` only through the owner's switches, checked before any context
 load, quota reservation or provider call (`services/client-ai-switch.ts`). `coach-chat`,
 `fan-summary` and `chat-review` run the full check of the page's `coach` / `recap` / `review` flag
-(`requireClientFeature`). On Fansly (R20 HF-12; the request's `platform`, which the route holds to
+(`requireClientFeature`), on both platforms (the three flags exist on Fansly since R20 HF-2). On
+Fansly (R20 HF-12; the request's `platform`, which the route holds to
 the page's own before any context load) `fast-reply`, `improve-draft`, `hi-greeting` and `ping` run
 the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-notes-fill` of
 `notesFill`: three flags that exist on Fansly alone (`voice` also opens the voice-note routes the
-script feeds to the narrow token, R20 HF-4б). Every other feature, and on OnlyFans those six,
-needs `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
-above `chatExtensionMinVersion`. A refusal is `409 client_feature_disabled` with its `reason`. The
+script feeds to the narrow token, R20 HF-4б). On OnlyFans those six, and `help-me`,
+need `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
+above `chatExtensionMinVersion`. `help-me` on Fansly is refused `platform_unsupported` (R20 HF-2: the
+extension has no Help on its Fansly site), so on Fansly every generation of the narrow token waits
+for a flag of the page. A page's flag is the page's own row of `chatExtensionFeatures`, else the
+`"*"` row on OnlyFans; a Fansly page reads its own row alone (R20 HF-2), so no Fansly generation
+of the narrow token runs until the owner names the page. A full device token (the released Fansly
+extension, the desktop) is asked none of this. A refusal is `409 client_feature_disabled` with its `reason`. The
 check runs once, when the generation is asked for: an owner's change while it streams holds from the
 next request, and the generation already admitted finishes. The raw gateway stream is not on the
 narrow token's route list at all. The restricted generation record of a narrow token carries
@@ -933,9 +940,11 @@ Which platform keys its chats by ids of their own is one table (`clientConversat
 - the feed: the group's messages; `target.conversationRef` repeats the request's, and a cursor is
   bound to the group and the fan (a cursor of the fan's own chat keeps the scope it always had).
 
-Nothing on Fansly is reachable through these routes until `recap` and `preview` exist there
-(`CLIENT_FEATURE_REQUIREMENTS`, chat-extension R20 HF-2): until then they answer `409
-client_feature_disabled` `platform_unsupported` before the conversation is resolved.
+`recap` and `preview` exist on Fansly since chat-extension R20 HF-2
+(`CLIENT_FEATURE_REQUIREMENTS`), where they also need `conversation-recaps-v1`. A Fansly page
+reaches these routes only with its own row of the owner's switches: without it they answer `409
+client_feature_disabled` `flag_off` before the conversation is resolved, whatever the `"*"` row
+says.
 
 ### Shared recaps (chat-extension)
 
@@ -1326,8 +1335,9 @@ before. `ping`, `hi-greeting` and `coach-chat` take it only when all of these ho
 
 - the request advertises `split-all-v1` in `x-kernel-ai-capabilities`;
 - the owner's `splitAll` flag is on for the page, by the same evaluation as every chat-extension
-  flag (`evaluateClientFeature`: an OnlyFans page, `chatExtensionEnabled`, the flag in
-  `chatExtensionFeatures`, a binding, `split-all-v1` among the served capabilities);
+  flag (`evaluateClientFeature`: `chatExtensionEnabled`, the flag in `chatExtensionFeatures`, a
+  binding, `split-all-v1` among the served capabilities). The flag exists on OnlyFans and on
+  Fansly (R20 HF-2); a Fansly page reads its own row alone, never the `"*"` row;
 - the feature is `supportsSplitAll` in both policy tables (`FEATURE_POLICIES` and the builder's
   `PROMPT_POLICIES`).
 

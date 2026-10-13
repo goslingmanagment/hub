@@ -282,8 +282,10 @@ send. What a platform takes of a send is its admission (chat-extension R20
 HF-3, `apps/runtime/src/services/client-claim-admission.ts`): OnlyFans, a
 greeting or a reply with an AI group; Fansly, a greeting only, with an AI or
 a manual group (`manual-greeting-v1`), never a reply. The custody exists on
-Fansly once `newcomers` exists there (HF-2); until then every Fansly action
-that starts something, and the status read, is `platform_unsupported`. A page
+Fansly since `newcomers` does (chat-extension R20 HF-2): a Fansly page's
+`newcomers` is the page's own row of the owner's switches, never the `"*"`
+row, and until the owner sets it `claim`, `renew` and `dispatch` there are
+`flag_off`. A page
 that is not the caller's answers as on every chat-extension page route (403 /
 404 with the policy enforced, `409 client_feature_disabled` / `not_granted`
 in `log` mode).
