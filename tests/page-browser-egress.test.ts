@@ -12,8 +12,9 @@ import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, SOCKS_PASSWORD, 
 // The operator's local proxy (Project Browser plan §4.5; stage 3, PR 4):
 // Chrome's only way out, through the page's SOCKS5 with its password. It
 // refuses everything while the exit is closed, local and private addresses
-// always, and hosts it does not know; to the API host only the request of an
-// open gate window goes.
+// always, and the hosts the map of operations closes; every other host the
+// site loads goes through, third-party ones too (owner decision №2; PR 6);
+// to the API host only the request of an open gate window goes.
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -64,7 +65,7 @@ describe("the closed exit", () => {
     expect(egress.exitOpen).toBe(false);
   });
 
-  it("serves no plain HTTP", async () => {
+  it("serves no plain HTTP of its own (the rules extension's package: tests/page-browser-extension.test.ts)", async () => {
     const { port } = await setUp();
     const response = await fetch(`http://127.0.0.1:${port}/pb-extension/update.xml`);
     expect(response.status).toBe(403);
@@ -92,11 +93,11 @@ describe("the open exit", () => {
     expect(records[0]).toMatchObject({ host: "fansly.com", cls: "site", refused: false, up: 24, down: 24, result: "cut: exit closed (a test)" });
   });
 
-  it("refuses local and private addresses, unknown hosts and the socket host", async () => {
-    const { egress, port, records, config } = await setUp();
+  it("refuses local and private addresses, special-use names, the hosts the map closes and the socket host", async () => {
+    const { egress, port, socks, records, config } = await setUp();
     egress.setSocks(config);
     egress.openExit();
-    const targets = ["127.0.0.1:443", "localhost:443", "10.1.2.3:443", "192.168.0.10:443", "169.254.169.254:80", "[::1]:443", "intranet:443", "example.com:443", "chatws.fansly.com:443", "wsv3.fansly.com:443"];
+    const targets = ["127.0.0.1:443", "localhost:443", "10.1.2.3:443", "192.168.0.10:443", "169.254.169.254:80", "[::1]:443", "intranet:443", "apiv3.fansly.com.pb-hold.invalid:443", "stand.test:443", "chatws.fansly.com:443", "mediav2.fansly.com:443", "wsv3.fansly.com:443"];
     for (const target of targets) {
       const { status, socket } = await proxyConnect(port, target);
       socket.destroy();
@@ -105,12 +106,51 @@ describe("the open exit", () => {
     await until(() => records.length === targets.length);
     expect(records.map((record) => record.result)).toEqual([
       ...Array(7).fill("refused: local or private address"),
-      "refused: host not allowed",
-      "refused: host not allowed",
+      // The placeholder of Hub's requests exists nowhere: a request Chrome let
+      // go of without the operator ends here (hub-requests/page.ts).
+      "refused: special-use name",
+      "refused: special-use name",
+      "refused: host closed by the map",
+      "refused: host closed by the map",
       // No admitting path given to this proxy: a socket is never let through
       // without one (PR 10, ws/sockets.ts).
       "refused: socket not admitted (no admitting path)",
     ]);
+    expect(records.map((record) => record.cls)).toEqual([...Array(9).fill("denied"), "closed", "closed", "ws"]);
+    expect(records.every((record) => record.refused)).toBe(true);
+    // Nothing of them reached the page's SOCKS5.
+    expect(socks.connects).toEqual([]);
+  });
+
+  it("lets a host that is not Fansly's through the page's SOCKS5, journaled (owner decision №2)", async () => {
+    const { egress, port, socks, records, config } = await setUp();
+    const echo = await echoServer();
+    cleanups.push(echo.close);
+    for (const host of ["www.googletagmanager.com", "widget.intercom.io", "update.googleapis.com", "leaderboard.fansly.com"]) socks.routes.set(`${host}:443`, echo.port);
+    egress.setSocks(config);
+    egress.openExit();
+    for (const host of ["www.googletagmanager.com", "widget.intercom.io", "update.googleapis.com", "leaderboard.fansly.com"]) {
+      const { status, socket } = await proxyConnect(port, `${host}:443`);
+      cleanups.push(() => void socket.destroy());
+      expect(status, host).toBe(200);
+      socket.write("ping");
+      expect((await readSome(socket)).toString()).toBe("ping");
+    }
+    // The name goes to the SOCKS5 as it is; closing the exit cuts them like
+    // any tunnel, and each is one line of the journal.
+    expect(socks.connects).toEqual(["www.googletagmanager.com:443", "widget.intercom.io:443", "update.googleapis.com:443", "leaderboard.fansly.com:443"]);
+    expect(egress.closeExit("a test")).toBe(4);
+    await until(() => records.length === 4);
+    expect(records.map((record) => [record.host, record.cls, record.refused, record.up, record.down, record.result])).toEqual([
+      ["www.googletagmanager.com", "third_party", false, 4, 4, "cut: exit closed (a test)"],
+      ["widget.intercom.io", "third_party", false, 4, 4, "cut: exit closed (a test)"],
+      ["update.googleapis.com", "third_party", false, 4, 4, "cut: exit closed (a test)"],
+      ["leaderboard.fansly.com", "site", false, 4, 4, "cut: exit closed (a test)"],
+    ]);
+    // With the exit closed they are refused like everything else.
+    const { status, socket } = await proxyConnect(port, "www.googletagmanager.com:443");
+    socket.destroy();
+    expect(status).toBe(403);
   });
 
   it("refuses a new tunnel to the API host without a window of the gate", async () => {
@@ -271,16 +311,20 @@ describe("the exit IP", () => {
 });
 
 describe("hosts", () => {
-  it("knows the spec's hosts and nothing else", () => {
+  it("are the map's: Fansly's hosts by their roles, the closed ones, every other host through (tests/page-browser-operations.test.ts)", () => {
     expect(classifyFanslyHost("fansly.com")).toBe("site");
     expect(classifyFanslyHost("apiv3.fansly.com")).toBe("api");
     expect(classifyFanslyHost("APIV3.fansly.com")).toBe("api");
     expect(classifyFanslyHost("wsv3.fansly.com")).toBe("ws");
     expect(classifyFanslyHost("cdn3.fansly.com")).toBe("cdn");
     expect(classifyFanslyHost("cdn.fansly.com")).toBe("cdn");
-    for (const host of ["www.fansly.com", "chatws.fansly.com", "mediav2.fansly.com", "evil-apiv3.fansly.com", "apiv3.fansly.com.evil.net", "cdn3.fansly.com.evil.net", "update.googleapis.com"]) {
-      expect(classifyFanslyHost(host), host).toBe("denied");
-    }
+    for (const host of ["chatws.fansly.com", "mediav2.fansly.com"]) expect(classifyFanslyHost(host), host).toBe("closed");
+    for (const host of ["www.fansly.com", "evil-apiv3.fansly.com"]) expect(classifyFanslyHost(host), host).toBe("site");
+    for (const host of ["apiv3.fansly.com.evil.net", "cdn3.fansly.com.evil.net", "update.googleapis.com"]) expect(classifyFanslyHost(host), host).toBe("third_party");
+    // No host but the API's is ever taken for the API (its gate), nor but the
+    // socket's for the socket (its admission).
+    for (const host of ["evil-apiv3.fansly.com", "apiv3.fansly.com.evil.net", "x.apiv3.fansly.com", "apiv3.fansly.com.pb-hold.invalid"]) expect(classifyFanslyHost(host), host).not.toBe("api");
+    for (const host of ["x.wsv3.fansly.com", "wsv3.fansly.com.evil.net", "chatws.fansly.com"]) expect(classifyFanslyHost(host), host).not.toBe("ws");
   });
 
   it("refuses local and private destinations and invalid ports", () => {
