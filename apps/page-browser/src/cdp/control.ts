@@ -188,8 +188,13 @@ export class BrowserControl {
         const { totalBytes, perResponseBytes } = this.networkBuffer;
         await this.#cdp.send("Network.enable", { maxTotalBufferSize: totalBytes, maxResourceBufferSize: perResponseBytes }, session);
       }
-      if (page) {
-        await this.#cdp.send("Page.enable", {}, session);
+      if (page) await this.#cdp.send("Page.enable", {}, session);
+      if (page && target.type === "page") {
+        // The tab's position, which its frames inherit. Chrome keeps the
+        // override on the tab itself (its WebContents), whichever session
+        // set it, and a frame session's detach clears it: set through a
+        // frame, the tab would show the server's own position once that
+        // frame is gone (Chrome 155, emulation_handler.cc).
         const position = this.geolocation;
         if (position === null) throw new Error("no position of the page");
         await this.#cdp.send("Emulation.setGeolocationOverride", { latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracyM }, session);

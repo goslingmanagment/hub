@@ -229,7 +229,7 @@ describe("the control", () => {
     expect(chrome.sent("Runtime.runIfWaitingForDebugger").filter((command) => command.sessionId === "S1")).toEqual([]);
   });
 
-  it("sets the position in every new frame before it runs; a worker, which has no geolocation, only runs", async () => {
+  it("sets the position in every tab, never through a frame (whose detach would clear the tab's); a worker, which has no geolocation, only runs", async () => {
     const { chrome, operator } = await setUp();
     new BrowserModel(chrome);
     const { cdp } = operator();
@@ -242,7 +242,8 @@ describe("the control", () => {
     chrome.event("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { targetId: "T-worker", type: "worker", url: "https://fansly.com/worker.js" }, waitingForDebugger: true }, "S1");
     await until(() => chrome.sent("Runtime.runIfWaitingForDebugger").filter((command) => command.sessionId === "S-frame" || command.sessionId === "S-worker").length === 2);
     const of = (session: string) => chrome.commands.filter((command) => command.sessionId === session).map((command) => command.method);
-    expect(of("S-frame")).toEqual(["Network.enable", "Page.enable", "Emulation.setGeolocationOverride", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+    expect(of("S-frame")).toEqual(["Network.enable", "Page.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+    expect(of("S1")).toContain("Emulation.setGeolocationOverride");
     expect(of("S-worker")).toEqual(["Network.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
   });
 });
