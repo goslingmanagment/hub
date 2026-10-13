@@ -9,14 +9,24 @@
 // additions; an unknown type or value is a protocol error and the connection
 // closes. The refusal of `hello` keeps its shape in every version.
 //
-// One addition to spec §6.1 (PR 5): the stop reason `env_mismatch`
-// (state/steps.ts).
+// Additions to spec §6.1, to be made there before an engine reads them:
+// - PR 5: the stop reason `env_mismatch` (state/steps.ts).
+// - PR 11: `events.refused` — the operator's answer to a subscription or an
+//   ack it does not take (a foreign buffer id, an ack past what was sent, a
+//   buffer that cannot be opened), naming its own buffer id; the alarm kind
+//   `buffer` — 50 % and 80 % of a buffer cap, a full buffer or disk, a
+//   buffer that cannot be opened (spec §5); and the stop reason
+//   `buffer_unavailable` (state/steps.ts). While the buffer cannot be
+//   opened, helloResult's `bufferId` is the one it had when it was last open
+//   ("" if none is known), and the engine subscribes again once `state` no
+//   longer says `buffer_unavailable`.
 //
-// This operator (PR 4) takes `hello`, `ping`/`pong` and `command` (closeExit,
-// openExit, stopPage, restartBrowser, selfTest); the other kinds of command
-// are refused as not supported yet, and the other messages of the engine
-// come with the PRs that implement them (send/check — PR 9, siteAdmit — PR 7,
-// wsAdmit — PR 10, events, resultAck, recover — PR 11).
+// This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
+// openExit, stopPage, restartBrowser, selfTest — PR 4) and the buffer's
+// messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`. The
+// other kinds of command are refused as not supported yet, and the other
+// messages of the engine come with the PRs that implement them (send/check —
+// PR 9, siteAdmit — PR 7, wsAdmit — PR 10).
 
 import { isIP } from "node:net";
 
@@ -263,6 +273,10 @@ export interface EventsSubscribe extends FromEngine {
   bufferId: BufferId;
   afterSeq: number;
 }
+/** ≤ 500 events or 1 MB, in order of `seq` (buffer/stream.ts). An event is
+ *  JSON, stored as it is sent (buffer/schema.ts, row format 1); the body a
+ *  `site.response` names (BodyRef) will come as binary frames before the
+ *  batch — not yet: the PRs that capture bodies add them. */
 export interface Events {
   type: "events";
   bufferId: BufferId;
@@ -272,6 +286,22 @@ export interface Ack extends FromEngine {
   type: "ack";
   bufferId: BufferId;
   uptoSeq: number;
+}
+/** An addition to spec §6.1 (PR 11): a subscription or an ack not taken.
+ *  `foreign_buffer` — not this buffer's id (the volume was made anew: the
+ *  engine starts over with `bufferId`); `ahead` — a subscription past the
+ *  last number this buffer gave; `not_subscribed` — an ack before the
+ *  subscription on this connection; `beyond_sent` — an ack past what this
+ *  subscription sent; `unavailable` — the buffer cannot be opened (state's
+ *  stop reason `buffer_unavailable`). Nothing of it is acknowledged. */
+export interface EventsRefused {
+  type: "events.refused";
+  of: "events.subscribe" | "ack";
+  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent" | "unavailable";
+  /** This operator's buffer. */
+  bufferId: BufferId;
+  givenBufferId: BufferId;
+  givenSeq: number;
 }
 export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
   | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
@@ -309,7 +339,8 @@ export interface CommandResult {
   ok: boolean;
   detail: string | null;
 }
-export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send";
+/** `buffer` is an addition to spec §6.1 (PR 11). */
+export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer";
 export interface Alarm {
   type: "alarm";
   atWall: WallMs;
@@ -345,16 +376,23 @@ export type OperatorToEngine =
   | WsAdmit
   | WsDone
   | Events
+  | EventsRefused
   | CommandResult
   | Alarm;
 
 // ── what this operator reads from the engine ──
 
+/** The buffer's messages (PR 11). */
+export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
+
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage;
 
 /** Types of the protocol that later PRs implement. */
-const LATER_TYPES = new Set(["send", "checkResult", "resultAck", "recover", "siteAdmitResult", "wsAdmitResult", "events.subscribe", "ack"]);
+const LATER_TYPES = new Set(["send", "checkResult", "siteAdmitResult", "wsAdmitResult"]);
+
+/** A recover names at most this many attempts. */
+const MAX_RECOVER = 10_000;
 
 export type Parsed = { ok: true; message: HandledMessage } | { ok: false; error: string };
 
@@ -450,6 +488,22 @@ function parseCommand(m: Record<string, unknown>): Command {
   return { ...base, command: { kind: kind as CommandKind } };
 }
 
+function parseBufferMessage(type: BufferMessage["type"], m: Record<string, unknown>): BufferMessage {
+  const ownerGeneration = int(m.ownerGeneration, "ownerGeneration");
+  switch (type) {
+    case "events.subscribe":
+      return { type, ownerGeneration, bufferId: str(m.bufferId, "bufferId", 64), afterSeq: int(m.afterSeq, "afterSeq") };
+    case "ack":
+      return { type, ownerGeneration, bufferId: str(m.bufferId, "bufferId", 64), uptoSeq: int(m.uptoSeq, "uptoSeq") };
+    case "resultAck":
+      return { type, ownerGeneration, attemptId: int(m.attemptId, "attemptId") };
+    case "recover": {
+      if (Array.isArray(m.attemptIds) && m.attemptIds.length > MAX_RECOVER) throw new Invalid(`attemptIds has more than ${MAX_RECOVER} items`);
+      return { type, ownerGeneration, attemptIds: ints(m.attemptIds, "attemptIds") };
+    }
+  }
+}
+
 /** An engine message as this operator reads it. Anything else — malformed,
  *  unknown, or of a later PR — is an error: the connection closes (spec
  *  §6.3, rule 3). */
@@ -475,6 +529,11 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: { type, n: int(m.n, "n"), ownerGeneration: int(m.ownerGeneration, "ownerGeneration") } };
       case "command":
         return { ok: true, message: parseCommand(m) };
+      case "events.subscribe":
+      case "ack":
+      case "resultAck":
+      case "recover":
+        return { ok: true, message: parseBufferMessage(type, m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }

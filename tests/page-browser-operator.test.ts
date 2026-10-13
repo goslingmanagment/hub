@@ -1,10 +1,13 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Operator } from "../apps/page-browser/src/operator/operator.ts";
+import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
+import { MAX_WAITING, REPLAY_HIGH_WATER } from "../apps/page-browser/src/buffer/replay.ts";
+import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
+import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import {
@@ -16,12 +19,17 @@ import {
   FakeSocks,
   hello,
   HolderUnderS6,
+  hubResult,
+  proxyConnect,
+  quiet,
+  RawEngine,
   RPC_TOKEN,
   SOCKS_PASSWORD,
   SOCKS_USER,
   tempDir,
   until,
   writeNetSelftest,
+  wsFrame,
 } from "./helpers/page-browser-fakes.ts";
 
 // The operator core (Project Browser plan §4.1, §4.9, §4.13; stage 3, PR 4)
@@ -41,6 +49,8 @@ afterEach(async () => {
 });
 
 interface SetUp {
+  /** The test's directory: the heartbeat is `alive` in it. */
+  dir: string;
   operator: Operator;
   engine: FakeEngine;
   chrome: FakeChrome;
@@ -57,7 +67,17 @@ interface SetUp {
   rpcPort: () => number;
 }
 
-async function setUp(options: { extension?: "required"; exitIp?: () => string | Promise<string>; holderMaxBytes?: number } = {}): Promise<SetUp> {
+async function setUp(
+  options: {
+    extension?: "required";
+    exitIp?: () => string | Promise<string>;
+    holderMaxBytes?: number;
+    params?: Record<string, unknown>;
+    buffer?: OperatorDeps["buffer"];
+    /** Before the operator: what its buffer volume holds. */
+    prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
+  } = {},
+): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -98,12 +118,14 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
         chromeEnvPath: chromeEnv,
         logDir,
         stateDir: join(temp.dir, "state"),
+        bufferDir: join(temp.dir, "buffer"),
         heartbeatPath: join(temp.dir, "alive"),
         operatorVersion: "test",
       },
       chrome: control,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
+      ...(options.buffer ? { buffer: options.buffer } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
     });
     const ports = await operator.start();
@@ -112,14 +134,15 @@ async function setUp(options: { extension?: "required"; exitIp?: () => string | 
     rpcPort = ports.rpcPort;
     return operator;
   };
+  options.prepare?.({ bufferDir: join(temp.dir, "buffer"), stateDir: join(temp.dir, "state") });
   const operator = await newOperator();
   await until(() => operator.cdp.linked, 3000, "the holder link");
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
-  return { operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
+  return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
@@ -629,4 +652,297 @@ describe("secrets", () => {
     expect(everything).toContain("/api/v1/account/me");
     expect(everything).toContain("refused: exit closed");
   });
+});
+
+describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
+  const bufferHello = (s: SetUp, overrides: Record<string, unknown> = {}, params?: Record<string, unknown>) =>
+    hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD }, ...overrides }, params);
+  const eventsOf = (engine: FakeEngine) => engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
+  const seqs = (engine: FakeEngine) => eventsOf(engine).map((event) => event.seq as number);
+
+  async function reconnect(s: SetUp, previous: FakeEngine = s.engine): Promise<FakeEngine> {
+    previous.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    const again = new FakeEngine();
+    await again.connect(s.rpcPort());
+    cleanups.push(() => again.close());
+    again.send(bufferHello(s));
+    await again.waitFor("helloResult");
+    return again;
+  }
+
+  async function durable(appended: ReturnType<Operator["buffer"]["append"]>): Promise<void> {
+    if (!appended.ok) throw new Error(`refused: ${appended.reason}`);
+    expect(await appended.durable).toMatchObject({ ok: true });
+  }
+
+  it("streams what the producers wrote, in order, to the engine that subscribed; after a reconnect it resumes from the last ack; a foreign buffer's ack is refused", async () => {
+    const s = await setUp();
+    const bufferId = s.engine.last("helloResult")!.bufferId as string;
+    expect(bufferId).toBe(s.operator.buffer.id);
+    for (let n = 1; n < 30; n++) s.operator.buffer.append(wsFrame(n));
+    await durable(s.operator.buffer.append(wsFrame(30)));
+    // state.buffer is real now.
+    const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes > 0);
+    expect(state.buffer).toEqual({ bytes: s.operator.buffer.stats().bytes, oldestAgeMs: expect.any(Number) });
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
+    await until(() => seqs(s.engine).length === 30, 5000, "30 events");
+    expect(seqs(s.engine)).toEqual(Array.from({ length: 30 }, (_, n) => n + 1));
+    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "ws.in", connectionId: "conn-1", atWall: expect.any(Number), atMono: expect.any(Number) });
+    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId, uptoSeq: 20 });
+    await until(() => s.operator.buffer.stats().events === 10, 3000, "the acknowledged events to go");
+    // Live: a new event goes out once it is durable.
+    s.operator.buffer.append(wsFrame(31));
+    await until(() => seqs(s.engine).includes(31), 3000, "event 31");
+    // The engine goes and comes back (a Hub deploy): from its last ack.
+    const again = await reconnect(s);
+    again.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 20 });
+    await until(() => seqs(again).length === 11, 5000, "the rest");
+    expect(seqs(again)).toEqual(Array.from({ length: 11 }, (_, n) => n + 21));
+    // The late ack of a buffer from before the volume was made anew.
+    again.send({ type: "ack", ownerGeneration: 1, bufferId: "11111111-1111-4111-8111-111111111111", uptoSeq: 31 });
+    expect(await again.waitFor("events.refused")).toEqual({ type: "events.refused", of: "ack", reason: "foreign_buffer", bufferId, givenBufferId: "11111111-1111-4111-8111-111111111111", givenSeq: 31 });
+    await s.operator.buffer.flush();
+    expect(s.operator.buffer.stats().events).toBe(11);
+    // A restarted operator keeps the buffer, its id and its numbers.
+    await s.operator.stop();
+    const next = await s.newOperator();
+    expect(next.buffer.id).toBe(bufferId);
+    expect(next.buffer.lastSeq).toBe(31);
+  });
+
+  it("sends an attempt's outcome once durable, again on every new connection until its resultAck; recover resends what it has", async () => {
+    const s = await setUp();
+    await durable(s.operator.buffer.putOutcome(hubResult(501)));
+    expect(await s.engine.waitFor("result")).toEqual(hubResult(501));
+    const again = await reconnect(s);
+    await again.waitFor("result", (message) => message.attemptId === 501);
+    again.send({ type: "recover", ownerGeneration: 1, attemptIds: [501, 502, 501] });
+    const recovered = await again.waitFor("recoverResult");
+    expect(recovered.attempts).toEqual([
+      { attemptId: 501, state: "outcome_resent" },
+      { attemptId: 502, state: "unknown" },
+    ]);
+    // The outcome came again before the answer that says so.
+    const order = again.messages.map((message) => message.type);
+    expect(order.lastIndexOf("result")).toBeLessThan(order.indexOf("recoverResult"));
+    expect(again.of("result")).toHaveLength(2);
+    again.send({ type: "resultAck", ownerGeneration: 1, attemptId: 501 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    const third = await reconnect(s, again);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(third.of("result")).toEqual([]);
+  });
+
+  it("full: writes refused, the exit closed, the page stopped with buffer_full and alarms; once the engine takes the backlog, the gap and the page starts again", async () => {
+    const s = await setUp({ params: { bufferCap: { bytes: 20_000, ageMs: 3_600_000, alarmPercents: [50, 80] }, restartBackoffMs: [60_000] }, buffer: { checkEveryMs: 50 } });
+    await started(s);
+    let refused: string | null = null;
+    for (let n = 1; n <= 200 && refused === null; n++) {
+      const appended = s.operator.buffer.append(wsFrame(n, 900));
+      if (appended.ok) await appended.durable;
+      else refused = appended.reason;
+    }
+    expect(refused).toBe("buffer_full");
+    await until(() => s.operator.page.snapshot.stopReason === "buffer_full", 5000, "the stop");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.operator.admissionsOpen()).toBe(false);
+    expect(s.operator.page.halted).toBe(false);
+    await until(() => s.engine.of("alarm").filter((alarm) => alarm.kind === "buffer").length >= 3, 3000, "the alarms");
+    expect(s.engine.of("alarm").map((alarm) => [alarm.kind, (alarm.detail as Record<string, unknown>).percent, (alarm.detail as Record<string, unknown>).full ?? false])).toEqual([
+      ["buffer", 50, false],
+      ["buffer", 80, false],
+      ["buffer", 100, true],
+    ]);
+    // No start while it is full: the engine's restartBrowser fails at the gate.
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+    expect(s.operator.page.snapshot.stopReason).toBe("buffer_full");
+    // The engine takes everything: room, the gap, and the page goes again.
+    const last = s.operator.buffer.lastSeq;
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    await until(() => seqs(s.engine).includes(last), 5000, "the backlog");
+    s.engine.send({ type: "ack", ownerGeneration: 1, bufferId: s.operator.buffer.id, uptoSeq: last });
+    await until(() => eventsOf(s.engine).some((event) => event.kind === "gap"), 5000, "the gap");
+    expect(eventsOf(s.engine).find((event) => event.kind === "gap")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start again");
+    expect(s.operator.admissionsOpen()).toBe(true);
+  });
+
+  it("a full disk keeps the page from starting (disk_full); room again, and it starts", async () => {
+    let free = 500;
+    const s = await setUp({ params: { restartBackoffMs: [60_000] }, buffer: { diskFree: () => free, minFreeBytes: 1000, checkEveryMs: 50 } });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "disk_full", 5000, "the start to fail");
+    expect(s.control.calls).not.toContain("start");
+    expect(s.engine.of("alarm")).toContainEqual(expect.objectContaining({ kind: "buffer", detail: expect.objectContaining({ full: true, reason: "disk_full" }) }));
+    free = 10_000;
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start");
+    expect(s.operator.buffer.lastSeq).toBe(1);
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    await until(() => eventsOf(s.engine).length === 1, 3000, "the gap");
+    expect(eventsOf(s.engine)[0]).toMatchObject({ kind: "gap", seq: 1, fromSeq: null, reason: "disk_full" });
+  });
+});
+
+describe("the buffer under stress (Astra's review of PR 11)", () => {
+  it("replays a large backlog of outcomes a page at a time, waiting for a stuck engine's socket; repeated recovers do not pile up copies", async () => {
+    const s = await setUp();
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the engine to go");
+    // 3000 outcomes of ~6 KB: ~18 MB waiting for their resultAck.
+    const count = 3000;
+    const big = (attemptId: number) => hubResult(attemptId, 200, 6000);
+    for (let id = 1; id < count; id++) s.operator.buffer.putOutcome(big(id));
+    const last = s.operator.buffer.putOutcome(big(count));
+    if (!last.ok) throw new Error("refused");
+    await last.durable;
+    const engine = new RawEngine();
+    cleanups.push(() => engine.close());
+    await engine.connect(s.rpcPort());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    // The engine stops reading (stuck, or slow on its database).
+    engine.pause();
+    const peak = async (ms: number) => {
+      let max = 0;
+      for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 10))) max = Math.max(max, s.operator.rpc.backlog());
+      return max;
+    };
+    // What the operator holds for it stays small: no more than the mark
+    // and one outcome, not the backlog.
+    expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    // The engine asks again and again: the asks are merged, not stacked.
+    const ids = Array.from({ length: count }, (_, n) => n + 1);
+    for (let n = 0; n < 100; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: ids });
+    expect(await peak(400)).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    expect(s.operator.replay.queued).toBeLessThanOrEqual(1);
+    // It reads again: every outcome once from the replay, once for the
+    // merged recover, then one answer that names them all.
+    engine.resume();
+    const answer = await engine.waitFor("recoverResult", () => true, 30_000);
+    expect((answer.attempts as Array<{ state: string }>).every((attempt) => attempt.state === "outcome_resent")).toBe(true);
+    expect((answer.attempts as unknown[]).length).toBe(count);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(engine.of("recoverResult")).toHaveLength(1);
+    expect(engine.of("result")).toHaveLength(2 * count);
+    expect(new Set(engine.of("result").map((result) => result.attemptId)).size).toBe(count);
+  }, 60_000);
+
+  it("a corrupt buffer does not take the operator down: the RPC, the heartbeat and the refusing proxy run, the page stands with buffer_unavailable, the engine is alarmed, Chrome never starts, the file stays as it is", async () => {
+    const garbage = Buffer.from("this is not a database, but the owner's to look at. ".repeat(100));
+    let file = "";
+    const s = await setUp({
+      buffer: { openRetryMs: [20] },
+      prepare: ({ bufferDir }) => {
+        mkdirSync(bufferDir, { recursive: true });
+        file = join(bufferDir, DB_FILE);
+        writeFileSync(file, garbage);
+      },
+    });
+    expect(s.engine.last("helloResult")).toMatchObject({ ok: true, state: { stopReason: "buffer_unavailable", exitOpen: false } });
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "buffer");
+    expect(alarm.detail).toMatchObject({ unavailable: true, cause: "corrupt", recoverable: false });
+    // The heartbeat goes on.
+    const beat = statSync(join(s.dir, "alive")).mtimeMs;
+    await until(() => statSync(join(s.dir, "alive")).mtimeMs > beat, 3000, "a heartbeat");
+    // The proxy is there, and refuses.
+    const { status, socket } = await proxyConnect(s.model.proxyPort, "apiv3.fansly.com:443");
+    socket.destroy();
+    expect(status).toBe(403);
+    // The engine's start goes no further than the gate: no Chrome.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "buffer_unavailable" && !s.operator.page.halted, 5000, "the start to fail at the gate");
+    expect(s.control.calls).not.toContain("start");
+    expect(s.operator.admissionsOpen()).toBe(false);
+    // A subscription is refused, saying why.
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    expect(await s.engine.waitFor("events.refused")).toMatchObject({ reason: "unavailable" });
+    // Not opened again, and the file is exactly as it was.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.buffer.unavailable?.attempts).toBe(1);
+    expect(readFileSync(file).equals(garbage)).toBe(true);
+  });
+
+  it("a locked buffer is opened again once the lock goes: the page then stands as usual and starts on the engine's word", async () => {
+    let holder: EventBuffer | null = null;
+    const s = await setUp({
+      buffer: { openRetryMs: [50] },
+      prepare: ({ bufferDir, stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        holder = new EventBuffer({ dir: bufferDir, idFile: join(stateDir, "buffer-id"), minFreeBytes: 0, log: quiet });
+      },
+    });
+    const held = holder as unknown as EventBuffer;
+    // The id the buffer had, from its copy.
+    expect(s.engine.last("helloResult")).toMatchObject({ bufferId: held.id, state: { stopReason: "buffer_unavailable" } });
+    expect((await s.engine.waitFor("alarm", (message) => message.kind === "buffer")).detail).toMatchObject({ unavailable: true, cause: "locked", recoverable: true });
+    await held.close();
+    await until(() => s.operator.buffer.unavailable === null, 5000, "the open");
+    expect(s.operator.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
+    await s.engine.waitFor("state", (state) => state.stopReason === null);
+    await started(s);
+  });
+
+  /** An engine linked with outcomes waiting for it, that stops reading. */
+  async function stuckEngine(s: SetUp, count: number): Promise<RawEngine> {
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the engine to go");
+    for (let id = 1; id < count; id++) s.operator.buffer.putOutcome(hubResult(id, 200, 6000));
+    const last = s.operator.buffer.putOutcome(hubResult(count, 200, 6000));
+    if (!last.ok) throw new Error("refused");
+    await last.durable;
+    const engine = new RawEngine();
+    cleanups.push(() => engine.close());
+    await engine.connect(s.rpcPort());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    engine.pause();
+    return engine;
+  }
+
+  it("an engine that asks about more attempts than are kept waiting, without reading the answers, is cut off: nothing goes around the socket's wait", async () => {
+    const s = await setUp();
+    const engine = await stuckEngine(s, 3000);
+    let peak = 0;
+    const sample = setInterval(() => (peak = Math.max(peak, s.operator.rpc.backlog())), 5);
+    cleanups.push(() => clearInterval(sample));
+    // Five asks of 10 000 attempts each, then the same 10 000 again and
+    // again: 100 asks, past what waits for an answer.
+    const asks = Array.from({ length: 6 }, (_, ask) => Array.from({ length: 10_000 }, (_, n) => 1_000_000 + ask * 10_000 + n));
+    for (let n = 0; n < 100; n++) engine.send({ type: "recover", ownerGeneration: 1, attemptIds: asks[Math.min(n, 5)]! });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    clearInterval(sample);
+    expect(peak).toBeLessThanOrEqual(REPLAY_HIGH_WATER + 64 * 1024);
+    await until(() => !s.operator.rpc.linkUp, 5000, "the connection to be closed");
+    expect(s.lines.some((line) => line.includes('"e":"protocol.error"') && line.includes("recover"))).toBe(true);
+    expect(s.lines.some((line) => line.includes('"e":"recover.refused"') && line.includes(`"cap":${MAX_WAITING}`))).toBe(true);
+    expect(s.operator.replay.queued).toBe(0);
+  }, 30_000);
+
+  it("a superseded engine that stopped reading does not hold up its successor: the new one gets every outcome and its recover's answer", async () => {
+    const s = await setUp();
+    await stuckEngine(s, 3000);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The replay waits on the stuck socket. A new owner connects.
+    const next = new FakeEngine();
+    next.generation = 2;
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("helloResult", (message) => message.ok === true);
+    next.send({ type: "recover", ownerGeneration: 2, attemptIds: [1, 2, 3000, 4000] });
+    // Well before the old socket's grace runs out (5 s).
+    await until(() => new Set(next.of("result").map((result) => result.attemptId)).size === 3000, 3000, "every outcome on the new connection");
+    expect(await next.waitFor("recoverResult", () => true, 3000)).toMatchObject({
+      attempts: [
+        { attemptId: 1, state: "outcome_resent" },
+        { attemptId: 2, state: "outcome_resent" },
+        { attemptId: 3000, state: "outcome_resent" },
+        { attemptId: 4000, state: "unknown" },
+      ],
+    });
+  }, 30_000);
 });

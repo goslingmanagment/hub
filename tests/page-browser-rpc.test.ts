@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { GenerationStore } from "../apps/page-browser/src/rpc/generation.ts";
 import type { CommandOutcome } from "../apps/page-browser/src/rpc/ledger.ts";
-import { parseEngineMessage, type Command, type Hello, type State } from "../apps/page-browser/src/rpc/protocol.ts";
+import { parseEngineMessage, type BufferMessage, type Command, type Hello, type State } from "../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer, tokenMatches } from "../apps/page-browser/src/rpc/server.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { FakeEngine, hello, quiet, RPC_TOKEN, tempDir, until } from "./helpers/page-browser-fakes.ts";
@@ -12,7 +12,8 @@ import { FakeEngine, hello, quiet, RPC_TOKEN, tempDir, until } from "./helpers/p
 // The operator's RPC for the engine (Project Browser plan §4.13; spec §6):
 // hello with the page's token first (constant time), the owner generation (a
 // lower one refused, a higher one supersedes and gets `quiesced`), ping/pong
-// with link loss after 5 s, and commands executed once per id.
+// with link loss after 5 s, commands executed once per id, and the buffer's
+// messages (PR 11) handed to the operator.
 
 const STATE: State = {
   type: "state",
@@ -40,6 +41,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
   const links: Array<[boolean, string]> = [];
   const executed: Command[] = [];
   const quiesced: number[] = [];
+  const buffered: BufferMessage[] = [];
   const temp = tempDir();
   cleanups.push(temp.remove);
   const server = new RpcServer({
@@ -62,6 +64,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
         executed.push(command);
         return options.execute ? options.execute(command) : { ok: true, detail: command.command.kind };
       },
+      onBuffer: (message) => buffered.push(message),
       onLink: (up, reason) => links.push([up, reason]),
     },
   });
@@ -76,7 +79,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
     cleanups.push(() => fake.close());
     return fake;
   };
-  return { server, port, hellos, links, executed, quiesced, engine, storeDir: temp.dir };
+  return { server, port, hellos, links, executed, quiesced, buffered, engine, storeDir: temp.dir };
 }
 
 const command = (generation: number, commandId: string, kind: string, notAfterMono = monoMs() + 10_000) => ({ type: "command", ownerGeneration: generation, commandId, notAfterMono, command: { kind } });
@@ -287,6 +290,51 @@ describe("commands", () => {
   });
 });
 
+describe("the buffer's messages (PR 11)", () => {
+  it("go to the operator, of this connection's generation only, and count as the engine heard", async () => {
+    const { engine, buffered } = await setUp();
+    const fake = await engine(2);
+    fake.send(hello({ ownerGeneration: 2 }));
+    await fake.waitFor("helloResult");
+    const bufferId = "00000000-0000-4000-8000-000000000000";
+    fake.send({ type: "events.subscribe", ownerGeneration: 2, bufferId, afterSeq: 0 });
+    fake.send({ type: "ack", ownerGeneration: 2, bufferId, uptoSeq: 0 });
+    fake.send({ type: "resultAck", ownerGeneration: 2, attemptId: 5 });
+    fake.send({ type: "recover", ownerGeneration: 2, attemptIds: [5, 6] });
+    // An older owner's ack is dropped: it acknowledges nothing.
+    fake.send({ type: "ack", ownerGeneration: 1, bufferId, uptoSeq: 9 });
+    fake.send({ type: "ping", n: 1, ownerGeneration: 2 });
+    await fake.waitFor("pong");
+    expect(buffered).toEqual([
+      { type: "events.subscribe", ownerGeneration: 2, bufferId, afterSeq: 0 },
+      { type: "ack", ownerGeneration: 2, bufferId, uptoSeq: 0 },
+      { type: "resultAck", ownerGeneration: 2, attemptId: 5 },
+      { type: "recover", ownerGeneration: 2, attemptIds: [5, 6] },
+    ]);
+    expect(fake.closed).toBeNull();
+  });
+
+  it("malformed close the connection as a protocol error", async () => {
+    const { engine, buffered } = await setUp();
+    const fake = await engine();
+    fake.send(hello());
+    await fake.waitFor("helloResult");
+    fake.send({ type: "ack", ownerGeneration: 1, bufferId: "b", uptoSeq: -1 });
+    await until(() => fake.closed !== null);
+    expect(buffered).toEqual([]);
+  });
+
+  it("an event batch goes out as the buffer stored it, to the connected engine only", async () => {
+    const { engine, server } = await setUp();
+    expect(server.sendRaw('{"type":"events","bufferId":"b","events":[]}')).toBe(false);
+    const fake = await engine();
+    fake.send(hello());
+    await fake.waitFor("helloResult");
+    expect(server.sendRaw('{"type":"events","bufferId":"b","events":[{"seq":1,"atMono":1.5,"atWall":2,"kind":"ws.in","connectionId":"c","frame":"x"}]}')).toBe(true);
+    expect(await fake.waitFor("events")).toEqual({ type: "events", bufferId: "b", events: [{ seq: 1, atMono: 1.5, atWall: 2, kind: "ws.in", connectionId: "c", frame: "x" }] });
+  });
+});
+
 describe("the protocol's messages", () => {
   it("parses the commands this operator knows, and only them", () => {
     expect(parseEngineMessage(JSON.stringify(command(1, "c", "stopPage")))).toMatchObject({ ok: true, message: { command: { kind: "stopPage" } } });
@@ -295,5 +343,16 @@ describe("the protocol's messages", () => {
     expect(parseEngineMessage(JSON.stringify(command(1, "", "stopPage")))).toMatchObject({ ok: false });
     expect(parseEngineMessage("{")).toEqual({ ok: false, error: "not JSON" });
     expect(parseEngineMessage(JSON.stringify({ type: "wsAdmitResult" }))).toEqual({ ok: false, error: "wsAdmitResult is not supported by this operator yet" });
+  });
+
+  it("parses the buffer's messages strictly", () => {
+    expect(parseEngineMessage(JSON.stringify({ type: "events.subscribe", ownerGeneration: 1, bufferId: "b", afterSeq: 12 }))).toEqual({ ok: true, message: { type: "events.subscribe", ownerGeneration: 1, bufferId: "b", afterSeq: 12 } });
+    expect(parseEngineMessage(JSON.stringify({ type: "ack", ownerGeneration: 1, bufferId: "b", uptoSeq: 1.5 }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "ack", ownerGeneration: 1, uptoSeq: 1 }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "events.subscribe", ownerGeneration: 1, bufferId: "x".repeat(65), afterSeq: 0 }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "resultAck", ownerGeneration: 1, attemptId: "7" }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "recover", ownerGeneration: 1, attemptIds: [1, 2] }))).toMatchObject({ ok: true });
+    expect(parseEngineMessage(JSON.stringify({ type: "recover", ownerGeneration: 1, attemptIds: Array.from({ length: 10_001 }, (_, n) => n) }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "recover", attemptIds: [] }))).toMatchObject({ ok: false });
   });
 });

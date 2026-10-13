@@ -17,10 +17,13 @@ export const STEPS = [
 ] as const;
 export type Step = (typeof STEPS)[number];
 
-/** Spec §6.1's reasons, and one more (PR 5): `env_mismatch` — the page's
- *  environment could not be handed to Chrome, or the browser does not show
- *  it (plan §4.1, step 2; spec §10). Spec §6.1 has no reason for that step;
- *  it is to be added there before an engine reads these. */
+/** Spec §6.1's reasons, and two more, to be added there before an engine
+ *  reads these:
+ *  - `env_mismatch` (PR 5): the page's environment could not be handed to
+ *    Chrome, or the browser does not show it (plan §4.1, step 2; spec §10);
+ *  - `buffer_unavailable` (PR 11): the buffer could not be opened — locked,
+ *    a failing disk, a corrupt file, a format newer than the operator. The
+ *    page stands with the exit closed until it opens (spec §5). */
 export const STOP_REASONS = [
   "selftest_failed",
   "env_mismatch",
@@ -31,6 +34,7 @@ export const STOP_REASONS = [
   "holder_overflow",
   "buffer_full",
   "disk_full",
+  "buffer_unavailable",
   "chrome_crashed",
   "unknown_ws_message",
   "header_mismatch",
