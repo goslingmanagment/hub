@@ -99,6 +99,16 @@ const SANCTIONED_DELETER_FILES = [
   // forget the API's open screens of a page's browser once closed, and the
   // closings of a login once written. No SQL deletion.
   "apps/runtime/src/modules/page-browser/index.ts",
+  // Project Browser (stage 3 PR 16): Map/Set.delete forget the onboarding
+  // links of profiles no page has and a route's in-memory hold. No SQL
+  // deletion: every send of a link is journaled and kept.
+  "apps/runtime/src/sync/fansly/browser-onboarding.ts",
+  // Project Browser (stage 3 PR 16): `remove-profile` — the owner's removal of
+  // a page browser profile no page has (its row of configuration: container,
+  // sealed secrets, the proxy given for the page to be). Never scheduled, never
+  // a bound profile, no captured fact: its sends stay journaled, its site
+  // answers in observations.
+  "packages/db/src/repositories/page-browser-onboarding.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

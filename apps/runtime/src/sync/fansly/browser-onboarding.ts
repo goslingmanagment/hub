@@ -27,7 +27,7 @@ import {
   type OnboardingProfile,
 } from "@agency_hub_core/db";
 import { buildFanslyWireUrl, FANSLY_WIRE_MAX_BODY_BYTES, fanslyWireSpec, readFanslyWireResponse, type FanslyWireOutcome } from "@agency_hub_core/fansly";
-import { redactSensitiveText, type AppConfig } from "@agency_hub_core/shared";
+import { FANSLY_PAUSE_MIN_MS, redactSensitiveText, type AppConfig } from "@agency_hub_core/shared";
 
 import {
   onboardingLinkProblem,
@@ -47,7 +47,7 @@ import {
   type PageBrowserRpcTiming,
 } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
-import { FLOOR_LOOKBACK_MS, Pacer, REQUEST_TIMEOUT_MS, TAKEOVER_FACTOR, type Admission } from "../engine/pacer.ts";
+import { FLOOR_LOOKBACK_MS, Pacer, REQUEST_TIMEOUT_MS, TAKEOVER_FACTOR, type Admission, type PacerDeps } from "../engine/pacer.ts";
 import { cryptoRng, noopMetrics, systemClock, type Clock, type Metrics, type PauseSource, type Rng } from "../engine/ports.ts";
 import {
   classifySiteRequest,
@@ -148,13 +148,14 @@ export const BROWSER_ONBOARDING_TIMING: Readonly<BrowserOnboardingTiming> = Obje
 });
 
 /** TESTS ONLY: the operator's address and hello, scaled timings, a pacer
- *  floor below the owner's minimum. Never passed by `main.ts`. */
+ *  with a test setting floor (as the host's `pacerFactory`). Never passed by
+ *  `main.ts`. */
 export interface BrowserOnboardingOverrides {
   url?: (profileId: string) => string;
   settings?: (profileId: string) => Promise<PageBrowserLinkSettings>;
   rpcTiming?: Partial<PageBrowserRpcTiming>;
   timing?: Partial<BrowserOnboardingTiming>;
-  minSettingMs?: number;
+  pacerFactory?: (deps: PacerDeps) => Pacer;
 }
 
 export interface BrowserOnboardingOptions {
@@ -367,13 +368,13 @@ export class OnboardingLink {
       ...(overrides.rpcTiming === undefined ? {} : { timing: overrides.rpcTiming }),
     });
     this.site = new BrowserSiteAdmission({ client: this.client, bridge: this.#bridge, monoNow: () => this.#clock.monoNow(), metrics: this.#metrics, loginOnly: true });
-    this.pacer = new Pacer({
+    const pacerDeps: PacerDeps = {
       clock: this.#clock,
       rng: options.rng ?? cryptoRng,
       pause: options.pause,
       ownership: { alive: () => !this.#lost && this.#stopped === null && this.#holds() },
-      ...(overrides.minSettingMs === undefined ? {} : { minSettingMs: overrides.minSettingMs }),
-    });
+    };
+    this.pacer = overrides.pacerFactory?.(pacerDeps) ?? new Pacer(pacerDeps);
   }
 
   /** Its generation no longer holds the profile (bound, removed, taken
@@ -387,7 +388,8 @@ export class OnboardingLink {
     // The earlier links' sends that never completed may have gone: closed
     // as unknown, and counted for the pause.
     await closeUnfinishedBrowserProfileSends(db, this.profileId);
-    const settingMs = Math.max(this.#o.overrides?.minSettingMs ?? 0, await this.#o.pause.readSettingMs());
+    // S as the host reads it for a takeover floor (never below the owner's minimum).
+    const settingMs = Math.max(await this.#o.pause.readSettingMs(), FANSLY_PAUSE_MIN_MS);
     const last = await lastBrowserProfileSendAt(db, { profileId: this.profileId, lookbackMs: FLOOR_LOOKBACK_MS });
     const floorDelayMs = last === null ? 0 : last.getTime() + Math.ceil(TAKEOVER_FACTOR * settingMs) - Date.now();
     this.pacer.initTakeover(Math.max(0, floorDelayMs));

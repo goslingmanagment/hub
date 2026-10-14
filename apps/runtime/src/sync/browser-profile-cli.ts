@@ -136,8 +136,8 @@ export async function addBrowserProfile(
   const label = "existing" in input.page ? input.page.existing : input.page.new;
   const found = await findPageByLabel(ctx.db, label);
   if ("existing" in input.page) {
+    // A page of another platform: the registration refuses it (a Fansly page only).
     if (found === null) throw new SyncOwnerLeverError(`no active page ${label}: a new page's profile is added with --new-page`);
-    if (found.page.platform !== "fansly") throw new SyncOwnerLeverError(`${label} is not a Fansly page`);
   } else if (found !== null) {
     throw new SyncOwnerLeverError(`a page ${label} exists: its profile is added with --page ${label} (it moves to its browser)`);
   }

@@ -19,6 +19,7 @@ import { encryptJson } from "@agency_hub_core/shared";
 
 import type { SiteAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
+import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { BrowserOnboardingTask } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A } from "./helpers/page-browser-operator.ts";
@@ -118,7 +119,7 @@ function startTask(r: Rig, holder: FanslySendHolderIdentity = HOLDER): BrowserOn
       settings: async () => linkSettings({ pageId: 0, expectedAccountId: "" }),
       rpcTiming: RPC_TIMING,
       timing: TIMING,
-      minSettingMs: S,
+      pacerFactory: (deps) => new Pacer({ ...deps, minSettingMs: S }),
     },
   });
   cleanups.push(() => task.stop());
