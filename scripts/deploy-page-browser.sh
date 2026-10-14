@@ -71,7 +71,9 @@ Usage:
   remove-profile
             A profile no page has, given up: Hub forgets it first (refused
             for a profile bound to a page), then its container, its files and
-            its two volumes are deleted on the server.
+            its two volumes are deleted on the server — only while the page's
+            files there still name the profile Hub forgot (checked under the
+            server's lock).
   rollback  Back to the page's previous image.
   down      Removes the container; the profile's volumes stay.
   to-node   Takes the page off its browser for good when its operator cannot
@@ -343,7 +345,7 @@ add_profile() {
     if forgot="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile" --absent-ok)")" \
       && [[ "$forgot" =~ $outcome_re ]]; then
       log "Hub has no profile ${profile} (${BASH_REMATCH[1]}): its container and volumes go"
-      page_remote remove-profile --page "$PAGE_NAME" || log "warning: page-browser-${PAGE_NAME} could not be removed: run remove-profile again"
+      page_remote remove-profile --page "$PAGE_NAME" --profile "$profile" || log "warning: page-browser-${PAGE_NAME} could not be removed: run remove-profile again"
       fail "add-profile failed; nothing of profile ${profile} is kept"
     fi
     fail "add-profile failed, and Hub did not say profile ${profile} is no page's (bound to one, or its answer lost): nothing removed — page-browser-${PAGE_NAME} and its volumes stay; see sync browser-profile list, then remove-profile"
@@ -360,9 +362,13 @@ remove_profile() {
   profile="$(run_remote "set -euo pipefail; sed -n 's/^PB_PROFILE_ID=//p' $(printf '%q' "${REMOTE_BASE}/pages/${PAGE_NAME}/page.env") | tail -n 1")" \
     || fail "no page ${PAGE_NAME} on the server"
   [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "page ${PAGE_NAME} names no profile on the server"
-  run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile")" \
+  # Hub forgets it (or never had it: a run again after Hub's answer was
+  # lost); a profile bound to a page is refused.
+  run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile" --absent-ok)" \
     || fail "Hub did not forget profile ${profile} (bound to a page? see sync browser-profile list): nothing removed"
-  page_remote remove-profile --page "$PAGE_NAME"
+  # The server removes it only while the page's files still name it.
+  page_remote remove-profile --page "$PAGE_NAME" --profile "$profile" \
+    || fail "the server did not remove profile ${profile} of ${PAGE_NAME} (Hub forgot it already): see page.sh status"
   log "profile ${profile} of ${PAGE_NAME} removed: Hub, container, files, volumes"
 }
 

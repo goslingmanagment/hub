@@ -33,9 +33,10 @@ PB_BASE="$TEST_PB_BASE" exec bash -c "$command"
 `;
 
 // docker: containers, volumes and Hub calls as files under $TEST_STATE. The
-// n-th Hub call (from 0) prints $TEST_HUB_OUT_<n> and exits with
-// $TEST_HUB_EXIT_<n> (else $TEST_HUB_EXIT, else 0) — 255 is ssh's word for
-// an answer that never came back.
+// n-th Hub call (from 0) runs $TEST_HUB_HOOK_<n> (what happens on the server
+// meanwhile), prints $TEST_HUB_OUT_<n> and exits with $TEST_HUB_EXIT_<n>
+// (else $TEST_HUB_EXIT, else 0) — 255 is ssh's word for an answer that never
+// came back.
 const fakeDocker = `#!/usr/bin/env bash
 state="$TEST_STATE"
 mkdir -p "$state/volumes" "$state/containers"
@@ -44,7 +45,8 @@ if [[ "$1" == "compose" && " $* " == *" exec -T api "* ]]; then
   n=$(ls "$state" | grep -c '^hub-call-[0-9]*[.]args$' || true)
   printf '%s\\n' "$@" > "$state/hub-call-$n.args"
   cat > "$state/hub-call-$n.stdin"
-  out="TEST_HUB_OUT_$n"; code="TEST_HUB_EXIT_$n"
+  out="TEST_HUB_OUT_$n"; code="TEST_HUB_EXIT_$n"; hook="TEST_HUB_HOOK_$n"
+  [[ -z "\${!hook:-}" ]] || eval "\${!hook}"
   [[ -z "\${!out:-}" ]] || printf '%s\\n' "\${!out}"
   exit "\${!code:-\${TEST_HUB_EXIT:-0}}"
 fi
@@ -255,7 +257,9 @@ describe("deploy-page-browser.sh remove-profile", () => {
     expect(removed.status, removed.stderr).toBe(0);
     const calls = hubCalls();
     expect(calls).toHaveLength(2);
-    expect(calls[1]!.args.slice(calls[1]!.args.indexOf("node"))).toEqual(["node", "apps/runtime/dist/cli.js", "sync", "browser-profile", "remove", "--profile", profile]);
+    expect(calls[1]!.args.slice(calls[1]!.args.indexOf("node"))).toEqual(["node", "apps/runtime/dist/cli.js", "sync", "browser-profile", "remove", "--profile", profile, "--absent-ok"]);
+    // The server is told which profile Hub forgot.
+    expect(removed.remote.at(-1)).toContain(`page.sh remove-profile --page ari-2 --profile ${profile}`);
     expect(volumes()).toEqual([]);
     expect(containers()).toEqual([]);
     expect(existsSync(path.join(pbBase, "pages/ari-2"))).toBe(false);
@@ -269,5 +273,35 @@ describe("deploy-page-browser.sh remove-profile", () => {
     expect(volumes()).toHaveLength(2);
     expect(containers()).toEqual(["page-browser-lilly-1"]);
     expect(existsSync(path.join(pbBase, "pages/lilly-1/page.env"))).toBe(true);
+  });
+
+  it("removes on the server only the profile Hub forgot: another up --new-profile in between keeps the page's new profile whole (Astra's review of PR 16, item 7)", () => {
+    expect(run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV]).status).toBe(0);
+    const envFile = path.join(pbBase, "pages/ari-2/page.env");
+    const forgotten = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(envFile, "utf8"))![1]!;
+    // While Hub forgets the first profile, another operation gives the page a new one.
+    const removed = run("remove-profile", ["--page", "ari-2"], {
+      TEST_HUB_HOOK_1: 'PB_BASE="$TEST_PB_BASE" bash "$TEST_PAGE_SH" up --page ari-2 --image hub-page-browser:155.0.1-abc --new-profile >/dev/null',
+    });
+    const now = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(envFile, "utf8"))![1]!;
+    expect(now).not.toBe(forgotten);
+    expect(removed.status).toBe(1);
+    expect(removed.stderr).toContain(`ari-2's files name profile ${now}, not ${forgotten}: nothing removed`);
+    // The new profile, its container and its files are whole.
+    expect(volumes()).toEqual(expect.arrayContaining([`pb-buffer-${now}`, `pb-profile-${now}`]));
+    expect(containers()).toEqual(["page-browser-ari-2"]);
+    expect(existsSync(envFile)).toBe(true);
+  });
+
+  it("page.sh removes a profile only when told which one, and only that one", () => {
+    expect(run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV]).status).toBe(0);
+    const page = (args: string[]) => spawnSync("bash", [pageSh, "remove-profile", "--page", "ari-2", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${path.join(root, "bin")}:${process.env.PATH}`, PB_BASE: pbBase, TEST_STATE: state },
+    });
+    expect(page([]).stderr).toContain("remove-profile needs --profile <uuid>");
+    expect(page(["--profile", "00000000-0000-4000-8000-000000000000"]).stderr).toContain("not 00000000-0000-4000-8000-000000000000: nothing removed");
+    expect(volumes()).toHaveLength(2);
+    expect(containers()).toEqual(["page-browser-ari-2"]);
   });
 });

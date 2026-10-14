@@ -15,10 +15,11 @@
 #              container here — `up --new-profile`, refused for a page that
 #              has one; its last lines name it: PB_PROFILE_ID=<uuid> and
 #              PB_SOCKS=<ip>:<port>, the SOCKS5 its rules admit)
-#   page.sh remove-profile --page <name>
+#   page.sh remove-profile --page <name> --profile <uuid>
 #              (a profile given up before it served a page: its container
 #              removed, its files and its two volumes deleted — the session
-#              its profile may hold goes with them)
+#              its profile may hold goes with them; only while the page's
+#              files still name that profile, checked under the lock)
 #   page.sh rollback --page <name>
 #   page.sh down --page <name>
 #   page.sh forget --page <name>
@@ -377,11 +378,17 @@ add_profile_undo() {
 # A profile given up (Project Browser PR 16): its container removed, its
 # files and both its volumes deleted. Hub forgets it first (the deploy
 # script's remove-profile): a profile Hub still has is never removed here.
+# The profile Hub forgot is named (--profile) and compared, under the
+# server's lock, with the one the page's files name before anything goes:
+# another operation may have given the page another profile since (Astra's
+# review of PR 16, item 7).
 remove_profile() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
+  [[ "$PROFILE" =~ ^[0-9a-f-]{36}$ ]] || fail "remove-profile needs --profile <uuid>: the profile Hub forgot"
   local profile
   profile="$(value PB_PROFILE_ID "$(env_file)")"
   [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "$PAGE names no profile"
+  [[ "$profile" == "$PROFILE" ]] || fail "$PAGE's files name profile $profile, not $PROFILE: nothing removed"
   compose_with "$(env_file)" down >/dev/null 2>&1 || true
   ! docker inspect "page-browser-$PAGE" >/dev/null 2>&1 || fail "page-browser-$PAGE is still there"
   rm -rf "$(page_dir)"
