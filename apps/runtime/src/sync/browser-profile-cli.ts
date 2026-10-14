@@ -167,12 +167,22 @@ export async function addBrowserProfile(
   return { profileId: input.profileId, container: input.container, socksEndpoint: input.socks, boundTo: "existing" in input.page ? label : null };
 }
 
-/** `remove`: a profile no page has, forgotten and audited. */
-export async function removeBrowserProfile(db: Database, input: { profileId: string; actor: string }): Promise<{ profileId: string; container: string }> {
+/** `remove`: a profile no page has, forgotten and audited (`removed`). A
+ *  bound one is refused. With `absentOk` (the deploy script's clean-up after
+ *  an `add` whose answer it did not get), a profile Hub never registered is
+ *  said to be `absent` instead of refused: only `removed` and `absent` let
+ *  its container go. */
+export async function removeBrowserProfile(
+  db: Database,
+  input: { profileId: string; actor: string; absentOk?: boolean },
+): Promise<{ profileId: string; container: string | null; outcome: "removed" | "absent" }> {
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     const profile = await findOnboardingProfile(tx, input.profileId);
-    if (profile === null) throw new SyncOwnerLeverError(`no profile ${input.profileId} in Hub`);
+    if (profile === null) {
+      if (input.absentOk === true) return { profileId: input.profileId, container: null, outcome: "absent" as const };
+      throw new SyncOwnerLeverError(`no profile ${input.profileId} in Hub`);
+    }
     if (profile.pageId !== null) throw new SyncOwnerLeverError(`profile ${input.profileId} is bound to page ${profile.pageId}: it is that page's (to-node, then down)`);
     if (!(await deleteUnboundPageBrowser(tx, input.profileId))) throw new SyncOwnerLeverError(`profile ${input.profileId} could not be removed (bound meanwhile?)`);
     await insertAuditEvent(tx, {
@@ -181,7 +191,7 @@ export async function removeBrowserProfile(db: Database, input: { profileId: str
       eventType: PAGE_BROWSER_PROFILE_AUDIT_EVENT,
       metadata: { actor: input.actor, action: "remove", profileId: input.profileId, container: profile.container, onboarding: profile.onboarding },
     });
-    return { profileId: input.profileId, container: profile.container };
+    return { profileId: input.profileId, container: profile.container, outcome: "removed" as const };
   });
 }
 
@@ -228,8 +238,9 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     .command("remove")
     .description("forget a profile no page has (its container goes after, on the server); a bound one is refused (audited)")
     .requiredOption("--profile <uuid>", "the profile", parseUuid)
-    .action(async (options: { profile: string }) => {
-      await withContext(async ({ db }) => print(await removeBrowserProfile(db, { profileId: options.profile, actor: cliActor() })));
+    .option("--absent-ok", "a profile Hub does not have is no error (`outcome: absent`): the deploy script's clean-up after an add whose answer was lost", false)
+    .action(async (options: { profile: string; absentOk: boolean }) => {
+      await withContext(async ({ db }) => print(await removeBrowserProfile(db, { profileId: options.profile, actor: cliActor(), absentOk: options.absentOk })));
     });
 
   group

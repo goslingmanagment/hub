@@ -988,7 +988,10 @@ session, the browser logs in from its own device and IP (plan §3.2 «Подкл
      --socks <socks-host>:<port> --env '{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}'
    ```
 
-   `--page` is the new page's label. `pnpm cli sync browser-profile list` shows the profiles no page has yet.
+   `--page` is the new page's label. `pnpm cli sync browser-profile list` shows the profiles no page has yet. When
+   Hub refuses the profile, or its answer is lost, the script asks Hub to forget it (only one no page has) and removes
+   the container and its volumes only once Hub says it forgot it or never had it; otherwise it removes nothing and
+   says so — check `sync browser-profile list`, then `remove-profile`.
 2. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy (the
    SOCKS5 the container was made for, with its login and password — saved sealed; Hub shows its exit IP), the exit IP
    pinned (the browser opens its exit only when it sees that IP itself, and says what it saw), the login through

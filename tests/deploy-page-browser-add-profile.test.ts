@@ -32,16 +32,21 @@ command="\${command//\\/opt\\/agency-hub/$TEST_HUB_DIR}"
 PB_BASE="$TEST_PB_BASE" exec bash -c "$command"
 `;
 
-// docker: containers, volumes and Hub calls as files under $TEST_STATE.
+// docker: containers, volumes and Hub calls as files under $TEST_STATE. The
+// n-th Hub call (from 0) prints $TEST_HUB_OUT_<n> and exits with
+// $TEST_HUB_EXIT_<n> (else $TEST_HUB_EXIT, else 0) — 255 is ssh's word for
+// an answer that never came back.
 const fakeDocker = `#!/usr/bin/env bash
 state="$TEST_STATE"
 mkdir -p "$state/volumes" "$state/containers"
 echo "$*" >> "$state/docker.log"
 if [[ "$1" == "compose" && " $* " == *" exec -T api "* ]]; then
-  n=$(ls "$state" | grep -c '^hub-call-' || true)
+  n=$(ls "$state" | grep -c '^hub-call-[0-9]*[.]args$' || true)
   printf '%s\\n' "$@" > "$state/hub-call-$n.args"
   cat > "$state/hub-call-$n.stdin"
-  exit "\${TEST_HUB_EXIT:-0}"
+  out="TEST_HUB_OUT_$n"; code="TEST_HUB_EXIT_$n"
+  [[ -z "\${!out:-}" ]] || printf '%s\\n' "\${!out}"
+  exit "\${!code:-\${TEST_HUB_EXIT:-0}}"
 fi
 case "$1" in
   image) exit 0 ;;
@@ -171,13 +176,54 @@ describe("deploy-page-browser.sh add-profile", () => {
     expect(made.stderr).toContain("registered in Hub and bound to lilly-1");
   });
 
-  it("Hub refuses the profile: the container, its files and both volumes go — nothing half-made stays", () => {
-    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], { TEST_HUB_EXIT: "1" });
+  it("Hub refuses the profile: Hub says it has none, then the container, its files and both volumes go — nothing half-made stays", () => {
+    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
+      TEST_HUB_EXIT_0: "1",
+      TEST_HUB_OUT_1: '{\n  "profileId": "x",\n  "container": null,\n  "outcome": "absent"\n}',
+    });
     expect(made.status).toBe(1);
     expect(made.stderr).toMatch(/add-profile failed; nothing of profile [0-9a-f-]{36} is kept/);
+    const [, forget] = hubCalls();
+    expect(forget!.args.slice(forget!.args.indexOf("node"))).toEqual(["node", "apps/runtime/dist/cli.js", "sync", "browser-profile", "remove", "--profile", forget!.args[forget!.args.indexOf("--profile") + 1], "--absent-ok"]);
     expect(volumes()).toEqual([]);
     expect(containers()).toEqual([]);
     expect(existsSync(path.join(pbBase, "pages/ari-2"))).toBe(false);
+  });
+
+  it("the add's answer lost after Hub took the profile unbound: Hub forgets it first (removed), then the container and volumes go", () => {
+    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
+      TEST_HUB_EXIT_0: "255",
+      TEST_HUB_OUT_1: '{\n  "profileId": "x",\n  "container": "page-browser-ari-2",\n  "outcome": "removed"\n}',
+    });
+    expect(made.status).toBe(1);
+    expect(made.stderr).toContain("(removed): its container and volumes go");
+    expect(volumes()).toEqual([]);
+    expect(containers()).toEqual([]);
+  });
+
+  it("the add's answer lost after Hub took the profile and bound it to the existing page: Hub refuses to forget it — nothing is removed (Astra's review of PR 16, item 6)", () => {
+    const made = run("add-profile", ["--page", "lilly-1", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV, "--existing"], {
+      TEST_HUB_EXIT_0: "255",
+      TEST_HUB_EXIT_1: "1",
+    });
+    expect(made.status).toBe(1);
+    expect(made.stderr).toContain("nothing removed — page-browser-lilly-1 and its volumes stay");
+    const profile = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(path.join(pbBase, "pages/lilly-1/page.env"), "utf8"))![1]!;
+    expect(volumes()).toEqual([`pb-buffer-${profile}`, `pb-profile-${profile}`]);
+    expect(containers()).toEqual(["page-browser-lilly-1"]);
+    expect(hubCalls()).toHaveLength(2);
+  });
+
+  it("the add's answer lost and the forget's too: what Hub holds is unknown — nothing is removed", () => {
+    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
+      TEST_HUB_EXIT_0: "255",
+      TEST_HUB_EXIT_1: "255",
+    });
+    expect(made.status).toBe(1);
+    expect(made.stderr).toContain("nothing removed");
+    expect(volumes()).toHaveLength(2);
+    expect(containers()).toEqual(["page-browser-ari-2"]);
+    expect(existsSync(path.join(pbBase, "pages/ari-2/page.env"))).toBe(true);
   });
 
   it("a container that does not come up healthy: its volumes and files go, Hub is never told", () => {

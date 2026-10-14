@@ -25,6 +25,7 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 
+import { removeBrowserProfile } from "../apps/runtime/src/sync/browser-profile-cli.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { bindProvenProfile, proveOnboardingAccount, type OnboardingProof } from "./helpers/page-browser-onboarding.ts";
 
@@ -255,6 +256,18 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     // The next link closes it as unknown: it still counts.
     expect(await closeUnfinishedBrowserProfileSends(db(), profileId)).toBe(1);
     expect(await count()).toBe(2);
+  });
+
+  it("forgets for the deploy script's clean-up only a profile no page has, or says Hub has none (`--absent-ok`); a bound one is refused (Astra's review of PR 16, item 6)", async (context) => {
+    if (!testDb) return context.skip();
+    const unbound = await profile();
+    const bound = await profile({ pageId: await page("lilly-1") });
+    const remove = (profileId: string, absentOk: boolean) => removeBrowserProfile(db(), { profileId, actor: "cli:test", absentOk });
+    await expect(remove(bound, true)).rejects.toThrow(/is bound to page/);
+    expect(await findOnboardingProfile(db(), bound)).not.toBeNull();
+    expect(await remove(unbound, true)).toMatchObject({ profileId: unbound, outcome: "removed" });
+    expect(await remove(unbound, true)).toEqual({ profileId: unbound, container: null, outcome: "absent" });
+    await expect(remove(unbound, false)).rejects.toThrow(/no profile/);
   });
 });
 
