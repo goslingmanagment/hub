@@ -4,6 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   bindOnboardedProfile,
+  closeUnfinishedBrowserProfileSends,
+  countBrowserProfileSendsSince,
   deleteUnboundPageBrowser,
   endPageBrowserOnboarding,
   findOnboardingProfile,
@@ -229,6 +231,30 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     const freshProof = await proveOnboardingAccount(db(), fresh);
     const bound = await bind(fresh, freshProof);
     expect(bound.locked.ok && bound.bound).toBe(true);
+  });
+
+  it("counts every send of the profile's last hour that may have gone — one never completed, one closed as unknown — and leaves out only what never went (Astra's review of PR 16, item 5)", async (context) => {
+    if (!testDb) return context.skip();
+    const profileId = await profile();
+    const send = (captured: string, completion: string) => testDb!.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at,
+                                    sent_at, completed_at, outcome, browser_profile_id, browser_attempt_id)
+       select null, gen_random_uuid(), 'onboarding', 'site:site.other', 'h', 1, 'sync', gen_random_uuid(), ${captured}, ${completion}, $1, 7`,
+      [profileId],
+    );
+    const since = new Date(Date.now() - 3_600_000);
+    const count = () => countBrowserProfileSendsSince(db(), { profileId, since });
+    // Sent and answered; never sent; sent more than an hour ago.
+    await send("clock_timestamp() - interval '10 minutes'", "clock_timestamp() - interval '10 minutes', clock_timestamp() - interval '10 minutes', 'response'");
+    await send("clock_timestamp() - interval '9 minutes'", "null, clock_timestamp() - interval '9 minutes', 'aborted_before_send'");
+    await send("clock_timestamp() - interval '2 hours'", "clock_timestamp() - interval '2 hours', clock_timestamp() - interval '2 hours', 'response'");
+    expect(await count()).toBe(1);
+    // Admitted, its outcome never written (the process died after it went).
+    await send("clock_timestamp() - interval '1 minute'", "null, null, null");
+    expect(await count()).toBe(2);
+    // The next link closes it as unknown: it still counts.
+    expect(await closeUnfinishedBrowserProfileSends(db(), profileId)).toBe(1);
+    expect(await count()).toBe(2);
   });
 });
 

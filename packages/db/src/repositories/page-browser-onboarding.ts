@@ -577,13 +577,16 @@ export async function lastBrowserProfileSendAt(db: Database, input: { profileId:
   return dateOf(result.rows[0]?.at ?? null);
 }
 
-/** The profile's sends the journal holds since `since` that went (the
- *  hour's ceiling of the site's requests, spec §3). */
+/** The profile's sends the journal holds since `since` that may have gone
+ *  (the hour's ceiling of the site's requests, spec §3): every one but what
+ *  never went (`aborted_before_send`) — one still unfinished, or closed as
+ *  unknown when its link ended before its outcome, counts (Astra's review of
+ *  PR 16, item 5). */
 export async function countBrowserProfileSendsSince(db: Database, input: { profileId: string; since: Date }): Promise<number> {
   const result = await db.execute<{ n: string }>(sql`
     select count(*)::text as n from fansly_send_log
      where browser_profile_id = ${input.profileId}::uuid and captured_at >= ${input.since.toISOString()}::timestamptz
-       and sent_at is not null
+       and (sent_at is not null or outcome is distinct from 'aborted_before_send')
   `);
   return Number(result.rows[0]?.n ?? 0);
 }

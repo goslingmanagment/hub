@@ -589,3 +589,34 @@ describe("the site's requests keep the route and family budgets a page's keep, a
     expect(held.at - limitedAt).toBeGreaterThanOrEqual(6_000 - 5);
   }, 60_000);
 });
+
+describe("the hour's ceiling of the site's requests counts what may have gone, across a restart (Astra's review of PR 16, item 5)", () => {
+  it("refuses the 301st request of the hour when the 300th went and its process died before its outcome was written", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    // 299 sends of the hour answered, the 300th admitted and never completed.
+    await testDb.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at,
+                                    sent_at, completed_at, outcome, browser_profile_id, browser_attempt_id)
+       select null, gen_random_uuid(), 'onboarding', 'site:site.other', 'h', 1, 'sync', gen_random_uuid(),
+              clock_timestamp() - interval '50 minutes' + n * interval '1 second', clock_timestamp() - interval '50 minutes' + n * interval '1 second',
+              clock_timestamp() - interval '50 minutes' + n * interval '1 second', 'response', $1, n
+         from generate_series(1, 299) as n`,
+      [r.profileId],
+    );
+    await testDb.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at, browser_profile_id, browser_attempt_id)
+       values (null, gen_random_uuid(), 'onboarding', 'login:auth.login', 'h', 1, 'sync', gen_random_uuid(), clock_timestamp() - interval '30 minutes', $1, 300)`,
+      [r.profileId],
+    );
+    startTask(r);
+    await untilLoginMode(r);
+    await until(async () => r.operator.state.mode === "manual_login" && r.operator.state.exitOpen, 10_000, "up in the manual login");
+    // The new link closed the 300th as unknown: it still counts.
+    expect((await journal(r.profileId)).at(-1)).toMatchObject({ outcome: "transport_error", sent_at: null });
+    const asked = r.operator.siteAdmit({ path: "/api/v1/versioning", route: "site.other" });
+    await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === asked.siteRequestId), 10_000, "answered");
+    expect(r.operator.siteAnswers.find((answer) => answer.siteRequestId === asked.siteRequestId)).toMatchObject({ admit: false, reason: "site_hour_cap" });
+    expect(await journal(r.profileId)).toHaveLength(300);
+  });
+});
