@@ -23,6 +23,7 @@ export function createTestAppContext(
     aiGatewayProvider?: AppContext["aiGatewayProvider"];
     pageBrowserEndpoints?: AppContext["pageBrowserEndpoints"];
     pageBrowserScreenWatch?: AppContext["pageBrowserScreenWatch"];
+    pageBrowserProxyTest?: AppContext["pageBrowserProxyTest"];
     ofapiEventRetentionDays?: number;
     ofapiEventWorkerReplicas?: number;
     ofapiDmProjectionEnabled?: boolean;
@@ -216,6 +217,7 @@ export function createTestAppContext(
     aiGatewayProvider: overrides?.aiGatewayProvider,
     pageBrowserEndpoints: overrides?.pageBrowserEndpoints,
     pageBrowserScreenWatch: overrides?.pageBrowserScreenWatch,
+    pageBrowserProxyTest: overrides?.pageBrowserProxyTest,
     fanslySendGuards: createFanslySendGuards({
       db: testDb.db,
       config,

@@ -15,6 +15,7 @@ import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 import { buildPageSyncRoute } from "@/lib/navigation";
 import { toast } from "sonner";
+import { BrowserProfilesSection } from "./BrowserProfilesSection.js";
 import { CreatePageModal } from "./CreatePageModal.js";
 import { EditPageModal } from "./EditPageModal.js";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
@@ -173,6 +174,9 @@ export function PagesTab() {
             </table>
           </section>
         )}
+
+        {/* Project Browser PR 16: a new page through its own server browser. */}
+        <BrowserProfilesSection />
       </div>
 
       {showCreate && (

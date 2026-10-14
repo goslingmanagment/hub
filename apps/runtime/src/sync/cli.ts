@@ -25,6 +25,7 @@ import {
   requestSyncProbe,
   requeueSyncWork,
 } from "./inspect.ts";
+import { registerSyncBrowserProfileCommands } from "./browser-profile-cli.ts";
 import { changeSyncPageTransport } from "./page-transport.ts";
 import { raiseSyncRoute } from "./route-raise.ts";
 
@@ -195,6 +196,9 @@ export function buildSyncEngineCommandGroup(deps: SyncCliDeps = defaultDeps): Co
 
 /** Add the engine's commands to the `sync` command group. */
 export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = defaultDeps): void {
+  // Project Browser PR 16: the page browsers' profiles (add-profile, remove-profile).
+  registerSyncBrowserProfileCommands(sync, deps);
+
   const page = sync.command("page").description("Fansly Sync Engine: one page's mode, pauses, overrides and status");
 
   page

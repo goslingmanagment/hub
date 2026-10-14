@@ -175,6 +175,22 @@ describe("the owner generation", () => {
     expect(await back.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
   });
 
+  it("keeps the floor of a profile that serves no page yet (page 0, a new page's onboarding: PR 16) across a restart", async () => {
+    const first = await setUp();
+    const onboarding = await first.engine(3);
+    onboarding.send(hello({ pageId: 0, expectedAccountId: "", ownerGeneration: 3 }));
+    expect(await onboarding.waitFor("helloResult")).toMatchObject({ ok: true });
+    // An earlier link of the onboarding, after the operator started again.
+    const second = await setUp({ storePath: join(first.storeDir, "owner-generation") });
+    const earlier = await second.engine(2);
+    earlier.send(hello({ pageId: 0, expectedAccountId: "", ownerGeneration: 2 }));
+    expect(await earlier.waitFor("helloResult")).toMatchObject({ ok: false, reason: "generation_stale" });
+    // The page it is bound to then starts its own count.
+    const bound = await second.engine(1);
+    bound.send(hello({ pageId: 12, ownerGeneration: 1 }));
+    expect(await bound.waitFor("helloResult")).toMatchObject({ ok: true });
+  });
+
   it("lets a higher one supersede the current connection, and tells it the previous one is quiesced", async () => {
     const { engine, quiesced, executed } = await setUp();
     const old = await engine(1);

@@ -83,6 +83,11 @@ export interface AppContext {
    *  take before the screen closes without its answer. Absent: 1 s each.
    *  Tests change them. */
   pageBrowserScreenWatch?: { everyMs?: number; deadlineMs?: number } | undefined;
+  /** TESTS ONLY: the proxy test of a proxy given for a new page's browser
+   *  (Project Browser PR 16) — its target's check and the exit IP read
+   *  through it — in place of the real one (a public target only, the IP
+   *  from api.ipify.org through the proxy, as the dashboard's proxy test). */
+  pageBrowserProxyTest?: ((proxy: { url: string; username?: string | null; password?: string | null }) => Promise<string>) | undefined;
   /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
    *  captures a page through it any more (step 4): it is this process's holder
    *  identity — for the journal of the identity check without a page, the

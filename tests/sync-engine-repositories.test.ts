@@ -65,6 +65,8 @@ describe("Fansly Sync Engine repository boundaries", () => {
 
   it("creates a page live only at its onboarding (I17, step 4 S4-05)", () => {
     expect(filesMatching("createLiveSyncPage\\(", SOURCES)).toEqual([
+      // Project Browser PR 16: a page born on its own browser.
+      "apps/runtime/src/services/page-browser-onboarding.ts",
       "apps/runtime/src/services/page-onboarding.ts",
       "packages/db/src/repositories/sync/pages.ts",
     ]);
@@ -74,6 +76,8 @@ describe("Fansly Sync Engine repository boundaries", () => {
     ]);
     // The `new_page` trigger's one producer is that birth (its definition aside).
     expect(filesMatching("fanslyNewPageWork\\(", SOURCES)).toEqual([
+      // Project Browser PR 16: the birth of a page on its own browser.
+      "apps/runtime/src/services/page-browser-onboarding.ts",
       "apps/runtime/src/services/page-onboarding.ts",
       "apps/runtime/src/sync/fansly/registry.ts",
     ]);

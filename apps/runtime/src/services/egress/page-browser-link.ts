@@ -2,7 +2,15 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-import { findPageBrowserByPage, findPageById, pageBrowserEnvOf, type Database, type PageBrowserRow } from "@agency_hub_core/db";
+import {
+  findOnboardingProfile,
+  findPageBrowserByPage,
+  findPageById,
+  pageBrowserEnvOf,
+  type Database,
+  type OnboardingProfile,
+  type PageBrowserRow,
+} from "@agency_hub_core/db";
 import {
   decryptJsonWithKeyVersion,
   encryptJson,
@@ -159,4 +167,97 @@ export async function readPageBrowserLinkRevision(
 
 async function resolveHost(host: string): Promise<string> {
   return (await lookup(host, { family: 4 })).address;
+}
+
+// ── a profile no page has yet (Project Browser PR 16) ─────────────────────
+
+/** The hello's page of a profile that serves no page yet: the operator keeps
+ *  its owner generations apart from every page's (`rpc/generation.ts`). */
+export const ONBOARDING_PAGE_ID = 0;
+
+/** Why the link to a profile no page has cannot say hello (no proxy given,
+ *  nothing pinned, no environment, bound meanwhile), or null. */
+export function onboardingLinkProblem(profile: OnboardingProfile): string | null {
+  if (profile.pageId !== null) return "the profile is bound to a page";
+  if (profile.proxy === null) return "no proxy is given for the page to be";
+  if (profile.pinnedExitIp === null) return "its exit IP is not pinned";
+  if (pageBrowserEnvOf(profile.env) === null) return "its browser has no environment (time zone, languages, geolocation)";
+  return null;
+}
+
+/**
+ * The settings of one hello to the browser of a profile no page has yet
+ * (plan §3.2 «Подключение новой страницы через браузер»): the profile's own
+ * token, no page (`ONBOARDING_PAGE_ID`) and no expected account — the
+ * operator confirms no session then, and Hub learns the account from its
+ * own read — the proxy the owner gave for the page to be (SOCKS5 only, its
+ * host resolved here), the pinned exit IP and the environment.
+ */
+export async function readOnboardingLinkSettings(
+  ctx: { db: Database; config: SecretsConfig },
+  profileId: string,
+  options: { resolve?: (host: string) => Promise<string> } = {},
+): Promise<PageBrowserLinkSettings> {
+  const profile = await findOnboardingProfile(ctx.db, profileId);
+  if (profile === null) throw new Error(`No page browser profile ${profileId}`);
+  const problem = onboardingLinkProblem(profile);
+  if (problem !== null) throw new Error(`Page browser profile ${profileId} cannot be linked: ${problem}`);
+  const proxy = profile.proxy!;
+  const auth = proxy.encryptedAuth === null
+    ? null
+    : decryptJsonWithKeyVersion<{ username: string | null; password: string | null }>(proxy.encryptedAuth, ctx.config.encryptionKeysByVersion);
+  const normalized = normalizeProxyConfigWithMetadata({ url: proxy.url, username: auth?.username ?? null, password: auth?.password ?? null });
+  if (!normalized.protocol.startsWith("socks5")) throw new Error(`Page browser profile ${profileId}: the proxy given is not a SOCKS5 one`);
+  const host = normalized.hostname.replace(/^\[|\]$/g, "");
+  const ip = isIP(host) !== 0 ? host : await (options.resolve ?? resolveHost)(host);
+  if (isIP(ip) === 0) throw new Error(`Page browser profile ${profileId}: the proxy's host does not resolve to an address`);
+  return {
+    token: openPageBrowserSecret(ctx.config, profile.encryptedEngineToken),
+    pageId: ONBOARDING_PAGE_ID,
+    expectedAccountId: "",
+    pinnedExitIp: profile.pinnedExitIp!,
+    socks5: { ip, port: Number(normalized.port), username: normalized.username ?? "", password: normalized.password ?? "" },
+    env: pageBrowserEnvOf(profile.env)!,
+  };
+}
+
+/** A cheap revision of what `readOnboardingLinkSettings` is made of (the
+ *  rows as stored; no decryption, no name resolution): a moved pin or proxy
+ *  is said in a new hello. */
+export async function readOnboardingLinkRevision(ctx: { db: Database }, profileId: string): Promise<string> {
+  const profile = await findOnboardingProfile(ctx.db, profileId);
+  return createHash("sha256").update(JSON.stringify(profile === null ? null : {
+    id: profile.profileId,
+    container: profile.container,
+    token: profile.encryptedEngineToken,
+    proxy: profile.proxy,
+    pin: profile.pinnedExitIp,
+    env: profile.env,
+    bound: profile.pageId,
+  })).digest("hex");
+}
+
+/** The proxy given for a page to be names the SOCKS5 its profile's
+ *  container admits (`socks_endpoint`): the host resolved as the hello
+ *  resolves it. Null: it does (or the container's is not known); otherwise
+ *  why not, in the owner's words. */
+export async function onboardingProxyMismatch(
+  profile: Pick<OnboardingProfile, "socksEndpoint">,
+  proxy: { url: string; username?: string | null; password?: string | null },
+  options: { resolve?: (host: string) => Promise<string> } = {},
+): Promise<string | null> {
+  const normalized = normalizeProxyConfigWithMetadata({ url: proxy.url, username: proxy.username ?? null, password: proxy.password ?? null });
+  if (!normalized.protocol.startsWith("socks5")) return "a page's browser goes out through a SOCKS5 proxy only (socks5://…)";
+  if (profile.socksEndpoint === null) return null;
+  const host = normalized.hostname.replace(/^\[|\]$/g, "");
+  let ip: string;
+  try {
+    ip = isIP(host) !== 0 ? host : await (options.resolve ?? resolveHost)(host);
+  } catch {
+    return `the proxy's host ${host} does not resolve`;
+  }
+  const endpoint = `${ip}:${Number(normalized.port)}`;
+  return endpoint === profile.socksEndpoint
+    ? null
+    : `the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${endpoint}`;
 }

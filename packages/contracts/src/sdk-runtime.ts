@@ -37,6 +37,9 @@ export const SDK_EXCLUDED_OPERATIONS = [
   // KasmVNC (Project Browser PR 15).
   "pageBrowserLoginScreenshot",
   "pageBrowserScreen",
+  // The same of a new page's browser, by its profile (PR 16).
+  "pageBrowserProfileLoginScreenshot",
+  "pageBrowserProfileScreen",
 ] as const;
 export type KernelSdkExcludedKey = (typeof SDK_EXCLUDED_OPERATIONS)[number];
 export type KernelSdkMethodKey = Exclude<KernelOperationKey, KernelSdkExcludedKey>;

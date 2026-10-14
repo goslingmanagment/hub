@@ -145,6 +145,9 @@ function buildBreadcrumbs(
   if (parts[0] === "ofapi-marketing") return [{ label: "Ссылки OnlyFans" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
+  if (parts[0] === "browser-profiles") {
+    return [{ label: "Overview", href: "/" }, { label: "Settings", href: "/settings?tab=pages" }, { label: "Подключение страницы" }];
+  }
 
   if (parts[0] === "usage") return [{ label: "Overview", href: "/" }, { label: "Usage" }];
   if (parts[0] === "transactions") return [{ label: "Overview", href: "/" }, { label: "Операции" }];

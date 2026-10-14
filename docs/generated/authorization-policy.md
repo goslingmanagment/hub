@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 25 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (296)
+## Routes (307)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -272,6 +272,17 @@ both enforcement modes. A full device token is not affected.
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/start` | `pageBrowserLoginStart` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/submit` | `pageBrowserLoginSubmit` | `owner-session` | — | — | no |
 | GET | `/api/v1/page-browser/pages/:pageLabel/screen/*` | `pageBrowserScreen` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/profiles` | `pageBrowserProfiles` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/profiles/:profileId` | `pageBrowserProfileGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/close` | `pageBrowserProfileClose` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/login/code` | `pageBrowserProfileLoginCode` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/login/finish` | `pageBrowserProfileLoginFinish` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/profiles/:profileId/login/screenshot` | `pageBrowserProfileLoginScreenshot` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/login/start` | `pageBrowserProfileLoginStart` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/login/submit` | `pageBrowserProfileLoginSubmit` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/pin` | `pageBrowserProfilePin` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/proxy` | `pageBrowserProfileProxy` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/profiles/:profileId/screen/*` | `pageBrowserProfileScreen` | `owner-session` | — | — | no |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |

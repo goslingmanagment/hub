@@ -247,6 +247,41 @@ describe("a Hub request", () => {
     expect(fake.checkResults.filter((result) => result.attemptId === 49)).toEqual([]);
   });
 
+  it("a handler may write its answer at once, inside its own critical section — once only, and never on another connection (PR 16)", async () => {
+    const fake = await operator();
+    const made = client(fake.url);
+    await up(made);
+    let finishSection: () => void = () => undefined;
+    made.register(50, {
+      onCheck: async (_check, answerNow) => {
+        // Written now, while the handler's section is still open …
+        expect(answerNow({ admit: true, deadlineMono: 901 })).toBe(true);
+        expect(answerNow({ admit: false, reason: "lease_used" })).toBe(false);
+        await new Promise<void>((resolve) => (finishSection = resolve));
+        // … and the settled answer is not written again.
+        return { admit: false, reason: "lease_inactive" };
+      },
+      onSent: () => undefined,
+      onResult: () => undefined,
+    });
+    fake.server.send({ type: "check", attemptId: 50, pausedMono: 1, liveSessionFingerprint: SESSION_A });
+    await until(() => fake.checkResults.length === 1, 5_000, "the answer written inside the section");
+    expect(fake.checkResults[0]).toMatchObject({ attemptId: 50, admit: true, deadlineMono: 901 });
+    finishSection();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.checkResults.filter((result) => result.attemptId === 50)).toHaveLength(1);
+    // The link changes inside the section: nothing is written.
+    let answer: (reply: { admit: true; deadlineMono: number }) => boolean = () => false;
+    made.register(51, { onCheck: (_check, answerNow) => new Promise(() => (answer = answerNow)), onSent: () => undefined, onResult: () => undefined });
+    fake.server.send({ type: "check", attemptId: 51, pausedMono: 1, liveSessionFingerprint: SESSION_A });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fake.server.protocolError("a test drops the engine");
+    await until(() => fake.hellos.length === 2 && made.up, 5_000, "the new connection");
+    expect(answer({ admit: true, deadlineMono: 902 })).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fake.checkResults.filter((result) => result.attemptId === 51)).toEqual([]);
+  });
+
   it("a body of several parts is reassembled before its JSON; an empty body is one last frame", async () => {
     const fake = await operator();
     const made = client(fake.url);

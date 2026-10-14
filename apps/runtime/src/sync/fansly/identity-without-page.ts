@@ -152,8 +152,10 @@ export async function checkFanslyIdentityWithoutPage(
   }
 }
 
-/** The account of an answer, or the legacy adapter's error for it. */
-function accountOf(outcome: FanslyWireOutcome): FanslyAccountMe["account"] {
+/** The account of an answer, or the legacy adapter's error for it (also
+ *  the browser's check of a profile no page has, PR 16: the same answers
+ *  read the same). */
+export function accountOf(outcome: FanslyWireOutcome): FanslyAccountMe["account"] {
   if (outcome.kind === "aborted_before_send") {
     throw new Error(`Fansly identity check was not sent (${outcome.refusal})`);
   }

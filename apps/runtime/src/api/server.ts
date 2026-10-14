@@ -194,18 +194,23 @@ export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec
 
   // A page browser's screenshot (Project Browser PR 15): raw image/jpeg, as
   // the voice-note audio above.
-  const screenshotResponse = paths?.["/api/v1/page-browser/pages/{pageLabel}/login/screenshot"]
-    ?.get?.responses?.["200"];
-  const screenshotJsonContent = screenshotResponse?.content?.["application/json"] as
-    | { schema?: Record<string, unknown> }
-    | undefined;
-  if (screenshotResponse && screenshotJsonContent) {
-    screenshotResponse.content = {
-      "image/jpeg": {
-        ...screenshotJsonContent,
-        schema: { ...(screenshotJsonContent.schema ?? {}), type: "string", format: "binary" },
-      },
-    };
+  // The same of a new page's browser, by its profile (PR 16).
+  for (const screenshotPath of [
+    "/api/v1/page-browser/pages/{pageLabel}/login/screenshot",
+    "/api/v1/page-browser/profiles/{profileId}/login/screenshot",
+  ]) {
+    const screenshotResponse = paths?.[screenshotPath]?.get?.responses?.["200"];
+    const screenshotJsonContent = screenshotResponse?.content?.["application/json"] as
+      | { schema?: Record<string, unknown> }
+      | undefined;
+    if (screenshotResponse && screenshotJsonContent) {
+      screenshotResponse.content = {
+        "image/jpeg": {
+          ...screenshotJsonContent,
+          schema: { ...(screenshotJsonContent.schema ?? {}), type: "string", format: "binary" },
+        },
+      };
+    }
   }
 
   return spec;

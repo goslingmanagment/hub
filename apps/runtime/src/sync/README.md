@@ -1084,6 +1084,45 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
   Nothing is ever sent again from what the operator kept. An undici page has no `held`, and its recovery is as it
   always was.
+- **A new page's browser** (PR 16, `fansly/browser-onboarding.ts`; 0280; plan §3.2 «Подключение новой страницы через
+  браузер»): a profile `scripts/deploy-page-browser.sh add-profile` made serves no page yet. While the owner's
+  onboarding of it is under way (`page_browsers.onboarding`) or an identity request waits, the `sync` process that
+  holds the onboarding lock (`(58216, 2)`) links to its operator by the profile alone — the hello names page 0 and no
+  expected account; every take raises `link_generation`, the hello's owner generation and the fence of every write
+  and grant — and follows the onboarding as a page's login is followed: the manual login and the browser started
+  (`login`), the automation back (`open`), the browser stopped (`closing`, then `off`); a browser halted for another
+  exit IP starts again only once the owner pins the IP again. The site's login operations and the reads its interface
+  makes are admitted by the profile key (`loginOnly`; the rest of the site and its socket refused): one in flight,
+  the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
+  profile's last send (the journal's and the operator's `quiesced`), and a page's site decision (`decideSite`): the
+  route and family budgets of `route-policy.ts`, the hour's ceiling and a 429's route hold, all read from the
+  profile's journal on every slot (a hold as `route_hold_ms=` on its send), so a restart keeps them — each
+  journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
+  `sync_attempts`' sequence, so the operator never sees an id twice) — only while the onboarding is the owner's
+  login, checked under the profile's row lock at the journal entry and again, in the same generation, at the grant
+  itself (the owner's moves and the binding take that lock: one that commits first refuses the grant). The identity check is one `GET /account/me`
+  through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
+  (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. It proves the account
+  only with the operator's own `sent` (without it the instant is unknown and proves nothing — PR 15's rule), sent
+  after the boundary of the owner's login: every change of `onboarding` raises `onboarding_generation` and voids the
+  request and its answer, and once the onboarding is open the link asks the operator for the automation (even one in
+  it) and takes the arrival of its answer as that generation's boundary; an answer of another generation is never
+  recorded as an account. And the read's session must be the one that exists after the login: PR 15's confirmation
+  (a page is ready only after a fresh identity read under the live session) is the operator's for a profile too — it
+  confirms whatever account the read names, but, once the mode changed, only under the session the site's own
+  authorized GET showed from the document the operator loaded after the change — bound by Chrome's loader: the one
+  named in answer to the navigation started in that mode, committed and still the frame's, and the GET's own (a
+  late request of the replaced document never counts); a load under way at the change is followed by a load anew
+  once it is in. Until then the Hub request's headers may still be the session of before the login. The engine
+  records the account only once the operator's state says so (`session_confirmed`, that account, that session),
+  and again at the write. A request is read once: its read is bound to its attempt (`identity_attempt_id`) in a
+  committed transaction before it may go, and its grant checks the binding under the profile's lock; a link that
+  finds the request bound and unanswered (the link before it ended) never reads it again — it answers it as not
+  known, and a new request reads anew (never an automatic re-send). The site's answers go to `observations` keyed by the profile, with the buffer's position on
+  its row. The binding (the API's, one transaction with the page's birth: `browser` transport, credentials untrusted
+  until the engine's own check under the page's hello) locks the profile's row first and goes on only while the
+  onboarding is open and the check is the profile's, answered in the generation that holds — else nothing is
+  created; it raises the generation: the link closes, and the page's slot takes the browser.
 
 ## Classes
 

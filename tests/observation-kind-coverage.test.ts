@@ -127,6 +127,11 @@ const DIRECT_WRITERS = [
   // `:incomplete` marks, or `fansly.site.<route>` for a path outside the
   // registry; journaled as facts, parsed by nothing yet (plan §3.2).
   "apps/runtime/src/sync/fansly/browser-intake.ts",
+  // Project Browser PR 16: a new page's onboarding through its browser — the
+  // account read through it (the wire spec's kind of account.me through the
+  // engine's codec, page-less) and the site's answers of a profile no page
+  // has yet (as browser-intake's, keyed by the profile).
+  "apps/runtime/src/sync/fansly/browser-onboarding.ts",
 ];
 
 describe("(1) coverage — every written kind is owned by something", () => {

@@ -9,6 +9,19 @@
 #              what it had unless told otherwise; --tz and --lang are only
 #              Chrome's defaults until the engine's hello brings the page's
 #              own environment)
+#   page.sh add-profile --page <name> --image <tag> --socks <host:port>
+#              [--tz <zone>] [--lang <tag>]
+#              (Project Browser PR 16: a new profile for a page that has no
+#              container here — `up --new-profile`, refused for a page that
+#              has one; its last lines name it: PB_PROFILE_ID=<uuid> and
+#              PB_SOCKS=<ip>:<port>, the SOCKS5 its rules admit. A start that
+#              fails takes its files and volumes with it only once Docker
+#              says its container is absent; else all stays, and it says so)
+#   page.sh remove-profile --page <name> --profile <uuid>
+#              (a profile given up before it served a page: its container
+#              removed, its files and its two volumes deleted — the session
+#              its profile may hold goes with them; only while the page's
+#              files still name that profile, checked under the lock)
 #   page.sh rollback --page <name>
 #   page.sh down --page <name>
 #   page.sh forget --page <name>
@@ -229,6 +242,14 @@ compatible() {
   fi
 }
 
+new_uuid() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+  else
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  fi
+}
+
 free_octet() {
   local used octet
   used="$(cat "$PB_BASE"/pages/*/page.env 2>/dev/null | sed -n "s/^PB_EGRESS_IP=$EGRESS_PREFIX\.//p" | sort -n)"
@@ -257,7 +278,7 @@ up() {
   [[ "$socks_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cannot resolve the SOCKS5 host"
   if [[ "$NEW_PROFILE" == 1 ]]; then
     [[ -z "$PROFILE" ]] || fail "--profile and --new-profile together"
-    profile="$(cat /proc/sys/kernel/random/uuid)"
+    profile="$(new_uuid)"
   else
     profile="${PROFILE:-$(value PB_PROFILE_ID "$old")}"
     [[ -n "$profile" ]] || fail "a new page needs --profile <uuid> or --new-profile"
@@ -324,6 +345,77 @@ EOF
   switch_to "up $IMAGE"
 }
 
+# A new profile (Project Browser PR 16): a container with a profile of its
+# own, an empty buffer and secrets of its own, for a page that has none here.
+# Its last lines name the profile and the SOCKS5 its rules admit, for the
+# deploy script to register it in Hub.
+add_profile() {
+  [[ -n "$PAGE" ]] || fail "--page is required"
+  [[ ! -f "$(env_file)" ]] || fail "$PAGE has a container here already (status; remove-profile gives up a profile no page has)"
+  [[ -z "$PROFILE" && "$NEW_PROFILE" == 0 ]] || fail "add-profile makes a new profile: no --profile, no --new-profile"
+  [[ -n "$SOCKS" ]] || fail "add-profile needs --socks <host>:<port>"
+  local profile
+  profile="$(new_uuid)"
+  [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "no UUID for the new profile"
+  # Nothing half-made stays: a start that fails takes the new profile's
+  # volumes and files with it.
+  trap 'add_profile_undo '"$profile" EXIT
+  docker volume create "pb-profile-$profile" >/dev/null
+  docker volume create "pb-buffer-$profile" >/dev/null
+  PROFILE="$profile"
+  up
+  trap - EXIT
+  printf 'PB_PROFILE_ID=%s\n' "$(value PB_PROFILE_ID "$(env_file)")"
+  printf 'PB_SOCKS=%s:%s\n' "$(value PB_SOCKS_IP "$(env_file)")" "$(value PB_SOCKS_PORT "$(env_file)")"
+}
+
+# The new profile's undo, when its start failed: its files and volumes go
+# only once Docker says its container is absent. A container left as it is
+# (one that would not stop, a Docker that cannot be read — switch_to's own
+# words) keeps everything: its secrets and its profile may be in use
+# (Astra's review of PR 16, round 4).
+add_profile_undo() {
+  local profile="$1" state
+  [[ -f "$(env_file)" ]] && return 0
+  if ! state="$(container_status)" || [[ "$state" != absent ]]; then
+    cat >&2 <<EOF
+page: the new profile $profile of $PAGE is kept as it is: page-browser-$PAGE is ${state:-unreadable}, its files $(page_dir) and the volumes pb-profile-$profile and pb-buffer-$profile stay.
+page: once \`docker inspect page-browser-$PAGE\` says it is gone (docker rm -f page-browser-$PAGE after checking it), remove them:
+page:   rm -rf $(page_dir) && docker volume rm pb-profile-$profile pb-buffer-$profile && $PB_BASE/egress-rules.sh apply
+EOF
+    return 0
+  fi
+  rm -rf "$(page_dir)"
+  docker volume rm "pb-profile-$profile" "pb-buffer-$profile" >/dev/null 2>&1 || true
+  echo "page: the new profile $profile of $PAGE was not kept (its volumes and files removed)" >&2
+}
+
+# A profile given up (Project Browser PR 16): its container removed, its
+# files and both its volumes deleted. Hub forgets it first (the deploy
+# script's remove-profile): a profile Hub still has is never removed here.
+# The profile Hub forgot is named (--profile) and compared, under the
+# server's lock, with the one the page's files name before anything goes:
+# another operation may have given the page another profile since (Astra's
+# review of PR 16, item 7).
+remove_profile() {
+  [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
+  [[ "$PROFILE" =~ ^[0-9a-f-]{36}$ ]] || fail "remove-profile needs --profile <uuid>: the profile Hub forgot"
+  local profile
+  profile="$(value PB_PROFILE_ID "$(env_file)")"
+  [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "$PAGE names no profile"
+  [[ "$profile" == "$PROFILE" ]] || fail "$PAGE's files name profile $profile, not $PROFILE: nothing removed"
+  compose_with "$(env_file)" down >/dev/null 2>&1 || true
+  # Gone means Docker says so (as forget): a state it cannot read is never
+  # taken for absent.
+  local state
+  state="$(container_status)" || fail "page-browser-$PAGE cannot be read: nothing of $PAGE is removed"
+  [[ "$state" == absent ]] || fail "page-browser-$PAGE is still there"
+  rm -rf "$(page_dir)"
+  "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the removed page" >&2
+  docker volume rm "pb-profile-$profile" "pb-buffer-$profile" >/dev/null
+  echo "page: $PAGE removed with its profile $profile (container, files, volumes)"
+}
+
 rollback() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
   local current previous
@@ -373,7 +465,7 @@ status() {
 
 # One page operation at a time on the server: a profile's owner is checked
 # and claimed (its page's files written) under the same lock.
-if [[ "$command" =~ ^(up|rollback|down|forget)$ ]]; then
+if [[ "$command" =~ ^(up|add-profile|remove-profile|rollback|down|forget)$ ]]; then
   exec 8>"$PB_BASE/.page.lock"
   flock -w 900 8 || fail "another page operation holds $PB_BASE/.page.lock"
   # Under the lock no switch is under way: a candidate left here is a dead
@@ -383,9 +475,11 @@ fi
 
 case "$command" in
   up) up ;;
+  add-profile) add_profile ;;
+  remove-profile) remove_profile ;;
   rollback) rollback ;;
   down) down ;;
   forget) forget ;;
   status) status ;;
-  *) fail "usage: page.sh up|rollback|down|forget|status [options]" ;;
+  *) fail "usage: page.sh up|add-profile|remove-profile|rollback|down|forget|status [options]" ;;
 esac

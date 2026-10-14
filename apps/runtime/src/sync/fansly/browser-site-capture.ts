@@ -57,6 +57,13 @@ export function siteResponseKey(pageId: number, bufferId: string, seq: number): 
   return `fansly-site:${pageId}:${bufferId}:${seq}`;
 }
 
+/** The observation key of a site response of a profile no page has yet (its
+ *  onboarding, PR 16): the buffer id is the volume's own, so no page's key is
+ *  ever the same. */
+export function profileSiteResponseKey(profileId: string, bufferId: string, seq: number): string {
+  return `fansly-site:profile:${profileId}:${bufferId}:${seq}`;
+}
+
 /** The API path of a site request (from `/api/v1`). */
 function apiPathOf(path: string): string {
   const bare = path.split("?", 1)[0]!;
@@ -119,6 +126,8 @@ export function siteResponseObservation(input: {
   bufferId: string;
   event: SiteResponseEvent;
   body: Buffer | null;
+  /** A profile no page has yet (PR 16): keyed by the profile, not a page. */
+  profileId?: string;
 }): SiteResponseObservation | null {
   const { event } = input;
   if (SECRET_ROUTES.has(event.route) || event.method.toUpperCase() !== "GET") return null;
@@ -130,7 +139,9 @@ export function siteResponseObservation(input: {
   const base = {
     source: "browser_site" as const,
     producer: `fansly-site:${event.route}`,
-    idempotencyKey: siteResponseKey(input.pageId, input.bufferId, event.seq),
+    idempotencyKey: input.profileId === undefined
+      ? siteResponseKey(input.pageId, input.bufferId, event.seq)
+      : profileSiteResponseKey(input.profileId, input.bufferId, event.seq),
   };
   const make = (kind: string, payload: unknown, as: SiteResponseObservation["as"]): SiteResponseObservation => ({
     ...base,
