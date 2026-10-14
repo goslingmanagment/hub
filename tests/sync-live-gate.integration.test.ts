@@ -269,10 +269,11 @@ describe("I17: source pins", () => {
     expect(builders.sort()).toEqual([path.join("sync", "engine", "host.ts"), path.join("sync", "fansly", "transport.ts")]);
   });
 
-  it("the browser transport is built nowhere yet: no page selects it before the transport switch (PR 14)", () => {
+  it("the browser transport is built in one place, a browser page's slot, which only the host's browser branch opens", () => {
     // Project Browser stage 3 PR 12: `createBrowserPageTransport` and the
-    // socket source of a browser page exist, but the host builds the undici
-    // transport for every page until `sync_pages.transport` chooses (PR 14).
+    // socket source of a browser page; PR 14: the slot that builds them with
+    // the link and the intake (`fansly/browser-page.ts`), opened by the host
+    // for a page whose transport is `browser` — never for a `node` page.
     const root = path.resolve("apps/runtime/src");
     const builders: string[] = [];
     const walk = (dir: string) => {
@@ -285,13 +286,33 @@ describe("I17: source pins", () => {
       }
     };
     walk(root);
-    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-transport.ts")]);
-    expect(read("apps/runtime/src/sync/engine/host.ts")).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
+    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-page.ts"), path.join("sync", "fansly", "browser-transport.ts")]);
+    const host = read("apps/runtime/src/sync/engine/host.ts");
+    expect(host).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
+    // Two calls: the browser branch of the acquisition, and the leave of a
+    // page's browser (no actor); the node branch is the undici transport and
+    // the engine's own socket, as before.
+    expect(host.match(/\bopenBrowserPage\(/g)).toHaveLength(2);
+    expect(host).toContain('if (sender === "browser") {\n        browser = await openBrowserPage({');
+    const leave = host.slice(host.indexOf("async #startLeave("), host.indexOf("async #runLeave("));
+    expect(leave).toContain("browser = await openBrowserPage({");
+    expect(leave).not.toMatch(/new SyncActor\(|createPageTransport\(/);
+    expect(host).toContain('const ws = sender === "node" ? this.#createWsSource(page, generation) : null;');
+    const openers: string[] = [];
+    const walkOpeners = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walkOpeners(full);
+        else if (entry.name.endsWith(".ts") && /\bopenBrowserPage\(/.test(readFileSync(full, "utf8"))) openers.push(path.relative(root, full));
+      }
+    };
+    walkOpeners(root);
+    expect(openers.sort()).toEqual([path.join("sync", "engine", "host.ts"), path.join("sync", "fansly", "browser-page.ts")]);
   });
 
   it("the production runtime passes none of the host's test-only options", () => {
     const main = read("apps/runtime/src/sync/main.ts");
-    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "liveSocket", "faults", "minSettingMs", "routeTimeScale"]) {
+    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "liveSocket", "faults", "minSettingMs", "routeTimeScale", "browserOverrides"]) {
       expect(main).not.toContain(option);
     }
   });

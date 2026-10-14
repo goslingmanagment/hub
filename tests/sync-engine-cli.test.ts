@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   changeSyncPagePause: vi.fn(),
   changeSyncRegistryOverride: vi.fn(),
   confirmStoppedSyncOwners: vi.fn(),
+  awaitBrowserHandovers: vi.fn(),
   explainSyncWork: vi.fn(),
   listSyncPageWork: vi.fn(),
   findSyncPageByLabel: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../apps/runtime/src/sync/inspect.ts", async (importOriginal) => {
     changeSyncPagePause: mocks.changeSyncPagePause,
     changeSyncRegistryOverride: mocks.changeSyncRegistryOverride,
     confirmStoppedSyncOwners: mocks.confirmStoppedSyncOwners,
+    awaitBrowserHandovers: mocks.awaitBrowserHandovers,
     explainSyncWork: mocks.explainSyncWork,
     listSyncPageWork: mocks.listSyncPageWork,
     findSyncPageByLabel: mocks.findSyncPageByLabel,
@@ -89,6 +91,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
       pauseNote: null,
     });
     mocks.confirmStoppedSyncOwners.mockResolvedValue([]);
+    mocks.awaitBrowserHandovers.mockResolvedValue([]);
     mocks.requestSyncProbe.mockResolvedValue({ workId: 9 });
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
@@ -202,6 +205,15 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     const input = mocks.confirmStoppedSyncOwners.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(input).not.toHaveProperty("pageLabel");
     expect(input.dryRun).toBe(false);
+    // Then the browser pages' hand-over (Project Browser PR 14): every page,
+    // a minute at most; with none on a browser, nothing more is printed.
+    expect(mocks.awaitBrowserHandovers).toHaveBeenCalledWith({}, { waitMs: 60_000 });
+    expect(vi.mocked(console.log).mock.calls.map(([line]) => String(line))).toEqual(["page\tgeneration\towner_host\tconfirmed"]);
+  });
+
+  it("a dry run of confirm-stopped waits for no hand-over", async () => {
+    await run(["sync", "ownership", "confirm-stopped", "--running-hosts", "abc", "--dry-run"]);
+    expect(mocks.awaitBrowserHandovers).not.toHaveBeenCalled();
   });
 
   // S4-35: the table listed an ownerless page with a heartbeat and left the

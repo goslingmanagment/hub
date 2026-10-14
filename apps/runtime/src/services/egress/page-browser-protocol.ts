@@ -148,7 +148,14 @@ export interface State {
   exitIp: string | null;
   chromeVersion: string;
   operatorVersion: string;
-  buffer: { bytes: number; oldestAgeMs: number };
+  /** `open` (an addition, PR 14): what the buffer holds, said only while it
+   *  is open — its id, the last event number it gave, the outcomes kept for
+   *  their resultAck, and what is written and not yet committed (a batch).
+   *  `null`: the buffer cannot be opened — nothing of it is known, and the
+   *  zero of `bytes` says nothing. Absent: an operator from before the
+   *  addition — unknown. Only `open` with nothing kept is the word that the
+   *  buffer is empty. */
+  buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
   selfTest: { ok: boolean; atWall: WallMs; failed: SelfTestMechanism | null; notInstalled?: SelfTestMechanism[] } | null;
 }
 export interface PingPong {
@@ -429,6 +436,19 @@ function bodyRef(value: unknown, what: string): BodyRef {
   return { bodyId: uuid(m.bodyId, `${what}.bodyId`), decodedBytes: int(m.decodedBytes, `${what}.decodedBytes`), sha256: sha256(m.sha256, `${what}.sha256`) };
 }
 
+/** `state.buffer.open`: what the open buffer holds, or null (it cannot be
+ *  opened). */
+function parseBufferOpen(value: unknown): NonNullable<State["buffer"]["open"]> | null {
+  if (value === null) return null;
+  const open = record(value, "buffer.open");
+  return {
+    id: str(open.id, "buffer.open.id", 64),
+    lastSeq: int(open.lastSeq, "buffer.open.lastSeq"),
+    outcomes: int(open.outcomes, "buffer.open.outcomes"),
+    pending: int(open.pending, "buffer.open.pending"),
+  };
+}
+
 function parseState(m: Record<string, unknown>): State {
   const buffer = record(m.buffer, "buffer");
   let selfTest: State["selfTest"] = null;
@@ -457,7 +477,11 @@ function parseState(m: Record<string, unknown>): State {
     exitIp: strOrNull(m.exitIp, "exitIp", 64),
     chromeVersion: str(m.chromeVersion, "chromeVersion", 128),
     operatorVersion: str(m.operatorVersion, "operatorVersion", 128),
-    buffer: { bytes: num(buffer.bytes, "buffer.bytes"), oldestAgeMs: num(buffer.oldestAgeMs, "buffer.oldestAgeMs") },
+    buffer: {
+      bytes: num(buffer.bytes, "buffer.bytes"),
+      oldestAgeMs: num(buffer.oldestAgeMs, "buffer.oldestAgeMs"),
+      ...(buffer.open === undefined ? {} : { open: parseBufferOpen(buffer.open) }),
+    },
     selfTest,
   };
 }

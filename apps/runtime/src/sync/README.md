@@ -58,6 +58,7 @@ levers address a Fansly page by are the registry's own lever map (A Fansly page 
 sync/
   main.ts, context.ts        the `sync` runtime role: context (pool timeouts), watchdog, heartbeat, host, signals
   cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync work …`, `sync ownership …`) and its reads
+  page-transport.ts          `sync page transport <page> browser|node [--prepare]` (Project Browser PR 14, audited)
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
     pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
@@ -67,7 +68,7 @@ sync/
     errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
     status.ts                "why waiting" and the page status
     resource.ts              the resource contract (plan / apply) and the rules every entry shares
-    host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
+    host.ts                  pages ↔ actors, ownership, LISTEN, mode and transport changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
@@ -82,16 +83,21 @@ sync/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
-    browser-transport.ts     the same port through a page's browser (Project Browser; built by nothing until
-                             the transport switch, PR 14): RPC to the page's operator, the grant at its check,
+    browser-transport.ts     the same port through a page's browser (Project Browser; built by a browser page's
+                             slot, `browser-page.ts`): RPC to the page's operator, the grant at its check,
                              the outcomes it keeps (`held`)
     browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
-                             event id, gaps, the site's answers (`browser-site-capture.ts`); built by nothing yet
+                             event id, gaps, the site's answers (`browser-site-capture.ts`); built by the slot
+    browser-site.ts          the site path over the operator's RPC (PR 14): `siteAdmit`/`wsAdmit` as PR 8's pending
+                             requests, the answers on the link they were asked on, `siteDone`/`wsDone` as their ends
+    browser-page.ts          a browser page's slot (PR 14): the link, the transport, the site path, the socket rows,
+                             the intake; the operator's `quiesced`; `stopPage` when the page leaves its browser
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`);
-                             a browser page's socket is the site's, its connection rows `browser-source.ts`
+                             a browser page's socket is the site's, its connection rows `browser-source.ts`, their
+                             guard and the down timer `browser-guard.ts`
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
                              media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
                              resources use (step 4 moved them here; what is left of the legacy executor takes only
@@ -603,7 +609,9 @@ the session advisory lock `(58215, pageId)` on the host's one lock session. A ne
 one is **confirmed stopped**: never owned; its own safe release (`owner_released_at` of its generation — written after
 SIGTERM, a mode change or the loss of its lock session, once nothing is in flight); the step-1 OS proof
 (`judgeFanslySendHolderTermination`: pid gone, pid reused, boot changed, or this container under a new pid namespace);
-or a Docker-level confirmation (`pnpm cli sync ownership confirm-stopped --running-hosts …`, run by the deploy). A lost
+or a Docker-level confirmation (`pnpm cli sync ownership confirm-stopped --running-hosts …`, run by the deploy; for a
+page on its browser it then waits — up to a minute, `--quiesced-wait-ms` — for the operator's `quiesced` to the new
+owner, since the browser works apart from `sync`, plan §4.7; a page on Node changes nothing in it). A lost
 lock session alone is never a confirmation. The first send after a takeover waits `1.2 × S` after every send the
 database knows of (I5). A `live` page is acquired only with its import mark (`legacy_imported_at`: stamped at a
 page's birth, and by the step-3 switch for the pages it took over); without it the page waits
@@ -896,7 +904,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I2 | At most one request of a page in flight; the next admission only after the previous completion. | `engine/actor.ts` (sequential loop) + `engine/pacer.ts` (`inFlight`) |
 | I3 | One physical request per admission; no transport retry; no redirect follow (a 3xx is an answer). Through a page's browser: one admission is one grant at the operator's `check` (a second is refused, `lease_used`); a CORS preflight and its request are one operation (owner decision №1); Chrome's own re-sends are held at the operator's gate (spec §9, mandatory condition №2); a redirect goes back as the answer. | `packages/fansly/src/wire/send.ts`; through a browser `engine/pacer.ts` (one grant) and the operator's gate (`apps/page-browser/src/egress/gate.ts`) |
 | I4 | `S` is re-read before every admission; `S < 2000 ms` is impossible (the test-only `minSettingMs` is never passed by the host). | `engine/ports.ts` `PauseSource` + `engine/pacer.ts` |
-| I5 | First send after a takeover ≥ `1.2 × S` after the latest of: the takeover, the last send recorded in the database, unfinished attempts of the last 10 min + the send window, the legacy guard's last completion. | `engine/host.ts` + `pacer.initTakeover` |
+| I5 | First send after a takeover ≥ `1.2 × S` after the latest of: the takeover, the last send recorded in the database, unfinished attempts of the last 10 min + the send window, the legacy guard's last completion — and, on a page on its browser, the last send its operator names in `quiesced` (nothing of the new owner goes before it). | `engine/host.ts` + `pacer.initTakeover` + `pacer.raiseTakeoverFloor` (`fansly/browser-page.ts`) |
 | I6 | No automatic takeover from a live old process: an unconfirmed stop leaves the page `ownership_unconfirmed`; a lost lock session is never a confirmation, the owner's own safe release is. | `engine/host.ts` |
 | I7 | Every write of an actor is fenced by `owner_generation`. | `repositories/sync/pages.ts` `lockOwnedPage` |
 | I8 | The raw answer is committed before it is parsed; apply is replayable from the observation without HTTP. | `engine/commit.ts` |
@@ -916,6 +924,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. On a browser page (Project Browser) the engine opens no Fansly socket at all: the site opens its own in the browser, its tunnel waiting for the engine's admission (`wsAdmit`, the site path, route `ws.upgrade`); the page's source (`fansly/ws/browser-source.ts`) only takes the operator's events and sends nothing. The engine's one other socket is its RPC to the page's operator (`ws:` on pb-control, never Fansly). | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts` + `fansly/ws/browser-source.ts`; tests/fansly-send-guard-boundary.test.ts |
 | I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 | I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refuses the drop under an image older than it (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `scripts/deploy-production.sh` (`verify_running_images_run_without_old_hold_columns`); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
+| I26 | One sender per page at a time (Project Browser PR 14): the page's transport (`sync_pages.transport`, `node` by default) names it, and the host builds that one only — a `node` page gets the undici transport and the engine's own socket and never a link to its browser. A change ends the page's slot (the request in flight finishes and is committed by its owner) and takes the page again with the other sender, under I5; no admission of the sender the page left commits after the change (the admission's row lock reads the transport). A page that leaves its browser is taken by Node only once the leave is confirmed (0278): by its operator — exit closed first, Chrome stopped, no site socket open, the earlier owners' kept outcomes and the buffer taken — or by the owner's word that its container is stopped (its buffer then marked not drained); a host that starts again resumes a pending leave before anything else; the deploy refuses a rollback to an image that does not know the page transport — read from the image's own label `agency-hub.sync-page-transport`, never from the schema's history — while a page is on its browser or leaving it. | `engine/host.ts` (`#modeLoop`, `#acquire`, `#startLeave`, `#runLeave`) + `repositories/sync/pages.ts` (`lockOwnedPage` with the slot's transport, `confirmBrowserLeave`, `assertBrowserLeft`) + `fansly/browser-page.ts` (`leave`) + `scripts/deploy-production.sh` (`verify_rollback_target_runs_no_browser_page`); tests/sync-transport-switch.integration.test.ts, tests/sync-live-gate.integration.test.ts, tests/deploy-browser-rollback-gate.test.ts |
 | I25 | A chat's unavailability episode has one writer, the page's actor: only a head read (no `before`) of `dm-messages.head`/`.catchup`/`.history` that Fansly refuses with its own error envelope counts; it is established at its own 5th refusal, never by the work's breaker; while it is established no key reads the chat's head before `retry_not_before`, every head read that went out and does not end it moves that boundary and settles its own work (one demand, one read; only a work row settles itself — another row decides in its own plan), and no background read is planned; an applied head read ends it. The capture is never lost to it (savepoint). | `fansly/resources/dm-messages.ts` (`outcomeInCapture`, the plan's wait, the apply's end) + `repositories/sync/chat-unavailability.ts`; tests/sync-chat-unavailability.integration.test.ts |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
@@ -931,10 +940,69 @@ the browser reported, else at the completion when the request may have gone out.
 
 ## A page's browser (Project Browser, stage 3)
 
-Plan: `docs/plans/project-browser/plan.md` (§3.2, §4.2, §4.13), the protocol in `spec.md` §6. A page may send through
-its own browser (Chrome in its container, driven by our operator) instead of undici. Nothing selects it yet: the host
-builds the undici transport for every page until `sync_pages.transport` chooses (PR 14), pinned by
-tests/sync-live-gate.integration.test.ts.
+Plan: `docs/plans/project-browser/plan.md` (§3.2, §4.2, §4.7, §4.13), the protocol in `spec.md` §6. A page may send
+through its own browser (Chrome in its container, driven by our operator) instead of undici. Which one is the page's
+transport, `sync_pages.transport` (0277): `node` for every page until the owner switches it (I26).
+
+- **The switch** (PR 14, `sync page transport <page> browser|node [--prepare]`, `page-transport.ts`; audited
+  `admin.sync_page_transport`): the change commits with its audit row; the host reads the transports every pass,
+  ends the page's slot, and takes the page again with the other sender — a new owner generation, the takeover floor
+  (≥ 1.2 × S after every send the database knows of), and the identity check of the new sender first (the trusted
+  digest is the other sender's: checks-only until its proof). Leaving `browser` records a pending leave (0278), and
+  Node takes the page only once it is confirmed: while it is pending the host runs a leave instead of a slot (a new
+  owner generation, the operator's link, no actor) — the operator's `quiesced`, `stopPage` until it says it stopped,
+  the earlier owners' outcomes it kept taken as theirs before Node's recovery could close them `unknown`
+  (`reconcileHeldOutcomesOf`), the rest of its buffer taken until it is drained — a positive fact
+  (`browserBufferDrained`): in a state said after the stop the operator says its buffer is open and keeps nothing
+  (`state.buffer.open`: no outcome, nothing uncommitted, no byte), and the intake's subscription to that buffer
+  committed its last event; a buffer that cannot be opened (it counts 0 bytes) or an operator that does not say is
+  never drained, and the leave waits — and no site socket is open. An outcome the operator keeps and does not give
+  (a body that does not read: `unknown`) is asked for again at a bounded rate (2 s, doubling to 30 s), each step both
+  ways: the unfinished attempts by `recover` (or an empty one), and — whenever nothing moved since the step before —
+  a new connection, to which the operator delivers all it keeps (an outcome of an attempt settled already too, which
+  `recover` cannot name). Moved: its count of kept outcomes fell, a byte of an outcome came, or a delivery is under
+  way (a recover asked and not answered — the operator answers it after the deliveries ahead of it) whose last byte
+  came within 30 s. A delivery in flight, however slow, is never cut; a stalled one is, before the drain too. Then the
+  leave is confirmed under that generation's fence. An operator out of reach keeps
+  the page waiting (`browser_leave_unconfirmed`; alert 2 of that name once the leave has been pending for 2 min,
+  read from the pending leave — the page's owner beats meanwhile) until the owner says the container is stopped
+  (`--browser-stopped`; `scripts/deploy-page-browser.sh to-node` removes the container first, then says it): what
+  the operator kept is then marked not drained (`page_browsers.buffer_undrained_since`, alert 2
+  `browser_buffer_undrained`) until an operator of that profile says its open buffer keeps nothing and the intake
+  committed its last event — the drain of a stopped
+  container's buffer without taking the page back to its browser is PR 17's. A host that starts again finds the
+  leave pending and runs it first. The deploy refuses to roll back to an image that does not know the page
+  transport while a page is on its browser or leaving it (`verify_rollback_target_runs_no_browser_page`): what the
+  target can do is read from the image itself — the runtime image's label `agency-hub.sync-page-transport` (Dockerfile;
+  level 1: reads the transport, leaves a browser only confirmed) — never inferred from the migrations applied, which
+  stay applied when a deploy rolls back to an old image; an image or a count that cannot be read refuses too. A leave that waits for its operator is no stall of the process:
+  every look is reported to the watchdog. `browser` needs the page's browser ready: a profile
+  bound to the page with a pinned exit IP and an environment (`page_browsers.pinned_exit_ip`, `env`, 0277 — the
+  hello's settings besides the proxy; nothing writes them but `setPageBrowserSettings` yet: the owner's lever is
+  `sync browser pin-ip`, PR 17). `node` needs a stored Node session (or `--prepare`); a page leaving its browser waits
+  for its confirmed leave (above). A page whose browser is not ready (no profile bound, no pin, no environment) is not taken at all: it waits
+  (`browser_not_ready`), no owner generation is spent on it and no owner beats — alert 1 after its bound — and nothing is sent.
+- **A browser page's slot** (`fansly/browser-page.ts`): one link to the operator (the hello's settings read anew at
+  every connect) and over it the browser transport, the site path, the socket rows and the buffer's intake (its frames
+  to the live overlay as the engine's own socket's). The hand-over (plan §4.7): the operator answers the new owner's
+  hello with `quiesced` once the earlier owners' requests are over; until then nothing of the new owner goes (the
+  transport refuses, the site path holds nothing pending, the kept outcomes are not asked about); then the owner is
+  recorded on the profile (`page_browsers.handover_*`, which `confirm-stopped` waits for) and the pacer's floor is
+  raised to 1.2 × S after the last send the operator names (I5). A shutdown or a deploy leaves the browser running.
+- **The site path** (`fansly/browser-site.ts`): the operator's `siteAdmit` and `wsAdmit` are PR 8's pending
+  requests (a socket's CONNECT is a GET of the socket host, route `ws.upgrade`); the answers go only on the
+  connection they were asked on (a grant that cannot be written there ends not sent); a request under another session
+  than the live one, an unknown host and the second socket (`chatws`) are refused; an id asked again is never admitted
+  twice; `siteDone`/`wsDone` settle the end the slot waits for, acknowledged (`resultAck`) only after the actor
+  committed it. The site path runs on browser pages only: a `node` page with a container has no link to it (the login
+  before a switch, plan stage 4 step 2, comes with PR 15).
+- **The way back without a Node session** (owner decision №12, `--prepare`): the page goes to Node under a
+  credentials hold (`auth`, reason `transport_prepare`) that admits only the identity check of a candidate session;
+  the owner sends the session of his own browser (the credentials change), the engine checks it through Node by that
+  session — the base it stands on is the page and its proxy when no session is stored
+  (`readFanslyPageBase`) — and only a match is stored and trusted, in one transaction that is a CAS on that base
+  (`saveVerifiedFanslyCredentials`); the verify of what is stored then lifts the hold (A3). A stored session is never
+  tried under it: the hold names its digest as refused.
 
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
@@ -964,7 +1032,12 @@ tests/sync-live-gate.integration.test.ts.
   frames, `recover`. Its types mirror the operator's (`services/egress/page-browser-protocol.ts`); the engine never
   loads the page-browser app, and tests/page-browser-protocol-drift.test.ts keeps the two the same.
 - **The site's socket** (`fansly/ws/browser-source.ts`): the connection rows (`fansly_ws_connections.origin =
-  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`.
+  'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`. Their guard and the down timer
+  (`fansly/ws/browser-guard.ts`, PR 14), as the engine's own socket has them: while the link to the operator is up,
+  the intake is subscribed and the stream says a connection is open, its row is renewed every 5 s (a quiet socket is
+  not a dead one — the alerts and `socketUp` read the renewal); no verified, renewed connection for two minutes — from
+  the slot's start or from a close — raises `dm-conversations.ws-down` once per outage (a refused demand is written
+  again at the next check).
 - **The buffer's intake** (PR 13, `fansly/browser-intake.ts`): the operator's event stream — `events.subscribe` with
   the buffer id and the last number committed (`page_browsers.events_*`, 0276), each batch committed in ONE
   transaction with its new position under the page's owner generation, `ack` only after that commit (the next
@@ -997,8 +1070,8 @@ tests/sync-live-gate.integration.test.ts.
   no request waits for — after a restart, another session's answer — are kept as facts, complete through the codec
   (`<kind>:late`, `<kind>:foreign_session`), never applied in an attempt's place, and acknowledged after that commit;
   one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
-  Nothing is ever sent again from what the operator kept. The host builds neither the intake nor a browser transport before
-  `sync_pages.transport` (PR 14): an undici page has no `held`, and its recovery is as it always was.
+  Nothing is ever sent again from what the operator kept. An undici page has no `held`, and its recovery is as it
+  always was.
 
 ## Classes
 

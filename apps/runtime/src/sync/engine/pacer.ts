@@ -192,6 +192,18 @@ export class Pacer {
     this.#initialized = true;
   }
 
+  /**
+   * A later takeover fact learnt after the takeover (a page's browser: the
+   * operator's `quiesced` names the last send it saw, plan §4.7, §4.13): no
+   * send before `atMono`. Only ever raises the floor — a takeover never
+   * shortens a pause.
+   */
+  raiseTakeoverFloor(atMono: number): void {
+    if (!Number.isFinite(atMono)) throw new PacerInvariantError("floor_invalid", String(atMono));
+    if (!this.#initialized) throw new PacerInvariantError("no_takeover");
+    this.#st.floorMono = Math.max(this.#st.floorMono, atMono);
+  }
+
   /** No new admission from now on; a dispatch not yet started is refused. */
   stop(): void {
     this.#stopping = true;

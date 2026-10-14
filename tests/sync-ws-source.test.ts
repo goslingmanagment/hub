@@ -291,7 +291,9 @@ describe("the socket source", () => {
     const host = read("apps/runtime/src/sync/engine/host.ts");
     // A slot is a live page's: the mode loop acquires no other.
     expect(host).toMatch(/#runs\(page: SyncPageRow\): boolean \{\s+return page\.mode === "live" && this\.#liveLoopEnabled;/);
-    expect(host).toContain("const ws = this.#createWsSource(page, generation);");
+    // A `node` page's (Project Browser PR 14: a browser page's socket is the
+    // site's, its rows the browser slot's).
+    expect(host).toContain('const ws = sender === "node" ? this.#createWsSource(page, generation) : null;');
     const exit = host.slice(host.indexOf("async #onActorExit("));
     expect(exit.indexOf("await slot.ws?.stop(")).toBeGreaterThan(-1);
     expect(exit.indexOf("await slot.ws?.stop(")).toBeLessThan(exit.indexOf("this.#release(slot.pageId, slot.generation)"));

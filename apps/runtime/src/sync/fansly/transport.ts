@@ -9,7 +9,7 @@ import {
 import { type AppConfig, type FanslySessionBundle, type ProxyConfig } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
-import { readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
+import { readFanslyPageBase, readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
 import { resolveEgress, type AppEgressContext } from "../../services/egress/resolver.ts";
 import { BadRequestError } from "../../services/errors.ts";
@@ -98,7 +98,10 @@ export interface IdentityCandidateSecret {
 interface ResolvedEgress {
   egress: AppEgressContext;
   dispatcher: Dispatcher;
-  /** Null: the page has no stored credentials (no API request can be built). */
+  /** The stored credentials' digest — or, for a page with no session stored,
+   *  the digest of the page and its proxy (`readFanslyPageBase`: the base of
+   *  the identity check of a candidate session, owner decision №12). Null:
+   *  it does not read. */
   generation: string | null;
 }
 
@@ -106,7 +109,7 @@ interface ResolvedEgress {
 async function resolvePageEgress(ctx: PageTransportContext, page: { pageId: number; pageLabel: string }): Promise<ResolvedEgress> {
   const resolved = await ctx.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
-    const generation = await readFanslyPageGeneration(tx, page.pageLabel).catch(() => null);
+    const generation = await readFanslyPageBase(tx, page.pageLabel).catch(() => null);
     const egress = await resolveEgress({ db: tx, config: ctx.config }, { kind: "page", pageId: page.pageId });
     return { generation, egress };
   }, { isolationLevel: "repeatable read", accessMode: "read only" });
@@ -156,20 +159,25 @@ export async function createPageTransport(
     const identity = work?.resource === IDENTITY_CHECK_KEY;
     const snapshot = await ctx.db.transaction(async (raw) => {
       const tx = raw as unknown as Database;
-      const generation = await readFanslyPageGeneration(tx, page.pageLabel);
+      // The identity check of a candidate stands on the base (the stored
+      // digest, or — no session stored, a page that ran on its browser — the
+      // page and its proxy, owner decision №12); every other request needs a
+      // stored session.
+      const generation = identity ? await readFanslyPageBase(tx, page.pageLabel) : await readFanslyPageGeneration(tx, page.pageLabel);
       const stored = await findPageById(tx, page.pageId);
-      if (stored?.credentials == null) {
+      if (stored?.credentials == null && !identity) {
         throw new BadRequestError(`Page "${page.pageLabel}" has no stored platform credentials`);
       }
       const verified = (await getSyncPage(tx, page.pageId))?.credentialsGeneration ?? null;
       const secret = identity && work !== undefined ? await readSyncWorkSecretParams(tx, work.id) : null;
-      return { generation, verified, encryptedSession: stored.credentials.encryptedSession, secret };
+      return { generation, verified, encryptedSession: stored?.credentials?.encryptedSession ?? null, secret };
     }, { isolationLevel: "repeatable read", accessMode: "read only" });
     if (!CREDENTIALS_CHECK_KEYS.has(work?.resource ?? "") && snapshot.verified !== snapshot.generation) {
       throw new CredentialsGenerationChangedError(page.pageId, snapshot.generation, snapshot.verified);
     }
     await followGeneration(snapshot.generation);
     if (!identity || work === undefined) {
+      if (snapshot.encryptedSession === null) throw new BadRequestError(`Page "${page.pageLabel}" has no stored platform credentials`);
       const session = decodeStoredFanslySession(ctx, snapshot.encryptedSession, page.pageLabel);
       return {
         ...buildFanslyWireRequest(request.spec, request.params as never, {
@@ -197,7 +205,12 @@ export async function createPageTransport(
     } catch {
       throw new UnsendableRequestError("secret_unreadable", { failure: "secret_unreadable", matches: null });
     }
-    const session = secret.session ?? decodeStoredFanslySession(ctx, snapshot.encryptedSession, page.pageLabel);
+    if (secret.session === undefined && snapshot.encryptedSession === null) {
+      // Nothing stored to check, and no session of the owner's: there is no
+      // identity to ask about.
+      throw new UnsendableRequestError("identity_candidate_missing", { failure: "identity_candidate_missing", matches: null });
+    }
+    const session = secret.session ?? decodeStoredFanslySession(ctx, snapshot.encryptedSession!, page.pageLabel);
     const built: FanslyWireRequest = {
       ...buildFanslyWireRequest(request.spec, request.params as never, {
         baseUrl: ctx.config.fanslyBaseUrl,

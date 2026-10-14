@@ -584,6 +584,12 @@ export class SyncActor {
       }
       return committed.exit;
     }
+    // Committed: the browser may drop the end it kept (PR 14).
+    try {
+      site.settled?.(classified.request.id, attemptId);
+    } catch (error) {
+      d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: the site path's settle failed");
+    }
     return null;
   }
 

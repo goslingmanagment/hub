@@ -106,7 +106,13 @@ export async function admitSite(
   const { classified, grant } = input;
   const manual = classified.exempt;
   return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update", live: true });
+    await lockOwnedPage(tx, {
+      pageId: d.pageId,
+      generation: d.generation,
+      lock: "no_key_update",
+      live: true,
+      ...(d.pageTransport === undefined ? {} : { transport: d.pageTransport }),
+    });
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
     if (page.pausedAll && !manual) throw new AdmissionHeldError("paused", null);

@@ -28,7 +28,7 @@ import type {
   ThreadChainChangedHook,
   WorkClosedHook,
 } from "../../apps/runtime/src/sync/engine/commit.ts";
-import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
+import { createPacer, type Pacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import {
   systemClock,
   type AlertSink,
@@ -37,6 +37,7 @@ import {
   type PageTransport,
   type SendHooks,
   type SettingsSource,
+  type SiteAdmissionPort,
   type SyncAlertInput,
   type SyncAlertKey,
   type SyncMetricLabels,
@@ -290,6 +291,10 @@ export interface TestActorOptions {
   settingMs?: number;
   /** Default: a `ScriptedLiveTransport` answering every request 200. */
   transport?: PageTransport;
+  /** Built after the acquisition, with its generation and the actor's pacer
+   *  (a page's browser: its link carries the generation, its `quiesced`
+   *  raises the pacer's floor): the transport, and the site path. */
+  build?: (ctx: { generation: bigint; pacer: Pacer }) => Promise<{ transport: PageTransport; site?: SiteAdmissionPort }>;
   ownership?: OwnershipSession;
   alerts?: AlertSink;
   metrics?: Metrics;
@@ -347,6 +352,7 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     minSettingMs: 1,
   });
   pacer.initTakeover(options.floorDelayMs ?? 0);
+  const built = options.build === undefined ? null : await options.build({ generation: acquired.generation, pacer });
   const deps: ActorDeps = {
     db: options.db,
     pageId: options.pageId,
@@ -359,7 +365,8 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     metrics: options.metrics ?? new RecordingMetrics(),
     logger: quietLogger,
     pacer,
-    transport: options.transport ?? new ScriptedLiveTransport(),
+    transport: built?.transport ?? options.transport ?? new ScriptedLiveTransport(),
+    ...(built?.site === undefined ? {} : { site: built.site }),
     ownership,
     wake: options.wake ?? immediateWake,
     ...(options.faults === undefined ? {} : { faults: options.faults }),

@@ -133,6 +133,10 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "helloResult", ok: false, reason: "protocol_major", supportedMajors: [1] },
   { type: "quiesced", previousGeneration: 3, lastSendMono: 12.5, lastSendWall: null },
   { ...STATE, stopReason: "request_unended", sessionFingerprint: null, selfTest: null },
+  // What the open buffer holds (PR 14) — and a buffer that cannot be opened,
+  // which a `stopPage` shows with another stop reason and 0 bytes.
+  { ...STATE, buffer: { bytes: 10, oldestAgeMs: 5, open: { id: UUID, lastSeq: 41, outcomes: 2, pending: 1 } } },
+  { ...STATE, stopReason: "owner_stop", exitOpen: false, buffer: { bytes: 0, oldestAgeMs: 0, open: null } },
   { type: "ping", n: 1 },
   { type: "pong", n: 2 },
   { type: "check", attemptId: 9, pausedMono: 100.25, liveSessionFingerprint: FP },
@@ -207,6 +211,17 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.BODY_PART_BYTES).toBe(Operator.BODY_PART_BYTES);
     expect([...Engine.STEPS]).toEqual([...OPERATOR_STEPS]);
     expect([...Engine.STOP_REASONS]).toEqual([...OPERATOR_STOP_REASONS]);
+  });
+
+  it("reads what the buffer holds only as the operator says it: absent stays unknown, a malformed word is a protocol error", () => {
+    const parse = (buffer: unknown) => Engine.parseOperatorMessage(JSON.stringify({ ...STATE, buffer }));
+    // An operator from before the addition: nothing is made up for it.
+    const before = parse({ bytes: 0, oldestAgeMs: 0 });
+    expect(before).toMatchObject({ ok: true });
+    expect(before.ok && before.message.type === "state" && "open" in before.message.buffer).toBe(false);
+    for (const open of [{}, { id: UUID, lastSeq: -1, outcomes: 0, pending: 0 }, { id: UUID, lastSeq: 1, outcomes: 0.5, pending: 0 }, { id: 7, lastSeq: 1, outcomes: 0, pending: 0 }, true, 0]) {
+      expect(parse({ bytes: 0, oldestAgeMs: 0, open }), JSON.stringify(open)).toMatchObject({ ok: false });
+    }
   });
 
   it("reads every message the operator sends", () => {

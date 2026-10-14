@@ -940,6 +940,23 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # updates the table by named columns; nothing takes a page's buffer before
   # the transport switch (PR 14), so it runs unchanged after a rollback.
   "0276_page_browser_intake.sql"
+  # Project Browser PR 14: sync_pages.transport (constant default 'node':
+  # catalog only; its check added NOT VALID and validated over a handful of
+  # rows) and page_browsers' hand-over columns (nullable, no default), under a
+  # 5 s lock_timeout. The previous image never names the columns and no lever
+  # of it writes 'browser', so every page is on 'node' when it runs again: it
+  # runs unchanged after a rollback of the deploy that applies this. (Once a
+  # page is on 'browser', an image older than this release must not run it.)
+  "0277_sync_pages_transport.sql"
+  # Project Browser PR 14 (Astra): a page's pending leave of its browser and
+  # the last confirmed one on sync_pages (nullable, no default: catalog only;
+  # their check NOT VALID then validated over a handful of rows), and
+  # page_browsers.buffer_undrained_since, under a 5 s lock_timeout. The
+  # previous image never names them; the rollback below refuses to go back to
+  # an image that does not know the page transport (its own label says) while
+  # a page is on its browser or a leave is pending
+  # (verify_rollback_target_runs_no_browser_page).
+  "0278_sync_pages_browser_leave.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -1520,6 +1537,69 @@ SQL'")" || return 1
   [[ "$unsafe_count" == "0" ]]
 }
 
+# Project Browser (stage 3 PR 14, Astra's reviews): an image whose engine does
+# not read sync_pages.transport runs every page through Node. On a page whose
+# transport is its browser, or whose leave of the browser is still pending, it
+# would send beside the browser — whose site socket outlives the engine's link
+# and keeps its frames going.
+#
+# What the rollback target can do is read from the image itself, never
+# inferred from the schema's history: the migrations stay applied after a
+# failed deploy that rolled back, so on the next deploy they are in the
+# baseline while the image that would be restored is still the old one. The
+# runtime image says it in a label (Dockerfile):
+#   agency-hub.sync-page-transport=<level>
+#   1 — the engine reads the page's transport and takes a page off its browser
+#       only once the leave is confirmed.
+# A target without the label, or with a level below the one this release
+# needs, is refused while any page is not plainly on Node. The columns the
+# count names are those the schema has now (the rollback captured it): none
+# before 0277 — no page can stand off Node — the transport with 0277, a
+# pending leave with 0278. Read-only; fails closed (the image or the count
+# cannot be read: no rollback).
+verify_rollback_target_runs_no_browser_page() {
+  local label="agency-hub.sync-page-transport"
+  local needed=1
+  if ! grep -Fxq "0277_sync_pages_transport.sql" "$SCHEMA_AFTER_FILE"; then
+    return 0
+  fi
+  local level
+  if ! level="$(run_remote "set -euo pipefail; docker image inspect --format '{{ index .Config.Labels \"${label}\" }}' $(printf '%q' "$ROLLBACK_IMAGE_TAG")")"; then
+    printf '[deploy] The rollback image %s cannot be read: whether its engine knows the page transport is unknown.\n' "$ROLLBACK_IMAGE_TAG" >&2
+    return 1
+  fi
+  if [[ "$level" =~ ^[0-9]+$ ]] && (( 10#$level >= needed )); then
+    log "The rollback image knows the page transport (${label}=${level}): it may run a page on its browser"
+    return 0
+  fi
+  # A quote of the SQL, as the remote sh -c '…' below needs it written.
+  local quote="'\\''"
+  local conditions="transport <> ${quote}node${quote}"
+  if grep -Fxq "0278_sync_pages_browser_leave.sql" "$SCHEMA_AFTER_FILE"; then
+    conditions="${conditions}"$'\n   OR browser_leave_generation IS NOT NULL'
+  fi
+  local pages
+  pages="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
+export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
+psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
+BEGIN READ ONLY;
+SELECT count(*)
+FROM sync_pages
+WHERE ${conditions};
+COMMIT;
+SQL'")" || return 1
+  [[ "$pages" =~ ^[0-9]+$ ]] || return 1
+
+  if [[ "$pages" != "0" ]]; then
+    printf '[deploy] %s page(s) are on their browser, or leaving it (sync_pages.transport, browser_leave_generation).\n' "$pages" >&2
+    printf '[deploy] The image this rollback would return to does not know the page transport (no label %s at level %s):\n' "$label" "$needed" >&2
+    printf '[deploy] it would send through Node beside the page'\''s browser. Move the page back to Node and confirm its leave\n' >&2
+    printf '[deploy] (sync page transport <page> node; scripts/deploy-page-browser.sh to-node) before any rollback.\n' >&2
+    return 1
+  fi
+  log "No page is on its browser or leaving it: the previous image may run every page"
+}
+
 # Decision #239: a deploy recreates the runtime containers, and a
 # `capture:backfill --execute` running inside one of them dies with them.
 # That is exactly how production run 1 ended on 2026-08-18 — the #87 deploy
@@ -1611,6 +1691,12 @@ rollback_remote_stack() {
   if ! verify_remote_legacy_onlyfans_dm_messages_retired; then
     log "Rollback skipped; durable retirement of legacy OnlyFans dm_messages is not proven"
     log "An old image could resurrect the paid crawler; keep the current stack stopped and inspect page_sync_states"
+    return 0
+  fi
+
+  if ! verify_rollback_target_runs_no_browser_page; then
+    log "Rollback skipped; the previous image does not know the page transport (or cannot be read), and a page is on its browser or leaving it"
+    log "An old image would send through Node beside the page's browser; inspect sync_pages.transport before choosing a manual rollback"
     return 0
   fi
 

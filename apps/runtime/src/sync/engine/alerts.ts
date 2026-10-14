@@ -333,6 +333,14 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   const { journal, live, now } = facts;
   // 2. The live path degraded.
   const degraded: SyncAlertCondition["reasons"] = [];
+  // A page whose transport left its browser, the leave not confirmed (PR 14):
+  // Node does not take it, nothing is sent — until its operator confirms the
+  // stop or the owner says the container is stopped. First: a socket that is
+  // down beside it is its consequence. The page's owner beats meanwhile (the
+  // host's leave), so alert 1 does not see it.
+  if (live.browserLeaveSince !== null && msSince(live.browserLeaveSince, now) > SYNC_OWNERSHIP_UNCONFIRMED_MS) {
+    degraded.push({ detail: "browser_leave_unconfirmed", since: live.browserLeaveSince });
+  }
   if (!live.socket.up && msSince(live.socket.lastAliveAt, now) > SYNC_SOCKET_DOWN_MS) {
     degraded.push({ detail: "socket_down", since: live.socket.lastAliveAt });
   }
@@ -343,6 +351,11 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   // socket's frames and the site's answers wait in it until the owner acts.
   if (live.bufferHalted !== null) {
     degraded.push({ detail: "browser_buffer_halted", since: live.bufferHalted.at, context: { ...live.bufferHalted } });
+  }
+  // A page that left its browser on the owner's word, before what the
+  // browser kept was taken (PR 14): it waits in the buffer until drained.
+  if (live.bufferUndrainedSince !== null) {
+    degraded.push({ detail: "browser_buffer_undrained", since: live.bufferUndrainedSince });
   }
   const quarantined = Object.entries(journal.quarantined);
   if (quarantined.length > 0) {
@@ -514,6 +527,8 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
     unconfirmed: { count: 0, oldestVisibleAt: null },
     unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
     bufferHalted: null,
+    bufferUndrainedSince: null,
+    browserLeaveSince: null,
   },
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,

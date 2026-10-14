@@ -415,6 +415,11 @@ export interface PendingSiteRequest {
   path: string;
   /** When the engine heard of it (this process's monotonic clock). */
   askedMono: number;
+  /** When the request's own wait ends, on this process's monotonic clock
+   *  (the browser's absolute deadline: a socket's counts from its CONNECT,
+   *  before the engine heard of it). Never admitted at or after it. Absent:
+   *  the engine's wait alone (`SITE_WAIT_MS` from `askedMono`). */
+  waitDeadlineMono?: number;
   /** The operator is in its manual-login mode: the owner logs in. Only then
    *  does a login operation pass, and only then do the site's requests pass
    *  the page's pause, its credentials hold and checks-only (plan §3.2). */
@@ -459,4 +464,7 @@ export interface SiteAdmissionPort {
   refuse(id: string, reason: SiteRefusalReason): void;
   /** The end of an admitted request; never throws for an outcome. */
   end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
+  /** The end of `id` (its attempt `attemptId`) is committed: a browser that
+   *  keeps the end until it is acknowledged may drop it now. Never throws. */
+  settled?(id: string, attemptId: number): void;
 }

@@ -18,6 +18,7 @@ Usage:
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
+  scripts/deploy-page-browser.sh to-node  <user@host> --page <name> [--prepare] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh status   <user@host> [--page <name>]
 
   host      Prepares the server, again after any change to its files: the
@@ -38,6 +39,13 @@ Usage:
             stays the page's previous one.
   rollback  Back to the page's previous image.
   down      Removes the container; the profile's volumes stay.
+  to-node   Takes the page off its browser for good when its operator cannot
+            confirm the leave: removes the container, checks it is gone, then
+            tells the Hub (`sync page transport <page> node --browser-stopped`,
+            in the api container under --hub-dir, default /opt/agency-hub),
+            audited. Node takes the page; what the browser's buffer kept is
+            marked not drained. --prepare: the page has no Node session (it
+            was connected through its browser) — the owner's session follows.
   status    The page containers, their images and health.
 
 Options: --identity <path>, --ssh-port <port>. Any other option goes to
@@ -65,10 +73,16 @@ REMOTE="${2:-}"
 shift 2
 SSH_ARGS=(-o BatchMode=yes -o ConnectTimeout=15)
 PAGE_ARGS=()
+PAGE_NAME=""
+TO_NODE_PREPARE=0
+HUB_DIR=/opt/agency-hub
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) SSH_ARGS+=(-i "$2"); shift 2 ;;
     --ssh-port) SSH_ARGS+=(-p "$2"); shift 2 ;;
+    --prepare) TO_NODE_PREPARE=1; shift ;;
+    --hub-dir) [[ $# -ge 2 ]] || fail "$1 needs a value"; HUB_DIR="$2"; shift 2 ;;
+    --page) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_NAME="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --new-profile) PAGE_ARGS+=("$1"); shift ;;
     --*) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     *) fail "unexpected argument $1" ;;
@@ -173,9 +187,30 @@ build() {
   log "built $tag"
 }
 
+# The page off its browser for good (Project Browser PR 14): its container
+# removed and gone, then the Hub told the browser is stopped — its pending
+# leave confirmed by the owner's word, audited. Never the other way round: a
+# Hub told before the container is gone would let Node send beside a live
+# site socket.
+to_node() {
+  [[ -n "$PAGE_NAME" ]] || fail "to-node needs --page <name>"
+  [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9_.-]{0,62}$ ]] || fail "not a page name: $PAGE_NAME"
+  page_remote down --page "$PAGE_NAME"
+  run_remote "set -euo pipefail; ! docker inspect $(printf '%q' "page-browser-${PAGE_NAME}") >/dev/null 2>&1" \
+    || fail "page-browser-${PAGE_NAME} still exists: the Hub is not told it stopped"
+  local cli=(node apps/runtime/dist/cli.js sync page transport "$PAGE_NAME" node --browser-stopped)
+  [[ "$TO_NODE_PREPARE" == "1" ]] && cli+=(--prepare)
+  cli+=(--note "deploy-page-browser.sh to-node: container page-browser-${PAGE_NAME} removed")
+  local quoted="" arg
+  for arg in "${cli[@]}"; do quoted+=" $(printf '%q' "$arg")"; done
+  run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); docker compose --env-file .env.production -f docker-compose.production.yml exec -T api${quoted}"
+  log "page ${PAGE_NAME}: its browser is stopped and the Hub knows it; Node takes the page"
+}
+
 case "$COMMAND" in
   host) host ;;
   build) build ;;
+  to-node) to_node ;;
   up|rollback|down|status) page_remote "$COMMAND" "${PAGE_ARGS[@]}" ;;
   *) usage; exit 2 ;;
 esac

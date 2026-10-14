@@ -59,6 +59,14 @@ export class BrowserWsSource implements LivePageSocket {
 
   readonly connectNotBefore = null;
 
+  /** The site's connection open now (the operator's id), or null. */
+  get openConnectionId(): string | null {
+    if (this.#stopped) return null;
+    let last: string | null = null;
+    for (const id of this.#open) last = id;
+    return last;
+  }
+
   /** The engine never opens a browser page's socket: nothing is sent. */
   async handshake(_hooks: SendHooks, _signal: AbortSignal): Promise<TransportOutcome> {
     return { kind: "aborted_before_send", refusal: "lease_inactive" };

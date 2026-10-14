@@ -91,6 +91,10 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/egress/page-browser-rpc.ts",
   "apps/runtime/src/sync/fansly/browser-transport.ts",
   "apps/runtime/src/sync/fansly/ws/browser-source.ts",
+  // Project Browser (stage 3 PR 14): Map/Set.delete forget the site path's
+  // requests once refused or settled, and the oldest finished ids. No SQL
+  // deletion: the journal keeps every admission.
+  "apps/runtime/src/sync/fansly/browser-site.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

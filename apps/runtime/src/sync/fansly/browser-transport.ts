@@ -19,7 +19,7 @@ import {
   type PageBrowserRpcClient,
 } from "../../services/egress/page-browser-rpc.ts";
 import { credentialsGenerationOfAttempt } from "../engine/commit.ts";
-import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY, retryAfterDelayMs } from "../engine/errors.ts";
+import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY } from "../engine/errors.ts";
 import { REQUEST_TIMEOUT_MS } from "../engine/pacer.ts";
 import {
   CredentialsGenerationChangedError,
@@ -36,6 +36,7 @@ import {
 } from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
+import { SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
 import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 
 // The browser page transport (Project Browser, plan §3.2, §4.2; stage 3 PR
@@ -90,6 +91,10 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   session's answer that arrived whole is kept as a fact by the actor's
 //   late intake (`held`, below) and then acknowledged; a body that did not
 //   arrive whole stays with the operator, which sends it again.
+// - Nothing goes before the operator's `quiesced` for this owner: the
+//   previous owner's requests are not known to be over until it says so
+//   (plan §4.7, PR 14); `prepare` refuses, and the kept outcomes are not
+//   asked about before it.
 // - The operator not reachable or not ready is not Fansly's failure (no
 //   network hold, plan §3.2): `prepare` refuses with
 //   `PageTransportUnavailableError` and nothing is admitted; a request the
@@ -134,10 +139,9 @@ const PENDING_RECOVER_CHUNK = 64;
 /** The pause before an outcome whose body did not arrive whole is asked for
  *  again. */
 const PENDING_RETRY_MS = 1_000;
-/** A reported send instant is taken this much later than the bridge says:
- *  the shift between the two clocks is read, not known, and the pause must
- *  never run from an instant before the true send (I1: a strict minimum). */
-export const SEND_REPORT_GUARD_MS = 1;
+/** A reported send instant is taken this much later than the bridge says
+ *  (`browser-site.ts`, shared with the site path). */
+export { SEND_REPORT_GUARD_MS };
 
 export interface BrowserPageTransportContext {
   db: Database;
@@ -289,6 +293,7 @@ export async function createBrowserPageTransport(
     if (status.kind === "refused") return unavailable(`the page's browser refused the link (${status.reason})`);
     const now = monoNow();
     if (now < unavailableUntil) return unavailable("the page's browser could not take the last request", unavailableUntil - now);
+    if (client.up && client.quiesced === null) return unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250);
     const why = notTaking(client.state);
     return why === null ? null : unavailable(why);
   }
@@ -661,16 +666,7 @@ export async function createBrowserPageTransport(
   /** A site request's or a site socket's end, as the site path takes it. */
   function heldEnd(end: SiteDone | WsDone): HeldAnswer {
     if (end.type === "wsDone" && end.fate === "unknown") return { kind: "unknown", attemptId: end.attemptId, held: true };
-    const sentMono = end.sentMono === null ? null : bridge.fromKernel(end.sentMono) + SEND_REPORT_GUARD_MS;
-    let siteEnd: SiteRequestEnd;
-    if (!end.sent) siteEnd = { kind: "aborted_before_send", reason: "not_sent" };
-    else if (end.status !== null) {
-      const retryAfter = end.type === "siteDone" ? end.retryAfter : null;
-      siteEnd = { kind: "response", status: end.status, retryAfterMs: retryAfterDelayMs(retryAfter, null, new Date()), sentMono };
-    } else {
-      const message = end.type === "siteDone" ? end.error?.message ?? "no answer" : end.error ?? "no answer";
-      siteEnd = { kind: "transport_error", sent: true, message, sentMono };
-    }
+    const siteEnd: SiteRequestEnd = siteRequestEndOf(end, bridge);
     return { kind: "site", attemptId: end.attemptId, end: siteEnd, sentWall: end.sent ? wallOfKernel(end.sentMono) : null };
   }
 
@@ -685,12 +681,14 @@ export async function createBrowserPageTransport(
     async recover(attemptIds, waitMs) {
       if (attemptIds.length === 0) return new Map();
       const deadline = monoNow() + Math.min(waitMs, recoverWaitMs);
-      while (!client.up && !closed && monoNow() < deadline) {
+      // After the operator's quiesced: an earlier owner's request it still
+      // ends has its outcome by then (plan §4.7).
+      while ((!client.up || client.quiesced === null) && !closed && monoNow() < deadline) {
         const status = client.status.kind;
         if (status === "superseded" || status === "refused" || status === "closed") return null;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      if (!client.up) return null;
+      if (!client.up || client.quiesced === null) return null;
       let answer: Awaited<ReturnType<typeof client.recover>> | null;
       let timer: NodeJS.Timeout | undefined;
       try {
