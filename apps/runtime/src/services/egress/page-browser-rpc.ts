@@ -20,7 +20,6 @@ import {
   type EngineToOperator,
   type EventsRefused,
   type Hello,
-  type Mode,
   type OperatorParams,
   type OperatorToEngine,
   type Quiesced,
@@ -445,7 +444,7 @@ export class PageBrowserRpcClient {
    *  within `waitMs` — whether it ran is then not known. `notAfterMono` is
    *  the operator's clock (CLOCK_MONOTONIC): later, it is not executed.
    *  `commandId`: the owner's own id of it (the operator runs an id once). */
-  command(kind: CommandKind | { kind: "setMode"; mode: Mode }, notAfterMono: number, waitMs: number, commandId: string = randomUUID()): Promise<CommandResult | null> {
+  command(kind: CommandKind | Exclude<Command["command"], { kind: CommandKind }>, notAfterMono: number, waitMs: number, commandId: string = randomUUID()): Promise<CommandResult | null> {
     const command: Command["command"] = typeof kind === "string" ? { kind } : kind;
     return new Promise((resolve) => {
       const timer = setTimeout(() => settle(null), waitMs);

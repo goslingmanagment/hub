@@ -11,6 +11,7 @@ import { LoginDesk } from "../apps/page-browser/src/login/desk.ts";
 import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, type FormMarks, type PageMarks, type SessionMarks } from "../apps/page-browser/src/login/screens.ts";
 import { loadConfig } from "../apps/page-browser/src/operator/config.ts";
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
+import { HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
 import { decodeBodyFrame, parseLoginRequest } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
@@ -466,7 +467,7 @@ interface SetUp {
   rpcPort: number;
 }
 
-async function setUp(options: { apiToken?: string | null } = {}): Promise<SetUp> {
+async function setUp(options: { apiToken?: string | null; haltStore?: HaltStore } = {}): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -518,6 +519,7 @@ async function setUp(options: { apiToken?: string | null } = {}): Promise<SetUp>
     chrome: control,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
+    ...(options.haltStore ? { haltStore: options.haltStore } : {}),
     timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
   });
   const ports = await operator.start();
@@ -776,6 +778,42 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
       "fansly-session-id": "720167541418230022",
     });
   }
+
+  it("a browser Fansly signed out (login_required held): started only for the owner's login, and that halt cleared by the operator once the expected account is confirmed after it (PR 17, Astra round 3)", async () => {
+    const store = new HaltStore(null);
+    const held = { id: randomUUID(), reason: "login_required" as const, atWall: Date.now() - 60_000 };
+    store.write(held);
+    const s = await setUp({ haltStore: store });
+    expect(s.operator.heldHalt).toEqual(held);
+    let attempt = 7600;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: ++attempt });
+      if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+    };
+    // In the automation: no start for it.
+    expect(await command(s.engine, { kind: "restartBrowser" })).toMatchObject({ ok: false, detail: expect.stringContaining("clearHalt first") });
+    // The owner's login: its start is taken.
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    expect(await command(s.engine, { kind: "restartBrowser" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded");
+    s.site.setTab(s.operator.control.workTab!.sessionId);
+    const token = "fansly-token-SiGnEdOuT0123456789ab";
+    const fingerprint = sessionFingerprint(token, SITE_CLIENT);
+    siteRead(s, token, SITE_CLIENT);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint, WAIT_MS);
+    // Still held while the person is in the page.
+    expect(s.operator.heldHalt).toEqual(held);
+    // The automation; the engine's identity read names the expected account: cleared.
+    const loads = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
+    s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
+    s.engine.send({ type: "send", ownerGeneration: 1, attemptId: 9701, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
+    await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
+    expect(s.operator.heldHalt).toBeNull();
+    expect(store.read()).toBeNull();
+    await s.engine.waitFor("state", (state) => state.halt === null && state.step === "ready", WAIT_MS);
+  });
 
   it("a ready page is not ready while a person is in it: back at the loaded site until the automation, and ready only once a fresh identity read confirms it", async () => {
     const s = await setUp();

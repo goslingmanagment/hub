@@ -290,6 +290,10 @@ interface State {
   // поля нет — оператор старше этого добавления (неизвестно). Пустым движок считает буфер только по open.
   buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
   selfTest: { ok: boolean; atWall: WallMs; failed: "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies" | null } | null;
+  // halt (minor 1, PR 17) — остановка ради решения владельца, которую оператор держит на своём томе через
+  // перезапуски: пока она есть, он отказывает любому запуску и открытию выхода; снимает её clearHalt с её id
+  // (или сам оператор — «нужен вход» после подтверждённого входа). null — нет; поля нет — оператор старше.
+  halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
 }
 interface PingPong { type: "ping" | "pong"; n: number }  // раз в 1 с; нет ответа 5 с — связь потеряна
 // ── запрос Hub (план §4.2) ──
@@ -367,7 +371,8 @@ type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
 interface Command extends FromEngine {
   type: "command"; commandId: CommandId; notAfterMono: MonoMs;  // просроченная не исполняется
   command: { kind: "closeExit" | "openExit" | "stopPage" | "restartBrowser" | "selfTest" | "profileSnapshot" }
-    | { kind: "setMode"; mode: Mode };
+    | { kind: "setMode"; mode: Mode }
+    | { kind: "clearHalt"; haltId: string };  // minor 1: снимает только названную остановку; движок шлёт её лишь оператору с полем halt
 }
 interface CommandResult { type: "commandResult"; commandId: CommandId; ok: boolean; detail: string | null }
 interface Alarm { type: "alarm"; atWall: WallMs; detail: Record<string, string | number | boolean>;  // без секретов

@@ -110,7 +110,10 @@ import type { Step, StopReason } from "../state/steps.ts";
 
 export type { Step, StopReason };
 
-export const PROTOCOL = { major: 1, minor: 0 } as const;
+// Minor 1 (Project Browser PR 17): the operator holds its halt for the
+// owner's decision on its volume — `state.halt` says it, `clearHalt` clears
+// it by its id.
+export const PROTOCOL = { major: 1, minor: 1 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -231,6 +234,13 @@ export interface State {
   /** `notInstalled` (an addition to spec §6.1): mechanisms the image does
    *  not have yet — reported, never counted as passed. */
   selfTest: { ok: boolean; atWall: WallMs; failed: SelfTestMechanism | null; notInstalled?: SelfTestMechanism[] } | null;
+  /** (An addition, minor 1, PR 17.) The halt the operator holds for the
+   *  owner's decision, kept on its volume across restarts: every start and
+   *  the exit's opening are refused until it is cleared (`clearHalt` with
+   *  its id; a `login_required` also by the operator, once the expected
+   *  account is confirmed after a login). `null`: none. Absent: an operator
+   *  from before the addition (it holds nothing, and takes no `clearHalt`). */
+  halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {
@@ -422,7 +432,7 @@ export interface Command extends FromEngine {
   commandId: CommandId;
   /** A command past this moment is not executed. */
   notAfterMono: MonoMs;
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode };
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string };
 }
 export interface CommandResult {
   type: "commandResult";
@@ -565,7 +575,7 @@ function parseHello(m: Record<string, unknown>): Hello {
   };
 }
 
-const COMMAND_KINDS = new Set<string>(["closeExit", "openExit", "stopPage", "restartBrowser", "selfTest", "profileSnapshot", "setMode"]);
+const COMMAND_KINDS = new Set<string>(["closeExit", "openExit", "stopPage", "restartBrowser", "selfTest", "profileSnapshot", "setMode", "clearHalt"]);
 
 function parseCommand(m: Record<string, unknown>): Command {
   const command = record(m.command, "command");
@@ -578,6 +588,11 @@ function parseCommand(m: Record<string, unknown>): Command {
     const mode = str(command.mode, "command.mode", 32);
     if (mode !== "automation" && mode !== "manual_login") throw new Invalid(`an unknown mode ${mode}`);
     return { ...base, command: { kind: "setMode", mode } };
+  }
+  if (kind === "clearHalt") {
+    const haltId = str(command.haltId, "command.haltId", 64);
+    if (haltId === "") throw new Invalid("an empty command.haltId");
+    return { ...base, command: { kind: "clearHalt", haltId } };
   }
   return { ...base, command: { kind: kind as CommandKind } };
 }

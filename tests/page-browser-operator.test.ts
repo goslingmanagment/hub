@@ -12,6 +12,7 @@ import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
+import { HaltFileUnreadable, HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -105,6 +106,7 @@ async function setUp(
     slotLimitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
+    haltStore?: OperatorDeps["haltStore"];
   } = {},
 ): Promise<SetUp> {
   const temp = tempDir();
@@ -162,6 +164,7 @@ async function setUp(
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
+      ...(options.haltStore ? { haltStore: options.haltStore } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
     });
     const ports = await operator.start();
@@ -660,6 +663,107 @@ describe("a lost control (plan §4.9)", () => {
     await until(() => !s.chrome.running, 5000);
     expect(next.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
     expect(next.egress.exitOpen).toBe(false);
+  });
+});
+
+describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => {
+  function commandOf(engine: FakeEngine, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const commandId = `c-${++commandN}`;
+    engine.send({ type: "command", ownerGeneration: engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: body });
+    return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
+  }
+  const heldOnDisk = (s: SetUp) => JSON.parse(readFileSync(join(s.dir, "state", "halt.json"), "utf8")) as { id: string; reason: string } | null;
+
+  it("is on the volume before the browser stops, survives a restart of the operator, and refuses every start and the exit's opening until the owner's clearHalt names it; a stale id clears nothing", async () => {
+    const s = await setUp({ exitIp: () => "198.51.100.9" });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.heldHalt !== null, 10_000, "the halt held");
+    const held = s.operator.heldHalt!;
+    expect(held).toMatchObject({ reason: "exit_ip_changed" });
+    expect(heldOnDisk(s)).toMatchObject({ id: held.id, reason: "exit_ip_changed" });
+    await until(() => s.engine.last("state")?.halt != null, 5000, "the halt said");
+    expect(s.engine.last("state")!.halt).toEqual({ id: held.id, reason: "exit_ip_changed", atWall: held.atWall });
+    // Refused, from anyone.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false, detail: expect.stringContaining("clearHalt first") });
+    expect(await command(s.engine, "openExit")).toMatchObject({ ok: false, detail: expect.stringContaining("clearHalt first") });
+    // The operator starts again (its container too): the halt is still held.
+    await s.operator.stop();
+    await s.engine.close();
+    const next = await s.newOperator();
+    expect(next.heldHalt).toEqual(held);
+    expect(next.page.snapshot).toMatchObject({ step: "exit_closed", stopReason: "exit_ip_changed", halted: true });
+    const engine = new FakeEngine();
+    await engine.connect(s.rpcPort());
+    cleanups.push(() => engine.close());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    expect(await engine.waitFor("helloResult")).toMatchObject({ ok: true, state: { stopReason: "exit_ip_changed", halt: { id: held.id, reason: "exit_ip_changed" } } });
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    expect(await command(engine, "restartBrowser")).toMatchObject({ ok: false });
+    // A clearHalt that names another halt clears nothing.
+    expect(await commandOf(engine, { kind: "clearHalt", haltId: "00000000-0000-4000-8000-000000000000" })).toMatchObject({ ok: false, detail: expect.stringContaining("nothing cleared") });
+    expect(next.heldHalt).toEqual(held);
+    expect(heldOnDisk(s)).toMatchObject({ id: held.id });
+    // The owner's: cleared on the volume, then a start is taken.
+    expect(await commandOf(engine, { kind: "clearHalt", haltId: held.id })).toMatchObject({ ok: true });
+    expect(next.heldHalt).toBeNull();
+    expect(heldOnDisk(s)).toBeNull();
+    expect(next.page.snapshot).toMatchObject({ halted: false, stopReason: null });
+    expect(await command(engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.control.calls.filter((call) => call === "start").length > starts, 10_000, "the start");
+  });
+
+  it("a stricter halt replaces a held login_required and is never replaced by it; the login starts only a browser held for login_required", async () => {
+    const loginRequired = { id: "11111111-1111-4111-8111-111111111111", reason: "login_required", atWall: Date.now() - 60_000 };
+    const s = await setUp({
+      exitIp: () => "198.51.100.9",
+      prepare: ({ stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, "halt.json"), `${JSON.stringify(loginRequired)}\n`);
+      },
+    });
+    expect(s.operator.heldHalt).toEqual(loginRequired);
+    // In the automation: no start for it.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false });
+    // The owner's login: the start for it is taken; its exit IP changed.
+    expect(await commandOf(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.heldHalt?.reason === "exit_ip_changed", 10_000, "the stricter halt held");
+    const stricter = s.operator.heldHalt!;
+    expect(stricter.id).not.toBe(loginRequired.id);
+    expect(heldOnDisk(s)).toMatchObject({ id: stricter.id, reason: "exit_ip_changed" });
+    // Not even the login starts it now; a clearHalt of the login_required clears nothing.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false });
+    expect(await commandOf(s.engine, { kind: "clearHalt", haltId: loginRequired.id })).toMatchObject({ ok: false });
+    expect(s.operator.heldHalt).toEqual(stricter);
+  });
+
+  it("a held halt that cannot be written is held in memory, refused all the same, and written once it can be", async () => {
+    let failing = true;
+    const store = new HaltStore(null);
+    const write = store.write.bind(store);
+    store.write = (halt) => {
+      if (failing) throw new Error("EIO");
+      write(halt);
+    };
+    const s = await setUp({ exitIp: () => "198.51.100.9", haltStore: store });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.heldHalt !== null, 10_000, "the halt held");
+    expect(store.read()).toBeNull();
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false });
+    failing = false;
+    await until(() => store.read() !== null, 5000, "the halt written");
+    expect(store.read()).toEqual(s.operator.heldHalt);
+  });
+
+  it("a halt file that cannot be understood stops the operator before it starts", async () => {
+    const temp = tempDir();
+    cleanups.push(temp.remove);
+    const stateDir = join(temp.dir, "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "halt.json"), "{ not json");
+    expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
+    writeFileSync(join(stateDir, "halt.json"), JSON.stringify({ id: "x", reason: "exit_ip_changed", atWall: 1 }));
+    expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
   });
 });
 
