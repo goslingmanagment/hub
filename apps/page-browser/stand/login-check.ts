@@ -29,6 +29,9 @@
 //     page as a person's would, and the site sends them itself;
 //   - those requests went only under an admission each, as login
 //     operations, with their preflights — none in the automation mode;
+//   - the site's read after the login (its interface's, PR 15) under an
+//     admission of its own too, its answer to the buffer; the account
+//     loaded under the new session is a success;
 //   - the screenshot is a JPEG of the page;
 //   - no marker in the log or the journal, nor in the buffer's files.
 //
@@ -394,6 +397,7 @@ const cdp = new DirectCdp(ws);
 const asks: SiteAdmit[] = [];
 const admitted: Array<{ id: string; route: string; operation: string; method: string; path: string }> = [];
 const committed: SiteDone[] = [];
+const readsEnded: Array<{ route: string; status: number | null; sent: boolean; session: string | null }> = [];
 const journal: RequestLine[] = [];
 let mode: OperatorMode = "manual_login";
 
@@ -438,6 +442,10 @@ const site: SiteRequests = new SiteRequests({
   fault: () => undefined,
   journal: (line) => journal.push(line),
   loginEnded: (end) => desk.loginEnded(end),
+  readEnded: (end) => {
+    readsEnded.push(end);
+    desk.readEnded(end);
+  },
 });
 egress.gate.onEvent = (event) => site.onGateEvent(event);
 
@@ -526,9 +534,14 @@ const afterLogin = await desk.submit(LOGIN, PASSWORD);
 check("the login: the code screen follows", screenOf(afterLogin) === "code [code]", screenOf(afterLogin));
 const afterCode = await desk.code(CODE);
 await sleep(500);
-// The site's read after it is closed in the manual login (its preflight
-// too): the new session shows once the automation is back.
 check("the code: the success (the site's code accepted, no form)", screenOf(afterCode) === "success []", { screen: screenOf(afterCode), sessionSeen: session.fingerprint !== sessionAtStart });
+// The site's read after it, its interface's, passes in the manual login
+// (PR 15): the account loaded under the new session is a success too.
+const readAt = Date.now();
+while (Date.now() - readAt < 5_000 && !committed.some((done) => asks.some((ask) => ask.path === "/api/v1/account/me" && ask.siteRequestId === done.siteRequestId))) await sleep(50);
+const afterRead = await desk.state();
+const accountLoaded = readsEnded.some((end) => end.route === "account.me" && end.sent && end.status === 200 && end.session !== null && end.session === session.fingerprint);
+check("the account loaded under the site's new session: the success", screenOf(afterRead) === "success []" && session.fingerprint !== sessionAtStart && accountLoaded, { screen: screenOf(afterRead), sessionSeen: session.fingerprint !== sessionAtStart, accountLoaded });
 const logins = loginBodies.filter((body) => body.path === "/api/v1/login");
 check("what was typed is what the site sent, byte for byte", logins.length === 2 && logins[0]!.username === LOGIN && logins[0]!.password === WRONG && logins[1]!.username === LOGIN && logins[1]!.password === PASSWORD
   && loginBodies.filter((body) => body.path === "/api/v1/login/twofa").map((body) => body.code).join() === CODE, { bodies: loginBodies.map((body) => body.path) });
@@ -537,11 +550,16 @@ check("what was typed is what the site sent, byte for byte", logins.length === 2
 await buffer.flush();
 const apiArrivals = arrivals.filter((arrival) => arrival.host === "apiv3.fansly.com");
 const posts = apiArrivals.filter((arrival) => arrival.method === "POST");
-const preflights = apiArrivals.filter((arrival) => arrival.method === "OPTIONS");
+const LOGIN_PATHS = ["/api/v1/login", "/api/v1/login/twofa"];
+const preflights = apiArrivals.filter((arrival) => arrival.method === "OPTIONS" && LOGIN_PATHS.includes(arrival.path));
 const loginAdmissions = admitted.filter((entry) => entry.operation === "login");
 check("each login went under its own admission, with its preflight (owner decision №1)", posts.length === 3 && preflights.length === posts.length && loginAdmissions.length === posts.length
   && loginAdmissions.every((entry) => entry.method === "POST" && (entry.route === "auth.login" || entry.route === "auth.twofa")), { posts: posts.length, preflights: preflights.length, admissions: loginAdmissions.map((entry) => entry.route) });
-check("the site's read after the login is not the manual login's: refused, never sent", !apiArrivals.some((arrival) => arrival.path === "/api/v1/account/me") && !asks.some((ask) => ask.path === "/api/v1/account/me"), { reads: apiArrivals.filter((arrival) => arrival.method === "GET").map((arrival) => arrival.path) });
+const readAdmissions = admitted.filter((entry) => entry.path === "/api/v1/account/me");
+const readEnds = committed.filter((done) => readAdmissions.some((entry) => entry.id === done.siteRequestId));
+check("the site's read after the login went under an admission of its own, with its preflight; its answer to the buffer", readAdmissions.length === 1 && readAdmissions[0]!.route === "account.me" && readAdmissions[0]!.operation === "read"
+  && apiArrivals.filter((arrival) => arrival.path === "/api/v1/account/me").map((arrival) => arrival.method).join() === "OPTIONS,GET"
+  && readEnds.length === 1 && readEnds[0]!.sent && readEnds[0]!.status === 200 && readEnds[0]!.body === "buffered", { admissions: readAdmissions.map((entry) => entry.route), arrivals: apiArrivals.filter((arrival) => arrival.path === "/api/v1/account/me").map((arrival) => arrival.method), ends: readEnds.map((done) => ({ sent: done.sent, status: done.status, body: done.body })) });
 const ends = committed.filter((done) => loginAdmissions.some((entry) => entry.id === done.siteRequestId));
 check("the logins' answers are not kept (they carry secrets)", ends.length === 3 && ends.every((done) => done.sent && done.status === 200 && done.body === "not_platform_data"), ends.map((done) => ({ sent: done.sent, status: done.status, body: done.body })));
 

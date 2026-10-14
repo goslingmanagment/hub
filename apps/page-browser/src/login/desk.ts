@@ -69,6 +69,8 @@ export class LoginDesk {
   #sessionAtStart: string | null = null;
   /** The site's code went and was answered 2xx in this manual login. */
   #codeAccepted = false;
+  /** The session the site's account read was last answered 2xx under. */
+  #accountLoaded: string | null = null;
 
   constructor(deps: LoginDeskDeps) {
     this.#deps = deps;
@@ -80,6 +82,15 @@ export class LoginDesk {
   begin(): void {
     this.#sessionAtStart = this.#deps.session();
     this.#codeAccepted = false;
+    this.#accountLoaded = null;
+  }
+
+  /** A read of the site ended (intercept/site.ts): the account loaded is a
+   *  sign of the success; a refused one says the session no longer works. */
+  readEnded(end: { route: string; status: number | null; sent: boolean; session: string | null }): void {
+    if (end.route !== "account.me" || !end.sent || end.status === null) return;
+    if (end.status >= 200 && end.status < 300) this.#accountLoaded = end.session;
+    else if (end.status === 401 || end.status === 403) this.#accountLoaded = null;
   }
 
   /** A login operation of the site ended (intercept/site.ts): the code's
@@ -185,7 +196,7 @@ export class LoginDesk {
   }
 
   async #recognize(): Promise<Recognized> {
-    return recognize(await this.#marks(), { live: this.#deps.session(), atStart: this.#sessionAtStart, codeAccepted: this.#codeAccepted });
+    return recognize(await this.#marks(), { live: this.#deps.session(), atStart: this.#sessionAtStart, codeAccepted: this.#codeAccepted, accountLoaded: this.#accountLoaded });
   }
 
   /** The element of `role` in the one form shown, by reference; the screen

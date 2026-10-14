@@ -48,9 +48,10 @@ import type { BrowserBufferIntake } from "./browser-intake.ts";
 // A page on Node has a link of its own for this (`openBrowserLoginLink`),
 // opened by its slot while the owner's login is open and closed once it is
 // over (a page on Node is otherwise never linked to its browser): the site
-// path for the login's requests alone (`loginOnly` — the page's reads and
-// socket are Node's), behind the slot's `LoginSitePort`; the buffer's intake
-// (the login screens' answers to `observations`: the buffer never ages full
+// path for the login's requests alone (`loginOnly` — the login operations and
+// the reads its interface makes; the socket is Node's), behind the slot's
+// `LoginSitePort`; the buffer's intake (those reads' answers to
+// `observations`, as any site answer: the buffer never ages full
 // while the page is on Node); the ends the operator keeps, acknowledged.
 
 export interface BrowserLoginTiming {

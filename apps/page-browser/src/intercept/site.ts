@@ -195,6 +195,10 @@ export interface SiteDeps {
    *  its route, its status (null: no answer; a preflight's answer is not
    *  its request's) and whether it was sent. Never what it carried. */
   loginEnded?: (end: { route: string; status: number | null; sent: boolean }) => void;
+  /** A read of the site ended (PR 15: the login desk's sign of the loaded
+   *  account): its route, its status, whether it was sent, and the session
+   *  its own headers carried. Never its body. */
+  readEnded?: (end: { route: string; status: number | null; sent: boolean; session: string | null }) => void;
   timings?: Partial<SiteTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -1285,6 +1289,7 @@ export class SiteRequests {
     if (end.status === null && !end.reload && !this.#sent(op) && !this.documents.replaced(op.document)) this.#failures += 1;
     op.end();
     if (op.operation === "login") this.#deps.loginEnded?.({ route: op.route, status: end.preflightAnswer ? null : end.status, sent: this.#sent(op) });
+    else this.#deps.readEnded?.({ route: op.route, status: end.preflightAnswer ? null : end.status, sent: this.#sent(op), session: op.ownFingerprint });
     // The body: whole and sealed, a mark, or none to keep.
     const capture = op.capture;
     let body: OutcomeBody | null = null;

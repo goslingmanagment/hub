@@ -71,15 +71,45 @@ describe("the screens (spec §7; signs fansly-login/1)", () => {
     expect(recognize(page([form({ code: 1, error: "Invalid code" })]), none)).toMatchObject({ screen: "error", fields: ["code"], siteError: "Invalid code" });
     expect(recognize(page([]), { live: "b".repeat(64), atStart: "a".repeat(64) })).toMatchObject({ screen: "success", fields: [] });
     expect(recognize(page([]), { live: "b".repeat(64), atStart: null })).toMatchObject({ screen: "success" });
-    // The site's code accepted: its new session may not show before the
-    // automation is back (the manual login closes its reads).
+    // The site's code accepted: its new session may not show yet.
     expect(recognize(page([]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "success" });
+    // The site loaded the account under the live session (its interface's
+    // read in the manual login, PR 15), though that session is the one at
+    // the start: a page logged in already.
+    expect(recognize(page([]), { live: "a".repeat(64), atStart: "a".repeat(64), accountLoaded: "a".repeat(64) })).toMatchObject({ screen: "success", why: expect.stringContaining("loaded the account") });
     // A form still shown wins: an accepted code with the code form again is no success.
     expect(recognize(page([form({ code: 1 })]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "code" });
   });
 
   it("a page without a form after the login alone (an e-mail notice, say) is unknown, never a success", () => {
     expect(recognize(page([]), { live: null, atStart: null, codeAccepted: false }).screen).toBe("unknown");
+    // An account loaded under another session than the live one, or none, is no sign.
+    expect(recognize(page([]), { live: "a".repeat(64), atStart: "a".repeat(64), accountLoaded: "b".repeat(64) }).screen).toBe("unknown");
+    expect(recognize(page([]), { live: null, atStart: null, accountLoaded: null }).screen).toBe("unknown");
+    // A form still shown wins over the account loaded.
+    expect(recognize(page([form({ password: 1, login: 1 })]), { live: "a".repeat(64), atStart: "a".repeat(64), accountLoaded: "a".repeat(64) }).screen).toBe("login");
+  });
+
+  it("the desk counts the account loaded only from a sent GET /account/me answered 2xx under the live session, in this manual login", async () => {
+    const chrome = new DeskChrome();
+    chrome.screen = "none";
+    const live = "a".repeat(64);
+    const d = new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(7), session: () => live, timings: { settleMs: 50, pollMs: 10 }, log: () => undefined });
+    d.begin();
+    d.readEnded({ route: "account.me", status: 200, sent: false, session: live });
+    d.readEnded({ route: "account.me", status: null, sent: true, session: live });
+    d.readEnded({ route: "account.me", status: 200, sent: true, session: "b".repeat(64) });
+    d.readEnded({ route: "site.other", status: 200, sent: true, session: live });
+    expect(await d.state()).toMatchObject({ screen: "unknown" });
+    d.readEnded({ route: "account.me", status: 200, sent: true, session: live });
+    expect(await d.state()).toMatchObject({ screen: "success" });
+    // A 401 under it says the session no longer works.
+    d.readEnded({ route: "account.me", status: 401, sent: true, session: live });
+    expect(await d.state()).toMatchObject({ screen: "unknown" });
+    d.readEnded({ route: "account.me", status: 200, sent: true, session: live });
+    // A new manual login starts from nothing.
+    d.begin();
+    expect(await d.state()).toMatchObject({ screen: "unknown" });
   });
 
   it("the desk counts the code accepted only from a sent POST /login/twofa answered 2xx, in this manual login", async () => {
@@ -497,10 +527,20 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
       // Its answer is not kept: a login's answer carries secrets.
       expect(done).toMatchObject({ sent: true, status: 200, body: "not_platform_data" });
     }
-    // The site's read after the login is not the manual login's (closed by
-    // the map), but its session is the page's now.
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT));
-    expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/account/me")).toBe(false);
+    // The site's read after the login, its interface's, passes in the manual
+    // login too (plan §4.8; PR 15) under the engine's admission, under the
+    // session that is the page's now; its answer goes to the buffer as any
+    // site answer.
+    const fingerprint = sessionFingerprint(SITE_TOKEN, SITE_CLIENT);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    const readAsk = s.engine.of("siteAdmit").find((ask) => ask.path === "/api/v1/account/me")!;
+    expect(readAsk).toMatchObject({ method: "GET", route: "account.me", operation: "read", sessionFingerprint: fingerprint });
+    const readDone = await s.engine.waitFor("siteDone", (done) => done.siteRequestId === readAsk.siteRequestId, 5000);
+    expect(readDone).toMatchObject({ sent: true, status: 200 });
+    const answered = await s.engine.waitFor("events", (message) => (message.events as Array<{ kind: string; route?: string }>).some((event) => event.kind === "site.response" && event.route === "account.me"));
+    expect((answered.events as Array<Record<string, unknown>>).find((event) => event.kind === "site.response")).toMatchObject({ route: "account.me", status: 200, sessionFingerprint: fingerprint });
+    // The account loaded under the live session: a success sign of its own.
+    expect(await api.call("login.state")).toMatchObject({ screen: "success" });
     // No socket of the site while a person is in the page.
     expect(s.operator.page.step).toBe("site_loaded");
 
@@ -580,7 +620,8 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
     expect(s.operator.page.step).not.toBe("ready");
     await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
-    // The site's read again under that session: closed in the manual login.
+    // The site's read again under that session: it passes (the interface's
+    // read, PR 15), but the page is no readier for it.
     siteRead(s, token, SITE_CLIENT);
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(s.operator.page.step).toBe("site_loaded");

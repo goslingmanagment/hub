@@ -26,15 +26,15 @@
 // unknown — the owner's way in is the screen, never a guess.
 //
 // The success is not read from the DOM alone: no form of the login is shown
-// and either the site's own API requests carry a session the page did not
+// and either the site loaded the account — its own `GET /account/me` under
+// the live session answered 2xx (the manual login lets the interface's reads
+// through, PR 15) — or its own API requests carry a session the page did not
 // have when the manual login began (hub-requests/session.ts learns it from
-// them as they stop), or the site's `POST /login/twofa` of this manual login
-// was answered 2xx (the last step of the login of a page with 2FA, which
-// all the agency's pages have). In the manual login the site's account
-// reads are closed (spec §2.4) — their preflights too — so the new session
-// may not show before the automation is back; and a page without a form
-// after `POST /login` alone (a notice to check the e-mail, say) is unknown,
-// never a success.
+// them as they stop), or its `POST /login/twofa` of this manual login was
+// answered 2xx (the last step of the login of a page with 2FA, which all the
+// agency's pages have). A page without a form after `POST /login` alone (a
+// notice to check the e-mail, say) and no account loaded is unknown, never a
+// success.
 
 /** The version of the signs below. */
 export const SCREEN_VERSION = "fansly-login/1";
@@ -90,6 +90,9 @@ export interface SessionMarks {
   /** The site's `POST /login/twofa` of this manual login went and was
    *  answered 2xx. */
   codeAccepted?: boolean;
+  /** The session under which the site's own `GET /account/me` of this
+   *  manual login was last answered 2xx (null: none). */
+  accountLoaded?: string | null;
 }
 
 // The in-page scan, shared by the probe and the locator. Runs in the
@@ -213,6 +216,9 @@ export function recognize(marks: PageMarks | null, session: SessionMarks): Recog
   const form = marks.forms[0];
   if (form === undefined) {
     if (marks.readyState !== "complete") return unknown("the site is still loading");
+    if (session.live !== null && session.accountLoaded === session.live) {
+      return { screen: "success", fields: [], siteError: null, why: "no form of the login, and the site loaded the account under the live session" };
+    }
     if (session.live !== null && session.live !== session.atStart) {
       return { screen: "success", fields: [], siteError: null, why: "no form of the login, and the site's requests carry a new session" };
     }

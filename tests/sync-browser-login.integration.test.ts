@@ -39,9 +39,10 @@ import {
 // the browser a fake operator (the operator's own RPC server):
 // - a page on Node is linked to its browser only while the owner's login is
 //   open: the page on the owner's pause at once, its operator into the
-//   manual login (setMode) and started; the login's own requests admitted
-//   under the pause through the same pacer and journal (origin `login`),
-//   everything else of the site and its socket refused; closed: the browser
+//   manual login (setMode) and started; the login's own requests (origin
+//   `login`) and the reads its interface makes (origin `site`, their answers
+//   in `observations`) admitted under the pause through the same pacer and
+//   journal, its socket refused; closed: the browser
 //   stopped first, the automation back, then off — the pause the login put on
 //   the page lifted, Node sending again, the link closed;
 // - a page on its browser: the same over its own slot, no stop at the end,
@@ -150,7 +151,7 @@ async function asked(r: Rig, input: Parameters<FakeOperator["siteAdmit"]>[0]): P
 }
 
 describe("a page on Node, logged in before its switch (stage 4, step 2)", () => {
-  it("links to its browser only for the login: paused, into the manual login and started; the login's requests under the pause, nothing else; closed: stopped, the automation back, unpaused, unlinked", async (context) => {
+  it("links to its browser only for the login: paused, into the manual login and started; the login's requests and its interface's reads under the pause, no socket; closed: stopped, the automation back, unpaused, unlinked", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const host = await startHost(r);
@@ -179,15 +180,22 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     expect(admitted).toMatchObject({ admit: true });
     r.operator.siteDone(admitted as SiteAdmitResult & { admit: true }, { status: 200, body: "not_platform_data" });
     await until(async () => r.operator.acks.includes((admitted as { attemptId: number }).attemptId), 10_000, "the end acknowledged");
-    // A read of the login screens too; a read of the site's data and its
-    // socket are Node's: refused.
-    expect(await asked(r, { path: "/api/v1/versioning", route: "site.other" })).toMatchObject({ admit: true });
-    expect(await asked(r, { path: "/api/v1/account/me", route: "account.me", sessionFingerprint: null })).toMatchObject({ admit: false, reason: "mode" });
+    // The reads its interface makes pass too (plan §4.8; PR 15), the login
+    // screens' and the account's, and their answers go to `observations` as
+    // any site answer; the socket is Node's: refused.
+    const screenRead = await asked(r, { path: "/api/v1/versioning", route: "site.other" });
+    expect(screenRead).toMatchObject({ admit: true });
+    r.operator.siteDone(screenRead as SiteAdmitResult & { admit: true }, { status: 200 });
+    const accountRead = await asked(r, { path: "/api/v1/account/me", route: "account.me", sessionFingerprint: null });
+    expect(accountRead).toMatchObject({ admit: true });
+    r.operator.siteDone(accountRead as SiteAdmitResult & { admit: true }, { status: 200 });
+    const answer = r.operator.siteResponse({ route: "account.me", path: "/api/v1/account/me", body: JSON.stringify({ success: true, response: { account: { id: "300000000000000001" } } }) });
+    await until(async () => (await testDb!.pool.query("select 1 from observations where account_id = $1 and source = 'browser_site' and producer = 'fansly-site:account.me'", [r.page.pageId])).rowCount === 1, 10_000, `the account's answer (${answer.seq}) in observations`);
     const socket = r.operator.wsAdmit({ sessionFingerprint: null });
     await until(async () => r.operator.wsAnswers.some((answer) => answer.connectionId === socket.connectionId), 5_000, "the socket's answer");
     expect(r.operator.wsAnswers.find((answer) => answer.connectionId === socket.connectionId)).toMatchObject({ admit: false, reason: "mode" });
     const journaled = await attemptsOf(r.page.pageId);
-    expect(journaled[0]).toMatchObject({ origin: "login", operation: "/api/v1/login" });
+    expect(journaled.map((attempt) => `${attempt.origin} ${attempt.operation}`)).toEqual(["login /api/v1/login", "site /api/v1/versioning", "site /api/v1/account/me"]);
 
     // The owner closes the login: stopped first, then the automation, then off.
     const before = r.operator.commands.length;

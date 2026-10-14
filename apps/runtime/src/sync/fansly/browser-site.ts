@@ -44,10 +44,11 @@ import { classifySiteRequest } from "../engine/site-admission.ts";
 //   operator keeps it.
 // - A page on Node (PR 15): its link to the operator serves the owner's
 //   login alone (`loginOnly`). Only the manual login's own requests — the
-//   login operations and the login screens' reads, asked while the operator
-//   says it is in the manual login — wait for the engine; every other
-//   request of the site and every socket is refused (`mode`) at once: the
-//   page's reads and its socket are Node's.
+//   login operations and the reads its interface makes (every API read the
+//   map opens), asked while the operator says it is in the manual login —
+//   wait for the engine; every other request of the site and every socket
+//   is refused (`mode`) at once: outside the login the page's reads and its
+//   socket are Node's.
 
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
@@ -290,8 +291,8 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     this.#entries.set(message.siteRequestId, entry);
   }
 
-  /** A request of the manual login itself: a login operation, or a read of
-   *  the login screens, asked in the manual login (`classifySiteRequest`). */
+  /** A request of the manual login itself: a login operation, or a read its
+   *  interface makes, asked in the manual login (`classifySiteRequest`). */
   #ofTheLogin(request: PendingSiteRequest): boolean {
     const classified = classifySiteRequest(request);
     return !("refuse" in classified) && classified.exempt;

@@ -58,14 +58,15 @@
 //
 // The manual login (login/, PR 15; plan §4.8; spec §7): the engine's
 // `setMode` of the current owner generation switches it on — the map lets
-// the login operations through, Hub's requests and the site's socket stay
-// out, the page is never ready — and off again, with the checks before the
-// page resumes: the exit IP now, the session and the account by the
-// engine's identity read under the live session. The API's calls of the
-// login form (`login.*`, their own token) are taken only while the mode is
-// that owner's: the screen, its screenshot, the owner's input typed in as a
-// person types it. What was typed lives in the call for the time of the
-// hand-over: never in a log line, a journal, the buffer or an error.
+// the login operations through beside the interface's reads, Hub's
+// requests and the site's socket stay out, the page is never ready — and
+// off again, with the checks before the page resumes: the exit IP now, the
+// session and the account by the engine's identity read under the live
+// session. The API's calls of the login form (`login.*`, their own token)
+// are taken only while the mode is that owner's: the screen, its
+// screenshot, the owner's input typed in as a person types it. What was
+// typed lives in the call for the time of the hand-over: never in a log
+// line, a journal, the buffer or an error.
 //
 // What holds, whatever happens:
 // - No API request leaves without the engine's admission. A Hub request goes
@@ -576,6 +577,7 @@ export class Operator {
       fault: (reason, note) => this.#requestFault(reason, note),
       journal: (line) => this.journals.request(line),
       loginEnded: (end) => this.login.loginEnded(end),
+      readEnded: (end) => this.login.readEnded(end),
       ...(deps.siteTimings ? { timings: deps.siteTimings } : {}),
     });
     this.login = new LoginDesk({
@@ -1445,8 +1447,9 @@ export class Operator {
   // ── the manual login (plan §4.8; spec §7) ─────────────────────────────
 
   /** The engine of `generation` puts the page into the manual login: the
-   *  map lets the login operations through (policy/operations.ts), the
-   *  site's socket and Hub's requests stay out, the page is never ready.
+   *  map lets the login operations through beside the interface's reads
+   *  (policy/operations.ts), the site's socket and Hub's requests stay out,
+   *  the page is never ready.
    *  A page that is up loads the site anew, so its login screen is shown
    *  under this mode; one that is not waits for the engine's start. */
   async #enterManualLogin(generation: number): Promise<CommandOutcome> {

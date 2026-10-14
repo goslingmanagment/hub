@@ -218,8 +218,12 @@ export interface ApiRow {
 const CATALOGUE = "catalogue (fansly/routes.ts)";
 const LEGACY = "catalogue, not sent by the engine (†, fansly/routes.ts:31-39)";
 
+/** Every API read the map opens is open in the manual login too: plan §4.8
+ *  «разрешены вход, подтверждение 2FA и чтения, которые делает интерфейс»,
+ *  with owner decision №2 (every API read open) — under the same site
+ *  admission, pacer and budgets (PR 15). */
 function read(template: string, route: string, source = CATALOGUE): ApiRow {
-  return { methods: ["GET"], template, mode: "automation", route, platformData: true, what: "a read of the catalogue", source };
+  return { methods: ["GET"], template, mode: "both", route, platformData: true, what: "a read of the catalogue", source };
 }
 
 /** The engine's catalogue of API reads (spec §2.2): 52 routes of the wire
@@ -298,10 +302,10 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
 /** The route of an API read outside the catalogue (decision №3). */
 export const SITE_OTHER_ROUTE = "site.other";
 
-/** The reads of the login screens (stage 1, sessions 1–5): in the manual
- *  login they pass with the login operations (the engine's
- *  LOGIN_SCREEN_READS, engine/site-admission.ts — the test holds the two
- *  equal). Their route is `site.other`. */
+/** The reads of the login screens (stage 1, sessions 1–5), named apart:
+ *  `/device/id` carries no platform data (the engine's LOGIN_SCREEN_READS,
+ *  engine/site-admission.ts — the test holds the two equal). Their route is
+ *  `site.other`; like every API read the map opens, they pass in both modes. */
 export const LOGIN_SCREEN_ROWS: readonly ApiRow[] = [
   { methods: ["GET"], template: "/versioning", mode: "both", route: SITE_OTHER_ROUTE, platformData: true, what: "the app's version", source: "stage 1, §9; engine LOGIN_SCREEN_READS" },
   { methods: ["GET"], template: "/thirdpartyconnect/providers", mode: "both", route: SITE_OTHER_ROUTE, platformData: true, what: "the third-party sign-in providers", source: "stage 1, §9; engine LOGIN_SCREEN_READS" },
@@ -322,7 +326,7 @@ export const LOGIN_ROWS: readonly ApiRow[] = [
  *  every method, and a path in a spelling no client writes (`PLAIN_ESCAPES`):
  *  the closed rows and that spelling are decided before these. */
 export const OPEN_ROWS: readonly ApiRow[] = [
-  { methods: ["GET"], template: "/**", mode: "automation", route: SITE_OTHER_ROUTE, platformData: true, what: "an API read outside the catalogue", source: "spec §2.4; decision №3" },
+  { methods: ["GET"], template: "/**", mode: "both", route: SITE_OTHER_ROUTE, platformData: true, what: "an API read outside the catalogue", source: "spec §2.4; decision №3; PR 15: the manual login reads too" },
   { methods: ["OPTIONS"], template: "/**", mode: "both", route: null, platformData: false, what: "a CORS preflight: under its request's admission", source: "spec §2.4; decision №1" },
 ];
 
@@ -589,7 +593,8 @@ export function loginRowOf(apiPath: string): ApiRow | null {
   return LOGIN_ROWS.find((row) => row.template === normalized) ?? null;
 }
 
-/** A read of the login screens (the engine's `apiPathOf`), or null. */
+/** A read of the login screens (its path from `/api/v1`, its query and one
+ *  trailing slash aside), or null. */
 export function loginScreenRowOf(apiPath: string): ApiRow | null {
   const bare = apiPath.split("?", 1)[0]!;
   const trimmed = bare.length > 1 && bare.endsWith("/") ? bare.slice(0, -1) : bare;

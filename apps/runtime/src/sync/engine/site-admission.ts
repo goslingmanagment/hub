@@ -20,11 +20,14 @@ import { CYCLE } from "./scheduler.ts";
 //   the page or of its route longer than the rest, a request no route
 //   admits, the hour's ceiling reached.
 // - The manual login (the operator's mode): the login operations and the
-//   reads of the login screens (`LOGIN_SCREEN_READS`) — nothing else of the
-//   site — pass the owner's pause, a credentials hold and checks-only; the
-//   pacer, the budgets, the page's ownership and a network hold still hold.
-//   Outside it a login operation is refused, and under those three every
-//   other request of the site is.
+//   reads the site's interface makes — every API read the map opens (plan
+//   §4.8 «разрешены вход, подтверждение 2FA и чтения, которые делает
+//   интерфейс»; owner decision №2; PR 15) — pass the owner's pause, a
+//   credentials hold and checks-only; the pacer, the budgets, the hour's
+//   ceiling, the page's ownership and a network hold still hold. Writes stay
+//   the login operations' alone, and the operator's map keeps the closed
+//   reads closed. Outside it a login operation is refused, and under those
+//   three every other request of the site is.
 
 /** How long a site request may wait for its admission (spec §3). */
 export const SITE_WAIT_MS = 60_000;
@@ -41,9 +44,10 @@ export const SITE_END_WAIT_MS = 60_000;
 
 /** The API paths (from `/api/v1`) the login screens read, as the test
  *  account showed them (stage 1, sessions 1–5): the app's version, the
- *  third-party sign-in providers, the device id. In the manual login these
- *  pass the owner's pause and a credentials hold with the login operations;
- *  any other read of the site does not (Astra's review of PR 8). */
+ *  third-party sign-in providers, the device id (the operator's map names
+ *  them apart: the device id's answer is no platform data). In the manual
+ *  login every read passes the owner's pause and a credentials hold with the
+ *  login operations (PR 15), these among them. */
 export const LOGIN_SCREEN_READS: ReadonlySet<string> = new Set(["/versioning", "/thirdpartyconnect/providers", "/device/id"]);
 
 /** A site request the engine can admit: its route, whose it is, and whether
@@ -52,27 +56,22 @@ export interface ClassifiedSiteRequest {
   request: PendingSiteRequest;
   route: FanslyRoute;
   origin: "site" | "login";
-  /** A login operation, or a read of the login screens, in the manual
-   *  login: it passes the owner's pause, a credentials hold, checks-only, and
-   *  its 401/403 holds nothing. */
+  /** A login operation, or a read the site's interface makes, in the
+   *  manual login: it passes the owner's pause, a credentials hold,
+   *  checks-only, and its 401/403 holds nothing. */
   exempt: boolean;
-}
-
-function apiPathOf(path: string): string {
-  const bare = path.split("?", 1)[0]!;
-  const api = bare.startsWith("/api/v1/") ? bare.slice("/api/v1".length) : bare;
-  return api.length > 1 && api.endsWith("/") ? api.slice(0, -1) : api;
 }
 
 /** The route of a site request, or why no route admits it. */
 export function classifySiteRequest(request: PendingSiteRequest): ClassifiedSiteRequest | { refuse: SiteRefusalReason } {
   const match = matchSiteRequest(request.host, request.method, request.path);
-  const loginScreen = request.manualLogin && request.method.toUpperCase() === "GET" && request.host === "api" && LOGIN_SCREEN_READS.has(apiPathOf(request.path));
+  // A read of the API in the manual login: the interface's (PR 15).
+  const interfaceRead = request.manualLogin && request.method.toUpperCase() === "GET" && request.host === "api";
   switch (match.kind) {
     case "route":
-      return { request, route: match.route, origin: "site", exempt: loginScreen };
+      return { request, route: match.route, origin: "site", exempt: interfaceRead };
     case "site_other":
-      return { request, route: SITE_OTHER_ROUTE, origin: "site", exempt: loginScreen };
+      return { request, route: SITE_OTHER_ROUTE, origin: "site", exempt: interfaceRead };
     case "login":
       // A login operation belongs to the owner's manual login only.
       return request.manualLogin ? { request, route: match.route, origin: "login", exempt: true } : { refuse: "mode" };
