@@ -205,6 +205,11 @@ export function eventsComplete(buffers: readonly BufferBounds[]): string[] {
 // and every request it answered — and each of them must be kept by the
 // engine, or lie inside a gap mark the engine committed: not just be absent.
 
+/** The request id in a target or a query (`rid=…`). */
+export function ridIn(target: string | null): string | null {
+  return /(?:^|[?&])rid=([^&]+)/.exec(target ?? "")?.[1] ?? null;
+}
+
 export interface MadeFrame {
   page: string;
   wsId: string;
@@ -224,6 +229,11 @@ export interface MadeAnswer {
   wall: number;
   /** The engine's attempt it was admitted as; null: none. */
   attemptId: number | null;
+  /** What admitted it: Hub's own request, or the site's (whose answer is
+   *  an event of the stream as well); null: no admission of the engine's. */
+  kind: "hub" | "site" | null;
+  /** Its request id (`rid` in its query). */
+  rid: string | null;
 }
 
 export interface FanslyMade {
@@ -234,7 +244,7 @@ export interface FanslyMade {
 /** What the stand's Fansly made for the stand's pages, from its journal:
  *  the frames it sent (`ws.out`) and the API requests it answered (`res`,
  *  preflights apart), each answer with the attempt the engine admitted that
- *  request as. */
+ *  request as, and whether that was the site's admission or Hub's. */
 export function fanslyMade(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress): FanslyMade {
   const requests = new Map(events.filter((event) => event.type === "req").map((event) => [event.seq, event]));
   const made: FanslyMade = { frames: [], answers: [] };
@@ -247,7 +257,7 @@ export function fanslyMade(events: readonly JournalEvent[], grants: readonly Gra
     const target = `${String(event.host)}${path}`;
     const own = grants.filter((grant) => grant.page === page && grant.kind !== "ws" && grant.target === target && grant.attemptId > 0);
     const grant = own.filter((candidate) => candidate.grantedMono <= event.mono).sort((a, b) => b.grantedMono - a.grantedMono)[0] ?? own[0];
-    made.answers.push({ page, method: String(event.method), target, status: Number(event.status), mono: event.mono, wall: event.wall, attemptId: grant?.attemptId ?? null });
+    made.answers.push({ page, method: String(event.method), target, status: Number(event.status), mono: event.mono, wall: event.wall, attemptId: grant?.attemptId ?? null, kind: grant?.kind === "site" ? "site" : grant?.kind === "hub" ? "hub" : null, rid: ridIn(target) });
   }
   return made;
 }
@@ -269,6 +279,9 @@ export interface Kept {
   frames: ReadonlyMap<string, ReadonlySet<number>>;
   /** The attempts with a stored outcome, by page. */
   outcomes: ReadonlyMap<string, ReadonlySet<number>>;
+  /** The request ids with a stored `site.response` event — complete, or
+   *  marked incomplete (`complete: false`) — by page. */
+  responses: ReadonlyMap<string, ReadonlySet<string>>;
   gaps: readonly StoredGap[];
 }
 
@@ -279,7 +292,10 @@ export const GAP_SLACK_MS = 250;
 
 /** Everything Fansly made is kept: each frame it sent is stored as its
  *  `ws.in` event (by the frame's number), each request it answered has its
- *  stored outcome. The only exception is what a committed gap mark covers
+ *  stored outcome — and a request the site's admission let go has, besides
+ *  its outcome (`siteDone`), its answer as a `site.response` event of the
+ *  stream (complete, or marked incomplete): the two travel apart, and
+ *  either can be lost alone. The only exception is what a committed gap mark covers
  *  by time (the stream is known to be broken there, and the engine
  *  backfills it): those are counted as covered, never silently let go — and
  *  whatever is neither kept nor covered was deleted, or never recorded,
@@ -299,9 +315,12 @@ export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS
     violations.push(`Fansly sent ${page} ${frames.length} frame(s) on ${wsId} that are not stored as ws.in events, and no gap mark covers when they were sent: ${frames.slice(0, 5).map((frame) => frame.frame).join(", ")}${frames.length > 5 ? ", …" : ""}`);
   }
   for (const answer of made.answers) {
-    if (answer.attemptId !== null && kept.outcomes.get(answer.page)?.has(answer.attemptId)) continue;
+    const missing: string[] = [];
+    if (answer.attemptId === null || !kept.outcomes.get(answer.page)?.has(answer.attemptId)) missing.push(`no stored outcome (${answer.attemptId === null ? "it is no attempt of the engine's" : `attempt ${answer.attemptId}`})`);
+    if (answer.kind === "site" && (answer.rid === null || !kept.responses.get(answer.page)?.has(answer.rid))) missing.push(`no stored site.response event (${answer.rid === null ? "it has no request id to find one by" : `rid ${answer.rid}`})`);
+    if (missing.length === 0) continue;
     if (covered(answer.page, answer.wall)) coveredByGap.answers += 1;
-    else violations.push(`${answer.method} ${answer.target} of ${answer.page} was answered by Fansly (${answer.status}) and has no stored outcome (${answer.attemptId === null ? "it is no attempt of the engine's" : `attempt ${answer.attemptId}`}), and no gap mark covers when it was answered`);
+    else violations.push(`${answer.method} ${answer.target} of ${answer.page} was answered by Fansly (${answer.status}) and has ${missing.join(" and ")}, and no gap mark covers when it was answered`);
   }
   return { violations, coveredByGap };
 }
@@ -380,14 +399,28 @@ export function closedWriteAttempted(events: readonly JournalEvent[], pageAddres
   return violations;
 }
 
-/** A CONNECT the stand's SOCKS5 held and then let go; `upstream`: the
- *  connection to the stand's Fansly it became (the address and port the
- *  front sees it come from) — null: its client had gone, none was made. */
+/** A CONNECT the stand's SOCKS5 held, by its own connection's life in the
+ *  journal (fansly/socks.ts): when its hold began, when the hold let it go
+ *  (null: never — it closed while held), when the connection closed and
+ *  who closed it (null: still open), and `upstream`: the connection to the
+ *  stand's Fansly it became (the address and port the front sees it come
+ *  from; null: none was made). */
 export interface HeldConnect {
   socksId: number;
   heldMono: number;
-  releasedMono: number;
+  releasedMono: number | null;
+  closedMono: number | null;
+  closedBy: string | null;
   upstream: string | null;
+}
+
+/** The held connection was alive over the deadline and the hold then let
+ *  it go: held at or before the deadline, released after it, and closed —
+ *  if at all — only after its release. A connection that closed while held
+ *  (its client gave up, the stand cut it) was never a way for the request,
+ *  whatever its timer would have said. */
+export function heldOpenOver(hold: HeldConnect, deadlineMono: number): boolean {
+  return hold.heldMono <= deadlineMono && hold.releasedMono !== null && hold.releasedMono > deadlineMono && (hold.closedMono === null || hold.closedMono >= hold.releasedMono);
 }
 
 /** One admitted request whose admission ran out over a held CONNECT. */
@@ -402,8 +435,6 @@ export interface ExpiredRequest {
   holds: HeldConnect[];
 }
 
-const ridIn = (target: string | null): string | null => /[?&]rid=([^&]+)/.exec(target ?? "")?.[1] ?? null;
-
 /** The requests of `page` to `host` whose admission ran out over their own
  *  connection's CONNECT (plan §5, stage 2: "истечение срока допуска во время
  *  установления соединения"). One counts only when all of this is in the
@@ -416,9 +447,12 @@ const ridIn = (target: string | null): string | null => /[?&]rid=([^&]+)/.exec(t
  *    page counted);
  *  - its admission was not used: nothing with its request id arrived up to
  *    its deadline;
- *  - a CONNECT of the host from the page was being held at its deadline —
- *    begun before it, let go after it — and has been let go for `settleMs`
- *    by now, so that what follows the hold had the time to show.
+ *  - a CONNECT of the host from the page was being held at its deadline,
+ *    its connection alive throughout: held at or before the deadline (in
+ *    the admission's window or before it), let go after the deadline while
+ *    still open, closed — if at all — only after that (`heldOpenOver`); and
+ *    it has been let go for `settleMs` by now, so that what follows the
+ *    hold had the time to show.
  *
  *  A request answered before the hold, or one that had a warm connection,
  *  is no evidence, however long another connection was held. With none
@@ -427,20 +461,20 @@ export function expiredUnderHold(events: readonly JournalEvent[], grants: readon
   const own = (event: JournalEvent) => event.host === host && event.from === pageAddress;
   const dropped = events.filter((event) => event.type === "stand.dropped" && (event.host === null || event.host === undefined || event.host === host)).map((event) => event.mono);
   const connects = events.filter((event) => event.type === "socks.connect" && own(event));
-  const closedAt = new Map(events.filter((event) => event.type === "socks.closed").map((event) => [Number(event.socksId), event.mono]));
+  const closes = new Map(events.filter((event) => event.type === "socks.closed").map((event) => [Number(event.socksId), event]));
+  const closedAt = new Map([...closes].map(([socksId, event]) => [socksId, event.mono]));
   const releasedAt = new Map(events.filter((event) => event.type === "socks.release").map((event) => [Number(event.socksId), event.mono]));
   const holds: HeldConnect[] = events
     .filter((event) => event.type === "socks.hold" && own(event))
-    .flatMap((hold) => {
+    .map((hold) => {
       const socksId = Number(hold.socksId);
-      const releasedMono = releasedAt.get(socksId);
-      if (releasedMono === undefined) return [];
+      const closed = closes.get(socksId);
       const upstream = connects.find((connect) => Number(connect.socksId) === socksId)?.upstream;
-      return [{ socksId, heldMono: hold.mono, releasedMono, upstream: typeof upstream === "string" && upstream !== "" ? upstream : null }];
+      return { socksId, heldMono: hold.mono, releasedMono: releasedAt.get(socksId) ?? null, closedMono: closed?.mono ?? null, closedBy: closed === undefined ? null : String(closed.by ?? "?"), upstream: typeof upstream === "string" && upstream !== "" ? upstream : null };
     });
   const arrivals = events.filter((event) => event.type === "req" && event.role === "api" && typeof event.rid === "string");
   const admitted = grants.filter((grant) => grant.page === page && grant.kind !== "ws" && grant.target !== null && grant.target.split("/")[0] === host);
-  const why = { unnamed: 0, beforeTheDrop: 0, used: 0, warm: 0, notHeld: 0, justLetGo: 0 };
+  const why = { unnamed: 0, beforeTheDrop: 0, used: 0, warm: 0, notHeld: 0, closedWhileHeld: 0, justLetGo: 0 };
   const expired: ExpiredRequest[] = [];
   for (const grant of admitted) {
     const rid = ridIn(grant.target);
@@ -449,14 +483,19 @@ export function expiredUnderHold(events: readonly JournalEvent[], grants: readon
     else if (arrivals.some((arrival) => arrival.rid === rid && arrival.mono <= grant.deadlineMono)) why.used += 1;
     else if (connects.some((connect) => connect.mono <= grant.deadlineMono && (closedAt.get(Number(connect.socksId)) ?? Infinity) > grant.grantedMono)) why.warm += 1;
     else {
-      const over = holds.filter((hold) => hold.heldMono <= grant.deadlineMono && hold.releasedMono > grant.deadlineMono);
-      if (over.length === 0) why.notHeld += 1;
-      else if (over.some((hold) => hold.releasedMono + settleMs > judgedMono)) why.justLetGo += 1;
+      const over = holds.filter((hold) => heldOpenOver(hold, grant.deadlineMono));
+      // Held over the deadline by its timer, but closed before the hold let
+      // it go (or never let go): no way for the request — no evidence.
+      const dead = holds.filter((hold) => hold.heldMono <= grant.deadlineMono && (hold.releasedMono ?? hold.closedMono ?? Infinity) > grant.deadlineMono && !heldOpenOver(hold, grant.deadlineMono));
+      if (over.length === 0) {
+        if (dead.length > 0) why.closedWhileHeld += 1;
+        else why.notHeld += 1;
+      } else if (over.some((hold) => hold.releasedMono! + settleMs > judgedMono)) why.justLetGo += 1;
       else expired.push({ attemptId: grant.attemptId, rid, target: grant.target!, grantedMono: grant.grantedMono, deadlineMono: grant.deadlineMono, holds: over });
     }
   }
   if (expired.length > 0) return { expired, violations: [] };
-  const seen = `${admitted.length} admitted to ${host}: ${why.beforeTheDrop} before the page's connections were dropped${dropped.length === 0 ? " (they never were)" : ""}, ${why.used} arrived inside their window, ${why.warm} had a connection to ride, ${why.notHeld} with no CONNECT held over their deadline, ${why.justLetGo} whose hold was let go under ${settleMs} ms ago, ${why.unnamed} without a request id; ${holds.length} CONNECT(s) held and let go`;
+  const seen = `${admitted.length} admitted to ${host}: ${why.beforeTheDrop} before the page's connections were dropped${dropped.length === 0 ? " (they never were)" : ""}, ${why.used} arrived inside their window, ${why.warm} had a connection to ride, ${why.notHeld} with no CONNECT held over their deadline, ${why.closedWhileHeld} whose CONNECT held over the deadline closed before the hold let it go, ${why.justLetGo} whose hold was let go under ${settleMs} ms ago, ${why.unnamed} without a request id; ${holds.length} CONNECT(s) held, ${holds.filter((hold) => hold.releasedMono !== null).length} let go open`;
   return { expired, violations: [`no admitted request of ${page} ran out over its own held CONNECT (${seen}): the run proves nothing about the deadline`] };
 }
 
@@ -483,7 +522,7 @@ export function expiredArrivals(events: readonly JournalEvent[], expired: readon
     for (const arrival of events) {
       if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== request.rid) continue;
       const peer = String(arrival.peer ?? "");
-      const held = request.holds.find((hold) => hold.upstream !== null && hold.upstream === peer && Number(arrival.socksId) === hold.socksId && arrival.mono >= hold.releasedMono) ?? null;
+      const held = request.holds.find((hold) => hold.upstream !== null && hold.upstream === peer && Number(arrival.socksId) === hold.socksId && hold.releasedMono !== null && arrival.mono >= hold.releasedMono) ?? null;
       late.push({ attemptId: request.attemptId, rid: request.rid, method: String(arrival.method ?? ""), lateMs: Math.round(arrival.mono - request.deadlineMono), peer, held });
     }
   }

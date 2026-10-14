@@ -583,7 +583,7 @@ async function controlNoCapture(ctx: Ctx): Promise<ScenarioOutcome> {
 function expiryChecks(ctx: Ctx, journal: readonly JournalEvent[], grants: readonly Grant[], host: string, late: boolean): Record<string, string[]> {
   const { expired, violations } = expiredUnderHold(journal, grants, ctx.page.info.name, ctx.page.info.egressIp, host, mono());
   const arrivals = expiredArrivals(journal, expired);
-  ctx.notes.expired = expired.map((request) => ({ attemptId: request.attemptId, rid: request.rid, windowMs: Math.round(request.deadlineMono - request.grantedMono), holds: request.holds.map((hold) => ({ socksId: hold.socksId, upstream: hold.upstream, heldAfterAdmissionMs: Math.round(hold.heldMono - request.grantedMono), letGoAfterDeadlineMs: Math.round(hold.releasedMono - request.deadlineMono) })) }));
+  ctx.notes.expired = expired.map((request) => ({ attemptId: request.attemptId, rid: request.rid, windowMs: Math.round(request.deadlineMono - request.grantedMono), holds: request.holds.map((hold) => ({ socksId: hold.socksId, upstream: hold.upstream, heldAfterAdmissionMs: Math.round(hold.heldMono - request.grantedMono), letGoAfterDeadlineMs: Math.round((hold.releasedMono ?? Number.NaN) - request.deadlineMono), closedBy: hold.closedBy })) }));
   ctx.notes.lateArrivals = arrivals.late.map((arrival) => ({ rid: arrival.rid, attemptId: arrival.attemptId, lateMs: arrival.lateMs, peer: arrival.peer, heldSocksId: arrival.held?.socksId ?? null }));
   if (!late) return { heldPastDeadline: violations, heldRequestNeverArrived: arrivals.violations };
   const onItsOwn = arrivals.late.filter((arrival) => arrival.held !== null);
@@ -623,21 +623,38 @@ async function controlHeldLate(ctx: Ctx): Promise<ScenarioOutcome> {
   return { faultMono, checks: expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, true), attempts: activity.issued };
 }
 
-/** Events made and lost before the engine ever received them: the lever
- *  opens the site's socket from the page's own address (one, under an
- *  admission: C1 holds) and the stand's Fansly sends frames into it. The
- *  operator never saw that socket, so no number of its buffer is missing
- *  and nothing came on the wire — only the stand's own record of what it
- *  sent shows that the engine keeps none of it, with no gap mark over it. */
+/** Events made and lost before the engine ever received them — the second
+ *  half of C7 must see them by the stand's own record of what it made:
+ *
+ *  - frames: the lever opens the site's socket from the page's own address
+ *    (one, under an admission: C1 holds) and the stand's Fansly sends three
+ *    frames into it. The operator never saw that socket, so no number of
+ *    its buffer is missing and nothing came on the wire.
+ *  - a site answer whose outcome is kept and whose data event is not: the
+ *    lever sends one API request under a site admission of a real attempt,
+ *    Fansly answers it, and the stand commits that attempt's outcome as the
+ *    engine does on its `siteDone` — but no `site.response` event of it
+ *    ever comes. The operator in main sends neither (PR 7), so this half
+ *    stands in for the engine's side; what it checks is that C7 asks for
+ *    the answer's event and not only for its outcome (C6 is satisfied).
+ *
+ *  No gap mark covers either. */
 async function controlLostFrames(ctx: Ctx): Promise<ScenarioOutcome> {
   const socket = `wss://${FANSLY_HOSTS.ws[0]}/?v=3`;
+  const api = FANSLY_HOSTS.api[0];
   const login = { username: "pb-suite-control", password: randomBytes(16).toString("hex") };
+  const engine = ctx.page.engine;
+  const rid = `lost-${randomBytes(5).toString("hex")}`;
+  const path = `/api/v1/account/me?rid=${rid}`;
   let pushed = 0;
+  let siteAttempt = 0;
   const { activity, faultMono } = await atMoment(ctx, async () => {
     await ctx.stand.socks({ extraLogin: login });
     try {
-      ctx.page.engine.journalGrant("ws", "control-lost-frames", socket);
-      const told = { socks: { ip: ctx.topology.socksIp, port: ctx.topology.socksPort, ...login }, ca: LEVER_CA, sockets: { host: FANSLY_HOSTS.ws[0], path: "/?v=3", opens: 1, keepMs: 3000 } };
+      engine.journalGrant("ws", "control-lost-frames", socket);
+      siteAttempt = (await ctx.store.issue(ctx.page.info.name, engine.run, "site", [rid]))[0] ?? 0;
+      engine.journalGrant("site", rid, `${api}${path}`, engine.windowMs, siteAttempt);
+      const told = { socks: { ip: ctx.topology.socksIp, port: ctx.topology.socksPort, ...login }, ca: LEVER_CA, sockets: { host: FANSLY_HOSTS.ws[0], path: "/?v=3", opens: 1, keepMs: 3000 }, request: { host: api, path, timeoutMs: 10_000 } };
       const lever = inPage(ctx, ["node", "--no-warnings", LEVER, JSON.stringify(told)]).then(
         (out) => out.trim(),
         (error: unknown) => `failed: ${String(error)}`,
@@ -654,8 +671,21 @@ async function controlLostFrames(ctx: Ctx): Promise<ScenarioOutcome> {
     }
   });
   activity.stop();
+  // The engine's half of the site answer: its outcome, as on `siteDone`.
+  const answered = (await ctx.stand.journal(ctx.journalSince)).find((event) => event.type === "res" && event.rid === rid);
+  if (answered !== undefined && siteAttempt > 0) {
+    await ctx.store.commitOutcome(ctx.page.info.name, engine.run, siteAttempt, "siteDone", "response", true, { type: "siteDone", siteRequestId: rid, attemptId: siteAttempt, sent: true, status: answered.status, body: "buffered" });
+  }
   ctx.notes.pushed = pushed;
-  return { faultMono, checks: { framesSent: pushed === 3 ? [] : [`the stand sent ${pushed} of 3 frames into the page's socket: the control showed nothing`] }, attempts: activity.issued };
+  ctx.notes.siteAnswer = { rid, attemptId: siteAttempt, status: answered?.status ?? null };
+  return {
+    faultMono,
+    checks: {
+      framesSent: pushed === 3 ? [] : [`the stand sent ${pushed} of 3 frames into the page's socket: the control showed nothing`],
+      siteAnswered: answered?.status === 200 ? [] : [`Fansly did not answer the site request ${rid}: the control showed nothing about a lost site.response`],
+    },
+    attempts: [...activity.issued, ...(siteAttempt > 0 ? [siteAttempt] : [])],
+  };
 }
 
 // ── what needs the site (PR 7) ───────────────────────────────────────────
@@ -771,7 +801,7 @@ export const SCENARIOS: Scenario[] = [
   { name: "control-double-open", proves: "control: one socket admitted, two opened under it from the page's address — C1 must catch the repeat", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived again under one admission"] }, run: controlDoubleOpen },
   { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: { C6: ["committed 2 times"] }, run: controlDuplicate },
   { name: "control-hole", proves: "control: an engine that acknowledges events before it commits them, its database down — C7 must catch the lost tail", needs: [], page: "main", moment: [0, 500], control: { C7: ["were never committed (the tail"] }, run: controlHole },
-  { name: "control-lost-frames", proves: "control: frames Fansly sends into a socket of the page that the engine never receives, no gap mark over them — C7 must catch them against the stand's own record of what it sent", needs: [], page: "main", moment: [0, 500], control: { C7: ["not stored as ws.in events"] }, run: controlLostFrames },
+  { name: "control-lost-frames", proves: "control: frames Fansly sends into a socket of the page that the engine never receives, and a site answer whose outcome is stored and whose site.response event never comes, no gap mark over them — C7 must catch both against the stand's own record of what it made", needs: [], page: "main", moment: [0, 500], control: { C7: ["not stored as ws.in events", "has no stored site.response event"] }, run: controlLostFrames },
   { name: "control-held-late", proves: "control: a request admitted for 6 s goes from the page's address through a CONNECT held 10 s — the run must tie that very request to the held connection and show it arriving late; C1 must call it late, and C7 must miss the outcome of a request Fansly answered", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived outside its admission window"], C7: ["was answered by Fansly"] }, run: controlHeldLate },
   { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
   { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },

@@ -110,7 +110,7 @@ server without the owner's approval (stage 2 report §5).
 | C4 | No traffic past the proxy: only the SOCKS5 and the RPC's answers leave the page container — and the capture is evidence at all: the runner sends the page a sentinel datagram when the run begins and when it ends, and both must be in the capture (a stopped tcpdump, or one in a namespace the page has left, shows nothing and proves nothing) | the OS capture, the run's interval exactly |
 | C5 | Nothing reached the stand's direct listener | the stand's journal |
 | C6 | Every attempt the engine issued resolved exactly once (one committed outcome or a recover answer); "not sent" never of a request that arrived | the stand's Postgres, the journal |
-| C7 | No event deleted before the engine committed it, by two records kept apart from the store. **The operator's numbers:** every number between the run's bounds is stored — from the engine's position when the run began (1 for a buffer new to it) to the highest number the operator sent on the wire, the tail included. **What Fansly made:** every frame the stand's Fansly sent into a page's socket is stored as its `ws.in` event (by the frame's own number), and every API request it answered has its stored outcome — except what a committed gap mark covers by time, which is counted (`notes.fanslyMade.coveredByGap`), never silently absent | the stand's Postgres against the wire's bounds and against the stand's journal |
+| C7 | No event deleted before the engine committed it, by two records kept apart from the store. **The operator's numbers:** every number between the run's bounds is stored — from the engine's position when the run began (1 for a buffer new to it) to the highest number the operator sent on the wire, the tail included. **What Fansly made:** every frame the stand's Fansly sent into a page's socket is stored as its `ws.in` event (by the frame's own number), every API request it answered has its stored outcome, and one the site's admission let go has besides its outcome its `site.response` event (by its request id; complete, or marked incomplete) — the two travel apart — except what a committed gap mark covers by time, which is counted (`notes.fanslyMade.coveredByGap`), never silently absent | the stand's Postgres against the wire's bounds and against the stand's journal |
 | C8 | The stand's Fansly had no error | the stand's journal |
 
 The first half of C7 is the operator's own word: its end bound is what came
@@ -126,6 +126,9 @@ the last event saved before the break (`fromWall`; unknown: everything
 before the mark) and the mark itself (`atWall`), within 250 ms — the gap's
 clock is the operator's, the frame's is the stand's. A frame or an answer
 at the very end of a run is waited for up to 5 s before it is called lost.
+A site answer (admitted by `siteAdmitResult`) needs both its outcome
+(`siteDone`) and its `site.response` event; Hub's own request needs its
+outcome only.
 
 Each scenario adds its own: the exit seen closed within a bound, the stop
 reason (a failure with a retry, or a halt), back up by itself or only on
@@ -156,7 +159,14 @@ The expiry's evidence is one request, end to end (`criteria.ts`,
 were dropped (`stand.dropped`), with no connection to that host open at any
 moment of its window (so it could ride none), nothing with its request id
 arrived up to its deadline, and a CONNECT of that host from the page held
-at its deadline and let go after it. The SOCKS5 journals the connection
+at its deadline whose connection stayed alive: held at or before the
+deadline, let go after it while still open, closed only after that. The
+SOCKS5 journals each connection's own life by its id — `socks.open`,
+`socks.hold`, `socks.release` (only for a connection still open: one that
+closed while held is never released), `socks.connect`, `socks.closed` with
+who closed it (client, upstream, the stand) and whether it was still held.
+A held CONNECT whose client gave up before the release is no way for the
+request, and no evidence. It also journals the connection
 each CONNECT becomes (`socks.connect`: `upstream`), the front journals the
 connection every request arrives on (`peer`): the pass is that this request
 never arrives; the control must show this very request arriving late on
@@ -185,7 +195,7 @@ one with a warm connection, is no evidence, and such a run fails.
 | `control-double-open` | — | **control**: one socket admitted, two opened under it from the page's own address (through its SOCKS5, with a one-time login) — C1 must catch the repeat |
 | `control-duplicate` | — | **control**: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate |
 | `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — the lost event is the tail, and C7 must catch it (the operator's numbers) |
-| `control-lost-frames` | — | **control**: events made and lost before the engine ever received them — the stand's Fansly sends three frames into a socket opened from the page's own address (one, under an admission), which the operator never saw: no number is missing, nothing came on the wire, no gap mark — C7 must catch them against the stand's own record of what it sent |
+| `control-lost-frames` | — | **control**: events made and lost before the engine ever received them — the stand's Fansly sends three frames into a socket opened from the page's own address (one, under an admission), which the operator never saw; and it answers a request sent under a site admission of a real attempt, whose outcome the stand commits as the engine does on `siteDone` while no `site.response` event of it ever comes (main's operator sends neither: PR 7 — this half stands in for the engine's side). No number is missing, nothing came on the wire, no gap mark — C7 must catch both against the stand's own record of what it made |
 | `control-held-late` | — | **control**: the expiry's evidence, live in main — a request admitted for 6 s is sent from the page's own address through a CONNECT the SOCKS5 holds 10 s: the run must tie that very request to the held connection and show it arriving late on it (the checks `control-site-late-send` runs on the real operator); C1 must call it late, and C7 must miss the outcome of a request Fansly answered |
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |

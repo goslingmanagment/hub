@@ -13,7 +13,9 @@
 //   { socks, ca, request: { host, path, timeoutMs } }
 //       one GET, sent as soon as the SOCKS5 answers the CONNECT — however
 //       long it held it (up to `timeoutMs`): control-held-late, a request
-//       that goes after its admission ran out
+//       that goes after its admission ran out; control-lost-frames, a site
+//       answer whose event never reaches the engine
+//   Both may be given: the sockets first, then the request.
 //
 // Started as root by the runner (docker exec), it drops to pb-operator
 // first. The login it gets is a one-time one the stand's SOCKS5 takes only

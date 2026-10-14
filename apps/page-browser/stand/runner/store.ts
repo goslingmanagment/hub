@@ -193,6 +193,16 @@ export class Store {
     return rows.map((row) => Number(row[0]));
   }
 
+  /** The request ids of the site's answers a page has stored as
+   *  `site.response` events (complete or marked incomplete). */
+  async storedResponses(page: string): Promise<string[]> {
+    const rows = await this.query(`SELECT body->>'query' FROM pb_events WHERE page = ${lit(page)} AND kind = 'site.response'`);
+    return rows.flatMap((row) => {
+      const rid = /(?:^|[?&])rid=([^&]+)/.exec(row[0] ?? "")?.[1];
+      return rid === undefined ? [] : [rid];
+    });
+  }
+
   /** The gap marks committed for the pages: where each says the stream
    *  broke (the operator's wall clock; null: unknown) and when it was
    *  written. */

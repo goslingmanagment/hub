@@ -220,11 +220,24 @@ describe("an admission that runs out over its own held CONNECT", () => {
   it("finds the very request: admitted with no connection to ride, unused at its deadline, its CONNECT held over it — and it never arrives", () => {
     const { expired, violations } = found(held);
     expect(violations).toEqual([]);
-    expect(expired).toEqual([expect.objectContaining({ attemptId: 41, rid: "r1", holds: [{ socksId: 7, heldMono: 1010, releasedMono: 11_010, upstream: "127.0.0.1:40007" }] })]);
+    expect(expired).toEqual([expect.objectContaining({ attemptId: 41, rid: "r1", holds: [{ socksId: 7, heldMono: 1010, releasedMono: 11_010, closedMono: null, closedBy: null, upstream: "127.0.0.1:40007" }] })]);
     expect(expiredArrivals(held, expired)).toEqual({ late: [], violations: [] });
-    // The operator gave the CONNECT up at the deadline: held all the same, no connection came of it.
-    const gone = found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.closed", 7005, 7), socks("socks.release", 11_010, 7)]);
-    expect(gone.expired[0]?.holds).toEqual([expect.objectContaining({ socksId: 7, upstream: null })]);
+    // Closed after its release (the operator let the late connection go at once): alive over the deadline all the same.
+    const closedLater = found([...held, socks("socks.closed", 11_020, 7, { by: "client", whileHeld: false })]);
+    expect(closedLater.expired[0]?.holds).toEqual([expect.objectContaining({ socksId: 7, closedMono: 11_020, closedBy: "client" })]);
+  });
+
+  it("a held CONNECT that closed before its hold let it go is no way for the request: the run proves nothing (Astra's timeline)", () => {
+    // Held at 100, closed by its client at 500; another request admitted 1000…7000; the hold's timer said "release" at 10 100.
+    const astra = [dropped(50), socks("socks.hold", 100, 5), socks("socks.closed", 500, 5, { by: "client", whileHeld: true }), socks("socks.release", 10_100, 5)];
+    const { expired, violations } = found(astra, 14_000);
+    expect(expired).toEqual([]);
+    expect(violations).toEqual([expect.stringContaining("1 whose CONNECT held over the deadline closed before the hold let it go")]);
+    expect(expiredArrivals(astra, expired)).toEqual({ late: [], violations: [] });
+    // The stand's SOCKS5 no longer releases a closed connection: the same timeline as it is journaled now.
+    expect(found([dropped(50), socks("socks.hold", 100, 5), socks("socks.closed", 500, 5, { by: "client", whileHeld: true })], 14_000).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
+    // Closed while held after the deadline, never let go (the client gave up at 7005): no release while open — no evidence either.
+    expect(found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.closed", 7005, 7, { by: "client", whileHeld: true })]).violations).toEqual([expect.stringContaining("1 whose CONNECT held over the deadline closed before the hold let it go")]);
   });
 
   it("the control's late send is that very request, on the connection that was held for it", () => {
@@ -243,7 +256,7 @@ describe("an admission that runs out over its own held CONNECT", () => {
     expect(unadmittedArrivals(answered, [admission], PAGES)).toEqual([]);
     const { expired, violations } = found(answered);
     expect(expired).toEqual([]);
-    expect(violations).toEqual([expect.stringMatching(/no admitted request of p1 ran out over its own held CONNECT \(1 admitted .* 1 arrived inside their window.*1 CONNECT\(s\) held and let go\): the run proves nothing about the deadline/)]);
+    expect(violations).toEqual([expect.stringMatching(/no admitted request of p1 ran out over its own held CONNECT \(1 admitted .* 1 arrived inside their window.*1 CONNECT\(s\) held, 1 let go open\): the run proves nothing about the deadline/)]);
   });
 
   it("nor is a request that could ride a connection already open, or one admitted before the connections were dropped", () => {
@@ -267,7 +280,7 @@ describe("an admission that runs out over its own held CONNECT", () => {
 describe("C7's other half: what Fansly made against what the engine keeps", () => {
   const sent = (mono: number, frame: number, fields: Record<string, unknown> = {}) => event("ws.out", mono, { wsId: "ws-1", frame, t: 0, ...fields });
   const answered = (mono: number, pathWithQuery: string, fields: Record<string, unknown> = {}) => event("res", mono, { role: "api", host: "apiv3.fansly.com", method: "GET", path: pathWithQuery, status: 200, ...fields });
-  const kept = (frames: number[], outcomes: number[], gaps: StoredGap[] = []): Kept => ({ frames: new Map([["p1", new Set(frames)]]), outcomes: new Map([["p1", new Set(outcomes)]]), gaps });
+  const kept = (frames: number[], outcomes: number[], gaps: StoredGap[] = [], responses: string[] = []): Kept => ({ frames: new Map([["p1", new Set(frames)]]), outcomes: new Map([["p1", new Set(outcomes)]]), responses: new Map([["p1", new Set(responses)]]), gaps });
   // `event` puts the wall clock at 1 000 000 + mono.
   const gap = (fromWall: number | null, atWall: number, page = "p1"): StoredGap => ({ page, reason: "operator_start", fromWall, atWall });
 
@@ -307,9 +320,37 @@ describe("C7's other half: what Fansly made against what the engine keeps", () =
     expect(madeAndKept(made, kept([], [7])).violations).toEqual([]);
     expect(madeAndKept(made, kept([], [])).violations).toEqual(["GET apiv3.fansly.com/api/v1/account/me?rid=hub-1 of p1 was answered by Fansly (200) and has no stored outcome (attempt 7), and no gap mark covers when it was answered"]);
     expect(madeAndKept(made, kept([], [], [gap(1_004_000, 1_005_000)]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 } });
+    // Hub's own request: its outcome is all there is to keep.
+    expect(made.answers[0]?.kind).toBe("hub");
     // Answered with no admission of the engine's at all (a control's own grant has no attempt).
     const unowned = fanslyMade(events, [grant("site", "apiv3.fansly.com/api/v1/account/me?rid=hub-1", 4000, { attemptId: 0 })], PAGES);
     expect(madeAndKept(unowned, kept([], [7])).violations).toEqual([expect.stringContaining("was answered by Fansly (200) and has no stored outcome (it is no attempt of the engine's)")]);
+  });
+});
+
+describe("C7: a site answer is kept twice — its outcome and its site.response event", () => {
+  const SITE = "apiv3.fansly.com/api/v1/a?rid=r1";
+  const admitted = [grant("site", SITE, 4000, { attemptId: 9 })];
+  const journal = [apiRequest(4100, "GET", "/api/v1/a?rid=r1"), event("res", 4200, { role: "api", host: "apiv3.fansly.com", method: "GET", path: "/api/v1/a?rid=r1", status: 200 })];
+  const kept = (outcomes: number[], responses: string[], gaps: StoredGap[] = []): Kept => ({ frames: new Map(), outcomes: new Map([["p1", new Set(outcomes)]]), responses: new Map([["p1", new Set(responses)]]), gaps });
+
+  it("the outcome stored, the answer's event lost before the engine had it: C6 and the numbers hold, and C7 does not (Astra's counter-example)", () => {
+    const made = fanslyMade(journal, admitted, PAGES);
+    expect(made.answers).toEqual([expect.objectContaining({ kind: "site", rid: "r1", attemptId: 9 })]);
+    // siteDone committed once; the buffer's numbers: the engine stood at 10, nothing came after it.
+    expect(exactlyOnce([{ attemptId: 9, outcomes: [{ attemptId: 9, run: "r", type: "siteDone", kind: "response", sent: true, committedMono: 4300 }], recovered: null, arrived: true }])).toEqual([]);
+    expect(eventsComplete([{ bufferId: "b", start: 10, wireMax: 10, stored: [] }])).toEqual([]);
+    expect(madeAndKept(made, kept([9], [])).violations).toEqual(["GET apiv3.fansly.com/api/v1/a?rid=r1 of p1 was answered by Fansly (200) and has no stored site.response event (rid r1), and no gap mark covers when it was answered"]);
+  });
+
+  it("both kept — the event complete or marked incomplete — holds; either one missing does not; a gap over it is counted", () => {
+    const made = fanslyMade(journal, admitted, PAGES);
+    expect(madeAndKept(made, kept([9], ["r1"])).violations).toEqual([]);
+    expect(madeAndKept(made, kept([], ["r1"])).violations).toEqual([expect.stringContaining("has no stored outcome (attempt 9), and no gap mark")]);
+    expect(madeAndKept(made, kept([], [])).violations).toEqual([expect.stringContaining("has no stored outcome (attempt 9) and no stored site.response event (rid r1)")]);
+    // Another request's event is not this one's.
+    expect(madeAndKept(made, kept([9], ["r2"])).violations).toHaveLength(1);
+    expect(madeAndKept(made, kept([9], [], [{ page: "p1", reason: "operator_start", fromWall: 1_004_000, atWall: 1_004_500 }]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 } });
   });
 });
 

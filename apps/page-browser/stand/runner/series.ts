@@ -154,13 +154,15 @@ export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean,
   const read = async (): Promise<Kept> => {
     const frames = new Map<string, Set<number>>();
     const outcomes = new Map<string, Set<number>>();
+    const responses = new Map<string, Set<string>>();
     for (const page of pages) {
       const sent = made.frames.filter((frame) => frame.page === page);
       frames.set(page, new Set(sent.length === 0 ? [] : await store.storedFrames(page, sent.reduce((least, frame) => Math.min(least, frame.frame), Infinity))));
       const attempts = made.answers.flatMap((answer) => (answer.page === page && answer.attemptId !== null ? [answer.attemptId] : []));
       outcomes.set(page, new Set((await store.outcomes(page, attempts, naive)).map((row) => row.attemptId)));
+      responses.set(page, new Set(made.answers.some((answer) => answer.page === page && answer.kind === "site") ? await store.storedResponses(page) : []));
     }
-    return { frames, outcomes, gaps: await store.gapsOf(pages) };
+    return { frames, outcomes, responses, gaps: await store.gapsOf(pages) };
   };
   let verdict = madeAndKept(made, await read());
   const deadline = mono() + waitMs;
