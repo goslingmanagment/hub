@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CdpError, type CdpPort, type EventHandler } from "../apps/page-browser/src/cdp/client.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { LoginDesk } from "../apps/page-browser/src/login/desk.ts";
-import { FOCUSED, HIT, HOLD_CLICKS, locateExpression, PRESS_UNDONE, PROBE, recognize, RELEASE_POINT, SCREEN_VERSION, type FormMarks, type PageMarks, type SessionMarks } from "../apps/page-browser/src/login/screens.ts";
+import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, type FormMarks, type PageMarks, type SessionMarks } from "../apps/page-browser/src/login/screens.ts";
 import { loadConfig } from "../apps/page-browser/src/operator/config.ts";
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
 import { decodeBodyFrame, parseLoginRequest } from "../apps/page-browser/src/rpc/protocol.ts";
@@ -208,10 +208,6 @@ class DeskChrome implements CdpPort {
   world = 7;
   /** What the page does when a command reaches it (before it answers). */
   react: ((method: string, params: Record<string, unknown>) => void) | null = null;
-  /** Where a press may be let go (null: nowhere), and what the check after
-   *  it sees. */
-  releasePoint: { x: number; y: number } | null = { x: 3, y: 4 };
-  undone: { active: boolean; onButton: number; submits: number } | null = { active: false, onButton: 0, submits: 0 };
   /** The documents the desk had discarded, and why. */
   readonly discarded: string[] = [];
   /** A command Chrome does not answer well. */
@@ -238,8 +234,6 @@ class DeskChrome implements CdpPort {
           const declaration = String(params.functionDeclaration);
           if (declaration === HIT) return { result: { value: this.hit } };
           if (declaration === FOCUSED) return { result: { value: this.focused } };
-          if (declaration === RELEASE_POINT) return { result: { value: this.releasePoint } };
-          if (declaration === PRESS_UNDONE) return { result: { value: this.undone } };
           return { result: { value: true } };
         }
         default:
@@ -324,8 +318,8 @@ describe("the desk (plan §4.8: input as a person's)", () => {
       { over: (method, _params, chrome) => method === "Input.insertText" && chrome.of("Input.insertText").length === 2, typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: [], selects: 2 },
       // The pointer on the button: no press.
       { over: (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mouseMoved", typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: ["mouseMoved"], selects: 2 },
-      // Pressed: not let go on the button, but where it clicks nothing (round 2).
-      { over: (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed", typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: ["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"], selects: 2 },
+      // Pressed: not let go at all — its document discarded (rounds 2, 3).
+      { over: (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed", typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: ["mouseMoved", "mousePressed"], selects: 2 },
     ];
     for (const [n, c] of cases.entries()) {
       const chrome = new DeskChrome();
@@ -347,65 +341,42 @@ describe("the desk (plan §4.8: input as a person's)", () => {
     expect(idle.commands.filter((command) => command.method.startsWith("Input.") || command.method === "DOM.focus")).toHaveLength(0);
   });
 
-  // Astra's review of PR 15, round 2: a press is never left unfinished.
-  it("a press whose call may act no more before its release is let go where it clicks nothing, and checked, before the step ends", async () => {
-    const chrome = new DeskChrome();
-    let over: string | null = null;
-    chrome.react = (method, params) => {
-      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") over = "the engine's link was lost";
-    };
-    const d = desk(chrome);
-    const answer = d.submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
-    await d.drain();
-    // Drained: the press is let go already — not on the button (50, 20).
-    const mouse = chrome.of("Input.dispatchMouseEvent").map((command) => command.params);
-    expect(mouse.map((event) => event.type)).toEqual(["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]);
-    expect(mouse[1]).toMatchObject({ x: 50, y: 20, button: "left", buttons: 1 });
-    expect(mouse[2]).toMatchObject({ x: 3, y: 4, button: "left", buttons: 1 });
-    expect(mouse[3]).toMatchObject({ x: 3, y: 4, button: "left", buttons: 0 });
-    // The page's clicks held before the pointer left the button, checked
-    // after the release.
-    const order = chrome.commands.map((command) => command.method === "Runtime.callFunctionOn" && command.params.functionDeclaration === HOLD_CLICKS ? "hold"
-      : command.method === "Runtime.callFunctionOn" && command.params.functionDeclaration === PRESS_UNDONE ? "checked"
-        : command.method === "Input.dispatchMouseEvent" ? String(command.params.type) : null).filter((step) => step !== null);
-    expect(order).toEqual(["mouseMoved", "mousePressed", "hold", "mouseMoved", "mouseReleased", "checked"]);
-    expect(await answer).toEqual({ kind: "refused", reason: "not_manual_login" });
-    expect(chrome.discarded).toEqual([]);
-    // A release that does not answer is a press left as well: let go the same way.
-    const silent = new DeskChrome();
-    silent.fail = (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && params.x === 50;
-    expect(await desk(silent).submit(LOGIN_MARKER, PASSWORD_MARKER, acting)).toEqual({ kind: "refused", reason: "screen_changed" });
-    expect(silent.of("Input.dispatchMouseEvent").map((command) => [command.params.type, command.params.x])).toEqual([["mouseMoved", 50], ["mousePressed", 50], ["mouseReleased", 50], ["mouseMoved", 3], ["mouseReleased", 3]]);
-    expect(silent.discarded).toEqual([]);
-  });
-
-  it("a press that cannot be let go where it clicks nothing, or not checked so, is failed closed: its document discarded", async () => {
-    const cases: Array<{ what: string; set: (chrome: DeskChrome) => void }> = [
-      { what: "no point where a release clicks nothing", set: (chrome) => (chrome.releasePoint = null) },
-      { what: "the button still pressed", set: (chrome) => (chrome.undone = { active: true, onButton: 0, submits: 0 }) },
-      { what: "a click on the button", set: (chrome) => (chrome.undone = { active: false, onButton: 1, submits: 0 }) },
-      { what: "a submit", set: (chrome) => (chrome.undone = { active: false, onButton: 0, submits: 1 }) },
-      { what: "nothing held", set: (chrome) => (chrome.undone = null) },
-      { what: "its release does not answer", set: (chrome) => (chrome.fail = (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") },
+  // Astra's review of PR 15, rounds 2 and 3: a press is never left
+  // unfinished — and never let go anywhere but on its button.
+  it("a press not let go on its button gets nothing more — no release, no move, nothing in the page — and its document is discarded before the step ends", async () => {
+    const cases: Array<{ what: string; set: (chrome: DeskChrome, cut: () => void) => void; answer: string }> = [
+      { what: "the call may act no more after the press", answer: "not_manual_login", set: (chrome, cut) => {
+        chrome.react = (method, params) => {
+          if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") cut();
+        };
+      } },
+      { what: "the release does not answer", answer: "screen_changed", set: (chrome) => (chrome.fail = (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") },
+      { what: "the press does not answer", answer: "screen_changed", set: (chrome) => (chrome.fail = (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed") },
     ];
-    for (const { what, set } of cases) {
+    for (const { what, set, answer } of cases) {
       const chrome = new DeskChrome();
-      set(chrome);
       let over: string | null = null;
-      chrome.react = (method, params) => {
-        if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") over = "a new owner of the page";
-      };
-      const d = desk(chrome);
-      const answer = d.submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
+      set(chrome, () => (over = "the engine's link was lost"));
+      let discardedAt = -1;
+      const d = new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(chrome.world), session: () => null, timings: { settleMs: 50, pollMs: 10 }, log: () => undefined,
+        discard: (why) => {
+          chrome.discarded.push(why);
+          discardedAt = chrome.commands.length;
+          return Promise.resolve();
+        } });
+      const step = d.submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
       await d.drain();
-      // Discarded before the step ended, and never let go on the button.
-      expect(chrome.discarded, what).toHaveLength(1);
-      expect(chrome.discarded[0], what).toContain("could not be let go where it clicks nothing");
-      expect(chrome.of("Input.dispatchMouseEvent").filter((command) => command.params.type === "mouseReleased" && command.params.x === 50), what).toHaveLength(0);
-      expect(await answer, what).toEqual({ kind: "refused", reason: "not_manual_login" });
-      // The page's clicks are not left held.
-      if (what !== "no point where a release clicks nothing" && what !== "its release does not answer") continue;
-      expect(chrome.commands.filter((command) => command.params.functionDeclaration === PRESS_UNDONE), what).toHaveLength(1);
+      // Discarded before the step ended.
+      expect(chrome.discarded, what).toEqual(["a press of the login form was not let go on its button"]);
+      expect(await step, what).toEqual({ kind: "refused", reason: answer });
+      // From the press on, nothing went to the page but what it was sent
+      // already: no release other than an unanswered one, no move, no
+      // function in it — only the desk's own references let go after.
+      const pressedAt = chrome.commands.findIndex((command) => command.method === "Input.dispatchMouseEvent" && command.params.type === "mousePressed");
+      const after = chrome.commands.slice(pressedAt + 1);
+      const sentBefore = what === "the release does not answer" ? ["Input.dispatchMouseEvent"] : [];
+      expect(after.slice(0, discardedAt - pressedAt - 1).map((command) => command.method), what).toEqual(sentBefore);
+      expect(after.slice(discardedAt - pressedAt - 1).map((command) => command.method), what).toEqual(["Runtime.releaseObjectGroup"]);
     }
   });
 
@@ -963,50 +934,65 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     }
   }, 60_000);
 
-  // Astra's review of PR 15, round 2: the press of a step cut between the
-  // press and its release is let go where it clicks nothing — or its
-  // document goes — before the desk is drained.
-  it("a step cut between its press and its release leaves no press behind: a later release over the button clicks nothing", async () => {
-    for (const where of ["a point of no control", "nowhere: the document discarded"] as const) {
+  // Astra's review of PR 15, rounds 2 and 3: the press of a step cut
+  // between the press and its release dies with its document before the
+  // desk is drained; the next step works on the fresh one.
+  it("a step cut between its press and its release: no release, its document discarded, nothing clicked later; the next step works", async () => {
+    for (const blank of ["comes", "does not come"] as const) {
       const s = await setUp();
       await started(s);
       expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
       await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
       s.site.setTab(s.operator.control.workTab!.sessionId);
-      if (where !== "a point of no control") s.site.releasePoint = null;
+      if (blank === "does not come") s.model.blankLoads = "error";
       const api = await Caller.open(s.rpcPort);
       cleanups.push(() => api.close());
       // The engine's link goes while the button is pressed.
       const mouse = s.chrome.handlers.get("Input.dispatchMouseEvent")!;
+      let cut = true;
       s.chrome.handlers.set("Input.dispatchMouseEvent", async (cmd) => {
-        if (cmd.params.type === "mousePressed") {
+        if (cmd.params.type === "mousePressed" && cut) {
+          cut = false;
           s.engine.close();
           await until(() => !s.operator.rpc.linkUp, 5000, "the link lost");
         }
         return mouse(cmd);
       });
       const loads = s.model.navigations.length;
-      expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER }), where).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
+      expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER }), blank).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
       await s.operator.login.drain();
-      // Never let go on the button: no click, no POST, nothing pressed now.
-      expect(s.site.presses, where).toBe(0);
-      expect(s.site.down, where).toBe(false);
-      const releases = s.chrome.sent("Input.dispatchMouseEvent").filter((cmd) => cmd.params.type === "mouseReleased");
-      expect(releases.filter((cmd) => cmd.params.x === BUTTON_CENTRE.x), where).toHaveLength(0);
-      if (where === "a point of no control") {
-        expect(releases.map((cmd) => [cmd.params.x, cmd.params.y]), where).toEqual([[5, 5]]);
-        expect(s.model.navigations.length, where).toBe(loads);
-      } else {
-        // Nowhere to let it go: the work tab's document is discarded (the site loaded anew).
-        expect(releases, where).toHaveLength(0);
-        await until(() => s.model.navigations.length > loads, 10_000, "the document discarded");
-        expect(s.lines.join("\n"), where).toContain("login.document_discarded");
-      }
+      // No release at all, no click, no POST; nothing pressed any more.
+      expect(s.chrome.sent("Input.dispatchMouseEvent").filter((cmd) => cmd.params.type === "mouseReleased"), blank).toHaveLength(0);
+      expect(s.site.presses, blank).toBe(0);
+      expect(s.site.down, blank).toBe(false);
+      expect(s.lines.join("\n"), blank).toContain("login.document_discarded");
       // A release over the button later — a person's, say — clicks nothing.
       await mouse({ id: 0, method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: BUTTON_CENTRE.x, y: BUTTON_CENTRE.y, button: "left", clickCount: 1 } } as never);
       await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(s.site.presses, where).toBe(0);
-      expect(s.site.posts, where).toHaveLength(0);
+      expect(s.site.presses, blank).toBe(0);
+      expect(s.site.posts, blank).toHaveLength(0);
+      if (blank === "comes") {
+        // A blank document, then the site anew.
+        expect(s.model.navigations.slice(loads)).toEqual(["about:blank", "https://fansly.com/"]);
+        await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+        // The engine comes back; the next step works on the fresh document.
+        const again = new FakeEngine();
+        await again.connect(s.rpcPort);
+        cleanups.push(() => again.close());
+        again.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+        await again.waitFor("helloResult");
+        again.onMessage = (message) => {
+          if (message.type === "siteAdmit") again.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 8000 + Math.floor(Math.random() * 1000) });
+        };
+        await until(() => s.operator.rpc.linkUp, 5000, "the link back");
+        s.site.setTab(s.operator.control.workTab!.sessionId);
+        expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER })).toMatchObject({ type: "login.stateResult", screen: "code" });
+        expect(s.site.presses).toBe(1);
+      } else {
+        // No blank document: the page's Chrome goes, and the press with it.
+        await until(() => s.lines.some((line) => line.includes('"stopReason":"cdp_lost"') && line.includes("the browser goes with it")), 10_000, "the browser gone");
+        expect(s.lines.join("\n")).toContain("the browser goes with it");
+      }
       for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
     }
   }, 60_000);

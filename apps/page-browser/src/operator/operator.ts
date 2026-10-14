@@ -185,6 +185,9 @@ const DEFAULT_TIMINGS: OperatorTimings = {
 export const SITE_URL = `${SITE_ORIGIN}/`;
 /** An identity answer is read for its account id up to this size. */
 const IDENTITY_BODY_MAX = 1024 * 1024;
+/** A discarded work tab's blank document comes within this, or the
+ *  browser goes (#discardDocument). */
+const DISCARD_WAIT_MS = 5_000;
 
 export interface OperatorDeps {
   config: OperatorConfig;
@@ -1560,24 +1563,33 @@ export class Operator {
   }
 
   /** The work tab's document goes, failed closed: a press of the login form
-   *  could not be let go where it clicks nothing (login/desk.ts), and must
-   *  not wait in it for a release. A page that is up loads the site anew at
-   *  once — not waiting for what of the site is in flight: a request cut by
-   *  it stops the page, as a reload's would (#reloadForMode) — and one whose
-   *  site load fails starts again; a page that is not up gets a blank
-   *  document. */
+   *  was not let go on its button (login/desk.ts) and dies with its
+   *  document. The tab is taken to a blank document at once — no network,
+   *  nothing of the old document left; what of the site was in flight is cut
+   *  with it, which stops the page as a reload's would (#reloadForMode) — and
+   *  a page that is up loads the site anew after it. A blank document that
+   *  does not come (CDP lost, no answer, no work tab known): the page's
+   *  Chrome goes (#fail), and the press with it. Never throws. */
   async #discardDocument(why: string): Promise<void> {
-    const tab = this.control.workTab;
-    if (tab === null) return;
     this.#log("login.document_discarded", { why });
-    if (this.page.halted || !this.egress.exitOpen || !atLeast(this.page.step, "site_loaded")) {
-      await this.cdp.send("Page.navigate", { url: "about:blank" }, tab.sessionId, this.#timings.siteLoadMs);
+    const tab = this.control.workTab;
+    const run = this.#run;
+    const up = !this.page.halted && this.egress.exitOpen && atLeast(this.page.step, "site_loaded");
+    try {
+      if (tab === null) throw new Error("no work tab known");
+      if (up) {
+        this.site.reloading(tab.mainFrameId ?? null);
+        this.page.back("exit_open", why);
+      }
+      const reply = await this.cdp.send<{ errorText?: string }>("Page.navigate", { url: "about:blank" }, tab.sessionId, DISCARD_WAIT_MS);
+      if (typeof reply.errorText === "string" && reply.errorText !== "") throw new Error(reply.errorText);
+      const blank = await this.#waitUntil(() => this.control.workTab === tab && tab.url.startsWith("about:blank"), DISCARD_WAIT_MS);
+      if (!blank) throw new Error(`no blank document within ${DISCARD_WAIT_MS} ms`);
+    } catch (error) {
+      await this.#fail("cdp_lost", `${why}; its document could not be discarded (${errorMessage(error)}): the browser goes with it`).catch(() => undefined);
       return;
     }
-    const run = this.#run;
-    this.site.reloading(tab.mainFrameId ?? null);
-    this.page.back("exit_open", why);
-    await this.#loadSite(run);
+    if (up && run === this.#run) await this.#loadSite(run);
   }
 
   /** A call of the login form (spec §6.1 `login.*`): taken only in the

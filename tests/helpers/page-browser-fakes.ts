@@ -799,6 +799,15 @@ export class BrowserModel {
       const sessionId = command.sessionId ?? "S1";
       const url = String(command.params.url ?? "");
       this.navigations.push(url);
+      if (url === "about:blank") {
+        // No network: it commits at once, as Chrome's does — unless told not to.
+        if (this.blankLoads === "error") return { frameId: `F-${sessionId}`, loaderId: "L-error", errorText: "net::ERR_ABORTED" };
+        const loaderId = `L${++this.#requests}`;
+        const tab = this.#tabs.get(sessionId);
+        if (tab) tab.url = url;
+        this.chrome.event("Page.frameNavigated", { frame: { id: `F-${sessionId}`, url, loaderId } }, sessionId);
+        return { frameId: `F-${sessionId}`, loaderId };
+      }
       if (this.siteLoads === "error") return { frameId: `F-${sessionId}`, loaderId: "L-error", errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" };
       const request = this.pause(url, "GET", sessionId, "Document");
       const deadline = Date.now() + 5000;
@@ -820,6 +829,8 @@ export class BrowserModel {
   /** What the site's navigations do: the document commits (`commit`), never
    *  comes (`never`), or the navigation fails (`error`). */
   siteLoads: "commit" | "never" | "error" = "commit";
+  /** What a navigation to a blank document does. */
+  blankLoads: "commit" | "error" = "commit";
   /** The URLs the operator navigated to. */
   readonly navigations: string[] = [];
 

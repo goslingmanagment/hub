@@ -8,7 +8,7 @@
 // the next screen once it ended. No real site, no real credential: the
 // values a test types are markers.
 
-import { FOCUSED, HIT, HOLD_CLICKS, PRESS_UNDONE, RELEASE_POINT, SELECT_ALL, type FormMarks, type PageMarks } from "../../apps/page-browser/src/login/screens.ts";
+import { FOCUSED, HIT, SELECT_ALL, type FormMarks, type PageMarks } from "../../apps/page-browser/src/login/screens.ts";
 import { fanslyClientCheck } from "../../apps/page-browser/src/hub-requests/session.ts";
 import type { BrowserModel, CdpCommand, ModelRequest } from "./page-browser-fakes.ts";
 
@@ -42,8 +42,6 @@ export class FakeLoginSite {
   readonly posts: ModelRequest[] = [];
   /** Clicks that reached the button: a press on it, let go on it. */
   presses = 0;
-  /** Where a press may be let go where it clicks nothing (null: nowhere). */
-  releasePoint: { x: number; y: number } | null = { x: 5, y: 5 };
   /** The button is pressed and not let go (`:active`). */
   down = false;
   readonly #model: BrowserModel;
@@ -75,9 +73,6 @@ export class FakeLoginSite {
     });
     chain("Runtime.callFunctionOn", (command) => {
       if (command.params.functionDeclaration === SELECT_ALL) return { result: { type: "boolean", value: true } };
-      if (command.params.functionDeclaration === HOLD_CLICKS) return { result: { type: "boolean", value: true } };
-      if (command.params.functionDeclaration === RELEASE_POINT) return { result: { type: "object", value: this.releasePoint } };
-      if (command.params.functionDeclaration === PRESS_UNDONE) return { result: { type: "object", value: { active: this.down, onButton: 0, submits: 0, clicks: 0 } } };
       if (command.params.functionDeclaration === FOCUSED) {
         const role = this.#objects.get(String(command.params.objectId));
         return { result: { type: "boolean", value: role !== undefined && role === this.#focused } };

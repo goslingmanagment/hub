@@ -36,8 +36,10 @@
 //     pointer onto the button stops the press, a field that gave its focus
 //     away gets nothing typed, a call that may act no more stops at its
 //     next input step — and one cut between its press and its release
-//     leaves no press behind (a later release over the button clicks
-//     nothing);
+//     sends nothing more to the page: its document is discarded, no click,
+//     no submit, no login request then or after (also with the page's own
+//     earlier window click handler and pointer capture), and the next step
+//     on a fresh document works;
 //   - the screenshot is a JPEG of the page;
 //   - no marker in the log or the journal, nor in the buffer's files.
 //
@@ -169,7 +171,23 @@ function codeForm(error) {
     x.send();
   });
 }
-if (location.search.includes("record")) {
+if (location.search.includes("capture")) {
+  // Astra's fixture (review of PR 15, round 3): a click handler of the
+  // page's own, registered before anything, in the capture phase of the
+  // window — it sends the login itself and lets nothing after it run — and
+  // a button that captures the pointer once pressed.
+  window.pbClicks = 0;
+  window.addEventListener("click", (event) => {
+    const form = document.getElementById("login");
+    if (!form || !(event.target instanceof Node) || !form.contains(event.target)) return;
+    window.pbClicks += 1;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    post("/login", { username: form.username.value, password: form.password.value, deviceId: "stand-device-1" });
+  }, true);
+  loginForm(null);
+  document.querySelector("#login button").addEventListener("pointerdown", (event) => event.target.setPointerCapture(event.pointerId));
+} else if (location.search.includes("record")) {
   // What reaches the button and the form, counted by the page itself.
   loginForm(null);
   window.pbClicks = 0;
@@ -518,17 +536,20 @@ async function world(): Promise<number> {
 }
 
 const sessionAtStart = session.fingerprint;
-// The operator discards the work tab's document for a press it could not
-// let go cleanly; here a blank one, and it is counted.
-const discards: string[] = [];
+// The operator discards the work tab's document for a press not let go on
+// its button; here a blank one — what the page counted read first (a read
+// in its own world, nothing sent to it), and the discard counted.
+const discards: Array<{ why: string; page: { clicks: number | null; submits: number | null } }> = [];
 const desk = new LoginDesk({
   cdp,
   tab: () => tab,
   world,
   session: () => session.fingerprint,
   discard: async (why) => {
-    discards.push(why);
-    await cdp.send("Page.navigate", { url: "about:blank" }, tab);
+    const read = await cdp.send<{ result?: { value?: string } }>("Runtime.evaluate", { expression: "JSON.stringify({ clicks: window.pbClicks ?? null, submits: window.pbSubmits ?? null })", returnByValue: true }, tab);
+    discards.push({ why, page: JSON.parse(read.result?.value ?? "{}") as { clicks: number | null; submits: number | null } });
+    const blank = await cdp.send<{ errorText?: string }>("Page.navigate", { url: "about:blank" }, tab);
+    if (blank.errorText) throw new Error(blank.errorText);
   },
   timings: { settleMs: 8000, pollMs: 100 },
 });
@@ -602,42 +623,46 @@ await sleep(300);
 check("a call that may act no more after its first field: nothing more typed, nothing pressed", screenOf(cancelSubmit) === "refused: not_manual_login" && inputs() === cancelBefore.inputs + 1 && presses() === cancelBefore.presses && loginArrivals() === cancelBefore.logins, { submit: screenOf(cancelSubmit), inputs: inputs() - cancelBefore.inputs, mouse: presses() - cancelBefore.presses });
 
 // 3c. A step cut between its press and its release (Astra's review of
-// PR 15, round 2): the press is let go where it clicks nothing before the
-// desk is drained — the button no longer active, no click on it, no submit,
-// nothing at the server — and a release over the button later (a person's,
-// say) clicks nothing either.
-await load("https://fansly.com/?record=1");
-const pageSaw = async (): Promise<{ active: boolean | null; clicks: number; submits: number }> => {
-  const read = await cdp.send<{ result?: { value?: string } }>("Runtime.evaluate", {
-    expression: "JSON.stringify({ active: document.querySelector('#login button')?.matches(':active') ?? null, clicks: window.pbClicks, submits: window.pbSubmits })",
+// PR 15, rounds 2 and 3), on a page that counts its clicks and submits and
+// on Astra's fixture (pointer capture, the page's own earlier window click
+// handler that sends the login): no release, no move, nothing installed in
+// the page — its document discarded before the desk is drained. No click,
+// no submit, no POST /login, then or after (a release over where the
+// button was clicks nothing); the next step on a fresh document works.
+for (const fixture of ["record", "capture"] as const) {
+  await load(`https://fansly.com/?${fixture}=1`);
+  const box = await cdp.send<{ result?: { value?: string } }>("Runtime.evaluate", {
+    expression: "(() => { const box = document.querySelector('#login button').getBoundingClientRect(); return JSON.stringify({ x: box.x + box.width / 2, y: box.y + box.height / 2 }); })()",
     returnByValue: true,
   }, tab);
-  return JSON.parse(read.result?.value ?? "{}") as { active: boolean | null; clicks: number; submits: number };
-};
-const cutBefore = { presses: presses(), logins: loginArrivals() };
-// The guard holds for the pointer's move and the press, and fails before the release.
-const cutAtRelease: LoginGuard = () => (presses() >= cutBefore.presses + 2 ? "the engine's link was lost" : null);
-const cutSubmit = await desk.submit(LOGIN, WRONG, cutAtRelease);
-await desk.drain();
-const afterCut = await pageSaw();
-const centre = await cdp.send<{ result?: { value?: string } }>("Runtime.evaluate", {
-  expression: "(() => { const box = document.querySelector('#login button').getBoundingClientRect(); return JSON.stringify({ x: box.x + box.width / 2, y: box.y + box.height / 2 }); })()",
-  returnByValue: true,
-}, tab);
-const { x: buttonX, y: buttonY } = JSON.parse(centre.result?.value ?? "{}") as { x: number; y: number };
-await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: buttonX, y: buttonY, button: "none" }, tab);
-await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: buttonX, y: buttonY, button: "left", buttons: 0, clickCount: 1 }, tab);
-await sleep(500);
-const afterLater = await pageSaw();
-check("a step cut between its press and its release: let go where it clicks nothing (not active, no click, no submit, nothing at the server); a later release over the button clicks nothing",
-  screenOf(cutSubmit) === "refused: not_manual_login" && afterCut.active === false && afterCut.clicks === 0 && afterCut.submits === 0
-    && afterLater.clicks === 0 && afterLater.submits === 0 && loginArrivals() === cutBefore.logins && discards.length === 0,
-  { submit: screenOf(cutSubmit), afterCut, afterLater, logins: loginArrivals() - cutBefore.logins, discards: discards.length });
+  const { x: buttonX, y: buttonY } = JSON.parse(box.result?.value ?? "{}") as { x: number; y: number };
+  const cutBefore = { presses: presses(), logins: loginArrivals(), discards: discards.length, calls: cdp.sent.length };
+  // The guard holds for the pointer's move and the press, and fails before the release.
+  const cutAtRelease: LoginGuard = () => (presses() >= cutBefore.presses + 2 ? "the engine's link was lost" : null);
+  const cutSubmit = await desk.submit(LOGIN, WRONG, cutAtRelease);
+  await desk.drain();
+  const discarded = discards.slice(cutBefore.discards);
+  // After the press: the page's counters read, the blank document, the desk's references let go.
+  const afterPress = cdp.sent.slice(cutBefore.calls);
+  const pressedAt = afterPress.lastIndexOf("Input.dispatchMouseEvent");
+  const href = await cdp.send<{ result?: { value?: string } }>("Runtime.evaluate", { expression: "location.href", returnByValue: true }, tab);
+  // A release over where the button was (a person's, say).
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: buttonX, y: buttonY, button: "left", buttons: 0, clickCount: 1 }, tab);
+  await sleep(500);
+  check(`a step cut between its press and its release (${fixture}): no release, its document discarded; no click, no submit, no POST /login — then or after`,
+    screenOf(cutSubmit) === "refused: not_manual_login" && presses() === cutBefore.presses + 3 /* the move, the press, the later release of this check */
+      && afterPress.slice(pressedAt + 1).every((method) => method === "Runtime.evaluate" || method === "Page.navigate" || method === "Runtime.releaseObjectGroup")
+      && discarded.length === 1 && (discarded[0]!.page.clicks ?? 0) === 0 && (discarded[0]!.page.submits ?? 0) === 0
+      && href.result?.value === "about:blank" && loginArrivals() === cutBefore.logins,
+    { submit: screenOf(cutSubmit), afterPress: afterPress.slice(pressedAt + 1), discarded, href: href.result?.value, logins: loginArrivals() - cutBefore.logins });
+}
 await load("https://fansly.com/");
 
-// 4. A wrong password: the site's own error, the fields to try again.
+// 4. A wrong password: the site's own error, the fields to try again — the
+// first step on a fresh document after the discarded presses of 3c: nothing
+// is stuck in Chrome's input.
 const wrongState = await desk.submit(LOGIN, WRONG, acting);
-check("a wrong password: the site's error is shown with the login's fields", screenOf(wrongState) === 'error [login,password] "Invalid username or password"', screenOf(wrongState));
+check("a wrong password (the next step after the discarded presses, on a fresh document): the site's error is shown with the login's fields", screenOf(wrongState) === 'error [login,password] "Invalid username or password"', screenOf(wrongState));
 
 // 5. The login and the password, then the code: the site's own requests carry them.
 const afterLogin = await desk.submit(LOGIN, PASSWORD, acting);
