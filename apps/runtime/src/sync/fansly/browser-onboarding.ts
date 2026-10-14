@@ -1261,7 +1261,16 @@ export class OnboardingLink {
     if (taken.length > 0) {
       const last = taken.at(-1)!;
       await this.#fenced(async (tx) => {
+        // The loss boundary moves only on a socket's open or frame (the page
+        // intake's rule, #614); a stored gap stays for the page's intake.
+        const stored = await readProfileIntakePosition(tx, this.profileId);
+        let lossBoundary = stored?.lastWall ?? null;
+        const now = Date.now();
         for (const event of taken) {
+          if (event.kind === "ws.open" || event.kind === "ws.in") {
+            const at = new Date(Math.min(event.atWall, now));
+            if (lossBoundary === null || at.getTime() > lossBoundary.getTime()) lossBoundary = at;
+          }
           if (event.kind !== "site.response") continue;
           const observation = siteResponseObservation({
             pageId: 0,
@@ -1284,7 +1293,7 @@ export class OnboardingLink {
             observedAt: new Date(event.atWall),
           });
         }
-        await writePageBrowserIntake(tx, { profileId: this.profileId, bufferId: delivered.bufferId, ackedSeq: last.seq, lastWall: new Date(last.atWall), gapSince: null });
+        await writePageBrowserIntake(tx, { profileId: this.profileId, bufferId: delivered.bufferId, ackedSeq: last.seq, lastWall: lossBoundary, gapSince: stored?.gapSince ?? null });
       });
       this.#committedSeq = last.seq;
       this.client.ack(delivered.bufferId, last.seq);

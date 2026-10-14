@@ -742,12 +742,17 @@ export async function readBrowserProfileRouteJournal(
 
 /** Where the intake of the profile's buffer stands (0276's columns, the
  *  profile's: the page's intake goes on from it once bound). */
-export async function readProfileIntakePosition(db: Database, profileId: string): Promise<{ bufferId: string | null; ackedSeq: number } | null> {
-  const result = await db.execute<{ bufferId: string | null; ackedSeq: string }>(sql`
-    select events_buffer_id::text as "bufferId", events_acked_seq::text as "ackedSeq" from page_browsers where profile_id = ${profileId}::uuid
+export async function readProfileIntakePosition(
+  db: Database,
+  profileId: string,
+): Promise<{ bufferId: string | null; ackedSeq: number; lastWall: Date | null; gapSince: Date | null } | null> {
+  const result = await db.execute<{ bufferId: string | null; ackedSeq: string; lastWall: Date | string | null; gapSince: Date | string | null }>(sql`
+    select events_buffer_id::text as "bufferId", events_acked_seq::text as "ackedSeq",
+           events_last_wall as "lastWall", events_gap_since as "gapSince"
+      from page_browsers where profile_id = ${profileId}::uuid
   `);
   const row = result.rows[0];
-  return row === undefined ? null : { bufferId: row.bufferId, ackedSeq: Number(row.ackedSeq) };
+  return row === undefined ? null : { bufferId: row.bufferId, ackedSeq: Number(row.ackedSeq), lastWall: dateOf(row.lastWall), gapSince: dateOf(row.gapSince) };
 }
 
 // ── the binding ────────────────────────────────────────────────────────────

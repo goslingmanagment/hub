@@ -389,6 +389,9 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     r.operator.siteResponse({ route: "auth.login", path: "/api/v1/login", method: "POST", body: '{"success":true,"response":{"token":"secret-of-the-login"}}' });
     startTask(r);
     await until(async () => (await testDb!.pool.query("select 1 from page_browsers where profile_id = $1 and events_acked_seq = 2", [r.profileId])).rows.length === 1, 10_000, "the position");
+    // The loss boundary moves only on a socket's open or frame (#614): the
+    // site's answers leave it where it was â€” none yet.
+    expect((await testDb.pool.query<{ last: Date | null }>("select events_last_wall as last from page_browsers where profile_id = $1", [r.profileId])).rows[0]!.last).toBeNull();
     const rows = (await testDb.pool.query<{ source: string; kind: string; account_id: string | null; payload: unknown }>(
       "select source, kind, account_id, payload from observations where source = 'browser_site' order by id",
     )).rows;
