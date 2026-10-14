@@ -18,7 +18,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": apiProxyTarget,
+      // The browser's Host goes to the API as it is (Vite's string shorthand
+      // rewrites it to the target's): the API takes a change only from a
+      // page whose Origin names the host it came to, as in production behind
+      // nginx. `ws`: the page browser's screen (its WebSocket) too.
+      "/api": { target: apiProxyTarget, changeOrigin: false, ws: true },
       "/documentation": apiProxyTarget,
     },
   },

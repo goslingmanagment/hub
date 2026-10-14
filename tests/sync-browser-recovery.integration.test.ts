@@ -249,7 +249,9 @@ describe("at the engine's start, before the recovery closes anything unknown", (
     expect(r.operator.recovers[0]).toEqual([old]);
     expect(await attempt(r.page.pageId, old)).toMatchObject({
       outcome: "response",
-      sendMark: "transport_reported",
+      // Its `sent` went to the run that crashed: unknown to this one — the
+      // result's own instant proves nothing (Astra's review of PR 15, round 6).
+      sendMark: "completion_fallback",
       applyState: "applied",
       httpStatus: 200,
       observationKey: `fansly-sync:${r.page.pageId}:attempt:${old}`,

@@ -203,6 +203,16 @@ export class FakeOperator {
   beforeRelease: ((send: Send) => void | Promise<void>) | null = null;
   /** Report the send instant (`sent`, the result's sentMono). */
   reportSend = true;
+  /** The result's sentMono as an operator of another clock would put it
+   *  (Chrome's own timing, say) — the `sent` stays the gate's. Null: the
+   *  gate's instant, as the operator reports it. */
+  resultSentMono: ((gateMono: number) => number) | null = null;
+  /** Awaited after the send went and its `sent` was reported, before its
+   *  result is made (a test holds an answer there). */
+  beforeResult: ((send: Send) => Promise<void>) | null = null;
+  /** The next this many `sent` reports are lost on the way (their results
+   *  still carry the instant). */
+  dropSent = 0;
   /** Ask the engine a second time for one operation (a misbehaving operator). */
   checkTwice = false;
   /** Runs first on every `send` (a test changes the live session there). */
@@ -301,6 +311,15 @@ export class FakeOperator {
         },
         onCommand: async (command) => {
           this.commands.push(command);
+          // The manual login (PR 15): the mode, and a start of a page that stands.
+          if (command.command.kind === "setMode") {
+            this.pushState({ mode: command.command.mode });
+            return { ok: true, detail: `the mode is ${command.command.mode}` };
+          }
+          if (command.command.kind === "restartBrowser") {
+            this.pushState({ step: "site_loaded", stopReason: null, retryAtWall: null, exitOpen: true });
+            return { ok: true, detail: "the start began" };
+          }
           if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
           if (this.lateAfterStop !== null) {
             const late = this.lateAfterStop;
@@ -647,7 +666,9 @@ export class FakeOperator {
     if (this.sendDelayMs > 0) await sleep(this.sendDelayMs);
     const sentMono = monoMs();
     this.physical.push({ attemptId: send.attemptId, url: send.url, kind: send.kind, checkedMono: waiting.checkedMono, sentMono, generation: send.ownerGeneration, session: send.sessionFingerprint });
-    if (this.reportSend) this.server.send({ type: "sent", attemptId: send.attemptId, sentMono, sentWall: Date.now(), connectionReused: false });
+    if (this.reportSend && this.dropSent > 0) this.dropSent -= 1;
+    else if (this.reportSend) this.server.send({ type: "sent", attemptId: send.attemptId, sentMono, sentWall: Date.now(), connectionReused: false });
+    if (this.beforeResult !== null) await this.beforeResult(send);
     const answer = this.respond(send);
     const body = typeof answer.body === "string" ? Buffer.from(answer.body, "utf8") : answer.body;
     const bodyId = randomUUID();
@@ -658,7 +679,7 @@ export class FakeOperator {
       body: { bodyId, decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") },
       encodedBytes: body.length,
       source: this.responseSource,
-      sentMono: this.reportSend ? sentMono : null,
+      sentMono: this.reportSend ? (this.resultSentMono?.(sentMono) ?? sentMono) : null,
       sendMark: this.reportSend ? "transport_reported" : "completion_fallback",
     }, body);
   }

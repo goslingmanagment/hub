@@ -957,6 +957,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # a page is on its browser or a leave is pending
   # (verify_rollback_target_runs_no_browser_page).
   "0278_sync_pages_browser_leave.sql"
+  # Project Browser PR 15: sync_pages.manual_login and manual_login_paused
+  # (constant defaults 'off' and false: catalog only; the check NOT VALID
+  # then validated over a handful of rows) and when and by whom it changed
+  # (nullable, no default), under a 5 s lock_timeout. The previous image
+  # never names them and writes no other value. A page whose login was open
+  # keeps the owner's pause (paused_all) the login put on it until the owner
+  # lifts it; its operator leaves the manual login on that engine's new
+  # owner generation and refuses the form.
+  "0279_sync_pages_manual_login.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -4,9 +4,11 @@
 import { scrub } from "./secrets.ts";
 
 /** CLOCK_MONOTONIC in milliseconds (libuv's hrtime on Linux). Every process
- *  on the host reads the same clock, and Chrome's `timing.requestTime` (base
- *  TimeTicks, seconds) is on it too: admission deadlines are absolute values
- *  of this clock, never remainders (plan §4.2, step 4). */
+ *  on the host reads the same clock: admission deadlines are absolute values
+ *  of this clock, never remainders (plan §4.2, step 4). Every instant the
+ *  operator reports is of it — Chrome's own timing (`requestTime`, CDP
+ *  timestamps) never crosses the protocol, whatever its base (Astra's
+ *  review of PR 15, round 5). */
 export function monoMs(): number {
   return Number(process.hrtime.bigint()) / 1e6;
 }

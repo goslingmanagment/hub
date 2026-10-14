@@ -629,8 +629,9 @@ the core decided), status/why and the alerts. A credentials hold (`auth`,
 `identity_mismatch`) records its LATEST refusal in its row's `detail` (`failedAttemptId`, `failedAt`, the refused
 digest; `since` stays the episode's start) and is in force until the apply of an identity proof — an applied
 `/account/me` of the page's own account — whose request was sent after that refusal; nothing else lifts it, a moved
-trusted digest included. The proof (identity, trusted digest, `identity_checked_at` = its send instant, never
-overwritten by an older one) and the clearing are written in the apply's own transaction, which takes the page row
+trusted digest included. The proof (identity, trusted digest, `identity_checked_at` = its send instant — known only by its sender's word
+(`request_start`, a page browser's `sent` received), else its admission: an unknown send proves nothing fenced after it
+was admitted, `engine/send-instant.ts` — never overwritten by an older one) and the clearing are written in the apply's own transaction, which takes the page row
 FOR NO KEY UPDATE from its start; a failed write leaves the attempt captured/deferred and its stored answer is applied
 again, without a request. Under the hold only an `account.identity` check of a candidate session/proxy (the owner's
 change, sealed in the work's secret, over the stored base its caller read) and — once per digest — the
@@ -900,7 +901,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 
 | # | Invariant | Enforced in |
 |---|---|---|
-| I1 | Between the actual sends of any two requests of one page: gap ≥ `S × (1 + u)`, `S` = the owner's setting read at the admission of the later request, `u ∈ [0, 0.2)`. A strict minimum, never an average. "Actual send" = undici `onRequestStart`, on the monotonic clock — or, through a page's browser, the instant the browser reported (`transport_reported`: Chrome's timing, never before the gate's first bytes, moved to the engine's clock by one constant shift and rounded up; never before the engine's grant, never after the completion); without either mark, the completion instant. | `engine/pacer.ts` (`waitForSlot`, the synchronous `check` and `checkRemoteGrant`, `complete`) |
+| I1 | Between the actual sends of any two requests of one page: gap ≥ `S × (1 + u)`, `S` = the owner's setting read at the admission of the later request, `u ∈ [0, 0.2)`. A strict minimum, never an average. "Actual send" = undici `onRequestStart`, on the monotonic clock — or, through a page's browser, the instant the browser reported (`transport_reported`: the operator's `sent` as it came — the gate's first bytes on its own clock; Chrome's own timing never crosses the protocol, and without a `sent` received the instant is unknown, whatever the result says — moved to the engine's clock by one constant shift and rounded up; never before the engine's grant, never after the completion); without either mark, the completion instant. | `engine/pacer.ts` (`waitForSlot`, the synchronous `check` and `checkRemoteGrant`, `complete`) |
 | I2 | At most one request of a page in flight; the next admission only after the previous completion. | `engine/actor.ts` (sequential loop) + `engine/pacer.ts` (`inFlight`) |
 | I3 | One physical request per admission; no transport retry; no redirect follow (a 3xx is an answer). Through a page's browser: one admission is one grant at the operator's `check` (a second is refused, `lease_used`); a CORS preflight and its request are one operation (owner decision №1); Chrome's own re-sends are held at the operator's gate (spec §9, mandatory condition №2); a redirect goes back as the answer. | `packages/fansly/src/wire/send.ts`; through a browser `engine/pacer.ts` (one grant) and the operator's gate (`apps/page-browser/src/egress/gate.ts`) |
 | I4 | `S` is re-read before every admission; `S < 2000 ms` is impossible (the test-only `minSettingMs` is never passed by the host). | `engine/ports.ts` `PauseSource` + `engine/pacer.ts` |

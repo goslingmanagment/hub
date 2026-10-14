@@ -95,7 +95,8 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     expect(ours).toEqual(theirs);
     expect(ours).toHaveLength(59);
     expect(new Set(CATALOGUE_ROWS.map((row) => row.route)).size).toBe(59);
-    for (const row of CATALOGUE_ROWS) expect(row, row.template).toMatchObject({ mode: "automation", platformData: true });
+    // Both modes: the manual login lets the interface's reads through too (plan §4.8, PR 15).
+    for (const row of CATALOGUE_ROWS) expect(row, row.template).toMatchObject({ mode: "both", platformData: true });
   });
 
   it("carry the login operations and the reads of the login screens the engine admits in the manual login", () => {
@@ -105,7 +106,7 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     expect(LOGIN_SCREEN_ROWS.map((row) => row.template).sort()).toEqual([...LOGIN_SCREEN_READS].sort());
     for (const row of LOGIN_SCREEN_ROWS) expect(row).toMatchObject({ methods: ["GET"], mode: "both", route: SITE_OTHER_ROUTE });
     expect(FANSLY_ROUTES.has(SITE_OTHER_ROUTE as never)).toBe(true);
-    expect(OPEN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["GET /** automation site.other", "OPTIONS /** both null"]);
+    expect(OPEN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["GET /** both site.other", "OPTIONS /** both null"]);
   });
 
   it("give every request the route the engine's own matcher gives it", () => {
@@ -299,7 +300,7 @@ describe("the rows closed one by one (spec §2.5)", () => {
 
 describe("the operator's decisions (plan §4.3)", () => {
   it("automation: reads by the engine's admission, static and third-party hosts at once, the socket by its own admission", () => {
-    expect(decide({ method: "GET", url: api("/account/me?ngsw-bypass=true") }, "automation")).toEqual({ action: "admit", route: "account.me", operation: "read", platformData: true, mode: "automation", rule: "api: GET /account/me → account.me" });
+    expect(decide({ method: "GET", url: api("/account/me?ngsw-bypass=true") }, "automation")).toEqual({ action: "admit", route: "account.me", operation: "read", platformData: true, mode: "both", rule: "api: GET /account/me → account.me" });
     expect(decide({ method: "GET", url: api("/mediastories/following") }, "automation")).toMatchObject({ action: "admit", route: "site.other", operation: "read", platformData: true });
     expect(decide({ method: "OPTIONS", url: api("/message") }, "automation")).toMatchObject({ action: "preflight" });
     expect(decide({ method: "GET", url: "https://fansly.com/main.js" }, "automation")).toMatchObject({ action: "pass", cls: "site" });
@@ -310,15 +311,21 @@ describe("the operator's decisions (plan §4.3)", () => {
     expect(decide({ method: "POST", url: api("/login") }, "automation")).toMatchObject({ action: "refuse", refusal: "mode" });
   });
 
-  it("manual login: the login operations and the login screens' reads; no other request of the API, no socket", () => {
+  it("manual login: the login operations and every read the map opens (the interface's, PR 15); the closed reads and other writes closed, no socket", () => {
     expect(decide({ method: "POST", url: api("/login") }, "manual_login")).toMatchObject({ action: "admit", route: "auth.login", operation: "login", platformData: false });
     expect(decide({ method: "POST", url: api("/login/twofa") }, "manual_login")).toMatchObject({ action: "admit", route: "auth.twofa", operation: "login" });
     for (const row of LOGIN_SCREEN_ROWS) {
       for (const decision of both("GET", api(row.template))) expect(decision, row.template).toMatchObject({ action: "admit", route: "site.other", operation: "read", platformData: row.platformData });
     }
     expect(decide({ method: "GET", url: api("/device/id") }, "manual_login")).toMatchObject({ platformData: false });
-    expect(decide({ method: "GET", url: api("/account/me") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "mode" });
-    expect(decide({ method: "GET", url: api("/timeline/home") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "mode" });
+    // The interface's reads: the catalogue's and those outside it, as in the automation.
+    expect(decide({ method: "GET", url: api("/account/me") }, "manual_login")).toMatchObject({ action: "admit", route: "account.me", operation: "read", platformData: true, mode: "both" });
+    expect(decide({ method: "GET", url: api("/timeline/home") }, "manual_login")).toMatchObject({ action: "admit", route: "site.other", operation: "read", platformData: true });
+    // The reads that are no reads stay closed, and the writes but the login.
+    expect(decide({ method: "GET", url: api("/emails/unsubscribe") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
+    expect(decide({ method: "GET", url: api("/intercom/authorize") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
+    expect(decide({ method: "POST", url: api("/message") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
+    expect(decide({ method: "POST", url: api("/message/ack") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
     expect(decide({ method: "GET", url: "wss://wsv3.fansly.com/?v=3", resourceType: "WebSocket" }, "manual_login")).toMatchObject({ action: "refuse", refusal: "mode" });
     // What is not the API's passes in both modes.
     for (const decision of both("GET", "https://fansly.com/")) expect(decision).toMatchObject({ action: "pass" });

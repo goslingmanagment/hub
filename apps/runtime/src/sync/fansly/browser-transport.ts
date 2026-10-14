@@ -76,12 +76,17 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   moved generation asks for the verify first). Both are read again right
 //   before the grant. One admission is one check: a second is refused
 //   (`lease_used`).
-// - The send instant: the operator's report (`sent`, the result's `sentMono`
-//   — Chrome's timing, never before the gate's first bytes), converted from
-//   CLOCK_MONOTONIC by one constant shift (plan §4.2, step 5) and rounded up
-//   by `SEND_REPORT_GUARD_MS`, goes in the outcome as `transport_reported`;
-//   the pacer marks the send there (never before its grant, never after the
-//   completion). None: the completion.
+// - The send instant: the operator's `sent` (the gate's first bytes, its own
+//   clock) as it came — converted from CLOCK_MONOTONIC by one constant
+//   shift (plan §4.2, step 5) and rounded up by `SEND_REPORT_GUARD_MS` —
+//   goes in the outcome as `transport_reported`; the pacer marks the send
+//   there (never before its grant, never after the completion). Without a
+//   `sent` received (lost with a link, a result held from an earlier one)
+//   the instant is unknown, whatever the result says: `completion_fallback`
+//   — the pacer takes the completion, the latest it can have left, and a
+//   fence ordered by time takes the admission (`engine/send-instant.ts`):
+//   an unknown send proves nothing (Astra's review of PR 15, rounds 5 and
+//   6).
 // - The outcome: the operator's, as the wire layer shapes it (lower-case
 //   headers, the body decoded; a CDN hop's bytes as `bodyBuffer`, 5 MiB). An
 //   answer the server did not confirm (a cache, the site's service worker)
@@ -378,7 +383,11 @@ export async function createBrowserPageTransport(
   ): { outcome: TransportOutcome; whole: boolean } {
     const { result, body, bodyProblem } = delivered;
     const o = result.outcome;
-    const sentAt = (mono: number | null) => (mono === null ? reported : bridge.fromKernel(mono) + SEND_REPORT_GUARD_MS);
+    // The gate's `sent` as it came, or nothing: without it the send instant
+    // is unknown — the pacer takes the completion, a fence the admission
+    // (`engine/send-instant.ts`); a result's own instant proves nothing
+    // (Astra's review of PR 15, rounds 5 and 6).
+    const sentAt = (_mono: number | null) => reported;
     const sentError = (message: string, mono: number | null = null): TransportOutcome => {
       const at = sentAt(mono);
       return at === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: at };
@@ -657,8 +666,9 @@ export async function createBrowserPageTransport(
         };
         const req: FanslyWireRequest = { spec: attempt.operation as never, url, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS, credentialsGeneration: expected ?? "" };
         const { outcome, whole } = outcomeOf(delivered, meta, req, null, false);
-        const sentWall = o.kind === "response" ? wallOfKernel(o.sentMono) : null;
-        return { outcome, sameSession, whole, sentWall };
+        // Its `sent` went to an earlier link, if anywhere: the send instant
+        // is unknown (the result's own proves nothing).
+        return { outcome, sameSession, whole, sentWall: null };
       },
     };
   }

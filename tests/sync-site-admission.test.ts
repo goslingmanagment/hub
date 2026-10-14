@@ -93,23 +93,29 @@ describe("the decision at a slot", () => {
     }
   });
 
-  it("the manual login passes them for its login operations and the login screens' reads only", () => {
+  it("the manual login passes them for its login operations and the reads its interface makes (PR 15), never another write", () => {
     for (const ctx of [context({ pausedAll: true }), context({ pageHeld: { kind: "credentials" } }), context({ checksOnly: true })]) {
       expect(decideSite([request({ method: "POST", path: "/api/v1/login", manualLogin: true })], ctx).admit?.route).toBe("auth.login");
       expect(decideSite([request({ path: "/api/v1/versioning?ngsw-bypass=true", manualLogin: true })], ctx).admit?.route).toBe("site.other");
       expect(decideSite([request({ path: "/api/v1/thirdpartyconnect/providers", manualLogin: true })], ctx).admit).not.toBeNull();
-      // Any other read of the site, in the manual login too, is refused there
-      // (Astra's review of PR 8: `/message` must not pass a pause).
-      const other = decideSite([request({ path: "/api/v1/message?groupId=123", manualLogin: true })], ctx);
-      expect(other.admit).toBeNull();
-      expect(["paused", "credentials"]).toContain(other.refuse[0]?.reason);
+      // Every read of the interface in the manual login (plan §4.8 «чтения,
+      // которые делает интерфейс»; the coordinator's decision on PR 15).
+      expect(decideSite([request({ path: "/api/v1/account/me", manualLogin: true })], ctx).admit?.route).toBe("account.me");
+      expect(decideSite([request({ path: "/api/v1/message?groupId=123", manualLogin: true })], ctx).admit?.route).toBe("messages.page");
+      // Outside the manual login the same read is refused there.
+      const outside = decideSite([request({ path: "/api/v1/message?groupId=123" })], ctx);
+      expect(outside.admit).toBeNull();
+      expect(["paused", "credentials"]).toContain(outside.refuse[0]?.reason);
+      // A write that is not a login operation never passes.
+      expect(decideSite([request({ method: "POST", path: "/api/v1/message", manualLogin: true })], ctx)).toMatchObject({ admit: null, refuse: [{ reason: "write" }] });
     }
   });
 
   it("the exemption is the manual login's alone", () => {
     expect(classifySiteRequest(request({ path: "/api/v1/versioning" }))).toMatchObject({ exempt: false });
     expect(classifySiteRequest(request({ path: "/api/v1/versioning", manualLogin: true }))).toMatchObject({ exempt: true });
-    expect(classifySiteRequest(request({ path: "/api/v1/timeline/home", manualLogin: true }))).toMatchObject({ exempt: false });
+    expect(classifySiteRequest(request({ path: "/api/v1/timeline/home" }))).toMatchObject({ exempt: false });
+    expect(classifySiteRequest(request({ path: "/api/v1/timeline/home", manualLogin: true }))).toMatchObject({ exempt: true, origin: "site" });
     expect(classifySiteRequest(request({ method: "POST", path: "/api/v1/login/twofa", manualLogin: true }))).toMatchObject({ exempt: true, origin: "login" });
   });
 

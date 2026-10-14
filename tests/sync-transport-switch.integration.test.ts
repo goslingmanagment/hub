@@ -548,7 +548,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     // The outcome the operator kept is the attempt's: captured, applied,
     // acknowledged — never closed unknown, never sent again. (As delivered
     // to the leave's connection, or resent on its recover: either way.)
-    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    // Its `sent` went to the engine that died: unknown to this one — the
+    // result's own instant proves nothing (Astra's review of PR 15, round 6).
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "completion_fallback" });
     expect(r.operator.acks).toContain(old.id);
     expect(r.operator.physical.filter((request) => request.attemptId === old.id)).toHaveLength(1);
     // Stopped, taken and confirmed before Node sent anything.
@@ -590,7 +592,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     // The buffer opens: what it kept goes to the engine, and is the attempt's.
     r.operator.setBufferUnavailable(null);
     await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page running on Node");
-    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    // Its `sent` went to the engine that died: unknown to this one — the
+    // result's own instant proves nothing (Astra's review of PR 15, round 6).
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "completion_fallback" });
     expect(r.operator.acks).toContain(old.id);
     expect(r.operator.held.size).toBe(0);
     expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
@@ -620,7 +624,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     // The disk reads again: the next ask resends it, and it is the attempt's.
     r.operator.bodiesUnreadable = false;
     await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 40_000, "the page running on Node");
-    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    // Its `sent` went to the engine that died: unknown to this one — the
+    // result's own instant proves nothing (Astra's review of PR 15, round 6).
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "completion_fallback" });
     expect(r.operator.acks).toContain(old.id);
     expect(r.operator.held.size).toBe(0);
     expect(r.operator.physical.filter((request) => request.attemptId === old.id)).toHaveLength(1);
@@ -731,7 +737,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     await until(async () => (await leftBy(r.page.pageId)).by === "operator" && r.server.arrivals.length >= 1, 150_000, "the leave confirmed, Node sending");
     // The engine got it whole — a body is taken only with every part of one
     // connection and its sha256 matching — and it is the attempt's.
-    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    // Its `sent` went to the engine that died: unknown to this one — the
+    // result's own instant proves nothing (Astra's review of PR 15, round 6).
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "completion_fallback" });
     expect(r.operator.acks).toContain(old.id);
     expect(host.state(r.page.pageId)).toMatchObject({ kind: "running" });
   }, 240_000);
@@ -761,7 +769,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     // body, which it does only whole), and the leave ends.
     r.operator.stallAfterParts = null;
     await until(async () => (await leftBy(r.page.pageId)).by === "operator", 120_000, "the leave confirmed");
-    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    // Its `sent` went to the engine that died: unknown to this one — the
+    // result's own instant proves nothing (Astra's review of PR 15, round 6).
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "completion_fallback" });
   }, 300_000);
 
   it("a delivery that stalls while the leave first asks (before the drain) is cut after its silence too, and asked again on the next connection", async (context) => {

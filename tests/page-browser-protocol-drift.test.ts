@@ -60,6 +60,9 @@ interface Pairs {
   alarm: [Engine.Alarm, Operator.Alarm];
   engineToOperator: [Engine.EngineToOperator, Operator.EngineToOperator];
   operatorToEngine: [Engine.OperatorToEngine, Operator.OperatorToEngine];
+  loginScreen: [Engine.LoginScreen, Operator.LoginScreen];
+  loginRequest: [Engine.LoginRequest, Operator.LoginRequest];
+  loginReply: [Engine.LoginReply, Operator.LoginReply];
 }
 
 // A type that drifted makes its `true` here a type error (`pnpm typecheck`).
@@ -106,6 +109,9 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   alarm: true,
   engineToOperator: true,
   operatorToEngine: true,
+  loginScreen: true,
+  loginRequest: true,
+  loginReply: true,
 };
 
 const FP = "a".repeat(64);
@@ -197,6 +203,23 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: true, deadlineMono: 10, attemptId: 13 },
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: false, reason: "mode", retryNotBeforeWall: null },
   { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "stopPage" } },
+  // The owner's login (PR 15).
+  { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "setMode", mode: "manual_login" } },
+  { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "restartBrowser" } },
+];
+
+/** The login form's calls (API → operator) and answers (PR 15). */
+const LOGIN_CALLS: Engine.LoginRequest[] = [
+  { type: "login.state", callId: "c-1", token: "t" },
+  { type: "login.screenshot", callId: "c-2", token: "t" },
+  { type: "login.submit", callId: "c-3", token: "t", login: "someone", password: "pw" },
+  { type: "login.code", callId: "c-4", token: "t", code: "123456" },
+];
+const LOGIN_REPLIES: Operator.LoginReply[] = [
+  { type: "login.stateResult", callId: "c-1", screen: "error", screenVersion: "fansly-login/1", fields: ["login", "password"], siteError: "Invalid" },
+  { type: "login.stateResult", callId: "c-1", screen: "unknown", screenVersion: "fansly-login/1", fields: [], siteError: null },
+  { type: "login.screenshotResult", callId: "c-2", jpeg: { bodyId: UUID, decodedBytes: 10, sha256: FP } },
+  { type: "login.refused", callId: "c-3", reason: "not_manual_login" },
 ];
 
 describe("the engine's mirror of the operator protocol", () => {
@@ -236,6 +259,13 @@ describe("the engine's mirror of the operator protocol", () => {
       const parsed = Operator.parseEngineMessage(JSON.stringify(message));
       expect(parsed.ok, `${message.type}: ${parsed.ok ? "" : parsed.error}`).toBe(true);
     }
+  });
+
+  it("the login form: the operator reads every call the API makes, the API every answer the operator gives", () => {
+    for (const call of LOGIN_CALLS) expect(Operator.parseLoginRequest(JSON.parse(JSON.stringify(call))), call.type).toEqual({ ok: true, request: call });
+    for (const reply of LOGIN_REPLIES) expect(Engine.parseLoginReply(JSON.stringify(reply)), reply.type).toEqual({ ok: true, reply });
+    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[0], screen: "captcha" })).ok).toBe(false);
+    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[3], reason: "because" })).ok).toBe(false);
   });
 
   it("refuses what is not the protocol: an unknown type or value is an error (spec §6.3 rule 3)", () => {

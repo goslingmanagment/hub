@@ -479,6 +479,9 @@ export class SyncActor {
    *  refused; the request a slot would admit, if any. Nothing is admitted. */
   async #siteSweep(page: SyncPageRow): Promise<ClassifiedSiteRequest | null> {
     const d = this.#d;
+    // Nothing waits (a page on Node between its logins, PR 15): nothing to
+    // judge, and no reads for it.
+    if (d.site!.pending().length === 0) return null;
     const now = d.clock.wallNow();
     const holds = holdSetOf(page.holds);
     const clocks = holds.routes.ok ? await this.#routeClocks(holds.routes.state) : null;
@@ -527,6 +530,7 @@ export class SyncActor {
   ): Promise<ActorExit | null | "none"> {
     const d = this.#d;
     const site = d.site!;
+    if (site.pending().length === 0) return "none";
     const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
     const classified = settleSiteDecision(d, site, ctx);
     if (classified === null) return "none";

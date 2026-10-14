@@ -14,11 +14,13 @@ import {
   type BufferEvent,
   type Check,
   type CheckResult,
+  type Command,
   type CommandKind,
   type CommandResult,
   type EngineToOperator,
   type EventsRefused,
   type Hello,
+  type Mode,
   type OperatorParams,
   type OperatorToEngine,
   type Quiesced,
@@ -439,8 +441,9 @@ export class PageBrowserRpcClient {
    *  it could not be sent, the link went before the result, or none came
    *  within `waitMs` — whether it ran is then not known. `notAfterMono` is
    *  the operator's clock (CLOCK_MONOTONIC): later, it is not executed. */
-  command(kind: CommandKind, notAfterMono: number, waitMs: number): Promise<CommandResult | null> {
+  command(kind: CommandKind | { kind: "setMode"; mode: Mode }, notAfterMono: number, waitMs: number): Promise<CommandResult | null> {
     const commandId = randomUUID();
+    const command: Command["command"] = typeof kind === "string" ? { kind } : kind;
     return new Promise((resolve) => {
       const timer = setTimeout(() => settle(null), waitMs);
       timer.unref?.();
@@ -451,7 +454,7 @@ export class PageBrowserRpcClient {
         resolve(result);
       };
       this.#commands.set(commandId, settle);
-      if (!this.#write({ type: "command", ownerGeneration: this.#generation, commandId, notAfterMono, command: { kind } })) settle(null);
+      if (!this.#write({ type: "command", ownerGeneration: this.#generation, commandId, notAfterMono, command })) settle(null);
     });
   }
 

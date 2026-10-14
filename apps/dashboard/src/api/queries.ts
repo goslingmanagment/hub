@@ -15,3 +15,4 @@ export * from "./conversations.js";
 export * from "./dev.js";
 export * from "./overview.js";
 export * from "./pages.js";
+export * from "./pageBrowser.js";

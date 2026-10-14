@@ -56,6 +56,17 @@ type Reply = Record<string, unknown> | { error: { code: number; message: string 
 export class FakeChrome {
   readonly commands: CdpCommand[] = [];
   readonly handlers = new Map<string, (command: CdpCommand) => Reply | Promise<Reply>>();
+  /** Chrome's TimeTicks against the operator's clock, and how long its
+   *  metrics take to answer (`Performance.getMetrics`: an active calibration). */
+  clockShiftMs = 0;
+  clockDelayMs = 0;
+
+  constructor() {
+    this.handlers.set("Performance.getMetrics", async () => {
+      if (this.clockDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.clockDelayMs));
+      return { metrics: [{ name: "Timestamp", value: (monoMs() + this.clockShiftMs) / 1000 }] };
+    });
+  }
   readonly connections: WsConnection[] = [];
   #server: HttpServer | null = null;
   port = 0;
@@ -799,6 +810,15 @@ export class BrowserModel {
       const sessionId = command.sessionId ?? "S1";
       const url = String(command.params.url ?? "");
       this.navigations.push(url);
+      if (url === "about:blank") {
+        // No network: it commits at once, as Chrome's does — unless told not to.
+        if (this.blankLoads === "error") return { frameId: `F-${sessionId}`, loaderId: "L-error", errorText: "net::ERR_ABORTED" };
+        const loaderId = `L${++this.#requests}`;
+        const tab = this.#tabs.get(sessionId);
+        if (tab) tab.url = url;
+        this.chrome.event("Page.frameNavigated", { frame: { id: `F-${sessionId}`, url, loaderId } }, sessionId);
+        return { frameId: `F-${sessionId}`, loaderId };
+      }
       if (this.siteLoads === "error") return { frameId: `F-${sessionId}`, loaderId: "L-error", errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" };
       const request = this.pause(url, "GET", sessionId, "Document");
       const deadline = Date.now() + 5000;
@@ -820,6 +840,8 @@ export class BrowserModel {
   /** What the site's navigations do: the document commits (`commit`), never
    *  comes (`never`), or the navigation fails (`error`). */
   siteLoads: "commit" | "never" | "error" = "commit";
+  /** What a navigation to a blank document does. */
+  blankLoads: "commit" | "error" = "commit";
   /** The URLs the operator navigated to. */
   readonly navigations: string[] = [];
 
@@ -878,16 +900,18 @@ export class BrowserModel {
   }
 
   /** A request of the page itself pauses in Fetch (the site, a worker...). */
-  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}): ModelRequest {
+  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}, postData?: string): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
     const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused", siteHeaders: headers };
     this.requests.push(request);
-    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method } }, sessionId);
+    // A body (a login's) rides both events, as Chrome sends it.
+    const body = postData === undefined ? {} : { hasPostData: true, postData };
+    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method, ...body } }, sessionId);
     this.chrome.event("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,
-      request: { url: request.url, urlFragment: request.fragment, method, headers },
+      request: { url: request.url, urlFragment: request.fragment, method, headers, ...body },
       resourceType,
       frameId: `F-${sessionId}`,
     });
@@ -903,6 +927,8 @@ export class BrowserModel {
   /** Hub's requests this browser ran: the body they get, and what
    *  happened to each. */
   hubBody: Buffer = Buffer.from('{"success":true,"response":{"id":"1"}}');
+  /** The timing Chrome reports for a Hub request (its own clock: seconds). */
+  hubTiming: { requestTime: number; sendStart: number } = { requestTime: 777.125, sendStart: 1.5 };
   readonly hubRequests: Array<ModelRequest & { attemptId: number; headers: Array<[string, string]>; socket: Socket | null; streamed: boolean }> = [];
 
   #navigate(tab: ModelTarget): void {
@@ -991,7 +1017,7 @@ export class BrowserModel {
 
   #hubBodyGoes(request: (typeof this.hubRequests)[number]): void {
     const session = request.sessionId;
-    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: { requestTime: 777.125, sendStart: 1.5 }, connectionReused: false } }, session);
+    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: this.hubTiming, connectionReused: false } }, session);
     this.chrome.event("Network.responseReceivedExtraInfo", { requestId: request.networkId, statusCode: 200 }, session);
     this.chrome.event("Network.dataReceived", { requestId: request.networkId, dataLength: this.hubBody.length, encodedDataLength: this.hubBody.length, ...(request.streamed ? { data: this.hubBody.toString("base64") } : {}) }, session);
     this.chrome.event("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: this.hubBody.length + 100 }, session);
@@ -1093,6 +1119,17 @@ export const UNANSWERED = Symbol("unanswered");
 export class FakeCdpPort implements CdpPort {
   readonly commands: CdpCommand[] = [];
   readonly handlers = new Map<string, (command: CdpCommand) => unknown>();
+  /** Chrome's TimeTicks against the operator's clock, and how long its
+   *  metrics take to answer (`Performance.getMetrics`: an active calibration). */
+  clockShiftMs = 0;
+  clockDelayMs = 0;
+
+  constructor() {
+    this.handlers.set("Performance.getMetrics", async () => {
+      if (this.clockDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.clockDelayMs));
+      return { metrics: [{ name: "Timestamp", value: (monoMs() + this.clockShiftMs) / 1000 }] };
+    });
+  }
   readonly acks: number[] = [];
   readonly #listeners = new Map<string, EventHandler[]>();
   #seq = 0;

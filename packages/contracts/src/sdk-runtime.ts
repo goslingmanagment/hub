@@ -33,6 +33,10 @@ export const SDK_EXCLUDED_OPERATIONS = [
   "ofapiReadGateway",
   "adminOfapiCreditsLedgerCsv",
   "voiceNoteAudio",
+  // A page browser's screenshot is image/jpeg; its screen a passthrough of
+  // KasmVNC (Project Browser PR 15).
+  "pageBrowserLoginScreenshot",
+  "pageBrowserScreen",
 ] as const;
 export type KernelSdkExcludedKey = (typeof SDK_EXCLUDED_OPERATIONS)[number];
 export type KernelSdkMethodKey = Exclude<KernelOperationKey, KernelSdkExcludedKey>;
