@@ -504,6 +504,38 @@ describe("the account read through the browser proves it only when fresh (Astra'
     expect(r.operator.commands.some((command) => command.command.kind === "setMode" && "mode" in command.command && command.command.mode === "automation")).toBe(true);
   });
 
+  it("reads the account once a request, even when a look read the profile before the answer was written", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    let requestId = "";
+    let stalled = 0;
+    startTask(r, HOLDER, {
+      // account.me's own budget would hold a second read back past the test.
+      routeTimeScale: 0.01,
+      afterProfileRead: async (profile) => {
+        if (stalled > 0 || requestId === "" || profile?.identityRequest?.id !== requestId || profile.identityResult?.requestId === requestId || r.operator.physical.length !== 1) return;
+        stalled += 1;
+        // The read went; this look keeps its profile from before the
+        // answer until the answer is written and the check is over.
+        await until(async () => (await findOnboardingProfile(db(), r.profileId))!.identityResult?.requestId === requestId, 10_000, "answered");
+        await sleep(200);
+      },
+    });
+    // The read's answer comes a little later: looks run meanwhile.
+    let holding = true;
+    const held = intercept(r, (message) => (holding && message.type === "result" ? "hold" : message));
+    held.holdFrames();
+    requestId = await loginThenAsk(r);
+    await until(async () => r.operator.physical.length === 1, 10_000, "the read sent");
+    await until(async () => stalled === 1, 10_000, "a look with the profile of before the answer");
+    holding = false;
+    held.release();
+    expect(await answerOf(r, requestId)).toMatchObject({ ok: true });
+    await sleep(1_500);
+    expect(r.operator.physical).toHaveLength(1);
+  });
+
   it("proves the account with the operator's own `sent` after the login closed, in the generation that holds", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });

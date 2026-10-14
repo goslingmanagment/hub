@@ -189,6 +189,9 @@ export interface BrowserOnboardingOverrides {
   /** Awaited right before an account read's grant is written, under the
    *  profile's row lock (a test moves the onboarding there). */
   beforeCheckAnswer?: (attemptId: number) => Promise<void>;
+  /** Awaited after a look read the profile, before it acts on it (a test
+   *  lets the profile change meanwhile). */
+  afterProfileRead?: (profile: OnboardingProfile) => Promise<void>;
   /** Every route and family interval × this (`RoutePolicyOptions.timeScale`). */
   routeTimeScale?: number;
 }
@@ -415,6 +418,9 @@ export class OnboardingLink {
    *  it was sent after it, in that generation. */
   #automationBack: { generation: bigint; mono: number } | null = null;
   #identity: Promise<void> | null = null;
+  /** The identity request this link answered last: never read again, even
+   *  when a look read the profile before its answer was written. */
+  #answeredRequest: string | null = null;
   #lastRecorded: { at: number; key: string } | null = null;
   #subscribed: string | null = null;
   #intake: Promise<void> = Promise.resolve();
@@ -551,6 +557,7 @@ export class OnboardingLink {
 
   async #drive(): Promise<void> {
     const profile = await findOnboardingProfile(this.#o.db, this.profileId);
+    await this.#o.overrides?.afterProfileRead?.(profile!);
     if (profile === null || profile.pageId !== null || profile.linkGeneration !== this.generation) {
       this.#lost = true;
       return;
@@ -878,7 +885,7 @@ export class OnboardingLink {
 
   #maybeIdentity(profile: OnboardingProfile, state: State): void {
     const request = profile.identityRequest;
-    if (request === null || this.#identity !== null) return;
+    if (request === null || this.#identity !== null || request.id === this.#answeredRequest) return;
     if (profile.identityResult?.requestId === request.id) return;
     const boundary = this.#automationBack;
     const bounded = boundary !== null && boundary.generation === profile.onboardingGeneration;
@@ -890,7 +897,9 @@ export class OnboardingLink {
           : state.sessionFingerprint === null ? "the browser knows no live session: log it in first"
             : `the browser is not up at the site (${state.step})`;
       this.#identity = this.#fenced((tx) => recordOnboardingIdentity(tx, { profileId: this.profileId, result: { requestId: request.id, ok: false, error: why, httpStatus: null, at: new Date().toISOString() } }))
-        .then(() => undefined)
+        .then(() => {
+          this.#answeredRequest = request.id;
+        })
         .finally(() => {
           this.#identity = null;
         });
@@ -934,6 +943,9 @@ export class OnboardingLink {
     }));
     const admission = this.pacer.arm(grant, attemptId, issuedMono);
     const sent = await this.#sendIdentity(admission, fingerprint, signal, { requestId, generation: boundary.generation });
+    // One read a request: a look that read the profile before this answer
+    // was written never sends another.
+    this.#answeredRequest = requestId;
     const outcome = sent.outcome;
     await this.#complete(admission, token, outcome, outcome.kind === "response" ? outcome.status : null);
     const failure = (why: string): OnboardingIdentityResult => ({

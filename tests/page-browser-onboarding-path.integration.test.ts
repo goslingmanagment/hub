@@ -274,7 +274,12 @@ describe("a new page connected through its own browser, the whole path (plan §3
     await until(() => operator.page.step === "site_loaded" && operator.state.mode === "manual_login", 20_000, "the login screen up");
     site.setTab(operator.control.workTab!.sessionId);
     // The browser's own word: its exit through the pinned IP, its self-test.
-    await eventually(async () => (await findOnboardingProfile(db(), profileId))!.exitIp === "203.0.113.7", 10_000, "the exit IP recorded");
+    // (Recorded as the operator says it: wait for the state shown below,
+    // not an earlier one of the start — its exit IP checked, not yet open.)
+    await eventually(async () => {
+      const recorded = (await findOnboardingProfile(db(), profileId))!;
+      return recorded.exitIp === "203.0.113.7" && recorded.exitOpen && recorded.mode === "manual_login";
+    }, 10_000, "the open exit and the manual login recorded");
     const shown = await server.inject({ method: "GET", url: base, headers: as(cookie) });
     expect(shown.json()).toMatchObject({
       profile: { onboarding: "login", proxySet: true, pinnedExitIp: "203.0.113.7", operator: { exitIp: "203.0.113.7", exitOpen: true, mode: "manual_login", selfTest: { ok: true } } },
