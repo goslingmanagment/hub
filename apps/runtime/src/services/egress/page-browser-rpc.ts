@@ -299,6 +299,12 @@ export class PageBrowserRpcClient {
   readonly #reasked = new Set<number>();
   #recover: PendingRecover | null = null;
   readonly #recoverQueue: PendingRecover[] = [];
+  /** Bytes of outcomes received over every connection: body frames, results
+   *  and the site path's ends — what a delivery moves. Never falls. */
+  #outcomeBytes = 0;
+  /** When the recover asked now was written, or a byte of an outcome last
+   *  came (`#now`). */
+  #deliveryMovedAt = 0;
   readonly #stateListeners = new Set<(state: State) => void>();
   readonly #alarmListeners = new Set<(alarm: Alarm) => void>();
   readonly #linkListeners = new Set<(status: LinkStatus) => void>();
@@ -526,6 +532,27 @@ export class PageBrowserRpcClient {
 
   /** The outcomes the operator holds of `attemptIds`, resent, and the state
    *  of each. Rejects when the link goes before the answer. */
+  /** Bytes of outcomes received over every connection (body frames, results,
+   *  the site path's ends): a delivery under way moves it. Never falls. */
+  get outcomeBytes(): number {
+    return this.#outcomeBytes;
+  }
+
+  /** A recover is asked and not answered yet, or waits its turn. */
+  get recoverPending(): boolean {
+    return this.#recover !== null || this.#recoverQueue.length > 0;
+  }
+
+  /** How long the operator's answer to the recover asked on this connection
+   *  has been coming without a byte of an outcome (since it was written, or
+   *  the last byte); null: none is asked. The operator answers a recover
+   *  after the deliveries ahead of it (buffer/replay.ts), so a recover asked
+   *  and not answered is a delivery under way — or a stalled one, once this
+   *  grows long. */
+  deliveryIdleMs(): number | null {
+    return this.#recover === null ? null : this.#now() - this.#deliveryMovedAt;
+  }
+
   recover(attemptIds: readonly number[]): Promise<RecoverAnswer> {
     return new Promise((resolve, reject) => {
       const pending: PendingRecover = { ids: new Set(attemptIds), results: new Map(), ends: new Map(), resolve, reject };
@@ -784,6 +811,7 @@ export class PageBrowserRpcClient {
    *  about it, then the site path's — or, with none listening, an outcome
    *  nothing waits for. */
   #onEnd(message: SiteDone | WsDone): void {
+    this.#outcomeMoved(1);
     const recovering = this.#recover;
     if (recovering !== null && recovering.ids.has(message.attemptId)) recovering.ends.set(message.attemptId, message);
     if (this.#endClaim !== null) {
@@ -885,6 +913,7 @@ export class PageBrowserRpcClient {
       return this.#protocolError(errorName(error));
     }
     const { bodyId, part, last, abandoned, data } = decoded;
+    this.#outcomeMoved(frame.length);
     if (abandoned) {
       // The parts sent of it are void; its outcome comes on a later delivery.
       this.#bodies.delete(bodyId);
@@ -931,7 +960,14 @@ export class PageBrowserRpcClient {
     return { body, problem: null };
   }
 
+  /** A delivery moved: `bytes` of an outcome came. */
+  #outcomeMoved(bytes: number): void {
+    this.#outcomeBytes += Math.max(1, bytes);
+    this.#deliveryMovedAt = this.#now();
+  }
+
   #onResult(result: Result): void {
+    this.#outcomeMoved(1);
     const { body, problem } = this.#takeBody(result);
     const delivered: DeliveredResult = { result, body, bodyProblem: problem };
     const id = result.attemptId;
@@ -997,6 +1033,7 @@ export class PageBrowserRpcClient {
     if (next === undefined) return;
     const message: Recover = { type: "recover", ownerGeneration: this.#generation, attemptIds: [...next.ids] };
     this.#recover = next;
+    this.#deliveryMovedAt = this.#now();
     if (!this.#write(message)) {
       this.#recover = null;
       next.reject(new PageBrowserLinkError("no link to ask"));

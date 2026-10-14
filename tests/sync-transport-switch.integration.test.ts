@@ -546,9 +546,9 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     await startHost(r);
     await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page running on Node");
     // The outcome the operator kept is the attempt's: captured, applied,
-    // acknowledged — never closed unknown, never sent again.
+    // acknowledged — never closed unknown, never sent again. (As delivered
+    // to the leave's connection, or resent on its recover: either way.)
     expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
-    expect(r.operator.recovers.flat()).toContain(old.id);
     expect(r.operator.acks).toContain(old.id);
     expect(r.operator.physical.filter((request) => request.attemptId === old.id)).toHaveLength(1);
     // Stopped, taken and confirmed before Node sent anything.
@@ -699,6 +699,90 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "unknown" });
     expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
   }, 120_000);
+
+  /** The browser's answers 3 MiB long (three body parts of 1 MiB): JSON
+   *  padded with spaces, which it reads all the same. */
+  function bigAnswers(r: Rig): void {
+    const base = r.operator.respond;
+    r.operator.respond = (send) => {
+      const answer = base(send);
+      const text = String(answer.body);
+      return { ...answer, body: text + " ".repeat(3 * 1024 * 1024 - Buffer.byteLength(text)) };
+    };
+  }
+
+  /** The fake operator's link now: it grows when a connection comes or goes. */
+  const currentLinkOf = (r: Rig) => r.operator.link;
+
+  /** The links on which every part of a body went: a delivery not cut. */
+  const wholeOn = (r: Rig) => [...new Set(r.operator.partsSent.map((sent) => sent.link))]
+    .filter((link) => r.operator.partsSent.filter((sent) => sent.link === link).map((sent) => sent.part).join() === "0,1,2");
+
+  it("a slow but working delivery — 3 MiB over 45 s — is never cut: the leave waits for it, takes the outcome as the attempt's and Node sends (Astra PR 14 round 4, P1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    bigAnswers(r);
+    const old = await diedAfterBrowserSent(r);
+    // As Astra: the body does not read at first (the recover says unknown),
+    // then it reads — slowly: a part every 15 s.
+    r.operator.bodiesUnreadable = true;
+    const host = await startHost(r);
+    await until(async () => r.operator.recovers.flat().includes(old.id), 20_000, "the operator asked about the attempt");
+    r.operator.bodyPartDelayMs = 15_000;
+    r.operator.bodiesUnreadable = false;
+    await until(async () => (await leftBy(r.page.pageId)).by === "operator" && r.server.arrivals.length >= 1, 150_000, "the leave confirmed, Node sending");
+    // One delivery went whole, on one link, and was the attempt's.
+    expect(wholeOn(r)).not.toEqual([]);
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    expect(r.operator.acks).toContain(old.id);
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "running" });
+  }, 240_000);
+
+  it("a delivery that stalls is cut after its silence, never sooner; the next connection's delivers it (Astra PR 14 round 4)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    bigAnswers(r);
+    const old = await diedAfterBrowserSent(r);
+    r.operator.bodiesUnreadable = true;
+    await startHost(r);
+    await until(async () => r.operator.recovers.flat().includes(old.id), 20_000, "the operator asked about the attempt");
+    // It reads now, but stalls after the first part.
+    r.operator.stallAfterParts = 1;
+    r.operator.bodiesUnreadable = false;
+    await until(async () => r.operator.partsSent.length >= 1, 40_000, "the delivery under way");
+    const stalledOn = r.operator.partsSent[0]!.link;
+    const stalledAt = Date.now();
+    // A new connection only after the stall's silence (30 s), within one more step (≤ 30 s) and its ask.
+    await until(async () => currentLinkOf(r) > stalledOn, 90_000, "the stalled connection cut");
+    const after = Date.now() - stalledAt;
+    expect(after).toBeGreaterThanOrEqual(25_000);
+    expect(after).toBeLessThanOrEqual(80_000);
+    // No longer stalled: the next delivery is whole, and the leave ends.
+    r.operator.stallAfterParts = null;
+    await until(async () => (await leftBy(r.page.pageId)).by === "operator", 120_000, "the leave confirmed");
+    expect(wholeOn(r)).not.toEqual([]);
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response" });
+  }, 300_000);
+
+  it("a delivery that stalls while the leave first asks (before the drain) is cut after its silence too, and asked again on the next connection", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    bigAnswers(r);
+    const old = await diedAfterBrowserSent(r);
+    r.operator.stallAfterParts = 1;
+    await startHost(r);
+    await until(async () => r.operator.partsSent.length >= 1, 40_000, "the delivery under way");
+    const stalledOn = r.operator.partsSent[0]!.link;
+    const stalledAt = Date.now();
+    await until(async () => currentLinkOf(r) > stalledOn, 90_000, "the stalled connection cut");
+    expect(Date.now() - stalledAt).toBeGreaterThanOrEqual(25_000);
+    r.operator.stallAfterParts = null;
+    await until(async () => (await leftBy(r.page.pageId)).by === "operator", 120_000, "the leave confirmed");
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response" });
+  }, 300_000);
 });
 
 describe("sync ownership confirm-stopped waits for the browser pages' hand-over (plan §4.7)", () => {

@@ -240,6 +240,23 @@ export class FakeOperator {
    *  such an outcome is kept, not delivered, and a recover says `unknown`
    *  of it — until they read again and it is asked for (buffer/replay.ts). */
   bodiesUnreadable = false;
+  /** A slow delivery of the outcomes kept (on a new connection, on a
+   *  recover): this long before each part of a body. With it (or a stall),
+   *  deliveries run one at a time and a recover is answered after the ones
+   *  ahead of it, as buffer/replay.ts does; a delivery ends with its link. */
+  bodyPartDelayMs = 0;
+  /** A delivery that stalls: after this many parts of a body nothing more
+   *  goes until it is cleared (or the link goes). */
+  stallAfterParts: number | null = null;
+  /** Every body part a slow delivery sent, and on which link. */
+  readonly partsSent: Array<{ bodyId: string; part: number; link: number }> = [];
+  #link = 0;
+  #jobs: Promise<void> = Promise.resolve();
+
+  /** The link now: grows when a connection comes or goes. */
+  get link(): number {
+    return this.#link;
+  }
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -330,6 +347,7 @@ export class FakeOperator {
           else void this.#onCheckResult(message);
         },
         onLink: (up) => {
+          this.#link += 1;
           this.links.push(up);
           this.stream.reset();
           if (up) {
@@ -540,9 +558,47 @@ export class FakeOperator {
     if (was !== null && cause === null) this.#deliverKept();
   }
 
+  get #slow(): boolean {
+    return this.bodyPartDelayMs > 0 || this.stallAfterParts !== null;
+  }
+
+  /** A delivery of this link, after the ones ahead of it. */
+  #enqueue(job: (link: number) => Promise<void>): void {
+    const link = this.#link;
+    this.#jobs = this.#jobs.then(() => (this.#link === link ? job(link) : undefined)).catch(() => undefined);
+  }
+
+  /** One outcome, its body's parts slowly (or stalled); false: the link went. */
+  async #deliverSlowly(result: Result, body: Buffer | null, link: number): Promise<boolean> {
+    if (body !== null && result.outcome.kind === "response") {
+      const bodyId = result.outcome.body.bodyId;
+      const parts = Math.max(1, Math.ceil(body.length / BODY_PART_BYTES));
+      for (let part = 0; part < parts; part++) {
+        while (this.stallAfterParts !== null && part >= this.stallAfterParts && this.#link === link) await sleep(50);
+        if (this.bodyPartDelayMs > 0) await sleep(this.bodyPartDelayMs);
+        if (this.#link !== link) return false;
+        this.partsSent.push({ bodyId, part, link });
+        this.server.sendBinary(encodeBodyFrame(bodyId, part, part === parts - 1, body.subarray(part * BODY_PART_BYTES, (part + 1) * BODY_PART_BYTES)));
+      }
+    }
+    if (this.#link !== link) return false;
+    this.server.send(result);
+    return true;
+  }
+
   /** Every outcome kept, to the engine: those that can be read. */
   #deliverKept(): void {
     if (this.buffer.unavailable !== null) return;
+    if (this.#slow) {
+      this.#enqueue(async (link) => {
+        for (const [, kept] of [...this.held]) {
+          if (kept.body !== null && this.bodiesUnreadable) continue;
+          if (!(await this.#deliverSlowly(kept.result, kept.body, link))) return;
+        }
+        for (const [, end] of this.heldEnds) this.server.send(end);
+      });
+      return;
+    }
     for (const [, kept] of this.held) {
       if (kept.body === null || !this.bodiesUnreadable) this.#deliver(kept.result, kept.body);
     }
@@ -618,6 +674,22 @@ export class FakeOperator {
   }
 
   async #recover(attemptIds: number[]): Promise<void> {
+    if (this.#slow) {
+      this.#enqueue(async (link) => {
+        const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
+        for (const attemptId of attemptIds) {
+          const stored = this.buffer.unavailable === null ? this.held.get(attemptId) : undefined;
+          if (stored !== undefined && !(stored.body !== null && this.bodiesUnreadable)) {
+            if (!(await this.#deliverSlowly(stored.result, stored.body, link))) return;
+            attempts.push({ attemptId, state: "outcome_resent" });
+          } else {
+            attempts.push({ attemptId, state: this.recoverState(attemptId) });
+          }
+        }
+        if (this.#link === link) this.server.send({ type: "recoverResult", attempts });
+      });
+      return;
+    }
     const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
     for (const attemptId of attemptIds) {
       // Nothing of a buffer that cannot be opened is read; an outcome whose

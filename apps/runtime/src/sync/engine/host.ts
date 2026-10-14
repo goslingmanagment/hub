@@ -176,6 +176,11 @@ export const BROWSER_LEAVE_DRAIN_CHECK_MS = 250;
 export const BROWSER_LEAVE_RECOVER_FIRST_MS = 2_000;
 /** … up to this. */
 export const BROWSER_LEAVE_RECOVER_MAX_MS = 30_000;
+/** A delivery under way (a recover asked and not answered: the operator
+ *  answers it after the deliveries ahead of it) is never cut while a byte of
+ *  an outcome came within this long; a longer silence is a stalled one. A
+ *  frame is at most 1 MiB: this is ≥ 35 KiB/s. */
+export const BROWSER_LEAVE_DELIVERY_STALL_MS = 30_000;
 
 export type HostPageState =
   | { kind: "running"; generation: bigint }
@@ -1053,11 +1058,22 @@ export class SyncEngineHost {
         await sleep(BROWSER_LEAVE_RETRY_MS);
       }
       // 3. The earlier owners' outcomes it kept, taken as theirs before Node's
-      //    recovery could close them unknown.
+      //    recovery could close them unknown. A delivery slower than the
+      //    recover's wait comes as late outcomes: taken here too (an
+      //    unfinished attempt's is its own), and never asked for again while
+      //    the operator still answers — unless its delivery stalled (no byte
+      //    of an outcome for `BROWSER_LEAVE_DELIVERY_STALL_MS`): then a new
+      //    connection, on which it is asked again.
       while (!signal.aborted) {
         stall.progress("recover");
-        const reconciled = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
-        if (reconciled.reached) break;
+        await takeLateHeldOutcomes(d, held);
+        if (client.recoverPending) {
+          const idle = client.deliveryIdleMs();
+          if (idle !== null && idle >= BROWSER_LEAVE_DELIVERY_STALL_MS) client.reconnect("the leave: the operator's delivery stalled");
+        } else {
+          const reconciled = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
+          if (reconciled.reached) break;
+        }
         await sleep(BROWSER_LEAVE_RETRY_MS);
       }
       // 4. The rest of its buffer: late outcomes and the stream, until the
@@ -1069,13 +1085,18 @@ export class SyncEngineHost {
       //    ways: the unfinished attempts by `recover`; and everything it
       //    keeps — an outcome of an attempt settled already, which `recover`
       //    cannot name, too — by a new connection, to which the operator
-      //    delivers every outcome it keeps, whenever its count did not fall
-      //    since the step before. Neither waits for the other.
+      //    delivers every outcome it keeps, whenever nothing moved since the
+      //    step before: its count did not fall, no byte of an outcome came,
+      //    and no delivery is under way (a recover asked and not answered —
+      //    asked as an empty probe when there is nothing unfinished to name —
+      //    whose last byte came within `BROWSER_LEAVE_DELIVERY_STALL_MS`). A
+      //    delivery in flight, however slow, is never cut; a stalled one is.
       let recoverEvery = BROWSER_LEAVE_RECOVER_FIRST_MS;
       let nextRecover = this.#clock.monoNow() + recoverEvery;
       // The operator's count of kept outcomes at the step before (first:
-      // when the loop first saw it keep any).
+      // when the loop first saw it keep any), and the outcome bytes come.
       let keptBefore: number | null = null;
+      let bytesBefore = client.outcomeBytes;
       while (!signal.aborted) {
         stall.progress("applies");
         await takeLateHeldOutcomes(d, held);
@@ -1087,12 +1108,24 @@ export class SyncEngineHost {
         if (kept > 0) keptBefore ??= kept;
         if (kept > 0 && this.#clock.monoNow() >= nextRecover) {
           stall.progress("recover");
-          const again = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
-          const redeliver = keptBefore === null || kept >= keptBefore;
+          const idle = client.deliveryIdleMs();
+          const moved = (keptBefore !== null && kept < keptBefore) || client.outcomeBytes > bytesBefore
+            || (idle !== null && idle < BROWSER_LEAVE_DELIVERY_STALL_MS);
+          // The new connection first: the recover below goes on it, behind
+          // the delivery the operator starts there (never cut by its own step).
+          const redeliver = !moved;
           if (redeliver) client.reconnect("the leave: redeliver the outcomes the operator keeps");
-          this.#o.logger.info({ pageId: run.pageId, kept, keptBefore, asked: again.asked, redeliver, nextInMs: Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS) },
+          let asked = 0;
+          if (!client.recoverPending) {
+            asked = (await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS)).asked;
+            // Nothing unfinished to name: an empty recover, answered once the
+            // deliveries ahead of it end — what tells one is under way.
+            if (asked === 0 && !client.recoverPending) void client.recover([]).catch(() => undefined);
+          }
+          this.#o.logger.info({ pageId: run.pageId, kept, keptBefore, asked, idleMs: idle, redeliver, nextInMs: Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS) },
             "Fansly sync host: the page's browser still keeps outcomes; asked for them again");
           keptBefore = kept;
+          bytesBefore = client.outcomeBytes;
           recoverEvery = Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS);
           nextRecover = this.#clock.monoNow() + recoverEvery;
         }
