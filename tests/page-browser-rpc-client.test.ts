@@ -106,7 +106,7 @@ describe("the link", () => {
         const message = JSON.parse(payload.toString("utf8")) as { type: string };
         if (message.type !== "hello") return;
         hellos.push(message);
-        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 0 }, bufferId: "b", state: new FakeOperatorState().state }));
+        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 1 }, bufferId: "b", state: new FakeOperatorState().state }));
       };
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -118,6 +118,33 @@ describe("the link", () => {
     await up(made);
     await until(() => hellos.length >= 2, 5_000, "a second hello");
     expect(statuses).toContain("down");
+  });
+
+  it("an operator of protocol minor 0 (no halt held on its volume) is refused at its hello: no work goes through it, the hello is tried again after the refusal's wait (Astra PR 17 round 4)", async () => {
+    const hellos: unknown[] = [];
+    const server: Server = createServer();
+    server.on("upgrade", (req, socket, head) => {
+      const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
+      if (!ws) return;
+      ws.onText = (payload) => {
+        const message = JSON.parse(payload.toString("utf8")) as { type: string };
+        if (message.type !== "hello") return;
+        hellos.push(message);
+        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 0 }, bufferId: "b", state: new FakeOperatorState().state }));
+      };
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+    const port = (server.address() as { port: number }).port;
+    const made = client(`ws://127.0.0.1:${port}/rpc`);
+    const statuses: LinkStatus[] = [];
+    made.onLink((status) => statuses.push(status));
+    made.start();
+    await until(() => statuses.some((status) => status.kind === "refused"), 5_000, "the refusal");
+    expect(statuses.find((status) => status.kind === "refused")).toMatchObject({ reason: "protocol_minor" });
+    expect(made.up).toBe(false);
+    expect(made.state).toBeNull();
+    expect(hellos).toHaveLength(1);
   });
 
   it("an operator that drops the connection: the client connects and says hello again", async () => {
