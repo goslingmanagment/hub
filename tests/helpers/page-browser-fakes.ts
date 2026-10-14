@@ -900,7 +900,7 @@ export class BrowserModel {
   }
 
   /** A request of the page itself pauses in Fetch (the site, a worker...). */
-  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}, postData?: string, loaderId?: string): ModelRequest {
+  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}, postData?: string, loaderId?: string, frameId?: string): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
     const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused", siteHeaders: headers };
@@ -915,7 +915,7 @@ export class BrowserModel {
       networkId: request.networkId,
       request: { url: request.url, urlFragment: request.fragment, method, headers, ...body },
       resourceType,
-      frameId: `F-${sessionId}`,
+      frameId: frameId ?? `F-${sessionId}`,
     });
     return request;
   }

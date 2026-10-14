@@ -66,7 +66,7 @@ interface SetUp {
   afterNavigate: ((loaderId: string) => void) | null;
 }
 
-async function setUp(): Promise<SetUp> {
+async function setUp(options: { sessionShowWaitMs?: number } = {}): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -127,7 +127,7 @@ async function setUp(): Promise<SetUp> {
     chrome: control,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
-    timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, reloadWaitMs: 300 },
+    timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, reloadWaitMs: 300, ...(options.sessionShowWaitMs === undefined ? {} : { sessionShowWaitMs: options.sessionShowWaitMs }) },
   });
   const ports = await operator.start();
   cleanups.push(() => operator.stop());
@@ -166,8 +166,9 @@ async function siteReadDone(s: SetUp, token: string): Promise<void> {
 }
 
 /** The site's own authorized read, as its script sets its headers — of the
- *  document `loaderId` (default: the one committed last). */
-function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!): ReturnType<BrowserModel["pause"]> {
+ *  document `loaderId` (default: the one committed last; null: Chrome never
+ *  names it), in the top frame or `frameId`. */
+function siteRead(s: SetUp, token: string, loaderId: string | null = s.loaders.at(-1)!, frameId?: string): ReturnType<BrowserModel["pause"]> {
   const path = "/api/v1/account/me";
   return s.model.pause(`https://apiv3.fansly.com${path}?ngsw-bypass=true`, "GET", s.operator.control.workTab!.sessionId, "XHR", {
     Accept: "application/json, text/plain, */*",
@@ -176,7 +177,7 @@ function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!)
     "fansly-client-id": CLIENT,
     "fansly-client-ts": String(Date.now()),
     "fansly-session-id": "720167541418230033",
-  }, undefined, loaderId);
+  }, undefined, loaderId ?? undefined, frameId);
 }
 
 /** The site's GET under `token` from the document committed last, then
@@ -394,6 +395,59 @@ describe("a profile no page has yet: its account read confirms only the session 
     expect(s.operator.state.sessionFingerprint).toBe(b);
     await accountRead(s, b, ACCOUNT_B);
     await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.operator.state.accountId).toBe(ACCOUNT_B);
+  });
+
+  it("the GETs of eight child frames' documents between the new document's GET and its navigation's answer do not lose it: a child frame's document is never the mode's (Astra's review of PR 16, round 5)", async () => {
+    const s = await setUp();
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    await siteReadDone(s, TOKEN_A);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the login screen loaded");
+    const tab = s.operator.control.workTab!.sessionId;
+    let sent = 0;
+    s.afterNavigate = (loaderId) => {
+      // The new document's GET, then eight child frames' documents' GETs —
+      // all before the answer to the navigation. (A document loaded anew
+      // later — the child frames' requests failed — reads as it loads.)
+      siteRead(s, TOKEN_B, loaderId);
+      if (sent > 0) return;
+      for (let i = 1; i <= 8; i++) siteRead(s, TOKEN_B, `L-child-${i}`, `F-${tab}-child-${i}`);
+      sent = 9;
+    };
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => sent === 9 && s.operator.page.step === "site_loaded" && s.engine.of("siteDone").length >= 10, 10_000, "the new document and the GETs");
+    await accountRead(s, b, ACCOUNT_B);
+    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.operator.state.accountId).toBe(ACCOUNT_B);
+  });
+
+  it("a mode's document whose session the operator never saw: the next identity read past the wait loads the site anew, once, and the new document's GET confirms (Astra's review of PR 16, round 5)", async () => {
+    const s = await setUp({ sessionShowWaitMs: 300 });
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    await siteReadDone(s, TOKEN_A);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the login screen loaded");
+    // The automation's document makes its GET under B, but Chrome never
+    // names its document: the operator never sees its session.
+    s.afterNavigate = () => {
+      s.afterNavigate = null;
+      siteRead(s, TOKEN_B, null);
+    };
+    const loads = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded" && s.operator.state.sessionFingerprint === b, 10_000, "the new document");
+    await pause(500);
+    // The next document reads with its session as it loads.
+    s.afterNavigate = (loaderId) => {
+      s.afterNavigate = null;
+      siteRead(s, TOKEN_B, loaderId);
+    };
+    const before = s.model.navigations.length;
+    await accountRead(s, b, ACCOUNT_B);
+    // Loaded anew, once, and confirmed by that document's GET.
+    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.model.navigations.length).toBe(before + 1);
     expect(s.operator.state.accountId).toBe(ACCOUNT_B);
   });
 });

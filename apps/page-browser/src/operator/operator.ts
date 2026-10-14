@@ -166,6 +166,10 @@ export interface OperatorTimings {
   reloadWaitMs: number;
   /** The page's slot past its admission's deadline (egress/gate.ts). */
   slotLimitMs: number;
+  /** A profile no page has (page 0): how long its mode's document may stand
+   *  without the operator having seen its session before an identity read
+   *  that cannot be confirmed loads the site anew, once a document. */
+  sessionShowWaitMs: number;
 }
 
 const DEFAULT_TIMINGS: OperatorTimings = {
@@ -184,6 +188,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
+  sessionShowWaitMs: 3_000,
 };
 
 /** The site the work tab loads (plan §4.1, step 8). */
@@ -318,11 +323,17 @@ export class Operator {
   /** An authorized GET of the automation whose document Chrome had not named
    *  when it paused: judged once Chrome does. */
   #sessionNoteWaiting: { networkId: string; fingerprint: string } | null = null;
-  /** The session each document's authorized GETs of this mode showed (the
-   *  latest; a few documents): a GET can come before the answer to its
-   *  document's navigation is taken (one batch of Chrome's messages — Astra's
-   *  review of PR 16, round 4), and counts once that answer names it. */
+  /** The session each top-frame document's authorized GETs of this mode
+   *  showed (the latest; a few documents — never the frame's current one
+   *  evicted): a GET can come before the answer to its document's navigation
+   *  is taken (one batch of Chrome's messages — Astra's review of PR 16,
+   *  rounds 4–5), and counts once that answer names it. A child frame's
+   *  document is never the mode's: its GETs are not kept. */
   readonly #sessionsShown = new Map<string, string>();
+  /** When the mode's document came in (monotonic ms), and the document an
+   *  unconfirmable identity read had the site loaded anew for (once). */
+  #modeDocumentLoadedMono: number | null = null;
+  #loadedAnewFor: string | null = null;
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -1002,6 +1013,7 @@ export class Operator {
       const atSite = await this.#waitUntil(() => stale() || (this.#workTabAtSite() && documents() > before), this.#timings.siteLoadMs);
       if (stale()) return;
       if (!atSite) throw new StartFailure("proxy_unavailable", `the site's document did not come within ${this.#timings.siteLoadMs} ms`);
+      if (mode === this.#modeChanges) this.#modeDocumentLoadedMono = monoMs();
       this.page.advance("site_loaded", SITE_URL);
       if (mode !== this.#modeChanges) {
         // Its load began under the mode before: loaded anew for this one,
@@ -1037,7 +1049,10 @@ export class Operator {
     const identity = this.#identity;
     const live = this.hub.session.fingerprint;
     if (this.page.step !== "site_loaded" || identity === null || live === null || identity.fingerprint !== live) return;
-    if (!this.#identityConfirms(identity)) return;
+    if (!this.#identityConfirms(identity)) {
+      this.#loadAnewIfSessionUnseen();
+      return;
+    }
     if (this.#reloadPending) return;
     const failed = this.site.failures;
     if (failed > 0 && !this.#siteReloaded) {
@@ -1068,13 +1083,32 @@ export class Operator {
       && shown !== null && shown.loaderId === document.loaderId && shown.fingerprint === identity.fingerprint;
   }
 
+  /** Page 0: an identity read that cannot be confirmed because the
+   *  operator never saw the session of the mode's document — current, at the
+   *  site for `sessionShowWaitMs` — loads the site anew, once that document:
+   *  the next document's GET shows its session (nothing waits for a GET that
+   *  may never come). */
+  #loadAnewIfSessionUnseen(): void {
+    const document = this.#modeDocument;
+    const loaded = this.#modeDocumentLoadedMono;
+    if (this.#settings?.pageId !== 0 || this.#modeChanges === 0 || document === null || document.mode !== this.#modeChanges || loaded === null) return;
+    if (this.site.documents.currentLoader(this.control.workTab?.mainFrameId ?? null) !== document.loaderId) return;
+    if (this.#sessionShownInMode?.loaderId === document.loaderId || this.#loadedAnewFor === document.loaderId) return;
+    if (monoMs() - loaded < this.#timings.sessionShowWaitMs) return;
+    this.#loadedAnewFor = document.loaderId;
+    this.#reloadForMode("the session of the document loaded for the mode was never seen: the site is loaded anew, once");
+  }
+
   /** The site's own API request, as it stopped: a GET with its session in
    *  the automation shows the session that exists now — when it is of the
    *  document the operator loaded in this mode (its loader; page 0's
    *  confirmation, `#identityConfirms`). A request of any other document
    *  feeds nothing of it (the session's headers follow PR 15's rules). */
-  #siteShowedSession(request: { networkId: string | null; method: string; headers: Record<string, string> }): void {
+  #siteShowedSession(request: { networkId: string | null; frameId: string | null; method: string; headers: Record<string, string> }): void {
     if (this.#mode !== "automation" || request.method.toUpperCase() !== "GET" || request.networkId === null) return;
+    // The top frame's documents only: a child frame's is never the mode's.
+    const top = this.control.workTab?.mainFrameId ?? null;
+    if (top === null || request.frameId !== top) return;
     const value = (name: string) => Object.entries(request.headers).find(([key]) => key.toLowerCase() === name)?.[1] ?? "";
     const authorization = value("authorization");
     if (authorization === "") return;
@@ -1094,7 +1128,13 @@ export class Operator {
     if (this.#mode !== "automation") return;
     this.#sessionsShown.delete(loaderId);
     this.#sessionsShown.set(loaderId, fingerprint);
-    if (this.#sessionsShown.size > 8) this.#sessionsShown.delete(this.#sessionsShown.keys().next().value!);
+    if (this.#sessionsShown.size > 8) {
+      // The oldest but the frame's current document (its navigation's answer
+      // may still be on the way) and the mode's.
+      const keep = new Set([this.site.documents.currentLoader(this.control.workTab?.mainFrameId ?? null), this.#modeDocument?.loaderId ?? null]);
+      const oldest = [...this.#sessionsShown.keys()].find((loader) => !keep.has(loader));
+      if (oldest !== undefined) this.#sessionsShown.delete(oldest);
+    }
     this.#documentShowedSession(loaderId, fingerprint);
   }
 
