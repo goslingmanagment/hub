@@ -728,7 +728,7 @@ describe("gaps", () => {
     }
   }, 120_000);
 
-  it("a gap with no boundary and no socket event taken yet (only a site answer): nothing bounds it — the next connection reads back from the previous connection's end, as for the engine's own socket", async (context) => {
+  it("a gap with no boundary and no socket event taken yet (only a site answer): a site answer bounds nothing — the gap starts at the previous connection's end, as for the engine's own socket", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     await r.start();
@@ -742,7 +742,7 @@ describe("gaps", () => {
     r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, Date.now() - 120_000);
     const gap = r.operator.gap("operator_start", null);
     await committedUpTo(r.page.pageId, gap.seq);
-    expect(await position(r.page.pageId)).toMatchObject({ lastWall: null, gapSince: null });
+    expect(await position(r.page.pageId)).toMatchObject({ lastWall: null, gapSince: closedAt });
     const opened = open(r.operator, randomUUID(), Date.now() - 5_000);
     await committedUpTo(r.page.pageId, opened.seq);
     const rows = await connections(r.page.pageId);
@@ -853,6 +853,74 @@ describe("the loss boundary: a frame CDP told late", () => {
       }, LONG_TEST_MS);
     }
   }
+
+  // Astra's round 1 on this fix: with no socket event taken and NO
+  // connection of the page before, the next connection's own opening is no
+  // bound — a first connection lost whole (its open and frames) would be left
+  // out. A loss is then bounded by when the browser profile was made.
+  const LOSSES = [
+    "a gap the operator cannot name (a late first 101 after its tunnel ended)",
+    "events the operator no longer has",
+    "a new volume's untaken tail",
+    "a boundary the operator names from a site answer",
+  ] as const;
+  for (const loss of LOSSES) it(`no socket event taken and no connection before — ${loss}: read back from when the browser profile was made, the first connection's missed message inside the repair's window`, async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const now = Date.now();
+    // The profile was made an hour ago: before any socket its browser opened.
+    const made = new Date(now - 3_600_000);
+    await testDb.pool.query("update page_browsers set created_at = $2 where page_id = $1", [r.page.pageId, made.toISOString()]);
+    const engine = await r.start();
+    // Only a site answer taken: nothing of the socket yet, no connection row.
+    const answer = r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, now - 450_000);
+    await committedUpTo(r.page.pageId, answer.seq);
+    // The page's first socket: Chrome saw its open and a frame, which never
+    // reach the engine.
+    const missed = now - 560_000;
+    const first = randomUUID();
+    const next = randomUUID();
+    let verified: BufferEvent;
+    if (loss === "a gap the operator cannot name (a late first 101 after its tunnel ended)") {
+      // Its 101 told after its tunnel ended: dropped with its frames, and
+      // the reconnect's gap names no boundary (page-browser-ws.test.ts).
+      r.operator.gap("ws_reconnect", null, now - 300_500);
+      open(r.operator, next, now - 300_000);
+      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
+      await committedUpTo(r.page.pageId, verified.seq);
+    } else if (loss === "a boundary the operator names from a site answer") {
+      // The operator died with them still on their way through CDP; its
+      // start's gap names the last event it saved — the answer, at its take.
+      r.operator.gap("operator_start", answer, now - 300_500);
+      open(r.operator, next, now - 300_000);
+      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
+      await committedUpTo(r.page.pageId, verified.seq);
+    } else {
+      await engine.crash();
+      open(r.operator, first, missed - 20_000);
+      frame(r.operator, first, serviceFrame({ type: 99, n: 1 }, 99), missed);
+      if (loss === "events the operator no longer has") {
+        const gone = close(r.operator, first, missed + 20_000);
+        r.operator.buffer.acknowledge(gone.seq);
+      } else {
+        r.operator.recreateBuffer();
+        r.operator.gap("operator_start", null, now - 300_500);
+      }
+      open(r.operator, next, now - 300_000);
+      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
+      await r.start();
+      await until(async () => (await position(r.page.pageId)).bufferId === r.operator.buffer.id && (await position(r.page.pageId)).ackedSeq >= verified.seq, 10_000, "the next connection taken");
+    }
+    const rows = await connections(r.page.pageId);
+    expect(rows.map((row) => row.browserConnectionId)).toEqual([next]);
+    // Never the next connection's own opening (300 s later, past the margin).
+    expect(rows[0]!.gapSince.getTime()).toBe(made.getTime());
+    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
+    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+    expect(pass.targets).toHaveLength(1);
+    expect(pass.since!.getTime()).toBe(made.getTime() - 60_000);
+    expect(pass.since!.getTime()).toBeLessThanOrEqual(missed);
+  }, LONG_TEST_MS);
 
   // The operator names its start's gap, and a full buffer's, from the last
   // event it saved, of any kind: a site answer stamped at its take, while a
