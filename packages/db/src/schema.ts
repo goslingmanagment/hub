@@ -443,6 +443,7 @@ export const pageBrowsers = pgTable("page_browsers", {
   identityRequestSource: text("identity_request_source").$type<"onboarding" | "credentials_verify">(),
   identityRequestedAt: timestamp("identity_requested_at", { withTimezone: true }),
   identityResult: jsonbSafe("identity_result").$type<Record<string, unknown>>(),
+  identityAttemptId: bigint("identity_attempt_id", { mode: "number" }),
   // 0276 (Project Browser PR 13): where the engine's intake of the operator's
   // buffer stands (`repositories/page-browser-intake.ts`).
   eventsBufferId: uuid("events_buffer_id"),

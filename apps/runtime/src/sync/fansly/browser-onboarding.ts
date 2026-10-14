@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 
 import {
+  bindIdentityAttempt,
   browserProfileRouteHoldDetail,
   closeUnfinishedBrowserProfileSends,
   completeFanslySendAttempt,
@@ -18,6 +19,7 @@ import {
   OnboardingLinkLostError,
   readBrowserProfileRouteJournal,
   readProfileIntakePosition,
+  recordIdentityIndeterminate,
   recordOnboardingIdentity,
   recordPageBrowserLinkError,
   recordPageBrowserState,
@@ -418,9 +420,6 @@ export class OnboardingLink {
    *  it was sent after it, in that generation. */
   #automationBack: { generation: bigint; mono: number } | null = null;
   #identity: Promise<void> | null = null;
-  /** The identity request this link answered last: never read again, even
-   *  when a look read the profile before its answer was written. */
-  #answeredRequest: string | null = null;
   #lastRecorded: { at: number; key: string } | null = null;
   #subscribed: string | null = null;
   #intake: Promise<void> = Promise.resolve();
@@ -885,8 +884,27 @@ export class OnboardingLink {
 
   #maybeIdentity(profile: OnboardingProfile, state: State): void {
     const request = profile.identityRequest;
-    if (request === null || this.#identity !== null || request.id === this.#answeredRequest) return;
+    if (request === null || this.#identity !== null) return;
     if (profile.identityResult?.requestId === request.id) return;
+    const bound = profile.identityAttemptId;
+    if (bound !== null) {
+      // Its one read was granted already (the binding is durable: Astra's
+      // review of PR 16, round 6) — by a link before this one, or by this
+      // one and answered since this look read the profile. Never read
+      // again: unanswered, it is answered as not known (an answer written
+      // meanwhile stands), and a new request reads anew.
+      this.#identity = this.#fenced((tx) => recordIdentityIndeterminate(tx, {
+        profileId: this.profileId,
+        requestId: request.id,
+        attemptId: bound,
+        why: "the engine's link to the browser changed while the account was read: whether the read went is not known — check again",
+      }))
+        .then(() => undefined)
+        .finally(() => {
+          this.#identity = null;
+        });
+      return;
+    }
     const boundary = this.#automationBack;
     const bounded = boundary !== null && boundary.generation === profile.onboardingGeneration;
     if (profile.onboarding !== "open" || !takesHubRequests(state) || !bounded) {
@@ -897,9 +915,7 @@ export class OnboardingLink {
           : state.sessionFingerprint === null ? "the browser knows no live session: log it in first"
             : `the browser is not up at the site (${state.step})`;
       this.#identity = this.#fenced((tx) => recordOnboardingIdentity(tx, { profileId: this.profileId, result: { requestId: request.id, ok: false, error: why, httpStatus: null, at: new Date().toISOString() } }))
-        .then(() => {
-          this.#answeredRequest = request.id;
-        })
+        .then(() => undefined)
         .finally(() => {
           this.#identity = null;
         });
@@ -930,22 +946,28 @@ export class OnboardingLink {
     const attemptId = await nextBrowserAttemptId(this.#o.db);
     const token = randomUUID();
     const issuedMono = this.#clock.monoNow();
-    await this.#fenced((tx) => journalBrowserProfileSend(tx, {
-      token,
-      source,
-      operation: spec.legacyOperation!,
-      holder: this.#o.holder,
-      profileId: this.profileId,
-      attemptId,
-      settingMs: grant.settingMs,
-      jitterU: grant.jitterU,
-      pauseMs: grant.pauseMs,
-    }));
+    // The request's one read bound to this attempt — committed before the
+    // read may go (its grant checks it again under the lock): a later link
+    // finds it and never reads the request again. Bound to another attempt
+    // already: nothing goes.
+    const mine = await this.#fenced(async (tx) => {
+      if (!(await bindIdentityAttempt(tx, { profileId: this.profileId, requestId, attemptId }))) return false;
+      await journalBrowserProfileSend(tx, {
+        token,
+        source,
+        operation: spec.legacyOperation!,
+        holder: this.#o.holder,
+        profileId: this.profileId,
+        attemptId,
+        settingMs: grant.settingMs,
+        jitterU: grant.jitterU,
+        pauseMs: grant.pauseMs,
+      });
+      return true;
+    });
+    if (!mine) return;
     const admission = this.pacer.arm(grant, attemptId, issuedMono);
     const sent = await this.#sendIdentity(admission, fingerprint, signal, { requestId, generation: boundary.generation });
-    // One read a request: a look that read the profile before this answer
-    // was written never sends another.
-    this.#answeredRequest = requestId;
     const outcome = sent.outcome;
     await this.#complete(admission, token, outcome, outcome.kind === "response" ? outcome.status : null);
     const failure = (why: string): OnboardingIdentityResult => ({
@@ -954,6 +976,7 @@ export class OnboardingLink {
       error: redactSensitiveText(why).slice(0, 400),
       httpStatus: outcome.kind === "response" ? outcome.status : null,
       at: new Date().toISOString(),
+      attemptId,
     });
     let result: OnboardingIdentityResult;
     let observation: { kind: string; payload: unknown; payloadHash: Buffer; accountId: string } | null = null;
@@ -1085,7 +1108,8 @@ export class OnboardingLink {
       try {
         await this.#fenced(async (_tx, profile) => {
           if (!this.#holds()) return;
-          if (profile.onboarding !== "open" || profile.onboardingGeneration !== asked.generation || profile.identityRequest?.id !== asked.requestId || finished) {
+          if (profile.onboarding !== "open" || profile.onboardingGeneration !== asked.generation || profile.identityRequest?.id !== asked.requestId
+            || profile.identityAttemptId !== admission.attemptId || finished) {
             reply = { admit: false, reason: "lease_inactive" };
             return;
           }

@@ -54,7 +54,18 @@ export type OnboardingIdentityResult =
     /** The attempt id the operator knows the read by. */
     attemptId: number;
   }
-  | { requestId: string; ok: false; error: string; httpStatus: number | null; at: string };
+  | {
+    requestId: string;
+    ok: false;
+    error: string;
+    httpStatus: number | null;
+    at: string;
+    /** The read it is the answer of (none: no read went for it). */
+    attemptId?: number;
+    /** Whether the read went is not known: its link ended before its answer
+     *  (a new request reads anew). */
+    indeterminate?: boolean;
+  };
 
 export interface OnboardingProfile {
   profileId: string;
@@ -75,6 +86,8 @@ export interface OnboardingProfile {
   env: Record<string, unknown> | null;
   identityRequest: { id: string; source: OnboardingIdentitySource; requestedAt: Date } | null;
   identityResult: OnboardingIdentityResult | null;
+  /** The attempt the request's one read was granted to (null: none yet). */
+  identityAttemptId: number | null;
   /** The operator's last `state`, as recorded. */
   step: string | null;
   stopReason: string | null;
@@ -114,6 +127,7 @@ type SqlRow = {
   identityRequestSource: OnboardingIdentitySource | null;
   identityRequestedAt: Date | string | null;
   identityResult: unknown;
+  identityAttemptId: string | null;
   step: string | null;
   stopReason: string | null;
   mode: "automation" | "manual_login";
@@ -152,6 +166,7 @@ const columns = sql`
   b.identity_request_source as "identityRequestSource",
   b.identity_requested_at as "identityRequestedAt",
   b.identity_result as "identityResult",
+  b.identity_attempt_id::text as "identityAttemptId",
   b.step,
   b.stop_reason as "stopReason",
   b.mode,
@@ -203,6 +218,7 @@ function profileOf(row: SqlRow): OnboardingProfile {
       ? null
       : { id: row.identityRequestId, source: row.identityRequestSource, requestedAt: dateOf(row.identityRequestedAt)! },
     identityResult: resultOf(row.identityResult),
+    identityAttemptId: row.identityAttemptId === null ? null : Number(row.identityAttemptId),
     step: row.step,
     stopReason: row.stopReason,
     mode: row.mode,
@@ -415,7 +431,7 @@ export type SetOnboardingResult =
 const voidedIdentity = sql`
   onboarding_generation = onboarding_generation + 1,
   identity_request_id = null, identity_request_source = null, identity_requested_at = null,
-  identity_result = null`;
+  identity_result = null, identity_attempt_id = null`;
 
 /** Where the owner may move the onboarding from (`closing` is the engine's
  *  to end). */
@@ -468,7 +484,7 @@ export async function requestOnboardingIdentity(
   const result = await db.execute<{ requestId: string }>(sql`
     update page_browsers
        set identity_request_id = gen_random_uuid(), identity_request_source = ${input.source},
-           identity_requested_at = clock_timestamp(), updated_at = clock_timestamp()
+           identity_requested_at = clock_timestamp(), identity_attempt_id = null, updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid and page_id is null and onboarding = 'open'
     returning identity_request_id::text as "requestId"
   `);
@@ -542,12 +558,53 @@ export async function recordOnboardingIdentity(
   const fresh = input.result.ok
     ? sql`and onboarding = 'open' and onboarding_generation = ${input.result.onboardingGeneration}::bigint`
     : sql``;
+  // The answer of a read is the bound attempt's only.
+  const attempt = input.result.attemptId === undefined ? sql`` : sql`and identity_attempt_id = ${input.result.attemptId}::bigint`;
   const result = await tx.execute(sql`
     update page_browsers
        set identity_result = ${JSON.stringify(input.result)}::jsonb, updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid and page_id is null
        and identity_request_id = ${input.result.requestId}::uuid
        ${fresh}
+       ${attempt}
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * The identity request's one read bound to its attempt, under the caller's
+ * `lockOnboardingLink`, in the transaction that gives the read its grant —
+ * before it may go (Astra's review of PR 16, round 6). False: the request
+ * is gone, or its read was granted to another attempt already — this one
+ * never goes.
+ */
+export async function bindIdentityAttempt(tx: Database, input: { profileId: string; requestId: string; attemptId: number }): Promise<boolean> {
+  const result = await tx.execute(sql`
+    update page_browsers set identity_attempt_id = ${input.attemptId}::bigint, updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid and page_id is null and identity_request_id = ${input.requestId}::uuid
+       and (identity_attempt_id is null or identity_attempt_id = ${input.attemptId}::bigint)
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * A request whose read was granted (to `attemptId`) and never answered — its
+ * link ended before the answer: answered as not known, under the caller's
+ * `lockOnboardingLink`, unless an answer of it is there already. It is never
+ * read again; a new request reads anew. True: written.
+ */
+export async function recordIdentityIndeterminate(
+  tx: Database,
+  input: { profileId: string; requestId: string; attemptId: number; why: string },
+): Promise<boolean> {
+  const answer: OnboardingIdentityResult = { requestId: input.requestId, ok: false, error: input.why, httpStatus: null, at: new Date().toISOString(), attemptId: input.attemptId, indeterminate: true };
+  const result = await tx.execute(sql`
+    update page_browsers set identity_result = ${JSON.stringify(answer)}::jsonb, updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid and page_id is null
+       and identity_request_id = ${input.requestId}::uuid and identity_attempt_id = ${input.attemptId}::bigint
+       and (identity_result is null or identity_result->>'requestId' is distinct from ${input.requestId})
     returning profile_id
   `);
   return result.rows.length === 1;
@@ -748,6 +805,7 @@ export async function bindOnboardedProfile(
            onboarding_generation = onboarding_generation + 1,
            onboarding_proxy_url = null, onboarding_proxy_auth = null, onboarding_proxy_key_version = null,
            identity_request_id = null, identity_request_source = null, identity_requested_at = null,
+           identity_attempt_id = null,
            updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid and page_id is null and onboarding = 'open'
        and onboarding_generation = ${input.onboardingGeneration.toString()}::bigint

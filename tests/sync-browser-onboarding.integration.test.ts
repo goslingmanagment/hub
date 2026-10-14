@@ -536,6 +536,37 @@ describe("the account read through the browser proves it only when fresh (Astra'
     expect(r.operator.physical).toHaveLength(1);
   });
 
+  it("never reads an identity request again once its read was granted, the link taken over meanwhile: answered as not known, a new request reads anew (Astra's review of PR 16, round 6)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    // The first read's answer held on its way.
+    let holding = true;
+    const held = intercept(r, (message) => (holding && message.type === "result" ? "hold" : message));
+    held.holdFrames();
+    const task = startTask(r);
+    const first = await loginThenAsk(r);
+    await until(async () => r.operator.physical.length === 1, 10_000, "the read sent");
+    const bound = (await findOnboardingProfile(db(), r.profileId))!.identityAttemptId;
+    expect(bound).toBe(r.operator.sends[0]!.attemptId);
+    // The link taken over (another take of the profile): a new link finds the
+    // request bound to the read that went, unanswered.
+    const before = task.links.get(r.profileId)!.generation;
+    await takeOnboardingLink(db(), r.profileId);
+    await until(async () => (task.links.get(r.profileId)?.generation ?? 0n) > before + 1n, 10_000, "a new link");
+    expect(await answerOf(r, first)).toMatchObject({ ok: false, indeterminate: true, attemptId: bound, error: expect.stringContaining("not known") });
+    holding = false;
+    held.release();
+    await sleep(500);
+    // One physical read of that request.
+    expect(r.operator.physical).toHaveLength(1);
+    // A new request reads anew, once.
+    const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "credentials_verify" });
+    const second = requested.kind === "requested" ? requested.requestId : "";
+    expect(await answerOf(r, second)).toMatchObject({ ok: true, accountId: ACCOUNT });
+    expect(r.operator.physical).toHaveLength(2);
+  });
+
   it("proves the account with the operator's own `sent` after the login closed, in the generation that holds", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });

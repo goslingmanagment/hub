@@ -1115,7 +1115,10 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   late request of the replaced document never counts); a load under way at the change is followed by a load anew
   once it is in. Until then the Hub request's headers may still be the session of before the login. The engine
   records the account only once the operator's state says so (`session_confirmed`, that account, that session),
-  and again at the write. The site's answers go to `observations` keyed by the profile, with the buffer's position on
+  and again at the write. A request is read once: its read is bound to its attempt (`identity_attempt_id`) in a
+  committed transaction before it may go, and its grant checks the binding under the profile's lock; a link that
+  finds the request bound and unanswered (the link before it ended) never reads it again — it answers it as not
+  known, and a new request reads anew (never an automatic re-send). The site's answers go to `observations` keyed by the profile, with the buffer's position on
   its row. The binding (the API's, one transaction with the page's birth: `browser` transport, credentials untrusted
   until the engine's own check under the page's hello) locks the profile's row first and goes on only while the
   onboarding is open and the check is the profile's, answered in the generation that holds — else nothing is

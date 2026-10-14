@@ -49,6 +49,13 @@
 --                           (id, username, display name), the send instant,
 --                           the session's fingerprint, the observation it was
 --                           journaled as — or why there is none
+--   identity_attempt_id     the attempt the request's one read was granted to,
+--                           written under the profile's lock with the grant,
+--                           before the read may go: a request is read once —
+--                           a link that finds it bound and unanswered (the
+--                           link before it ended) never reads again: the
+--                           check is answered as not known, and a new request
+--                           reads anew (Astra's review of PR 16, round 6)
 --
 -- page_browser_forgotten_profiles (new): the profiles Hub forgot (`sync
 --   browser-profile remove`) or said it never had (`--absent-ok`, the deploy
@@ -94,7 +101,8 @@ alter table page_browsers
   add column if not exists identity_request_id uuid,
   add column if not exists identity_request_source text,
   add column if not exists identity_requested_at timestamptz,
-  add column if not exists identity_result jsonb;
+  add column if not exists identity_result jsonb,
+  add column if not exists identity_attempt_id bigint;
 
 alter table page_browsers
   drop constraint if exists page_browsers_onboarding_check,
@@ -122,7 +130,9 @@ alter table page_browsers
     and (identity_request_source is null or identity_request_source in ('onboarding', 'credentials_verify'))
   ),
   drop constraint if exists page_browsers_identity_result_check,
-  add constraint page_browsers_identity_result_check check (identity_result is null or jsonb_typeof(identity_result) = 'object');
+  add constraint page_browsers_identity_result_check check (identity_result is null or jsonb_typeof(identity_result) = 'object'),
+  drop constraint if exists page_browsers_identity_attempt_check,
+  add constraint page_browsers_identity_attempt_check check (identity_attempt_id is null or identity_request_id is not null);
 
 comment on column page_browsers.onboarding is
   'Project Browser (0281): the owner''s onboarding of a profile no page has yet — off, login (his login through the form, the operator in the manual login), open (the automation back, the account checked through the browser on request), closing (given up: the browser stopped, then off). Off once bound.';
@@ -162,7 +172,7 @@ begin
     -- every new column but the proxy's sealed auth
     grant select (onboarding, onboarding_changed_at, onboarding_changed_by, socks_endpoint, onboarding_proxy_url,
       onboarding_proxy_key_version, link_generation, onboarding_generation, identity_request_id, identity_request_source, identity_requested_at,
-      identity_result)
+      identity_result, identity_attempt_id)
       on page_browsers to read_only;
     grant select on page_browser_forgotten_profiles to read_only;
   end if;

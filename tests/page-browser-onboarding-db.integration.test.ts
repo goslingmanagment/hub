@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  bindIdentityAttempt,
   bindOnboardedProfile,
   closeUnfinishedBrowserProfileSends,
   countBrowserProfileSendsSince,
@@ -16,6 +17,7 @@ import {
   lockOnboardingLink,
   OnboardingLinkLostError,
   PageBrowserRegistrationError,
+  recordIdentityIndeterminate,
   recordOnboardingIdentity,
   registerPageBrowserProfile,
   requestOnboardingIdentity,
@@ -192,6 +194,9 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     const requestId = requested.kind === "requested" ? requested.requestId : "";
     const ok = (onboardingGeneration: string) => ({ requestId, ok: true as const, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration, sessionFingerprint: "f", observationId: 0, attemptId: 1 });
     const write = (result: Parameters<typeof recordOnboardingIdentity>[1]["result"]) => db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result }));
+    // Not the read the request was bound to: not written.
+    expect(await write(ok("1"))).toBe(false);
+    await db().transaction((tx) => bindIdentityAttempt(tx as unknown as Database, { profileId, requestId, attemptId: 1 }));
     // Read in the generation before this one: not written.
     expect(await write(ok("0"))).toBe(false);
     expect(await write(ok("1"))).toBe(true);
@@ -315,6 +320,39 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     await removeBrowserProfile(db(), { profileId: first, actor: "cli:test" });
     await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
     expect(JSON.parse(printed.at(-1)!)).toEqual({ present: false, profileId: first, forgotten: true });
+  });
+
+  it("binds an identity request's one read to its attempt, durably: never another attempt, cleared by a new request or a move; unanswered, it is answered as not known — an answer of it stands (Astra's review of PR 16, round 6)", async (context) => {
+    if (!testDb) return context.skip();
+    const profileId = await profile();
+    await move(profileId, "open");
+    const ask = async () => {
+      const requested = await requestOnboardingIdentity(db(), { profileId, source: "onboarding" });
+      return requested.kind === "requested" ? requested.requestId : "";
+    };
+    const bind = (requestId: string, attemptId: number) => db().transaction((tx) => bindIdentityAttempt(tx as unknown as Database, { profileId, requestId, attemptId }));
+    const notKnown = (requestId: string, attemptId: number) => db().transaction((tx) => recordIdentityIndeterminate(tx as unknown as Database, { profileId, requestId, attemptId, why: "not known" }));
+    const first = await ask();
+    expect(await bind(first, 11)).toBe(true);
+    expect(await bind(first, 11)).toBe(true);
+    // Another attempt never takes it.
+    expect(await bind(first, 12)).toBe(false);
+    expect((await findOnboardingProfile(db(), profileId))!.identityAttemptId).toBe(11);
+    // Unanswered: answered as not known — by the bound attempt only.
+    expect(await notKnown(first, 12)).toBe(false);
+    expect(await notKnown(first, 11)).toBe(true);
+    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ requestId: first, ok: false, indeterminate: true, attemptId: 11 });
+    // A new request: unbound; an answer of it is never overwritten as not known.
+    const second = await ask();
+    expect((await findOnboardingProfile(db(), profileId))!.identityAttemptId).toBeNull();
+    expect(await bind(second, 13)).toBe(true);
+    const generation = (await findOnboardingProfile(db(), profileId))!.onboardingGeneration.toString();
+    expect(await db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result: { requestId: second, ok: true, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration: generation, sessionFingerprint: "f", observationId: 0, attemptId: 13 } }))).toBe(true);
+    expect(await notKnown(second, 13)).toBe(false);
+    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ requestId: second, ok: true });
+    // A move voids it all.
+    await move(profileId, "login");
+    expect(await findOnboardingProfile(db(), profileId)).toMatchObject({ identityRequest: null, identityAttemptId: null });
   });
 });
 

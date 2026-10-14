@@ -1,4 +1,5 @@
 import {
+  bindIdentityAttempt,
   bindOnboardedProfile,
   findOnboardingProfile,
   recordOnboardingIdentity,
@@ -30,7 +31,8 @@ export async function proveOnboardingAccount(db: Database, profileId: string, ac
   const requested = await requestOnboardingIdentity(db, { profileId, source: "onboarding" });
   if (requested.kind !== "requested") throw new Error(`no identity request: ${requested.why}`);
   const profile = (await findOnboardingProfile(db, profileId))!;
-  const written = await db.transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, {
+  // Its one read bound to attempt 1, as the engine binds it before the read.
+  const written = await db.transaction(async (tx) => (await bindIdentityAttempt(tx as unknown as Database, { profileId, requestId: requested.requestId, attemptId: 1 })) && recordOnboardingIdentity(tx as unknown as Database, {
     profileId,
     result: {
       requestId: requested.requestId,
