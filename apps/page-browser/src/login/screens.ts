@@ -198,6 +198,12 @@ export const HIT = `function (x, y) {
   return !!hit && (hit === this || this.contains(hit));
 }`;
 
+/** Whether this field is in the document and its focused element now
+ *  (`Runtime.callFunctionOn` on the field, right before the text goes in). */
+export const FOCUSED = `function () {
+  return this.isConnected && this.ownerDocument.activeElement === this;
+}`;
+
 /** Selects what the field holds, so the text inserted next replaces it —
  *  read by nobody (`Runtime.callFunctionOn` on the field). */
 export const SELECT_ALL = `function () {

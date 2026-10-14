@@ -23,6 +23,13 @@
 //   (`not_manual_login`): nothing more is typed or pressed. The operator
 //   waits for a stopped step to end (`drain`) before the automation comes
 //   back or a new owner takes the page.
+// - What is acted on is checked last, at the moment of the act (Astra's
+//   review of PR 15, item 4): the text goes in only once the screen was read
+//   again after the focus, in the same document, and the field to type into
+//   is the focused one; the pointer is moved onto the button first, then the
+//   screen, the document and the hit test at that point are read again, and
+//   only then is it pressed — an overlay or a screen that comes with the
+//   pointer stops the step before the press.
 // - Secrets: the login, the password and the code live in this call's
 //   arguments for the time of the hand-over and nowhere else — never in a
 //   log line, a journal, an error message or a field of this object. The
@@ -32,7 +39,7 @@
 
 import { CdpError, type CdpPort } from "../cdp/client.ts";
 import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
-import { HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, SELECT_ALL, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
+import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, SELECT_ALL, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
 
 export interface LoginTimings {
   /** One CDP command of the desk. */
@@ -76,9 +83,12 @@ class ScreenChanged extends Error {}
 /** The call's guard failed: it may act no more. */
 class Cancelled extends Error {}
 
-/** The element a step acts on. */
+/** The element a step acts on, in the document it was found in. */
 interface Located {
   tab: string;
+  /** The isolated world of the document it was found in (a new document
+   *  has a new one). */
+  world: number;
   objectId: string;
 }
 
@@ -246,16 +256,25 @@ export class LoginDesk {
     if (!sameFields(seen.fields, needs)) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
     const tab = this.#deps.tab();
     if (tab === null) throw new ScreenChanged("no work tab");
-    const contextId = await this.#deps.world();
+    const world = await this.#deps.world();
     const reply = await this.#deps.cdp.send<{ result?: { objectId?: string; subtype?: string } }>(
       "Runtime.evaluate",
-      { expression: locateExpression(role), contextId, returnByValue: false, objectGroup: GROUP },
+      { expression: locateExpression(role), contextId: world, returnByValue: false, objectGroup: GROUP },
       tab,
       this.#timings.commandMs,
     );
     const objectId = reply.result?.objectId;
     if (typeof objectId !== "string" || reply.result?.subtype === "null") throw new ScreenChanged(`no single ${role} on the screen`);
-    return { tab, objectId };
+    return { tab, world, objectId };
+  }
+
+  /** Right before an act on `at`: the screen still shows `needs`, in the
+   *  same work tab and the same document `at` was found in. */
+  async #still(at: Located, needs: LoginField[]): Promise<void> {
+    const seen = await this.#recognize();
+    if (!sameFields(seen.fields, needs)) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
+    if (this.#deps.tab() !== at.tab) throw new ScreenChanged("the work tab changed");
+    if ((await this.#deps.world()) !== at.world) throw new ScreenChanged("the document changed");
   }
 
   /** A boolean the element's function answers (`Runtime.callFunctionOn`). */
@@ -269,8 +288,9 @@ export class LoginDesk {
     return reply.result?.value === true;
   }
 
-  /** `text` into the field of `role`: focused, its content selected, the
-   *  text inserted as typed. */
+  /** `text` into the field of `role`: focused, its content selected, then —
+   *  the screen and the document read again, the field the focused one —
+   *  the text inserted as typed. */
   async #type(role: LoginField, needs: LoginField[], text: string, guard: LoginGuard): Promise<void> {
     const field = await this.#locate(role, needs);
     const cdp = this.#deps.cdp;
@@ -278,11 +298,15 @@ export class LoginDesk {
     await cdp.send("DOM.focus", { objectId: field.objectId }, field.tab, this.#timings.commandMs);
     allowed(guard);
     await cdp.send("Runtime.callFunctionOn", { objectId: field.objectId, functionDeclaration: SELECT_ALL, returnByValue: true }, field.tab, this.#timings.commandMs);
+    await this.#still(field, needs);
+    if (!(await this.#ask(field, FOCUSED))) throw new ScreenChanged(`the ${role} field is not the focused one`);
     allowed(guard);
     await cdp.send("Input.insertText", { text }, field.tab, this.#timings.commandMs);
   }
 
-  /** The form's one button, pressed at its centre — if that point hits it. */
+  /** The form's one button, pressed at its centre: the pointer moved there
+   *  first, then — the screen and the document read again, the point still
+   *  hitting the button — pressed and let go. */
   async #press(needs: LoginField[], guard: LoginGuard): Promise<void> {
     const button = await this.#locate("submit", needs);
     const { tab, objectId } = button;
@@ -300,6 +324,9 @@ export class LoginDesk {
     if (!(await this.#ask(button, HIT, point))) throw new ScreenChanged("something else is over the button");
     allowed(guard);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" }, tab, this.#timings.commandMs);
+    // What the pointer's coming may have changed: read again, last.
+    await this.#still(button, needs);
+    if (!(await this.#ask(button, HIT, point))) throw new ScreenChanged("something else is over the button once the pointer is on it");
     const mouse = { x, y, button: "left", clickCount: 1 };
     allowed(guard);
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...mouse }, tab, this.#timings.commandMs);

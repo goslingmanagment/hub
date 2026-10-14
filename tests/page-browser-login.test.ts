@@ -202,6 +202,8 @@ class DeskChrome implements CdpPort {
   readonly commands: Array<{ method: string; params: Record<string, unknown> }> = [];
   screen: "login" | "code" | "other" | "none" = "login";
   hit = true;
+  /** The field focused is the one the desk focused. */
+  focused = true;
   /** The isolated world of the document now (a new document, a new one). */
   world = 7;
   /** What the page does when a command reaches it (before it answers). */
@@ -223,8 +225,10 @@ class DeskChrome implements CdpPort {
         }
         case "DOM.getBoxModel":
           return { model: { content: [0, 0, 100, 0, 100, 40, 0, 40] } };
-        case "Runtime.callFunctionOn":
-          return { result: { value: String(params.functionDeclaration).includes("elementFromPoint") ? this.hit : true } };
+        case "Runtime.callFunctionOn": {
+          const declaration = String(params.functionDeclaration);
+          return { result: { value: declaration.includes("elementFromPoint") ? this.hit : declaration.includes("activeElement") ? this.focused : true } };
+        }
         default:
           return {};
       }
@@ -338,6 +342,50 @@ describe("the desk (plan §4.8: input as a person's)", () => {
     expect(chrome.of("Input.dispatchMouseEvent").map((command) => command.params.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
     // Nothing under way: the drain is over at once.
     await d.drain();
+  });
+
+  // Astra's review of PR 15, item 4: what is acted on is read again at the
+  // moment of the act.
+  it("the pointer goes onto the button first; a screen, a document or an overlay that comes with it stops the press", async () => {
+    const changes: Array<{ what: string; change: (chrome: DeskChrome) => void }> = [
+      { what: "an unknown screen", change: (chrome) => (chrome.screen = "other") },
+      { what: "an overlay over the button", change: (chrome) => (chrome.hit = false) },
+      { what: "a new document", change: (chrome) => (chrome.world = 8) },
+    ];
+    for (const { what, change } of changes) {
+      const chrome = new DeskChrome();
+      chrome.react = (method, params) => {
+        if (method === "Input.dispatchMouseEvent" && params.type === "mouseMoved") change(chrome);
+      };
+      expect(await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER, acting), what).toEqual({ kind: "refused", reason: "screen_changed" });
+      expect(chrome.of("Input.dispatchMouseEvent").map((command) => command.params.type), what).toEqual(["mouseMoved"]);
+      // Read again after the move: the screen and the hit test, last.
+      const afterMove = chrome.commands.slice(chrome.commands.findIndex((command) => command.method === "Input.dispatchMouseEvent") + 1);
+      expect(afterMove.some((command) => command.method === "Runtime.evaluate" && String(command.params.expression).includes("pbLoginProbe")), what).toBe(true);
+    }
+  });
+
+  it("the text goes in only into the field it was meant for, focused, on the same screen and document", async () => {
+    const changes: Array<{ what: string; on: (method: string, params: Record<string, unknown>, chrome: DeskChrome) => boolean; change: (chrome: DeskChrome) => void }> = [
+      { what: "the focus taken away", on: (method, _params, chrome) => method === "DOM.focus" && chrome.of("DOM.focus").length === 2, change: (chrome) => (chrome.focused = false) },
+      { what: "another screen once focused", on: (method, _params, chrome) => method === "DOM.focus" && chrome.of("DOM.focus").length === 2, change: (chrome) => (chrome.screen = "code") },
+      { what: "a new document once selected", on: (method, params, chrome) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("select()") && chrome.of("Input.insertText").length === 1, change: (chrome) => (chrome.world = 9) },
+    ];
+    for (const { what, on, change } of changes) {
+      const chrome = new DeskChrome();
+      chrome.react = (method, params) => {
+        if (on(method, params, chrome)) change(chrome);
+      };
+      expect(await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER, acting), what).toEqual({ kind: "refused", reason: "screen_changed" });
+      // The login went in; the password never.
+      expect(chrome.of("Input.insertText").map((command) => command.params.text), what).toEqual([LOGIN_MARKER]);
+      expect(chrome.of("Input.dispatchMouseEvent"), what).toHaveLength(0);
+    }
+    // The check runs right before each text: the focus asked of the field itself.
+    const chrome = new DeskChrome();
+    await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER, acting);
+    const order = chrome.commands.map((command) => command.method === "Runtime.callFunctionOn" && String(command.params.functionDeclaration).includes("activeElement") ? "focused?" : command.method);
+    for (let at = 0; at < order.length; at++) if (order[at] === "Input.insertText") expect(order[at - 1]).toBe("focused?");
   });
 });
 

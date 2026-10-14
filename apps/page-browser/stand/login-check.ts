@@ -32,7 +32,10 @@
 //   - the site's read after the login (its interface's, PR 15) under an
 //     admission of its own too, its answer to the buffer; the account
 //     loaded under the new session is a success;
-//   - a call that may act no more stops at its next input step;
+//   - an act is checked at its moment: an overlay that comes with the
+//     pointer onto the button stops the press, a field that gave its focus
+//     away gets nothing typed, a call that may act no more stops at its
+//     next input step;
 //   - the screenshot is a JPEG of the page;
 //   - no marker in the log or the journal, nor in the buffer's files.
 //
@@ -164,7 +167,23 @@ function codeForm(error) {
     x.send();
   });
 }
-if (location.search.includes("captcha")) {
+if (location.search.includes("hover")) {
+  // An overlay that comes with the pointer onto the button.
+  loginForm(null);
+  document.querySelector("#login button").addEventListener("mouseover", () => {
+    const veil = document.createElement("div");
+    veil.style.cssText = "position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.3)";
+    document.body.appendChild(veil);
+  });
+} else if (location.search.includes("steal")) {
+  // The password field gives its focus away at once.
+  loginForm(null);
+  const decoy = document.createElement("div");
+  decoy.tabIndex = -1;
+  decoy.textContent = "help";
+  document.body.appendChild(decoy);
+  document.querySelector("#login input[type=password]").addEventListener("focus", () => decoy.focus());
+} else if (location.search.includes("captcha")) {
   loginForm(null);
   const frame = document.createElement("iframe");
   frame.src = "https://www.google.com/recaptcha/api2/anchor?k=stand";
@@ -474,11 +493,19 @@ const tab = sessionOfTarget.get(created.targetId) ?? "";
 if (tab === "") await cannotRun("the work tab was not attached");
 await sleep(300);
 
-/** The operator's isolated world in the tab's current document. */
+/** The operator's isolated world in the tab's current document: made once
+ *  a document, as cdp/control.ts keeps it (a new document, a new world). */
+let worldId: number | null = null;
+cdp.on("Page.frameNavigated", (event) => {
+  const frame = (event.params as { frame?: { parentId?: string } }).frame;
+  if (event.sessionId === tab && frame !== undefined && frame.parentId === undefined) worldId = null;
+});
 async function world(): Promise<number> {
+  if (worldId !== null) return worldId;
   const tree = await cdp.send<{ frameTree: { frame: { id: string } } }>("Page.getFrameTree", {}, tab);
   const made = await cdp.send<{ executionContextId: number }>("Page.createIsolatedWorld", { frameId: tree.frameTree.frame.id, worldName: "pb-hub", grantUniveralAccess: false }, tab);
-  return made.executionContextId;
+  worldId = made.executionContextId;
+  return worldId;
 }
 
 const sessionAtStart = session.fingerprint;
@@ -527,12 +554,24 @@ await sleep(500);
 check("in the automation the site's login is closed: nothing reaches the server", arrivals.filter((arrival) => arrival.path === "/api/v1/login").length === arrivedBefore && !asks.some((ask) => ask.path === "/api/v1/login"), { submit: screenOf(automationSubmit) });
 mode = "manual_login";
 
-// 3b. A call that may act no more after its first field (Astra's review of
-// PR 15, item 3): nothing more is typed, nothing is pressed, nothing reaches
-// the server.
+// 3b. Acts are checked at the moment of the act (Astra's review of PR 15,
+// items 3 and 4): an overlay that comes with the pointer onto the button, a
+// password field that gives its focus away, a call that may act no more
+// after its first field — nothing more is typed, nothing is pressed,
+// nothing reaches the server.
 const inputs = () => cdp.sent.filter((method) => method === "Input.insertText").length;
 const presses = () => cdp.sent.filter((method) => method === "Input.dispatchMouseEvent").length;
 const loginArrivals = () => arrivals.filter((arrival) => arrival.path === "/api/v1/login").length;
+await load("https://fansly.com/?hover=1");
+const hoverBefore = { inputs: inputs(), presses: presses(), logins: loginArrivals() };
+const hoverSubmit = await desk.submit(LOGIN, WRONG, acting);
+await sleep(300);
+check("an overlay that comes with the pointer: not pressed (the pointer's move only), nothing reaches the server", screenOf(hoverSubmit) === "refused: screen_changed" && inputs() === hoverBefore.inputs + 2 && presses() === hoverBefore.presses + 1 && loginArrivals() === hoverBefore.logins, { submit: screenOf(hoverSubmit), inputs: inputs() - hoverBefore.inputs, mouse: presses() - hoverBefore.presses });
+await load("https://fansly.com/?steal=1");
+const stealBefore = { inputs: inputs(), presses: presses(), logins: loginArrivals() };
+const stealSubmit = await desk.submit(LOGIN, WRONG, acting);
+await sleep(300);
+check("a field that gives its focus away: nothing typed into it, nothing pressed", screenOf(stealSubmit) === "refused: screen_changed" && inputs() === stealBefore.inputs + 1 && presses() === stealBefore.presses && loginArrivals() === stealBefore.logins, { submit: screenOf(stealSubmit), inputs: inputs() - stealBefore.inputs, mouse: presses() - stealBefore.presses });
 await load("https://fansly.com/");
 const cancelBefore = { inputs: inputs(), presses: presses(), logins: loginArrivals() };
 const cancelled: LoginGuard = () => (inputs() > cancelBefore.inputs ? "the manual login is over" : null);

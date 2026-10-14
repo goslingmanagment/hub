@@ -8,7 +8,7 @@
 // the next screen once it ended. No real site, no real credential: the
 // values a test types are markers.
 
-import { HIT, SELECT_ALL, type FormMarks, type PageMarks } from "../../apps/page-browser/src/login/screens.ts";
+import { FOCUSED, HIT, SELECT_ALL, type FormMarks, type PageMarks } from "../../apps/page-browser/src/login/screens.ts";
 import { fanslyClientCheck } from "../../apps/page-browser/src/hub-requests/session.ts";
 import type { BrowserModel, CdpCommand, ModelRequest } from "./page-browser-fakes.ts";
 
@@ -71,6 +71,10 @@ export class FakeLoginSite {
     });
     chain("Runtime.callFunctionOn", (command) => {
       if (command.params.functionDeclaration === SELECT_ALL) return { result: { type: "boolean", value: true } };
+      if (command.params.functionDeclaration === FOCUSED) {
+        const role = this.#objects.get(String(command.params.objectId));
+        return { result: { type: "boolean", value: role !== undefined && role === this.#focused } };
+      }
       if (command.params.functionDeclaration === HIT) {
         const [x, y] = (command.params.arguments as Array<{ value: number }>).map((arg) => arg.value);
         const role = this.#objects.get(String(command.params.objectId));
