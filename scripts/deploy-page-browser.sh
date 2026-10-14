@@ -249,8 +249,12 @@ to_node() {
   [[ -n "$PAGE_NAME" ]] || fail "to-node needs --page <name>"
   [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9_.-]{0,62}$ ]] || fail "not a page name: $PAGE_NAME"
   page_remote down --page "$PAGE_NAME"
-  run_remote "set -euo pipefail; ! docker inspect $(printf '%q' "page-browser-${PAGE_NAME}") >/dev/null 2>&1" \
-    || fail "page-browser-${PAGE_NAME} still exists: the Hub is not told it stopped"
+  # Gone means Docker says so: an inspect that fails for another reason (its
+  # daemon down) says nothing, and the Hub is not told on it.
+  local gone=0
+  run_remote "set -uo pipefail; out=\$(docker inspect $(printf '%q' "page-browser-${PAGE_NAME}") 2>&1) && exit 1; grep -qiE 'no such (object|container)' <<<\"\$out\" && exit 0; exit 2" || gone=$?
+  ((gone != 1)) || fail "page-browser-${PAGE_NAME} still exists: the Hub is not told it stopped"
+  ((gone == 0)) || fail "page-browser-${PAGE_NAME} cannot be read on the server: the Hub is not told it stopped"
   local cli=(node apps/runtime/dist/cli.js sync page transport "$PAGE_NAME" node --browser-stopped)
   [[ "$TO_NODE_PREPARE" == "1" ]] && cli+=(--prepare)
   cli+=(--note "deploy-page-browser.sh to-node: container page-browser-${PAGE_NAME} removed")
