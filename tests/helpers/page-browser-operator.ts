@@ -248,7 +248,8 @@ export class FakeOperator {
   /** A delivery that stalls: after this many parts of a body nothing more
    *  goes until it is cleared (or the link goes). */
   stallAfterParts: number | null = null;
-  /** Every body part a slow delivery sent, and on which link. */
+  /** Every body part of an outcome the operator sent, on any delivery path,
+   *  and on which link. */
   readonly partsSent: Array<{ bodyId: string; part: number; link: number }> = [];
   #link = 0;
   #jobs: Promise<void> = Promise.resolve();
@@ -669,7 +670,12 @@ export class FakeOperator {
   }
 
   #deliver(result: Result, body: Buffer | null): void {
-    if (body !== null && result.outcome.kind === "response") sendBody(this.server, result.outcome.body.bodyId, body);
+    if (body !== null && result.outcome.kind === "response") {
+      const bodyId = result.outcome.body.bodyId;
+      const parts = Math.max(1, Math.ceil(body.length / BODY_PART_BYTES));
+      for (let part = 0; part < parts; part++) this.partsSent.push({ bodyId, part, link: this.#link });
+      sendBody(this.server, bodyId, body);
+    }
     this.server.send(result);
   }
 
