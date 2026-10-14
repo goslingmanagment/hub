@@ -702,7 +702,12 @@ export class HubRequests {
       // only in it, and only before the deadline (spec §9).
       const opened = this.#deps.gate.open(phys.window, deadline!, 0);
       if (!opened.ok) {
-        return this.#refuseAt(attempt, request, this.#sent(attempt) ? { kind: "transport_error", sent: true, message: `the gate refused the request: ${opened.reason}` } : { kind: "aborted_before_send", refusal: "send_deadline_passed" });
+        // Another admitted request of the page unfinished (egress/gate.ts):
+        // not released, not sent — the engine's not-sent outcome, as its
+        // pacer's one place in flight says ("pace").
+        const why = `the gate refused the request: ${opened.reason}`;
+        const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
+        return this.#refuseAt(attempt, request, outcome, why);
       }
     }
     if (role === "preflight") attempt.preflight = phys;
@@ -1062,8 +1067,11 @@ export class HubRequests {
 
   /** Refused at a pause: the outcome first, then the request fails (with
    *  every pause of the attempt still held, #finish). */
-  #refuseAt(attempt: Attempt, request: PausedRequest, outcome: Outcome): void {
-    attempt.held.add(request);
+  /** `why`: the pause is failed with it, for the journal; else as the
+   *  attempt's end fails what it holds. */
+  #refuseAt(attempt: Attempt, request: PausedRequest, outcome: Outcome, why: string | null = null): void {
+    if (why !== null) void this.#failHeld(attempt, request, "Failed", why);
+    else attempt.held.add(request);
     this.#finish(attempt, outcome);
   }
 

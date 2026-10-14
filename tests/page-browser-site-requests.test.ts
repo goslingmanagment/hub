@@ -303,6 +303,23 @@ describe("a read of the API (plan §4.3)", () => {
     for (const secret of [TOKEN, CLIENT_ID, "lora"]) expect(w.lines.join("\n"), secret).not.toContain(secret);
   });
 
+  it("one admitted request of the page at a time: admitted while another operation's request is unfinished, it is not released — failed, journaled, siteDone not sent; once that one ended, the next goes", async () => {
+    const w = await world();
+    // A Hub request in flight (an engine that overlapped them).
+    expect(w.gate.open("hub:7:main", monoMs() + 15_000, 0)).toEqual({ ok: true });
+    const request = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications") });
+    const [done] = await doneOf(w);
+    expect(request.outcome).toBe("failed");
+    expect(request.failReason).toBe("Failed");
+    expect(w.chrome.wire).toEqual([]);
+    expect(done).toMatchObject({ sent: false, sentMono: null, status: null, error: { afterSendStart: false, message: expect.stringContaining("another admitted request of the page is unfinished: one at a time (hub:7:main)") } });
+    expect(w.journal).toContainEqual(expect.objectContaining({ path: "/api/v1/notifications", decision: "ended", result: expect.stringContaining("the gate refused the request: another admitted request of the page is unfinished") }));
+    expect(w.gate.state.window).toBe("hub:7:main");
+    // Its end is known: the site's next request goes.
+    w.gate.close("hub:7:main");
+    expect(await run(w, "/notifications", {})).toMatchObject({ sent: true, status: 200 });
+  });
+
   it("its id is in the buffer before its siteAdmit; a buffer that refuses writes admits nothing: failed at once, nothing asked", async () => {
     const w = await world();
     w.engine.answer = () => null;

@@ -1478,8 +1478,12 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     admitting = true;
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.model.navigations.length === 3 && s.operator.page.step === "site_loaded", 10_000, "the new start's site");
+    const ended = s.engine.of("siteDone").length;
     const admitted = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
     await until(() => admitted.outcome === "continued", 3000, "its admission");
+    // One admitted request of the page at a time: the read in its turn,
+    // once the site's request ended.
+    await until(() => s.engine.of("siteDone").length > ended, 5000, "the site's request to end");
     s.engine.send(identity(9503, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9503, 10_000);
     await until(() => s.operator.page.step === "ready", 5000, "ready in the new start");
@@ -1543,7 +1547,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "their ids to go");
   });
 
-  it("a request of the site in flight at the confirmation is waited out before that reload: the reload cancels nothing, and nothing stops the page", async () => {
+  it("one admitted request of the page at a time: the identity read admitted while a request of the site is in flight is not released (not sent, \"pace\", the gate's refusal logged); after that request's answer it confirms, and the reload cancels nothing and stops nothing", async () => {
     let attempt = 9800;
     const answers: Array<{ admit: number } | { refuse: string }> = [{ refuse: "held" }];
     const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
@@ -1554,14 +1558,17 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     const flying = read(s, "/api/v1/notifications");
     await until(() => s.operator.site.released === 1, 3000, "the request in flight");
     s.model.hubBody = account("123456789");
+    // An engine that overlaps them: the read is refused, nothing of it goes.
     s.engine.send(identity(9901, FINGERPRINT));
-    await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000);
-    // Confirmed by the read, but the tab does not navigate while it flies.
-    expect(s.model.navigations).toHaveLength(1);
-    expect(s.operator.site.released).toBe(1);
+    expect(await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000)).toMatchObject({ outcome: { kind: "aborted_before_send", refusal: "pace" } });
+    expect(s.lines.join("\n")).toContain('"kind":"in_flight_refused"');
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801, 10_000)).toMatchObject({ sent: true, status: 200 });
+    // In its turn: confirmed, the tab loaded anew once.
+    s.engine.send(identity(9902, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9902, 10_000);
     await until(() => s.operator.page.step === "ready", 8000, "the page ready");
     expect(s.model.navigations).toHaveLength(2);
-    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801)).toMatchObject({ sent: true, status: 200 });
     const answered = s.chrome.commands.findIndex((command) => command.method === "Fetch.continueResponse" && command.params.requestId === flying.interceptionId);
     const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
     expect(answered).toBeGreaterThan(-1);

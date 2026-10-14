@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiGate, bigDataRecords, controlRecordLimit, MAX_BODY_BYTES, NO_RESPONSE_MS, serverHelloIsTls13 } from "../apps/page-browser/src/egress/gate.ts";
+import { ApiGate, bigDataRecords, controlRecordLimit, IN_FLIGHT_REFUSAL, MAX_BODY_BYTES, NO_RESPONSE_MS, operationOf, serverHelloIsTls13 } from "../apps/page-browser/src/egress/gate.ts";
 
 // The send gate (Project Browser spec §9; stage 1, §3.1): a decision per TLS
 // record Chrome writes into an API tunnel, within the window budget of the
@@ -267,6 +267,63 @@ describe("a window", () => {
     gate.open("w", now + 15_000, 0);
     record(WARM, HEADERS);
     expect(gate.lastSend?.mono).toBe(now);
+  });
+});
+
+describe("one admitted request of the page at a time (the owner's rule: one managed request in flight per page)", () => {
+  it("a preflight and its request are one operation; another operation's window is refused while one is unfinished — open, holding or answering", () => {
+    expect(operationOf("hub:12:preflight")).toBe("hub:12");
+    expect(operationOf("site:3f2e:main")).toBe("site:3f2e");
+    const events: Array<{ kind: string; window: string | null; detail: Record<string, unknown> }> = [];
+    gate.onEvent = (event) => events.push(event);
+    expect(gate.open("hub:12:preflight", now + 15_000, 0)).toEqual({ ok: true });
+    // Its own request, after the preflight: the same operation.
+    expect(gate.open("hub:12:main", now + 15_000, 0)).toEqual({ ok: true });
+    expect(record(WARM, HEADERS)).toBe("up");
+    gate.recordDone(WARM);
+    // Another operation, while that one is holding, then answering.
+    for (const phase of ["holding", "responding"]) {
+      if (phase === "responding") gate.responding("hub:12:main");
+      expect(gate.state.phase).toBe(phase);
+      expect(gate.open("site:9:preflight", now + 15_000, 0)).toEqual({ ok: false, reason: `${IN_FLIGHT_REFUSAL} (hub:12:main)`, inFlight: "hub:12:main" });
+    }
+    // Refused, nothing changed: still the first operation's window.
+    expect(gate.state.window).toBe("hub:12:main");
+    expect(events.filter((event) => event.kind === "in_flight_refused")).toEqual([
+      { kind: "in_flight_refused", window: "site:9:preflight", detail: { unfinished: "hub:12:main", phase: "holding" } },
+      { kind: "in_flight_refused", window: "site:9:preflight", detail: { unfinished: "hub:12:main", phase: "responding" } },
+    ]);
+    // Its end is known: the next operation's window opens.
+    gate.close("hub:12:main");
+    expect(gate.unfinished).toBeNull();
+    expect(gate.open("site:9:preflight", now + 15_000, 0)).toEqual({ ok: true });
+  });
+
+  it("an admission that ran out unsent stays unfinished until its end is known: Chrome may still hold its request, and the next admission's new connection must not carry it late", () => {
+    // Admitted for 6 s; its connection is held past the deadline (stand t9).
+    gate.open("hub:12:preflight", now + 6000, 0);
+    advance(6000);
+    expect(cuts).toEqual(["gate: the admission expired before the send"]);
+    expect(gate.state.phase).toBe("closed");
+    expect(gate.unfinished).toBe("hub:12:preflight");
+    // An engine that admits the next one meanwhile: refused — no window,
+    // no new connection, and the expired request Chrome writes when its
+    // connection comes is held.
+    expect(gate.open("site:9:preflight", now + 6000, 0).ok).toBe(false);
+    expect(gate.admitsTunnel()).toBe(false);
+    expect(record(NEW, HEADERS)).toBe("hold");
+    // Chrome reports its end (the cut failed it): the next one may go.
+    gate.close("hub:12:preflight");
+    expect(gate.open("site:9:preflight", now + 6000, 0)).toEqual({ ok: true });
+    expect(gate.admitsTunnel()).toBe(true);
+  });
+
+  it("stays unfinished through a reset — the exit closed, control lost — until its path ends it", () => {
+    gate.open("site:3:main", now + 15_000, 0);
+    gate.reset();
+    expect(gate.open("hub:4:main", now + 15_000, 0).ok).toBe(false);
+    gate.close("site:3:main");
+    expect(gate.open("hub:4:main", now + 15_000, 0)).toEqual({ ok: true });
   });
 });
 

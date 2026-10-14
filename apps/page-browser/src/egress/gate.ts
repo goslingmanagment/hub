@@ -39,6 +39,18 @@
 //   when the window closes: Chrome finishes such a connection later, and it
 //   would take the next window's one new connection — or pass for that
 //   window's request (stage 1, amendment 21).
+// - One admitted request of the page at a time, kept here and not only
+//   taken from the engine (the owner's rule: one managed request in flight
+//   per page): a window opens only while no other operation's request is
+//   unfinished — its window not closed, or closed at its deadline with its
+//   end not known yet (Chrome may still hold it, unwritten, and write it
+//   into the next window's new connection, where it would pass for that
+//   window's request: two overlapping admissions on stand t9 let a Hub
+//   preflight go 3.8 s and a site preflight 13.7 s past their deadlines).
+//   Unfinished until the path closes its window (`close`): at the end Chrome
+//   reports, or at its operation's end. A preflight and its request are one
+//   operation (owner decision №1). Refused, the request is not released:
+//   the path ends it not sent (fail closed).
 //
 // What stays open (spec §9, owner decisions №10 and №1б): a request Chrome
 // releases by itself in the very moment a window opens can take the window's
@@ -72,7 +84,7 @@ export type GatePhase = "closed" | "open" | "holding" | "responding";
 export type RecordVerdict = "up" | "hold";
 
 export interface GateEvent {
-  kind: "first_bytes" | "held" | "unadmitted_cut" | "no_response" | "expired" | "announced" | "unused_cut";
+  kind: "first_bytes" | "held" | "unadmitted_cut" | "no_response" | "expired" | "announced" | "unused_cut" | "in_flight_refused";
   window: string | null;
   detail: Record<string, string | number | boolean | null>;
 }
@@ -96,6 +108,15 @@ interface Window {
   sentAt: number | null;
 }
 
+/** The operation a window is of: a preflight's and its request's are one
+ *  (`hub:<attempt>:preflight` and `hub:<attempt>:main`, the site's alike). */
+export function operationOf(windowId: string): string {
+  return windowId.replace(/:(?:preflight|main)$/, "");
+}
+
+/** The open's refusal while another operation's request is unfinished. */
+export const IN_FLIGHT_REFUSAL = "another admitted request of the page is unfinished: one at a time";
+
 export interface GateOptions {
   /** CLOCK_MONOTONIC ms (tests use their own clock). */
   now?: () => number;
@@ -118,6 +139,9 @@ export class ApiGate {
   #deadlineTimer: NodeJS.Timeout | null = null;
   #noResponseTimer: NodeJS.Timeout | null = null;
   #lastSend: { mono: number; wall: number } | null = null;
+  /** The last window opened whose request's end is not known yet (its
+   *  window may have closed at the deadline). */
+  #unfinished: string | null = null;
 
   constructor(options: GateOptions = {}) {
     this.#now = options.now ?? monoMs;
@@ -137,11 +161,18 @@ export class ApiGate {
    *  follows): its window, until `deadlineMono`. `bodyBytes`: its body
    *  (0 = none, null = of unknown length). Refused — the request must then
    *  not be released — for a body the gate cannot count or a deadline gone. */
-  open(id: string, deadlineMono: number, bodyBytes: number | null): { ok: true } | { ok: false; reason: string } {
+  open(id: string, deadlineMono: number, bodyBytes: number | null): { ok: true } | { ok: false; reason: string; inFlight?: string } {
     if (bodyBytes === null) return { ok: false, reason: "a body of unknown length" };
     if (bodyBytes > MAX_BODY_BYTES) return { ok: false, reason: `a body of ${bodyBytes} bytes, over ${MAX_BODY_BYTES}` };
     const now = this.#now();
     if (!(deadlineMono > now)) return { ok: false, reason: "the admission's deadline has passed" };
+    const unfinished = this.#unfinished;
+    if (unfinished !== null && operationOf(unfinished) !== operationOf(id)) {
+      // Nothing is changed: the unfinished window stays as it is.
+      this.onEvent({ kind: "in_flight_refused", window: id, detail: { unfinished, phase: this.#phase } });
+      return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${unfinished})`, inFlight: unfinished };
+    }
+    this.#unfinished = id;
     this.#clearTimers();
     // Whatever a tunnel still holds was never admitted.
     const cut = this.cutHeld("gate: bytes held from before this window");
@@ -237,8 +268,9 @@ export class ApiGate {
     this.#phase = "responding";
   }
 
-  /** The request finished (or its operation was closed). */
+  /** The request finished (or its operation was closed): its end is known. */
   close(id: string): void {
+    if (this.#unfinished === id) this.#unfinished = null;
     const w = this.#window;
     if (w?.id !== id) return;
     this.#clearTimers();
@@ -249,7 +281,14 @@ export class ApiGate {
     }
   }
 
-  /** The exit closed or control was lost: no window any more. */
+  /** The window whose request's end is not known yet, if any. */
+  get unfinished(): string | null {
+    return this.#unfinished;
+  }
+
+  /** The exit closed or control was lost: no window any more. What was
+   *  unfinished stays so until its path closes it (at its end, or at its
+   *  operation's: a page that stops ends every operation). */
   reset(): void {
     this.#clearTimers();
     this.#phase = "closed";
