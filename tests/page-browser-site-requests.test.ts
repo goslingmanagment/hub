@@ -233,7 +233,9 @@ const JSON_BODY = Buffer.from(JSON.stringify({ success: true, response: { accoun
 describe("a read of the API (plan §4.3)", () => {
   it("is asked of the engine with its route and session, its stream armed before the ask, released through the gate's window under the admission, and its answer kept whole before siteDone goes", async () => {
     const w = await world();
-    const request = w.chrome.request(`${API}/account/me?ngsw-bypass=true`, { headers: siteHeaders("/api/v1/account/me"), script: { chunks: [JSON_BODY.subarray(0, 40), JSON_BODY.subarray(40)] } });
+    // Chrome's own timing an hour ahead of the operator's clock: another
+    // clock's, never reported (Astra's review of PR 15, round 5).
+    const request = w.chrome.request(`${API}/account/me?ngsw-bypass=true`, { headers: siteHeaders("/api/v1/account/me"), script: { chunks: [JSON_BODY.subarray(0, 40), JSON_BODY.subarray(40)], timing: { requestTime: (monoMs() + 3_600_000) / 1000, sendStart: 2.5 } } });
     const [done] = await doneOf(w);
     const ask = w.engine.of("siteAdmit")[0]!;
     expect(ask).toEqual({
@@ -292,8 +294,8 @@ describe("a read of the API (plan §4.3)", () => {
       error: null,
       body: "buffered",
     });
-    // Chrome's moment, never earlier than the gate's first bytes.
-    expect(done!.sentMono).toBeGreaterThanOrEqual(w.gate.lastSend!.mono);
+    // The gate's first bytes, the operator's own clock — not Chrome's timing.
+    expect(done!.sentMono).toBe(w.gate.lastSend!.mono);
     // Its id went with its end: nothing of it is kept.
     await until(() => w.buffer.siteRequests().length === 0, 3000, "its id to go");
     expect(w.journal).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "ended", status: 200, result: "200, body buffered", admission: `site request ${String(ask.siteRequestId)} (attempt ${done!.attemptId})` }));

@@ -875,6 +875,15 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     s.engine.send(identity(9602));
     await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
     expect(s.operator.state.accountId).toBe("123456789");
+    // What the engine was told of both sends is the gate's instant, the
+    // operator's own clock — Chrome's timing never crosses (Astra's review
+    // of PR 15, round 5): the result's instant is the `sent` one.
+    const fresh = await s.engine.waitFor("result", (message) => message.attemptId === 9602, WAIT_MS);
+    for (const [attemptId, result] of [[9601, await s.engine.waitFor("result", (message) => message.attemptId === 9601, WAIT_MS)], [9602, fresh]] as const) {
+      const sent = s.engine.of("sent").find((message) => message.attemptId === attemptId)!;
+      expect((result.outcome as { sentMono: number }).sentMono, String(attemptId)).toBe(sent.sentMono);
+      expect(sent.sentMono as number, String(attemptId)).toBeLessThanOrEqual(monoMs());
+    }
   });
 
   it("no socket of the site in the manual login: its CONNECT is refused before any admission is asked", async () => {

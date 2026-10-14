@@ -708,6 +708,26 @@ describe("the handshake's outcome (wsDone)", () => {
 });
 
 describe("frames (plan §4.4)", () => {
+  // Astra's review of PR 15, round 5: an event's stamp is the operator's own
+  // clock, whatever Chrome's timestamp says (another clock's: behind, ahead).
+  it("are stamped by the operator's own clock, never Chrome's timestamp", async () => {
+    const w = await world();
+    const client = await opened(w, "WS1", 43);
+    const before = monoMs();
+    for (const offset of [-1_800_000, 500, 3_600_000]) {
+      w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (monoMs() + offset) / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: String(offset) }) } }, "S1");
+    }
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1", timestamp: (monoMs() - 1_800_000) / 1000 }, "S1");
+    await w.buffer.flush();
+    await until(() => w.events().filter((event) => event.kind === "ws.in" || event.kind === "ws.close").length === 4, 3000, "the frames and the close durable");
+    const after = monoMs();
+    for (const event of w.events().filter((one) => one.kind === "ws.in" || one.kind === "ws.close")) {
+      expect(event.atMono as number, String(event.kind)).toBeGreaterThanOrEqual(before);
+      expect(event.atMono as number, String(event.kind)).toBeLessThanOrEqual(after);
+    }
+    client.destroy();
+  });
+
   it("go from CDP into the buffer, durable and in order: ws.open with the attempt and the session, every text frame as it is, ws.close", async () => {
     const w = await world();
     const client = await opened(w, "WS1", 41);

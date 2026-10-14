@@ -880,13 +880,11 @@ export class SiteSockets {
     return typeof requestId === "string" ? `${event.sessionId ?? ""}|${requestId}` : null;
   }
 
-  /** When Chrome saw it (Network.MonotonicTime, on the operator's clock),
-   *  else now — an event's stamp. */
-  #at(event: CdpEvent): { mono: number; wall: number } {
-    const now = monoMs();
-    const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
-    const mono = Number.isFinite(seen) && seen > 0 && seen <= now + 1000 && seen >= now - 3_600_000 ? seen : now;
-    return { mono, wall: Math.round(wallMs() - (now - mono)) };
+  /** An event's stamp: when this process took it, on its own clock. Chrome's
+   *  own timestamp (Network.MonotonicTime) runs on a clock of its own and
+   *  never crosses the protocol (Astra's review of PR 15, round 5). */
+  #at(_event: CdpEvent): { mono: number; wall: number } {
+    return { mono: monoMs(), wall: wallMs() };
   }
 
   /** The socket an event is of — one of this Chrome to the socket host — or

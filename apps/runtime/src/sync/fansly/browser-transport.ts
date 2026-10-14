@@ -76,12 +76,15 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   moved generation asks for the verify first). Both are read again right
 //   before the grant. One admission is one check: a second is refused
 //   (`lease_used`).
-// - The send instant: the operator's report (`sent`, the result's `sentMono`
-//   — Chrome's timing, never before the gate's first bytes), converted from
-//   CLOCK_MONOTONIC by one constant shift (plan §4.2, step 5) and rounded up
-//   by `SEND_REPORT_GUARD_MS`, goes in the outcome as `transport_reported`;
-//   the pacer marks the send there (never before its grant, never after the
-//   completion). None: the completion.
+// - The send instant: the operator's report — its `sent` (the gate's first
+//   bytes, the operator's own clock) as it came, or, when none came (a
+//   result delivered on a later link), the result's `sentMono` (the same
+//   instant); never a later-of the two, and never Chrome's own timing,
+//   which the operator does not report (Astra's review of PR 15, round 5)
+//   — converted from CLOCK_MONOTONIC by one constant shift (plan §4.2, step
+//   5) and rounded up by `SEND_REPORT_GUARD_MS`, goes in the outcome as
+//   `transport_reported`; the pacer marks the send there (never before its
+//   grant, never after the completion). None: the completion.
 // - The outcome: the operator's, as the wire layer shapes it (lower-case
 //   headers, the body decoded; a CDN hop's bytes as `bodyBuffer`, 5 MiB). An
 //   answer the server did not confirm (a cache, the site's service worker)
@@ -378,7 +381,10 @@ export async function createBrowserPageTransport(
   ): { outcome: TransportOutcome; whole: boolean } {
     const { result, body, bodyProblem } = delivered;
     const o = result.outcome;
-    const sentAt = (mono: number | null) => (mono === null ? reported : bridge.fromKernel(mono) + SEND_REPORT_GUARD_MS);
+    // The gate's `sent` first, as it came; the result's own instant only
+    // when none came (a result delivered on a later link) — never a
+    // later-of the two (Astra's review of PR 15, round 5).
+    const sentAt = (mono: number | null) => reported ?? (mono === null ? null : bridge.fromKernel(mono) + SEND_REPORT_GUARD_MS);
     const sentError = (message: string, mono: number | null = null): TransportOutcome => {
       const at = sentAt(mono);
       return at === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: at };

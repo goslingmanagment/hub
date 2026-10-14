@@ -29,9 +29,12 @@
 //     goes under the same admission, while the deadline is ahead.
 //  6. The send: `sent` when the gate sees the first bytes (the sender's
 //     word, amendment 20), with whether the connection was a new one; the
-//     result's moment is Chrome's (`timing.requestTime/sendStart`, the same
-//     clock) but never earlier than the gate's first bytes of that request
-//     — or the completion's (`completion_fallback`).
+//     result's moment is the same — the gate's first bytes of its first
+//     request, this process's clock — or none (`completion_fallback`). A
+//     CDN request (no gate) is sent by the instant Chrome says it was
+//     answered, on this process's clock. Chrome's own timing never crosses
+//     the protocol: it runs on a clock of its own (Astra's review of PR 15,
+//     round 5).
 //  7. The response stops at its headers. A redirect is not followed: the
 //     page gets it as final, the engine gets it with its Location
 //     (amendment 16). A declared size over the limit (API 32 MiB, media
@@ -162,8 +165,9 @@ interface Physical {
   ended: boolean;
   firstBytesMono: number | null;
   announced: boolean;
-  /** Chrome's moment of the send (responseReceived timing). */
-  timingMono: number | null;
+  /** A CDN request (no gate there): this process's clock when Chrome said
+   *  it was answered — the latest instant it may have left. */
+  answeredMono: number | null;
   status: number | null;
   headers: Array<{ name: string; value: string }>;
 }
@@ -248,12 +252,15 @@ export function engineHeaders(headers: Array<{ name: string; value: string }>): 
   return out;
 }
 
-/** When a physical request left: Chrome's moment (its timing), never
- *  earlier than the gate's first bytes of it; null when neither is known. */
+/** When a physical request left, on this process's clock alone (Astra's
+ *  review of PR 15, round 5): the gate's first bytes of it — or, for a CDN
+ *  request (no gate there), when Chrome said it was answered, the latest it
+ *  may have left (a pause never runs from before the true send). Chrome's
+ *  own timing is another clock's and never crosses the protocol. Null:
+ *  not known. */
 function sendMoment(phys: Physical | null): number | null {
   if (phys === null) return null;
-  const known = [phys.timingMono, phys.firstBytesMono].filter((mono): mono is number => mono !== null);
-  return known.length > 0 ? Math.max(...known) : null;
+  return phys.firstBytesMono ?? phys.answeredMono;
 }
 
 export class HubRequests {
@@ -695,7 +702,7 @@ export class HubRequests {
       ended: false,
       firstBytesMono: null,
       announced: false,
-      timingMono: null,
+      answeredMono: null,
       status: null,
       headers: [],
     };
@@ -850,27 +857,25 @@ export class HubRequests {
   #onResponseReceived(event: CdpEvent): void {
     const params = event.params as {
       requestId?: string;
-      response?: { timing?: { requestTime?: number; sendStart?: number }; fromDiskCache?: boolean; fromServiceWorker?: boolean; fromPrefetchCache?: boolean; connectionReused?: boolean };
+      response?: { fromDiskCache?: boolean; fromServiceWorker?: boolean; fromPrefetchCache?: boolean; connectionReused?: boolean };
     };
     if (typeof params.requestId !== "string") return;
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { attempt, phys } = found;
-    const timing = params.response?.timing;
-    if (timing && typeof timing.requestTime === "number" && typeof timing.sendStart === "number" && timing.sendStart >= 0) {
-      // CLOCK_MONOTONIC, as the operator's and the engine's (plan §4.2, step 5).
-      phys.timingMono = timing.requestTime * 1000 + timing.sendStart;
-    }
     if (phys.window !== null) this.#deps.gate.responding(phys.window);
     if (phys.role !== "main") return;
     attempt.responseSeen = true;
     attempt.fromCache = params.response?.fromDiskCache === true || params.response?.fromPrefetchCache === true;
     attempt.fromServiceWorker = params.response?.fromServiceWorker === true;
-    if (attempt.cls === "cdn" && phys.timingMono !== null) {
-      // No gate on the CDN: Chrome's word.
-      const wall = wallMs() - (this.#now() - phys.timingMono);
-      this.#lastMediaSend = { mono: phys.timingMono, wall };
-      this.#reportSent(attempt, phys.timingMono, wall, params.response?.connectionReused === true);
+    if (attempt.cls === "cdn" && !attempt.fromCache && !attempt.fromServiceWorker) {
+      // No gate on the CDN: answered now, so it left by now — this
+      // process's clock, never Chrome's timing (another clock's).
+      const mono = this.#now();
+      const wall = wallMs();
+      phys.answeredMono = mono;
+      this.#lastMediaSend = { mono, wall };
+      this.#reportSent(attempt, mono, wall, params.response?.connectionReused === true);
     }
   }
 
@@ -1153,7 +1158,7 @@ export class HubRequests {
     if (phys !== null && phys.networkId === networkId) return { attempt, phys };
     if (role === undefined) return null;
     // A request of the attempt not released (yet): its failure still counts.
-    const ghost: Physical = { role, networkId, window: null, released: false, answered: false, ended: false, firstBytesMono: null, announced: false, timingMono: null, status: null, headers: [] };
+    const ghost: Physical = { role, networkId, window: null, released: false, answered: false, ended: false, firstBytesMono: null, announced: false, answeredMono: null, status: null, headers: [] };
     return { attempt, phys: ghost };
   }
 

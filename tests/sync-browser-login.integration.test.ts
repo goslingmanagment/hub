@@ -132,7 +132,8 @@ async function startHost(r: Rig): Promise<SyncEngineHost> {
       url: () => r.operator.url,
       settings: async (pageId) => linkSettings({ pageId, expectedAccountId: HARNESS_OWN_REF }),
       rpcTiming: RPC_TIMING,
-      transportTiming: { unavailableRetryMs: 100, resultWaitMs: 10_000 },
+      // A result may be held across a whole login (a hang guard).
+      transportTiming: { unavailableRetryMs: 100, resultWaitMs: WAIT_MS },
       leaveWaitMs: 5_000,
       loginTiming: LOGIN_TIMING,
     },
@@ -337,6 +338,65 @@ describe("after a login: the account checked anew (Astra's review of PR 15, item
     // Trusted again: the same digest, by the check sent after the login.
     expect((await testDb.pool.query("select credentials_generation from sync_pages where page_id = $1", [r.page.pageId])).rows[0]).toEqual({ credentials_generation: trusted });
   }, LONG_TEST_MS);
+});
+
+describe("after a login: one clock across the protocol (Astra's review of PR 15, round 5)", () => {
+  // An identity check sent before the login, its answer held until the login
+  // ended, then reported with the result's instant on another clock than the
+  // gate's `sent` — Chrome's own timing fixed at 777 s, an hour ahead, an
+  // hour behind. The engine takes the gate's `sent`: the check was sent
+  // before the login's end, its proof counts for nothing, and the account is
+  // checked anew before anything ordinary goes.
+  it.for([
+    { chrome: "fixed at 777 s", shift: () => 777_126.5 },
+    { chrome: "an hour ahead", shift: (gate: number) => gate + 3_600_000 },
+    { chrome: "an hour behind", shift: (gate: number) => gate - 3_600_000 },
+  ])("an identity answer from before the login, its result's instant $chrome: no trust from it; the account checked anew first", { timeout: LONG_TEST_MS }, async ({ shift }, context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.state = { ...r.operator.state, step: "ready", exitOpen: true };
+    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
+    // Not trusted: the engine's first request is the account's check.
+    await testDb.pool.query("update sync_pages set credentials_generation = null where page_id = $1", [r.page.pageId]);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let holding: number | null = null;
+    r.operator.beforeResult = async (send) => {
+      if (holding !== null || !new URL(send.url).pathname.endsWith("/account/me")) return;
+      holding = send.attemptId;
+      await held;
+    };
+    r.operator.resultSentMono = shift;
+    await startHost(r);
+    await until(async () => holding !== null, WAIT_MS, "the account's check sent, its answer held");
+    const stale = holding!;
+
+    // The owner's login, opened and closed while the answer is held.
+    await login(r, "wanted");
+    await until(async () => r.operator.state.mode === "manual_login", WAIT_MS, "the manual login");
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
+    const ended = (await getSyncPageManualLogin(db(), r.page.pageId))!.changedAt!;
+    release();
+
+    // The held check: journaled as sent when the gate said — before the end.
+    await until(async () => (await testDb!.pool.query("select 1 from sync_attempts where id = $1 and outcome <> 'admitted'", [stale])).rowCount === 1, WAIT_MS, "the held check's end journaled");
+    const journaled = (await testDb.pool.query<{ sent_at: Date }>("select sent_at from sync_attempts where id = $1", [stale])).rows[0]!;
+    expect(journaled.sent_at.getTime()).toBeLessThan(ended.getTime());
+    // Its proof fenced: the next request of the engine is the account's
+    // check again, and nothing ordinary goes before that one's answer.
+    await until(async () => (await testDb!.pool.query("select 1 from sync_attempts where page_id = $1 and origin = 'engine' and id > $2 and resource <> 'account.verify'", [r.page.pageId, stale])).rowCount! > 0, WAIT_MS, "ordinary work again");
+    const after = (await testDb.pool.query<{ resource: string; admitted_at: Date; completed_at: Date | null }>(
+      "select resource, admitted_at, completed_at from sync_attempts where page_id = $1 and origin = 'engine' and id > $2 order by id", [r.page.pageId, stale],
+    )).rows;
+    expect(after[0]).toMatchObject({ resource: "account.verify" });
+    const firstOrdinary = after.find((attempt) => attempt.resource !== "account.verify")!;
+    expect(firstOrdinary.admitted_at.getTime()).toBeGreaterThanOrEqual(after[0]!.completed_at!.getTime());
+    // Trusted by the check sent after the login: its send after the end.
+    const proof = (await testDb.pool.query<{ identity_checked_at: Date; credentials_generation: string | null }>("select identity_checked_at, credentials_generation from sync_pages where page_id = $1", [r.page.pageId])).rows[0]!;
+    expect(proof.credentials_generation).toBe(await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A));
+    expect(proof.identity_checked_at.getTime()).toBeGreaterThan(ended.getTime());
+  });
 });
 
 describe("the owner's pause and the login (Astra's review of PR 15, item 5)", () => {

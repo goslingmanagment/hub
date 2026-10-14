@@ -223,7 +223,9 @@ describe("a Hub request (plan §4.2)", () => {
       body: { bodyId: w.outcomes.get(message.attemptId)!.bodyId, decodedBytes: body.length, sha256: sha256(body) },
       encodedBytes: body.length + 200,
       source: "network",
-      sentMono: (w.chrome.scripts.get(message.attemptId)!.timing!.requestTime * 1000) + 3.5,
+      // The gate's moment, as `sent` said — not Chrome's timing (a minute
+      // ahead here: another clock's, round 5 of Astra's review of PR 15).
+      sentMono: w.engine.of("sent")[0]!.sentMono,
       sendMark: "transport_reported",
     });
     expect(bodyOf(w, message.attemptId).equals(body)).toBe(true);
@@ -290,22 +292,43 @@ describe("a Hub request (plan §4.2)", () => {
     expect(w.faults).toEqual([]);
   });
 
-  it("takes its send moment from Chrome's timing, never earlier than the gate's first bytes; media without either fall back to the completion", async () => {
+  // Astra's review of PR 15, round 5: every instant the operator reports is
+  // its own clock's; Chrome's timing (another clock: fixed, ahead, behind)
+  // never crosses the protocol — in `sent`, in the result, in `quiesced`.
+  it("takes its send moment from the gate's first bytes alone, whatever Chrome's own timing says; media from the operator's clock when answered, none from a cache", async () => {
     const w = await world();
-    const later = (monoMs() + 60_000) / 1000;
-    const timed = send(w, {}, { timing: { requestTime: later, sendStart: 0.75 } });
-    expect(await outcomeOf(w, timed.attemptId)).toMatchObject({ sentMono: later * 1000 + 0.75, sendMark: "transport_reported" });
-    // Astra's review of PR 9, 1: Chrome wrote the request into the local
-    // socket 5 s before the operator forwarded it (it stood meanwhile): the
-    // send is the gate's moment, not Chrome's earlier one.
-    const early = send(w, {}, { timing: { requestTime: (monoMs() - 5000) / 1000, sendStart: 0 } });
-    const outcome = await outcomeOf(w, early.attemptId);
-    const gate = w.engine.of("sent").find((sent) => sent.attemptId === early.attemptId)!.sentMono as number;
-    expect(outcome).toMatchObject({ sentMono: gate, sendMark: "transport_reported" });
+    const timings = [
+      { requestTime: 777.125, sendStart: 1.5 },
+      { requestTime: (monoMs() + 3_600_000) / 1000, sendStart: 0.75 },
+      { requestTime: Math.max(0, monoMs() - 3_600_000) / 1000, sendStart: 0 },
+      // Chrome wrote it into the local socket 5 s before the operator let it go (Astra's review of PR 9, 1).
+      { requestTime: (monoMs() - 5000) / 1000, sendStart: 0 },
+    ];
+    for (const timing of timings) {
+      const before = monoMs();
+      const timed = send(w, {}, { timing });
+      const outcome = await outcomeOf(w, timed.attemptId);
+      const gate = w.engine.of("sent").find((sent) => sent.attemptId === timed.attemptId)!.sentMono as number;
+      expect(outcome, JSON.stringify(timing)).toMatchObject({ sentMono: gate, sendMark: "transport_reported" });
+      expect(gate, JSON.stringify(timing)).toBeGreaterThanOrEqual(before);
+      expect(gate, JSON.stringify(timing)).toBeLessThanOrEqual(monoMs());
+    }
     // With a preflight: its own request's moments, the first of the two.
-    const preflighted = send(w, {}, { preflight: 204, timing: { requestTime: (monoMs() - 5000) / 1000, sendStart: 0 } });
+    const preflighted = send(w, {}, { preflight: 204, timing: { requestTime: (monoMs() + 3_600_000) / 1000, sendStart: 0 } });
     const both = await outcomeOf(w, preflighted.attemptId);
     expect(both).toMatchObject({ sentMono: w.engine.of("sent").find((sent) => sent.attemptId === preflighted.attemptId)!.sentMono });
+    // Media (no gate on the CDN): sent by the time Chrome said it was
+    // answered, on the operator's clock — `sent`, the result and the last
+    // media send alike, Chrome's timing an hour ahead.
+    const before = monoMs();
+    const answered = send(w, { kind: "image", url: "https://cdn3.fansly.com/abc/2.jpg?Policy=p&Signature=s&Key-Pair-Id=k", maxBodyBytes: MEDIA_BODY_LIMIT }, { timing: { requestTime: (monoMs() + 3_600_000) / 1000, sendStart: 0 } });
+    const image = await outcomeOf(w, answered.attemptId);
+    const mediaSent = w.engine.of("sent").find((sent) => sent.attemptId === answered.attemptId)!.sentMono as number;
+    expect(image).toMatchObject({ kind: "response", sentMono: mediaSent, sendMark: "transport_reported" });
+    expect(mediaSent).toBeGreaterThanOrEqual(before);
+    expect(mediaSent).toBeLessThanOrEqual(monoMs());
+    expect(w.hub.lastMediaSend?.mono).toBe(mediaSent);
+    // Media Chrome never said was answered: none — the completion.
     const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/abc/1.jpg?Policy=p&Signature=s&Key-Pair-Id=k", maxBodyBytes: MEDIA_BODY_LIMIT }, { timing: null, noResponseReceived: true });
     expect(await outcomeOf(w, media.attemptId)).toMatchObject({ kind: "response", sentMono: null, sendMark: "completion_fallback", source: "cache_unconfirmed" });
   });

@@ -812,7 +812,7 @@ const doneOf = (path: string) => committed.filter((done) => admissions.find((adm
 check(doneOf("/api/v1/notifications").some((done) => done.status === 429 && done.retryAfter === "7" && done.sent), `siteDone of the 429 carries Retry-After: ${JSON.stringify(doneOf("/api/v1/notifications")[0] ?? null)}`);
 check(doneOf("/api/v1/post").some((done) => done.status === 302), "siteDone of the redirect has its status (not followed)");
 check(!arrivals.some((arrival) => arrival.path === "/api/v1/elsewhere"), "the redirect's next hop never left");
-check(phase1Done > 0 && committed.slice(0, phase1Done).every((done) => done.sent && typeof done.sentMono === "number"), `every siteDone of the site's load says sent, with Chrome's moment (${phase1Done})`);
+check(phase1Done > 0 && committed.slice(0, phase1Done).every((done) => done.sent && typeof done.sentMono === "number"), `every siteDone of the site's load says sent, with the gate's moment (${phase1Done})`);
 const armFailed = logLines.filter((line) => line.includes("body.arm_failed")).length;
 check(armFailed === 0, `no stream failed to arm (${armFailed})`);
 if (verbose) {
