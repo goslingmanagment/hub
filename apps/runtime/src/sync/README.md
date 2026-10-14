@@ -1110,9 +1110,12 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   recorded as an account. And the read's session must be the one that exists after the login: PR 15's confirmation
   (a page is ready only after a fresh identity read under the live session) is the operator's for a profile too — it
   confirms whatever account the read names, but, once the mode changed, only under the session the site's own
-  authorized GET showed in a document loaded after the change (until then the Hub request's headers may still be
-  the session of before the login); the engine records the account only once the operator's state says so
-  (`session_confirmed`, that account, that session), and again at the write. The site's answers go to `observations` keyed by the profile, with the buffer's position on
+  authorized GET showed from the document the operator loaded after the change — bound by Chrome's loader: the one
+  named in answer to the navigation started in that mode, committed and still the frame's, and the GET's own (a
+  late request of the replaced document never counts); a load under way at the change is followed by a load anew
+  once it is in. Until then the Hub request's headers may still be the session of before the login. The engine
+  records the account only once the operator's state says so (`session_confirmed`, that account, that session),
+  and again at the write. The site's answers go to `observations` keyed by the profile, with the buffer's position on
   its row. The binding (the API's, one transaction with the page's birth: `browser` transport, credentials untrusted
   until the engine's own check under the page's hello) locks the profile's row first and goes on only while the
   onboarding is open and the check is the profile's, answered in the generation that holds — else nothing is

@@ -900,14 +900,16 @@ export class BrowserModel {
   }
 
   /** A request of the page itself pauses in Fetch (the site, a worker...). */
-  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}, postData?: string): ModelRequest {
+  pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}, postData?: string, loaderId?: string): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
     const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused", siteHeaders: headers };
     this.requests.push(request);
-    // A body (a login's) rides both events, as Chrome sends it.
+    // A body (a login's) rides both events, as Chrome sends it; the
+    // document it is of (`loaderId`), when the caller names it.
     const body = postData === undefined ? {} : { hasPostData: true, postData };
-    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method, ...body } }, sessionId);
+    const loader = loaderId === undefined ? {} : { loaderId };
+    this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, ...loader, request: { url: request.url, urlFragment: request.fragment, method, ...body } }, sessionId);
     this.chrome.event("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,

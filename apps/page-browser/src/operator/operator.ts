@@ -106,6 +106,7 @@ import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
+import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
@@ -303,15 +304,20 @@ export class Operator {
   /** A profile no page has yet (page 0: its onboarding, Project Browser PR
    *  16): its identity read names whatever account the browser is logged
    *  into — so it confirms only the session that exists after the person's
-   *  login: the one the site's own authorized GET showed in a document whose
-   *  load began after the mode last changed (Astra's review of PR 16, round
-   *  2: until then the Hub requests' headers may still be the session of
-   *  before the login). The changes of the mode are counted; the change a
-   *  load began in, and the one it ended in; the session shown since. */
+   *  login: the one the site's own authorized GET showed from the document
+   *  the operator loaded after the mode last changed (Astra's review of PR
+   *  16, rounds 2–3: until then the Hub requests' headers may still be the
+   *  session of before the login, and a late request of the replaced
+   *  document still carries it). The document is bound by Chrome's loader:
+   *  the one Chrome named in answer to the navigation started in this mode,
+   *  committed and still the frame's; the GET is of that loader. The changes
+   *  of the mode are counted. */
   #modeChanges = 0;
-  #loadBeganInMode = -1;
-  #loadedInMode = -1;
-  #sessionShownInMode: string | null = null;
+  #modeDocument: { mode: number; loaderId: string } | null = null;
+  #sessionShownInMode: { fingerprint: string; loaderId: string } | null = null;
+  /** An authorized GET of the automation whose document Chrome had not named
+   *  when it paused: judged once Chrome does. */
+  #sessionNoteWaiting: { networkId: string; fingerprint: string } | null = null;
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -627,6 +633,14 @@ export class Operator {
       readEnded: (end) => this.login.readEnded(end),
       ...(deps.siteTimings ? { timings: deps.siteTimings } : {}),
     });
+    // A GET whose document Chrome named after it paused (page 0's
+    // confirmation, `#siteShowedSession`).
+    this.site.documents.onLoader = (networkId, loaderId) => {
+      const waiting = this.#sessionNoteWaiting;
+      if (waiting === null || waiting.networkId !== networkId) return;
+      this.#sessionNoteWaiting = null;
+      this.#documentShowedSession(loaderId, waiting.fingerprint);
+    };
     this.login = new LoginDesk({
       cdp: this.cdp,
       tab: () => this.control.workTab?.sessionId ?? null,
@@ -961,7 +975,6 @@ export class Operator {
   async #loadSite(run: number): Promise<void> {
     const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.page.step !== "exit_open" || !this.egress.exitOpen;
     const mode = this.#modeChanges;
-    this.#loadBeganInMode = mode;
     try {
       const tab = this.control.workTab;
       if (tab === null) throw new StartFailure("cdp_lost", "no work tab to load the site in");
@@ -970,15 +983,23 @@ export class Operator {
       this.site.resetFailures();
       const documents = () => this.site.documents.commits(this.control.workTab?.mainFrameId ?? null);
       const before = documents();
-      const reply = await this.cdp.send<{ errorText?: string }>("Page.navigate", { url: SITE_URL }, tab.sessionId, this.#timings.siteLoadMs);
+      const reply = await this.cdp.send<{ errorText?: string; loaderId?: string }>("Page.navigate", { url: SITE_URL }, tab.sessionId, this.#timings.siteLoadMs);
       if (stale()) return;
       if (typeof reply.errorText === "string" && reply.errorText !== "") throw new StartFailure("proxy_unavailable", `the site did not load: ${reply.errorText}`);
+      // The document of a navigation started in this mode, as Chrome names it.
+      if (mode === this.#modeChanges && typeof reply.loaderId === "string" && reply.loaderId !== "") this.#modeDocument = { mode, loaderId: reply.loaderId };
       // Its document, not the one the tab had: a new one committed.
       const atSite = await this.#waitUntil(() => stale() || (this.#workTabAtSite() && documents() > before), this.#timings.siteLoadMs);
       if (stale()) return;
       if (!atSite) throw new StartFailure("proxy_unavailable", `the site's document did not come within ${this.#timings.siteLoadMs} ms`);
-      if (mode === this.#modeChanges) this.#loadedInMode = mode;
       this.page.advance("site_loaded", SITE_URL);
+      if (mode !== this.#modeChanges) {
+        // Its load began under the mode before: loaded anew for this one,
+        // once it is in (Astra's review of PR 16, round 3) — a mode change
+        // during a load finds no loaded page to reload.
+        this.#reloadForMode("the site loaded under the mode before: it is loaded anew for this one");
+        return;
+      }
       this.#confirmSession();
     } catch (error) {
       if (stale()) return;
@@ -1029,19 +1050,39 @@ export class Operator {
     const settings = this.#settings;
     if (settings === null) return false;
     if (settings.pageId !== 0) return identity.accountId === settings.expectedAccountId;
-    return this.#modeChanges === 0 || (this.#loadedInMode === this.#modeChanges && this.#sessionShownInMode === identity.fingerprint);
+    if (this.#modeChanges === 0) return true;
+    const document = this.#modeDocument;
+    const shown = this.#sessionShownInMode;
+    return document !== null && document.mode === this.#modeChanges
+      && this.site.documents.currentLoader(this.control.workTab?.mainFrameId ?? null) === document.loaderId
+      && shown !== null && shown.loaderId === document.loaderId && shown.fingerprint === identity.fingerprint;
   }
 
   /** The site's own API request, as it stopped: a GET with its session in
-   *  the automation, asked by a document whose load began after the mode
-   *  last changed, shows the session that exists now (page 0's
-   *  confirmation, `#identityConfirms`). */
-  #siteShowedSession(request: { method: string; headers: Record<string, string> }): void {
-    if (this.#mode !== "automation" || this.#loadBeganInMode !== this.#modeChanges || request.method.toUpperCase() !== "GET") return;
-    if (!Object.entries(request.headers).some(([name, value]) => name.toLowerCase() === "authorization" && value !== "")) return;
-    const live = this.hub.session.fingerprint;
-    if (live === null || live === this.#sessionShownInMode) return;
-    this.#sessionShownInMode = live;
+   *  the automation shows the session that exists now — when it is of the
+   *  document the operator loaded in this mode (its loader; page 0's
+   *  confirmation, `#identityConfirms`). A request of any other document
+   *  feeds nothing of it (the session's headers follow PR 15's rules). */
+  #siteShowedSession(request: { networkId: string | null; method: string; headers: Record<string, string> }): void {
+    if (this.#mode !== "automation" || request.method.toUpperCase() !== "GET" || request.networkId === null) return;
+    const value = (name: string) => Object.entries(request.headers).find(([key]) => key.toLowerCase() === name)?.[1] ?? "";
+    const authorization = value("authorization");
+    if (authorization === "") return;
+    const fingerprint = sessionFingerprint(authorization, value("fansly-client-id"));
+    const loader = this.site.documents.loaderOfRequest(request.networkId);
+    if (loader === null) {
+      this.#sessionNoteWaiting = { networkId: request.networkId, fingerprint };
+      return;
+    }
+    this.#documentShowedSession(loader, fingerprint);
+  }
+
+  #documentShowedSession(loaderId: string, fingerprint: string): void {
+    const document = this.#modeDocument;
+    if (this.#mode !== "automation" || document === null || document.mode !== this.#modeChanges || document.loaderId !== loaderId) return;
+    const shown = this.#sessionShownInMode;
+    if (shown !== null && shown.loaderId === loaderId && shown.fingerprint === fingerprint) return;
+    this.#sessionShownInMode = { fingerprint, loaderId };
     this.#confirmSession();
     this.#sendState();
   }
@@ -1620,6 +1661,7 @@ export class Operator {
     // in a document loaded from now on.
     this.#modeChanges += 1;
     this.#sessionShownInMode = null;
+    this.#sessionNoteWaiting = null;
     this.#mode = mode;
     this.#modeGeneration = generation;
     this.#log("mode", { mode, generation, why });

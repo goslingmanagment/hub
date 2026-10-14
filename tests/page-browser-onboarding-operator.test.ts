@@ -32,9 +32,11 @@ import {
 // session it went under — PR 15's mechanism, «ready only after a fresh
 // identity read under the live session» — only once the site showed that
 // session in a document loaded after the mode last changed: the session that
-// exists after the person's login (Astra's review of PR 16, round 2). Until
-// the new document's own authorized GET, the Hub requests' headers may still
-// be the session of before the login.
+// exists after the person's login (Astra's review of PR 16, rounds 2–3).
+// Until the new document's own authorized GET, the Hub requests' headers may
+// still be the session of before the login; a late GET of the replaced
+// document still carries it. The document is Chrome's loader: the one named
+// in answer to the navigation started after the change.
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -54,6 +56,10 @@ interface SetUp {
   engine: FakeEngine;
   model: BrowserModel;
   lines: string[];
+  /** The loader of each document committed, as Chrome named it. */
+  loaders: string[];
+  /** Runs before each navigation goes on (a test holds it, or acts there). */
+  beforeNavigate: (() => Promise<void>) | null;
 }
 
 async function setUp(): Promise<SetUp> {
@@ -66,6 +72,14 @@ async function setUp(): Promise<SetUp> {
   await chrome.shutdown();
   cleanups.push(() => chrome.shutdown());
   const model = new BrowserModel(chrome);
+  const navigate = chrome.handlers.get("Page.navigate")!;
+  const s: Partial<SetUp> & { loaders: string[]; beforeNavigate: SetUp["beforeNavigate"] } = { loaders: [], beforeNavigate: null };
+  chrome.handlers.set("Page.navigate", async (command) => {
+    if (s.beforeNavigate !== null) await s.beforeNavigate();
+    const reply = (await navigate(command)) as { loaderId?: unknown; errorText?: unknown };
+    if (typeof reply.loaderId === "string" && typeof reply.errorText !== "string" && command.params.url !== "about:blank") s.loaders.push(reply.loaderId);
+    return reply as Record<string, unknown>;
+  });
   const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
   await holder.start();
   cleanups.push(() => holder.stop());
@@ -126,7 +140,7 @@ async function setUp(): Promise<SetUp> {
   };
   expect(await command(engine, { kind: "restartBrowser" })).toMatchObject({ ok: true });
   await until(() => operator.page.step === "site_loaded", 10_000, "the site loaded");
-  return { operator, engine, model, lines };
+  return Object.assign(s, { operator, engine, model, lines }) as SetUp;
 }
 
 let commandN = 0;
@@ -136,8 +150,17 @@ function command(engine: FakeEngine, command: Record<string, unknown>): Promise<
   return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
 }
 
-/** The site's own authorized read, as its script sets its headers. */
-function siteRead(s: SetUp, token: string): void {
+/** The site's own read of the new document, under `token`, ended (its
+ *  admission, its send and its answer) before anything else goes. */
+async function siteReadDone(s: SetUp, token: string): Promise<void> {
+  const ended = s.engine.of("siteDone").length;
+  siteRead(s, token);
+  await until(() => s.engine.of("siteDone").length > ended, 10_000, "the site's read ended");
+}
+
+/** The site's own authorized read, as its script sets its headers — of the
+ *  document `loaderId` (default: the one committed last). */
+function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!): void {
   const path = "/api/v1/account/me";
   s.model.pause(`https://apiv3.fansly.com${path}?ngsw-bypass=true`, "GET", s.operator.control.workTab!.sessionId, "XHR", {
     Accept: "application/json, text/plain, */*",
@@ -146,7 +169,7 @@ function siteRead(s: SetUp, token: string): void {
     "fansly-client-id": CLIENT,
     "fansly-client-ts": String(Date.now()),
     "fansly-session-id": "720167541418230033",
-  });
+  }, undefined, loaderId);
 }
 
 let readN = 9700;
@@ -187,8 +210,8 @@ describe("a profile no page has yet: its account read confirms only the session 
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
     // The new document's own read shows B: A's read confirms nothing.
-    siteRead(s, TOKEN_B);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === b);
+    await siteReadDone(s, TOKEN_B);
+    expect(s.operator.state.sessionFingerprint).toBe(b);
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
     // A read under B: confirmed, with the account it names (no account is
@@ -209,7 +232,7 @@ describe("a profile no page has yet: its account read confirms only the session 
     await accountRead(s, a, ACCOUNT_A);
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
-    siteRead(s, TOKEN_A);
+    await siteReadDone(s, TOKEN_A);
     await until(() => s.operator.page.step === "ready", 10_000, "confirmed once shown");
     expect(s.operator.state).toMatchObject({ sessionFingerprint: a, accountId: ACCOUNT_A });
   });
@@ -224,4 +247,76 @@ describe("a profile no page has yet: its account read confirms only the session 
     await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
     expect(s.operator.state.accountId).toBe(ACCOUNT_A);
   });
+
+  it("a late GET of the replaced document — between the navigation and its commit, under the session of before — confirms nothing; the new document's GET does (Astra's review of PR 16, round 3)", async () => {
+    const s = await setUp();
+    const a = sessionFingerprint(TOKEN_A, CLIENT);
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    siteRead(s, TOKEN_A);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === a);
+    await s.engine.waitFor("siteDone", () => true, 10_000);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the login screen loaded");
+    // The person logs into B. The automation's load starts — and before its
+    // document commits, the old document's late GET still carries A.
+    const old = s.loaders.at(-1)!;
+    let late = false;
+    s.beforeNavigate = async () => {
+      s.beforeNavigate = null;
+      siteRead(s, TOKEN_A, old);
+      late = true;
+      await pause(100);
+    };
+    const loads = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => late && s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew under the automation");
+    expect(s.loaders.at(-1)).not.toBe(old);
+    // Later still, after the new document committed: another of the old one's.
+    siteRead(s, TOKEN_A, old);
+    await pause(200);
+    // The Hub request's headers are A's: a read under them confirms nothing.
+    await accountRead(s, a, ACCOUNT_A);
+    await pause(300);
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(s.operator.state.accountId === ACCOUNT_A && atLeastConfirmed(s)).toBe(false);
+    // The new document's GET shows B; a read under B is confirmed.
+    await siteReadDone(s, TOKEN_B);
+    expect(s.operator.state.sessionFingerprint).toBe(b);
+    await accountRead(s, b, ACCOUNT_B);
+    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.operator.state).toMatchObject({ sessionFingerprint: b, accountId: ACCOUNT_B });
+  });
+
+  it("the login closed while a load is under way: once it is in, the site is loaded anew for the automation, and its GET confirms (Astra's review of PR 16, round 3)", async () => {
+    const s = await setUp();
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    siteRead(s, TOKEN_A);
+    await s.engine.waitFor("siteDone", () => true, 10_000);
+    // The manual login's own load is held under way …
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let holding = false;
+    s.beforeNavigate = async () => {
+      s.beforeNavigate = null;
+      holding = true;
+      await held;
+    };
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => holding, 10_000, "the manual login's load under way");
+    // … when the login is closed: the automation finds no loaded page to reload.
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    const loads = s.model.navigations.length;
+    release();
+    // That load comes in, and the site is loaded anew for the automation.
+    await until(() => s.model.navigations.length > loads && s.loaders.length >= 3 && s.operator.page.step === "site_loaded", 10_000, "loaded anew for the automation");
+    await siteReadDone(s, TOKEN_B);
+    expect(s.operator.state.sessionFingerprint).toBe(b);
+    await accountRead(s, b, ACCOUNT_B);
+    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.operator.state.accountId).toBe(ACCOUNT_B);
+  });
 });
+
+function atLeastConfirmed(s: SetUp): boolean {
+  return s.operator.page.step === "session_confirmed" || s.operator.page.step === "ready";
+}

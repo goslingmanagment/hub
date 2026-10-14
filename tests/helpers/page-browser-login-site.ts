@@ -119,11 +119,17 @@ export class FakeLoginSite {
       return {};
     });
     // A new document: nothing of the old one is pressed any more; a site
-    // logged in reads with its session as it loads (`readsOnLoad`).
-    chain("Page.navigate", () => {
+    // logged in reads with its session as it loads (`readsOnLoad`), from
+    // that document (the loader Chrome named for the navigation).
+    const navigate = chrome.handlers.get("Page.navigate");
+    chrome.handlers.set("Page.navigate", async (command) => {
       this.down = false;
-      if (this.#options.readsOnLoad === true && this.#signedIn) setTimeout(() => this.#readAccount(), 50);
-      return undefined;
+      const reply = (await (navigate ? navigate(command) : {})) as { loaderId?: unknown; errorText?: unknown };
+      if (this.#options.readsOnLoad === true && this.#signedIn && typeof reply.loaderId === "string" && typeof reply.errorText !== "string") {
+        const loaderId = reply.loaderId;
+        setTimeout(() => this.#readAccount(loaderId), 50);
+      }
+      return reply as Record<string, unknown>;
     });
     chain("Page.captureScreenshot", () => ({ data: Buffer.from(`FAKEJPEG:${this.screen}`).toString("base64") }));
     chain("Runtime.releaseObjectGroup", () => {
@@ -215,8 +221,9 @@ export class FakeLoginSite {
     this.#readAccount();
   }
 
-  /** The site's own read of the account, with its session. */
-  #readAccount(): void {
+  /** The site's own read of the account, with its session (of the document
+   *  `loaderId` names, when given). */
+  #readAccount(loaderId?: string): void {
     const path = "/api/v1/account/me";
     const { token, clientId } = this.#options;
     this.#model.pause(`https://apiv3.fansly.com${path}`, "GET", this.#tab(), "XHR", {
@@ -226,7 +233,7 @@ export class FakeLoginSite {
       "fansly-client-id": clientId,
       "fansly-client-ts": String(Date.now()),
       "fansly-session-id": "720167541418239999",
-    });
+    }, undefined, loaderId);
   }
 
   async #ended(request: ModelRequest): Promise<boolean> {
