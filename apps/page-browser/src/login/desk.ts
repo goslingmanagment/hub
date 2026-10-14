@@ -30,6 +30,16 @@
 //   screen, the document and the hit test at that point are read again, and
 //   only then is it pressed — an overlay or a screen that comes with the
 //   pointer stops the step before the press.
+// - A press is never left unfinished (Astra's review of PR 15, round 2): one
+//   that is not let go on the button — the call may act no more between the
+//   press and its release, or the release did not answer — is let go where
+//   it clicks nothing before the step ends (and so before the desk is
+//   drained): every click and submit of the page stopped meanwhile in the
+//   capture phase of its window, the pointer moved, still pressed, to a
+//   point of no control (`RELEASE_POINT`), released there, and checked —
+//   the button no longer `:active`, no click on it, no submit. What cannot
+//   be so let go, or checked, is failed closed: the work tab's document is
+//   discarded (`discard`, the operator's), and the press with it.
 // - Secrets: the login, the password and the code live in this call's
 //   arguments for the time of the hand-over and nowhere else — never in a
 //   log line, a journal, an error message or a field of this object. The
@@ -39,7 +49,7 @@
 
 import { CdpError, type CdpPort } from "../cdp/client.ts";
 import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
-import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, SELECT_ALL, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
+import { FOCUSED, HIT, HOLD_CLICKS, locateExpression, PRESS_UNDONE, PROBE, recognize, RELEASE_POINT, SCREEN_VERSION, SELECT_ALL, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
 
 export interface LoginTimings {
   /** One CDP command of the desk. */
@@ -64,6 +74,10 @@ export interface LoginDeskDeps {
   world: () => Promise<number>;
   /** The site's live session (hub-requests/session.ts), null: none seen. */
   session: () => string | null;
+  /** The work tab's document goes, and what is pressed in it (the
+   *  operator's: the site loaded anew, or the page stopped) — for a press
+   *  that could not be let go where it clicks nothing. */
+  discard: (why: string) => Promise<void>;
   timings?: Partial<LoginTimings>;
   log?: Logger;
 }
@@ -329,11 +343,50 @@ export class LoginDesk {
     if (!(await this.#ask(button, HIT, point))) throw new ScreenChanged("something else is over the button once the pointer is on it");
     const mouse = { x, y, button: "left", clickCount: 1 };
     allowed(guard);
-    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...mouse }, tab, this.#timings.commandMs);
-    // A press whose call may act no more is not let go on the button: no
-    // click comes of it.
-    allowed(guard);
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...mouse }, tab, this.#timings.commandMs);
+    // From the press on, it is let go — on the button, or where it clicks
+    // nothing — before this returns.
+    let pressed = true;
+    try {
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...mouse, buttons: 1 }, tab, this.#timings.commandMs);
+      // A press whose call may act no more is not let go on the button: no
+      // click comes of it.
+      allowed(guard);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...mouse, buttons: 0 }, tab, this.#timings.commandMs);
+      pressed = false;
+    } finally {
+      if (pressed) await this.#letGo(button);
+    }
+  }
+
+  /** The press on `button` let go where it clicks nothing, every click and
+   *  submit of the page stopped meanwhile, then checked: the button no
+   *  longer pressed, no click on it, no submit. Else — or if any of it
+   *  fails — the document is discarded, and the press with it. Never
+   *  throws. */
+  async #letGo(button: Located): Promise<void> {
+    const { tab, objectId } = button;
+    const cdp = this.#deps.cdp;
+    const call = <T>(functionDeclaration: string) => cdp.send<{ result?: { value?: T } }>("Runtime.callFunctionOn", { objectId, functionDeclaration, returnByValue: true }, tab, this.#timings.commandMs);
+    let held = false;
+    try {
+      held = (await call<boolean>(HOLD_CLICKS)).result?.value === true;
+      if (!held) throw new Error("the page's clicks could not be held");
+      const at = (await call<{ x?: unknown; y?: unknown } | null>(RELEASE_POINT)).result?.value ?? null;
+      if (at === null || typeof at.x !== "number" || typeof at.y !== "number" || !Number.isFinite(at.x) || !Number.isFinite(at.y)) throw new Error("no point where a release clicks nothing");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at.x, y: at.y, button: "left", buttons: 1 }, tab, this.#timings.commandMs);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: "left", buttons: 0, clickCount: 1 }, tab, this.#timings.commandMs);
+      held = false;
+      const seen = (await call<{ active?: unknown; onButton?: unknown; submits?: unknown } | null>(PRESS_UNDONE)).result?.value ?? null;
+      if (seen === null || seen.active !== false || seen.onButton !== 0 || seen.submits !== 0) {
+        throw new Error(`the press was not let go cleanly (${seen === null ? "nothing held" : `active ${String(seen.active)}, clicks on the button ${String(seen.onButton)}, submits ${String(seen.submits)}`})`);
+      }
+      this.#log("press.let_go", { where: "where it clicks nothing" });
+    } catch (error) {
+      if (held) await call(PRESS_UNDONE).catch(() => undefined);
+      const why = `a press of the login form could not be let go where it clicks nothing: ${errorMessage(error)}`;
+      this.#log("press.discard", { why });
+      await this.#deps.discard(why).catch((failure: unknown) => this.#log("press.discard_failed", { error: errorMessage(failure) }));
+    }
   }
 
   async #release(): Promise<void> {

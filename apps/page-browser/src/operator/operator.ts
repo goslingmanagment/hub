@@ -601,6 +601,7 @@ export class Operator {
         return tab ? this.control.isolatedWorld(tab, WORLD) : Promise.reject(new Error("no work tab"));
       },
       session: () => this.hub.session.fingerprint,
+      discard: (why) => this.#discardDocument(why),
       ...(deps.loginTimings ? { timings: deps.loginTimings } : {}),
     });
     this.sockets = new SiteSockets({
@@ -1556,6 +1557,27 @@ export class Operator {
       await this.#loadSite(run);
     })();
     return true;
+  }
+
+  /** The work tab's document goes, failed closed: a press of the login form
+   *  could not be let go where it clicks nothing (login/desk.ts), and must
+   *  not wait in it for a release. A page that is up loads the site anew at
+   *  once — not waiting for what of the site is in flight: a request cut by
+   *  it stops the page, as a reload's would (#reloadForMode) — and one whose
+   *  site load fails starts again; a page that is not up gets a blank
+   *  document. */
+  async #discardDocument(why: string): Promise<void> {
+    const tab = this.control.workTab;
+    if (tab === null) return;
+    this.#log("login.document_discarded", { why });
+    if (this.page.halted || !this.egress.exitOpen || !atLeast(this.page.step, "site_loaded")) {
+      await this.cdp.send("Page.navigate", { url: "about:blank" }, tab.sessionId, this.#timings.siteLoadMs);
+      return;
+    }
+    const run = this.#run;
+    this.site.reloading(tab.mainFrameId ?? null);
+    this.page.back("exit_open", why);
+    await this.#loadSite(run);
   }
 
   /** A call of the login form (spec §6.1 `login.*`): taken only in the
