@@ -519,6 +519,36 @@ describe("the account read through the browser proves it only when fresh (Astra'
   });
 });
 
+describe("an account read's grant leaves under the profile's lock (Astra's review of PR 16, round 2)", () => {
+  it("an abandon committed while the grant is decided waits for it — never a grant after a committed abandon", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    let abandon: Promise<unknown> | null = null;
+    let committedBeforeGrant: boolean | null = null;
+    startTask(r, HOLDER, {
+      beforeCheckAnswer: async () => {
+        let committed = false;
+        abandon = moveOnboarding(r.profileId, "closing").then(() => (committed = true));
+        // Until the abandon committed, or waits for the profile's lock.
+        await until(async () => committed || (await testDb!.pool.query(
+          "select 1 from pg_stat_activity where wait_event_type = 'Lock' and query ilike '%from page_browsers%for no key update%' and pid <> pg_backend_pid()",
+        )).rows.length > 0, 5_000, "the abandon committed or waiting");
+        committedBeforeGrant = committed;
+      },
+    });
+    await loginThenAsk(r);
+    await until(async () => abandon !== null, 10_000, "the account read's check");
+    await abandon;
+    // The grant went before the abandon could commit.
+    expect(committedBeforeGrant).toBe(false);
+    expect(r.operator.checkResults.filter((result) => result.admit)).toHaveLength(1);
+    // The read under it names nothing: the abandon voided the request.
+    await until(async () => r.operator.acks.length >= 1, 10_000, "the read's answer taken");
+    expect((await findOnboardingProfile(db(), r.profileId))!.identityResult).toBeNull();
+  });
+});
+
 describe("the site's requests pass only while the owner's login is open (Astra's review of PR 16, item 3)", () => {
   it("refuses a request still waiting for its slot once the owner closed the login — no grant", async (context) => {
     if (!testDb) return context.skip();

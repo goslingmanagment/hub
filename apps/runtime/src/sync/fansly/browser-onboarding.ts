@@ -186,6 +186,9 @@ export interface BrowserOnboardingOverrides {
   /** Awaited between a site request's journal entry and its grant (a test
    *  moves the onboarding there). */
   beforeGrant?: (siteRequestId: string) => Promise<void>;
+  /** Awaited right before an account read's grant is written, under the
+   *  profile's row lock (a test moves the onboarding there). */
+  beforeCheckAnswer?: (attemptId: number) => Promise<void>;
   /** Every route and family interval × this (`RoutePolicyOptions.timeScale`). */
   routeTimeScale?: number;
 }
@@ -661,17 +664,6 @@ export class OnboardingLink {
     }
   }
 
-  /** The profile as locked, still no page's and still this link's (null:
-   *  not so). */
-  async #stillHeld(): Promise<OnboardingProfile | null> {
-    try {
-      const profile = await this.#fenced(async (_tx, locked) => locked);
-      return this.#holds() ? profile : null;
-    } catch {
-      return null;
-    }
-  }
-
   #record(state: State): void {
     const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null]);
     const now = this.#clock.monoNow();
@@ -1069,26 +1061,43 @@ export class OnboardingLink {
       settle({ outcome, whole, sentFloorMono });
     };
     const maySent = (message: string) => finish(reported === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: reported });
-    const answerCheck = async (liveSession: string): Promise<CheckReply> => {
+    // The grant leaves from inside the profile's row lock, the onboarding
+    // found open there in the generation the request was asked in and the
+    // request not voided (Astra's review of PR 16, round 2): a move (given
+    // up, a login opened again) or a binding that commits first refuses it,
+    // one that comes later waits for it — as the site's grants.
+    const answerCheck = async (liveSession: string, answerNow: (reply: CheckReply) => boolean): Promise<CheckReply> => {
       if (finished) return { admit: false, reason: "lease_inactive" };
       if (liveSession !== fingerprint) return { admit: false, reason: "session_mismatch" };
-      // Still this link's, the onboarding still open in the generation the
-      // request was asked in, the request not voided.
-      const profile = await this.#stillHeld();
-      if (profile === null) return { admit: false, reason: "generation_stale" };
-      if (profile.onboarding !== "open" || profile.onboardingGeneration !== asked.generation || profile.identityRequest?.id !== asked.requestId) {
-        return { admit: false, reason: "lease_inactive" };
+      let reply: CheckReply = { admit: false, reason: "generation_stale" };
+      try {
+        await this.#fenced(async (_tx, profile) => {
+          if (!this.#holds()) return;
+          if (profile.onboarding !== "open" || profile.onboardingGeneration !== asked.generation || profile.identityRequest?.id !== asked.requestId || finished) {
+            reply = { admit: false, reason: "lease_inactive" };
+            return;
+          }
+          const refusal = this.pacer.checkRemoteGrant(admission);
+          if (refusal !== null) {
+            reply = { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
+            return;
+          }
+          reply = { admit: true, deadlineMono: this.#bridge.toKernel(admission.sendDeadlineMono) };
+          await this.#o.overrides?.beforeCheckAnswer?.(admission.attemptId);
+          // Written now, under the lock (false: the link changed — the
+          // operator failed the paused request already).
+          granted = answerNow(reply);
+        });
+      } catch (error) {
+        // A failure after the grant went (its commit) changes nothing of it.
+        if (!granted) this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: an account read's check could not be made; refused");
       }
-      if (finished) return { admit: false, reason: "lease_inactive" };
-      const refusal = this.pacer.checkRemoteGrant(admission);
-      if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
-      granted = true;
-      return { admit: true, deadlineMono: this.#bridge.toKernel(admission.sendDeadlineMono) };
+      return granted ? reply : reply.admit ? { admit: false, reason: "lease_inactive" } : reply;
     };
     const unregister = client.register(attemptId, {
-      onCheck: (check) => {
+      onCheck: (check, answerNow) => {
         if (firstAnswer !== null) return firstAnswer.then(() => ({ admit: false, reason: "lease_used" as const }));
-        firstAnswer = answerCheck(check.liveSessionFingerprint);
+        firstAnswer = answerCheck(check.liveSessionFingerprint, answerNow);
         return firstAnswer;
       },
       onSent: (message) => {
