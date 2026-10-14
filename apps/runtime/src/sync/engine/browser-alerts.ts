@@ -27,7 +27,9 @@ import { ownerRunState } from "./status.ts";
 //   cdp_lost          control of Chrome lost (CDP, the holder's overflow, the
 //                     fallback release of owner decision №10)
 //
-// A stop that holds until the owner decides pages at once; a failure the
+// A stop that holds until the owner decides pages at once — and stays
+// latched in Hub until his start, whatever an operator that started again
+// says (`page_browsers.halt_reason`); a failure the
 // operator retries by itself (its backoff, plan §4.1) pages only once the
 // browser has stayed down for `SYNC_BROWSER_DOWN_MS`. An alarm holds its kind
 // for the clean window after it (as of the alarm: its latch resolves 10 min
@@ -166,6 +168,15 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     });
   }
 
+  // A halt latched for the owner's decision, whatever the operator says now
+  // (one that started again stands with no reason): until his start.
+  if (browser.haltReason !== null) {
+    const kind = STOP_KIND[browser.haltReason] ?? "browser_down";
+    if (!(kind === "login_required" && browser.mode === "manual_login")) {
+      add({ kind, detail: browser.haltReason, since: browser.haltAt, seenAt: now, context: { latched: true } });
+    }
+  }
+
   // What the operator's state says.
   if (reason !== null) {
     const kind = STOP_KIND[reason];
@@ -198,7 +209,8 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
 
   // Down for a reason no other kind names, or starting for too long.
   const covered = reason !== null && (STOP_KIND[reason] !== undefined || RETRIED_KIND[reason] !== undefined);
-  if (explained === null && !covered && reason !== "owner_stop" && browser.lastStateAt !== null && downFor > SYNC_BROWSER_DOWN_MS) {
+  if (explained === null && !covered && reason !== "owner_stop" && browser.haltReason === null && browser.lastStateAt !== null
+    && downFor > SYNC_BROWSER_DOWN_MS) {
     add({
       kind: "browser_down",
       detail: reason ?? `not_up:${browser.step ?? "unknown"}`,

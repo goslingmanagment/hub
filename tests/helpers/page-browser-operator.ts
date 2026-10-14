@@ -236,6 +236,11 @@ export class FakeOperator {
   readonly wsAnswers: WsAdmitResult[] = [];
   /** The engine's commands, in order. */
   readonly commands: Command[] = [];
+  /** How long Chrome takes to go down after a `stopPage` (its answer comes
+   *  then; the state says the stop at once), and a Chrome that stays up
+   *  (PR 17). */
+  chromeStopMs = 0;
+  chromeStays = false;
   /** The answer to a command but `stopPage` (PR 17: the owner's levers);
    *  null: "not in this fake". */
   onOtherCommand: ((command: Command) => { ok: boolean; detail: string | null } | Promise<{ ok: boolean; detail: string | null }>) | null = null;
@@ -337,9 +342,13 @@ export class FakeOperator {
             }, late.afterMs).unref?.();
           }
           // As the real operator: a stop replaces whatever the page stood for
-          // (a buffer that cannot be opened too).
+          // (a buffer that cannot be opened too) — the state is said at once,
+          // the answer once Chrome is down (`chromeStopMs` later; PR 17).
           this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
-          return { ok: true, detail: "the page is stopped" };
+          if (this.chromeStopMs > 0) await sleep(this.chromeStopMs);
+          return this.chromeStays
+            ? { ok: false, detail: "the exit is closed, but Chrome is still up" }
+            : { ok: true, detail: "the page is stopped" };
         },
         onSite: (message) => {
           this.siteAnswers.push(message);

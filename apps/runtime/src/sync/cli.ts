@@ -35,7 +35,6 @@ import { registerSyncBrowserProfileCommands } from "./browser-profile-cli.ts";
 import {
   askPageBrowserSelfTest,
   awaitPageBrowserCommand,
-  awaitPageBrowserStopped,
   drainPageBrowser,
   pinPageBrowser,
   readPageBrowserStatusesByLabel,
@@ -623,7 +622,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .argument("[page]", "the Fansly page")
     .option("--all", "every page with a browser", false)
     .option("--note <text>", "why (stored with the audit row)")
-    .option("--wait-ms <ms>", `how long to wait for each operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
+    .option("--wait-ms <ms>", `how long to wait for each operator's answer to the stop — once Chrome is down (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
     .action(async (pageLabel: string | undefined, options: { all: boolean; note?: string; waitMs?: number }) => {
       await withContext(deps, async ({ db }) => {
         const stopped = await stopPageBrowsers(db, {
@@ -632,16 +631,18 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
           actor: cliActor(),
           ...(options.note === undefined ? {} : { note: options.note }),
         });
-        // Every page's operator at once (`--all`): the waits overlap.
+        // Every page's operator at once (`--all`): the waits overlap. A stop
+        // is confirmed by the operator's answer to its own request, which
+        // comes once Chrome is down.
         const confirmed = await Promise.all(stopped.map(async (entry) => {
-          const page = await findSyncPageByLabel(db, entry.page);
-          const since = new Date(entry.stoppedAt);
-          return { ...entry, operatorConfirmed: await awaitPageBrowserStopped(db, page.pageId, { since, waitMs: options.waitMs ?? BROWSER_WAIT_MS }) };
+          const ran = await awaitPageBrowserCommand(db, entry.command.id, { waitMs: options.waitMs ?? BROWSER_WAIT_MS });
+          return { ...entry, operatorConfirmed: ran?.ok === true, confirmation: ran?.detail ?? null };
         }));
         deps.print(json({
           stopped: confirmed,
           follows: "the page is paused at once; its owner tells the operator to close the exit and stop Chrome. "
-            + "operatorConfirmed=false: not said yet (no owner runs the page, or its operator cannot be reached) — the engine admits nothing of the page meanwhile",
+            + "operatorConfirmed=false: the operator has not answered this stop yet (no owner runs the page, its operator cannot be reached, "
+            + "or Chrome did not go down) — the engine admits nothing of the page meanwhile",
         }));
       });
     });
@@ -688,13 +689,16 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
           snapshot: true,
           ...(options.note === undefined ? {} : { note: options.note }),
         });
-        const page = await findSyncPageByLabel(db, pageLabel);
-        const confirmed = await awaitPageBrowserStopped(db, page.pageId, { since: new Date(stopped!.stoppedAt), waitMs: options.waitMs ?? BROWSER_WAIT_MS });
+        // Quiet only once the operator answered this very stop — after
+        // Chrome is down — under the page's owner that took it.
+        const ran = await awaitPageBrowserCommand(db, stopped!.command.id, { waitMs: options.waitMs ?? BROWSER_WAIT_MS });
+        const confirmed = ran?.ok === true;
         const [status] = await readPageBrowserStatusesByLabel(db, { pageLabel });
         const profileId = status!.browser.profileId;
         deps.print(json({
           ...stopped,
           operatorConfirmed: confirmed,
+          confirmation: ran === null ? null : { ok: ran.ok, detail: ran.detail, ownerGeneration: ran.takenGeneration, doneAt: ran.doneAt?.toISOString() ?? null },
           profileId,
           volumes: { profile: `pb-profile-${profileId}`, buffer: `pb-buffer-${profileId}` },
           follows: confirmed

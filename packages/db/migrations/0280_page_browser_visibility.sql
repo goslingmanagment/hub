@@ -21,17 +21,33 @@
 --                                 the operator's last alarm (spec §6.1
 --                                 `alarm`: no secrets by the protocol; the
 --                                 engine keeps only its scalar details)
---   page_browsers.owner_stop_at, owner_stop_by, owner_stop_paused
+--   page_browsers.owner_stop_at, owner_stop_by
 --                                 the owner's `sync browser stop` (plan
 --                                 §4.11: the engine pauses the page, the
---                                 operator closes its exit): when, by whom,
---                                 and whether the stop put the page on its
---                                 pause (so `sync browser start` lifts only
---                                 that one); null: not stopped by the owner
+--                                 operator closes its exit): when and by
+--                                 whom; null: not stopped by the owner
+--   page_browsers.halt_reason, halt_at
+--                                 the browser stopped for the owner's
+--                                 decision (a changed exit IP, a guard that
+--                                 failed: a halt the operator holds until it
+--                                 is started), latched here when the engine
+--                                 first hears it: an operator that starts
+--                                 again knows nothing of it, so no state of
+--                                 the operator lifts it — only the owner's
+--                                 audited `sync browser start`
+--   sync_pages.browser_stop_paused
+--                                 the page's whole pause is the one the
+--                                 owner's browser stop put on it (as
+--                                 `manual_login_paused` is the login's, PR
+--                                 15): `sync browser start` lifts only that
+--                                 pause, and any change of the whole pause
+--                                 by the owner's own lever makes it his
 --
 --   page_browser_commands         the owner's one-shot commands to a page's
---                                 browser (`sync browser start` of a halted
---                                 one, `sync browser selftest`), carried out
+--                                 browser (`sync browser start`, `stop` and
+--                                 `snapshot` — its stop confirmed by the
+--                                 operator once Chrome is down — and
+--                                 `selftest`), carried out
 --                                 by the engine that owns the page, over its
 --                                 link — a command reaches a browser only from
 --                                 the page's current owner (plan §4.8, §4.13).
@@ -42,13 +58,16 @@
 --                                 the page the profile served when asked.
 --
 -- LOCKING: page_browsers is tiny (one row per browser profile); the columns
--- are nullable or carry a constant default (catalog only). The new table is
--- empty. lock_timeout keeps each wait brief: if a lock is not had in 5 s the
--- migration aborts and the deploy rolls back.
+-- are nullable or carry a constant default (catalog only). sync_pages has a
+-- row per Fansly page and every actor transaction of the previous image
+-- holds a row lock there: its column carries a constant default (catalog
+-- only, no rewrite). The new table is empty. lock_timeout keeps each wait
+-- brief: if a lock is not had in 5 s the migration aborts and the deploy
+-- rolls back.
 --
 -- Rollback-compatible: the previous image never names these columns or the
--- table, and updates page_browsers by named columns only; nothing writes them
--- before a page runs on its browser.
+-- table, and updates page_browsers and sync_pages by named columns only;
+-- nothing writes them before a page has a browser.
 
 set local lock_timeout = '5s';
 
@@ -64,7 +83,10 @@ alter table page_browsers
   add column if not exists alarm_detail jsonb,
   add column if not exists owner_stop_at timestamptz,
   add column if not exists owner_stop_by text,
-  add column if not exists owner_stop_paused boolean not null default false;
+  add column if not exists halt_reason text,
+  add column if not exists halt_at timestamptz;
+
+alter table sync_pages add column if not exists browser_stop_paused boolean not null default false;
 
 alter table page_browsers
   drop constraint if exists page_browsers_visibility_check,
@@ -73,7 +95,7 @@ alter table page_browsers
     and (alarm_kind is null) = (alarm_at is null)
     and (alarm_detail is null or jsonb_typeof(alarm_detail) = 'object')
     and (owner_stop_at is null) = (owner_stop_by is null)
-    and (owner_stop_at is not null or not owner_stop_paused)
+    and (halt_reason is null) = (halt_at is null)
   );
 
 comment on column page_browsers.down_since is
@@ -82,8 +104,10 @@ comment on column page_browsers.alarm_kind is
   'Project Browser (0280): the operator''s last alarm (spec §6.1), with alarm_at and its scalar details (no secrets).';
 comment on column page_browsers.owner_stop_at is
   'Project Browser (0280): the owner stopped the page''s browser (sync browser stop): the engine keeps its exit closed and Chrome stopped until sync browser start.';
-comment on column page_browsers.owner_stop_paused is
-  'Project Browser (0280): the owner''s stop put the page on its pause (sync browser start lifts only that pause).';
+comment on column page_browsers.halt_reason is
+  'Project Browser (0280): the browser stopped for the owner''s decision (its stop reason), latched when the engine first heard it; no state of the operator lifts it, only the owner''s audited sync browser start.';
+comment on column sync_pages.browser_stop_paused is
+  'Project Browser (0280): the page''s whole pause is the one the owner''s browser stop put on it; sync browser start lifts only that one, and the owner''s own change of the whole pause makes it his.';
 
 create table if not exists page_browser_commands (
   id bigserial primary key,
@@ -101,7 +125,7 @@ create table if not exists page_browser_commands (
   ok boolean,
   detail text,
   constraint page_browser_commands_command_id_key unique (command_id),
-  constraint page_browser_commands_kind_check check (kind in ('restartBrowser', 'selfTest')),
+  constraint page_browser_commands_kind_check check (kind in ('restartBrowser', 'stopPage', 'selfTest')),
   constraint page_browser_commands_done_check check ((done_at is null) = (ok is null)),
   constraint page_browser_commands_taken_check check ((taken_at is null) = (taken_generation is null))
 );
@@ -109,13 +133,13 @@ create table if not exists page_browser_commands (
 create index if not exists page_browser_commands_pending_idx on page_browser_commands (page_id, id) where done_at is null;
 
 comment on table page_browser_commands is
-  'Project Browser (0280): the owner''s one-shot commands to a page''s browser (sync browser start|selftest), run once by the engine that owns the page over its link; never run after expires_at.';
+  'Project Browser (0280): the owner''s one-shot commands to a page''s browser (sync browser start|stop|snapshot|selftest), run once by the engine that owns the page over its link; never run after expires_at.';
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'read_only') then
     grant select (retry_at, down_since, stop_since, delivery_p50_ms, delivery_p95_ms, delivery_at, alarm_kind, alarm_at,
-      alarm_detail, owner_stop_at, owner_stop_by, owner_stop_paused)
+      alarm_detail, owner_stop_at, owner_stop_by, halt_reason, halt_at)
       on page_browsers to read_only;
     grant select on page_browser_commands to read_only;
   end if;

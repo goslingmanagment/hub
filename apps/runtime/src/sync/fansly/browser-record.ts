@@ -1,4 +1,6 @@
 import {
+  isOwnerDecisionHalt,
+  latchPageBrowserHalt,
   recordPageBrowserAlarm,
   recordPageBrowserDelivery,
   recordPageBrowserLinkError,
@@ -20,6 +22,11 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //   moved, else at most every `stateRefreshMs` — the alert evaluator's
 //   `browser_down` reads its age (no state for 2 min while the page's owner
 //   runs), the «Браузер» block shows it;
+// - a halt for the owner's decision it says (a stop reason it does not retry
+//   by itself, `isOwnerDecisionHalt`), latched on the profile's row at once
+//   and again until it is written — whatever states follow: an operator that
+//   starts again stands with no reason, and only the owner's `sync browser
+//   start` lifts the latch;
 // - its link refused (`token`, `protocol_version`, spec §6.3 rule 6) or
 //   broken by a protocol error (`protocol_error`, rule 3) — cleared by the
 //   next state;
@@ -84,6 +91,9 @@ export class BrowserRecorder {
   #writtenKey: string | null = null;
   #writtenAt = Number.NEGATIVE_INFINITY;
   #linkError: string | null = null;
+  /** A halt heard and not latched yet (its reason). */
+  #halt: string | null = null;
+  #latching: Promise<void> | null = null;
   #delivery: Array<{ atMono: number; lagMs: number }> = [];
   #deliveryWrittenMono = Number.NEGATIVE_INFINITY;
   #deliveryWriting: Promise<void> | null = null;
@@ -113,6 +123,7 @@ export class BrowserRecorder {
     for (const unlisten of this.#unlisten.splice(0)) unlisten();
     await this.#writing?.catch(() => undefined);
     await this.#deliveryWriting?.catch(() => undefined);
+    await this.#latching?.catch(() => undefined);
   }
 
   /** The intake committed events: how long each took from the operator's
@@ -127,6 +138,7 @@ export class BrowserRecorder {
    *  delivery's figures once they are due (the timer; tests). */
   look(): void {
     if (this.#stopped) return;
+    this.#latch();
     this.#writeState();
     this.#deliveryWriting ??= this.#writeDelivery().finally(() => {
       this.#deliveryWriting = null;
@@ -137,13 +149,35 @@ export class BrowserRecorder {
   async flushed(): Promise<void> {
     while (this.#writing !== null) await this.#writing.catch(() => undefined);
     await this.#deliveryWriting?.catch(() => undefined);
+    await this.#latching?.catch(() => undefined);
   }
 
   #onState(state: State): void {
     if (this.#stopped) return;
+    if (isOwnerDecisionHalt(state)) {
+      this.#halt ??= state.stopReason;
+      this.#latch();
+    }
     this.#latest = state;
     this.#unwritten = true;
     this.#writeState();
+  }
+
+  /** The halt heard, latched in Hub (tried again on every look until it is). */
+  #latch(): void {
+    const reason = this.#halt;
+    if (reason === null || this.#latching !== null) return;
+    const { db, profileId, pageId, logger } = this.#d;
+    this.#latching = latchPageBrowserHalt(db, { profileId, reason })
+      .then((latched) => {
+        if (this.#halt === reason) this.#halt = null;
+        if (latched) logger.warn({ pageId, reason }, "Fansly sync browser: the browser stands for the owner's decision; latched until sync browser start");
+      }, (error: unknown) => {
+        logger.warn({ pageId, reason, err: errorName(error) }, "Fansly sync browser: a halt could not be latched yet; tried again");
+      })
+      .finally(() => {
+        this.#latching = null;
+      });
   }
 
   /** The latest state the operator said, written — at once when it differs

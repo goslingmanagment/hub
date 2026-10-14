@@ -1011,13 +1011,19 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   link refused or broken (`link_error`), its last `alarm`, and the delivery of its events from their instant to the
   intake's commit (p50/p95). The page's status carries a `browser` block only for a page with a profile bound to it.
   The owner's levers (`sync browser stop|start|selftest|snapshot|pin-ip|drain`, audited `admin.sync_browser_*`) are
-  carried out by the page's owner over its link: its stop (`page_browsers.owner_stop_*`, the page paused) is kept by
-  `stopPage` until the operator says it stopped; a slot on the browser starts a browser that stands
-  (`restartBrowser`: never started, or stopped by a leave or a stop since lifted) unless the page is paused, stopped
-  by the owner or in the manual login — never one halted for the owner's decision; the owner's one-shot commands
-  (`page_browser_commands`: a start, a self-test with the exit closed for it) are taken by the owner of the page and
-  run once by their id, never past their expiry. A leave records and keeps the owner's stop, nothing more. The
-  journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
+  carried out by the page's owner over its link: the owner's one-shot commands (`page_browser_commands`: a stop, a
+  start, a self-test with the exit closed for it) are taken by the owner of the page and run once by their id, never
+  past their expiry — a stop's answer comes once Chrome is down and is the stop's confirmation (a snapshot waits for
+  it, never for a state); the owner's stop (`page_browsers.owner_stop_*`) is kept by `stopPage`; a slot on the
+  browser starts a browser that stands (never started, or stopped by a leave or a stop since lifted). Every start —
+  the slot's, the owner's, a self-test's `openExit` — passes one guard read fresh right before it goes
+  (`browserStartRefusal`: the page on its browser, no leave pending, this owner's generation, no owner stop, no
+  halt, no pause, no login). A halt for the owner's decision is latched in Hub when it is first heard
+  (`page_browsers.halt_reason`): an operator that starts again stands with no reason and lifts nothing; only the
+  owner's audited `sync browser start` does. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`)
+  until the owner changes the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start`
+  lifts only a pause still the stop's. A leave records and keeps the owner's stop, nothing more. The journals stay
+  on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
   and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the

@@ -1615,10 +1615,14 @@ export class Operator {
         return { ok: true, detail: "the exit is closed" };
       case "openExit":
         return this.#openExitCommand();
-      case "stopPage":
+      case "stopPage": {
         this.#exitHeld = false;
         await this.#halt("owner_stop", "the engine's stopPage", "stop");
-        return { ok: true, detail: "the page is stopped" };
+        // The answer is the stop's confirmation (a profile's snapshot waits
+        // for it): only once Chrome's process is down — never on the way.
+        const up = await this.chrome.isUp().catch(() => true);
+        return up ? { ok: false, detail: "the exit is closed, but Chrome is still up" } : { ok: true, detail: "the page is stopped: the exit closed, Chrome down" };
+      }
       case "restartBrowser":
         this.#exitHeld = false;
         void this.#launch(true, "the engine's restartBrowser");

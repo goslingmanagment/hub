@@ -71,18 +71,24 @@ export interface PageBrowserRow {
   alarmAt: Date | null;
   alarmDetail: Record<string, string | number | boolean> | null;
   /** The owner's `sync browser stop` (0280): when and by whom (null: not
-   *  stopped by the owner), and whether it put the page on its pause. */
+   *  stopped by the owner). Whether it put the page's pause is the page's
+   *  (`sync_pages.browser_stop_paused`). */
   ownerStopAt: Date | null;
   ownerStopBy: string | null;
-  ownerStopPaused: boolean;
+  /** The browser stopped for the owner's decision (0280): the halt's
+   *  reason and when the engine first heard it — latched, lifted only by the
+   *  owner's `sync browser start`. Null: none. */
+  haltReason: string | null;
+  haltAt: Date | null;
 }
 
 type SqlRow = Omit<
   PageBrowserRow,
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
-  | "alarmAt" | "alarmDetail" | "ownerStopAt"
+  | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt"
 > & {
+  haltAt: Date | string | null;
   retryAt: Date | string | null;
   downSince: Date | string | null;
   stopSince: Date | string | null;
@@ -145,7 +151,8 @@ const publicColumns = sql`
   b.alarm_detail as "alarmDetail",
   b.owner_stop_at as "ownerStopAt",
   b.owner_stop_by as "ownerStopBy",
-  b.owner_stop_paused as "ownerStopPaused"
+  b.halt_reason as "haltReason",
+  b.halt_at as "haltAt"
 `;
 
 const columns = sql`
@@ -186,7 +193,7 @@ function rowOf(row: SqlRow): PageBrowserRow {
     alarmAt: dateOf(row.alarmAt),
     alarmDetail: scalarDetailOf(row.alarmDetail),
     ownerStopAt: dateOf(row.ownerStopAt),
-    ownerStopPaused: row.ownerStopPaused === true,
+    haltAt: dateOf(row.haltAt),
   };
 }
 
@@ -500,19 +507,18 @@ export async function recordPageBrowserAlarm(
 
 /**
  * The owner stops the page's browser (`sync browser stop`, plan §4.11; 0280):
- * the mark the engine keeps the browser stopped by, its author, and whether
- * this stop put the page on its pause. A page already stopped by the owner
- * keeps its first mark. False: no profile bound to the page.
+ * the mark the engine keeps the browser stopped by, and its author. A page
+ * already stopped by the owner keeps its first mark. Null: no profile bound
+ * to the page.
  */
 export async function setPageBrowserOwnerStop(
   db: Database,
-  input: { pageId: number; by: string; pausedByStop: boolean },
+  input: { pageId: number; by: string },
 ): Promise<{ profileId: string; stoppedAt: Date; already: boolean } | null> {
   const result = await db.execute<{ profileId: string; stoppedAt: Date | string; already: boolean }>(sql`
     update page_browsers b
        set owner_stop_at = coalesce(b.owner_stop_at, clock_timestamp()),
            owner_stop_by = coalesce(b.owner_stop_by, ${input.by}),
-           owner_stop_paused = case when b.owner_stop_at is null then ${input.pausedByStop} else b.owner_stop_paused end,
            updated_at = clock_timestamp()
       from (select profile_id, owner_stop_at is not null as already from page_browsers where page_id = ${input.pageId}::bigint for update) old
      where b.profile_id = old.profile_id
@@ -522,22 +528,60 @@ export async function setPageBrowserOwnerStop(
   return row === undefined ? null : { profileId: row.profileId, stoppedAt: dateOf(row.stoppedAt)!, already: row.already === true };
 }
 
-/** The owner starts the page's browser again (`sync browser start`): the
- *  stop's mark is lifted. Returns what it was (null: no profile bound). */
+/** The owner starts the page's browser again (`sync browser start`, his
+ *  decision): the stop's mark and a latched halt are lifted. Returns what
+ *  they were (null: no profile bound). */
 export async function clearPageBrowserOwnerStop(
   db: Database,
   input: { pageId: number },
-): Promise<{ profileId: string; wasStopped: boolean; pausedByStop: boolean } | null> {
-  const result = await db.execute<{ profileId: string; wasStopped: boolean; pausedByStop: boolean }>(sql`
+): Promise<{ profileId: string; wasStopped: boolean; halt: { reason: string; at: Date } | null } | null> {
+  const result = await db.execute<{ profileId: string; wasStopped: boolean; haltReason: string | null; haltAt: Date | string | null }>(sql`
     update page_browsers b
-       set owner_stop_at = null, owner_stop_by = null, owner_stop_paused = false, updated_at = clock_timestamp()
-      from (select profile_id, owner_stop_at is not null as was_stopped, owner_stop_paused
+       set owner_stop_at = null, owner_stop_by = null, halt_reason = null, halt_at = null, updated_at = clock_timestamp()
+      from (select profile_id, owner_stop_at is not null as was_stopped, halt_reason, halt_at
               from page_browsers where page_id = ${input.pageId}::bigint for update) old
      where b.profile_id = old.profile_id
-    returning b.profile_id::text as "profileId", old.was_stopped as "wasStopped", old.owner_stop_paused as "pausedByStop"
+    returning b.profile_id::text as "profileId", old.was_stopped as "wasStopped", old.halt_reason as "haltReason", old.halt_at as "haltAt"
   `);
   const row = result.rows[0];
-  return row === undefined ? null : { profileId: row.profileId, wasStopped: row.wasStopped === true, pausedByStop: row.pausedByStop === true };
+  if (row === undefined) return null;
+  return {
+    profileId: row.profileId,
+    wasStopped: row.wasStopped === true,
+    halt: row.haltReason === null ? null : { reason: row.haltReason, at: dateOf(row.haltAt)! },
+  };
+}
+
+/** The operator's stop reasons that are no halt for the owner's decision:
+ *  the owner's own stop, and a buffer that does not open (the operator
+ *  stands again by itself once it opens). */
+const NOT_THE_OWNERS_DECISION: ReadonlySet<string> = new Set(["owner_stop", "buffer_unavailable"]);
+
+/** A state of the operator that stands for the owner's decision: a stop
+ *  reason it does not retry by itself (no next retry), but the owner's own
+ *  stop and an unopenable buffer. A reason this build does not know counts
+ *  (fail closed). */
+export function isOwnerDecisionHalt(state: { stopReason: string | null; retryAtWall: number | null }): boolean {
+  return state.stopReason !== null && state.retryAtWall === null && !NOT_THE_OWNERS_DECISION.has(state.stopReason);
+}
+
+/**
+ * The browser stopped for the owner's decision (0280): latched on the
+ * profile's row when the engine first hears it — its first reason and
+ * instant kept — and lifted only by the owner's `sync browser start`
+ * (`clearPageBrowserOwnerStop`): an operator that starts again stands with no
+ * reason, and nothing it says lifts the latch. True: latched now or already.
+ */
+export async function latchPageBrowserHalt(db: Database, input: { profileId: string; reason: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers
+       set halt_reason = coalesce(halt_reason, ${input.reason}),
+           halt_at = coalesce(halt_at, clock_timestamp()),
+           updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid
+    returning profile_id
+  `);
+  return result.rows.length === 1;
 }
 
 /** A profile bound to a page, with the page's label and transport and where
@@ -550,6 +594,8 @@ export interface PageBrowserOfPage {
   transport: "node" | "browser";
   /** The page's pending leave of its browser (0278): since when. */
   leaveSince: Date | null;
+  /** The page's whole pause is the owner's browser stop's (0280). */
+  browserStopPaused: boolean;
   /** The intake (0276): the operator's instant of the last event committed,
    *  the last commit, and a halted buffer (null: none). */
   intake: {
@@ -566,13 +612,14 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
     label: string | null;
     transport: string | null;
     leaveSince: Date | string | null;
+    browserStopPaused: boolean | null;
     eventsLastWall: Date | string | null;
     eventsUpdatedAt: Date | string | null;
     haltedReason: string | null;
     haltedAt: Date | string | null;
   }>(sql`
     select ${publicColumns}, ''::text as "encryptedEngineToken", ''::text as "encryptedApiToken", ''::text as "encryptedVncPassword",
-           p.label, sp.transport, sp.browser_leave_requested_at as "leaveSince",
+           p.label, sp.transport, sp.browser_leave_requested_at as "leaveSince", sp.browser_stop_paused as "browserStopPaused",
            b.events_last_wall as "eventsLastWall", b.events_updated_at as "eventsUpdatedAt",
            b.events_halted_reason as "haltedReason", b.events_halted_at as "haltedAt"
       from page_browsers b
@@ -582,7 +629,7 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
      order by p.label, b.page_id
   `);
   return result.rows.map((row) => {
-    const { label, transport, leaveSince, eventsLastWall, eventsUpdatedAt, haltedReason, haltedAt, ...rest } = row;
+    const { label, transport, leaveSince, browserStopPaused, eventsLastWall, eventsUpdatedAt, haltedReason, haltedAt, ...rest } = row;
     const browser = rowOf(rest as SqlRow);
     return {
       browser,
@@ -590,6 +637,7 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
       pageLabel: label,
       transport: transport === "browser" ? "browser" : "node",
       leaveSince: dateOf(leaveSince),
+      browserStopPaused: browserStopPaused === true,
       intake: {
         lastEventAt: dateOf(eventsLastWall),
         lastCommitAt: dateOf(eventsUpdatedAt),
@@ -599,15 +647,32 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
   });
 }
 
-/** What a page's browser is to be, as its owner looks every few seconds
- *  (0280): the owner's stop, the page's pause and its transport. Null: no
- *  such profile, or it serves no page. */
-export async function readPageBrowserControl(
-  db: Database,
-  input: { profileId: string },
-): Promise<{ pageId: number; ownerStopAt: Date | null; pausedAll: boolean; transport: "node" | "browser" | null } | null> {
-  const result = await db.execute<{ pageId: string; ownerStopAt: Date | string | null; pausedAll: boolean | null; transport: string | null }>(sql`
-    select b.page_id::text as "pageId", b.owner_stop_at as "ownerStopAt", sp.paused_all as "pausedAll", sp.transport
+/** What a page's browser may be told, read fresh by the page's owner right
+ *  before it commands it (0280): the page's transport, its pending leave and
+ *  its owner generation, its pause, the owner's stop and a latched halt. */
+export interface PageBrowserControlRead {
+  pageId: number;
+  transport: "node" | "browser" | null;
+  /** The pending leave of the page's browser (0278): its generation. */
+  leaveGeneration: bigint | null;
+  ownerGeneration: bigint | null;
+  pausedAll: boolean;
+  /** The whole pause is the one the owner's browser stop put (0280). */
+  browserStopPaused: boolean;
+  ownerStopAt: Date | null;
+  haltReason: string | null;
+}
+
+/** The control read of a profile (null: no such profile, or it serves no
+ *  page). */
+export async function readPageBrowserControl(db: Database, input: { profileId: string }): Promise<PageBrowserControlRead | null> {
+  const result = await db.execute<{
+    pageId: string; transport: string | null; leaveGeneration: string | null; ownerGeneration: string | null;
+    pausedAll: boolean | null; browserStopPaused: boolean | null; ownerStopAt: Date | string | null; haltReason: string | null;
+  }>(sql`
+    select b.page_id::text as "pageId", sp.transport, sp.browser_leave_generation::text as "leaveGeneration",
+           sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
+           b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason"
       from page_browsers b
       left join sync_pages sp on sp.page_id = b.page_id
      where b.profile_id = ${input.profileId}::uuid and b.page_id is not null
@@ -616,8 +681,12 @@ export async function readPageBrowserControl(
   if (row === undefined) return null;
   return {
     pageId: Number(row.pageId),
-    ownerStopAt: dateOf(row.ownerStopAt),
-    pausedAll: row.pausedAll === true,
     transport: row.transport === "browser" ? "browser" : row.transport === "node" ? "node" : null,
+    leaveGeneration: row.leaveGeneration === null ? null : BigInt(row.leaveGeneration),
+    ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
+    pausedAll: row.pausedAll === true,
+    browserStopPaused: row.browserStopPaused === true,
+    ownerStopAt: dateOf(row.ownerStopAt),
+    haltReason: row.haltReason,
   };
 }

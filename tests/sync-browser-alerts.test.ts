@@ -76,7 +76,8 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     alarmDetail: null,
     ownerStopAt: null,
     ownerStopBy: null,
-    ownerStopPaused: false,
+    haltReason: null,
+    haltAt: null,
     ...overrides,
   };
 }
@@ -166,6 +167,18 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
       .toEqual({ protocol_changed: "header_mismatch" });
     // A person at the login is no login_required page.
     expect(kinds({ browser: { step: "exit_closed", exitOpen: false, stopReason: "login_required", mode: "manual_login" } })).toEqual({});
+  });
+
+  it("a halt latched for the owner's decision holds its kind whatever the operator says now (Astra PR 17, P1-1)", () => {
+    const latched = { haltReason: "header_mismatch", haltAt: at(-5 * MINUTE) };
+    // An operator that started again: it stands with no reason, down for long.
+    const restarted = { ...latched, step: "exit_closed", exitOpen: false, stopReason: null, downSince: at(-5 * MINUTE) };
+    expect(kinds({ browser: restarted })).toEqual({ protocol_changed: "header_mismatch" });
+    expect(evaluateBrowserAlerts(facts({ browser: restarted }))[0]).toMatchObject({ since: at(-5 * MINUTE), context: { latched: true } });
+    // Paused by the owner: a halt still pages (it waits for his decision).
+    expect(kinds({ browser: restarted, page: { pausedAll: true } })).toEqual({ protocol_changed: "header_mismatch" });
+    // A reason this build does not know: browser_down.
+    expect(kinds({ browser: { ...restarted, haltReason: "a_newer_halt" } })).toEqual({ browser_down: "a_newer_halt" });
   });
 
   it("the last self-test failed: selftest_failed, with the mechanism", () => {

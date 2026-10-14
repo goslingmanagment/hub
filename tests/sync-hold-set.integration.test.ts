@@ -39,6 +39,8 @@ import {
   holdSyncPageManualLoginPause,
   endSyncPageManualLogin,
   requestBrowserDrain,
+  pausePageForBrowserStop,
+  liftBrowserStopPause,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncPages,
   trustSyncPageCredentials,
@@ -260,7 +262,7 @@ const UPDATES = [
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
   "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode", "setSyncPageTransport",
-  "confirmBrowserLeave", "assertBrowserLeft", "requestBrowserDrain",
+  "confirmBrowserLeave", "assertBrowserLeft", "requestBrowserDrain", "pausePageForBrowserStop", "liftBrowserStopPause",
   "setSyncPageManualLogin", "holdSyncPageManualLoginPause", "endSyncPageManualLogin",
 ];
 
@@ -379,6 +381,14 @@ async function runEveryPageRowUpdate(
     // The owner's drain of the stopped browser's buffer (PR 17): a pending leave again, the page on Node.
     ["requestBrowserDrain", pageId, async () => expect(await db.transaction(async (tx) => requestBrowserDrain(tx as unknown as Database, { pageId })))
       .toEqual({ kind: "requested", leave: generation })],
+    // The owner's browser stop pauses the page; his start lifts that pause (PR 17).
+    ["pausePageForBrowserStop", pageId, async () => {
+      await db.transaction(async (tx) => setPagePause(tx as unknown as Database, { pageId, all: false }));
+      expect(await db.transaction(async (tx) => pausePageForBrowserStop(tx as unknown as Database, { pageId, note: "stop" })))
+        .toEqual({ pausedByStop: true });
+    }],
+    ["liftBrowserStopPause", pageId, async () => expect(await db.transaction(async (tx) => liftBrowserStopPause(tx as unknown as Database, { pageId })))
+      .toBe(true)],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 

@@ -440,6 +440,23 @@ describe("commands", () => {
     await started(s);
   });
 
+  it("stopPage is answered as done only once Chrome is down: a Chrome that stays up confirms no stop (Astra PR 17, P1-3)", async () => {
+    const s = await setUp();
+    await started(s);
+    // Chrome neither quits on Browser.close nor goes down at s6's stop.
+    s.chrome.handlers.set("Browser.close", () => ({}));
+    s.control.stop = async () => {
+      s.control.calls.push("stop");
+    };
+    const answer = await command(s.engine, "stopPage");
+    expect(answer).toMatchObject({ ok: false, detail: "the exit is closed, but Chrome is still up" });
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.chrome.running).toBe(true);
+    // Once it is down, a stop is confirmed.
+    await s.chrome.shutdown();
+    expect(await command(s.engine, "stopPage")).toMatchObject({ ok: true });
+  });
+
   it("restartBrowser on a running page starts it again at once: the previous Chrome's holder going is no failure", async () => {
     const s = await setUp();
     await started(s);

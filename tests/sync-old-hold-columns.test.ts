@@ -220,6 +220,9 @@ describe("the statements that write the page row", () => {
       "update assertBrowserLeft",
       // The owner's drain of a stopped browser's buffer (PR 17): a pending leave.
       "update requestBrowserDrain",
+      // The owner's browser stop's pause, and its start lifting only it (PR 17).
+      "update pausePageForBrowserStop",
+      "update liftBrowserStopPause",
       "update setSyncPageMode",
       "insert createLiveSyncPage",
       "update trustSyncPageCredentials",

@@ -3,15 +3,17 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 
 // Project Browser (plan §4.11, §4.13; 0280, PR 17): the owner's one-shot
-// commands to a page's browser — `sync browser start` of a halted browser
-// (`restartBrowser`) and `sync browser selftest` (`selfTest`). The CLI asks;
+// commands to a page's browser — `sync browser start` (`restartBrowser`),
+// `stop` and `snapshot` (`stopPage`: the operator answers once Chrome is
+// down, so its answer is the stop's confirmation) and `sync browser
+// selftest` (`selfTest`). The CLI asks;
 // the engine that owns the page runs each once over its link to the operator
 // (a command reaches a browser only from the page's current owner, plan §4.8)
 // and writes what the operator answered. `command_id` is the operator's id of
 // the command: one run per id, also when a new owner takes it again after a
 // crash. A command nobody took before `expires_at` is never run.
 
-export const PAGE_BROWSER_COMMAND_KINDS = ["restartBrowser", "selfTest"] as const;
+export const PAGE_BROWSER_COMMAND_KINDS = ["restartBrowser", "stopPage", "selfTest"] as const;
 export type PageBrowserCommandKind = (typeof PAGE_BROWSER_COMMAND_KINDS)[number];
 
 export interface PageBrowserCommandRow {

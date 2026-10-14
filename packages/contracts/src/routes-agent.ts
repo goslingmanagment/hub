@@ -2586,8 +2586,10 @@ export const agentSyncBrowserStatusSchema = z.object({
     downSince: agentIsoTimestamp.nullable(),
     stopSince: agentIsoTimestamp.nullable(),
   }).strict(),
-  /** The owner's `sync browser stop`; `paused`: it put the page on its pause. */
+  /** The owner's `sync browser stop`; `paused`: the page's pause is still the one it put. */
   ownerStop: z.object({ at: agentIsoTimestamp, by: z.string(), paused: z.boolean() }).strict().nullable(),
+  /** Stopped for the owner's decision (a changed exit IP, a guard that failed), latched until `sync browser start`. */
+  halt: z.object({ reason: z.string(), at: agentIsoTimestamp }).strict().nullable(),
   login: z.object({ needed: z.boolean(), why: z.string().nullable() }).strict(),
   session: z.object({ present: z.boolean(), accountId: z.string().nullable() }).strict(),
   proxy: z.object({

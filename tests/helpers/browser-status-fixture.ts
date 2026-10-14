@@ -15,6 +15,7 @@ export function browserStatus(overrides: Partial<AgentSyncBrowserStatus> = {}): 
     link: { lastStateAt: ago(4_000), stateAgeMs: 4_000, error: null },
     state: { step: "ready", stopReason: null, retryAt: null, exitOpen: true, mode: "automation", downSince: null, stopSince: null },
     ownerStop: null,
+    halt: null,
     login: { needed: false, why: null },
     session: { present: true, accountId: "300000000000000001" },
     proxy: { pinnedExitIp: "203.0.113.7", pinnedAt: ago(86_400_000), exitIp: "203.0.113.7", matches: true, problem: null },

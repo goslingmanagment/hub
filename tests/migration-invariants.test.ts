@@ -534,22 +534,23 @@ describe("database migration invariants", () => {
     expect(visibility).toContain("set local lock_timeout = '5s';");
     for (const column of ["retry_at timestamptz", "down_since timestamptz", "stop_since timestamptz", "delivery_p50_ms bigint",
       "delivery_p95_ms bigint", "delivery_at timestamptz", "alarm_kind text", "alarm_at timestamptz", "alarm_detail jsonb",
-      "owner_stop_at timestamptz", "owner_stop_by text"]) {
+      "owner_stop_at timestamptz", "owner_stop_by text", "halt_reason text", "halt_at timestamptz"]) {
       expect(visibility).toContain(`add column if not exists ${column}`);
       // Nullable without a default: catalog only.
       expect(visibility.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
     }
-    // A constant default: catalog only.
-    expect(visibility).toContain("add column if not exists owner_stop_paused boolean not null default false");
+    // A constant default: catalog only — on sync_pages too, where every actor
+    // of the previous image holds a row lock (waited for 5 s at most).
+    expect(visibility).toContain("alter table sync_pages add column if not exists browser_stop_paused boolean not null default false;");
     // The owner's commands: a profile's (they go with it), one run per id, never past their expiry.
     expect(visibility).toContain("profile_id uuid not null references page_browsers(profile_id) on delete cascade");
     expect(visibility).toContain("constraint page_browser_commands_command_id_key unique (command_id)");
-    expect(visibility).toContain("check (kind in ('restartBrowser', 'selfTest'))");
+    expect(visibility).toContain("check (kind in ('restartBrowser', 'stopPage', 'selfTest'))");
     // No direct child of pages (the page erasure's inventory is unchanged).
     expect(visibility).not.toMatch(/references pages/);
     // No statement writes a row: only the engine and the owner's levers do.
     expect(visibility).not.toMatch(/^\s*(update|insert)\b/im);
-    expect(visibility).toMatch(/grant select \(retry_at, down_since, stop_since, delivery_p50_ms, delivery_p95_ms, delivery_at, alarm_kind, alarm_at,\s+alarm_detail, owner_stop_at, owner_stop_by, owner_stop_paused\)\s+on page_browsers to read_only;/);
+    expect(visibility).toMatch(/grant select \(retry_at, down_since, stop_since, delivery_p50_ms, delivery_p95_ms, delivery_at, alarm_kind, alarm_at,\s+alarm_detail, owner_stop_at, owner_stop_by, halt_reason, halt_at\)\s+on page_browsers to read_only;/);
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0280_page_browser_visibility.sql"');
   });

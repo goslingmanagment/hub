@@ -1,9 +1,11 @@
 import {
   finishPageBrowserCommand,
+  isOwnerDecisionHalt,
   readPageBrowserControl,
   takePageBrowserCommand,
   type Database,
   type PageBrowserCommandRow,
+  type PageBrowserControlRead,
 } from "@agency_hub_core/db";
 
 import type { CommandKind, CommandResult, State } from "../../services/egress/page-browser-protocol.ts";
@@ -15,19 +17,27 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 // owner over its link — the only one that may command its browser (Project
 // Browser plan §4.8, §4.11, §4.13; stage 3 PR 17):
 //
-// - The owner's stop (`sync browser stop`, `page_browsers.owner_stop_*`):
-//   while it stands the operator is told `stopPage` — its exit closed first,
-//   then Chrome — until it says it stands stopped by the owner.
+// - The owner's commands (`page_browser_commands`), first, each taken by
+//   this owner and run once by its id: a stop (`stopPage` — the operator
+//   answers once Chrome is down, so its answer is the stop's confirmation,
+//   bound to the command and this owner's generation), a start, a self-test
+//   (the exit closed for it, opened again after when it passes).
+// - The owner's stop (`page_browsers.owner_stop_*`): while it stands the
+//   operator is told `stopPage` until it says it stands stopped by the owner.
 // - A page's slot on its browser starts it (`restartBrowser`) when it stands
 //   — never started by this operator, or stopped by a leave or the owner's
-//   stop since lifted — at the switch to `browser` and back: not while the
-//   owner stopped it or paused the page, not while a person logs it in (the
-//   manual login), never one halted for the owner's decision (a changed exit
-//   IP, a guard that failed: the owner's `sync browser start`).
-// - The owner's one-shot commands (`page_browser_commands`): a start of a
-//   halted browser, a self-test (with the exit closed: closed for it and
-//   opened again after when it was open and the test passed). Each is taken
-//   by this owner and run once by its id.
+//   stop since lifted — at the switch to `browser` and back.
+//
+// One guard (`browserStartRefusal`), read fresh right before each command
+// that brings the browser up — `restartBrowser`, a self-test's `openExit`;
+// the start of a slot and the owner's start alike: never a page not on its
+// browser, leaving it, or of a newer owner; never while the owner stopped it
+// or paused the page, nor while a person logs it in; never a browser halted
+// for the owner's decision. That halt is latched in Hub (`halt_reason`,
+// written by the recorder when it hears it, lifted only by the owner's
+// audited `sync browser start`): an operator that starts again stands with
+// no reason and knows nothing of it. Until the latch is read back, the halt
+// this control heard on its link holds its own starts too.
 //
 // Nothing goes to the operator before its hand-over to this owner
 // (`quiesced`). A leave of the browser keeps the owner's stop and nothing
@@ -79,15 +89,50 @@ export function browserStoppedByOwner(state: State): boolean {
   return state.step === "exit_closed" && !state.exitOpen && state.stopReason === "owner_stop";
 }
 
+/**
+ * Why the page's browser may not be brought up now (null: it may) — one guard
+ * for the start of a slot (`who: "slot"`, which also respects a halt it heard
+ * itself and not yet read back) and the owner's own start (`who: "owner"`:
+ * his start lifted the stop and the latch it names, in its transaction), read
+ * fresh right before the command goes.
+ */
+export function browserStartRefusal(input: {
+  control: PageBrowserControlRead | null;
+  state: State | null;
+  generation: bigint;
+  who: "slot" | "owner";
+  /** A halt for the owner's decision this control heard on its link. */
+  haltHeard?: string | null;
+}): string | null {
+  const { control, state } = input;
+  if (control === null) return "the page's browser serves no page";
+  if (state === null) return "the operator cannot be reached";
+  if (control.transport !== "browser") return `the page is not on its browser (its transport is ${control.transport ?? "unknown"})`;
+  if (control.leaveGeneration !== null) return "a leave of the page's browser is pending";
+  if (control.ownerGeneration !== input.generation) return "this owner of the page was superseded";
+  if (control.ownerStopAt !== null) return "the owner stopped the page's browser (sync browser start lifts the stop)";
+  if (control.haltReason !== null) return `the browser stands for the owner's decision (${control.haltReason}): sync browser start`;
+  if (input.who === "slot" && (input.haltHeard ?? null) !== null) {
+    return `the browser stands for the owner's decision (${input.haltHeard!}): sync browser start`;
+  }
+  if (control.pausedAll) return "the page is paused (sync page resume --all)";
+  if (state.mode === "manual_login") return "a login of the page's browser is open";
+  return null;
+}
+
 export class BrowserControl {
   readonly #d: BrowserControlDeps;
   readonly #timing: BrowserControlTiming;
+  readonly #unlisten: Array<() => void> = [];
   #timer: ReturnType<typeof setInterval> | null = null;
   #tick: Promise<void> | null = null;
   #stopped = false;
   #nextStopMono = Number.NEGATIVE_INFINITY;
   /** The last `restartBrowser` this control sent (of either kind). */
   #lastStartMono = Number.NEGATIVE_INFINITY;
+  /** A halt for the owner's decision heard on the link, until the latch in
+   *  Hub is read back (or the owner's start ran). */
+  #haltHeard: string | null = null;
 
   constructor(deps: BrowserControlDeps) {
     this.#d = deps;
@@ -96,6 +141,9 @@ export class BrowserControl {
 
   start(): void {
     if (this.#stopped || this.#timer !== null) return;
+    this.#unlisten.push(this.#d.client.onState((state) => this.#heard(state)));
+    const state = this.#d.client.state;
+    if (state !== null) this.#heard(state);
     this.#timer = setInterval(() => void this.tick(), this.#timing.everyMs);
     this.#timer.unref?.();
   }
@@ -105,6 +153,7 @@ export class BrowserControl {
     this.#stopped = true;
     if (this.#timer !== null) clearInterval(this.#timer);
     this.#timer = null;
+    for (const unlisten of this.#unlisten.splice(0)) unlisten();
     await this.#tick?.catch(() => undefined);
   }
 
@@ -121,59 +170,89 @@ export class BrowserControl {
     return this.#tick;
   }
 
+  #heard(state: State): void {
+    if (isOwnerDecisionHalt(state)) this.#haltHeard ??= state.stopReason;
+  }
+
   async #look(): Promise<void> {
     const { client, db, profileId, pageId, generation } = this.#d;
-    const state = client.state;
     // Nothing goes to the operator before its hand-over to this owner.
-    if (state === null || client.quiesced === null) return;
+    if (client.state === null || client.quiesced === null) return;
     const control = await readPageBrowserControl(db, { profileId });
     if (control === null || control.pageId !== pageId || this.#stopped) return;
+    // Hub's latch is read back: it governs from now on.
+    if (control.haltReason !== null) this.#haltHeard = null;
+    // The owner's command first, in order.
+    if (this.#d.role === "slot") {
+      const command = await takePageBrowserCommand(db, { pageId, profileId, generation });
+      if (command !== null) {
+        let outcome: { ok: boolean; detail: string | null };
+        try {
+          outcome = await this.#run(command);
+        } catch (error) {
+          outcome = { ok: false, detail: `not run: ${errorName(error)}` };
+        }
+        await finishPageBrowserCommand(db, { id: command.id, generation, ok: outcome.ok, detail: outcome.detail });
+        this.#d.logger.info({ pageId, command: command.kind, by: command.requestedBy, ok: outcome.ok, detail: outcome.detail },
+          "Fansly sync browser: the owner's command ran");
+        return;
+      }
+    }
+    const state = client.state;
+    if (state === null || this.#stopped) return;
+    const now = this.#d.clock.monoNow();
     if (control.ownerStopAt !== null) {
-      const now = this.#d.clock.monoNow();
       if (!browserStoppedByOwner(state) && now >= this.#nextStopMono) {
         this.#nextStopMono = now + this.#timing.stopEveryMs;
         await this.#command("stopPage", "the owner stopped the page's browser");
       }
-    }
-    if (this.#d.role !== "slot" || this.#stopped) return;
-    // The owner's command first: a start he asked for is the start.
-    const command = await takePageBrowserCommand(db, { pageId, profileId, generation });
-    if (command !== null) {
-      let outcome: { ok: boolean; detail: string | null };
-      try {
-        outcome = await this.#run(command, control.ownerStopAt !== null);
-      } catch (error) {
-        outcome = { ok: false, detail: `not run: ${errorName(error)}` };
-      }
-      await finishPageBrowserCommand(db, { id: command.id, generation, ok: outcome.ok, detail: outcome.detail });
-      this.#d.logger.info({ pageId, command: command.kind, by: command.requestedBy, ok: outcome.ok, detail: outcome.detail },
-        "Fansly sync browser: the owner's command ran");
       return;
     }
-    const now = this.#d.clock.monoNow();
-    if (control.ownerStopAt === null && control.transport === "browser" && !control.pausedAll && state.mode === "automation"
-      && browserStands(state) && now - this.#lastStartMono >= this.#timing.startEveryMs) {
-      this.#lastStartMono = now;
-      await this.#command("restartBrowser", "the page runs on its browser, which stands");
-    }
+    if (this.#d.role !== "slot" || !browserStands(state) || now - this.#lastStartMono < this.#timing.startEveryMs) return;
+    // The guard, read fresh right before the start.
+    const fresh = await readPageBrowserControl(db, { profileId });
+    const refusal = browserStartRefusal({ control: fresh, state: client.state, generation, who: "slot", haltHeard: this.#haltHeard });
+    if (refusal !== null || this.#stopped) return;
+    this.#lastStartMono = now;
+    await this.#command("restartBrowser", "the page runs on its browser, which stands");
   }
 
-  async #run(command: PageBrowserCommandRow, ownerStopped: boolean): Promise<{ ok: boolean; detail: string | null }> {
-    const state = this.#d.client.state;
-    if (state === null) return { ok: false, detail: "not run: the operator cannot be reached" };
+  async #run(command: PageBrowserCommandRow): Promise<{ ok: boolean; detail: string | null }> {
+    const { db, profileId, generation } = this.#d;
     switch (command.kind) {
+      case "stopPage": {
+        // Only while the owner's stop stands: a start since lifted it.
+        const control = await readPageBrowserControl(db, { profileId });
+        if (control?.ownerStopAt == null) return { ok: false, detail: "not run: the owner's stop was lifted (sync browser start)" };
+        if (this.#d.client.state === null) return { ok: false, detail: "not run: the operator cannot be reached" };
+        const result = await this.#command("stopPage", `the owner's stop (${command.requestedBy})`, command.commandId);
+        return result === null ? { ok: false, detail: "no answer from the operator" } : { ok: result.ok, detail: result.detail };
+      }
       case "restartBrowser": {
-        if (ownerStopped) return { ok: false, detail: "not run: the owner stopped the page's browser (sync browser start lifts the stop)" };
-        if (state.step !== "exit_closed" || state.exitOpen) return { ok: true, detail: `not needed: the browser is up or starting (${state.step})` };
+        const state = this.#d.client.state;
+        const refusal = browserStartRefusal({ control: await readPageBrowserControl(db, { profileId }), state, generation, who: "owner" });
+        if (refusal !== null) return { ok: false, detail: `not run: ${refusal}` };
+        if (state!.step !== "exit_closed" || state!.exitOpen) return { ok: true, detail: `not needed: the browser is up or starting (${state!.step})` };
         this.#lastStartMono = this.#d.clock.monoNow();
         const result = await this.#command("restartBrowser", `the owner's start (${command.requestedBy})`, command.commandId);
+        // The owner decided: a halt this control heard is his to have lifted.
+        if (result?.ok === true) this.#haltHeard = null;
         return result === null ? { ok: false, detail: "no answer from the operator" } : { ok: result.ok, detail: result.detail };
       }
       case "selfTest": {
+        const state = this.#d.client.state;
+        if (state === null) return { ok: false, detail: "not run: the operator cannot be reached" };
         // The self-test runs with the exit closed (plan §4.1 step 5): closed
-        // for it, opened again after when it was open and the test passed.
+        // for it, opened again after when it was open and the test passed —
+        // under the guard, read fresh then.
         const wasOpen = state.exitOpen;
         const steps: string[] = [];
+        // An exit closed for the test is one the guard would let open again:
+        // never closed for a page that could not have it back.
+        if (wasOpen) {
+          const refusal = browserStartRefusal({ control: await readPageBrowserControl(db, { profileId }), state, generation, who: "owner" });
+          if (refusal !== null) return { ok: false, detail: `not run: ${refusal}` };
+        }
         if (wasOpen) {
           const closed = await this.#command("closeExit", "the owner's self-test", `${command.commandId}:closeExit`);
           steps.push(`closeExit: ${closed === null ? "no answer" : closed.detail ?? String(closed.ok)}`);
@@ -183,9 +262,17 @@ export class BrowserControl {
         steps.push(`selfTest: ${tested === null ? "no answer" : tested.detail ?? String(tested.ok)}`);
         let ok = tested?.ok === true;
         if (wasOpen && ok) {
-          const opened = await this.#command("openExit", "the owner's self-test passed", `${command.commandId}:openExit`);
-          steps.push(`openExit: ${opened === null ? "no answer" : opened.detail ?? String(opened.ok)}`);
-          ok = opened?.ok === true;
+          const refusal = browserStartRefusal({
+            control: await readPageBrowserControl(db, { profileId }), state: this.#d.client.state, generation, who: "owner",
+          });
+          if (refusal !== null) {
+            steps.push(`openExit: not run: ${refusal}`);
+            ok = false;
+          } else {
+            const opened = await this.#command("openExit", "the owner's self-test passed", `${command.commandId}:openExit`);
+            steps.push(`openExit: ${opened === null ? "no answer" : opened.detail ?? String(opened.ok)}`);
+            ok = opened?.ok === true;
+          }
         }
         return { ok, detail: steps.join("; ") };
       }

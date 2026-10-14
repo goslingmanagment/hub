@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import {
   clearPageBrowserOwnerStop,
   expirePageBrowserCommand,
@@ -10,10 +8,11 @@ import {
   listPageBrowsersOfPages,
   listSyncPages,
   pageBrowserEnvOf,
+  liftBrowserStopPause,
+  pausePageForBrowserStop,
   requestBrowserDrain,
   setPageBrowserOwnerStop,
   setPageBrowserSettings,
-  setPagePause,
   type Database,
   type PageBrowserCommandKind,
   type PageBrowserCommandRow,
@@ -32,15 +31,19 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //
 // - `stop` (one page, or `--all` pages with a browser): the engine pauses the
 //   page and the operator closes its exit, then stops Chrome (plan §4.11) —
-//   kept so (`page_browsers.owner_stop_*`) until `start`; the pause is marked
-//   as the stop's when the page was not paused before.
-// - `start`: the stop lifted (and the pause it put), and a start of the
-//   browser if it stands — also one halted for the owner's decision (a
-//   changed exit IP, a guard that failed).
+//   kept so (`page_browsers.owner_stop_*`) until `start`. The pause is the
+//   stop's (`sync_pages.browser_stop_paused`) when the page was not paused
+//   before, and only while the owner does not change it himself. The stop
+//   is confirmed by the operator's answer to this very request
+//   (`page_browser_commands` `stopPage`, under the owner's generation),
+//   which comes once Chrome is down — never by a state it says on the way.
+// - `start`: the owner's decision — his stop, a halt latched for his
+//   decision and the pause still his stop's lifted, and a start of the
+//   browser asked, under the guard of every start.
 // - `selftest`: the operator's self-test, with its exit closed for it.
-// - `snapshot`: the browser stopped and confirmed stopped for a snapshot of
-//   its profile (the volume is packed by the host's script — Hub's
-//   containers have no Docker, plan §4.10); `start` brings it back.
+// - `snapshot`: the browser stopped as by `stop`, and the profile quiet only
+//   once that stop is confirmed (the volume is packed by the host's script —
+//   Hub's containers have no Docker, plan §4.10); `start` brings it back.
 // - `pin-ip`: the exit IP the page's browser may open its exit through, and
 //   its environment (the hello's settings beside the proxy, 0277): until both
 //   are set the page cannot be switched to its browser.
@@ -104,11 +107,17 @@ export interface BrowserStopResult {
   stoppedAt: string;
   /** The page was stopped by the owner already (its first stop kept). */
   already: boolean;
-  /** This stop put the page on its pause (`start` lifts it). */
+  /** This stop put the page on its pause (`start` lifts it while it is
+   *  still the stop's). */
   pausedByStop: boolean;
+  /** The stop asked of the operator: its answer — once Chrome is down — is
+   *  the stop's confirmation. */
+  command: { id: number; kind: PageBrowserCommandKind; expiresAt: string };
 }
 
-/** `sync browser stop <page> | --all`. */
+/** `sync browser stop <page> | --all` (and `snapshot`): the owner's stop
+ *  marked, the page paused (the pause the stop's when it was not paused),
+ *  and a stop asked of the operator, whose answer confirms it. */
 export async function stopPageBrowsers(
   db: Database,
   input: { pageLabel?: string; all?: boolean; actor: string; note?: string | null; snapshot?: boolean },
@@ -117,22 +126,32 @@ export async function stopPageBrowsers(
   const results: BrowserStopResult[] = [];
   for (const page of pages) {
     results.push(await transaction(db, async (tx) => {
-      const locked = await tx.execute<{ pausedAll: boolean }>(sql`
-        select paused_all as "pausedAll" from sync_pages where page_id = ${page.pageId} for no key update
-      `);
-      if (locked.rows[0] === undefined) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
-      const wasPaused = locked.rows[0].pausedAll === true;
-      const stop = await setPageBrowserOwnerStop(tx, { pageId: page.pageId, by: input.actor, pausedByStop: !wasPaused });
+      const paused = await pausePageForBrowserStop(tx, { pageId: page.pageId, note: SYNC_BROWSER_STOP_PAUSE_NOTE });
+      if (paused === null) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
+      const stop = await setPageBrowserOwnerStop(tx, { pageId: page.pageId, by: input.actor });
       if (stop === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
-      if (!wasPaused) await setPagePause(tx, { pageId: page.pageId, all: true, note: SYNC_BROWSER_STOP_PAUSE_NOTE });
-      else await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(page.pageId)})`);
+      const command = await insertPageBrowserCommand(tx, {
+        pageId: page.pageId,
+        kind: "stopPage",
+        requestedBy: input.actor,
+        note: input.note ?? null,
+        ttlMs: SYNC_BROWSER_COMMAND_TTL_MS,
+      });
+      if (command === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
       await audit(tx, page, input.snapshot === true ? SYNC_BROWSER_AUDIT_EVENTS.snapshot : SYNC_BROWSER_AUDIT_EVENTS.stop, input.actor, input.note, {
         all: input.all === true,
         already: stop.already,
-        pausedByStop: !stop.already && !wasPaused,
+        pausedByStop: paused.pausedByStop,
         profileId: stop.profileId,
+        commandId: command.id,
       });
-      return { page: page.label, stoppedAt: stop.stoppedAt.toISOString(), already: stop.already, pausedByStop: !stop.already && !wasPaused };
+      return {
+        page: page.label,
+        stoppedAt: stop.stoppedAt.toISOString(),
+        already: stop.already,
+        pausedByStop: paused.pausedByStop,
+        command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
+      };
     }));
   }
   return results;
@@ -143,23 +162,20 @@ export interface BrowserCommandAsked {
   command: { id: number; kind: PageBrowserCommandKind; expiresAt: string };
 }
 
-/** `sync browser start <page>`: the owner's stop lifted — the page's pause
- *  too when the stop put it — and a start of the browser asked. */
+/** `sync browser start <page>` — the owner's decision: his stop lifted, a
+ *  halt latched for his decision lifted, the page's pause lifted only while
+ *  it is still the one his stop put (a pause he changed since is his), and a
+ *  start of the browser asked — run under the same guard as any start. */
 export async function startPageBrowser(
   db: Database,
   input: { pageLabel: string; actor: string; note?: string | null },
-): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean }> {
+): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; haltLifted: { reason: string; at: string } | null }> {
   const page = await pageWithBrowser(db, input.pageLabel);
   return transaction(db, async (tx) => {
-    const locked = await tx.execute<{ pausedAll: boolean; pauseNote: string | null }>(sql`
-      select paused_all as "pausedAll", pause_note as "pauseNote" from sync_pages where page_id = ${page.pageId} for no key update
-    `);
-    if (locked.rows[0] === undefined) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
+    // The page row first (the stop's order): its pause and its owner.
+    const resumed = await liftBrowserStopPause(tx, { pageId: page.pageId });
     const cleared = await clearPageBrowserOwnerStop(tx, { pageId: page.pageId });
     if (cleared === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
-    // Only the pause the stop put is lifted (another of the owner's stays).
-    const resumed = cleared.wasStopped && cleared.pausedByStop && locked.rows[0].pausedAll === true;
-    if (resumed) await setPagePause(tx, { pageId: page.pageId, all: false, note: null });
     const command = await insertPageBrowserCommand(tx, {
       pageId: page.pageId,
       kind: "restartBrowser",
@@ -168,12 +184,20 @@ export async function startPageBrowser(
       ttlMs: SYNC_BROWSER_COMMAND_TTL_MS,
     });
     if (command === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
+    const haltLifted = cleared.halt === null ? null : { reason: cleared.halt.reason, at: cleared.halt.at.toISOString() };
     await audit(tx, page, SYNC_BROWSER_AUDIT_EVENTS.start, input.actor, input.note, {
       wasStopped: cleared.wasStopped,
       resumed,
+      haltLifted,
       commandId: command.id,
     });
-    return { page: page.label, wasStopped: cleared.wasStopped, resumed, command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() } };
+    return {
+      page: page.label,
+      wasStopped: cleared.wasStopped,
+      resumed,
+      haltLifted,
+      command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
+    };
   });
 }
 
@@ -291,24 +315,6 @@ export async function awaitPageBrowserCommand(
       return getPageBrowserCommand(db, id);
     }
     if (Date.now() >= deadline) return null;
-    await sleep(input.everyMs ?? 500);
-  }
-}
-
-/** Wait until the operator says the page's browser stands stopped by the
- *  owner (its state as the engine recorded it after `since`). */
-export async function awaitPageBrowserStopped(
-  db: Database,
-  pageId: number,
-  input: { since: Date; waitMs: number; everyMs?: number; sleep?: (ms: number) => Promise<void> },
-): Promise<boolean> {
-  const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = Date.now() + input.waitMs;
-  for (;;) {
-    const browser = await findPageBrowserByPage(db, pageId);
-    if (browser !== null && browser.stopReason === "owner_stop" && !browser.exitOpen && browser.step === "exit_closed"
-      && browser.lastStateAt !== null && browser.lastStateAt.getTime() >= input.since.getTime()) return true;
-    if (Date.now() >= deadline) return false;
     await sleep(input.everyMs ?? 500);
   }
 }

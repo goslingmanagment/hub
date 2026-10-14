@@ -563,6 +563,48 @@ export async function requestBrowserDrain(
   return { kind: "requested", leave: BigInt(updated.rows[0]!.leave) };
 }
 
+/**
+ * The owner's browser stop pauses the page (Project Browser PR 17; 0280):
+ * under the page's row lock, in the caller's transaction. A page not paused
+ * is paused with `note`, and the pause is the stop's (`browser_stop_paused`)
+ * — `sync browser start` lifts it; a page paused already keeps its pause and
+ * its owner. Wakes the page's actor. Null: no engine row.
+ */
+export async function pausePageForBrowserStop(tx: Database, input: { pageId: number; note: string }): Promise<{ pausedByStop: boolean } | null> {
+  const current = await tx.execute<{ pausedAll: boolean }>(sql`
+    select paused_all as "pausedAll" from sync_pages where page_id = ${input.pageId} for no key update
+  `);
+  const row = current.rows[0];
+  if (row === undefined) return null;
+  if (row.pausedAll !== true) {
+    await tx.execute(sql`
+      update sync_pages
+         set paused_all = true, pause_note = ${input.note}, browser_stop_paused = true, updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+    `);
+  }
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { pausedByStop: row.pausedAll !== true };
+}
+
+/**
+ * The owner's `sync browser start` lifts the pause its stop put on the page,
+ * and only that one (0280): a pause the owner changed since — paused or
+ * resumed by his own lever — is his and stays. Under the page's row lock, in
+ * the caller's transaction. True: lifted.
+ */
+export async function liftBrowserStopPause(tx: Database, input: { pageId: number }): Promise<boolean> {
+  const result = await tx.execute(sql`
+    update sync_pages
+       set paused_all = false, pause_note = null, browser_stop_paused = false, updated_at = clock_timestamp()
+     where page_id = ${input.pageId} and browser_stop_paused and paused_all
+    returning page_id
+  `);
+  if (result.rows.length === 0) return false;
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return true;
+}
+
 // ── mode ──────────────────────────────────────────────────────────────────────
 
 /** The transition the owner makes (`sync page mode`): the only one there is
@@ -1616,6 +1658,12 @@ export class SyncPageManualLoginOpenError extends Error {
  * page is the owner's own — the login no longer counts it as the pause it
  * put on the page (`manual_login_paused` false), so the page stays paused
  * when the login ends. The login lifts only what it set.
+ *
+ * The owner's own change of the whole pause (a pause or a resume) makes it
+ * his also against the owner's browser stop (0280): the stop no longer
+ * counts it as the pause it put on the page (`browser_stop_paused` false), so
+ * `sync browser start` lifts only a pause still its own — the model of the
+ * login's pause.
  */
 export async function setPagePause(
   db: Database,
@@ -1644,6 +1692,7 @@ export async function setPagePause(
       update sync_pages
          set paused_all = coalesce(${all}::boolean, paused_all),
              manual_login_paused = case when ${all}::boolean is true then false else manual_login_paused end,
+             browser_stop_paused = case when ${all}::boolean is not null then false else browser_stop_paused end,
              paused_requests = coalesce(${input.requests ?? null}::boolean, paused_requests),
              paused_resources = coalesce(${resources === null ? null : sql.param(resources)}::text[], paused_resources),
              pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,

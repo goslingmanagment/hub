@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  isOwnerDecisionHalt,
+  latchPageBrowserHalt,
+  liftBrowserStopPause,
+  pausePageForBrowserStop,
+  setPagePause,
   listSyncPages,
   clearPageBrowserOwnerStop,
   expirePageBrowserCommand,
@@ -126,20 +131,74 @@ describe("the operator's state as the engine keeps it (0280)", () => {
   });
 });
 
-describe("the owner's stop (0280)", () => {
-  it("keeps its first mark and whether it put the pause; the start lifts it and says what it was", async (context) => {
+describe("the owner's stop, the halt latched for his decision, and the pause the stop owns (0280)", () => {
+  it("keeps its first mark; the start lifts it and a latched halt, and says what they were", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();
-    const first = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@a", pausedByStop: true });
+    const first = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@a" });
     expect(first).toMatchObject({ profileId, already: false });
-    const second = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@b", pausedByStop: false });
+    const second = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@b" });
     expect(second).toMatchObject({ already: true, stoppedAt: first!.stoppedAt });
-    expect(await findPageBrowser(db(), profileId)).toMatchObject({ ownerStopBy: "cli@a", ownerStopPaused: true });
-    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({ pageId, ownerStopAt: first!.stoppedAt, pausedAll: false, transport: "node" });
-    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: true, pausedByStop: true });
-    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: false, pausedByStop: false });
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ ownerStopBy: "cli@a" });
+    expect(await latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" })).toBe(true);
+    // The first reason and instant are kept.
+    expect(await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" })).toBe(true);
+    const latched = await findPageBrowser(db(), profileId);
+    expect(latched).toMatchObject({ haltReason: "header_mismatch" });
+    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({
+      pageId, ownerStopAt: first!.stoppedAt, pausedAll: false, transport: "node", haltReason: "header_mismatch", leaveGeneration: null,
+    });
+    // No state of the operator lifts the latch: one that started again stands with no reason.
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null }));
+    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
+    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: true, halt: { reason: "header_mismatch", at: latched!.haltAt } });
+    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: false, halt: null });
     const { pageId: bare } = await seedHarnessPage({ db: db(), pool: testDb.pool }, { mode: "live", proxyUrl: null, label: "no-browser", ownRef: "300000000000000777" });
-    expect(await setPageBrowserOwnerStop(db(), { pageId: bare, by: "cli", pausedByStop: false })).toBeNull();
+    expect(await setPageBrowserOwnerStop(db(), { pageId: bare, by: "cli" })).toBeNull();
+  });
+
+  it("which stop reasons stand for the owner's decision", () => {
+    expect(isOwnerDecisionHalt({ stopReason: "header_mismatch", retryAtWall: null })).toBe(true);
+    expect(isOwnerDecisionHalt({ stopReason: "exit_ip_changed", retryAtWall: null })).toBe(true);
+    expect(isOwnerDecisionHalt({ stopReason: "a_reason_of_a_newer_operator", retryAtWall: null })).toBe(true);
+    // Retried by the operator itself, the owner's own stop, a buffer that does not open, a stand.
+    expect(isOwnerDecisionHalt({ stopReason: "proxy_unavailable", retryAtWall: Date.now() })).toBe(false);
+    expect(isOwnerDecisionHalt({ stopReason: "owner_stop", retryAtWall: null })).toBe(false);
+    expect(isOwnerDecisionHalt({ stopReason: "buffer_unavailable", retryAtWall: null })).toBe(false);
+    expect(isOwnerDecisionHalt({ stopReason: null, retryAtWall: null })).toBe(false);
+  });
+
+  it("the stop's pause is the stop's until the owner changes the whole pause himself (Astra PR 17, P1-4)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await browserPage();
+    const pauseOf = async () => (await testDb!.pool.query<{ pausedAll: boolean; mine: boolean; note: string | null }>(
+      `select paused_all as "pausedAll", browser_stop_paused as mine, pause_note as note from sync_pages where page_id = $1`, [pageId],
+    )).rows[0]!;
+    const tx = <T>(body: (tx: Database) => Promise<T>) => db().transaction(async (raw) => body(raw as unknown as Database));
+    // Stop → the owner's own pause → start: his pause stays.
+    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: true });
+    expect(await pauseOf()).toEqual({ pausedAll: true, mine: true, note: "stop" });
+    await setPagePause(db(), { pageId, all: true, note: "maintenance" });
+    expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(false);
+    expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
+    // Stop of a page paused already: not the stop's.
+    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: false });
+    expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
+    // Resumed by the owner: nothing is the stop's any more; a later pause of his stays too.
+    await setPagePause(db(), { pageId, all: false, note: null });
+    await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
+    await setPagePause(db(), { pageId, all: false, note: null });
+    await setPagePause(db(), { pageId, all: true, note: "later" });
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(false);
+    expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "later" });
+    // The stop's own pause, untouched: lifted.
+    await setPagePause(db(), { pageId, all: false, note: null });
+    await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
+    // A pause of resources or of the requests keeps the whole pause the stop's.
+    await setPagePause(db(), { pageId, requests: true });
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(true);
+    expect(await pauseOf()).toEqual({ pausedAll: false, mine: false, note: null });
   });
 });
 

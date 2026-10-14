@@ -15,7 +15,8 @@ import {
 //
 // What it says: the page's transport and a leave pending; the operator's last
 // word (its step, stop reason, next retry, exit, mode — and how old it is);
-// the engine's link error; the owner's stop; whether a login is needed; the
+// the engine's link error; the owner's stop and a halt latched for his
+// decision; whether a login is needed; the
 // session (present or not, the account it named — never its token or
 // fingerprint); the proxy as the browser meets it (the pinned exit IP and the
 // one it saw; never the proxy's address or credentials); the buffer (its
@@ -40,6 +41,8 @@ export interface BrowserStatusView {
     stopSince: string | null;
   };
   ownerStop: { at: string; by: string; paused: boolean } | null;
+  /** Stopped for the owner's decision, latched until `sync browser start`. */
+  halt: { reason: string; at: string } | null;
   login: { needed: boolean; why: string | null };
   session: { present: boolean; accountId: string | null };
   proxy: { pinnedExitIp: string | null; pinnedAt: string | null; exitIp: string | null; matches: boolean | null; problem: string | null };
@@ -110,7 +113,8 @@ export function buildBrowserStatus(
     },
     ownerStop: browser.ownerStopAt === null
       ? null
-      : { at: browser.ownerStopAt.toISOString(), by: browser.ownerStopBy ?? "", paused: browser.ownerStopPaused },
+      : { at: browser.ownerStopAt.toISOString(), by: browser.ownerStopBy ?? "", paused: input.browserStopPaused },
+    halt: browser.haltReason === null || browser.haltAt === null ? null : { reason: browser.haltReason, at: browser.haltAt.toISOString() },
     login: { needed: loginWhy !== null, why: loginWhy },
     session: { present: browser.sessionFingerprint !== null, accountId: browser.accountId },
     proxy: {

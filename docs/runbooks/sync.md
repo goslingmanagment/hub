@@ -304,16 +304,23 @@ Every lever is audited (`admin.sync_browser_<lever>`) and carried out by the eng
 to the operator; the CLI waits for what the operator says.
 
 - `stop` pauses the page at once (`paused_all`, the note says the browser's stop) and the operator closes its exit,
-  then stops Chrome. It stays stopped — nothing starts it — until `start`, which lifts the stop and the pause the stop
-  put (a pause of yours from before stays), and starts the browser, also one halted for your decision (a changed exit
-  IP, a guard that failed). `operatorConfirmed: false`: no owner runs the page or its operator cannot be reached;
-  the page is paused all the same.
-- A page on its browser starts it by itself when it stands — at the switch to `browser`, and back — but never while
-  the page is paused or stopped by you, never while you log it in, never one halted for your decision.
+  then stops Chrome. It stays stopped — nothing starts it — until `start`. The stop is confirmed by the operator's
+  answer to that very request, which comes once Chrome is down (`operatorConfirmed`). `operatorConfirmed: false`: no
+  owner runs the page, its operator cannot be reached, or Chrome did not go down; the page is paused all the same.
+- The pause a stop put is the stop's only while you leave it alone: `sync page pause --all` or `resume --all` makes
+  it yours, and `start` lifts only a pause still the stop's (as the login does with its own, PR 15).
+- `start` is your decision: it lifts your stop, the stop's pause and a halt for your decision (a changed exit IP, a
+  guard that failed — latched in Hub when it is first heard: an operator whose container started again stands with
+  no reason, and still nothing starts it but you), and starts the browser. A start — yours or the slot's own — is
+  refused, with its reason, for a page not on its browser or leaving it, of a newer owner, paused by you, stopped
+  by you, or in a login.
+- A page on its browser starts it by itself when it stands — at the switch to `browser`, and back — under that same
+  guard.
 - `selftest` closes the exit for the test and opens it again when it passes; a test that fails stops the page
   (`selftest_failed`, its next start tests again).
-- `snapshot` stops the browser as `stop` does and waits until its operator says it stopped: then pack the volume it
-  prints on the server (Hub's containers have no Docker), and `start`.
+- `snapshot` stops the browser as `stop` does and waits for the operator's answer to that stop — once Chrome is down;
+  only then pack the volume it prints on the server (Hub's containers have no Docker), and `start`. A Chrome that does
+  not go down fails it.
 - `pin-ip` sets the exit IP the browser may open its exit through and its environment (the proxy's region); check
   the IP first (`pnpm cli page proxy-ip …`). Until both are set the page cannot be switched to its browser.
 - `drain` takes what a stopped container kept while the page stays on Node: bring the container up first. Node's slot
@@ -331,10 +338,10 @@ judged only for a page on its browser:
 | `browser_down` | no state from the operator for 2 min while the page's owner runs; the engine's link refused (`token`, `protocol_version`) or broken by a protocol error; the browser not up for 2 min for another reason (Chrome crashed, the environment, a request that did not end, a start that hangs); the `late_send` alarm |
 | `login_required` | Fansly signed the browser out (not while you log it in) |
 | `proxy` | the proxy unavailable or refusing its login, the browser down for 2 min |
-| `exit_ip_changed` | the exit IP is not the pinned one: the browser stands until you decide (`pin-ip`, `start`) |
+| `exit_ip_changed` | the exit IP is not the pinned one: the browser stands until you decide (`pin-ip`, `start`); latched until then |
 | `buffer` | the buffer full, the disk full, the buffer that does not open, or past 50 % / 80 % of a cap |
 | `selftest_failed` | a guard of the self-test did not hold |
-| `protocol_changed` | an unknown socket message, request headers that differ from the site's |
+| `protocol_changed` | an unknown socket message, request headers that differ from the site's; latched until your `start` |
 | `cdp_lost` | control of Chrome lost (CDP, the holder's overflow, owner decision №10's fallback release) |
 
 Your stop, your pause, your login and a credentials hold explain a browser that is down (`browser_down`, `proxy`); a

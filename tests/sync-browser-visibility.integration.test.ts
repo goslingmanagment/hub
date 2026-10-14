@@ -170,6 +170,10 @@ async function pause(pageId: number): Promise<{ pausedAll: boolean; note: string
 
 const kindsOf = (r: Rig) => r.operator.commands.map((command) => command.command.kind);
 
+async function stopOwnsPause(pageId: number): Promise<boolean> {
+  return (await testDb!.pool.query<{ mine: boolean }>("select browser_stop_paused as mine from sync_pages where page_id = $1", [pageId])).rows[0]!.mine;
+}
+
 describe("what the operator says goes on its profile's row, to the status and the alerts", () => {
   it("its state, its alarm and the delivery of its events; the status block without a secret; the evaluator's browser latches", async (context) => {
     if (!testDb) return context.skip();
@@ -275,7 +279,8 @@ describe("the owner's levers (sync browser …), each audited", () => {
     expect(stopped.stopped).toEqual([expect.objectContaining({ page: r.page.pageLabel, already: false, pausedByStop: true, operatorConfirmed: true })]);
     expect(kindsOf(r)).toEqual(["stopPage"]);
     expect(await pause(r.page.pageId)).toEqual({ pausedAll: true, note: "the owner stopped the page's browser (sync browser stop)" });
-    expect(await browserRow(r.page.pageId)).toMatchObject({ stopReason: "owner_stop", exitOpen: false, ownerStopPaused: true });
+    expect(await browserRow(r.page.pageId)).toMatchObject({ stopReason: "owner_stop", exitOpen: false });
+    expect(await stopOwnsPause(r.page.pageId)).toBe(true);
     expect(await audits(r.page.pageId, SYNC_BROWSER_AUDIT_EVENTS.stop)).toEqual([expect.objectContaining({ pageLabel: r.page.pageLabel, note: "drill", pausedByStop: true })]);
     // Kept stopped: nothing starts it while the stop stands.
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -305,6 +310,96 @@ describe("the owner's levers (sync browser …), each audited", () => {
     expect(await pause(r.page.pageId)).toEqual({ pausedAll: true, note: "mine" });
     await expect(cli(r, printed).parseAsync(["browser", "stop"], { from: "user" })).rejects.toThrow(/name one page, or --all/);
   }, 30_000);
+
+  it("start lifts no pause the owner changed after the stop: his own pause stays (Astra PR 17, P1-4)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const printed: string[] = [];
+    await cli(r, printed).parseAsync(["browser", "stop", r.page.pageLabel, "--wait-ms", "200"], { from: "user" });
+    expect(await stopOwnsPause(r.page.pageId)).toBe(true);
+    // The owner pauses the page himself: the pause is his now.
+    await cli(r, printed).parseAsync(["page", "pause", "--page", r.page.pageLabel, "--all", "--note", "maintenance"], { from: "user" });
+    expect(await stopOwnsPause(r.page.pageId)).toBe(false);
+    printed.length = 0;
+    await cli(r, printed).parseAsync(["browser", "start", r.page.pageLabel, "--wait-ms", "200"], { from: "user" });
+    expect(JSON.parse(printed.join("\n"))).toMatchObject({ wasStopped: true, resumed: false });
+    expect(await pause(r.page.pageId)).toEqual({ pausedAll: true, note: "maintenance" });
+    // Resumed by him after a stop, then paused again: still his.
+    await cli(r, printed).parseAsync(["browser", "stop", r.page.pageLabel, "--wait-ms", "200"], { from: "user" });
+    await cli(r, printed).parseAsync(["page", "resume", "--page", r.page.pageLabel, "--all"], { from: "user" });
+    await cli(r, printed).parseAsync(["page", "pause", "--page", r.page.pageLabel, "--all", "--note", "again mine"], { from: "user" });
+    await cli(r, printed).parseAsync(["browser", "start", r.page.pageLabel, "--wait-ms", "200"], { from: "user" });
+    expect(await pause(r.page.pageId)).toEqual({ pausedAll: true, note: "again mine" });
+    expect(await audits(r.page.pageId, SYNC_BROWSER_AUDIT_EVENTS.start)).toEqual([
+      expect.objectContaining({ resumed: false }), expect.objectContaining({ resumed: false }),
+    ]);
+  }, 30_000);
+
+  it("snapshot: the profile is quiet only once the operator answered this stop — after Chrome is down, not when it says the stop (Astra PR 17, P1-3)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    await startHost(r);
+    r.operator.pushState({ step: "ready" });
+    await until(async () => (await browserRow(r.page.pageId)).step === "ready", 15_000, "ready recorded");
+    // Chrome takes 2.5 s to go down; the operator says the stop at once.
+    r.operator.chromeStopMs = 2_500;
+    const printed: string[] = [];
+    let stateSaidAt: number | null = null;
+    const watch = (async () => {
+      await until(async () => (await browserRow(r.page.pageId)).stopReason === "owner_stop", 15_000, "the stop said");
+      stateSaidAt = Date.now();
+    })();
+    const begun = Date.now();
+    await cli(r, printed).parseAsync(["browser", "snapshot", r.page.pageLabel, "--wait-ms", "15000"], { from: "user" });
+    const answeredAt = Date.now();
+    await watch;
+    const snapshot = JSON.parse(printed.join("\n"));
+    expect(snapshot).toMatchObject({ operatorConfirmed: true, confirmation: { ok: true } });
+    expect(snapshot.follows).toContain("the profile is quiet");
+    expect(answeredAt - begun).toBeGreaterThanOrEqual(2_400);
+    expect(stateSaidAt! - begun).toBeLessThan(answeredAt - begun - 1_000);
+    expect(await audits(r.page.pageId, SYNC_BROWSER_AUDIT_EVENTS.snapshot)).toHaveLength(1);
+
+    // A Chrome that does not go down: no snapshot.
+    printed.length = 0;
+    r.operator.chromeStopMs = 0;
+    r.operator.chromeStays = true;
+    await expect(cli(r, printed).parseAsync(["browser", "snapshot", r.page.pageLabel, "--wait-ms", "15000"], { from: "user" }))
+      .rejects.toThrow(/has not said its browser stopped; no snapshot now/);
+    expect(JSON.parse(printed.join("\n"))).toMatchObject({ operatorConfirmed: false, confirmation: { ok: false, detail: "the exit is closed, but Chrome is still up" } });
+  }, 60_000);
+
+  it("a halt for the owner's decision is latched: an operator that starts again is not started; only the owner's start lifts it (Astra PR 17, P1-1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    r.operator.onOtherCommand = (command) => {
+      if (command.command.kind !== "restartBrowser") return { ok: false, detail: "not in this fake" };
+      r.operator.pushState({ step: "ready", stopReason: null, exitOpen: true });
+      return { ok: true, detail: "the start began" };
+    };
+    await startHost(r);
+    // Headers that differ from the site's: the operator halts for the owner.
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", retryAtWall: null });
+    await until(async () => (await browserRow(r.page.pageId)).haltReason === "header_mismatch", 15_000, "the halt latched");
+    // The operator starts again: it stands, with no reason.
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null, retryAtWall: null });
+    await until(async () => (await browserRow(r.page.pageId)).stopReason === null, 10_000, "the stand recorded");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(kindsOf(r)).toEqual([]);
+    const [status] = (await readSyncPageStatuses(db(), r.config, await listSyncPages(db()))).filter((entry) => entry.pageLabel === r.page.pageLabel);
+    expect(status!.browser).toMatchObject({ halt: { reason: "header_mismatch" }, alerts: [{ kind: "protocol_changed", detail: "header_mismatch" }] });
+
+    const printed: string[] = [];
+    await cli(r, printed).parseAsync(["browser", "start", r.page.pageLabel, "--note", "headers checked"], { from: "user" });
+    expect(JSON.parse(printed.join("\n"))).toMatchObject({ haltLifted: { reason: "header_mismatch" }, result: { ok: true } });
+    expect(kindsOf(r)).toEqual(["restartBrowser"]);
+    expect((await browserRow(r.page.pageId)).haltReason).toBeNull();
+    expect(await audits(r.page.pageId, SYNC_BROWSER_AUDIT_EVENTS.start)).toEqual([
+      expect.objectContaining({ note: "headers checked", haltLifted: expect.objectContaining({ reason: "header_mismatch" }) }),
+    ]);
+  }, 60_000);
 
   it("selftest: the exit closed for it, the test, the exit opened again — once, by the command's own ids", async (context) => {
     if (!testDb) return context.skip();
@@ -371,7 +466,7 @@ describe("the browser started at the switch to it", () => {
   it("a browser that stands is started — not while the page is paused, never one halted for the owner's decision", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" });
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null });
     r.operator.onOtherCommand = (command) => {
       if (command.command.kind !== "restartBrowser") return { ok: false, detail: "not in this fake" };
       r.operator.pushState({ step: "ready", stopReason: null, exitOpen: true });
@@ -380,19 +475,21 @@ describe("the browser started at the switch to it", () => {
     await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
     await onBrowser(r);
     await startHost(r);
-    await until(async () => (await browserRow(r.page.pageId)).stopReason === "exit_ip_changed", 15_000, "the halt recorded");
+    await until(async () => (await browserRow(r.page.pageId)).lastStateAt !== null, 15_000, "the stand recorded");
     await new Promise((resolve) => setTimeout(resolve, 1_500));
-    // Halted for the owner's decision: nothing starts it.
-    expect(kindsOf(r)).toEqual([]);
-    // Stands (never started), but the page is paused: still nothing.
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null });
-    await until(async () => (await browserRow(r.page.pageId)).stopReason === null, 10_000, "the stand recorded");
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Stands (never started), but the page is paused: nothing.
     expect(kindsOf(r)).toEqual([]);
     // The pause lifted: started, once.
     await testDb.pool.query("update sync_pages set paused_all = false where page_id = $1", [r.page.pageId]);
     await until(async () => kindsOf(r).includes("restartBrowser"), 10_000, "the browser started");
     await until(async () => (await browserRow(r.page.pageId)).step === "ready", 10_000, "ready recorded");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(kindsOf(r)).toEqual(["restartBrowser"]);
+    // Halted for the owner's decision (a changed exit IP), then standing as
+    // an operator that started again: nothing starts it but the owner.
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" });
+    await until(async () => (await browserRow(r.page.pageId)).haltReason === "exit_ip_changed", 10_000, "the halt latched");
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null });
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(kindsOf(r)).toEqual(["restartBrowser"]);
   }, 60_000);

@@ -480,7 +480,9 @@ export const pageBrowsers = pgTable("page_browsers", {
   alarmDetail: jsonbSafe("alarm_detail").$type<Record<string, unknown>>(),
   ownerStopAt: timestamp("owner_stop_at", { withTimezone: true }),
   ownerStopBy: text("owner_stop_by"),
-  ownerStopPaused: boolean("owner_stop_paused").notNull().default(false),
+  // The halt for the owner's decision, latched (`latchPageBrowserHalt`).
+  haltReason: text("halt_reason"),
+  haltAt: timestamp("halt_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -502,7 +504,7 @@ export const pageBrowserCommands = pgTable("page_browser_commands", {
   commandId: uuid("command_id").notNull().unique().default(sql`gen_random_uuid()`),
   profileId: uuid("profile_id").notNull().references(() => pageBrowsers.profileId, { onDelete: "cascade" }),
   pageId: bigint("page_id", { mode: "number" }).notNull(),
-  kind: text("kind").$type<"restartBrowser" | "selfTest">().notNull(),
+  kind: text("kind").$type<"restartBrowser" | "stopPage" | "selfTest">().notNull(),
   requestedBy: text("requested_by").notNull(),
   note: text("note"),
   requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
@@ -1079,6 +1081,8 @@ export const syncPages = pgTable(
     // through — undici from `sync`, or the page's own browser.
     transport: text("transport").$type<"node" | "browser">().notNull().default("node"),
     // 0278: a pending leave of the page's browser, and the last confirmed one.
+    // 0280 (Project Browser PR 17): the whole pause is the browser stop's.
+    browserStopPaused: boolean("browser_stop_paused").notNull().default(false),
     browserLeaveGeneration: bigint("browser_leave_generation", { mode: "bigint" }),
     browserLeaveRequestedAt: timestamp("browser_leave_requested_at", { withTimezone: true }),
     browserLeftAt: timestamp("browser_left_at", { withTimezone: true }),
