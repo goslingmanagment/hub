@@ -86,7 +86,12 @@ import { accountOf } from "./identity-without-page.ts";
 //   send — the journal's, and the operator's `quiesced`); the hour's ceiling
 //   and a 429's hold of its route; each journaled in `fansly_send_log`
 //   without a page (source `onboarding`, the profile and the attempt), as
-//   today's check without a page is.
+//   today's check without a page is. Only while the onboarding is the
+//   owner's login in the generation the request was admitted in, checked
+//   under the profile's row lock — the journal's entry under one, the grant
+//   itself under another (Astra's review of PR 16, item 3): a move (given
+//   up, the login closed) or a binding that commits first refuses the grant,
+//   one that comes after waits for it.
 // - The login closed (`open`): the operator back in the automation (it checks
 //   the exit IP and loads the site anew); the site's own requests are then
 //   refused (`mode`), nothing of it runs but its documents.
@@ -165,6 +170,9 @@ export interface BrowserOnboardingOverrides {
   rpcTiming?: Partial<PageBrowserRpcTiming>;
   timing?: Partial<BrowserOnboardingTiming>;
   pacerFactory?: (deps: PacerDeps) => Pacer;
+  /** Awaited between a site request's journal entry and its grant (a test
+   *  moves the onboarding there). */
+  beforeGrant?: (siteRequestId: string) => Promise<void>;
 }
 
 export interface BrowserOnboardingOptions {
@@ -696,17 +704,28 @@ export class OnboardingLink {
       const attemptId = await nextBrowserAttemptId(this.#o.db);
       const token = randomUUID();
       const issuedMono = this.#clock.monoNow();
-      await this.#fenced((tx) => journalBrowserProfileSend(tx, {
-        token,
-        source: "onboarding",
-        operation: `${chosen.origin}:${chosen.route}`,
-        holder: this.#o.holder,
-        profileId: this.profileId,
-        attemptId,
-        settingMs: grant.settingMs,
-        jitterU: grant.jitterU,
-        pauseMs: grant.pauseMs,
-      }));
+      // Journaled only while the owner's login is open: what it was admitted
+      // in is what its grant is checked against.
+      const generation = await this.#fenced(async (tx, profile) => {
+        if (profile.onboarding !== "login") return null;
+        await journalBrowserProfileSend(tx, {
+          token,
+          source: "onboarding",
+          operation: `${chosen.origin}:${chosen.route}`,
+          holder: this.#o.holder,
+          profileId: this.profileId,
+          attemptId,
+          settingMs: grant.settingMs,
+          jitterU: grant.jitterU,
+          pauseMs: grant.pauseMs,
+        });
+        return profile.onboardingGeneration;
+      });
+      if (generation === null) {
+        // The login is no longer open: nothing of the site passes.
+        for (const request of this.site.pending()) this.site.refuse(request.id, "mode");
+        return false;
+      }
       const admission = this.pacer.arm(grant, attemptId, issuedMono);
       const refusal = this.pacer.checkRemoteGrant(admission);
       if (refusal !== null) {
@@ -714,7 +733,27 @@ export class OnboardingLink {
         await this.#complete(admission, token, { kind: "aborted_before_send", refusal: refusal.reason }, null);
         return true;
       }
-      this.site.grant(chosen.id, { attemptId, sendWithinMs: Math.max(0, admission.sendDeadlineMono - this.#clock.monoNow()) });
+      await this.#o.overrides?.beforeGrant?.(chosen.id);
+      // The grant under the profile's row lock, the login still open in that
+      // generation: the owner's move and the binding wait for it, and none
+      // goes once either committed.
+      let granted = false;
+      try {
+        await this.#fenced(async (_tx, profile) => {
+          if (profile.onboarding !== "login" || profile.onboardingGeneration !== generation) return;
+          this.site.grant(chosen.id, { attemptId, sendWithinMs: Math.max(0, admission.sendDeadlineMono - this.#clock.monoNow()) });
+          granted = true;
+        });
+      } catch (error) {
+        // A failure after the grant went (its commit) changes nothing of it.
+        if (!granted) this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: a site request's grant could not be checked; refused");
+      }
+      if (!granted) {
+        this.site.refuse(chosen.id, "mode");
+        await this.#complete(admission, token, { kind: "aborted_before_send", refusal: "lease_inactive" }, null);
+        this.#metrics.increment("sync_browser_onboarding_site", { origin: chosen.origin, outcome: "refused_at_grant" });
+        return true;
+      }
       let end: Awaited<ReturnType<BrowserSiteAdmission["end"]>>;
       try {
         end = await this.site.end(chosen.id, AbortSignal.any([signal, AbortSignal.timeout(SITE_END_WAIT_MS)]));

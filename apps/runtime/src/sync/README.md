@@ -1096,7 +1096,9 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
   profile's last send (the journal's and the operator's `quiesced`), the hour's ceiling and a 429's route hold — each
   journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
-  `sync_attempts`' sequence, so the operator never sees an id twice). The identity check is one `GET /account/me`
+  `sync_attempts`' sequence, so the operator never sees an id twice) — only while the onboarding is the owner's
+  login, checked under the profile's row lock at the journal entry and again, in the same generation, at the grant
+  itself (the owner's moves and the binding take that lock: one that commits first refuses the grant). The identity check is one `GET /account/me`
   through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
   (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. It proves the account
   only with the operator's own `sent` (without it the instant is unknown and proves nothing — PR 15's rule), sent

@@ -19,7 +19,7 @@ import { encryptJson } from "@agency_hub_core/shared";
 import type { SiteAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
-import { BrowserOnboardingTask } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
+import { BrowserOnboardingTask, type BrowserOnboardingOverrides } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { bindProvenProfile } from "./helpers/page-browser-onboarding.ts";
 import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
@@ -106,7 +106,7 @@ async function moveOnboarding(profileId: string, to: "login" | "open" | "closing
   });
 }
 
-function startTask(r: Rig, holder: FanslySendHolderIdentity = HOLDER): BrowserOnboardingTask {
+function startTask(r: Rig, holder: FanslySendHolderIdentity = HOLDER, more: Partial<BrowserOnboardingOverrides> = {}): BrowserOnboardingTask {
   const task = new BrowserOnboardingTask({
     db: db(),
     connectionString: testDb!.connectionString,
@@ -120,6 +120,7 @@ function startTask(r: Rig, holder: FanslySendHolderIdentity = HOLDER): BrowserOn
       rpcTiming: RPC_TIMING,
       timing: TIMING,
       pacerFactory: (deps) => new Pacer({ ...deps, minSettingMs: S }),
+      ...more,
     },
   });
   cleanups.push(() => task.stop());
@@ -466,5 +467,47 @@ describe("the account read through the browser proves it only when fresh (Astra'
     // answer is the boundary the read went after.
     const kinds = r.operator.commands.map((command) => command.command.kind === "setMode" ? `setMode:${command.command.mode}` : command.command.kind);
     expect(kinds.lastIndexOf("setMode:automation")).toBeGreaterThan(kinds.indexOf("setMode:manual_login"));
+  });
+});
+
+describe("the site's requests pass only while the owner's login is open (Astra's review of PR 16, item 3)", () => {
+  it("refuses a request still waiting for its slot once the owner closed the login — no grant", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    startTask(r);
+    await untilLoginMode(r);
+    await until(async () => r.operator.state.mode === "manual_login" && r.operator.state.exitOpen, 10_000, "up in the manual login");
+    r.operator.siteAdmit({ path: "/api/v1/versioning", route: "site.other" });
+    await until(async () => granted(r).length === 1, 5_000, "the first admission");
+    r.operator.siteDone(granted(r)[0]!, { status: 200 });
+    // The next one waits for the owner's pause; meanwhile he closes the
+    // login (the link stays: the onboarding is open).
+    const waiting = r.operator.siteAdmit({ method: "POST", path: "/api/v1/login", route: "auth.login", operation: "login" });
+    await moveOnboarding(r.profileId, "open");
+    await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === waiting.siteRequestId), 5_000, "the waiting one answered");
+    expect(r.operator.siteAnswers.find((answer) => answer.siteRequestId === waiting.siteRequestId)).toMatchObject({ admit: false, reason: "mode" });
+    expect(granted(r)).toHaveLength(1);
+    expect((await journal(r.profileId)).map((row) => row.operation)).toEqual(["site:site.other"]);
+  });
+
+  it("refuses the grant when a move commits between the request's journal entry and its grant: no site request goes for an onboarding given up", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    let movedAt: string | null = null;
+    startTask(r, HOLDER, {
+      beforeGrant: async (siteRequestId) => {
+        movedAt = siteRequestId;
+        await moveOnboarding(r.profileId, "closing");
+      },
+    });
+    await untilLoginMode(r);
+    await until(async () => r.operator.state.mode === "manual_login" && r.operator.state.exitOpen, 10_000, "up in the manual login");
+    const asked = r.operator.siteAdmit({ method: "POST", path: "/api/v1/login", route: "auth.login", operation: "login" });
+    await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === asked.siteRequestId), 5_000, "answered");
+    expect(movedAt).toBe(asked.siteRequestId);
+    expect(r.operator.siteAnswers.find((answer) => answer.siteRequestId === asked.siteRequestId)).toMatchObject({ admit: false, reason: "mode" });
+    // Journaled before the move, closed as never sent.
+    await until(async () => (await journal(r.profileId)).every((row) => row.completed_at !== null), 5_000, "closed");
+    expect((await journal(r.profileId)).map((row) => [row.operation, row.outcome, row.sent_at])).toEqual([["login:auth.login", "aborted_before_send", null]]);
   });
 });
