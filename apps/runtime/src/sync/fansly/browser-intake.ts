@@ -193,6 +193,10 @@ export interface BrowserIntakeDeps {
   /** A captured frame, after its commit: its live overlay apply. Absent: the
    *  worker timer applies it. */
   applyLive?: (observationId: number) => void;
+  /** After a batch's commit: how long each event it took waited, from the
+   *  operator's instant to the commit (Project Browser PR 17, the delivery's
+   *  figures of the page's status). */
+  onDelivered?: (lagsMs: number[]) => void;
   /** TESTS ONLY. */
   timing?: Partial<BrowserIntakeTiming>;
   /** TESTS ONLY. */
@@ -600,6 +604,9 @@ export class BrowserBufferIntake {
     const batch: BrowserIntakeBatch = { bufferId: sub.bufferId, fromSeq: events[0]!.seq, uptoSeq: events.at(-1)!.seq, frames: 0, fenced: 0, siteResponses: 0, gaps: 0, lost: 0 };
     const captured: number[] = [];
     const connections: Array<{ event: BufferEvent; taken: BrowserWsTaken }> = [];
+    /** The operator's instants of the events this batch took (not those
+     *  committed before). */
+    let takenWalls: number[] = [];
     let result: { uptoSeq: number } | null;
     try {
       // A `ws.open`'s generation, on its own snapshot before the transaction.
@@ -631,6 +638,7 @@ export class BrowserBufferIntake {
          *  loss boundary — with none taken yet, the previous connection's
          *  end, else when the browser profile was made. */
         const lossSince = async (): Promise<Date> => lossBoundary ?? (await lastFanslyWsConnectionEnd(tx, pageId)) ?? stored.createdAt;
+        takenWalls = [];
         let gapSince = stored.gapSince;
         const signals: DemandSignal[] = [];
         // The session the engine trusts: frames of another are kept, not applied.
@@ -652,6 +660,7 @@ export class BrowserBufferIntake {
         for (const event of events) {
           if (event.seq <= storedSeq) continue;
           const at = wallOf(event, now);
+          takenWalls.push(event.atWall);
           switch (event.kind) {
             case "ws.open": {
               const taken = await d.source.takeIn(tx, event, { generation: generations.get(event.seq) ?? null, gapSince });
@@ -825,6 +834,10 @@ export class BrowserBufferIntake {
     }
     for (const { event, taken } of connections) d.source.committed(event, taken);
     for (const observationId of captured) d.applyLive?.(observationId);
+    if (d.onDelivered !== undefined && takenWalls.length > 0) {
+      const committedAt = Date.now();
+      d.onDelivered(takenWalls.map((atWall) => committedAt - atWall));
+    }
     batch.uptoSeq = result.uptoSeq;
     this.#committedBatches += 1;
     this.#recent = [...this.#recent.slice(-(BROWSER_INTAKE_RECENT_BATCHES - 1)), batch];

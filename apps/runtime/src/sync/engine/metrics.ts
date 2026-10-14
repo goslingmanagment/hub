@@ -1,5 +1,6 @@
 import {
   countSendsSince,
+  listPageBrowsersOfPages,
   listSyncPages,
   readSyncHistoryMetrics,
   readSyncJournalMetrics,
@@ -15,6 +16,7 @@ import type { FanslyPageHoldKind } from "@agency_hub_core/shared";
 import { moneyFramesMissing, readMoneyFrames, type MoneyFrame } from "../fansly/ws/money-frames.ts";
 import { holdSetOf, pageHoldsInForce, resourceFilesHeld } from "./admission.ts";
 import { collectPageAlerts, pagesOwnerAlerts, SYNC_MONEY_FRAME_MS, SYNC_MONEY_LOOKBACK_MS } from "./alerts.ts";
+import { evaluateBrowserAlerts } from "./browser-alerts.ts";
 import type { EngineRegistry } from "./resource.ts";
 
 // The Fansly Sync Engine's golden signals (plan §10, design §9.5), computed
@@ -237,6 +239,7 @@ export async function sampleSyncEngineMetrics(
       ...gauge("sync_alerts", conditions),
     );
   }
+  samples.push(...await samplePageBrowserMetrics(db, engaged, now));
   const windowFrom = now.getTime() - SYNC_METRICS_WINDOW_MS;
   const global = await computeSyncGlobalMetrics(db, {
     windowMs: SYNC_METRICS_WINDOW_MS,
@@ -257,6 +260,41 @@ export async function sampleSyncEngineMetrics(
       basisPoints(global.history.factOverForecast.p50), basisPoints(global.history.factOverForecast.p95)),
   );
   return samples;
+}
+
+/**
+ * The page browsers' families (Project Browser plan §4.11; PR 17), over the
+ * owned pages that run on their browser — none while every page is on Node:
+ * the buffer's largest volume and oldest event (`page_browser_buffer_bytes`,
+ * `page_browser_buffer_age_ms`), the delivery of events from the operator to
+ * the engine's commit (`page_browser_delivery_ms`, the largest page's p50 and
+ * p95 over its last minutes), the browsers whose last self-test failed
+ * (`page_browser_selftest_failed`) and the browser alerts that hold
+ * (`page_browser_alerts`). Chrome's memory is not among them: the operator
+ * does not report it (spec §6.1 `state`).
+ */
+export async function samplePageBrowserMetrics(
+  db: Database,
+  engaged: readonly SyncPageRow[],
+  now: Date,
+): Promise<OpsMetricSampleInput[]> {
+  if (engaged.length === 0) return [];
+  const byId = new Map(engaged.map((page) => [page.pageId, page]));
+  const browsers = (await listPageBrowsersOfPages(db, { pageIds: [...byId.keys()] })).filter((row) => row.transport === "browser");
+  if (browsers.length === 0) return [];
+  const max = (values: ReadonlyArray<number | null>): number | null => {
+    const known = values.filter((value): value is number => value !== null);
+    return known.length === 0 ? null : Math.max(...known);
+  };
+  let alerts = 0;
+  for (const row of browsers) alerts += evaluateBrowserAlerts({ page: byId.get(row.pageId)!, browser: row.browser, now }).length;
+  return [
+    ...gauge("page_browser_buffer_bytes", max(browsers.map((row) => row.browser.bufferBytes))),
+    ...gauge("page_browser_buffer_age_ms", max(browsers.map((row) => row.browser.bufferOldestAgeMs))),
+    ...pair("page_browser_delivery_ms", max(browsers.map((row) => row.browser.deliveryP50Ms)), max(browsers.map((row) => row.browser.deliveryP95Ms))),
+    ...gauge("page_browser_selftest_failed", browsers.filter((row) => row.browser.selftestOk === false).length),
+    ...gauge("page_browser_alerts", alerts),
+  ];
 }
 
 /** Whether the minutely sampler's run at `now` records the engine's set. */

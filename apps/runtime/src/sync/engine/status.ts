@@ -1,5 +1,6 @@
 import { fanslyPageHoldInForce, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
 
+import type { BrowserStatusView } from "../browser-status.ts";
 import { heldByScope, resourceFilesHeld, type HoldSet, type RouteAdmissionView } from "./admission.ts";
 import type { ResourceHoldKind } from "./errors.ts";
 import { TAKEOVER_FACTOR } from "./pacer.ts";
@@ -334,6 +335,9 @@ export interface PageStatus {
   ws: WsStatusView | null;
   /** The route budgets (owner CLI; not on the agent wire). */
   routes: RouteStatusView | null;
+  /** The page's browser (Project Browser PR 17): only a page with a browser
+   *  profile bound to it has the key (`sync/browser-status.ts`). */
+  browser?: BrowserStatusView;
 }
 
 export interface PageStatusInput {

@@ -54,13 +54,44 @@ export interface PageBrowserRow {
   /** The owner said the container stopped before the operator's buffer was
    *  drained (0278): what it kept waits there. Null: drained. */
   bufferUndrainedSince: Date | null;
+  /** The operator's next start after a failure (0280; `state.retryAtWall`). */
+  retryAt: Date | null;
+  /** Since when the operator has not said `ready` (0280): its browser is not
+   *  up. Null while it is ready (or before its first state). */
+  downSince: Date | null;
+  /** Since when the operator has said its current stop reason (0280). */
+  stopSince: Date | null;
+  /** The delivery of the operator's events to the engine's commit over the
+   *  last minutes (0280), as the engine measured it, and when it said so. */
+  deliveryP50Ms: number | null;
+  deliveryP95Ms: number | null;
+  deliveryAt: Date | null;
+  /** The operator's last alarm (0280; spec §6.1 `alarm`, scalar details). */
+  alarmKind: string | null;
+  alarmAt: Date | null;
+  alarmDetail: Record<string, string | number | boolean> | null;
+  /** The owner's `sync browser stop` (0280): when and by whom (null: not
+   *  stopped by the owner), and whether it put the page on its pause. */
+  ownerStopAt: Date | null;
+  ownerStopBy: string | null;
+  ownerStopPaused: boolean;
 }
 
 type SqlRow = Omit<
   PageBrowserRow,
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
-  | "pinnedExitIpAt" | "bufferUndrainedSince"
+  | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
+  | "alarmAt" | "alarmDetail" | "ownerStopAt"
 > & {
+  retryAt: Date | string | null;
+  downSince: Date | string | null;
+  stopSince: Date | string | null;
+  deliveryP50Ms: string | null;
+  deliveryP95Ms: string | null;
+  deliveryAt: Date | string | null;
+  alarmAt: Date | string | null;
+  alarmDetail: unknown;
+  ownerStopAt: Date | string | null;
   bufferUndrainedSince: Date | string | null;
   pinnedExitIpAt: Date | string | null;
   pageId: string | null;
@@ -73,7 +104,9 @@ type SqlRow = Omit<
   handoverLastSendAt: Date | string | null;
 };
 
-const columns = sql`
+/** Every column but the three secrets: what a status read needs, and all
+ *  the read role may see. */
+const publicColumns = sql`
   b.profile_id::text as "profileId",
   b.page_id::text as "pageId",
   b.container,
@@ -93,9 +126,6 @@ const columns = sql`
   b.buffer_oldest_age_ms::text as "bufferOldestAgeMs",
   b.last_state_at as "lastStateAt",
   b.link_error as "linkError",
-  b.encrypted_engine_token as "encryptedEngineToken",
-  b.encrypted_api_token as "encryptedApiToken",
-  b.encrypted_vnc_password as "encryptedVncPassword",
   b.key_version as "keyVersion",
   b.pinned_exit_ip as "pinnedExitIp",
   b.pinned_exit_ip_at as "pinnedExitIpAt",
@@ -103,7 +133,26 @@ const columns = sql`
   b.handover_generation::text as "handoverGeneration",
   b.handover_quiesced_at as "handoverQuiescedAt",
   b.handover_last_send_at as "handoverLastSendAt",
-  b.buffer_undrained_since as "bufferUndrainedSince"
+  b.buffer_undrained_since as "bufferUndrainedSince",
+  b.retry_at as "retryAt",
+  b.down_since as "downSince",
+  b.stop_since as "stopSince",
+  b.delivery_p50_ms::text as "deliveryP50Ms",
+  b.delivery_p95_ms::text as "deliveryP95Ms",
+  b.delivery_at as "deliveryAt",
+  b.alarm_kind as "alarmKind",
+  b.alarm_at as "alarmAt",
+  b.alarm_detail as "alarmDetail",
+  b.owner_stop_at as "ownerStopAt",
+  b.owner_stop_by as "ownerStopBy",
+  b.owner_stop_paused as "ownerStopPaused"
+`;
+
+const columns = sql`
+  ${publicColumns},
+  b.encrypted_engine_token as "encryptedEngineToken",
+  b.encrypted_api_token as "encryptedApiToken",
+  b.encrypted_vnc_password as "encryptedVncPassword"
 `;
 
 function dateOf(value: Date | string | null): Date | null {
@@ -128,7 +177,28 @@ function rowOf(row: SqlRow): PageBrowserRow {
     handoverQuiescedAt: dateOf(row.handoverQuiescedAt),
     handoverLastSendAt: dateOf(row.handoverLastSendAt),
     bufferUndrainedSince: dateOf(row.bufferUndrainedSince),
+    retryAt: dateOf(row.retryAt),
+    downSince: dateOf(row.downSince),
+    stopSince: dateOf(row.stopSince),
+    deliveryP50Ms: numberOf(row.deliveryP50Ms),
+    deliveryP95Ms: numberOf(row.deliveryP95Ms),
+    deliveryAt: dateOf(row.deliveryAt),
+    alarmAt: dateOf(row.alarmAt),
+    alarmDetail: scalarDetailOf(row.alarmDetail),
+    ownerStopAt: dateOf(row.ownerStopAt),
+    ownerStopPaused: row.ownerStopPaused === true,
   };
+}
+
+/** An alarm's details as kept: its scalar entries only (spec §6.1 says the
+ *  operator sends no secrets; nothing nested is kept or shown). */
+export function scalarDetailOf(value: unknown): Record<string, string | number | boolean> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item === "string" || typeof item === "boolean" || (typeof item === "number" && Number.isFinite(item))) out[key] = item;
+  }
+  return out;
 }
 
 export interface InsertPageBrowserInput {
@@ -194,14 +264,25 @@ export interface PageBrowserStateInput {
   operatorVersion: string;
   selfTest: { ok: boolean; at: Date; failed: string | null } | null;
   buffer: { bytes: number; oldestAgeMs: number };
+  /** The operator's next start after a failure (`state.retryAtWall`; 0280).
+   *  Absent: not said (kept as it is). */
+  retryAt?: Date | null;
 }
 
 /** The operator's last `state`, at the database's clock. The link works:
- *  the engine's link error is cleared with it. */
+ *  the engine's link error is cleared with it. Since when the browser is not
+ *  up (`down_since`: any step but `ready`) and since when it says its stop
+ *  reason (`stop_since`) are kept across states (0280). */
 export async function recordPageBrowserState(db: Database, input: PageBrowserStateInput): Promise<boolean> {
+  const retry = input.retryAt === undefined ? sql`retry_at` : sql`${input.retryAt === null ? null : input.retryAt.toISOString()}::timestamptz`;
   const result = await db.execute(sql`
     update page_browsers
-       set step = ${input.step},
+       set down_since = case when ${input.step} = 'ready' then null else coalesce(down_since, clock_timestamp()) end,
+           stop_since = case when ${input.stopReason}::text is null then null
+                             when stop_reason is not distinct from ${input.stopReason}::text then coalesce(stop_since, clock_timestamp())
+                             else clock_timestamp() end,
+           retry_at = ${retry},
+           step = ${input.step},
            stop_reason = ${input.stopReason},
            mode = ${input.mode},
            exit_open = ${input.exitOpen},
@@ -377,4 +458,166 @@ export async function clearPageBrowserUndrained(db: Database, input: { profileId
     returning profile_id
   `);
   return result.rows.length === 1;
+}
+
+/** The delivery of the operator's events to the engine's commit over the
+ *  last minutes, as the engine measured it (0280). */
+export async function recordPageBrowserDelivery(
+  db: Database,
+  input: { profileId: string; p50Ms: number | null; p95Ms: number | null },
+): Promise<boolean> {
+  const ms = (value: number | null) => (value === null ? null : Math.max(0, Math.round(value)));
+  const result = await db.execute(sql`
+    update page_browsers
+       set delivery_p50_ms = ${ms(input.p50Ms)}::bigint, delivery_p95_ms = ${ms(input.p95Ms)}::bigint,
+           delivery_at = clock_timestamp(), updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/** The operator's alarm (spec §6.1 `alarm`; 0280): its kind, its instant
+ *  (never later than the database's clock) and its scalar details. The newest
+ *  alarm wins; an older one written late changes nothing. */
+export async function recordPageBrowserAlarm(
+  db: Database,
+  input: { profileId: string; kind: string; at: Date; detail: Record<string, unknown> },
+): Promise<boolean> {
+  const detail = scalarDetailOf(input.detail) ?? {};
+  const result = await db.execute(sql`
+    update page_browsers
+       set alarm_kind = ${input.kind},
+           alarm_at = least(${input.at.toISOString()}::timestamptz, clock_timestamp()),
+           alarm_detail = ${JSON.stringify(detail)}::jsonb,
+           updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid
+       and (alarm_at is null or alarm_at <= least(${input.at.toISOString()}::timestamptz, clock_timestamp()))
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * The owner stops the page's browser (`sync browser stop`, plan §4.11; 0280):
+ * the mark the engine keeps the browser stopped by, its author, and whether
+ * this stop put the page on its pause. A page already stopped by the owner
+ * keeps its first mark. False: no profile bound to the page.
+ */
+export async function setPageBrowserOwnerStop(
+  db: Database,
+  input: { pageId: number; by: string; pausedByStop: boolean },
+): Promise<{ profileId: string; stoppedAt: Date; already: boolean } | null> {
+  const result = await db.execute<{ profileId: string; stoppedAt: Date | string; already: boolean }>(sql`
+    update page_browsers b
+       set owner_stop_at = coalesce(b.owner_stop_at, clock_timestamp()),
+           owner_stop_by = coalesce(b.owner_stop_by, ${input.by}),
+           owner_stop_paused = case when b.owner_stop_at is null then ${input.pausedByStop} else b.owner_stop_paused end,
+           updated_at = clock_timestamp()
+      from (select profile_id, owner_stop_at is not null as already from page_browsers where page_id = ${input.pageId}::bigint for update) old
+     where b.profile_id = old.profile_id
+    returning b.profile_id::text as "profileId", b.owner_stop_at as "stoppedAt", old.already
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : { profileId: row.profileId, stoppedAt: dateOf(row.stoppedAt)!, already: row.already === true };
+}
+
+/** The owner starts the page's browser again (`sync browser start`): the
+ *  stop's mark is lifted. Returns what it was (null: no profile bound). */
+export async function clearPageBrowserOwnerStop(
+  db: Database,
+  input: { pageId: number },
+): Promise<{ profileId: string; wasStopped: boolean; pausedByStop: boolean } | null> {
+  const result = await db.execute<{ profileId: string; wasStopped: boolean; pausedByStop: boolean }>(sql`
+    update page_browsers b
+       set owner_stop_at = null, owner_stop_by = null, owner_stop_paused = false, updated_at = clock_timestamp()
+      from (select profile_id, owner_stop_at is not null as was_stopped, owner_stop_paused
+              from page_browsers where page_id = ${input.pageId}::bigint for update) old
+     where b.profile_id = old.profile_id
+    returning b.profile_id::text as "profileId", old.was_stopped as "wasStopped", old.owner_stop_paused as "pausedByStop"
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : { profileId: row.profileId, wasStopped: row.wasStopped === true, pausedByStop: row.pausedByStop === true };
+}
+
+/** A profile bound to a page, with the page's label and transport and where
+ *  the engine's intake of its buffer stands (the owner's view of every page's
+ *  browser). */
+export interface PageBrowserOfPage {
+  browser: PageBrowserRow;
+  pageId: number;
+  pageLabel: string | null;
+  transport: "node" | "browser";
+  /** The page's pending leave of its browser (0278): since when. */
+  leaveSince: Date | null;
+  /** The intake (0276): the operator's instant of the last event committed,
+   *  the last commit, and a halted buffer (null: none). */
+  intake: {
+    lastEventAt: Date | null;
+    lastCommitAt: Date | null;
+    halted: { reason: string; at: Date | null } | null;
+  };
+}
+
+/** Every profile bound to a page (of `pageIds`, when given), by page. */
+export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: readonly number[] } = {}): Promise<PageBrowserOfPage[]> {
+  const filter = input.pageIds === undefined ? sql`` : sql`and b.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])`;
+  const result = await db.execute<SqlRow & {
+    label: string | null;
+    transport: string | null;
+    leaveSince: Date | string | null;
+    eventsLastWall: Date | string | null;
+    eventsUpdatedAt: Date | string | null;
+    haltedReason: string | null;
+    haltedAt: Date | string | null;
+  }>(sql`
+    select ${publicColumns}, ''::text as "encryptedEngineToken", ''::text as "encryptedApiToken", ''::text as "encryptedVncPassword",
+           p.label, sp.transport, sp.browser_leave_requested_at as "leaveSince",
+           b.events_last_wall as "eventsLastWall", b.events_updated_at as "eventsUpdatedAt",
+           b.events_halted_reason as "haltedReason", b.events_halted_at as "haltedAt"
+      from page_browsers b
+      join pages p on p.id = b.page_id
+      left join sync_pages sp on sp.page_id = b.page_id
+     where b.page_id is not null ${filter}
+     order by p.label, b.page_id
+  `);
+  return result.rows.map((row) => {
+    const { label, transport, leaveSince, eventsLastWall, eventsUpdatedAt, haltedReason, haltedAt, ...rest } = row;
+    const browser = rowOf(rest as SqlRow);
+    return {
+      browser,
+      pageId: browser.pageId!,
+      pageLabel: label,
+      transport: transport === "browser" ? "browser" : "node",
+      leaveSince: dateOf(leaveSince),
+      intake: {
+        lastEventAt: dateOf(eventsLastWall),
+        lastCommitAt: dateOf(eventsUpdatedAt),
+        halted: haltedReason === null ? null : { reason: haltedReason, at: dateOf(haltedAt) },
+      },
+    };
+  });
+}
+
+/** What a page's browser is to be, as its owner looks every few seconds
+ *  (0280): the owner's stop, the page's pause and its transport. Null: no
+ *  such profile, or it serves no page. */
+export async function readPageBrowserControl(
+  db: Database,
+  input: { profileId: string },
+): Promise<{ pageId: number; ownerStopAt: Date | null; pausedAll: boolean; transport: "node" | "browser" | null } | null> {
+  const result = await db.execute<{ pageId: string; ownerStopAt: Date | string | null; pausedAll: boolean | null; transport: string | null }>(sql`
+    select b.page_id::text as "pageId", b.owner_stop_at as "ownerStopAt", sp.paused_all as "pausedAll", sp.transport
+      from page_browsers b
+      left join sync_pages sp on sp.page_id = b.page_id
+     where b.profile_id = ${input.profileId}::uuid and b.page_id is not null
+  `);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  return {
+    pageId: Number(row.pageId),
+    ownerStopAt: dateOf(row.ownerStopAt),
+    pausedAll: row.pausedAll === true,
+    transport: row.transport === "browser" ? "browser" : row.transport === "node" ? "node" : null,
+  };
 }

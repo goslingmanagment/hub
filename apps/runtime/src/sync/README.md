@@ -1265,7 +1265,11 @@ the pause S every route of a page has a strict budget of its own (owner decision
 ## Alerts and metrics
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
-`live_degraded`, `freshness`, `stuck`) plus the global `process`. Alert 3 (`freshness`) never pages for a lone chat
+`live_degraded`, `freshness`, `stuck`) plus the global `process`. A page on its browser has the browser's own latches
+too (Project Browser PR 17, `browser:<kind>`: `browser_down`, `login_required`, `proxy`, `exit_ip_changed`, `buffer`,
+`selftest_failed`, `protocol_changed`, `cdp_lost`), judged by the evaluator's `browser` rule from what the operator
+said (`engine/browser-alerts.ts`) — a page on Node is judged on its transport alone (the pass's one read of the
+transports; its failure blinds that rule only) and has none. Alert 3 (`freshness`) never pages for a lone chat
 Fansly does not serve (`message_unconfirmed` leaves it out); `chats_refused` pages five chats refused within ten
 minutes (above, "A chat Fansly stopped serving"). The actor opens alert 1 at once from its capture
 transaction (a refused credential, another identity, a pace violation; a 429 opens its route's own latch,
@@ -1322,7 +1326,7 @@ evaluation threw, or whose open or resolve did not land (`resolveSyncEngineIncid
 never resolves its latch. The route incidents and the pace backstop have boundaries of their own; the backstop's cursor
 moves only once every open landed, so the next pass reads the same sends again. A page's boundary catches the
 unforeseen; the next pages go on. Each pass then records, per `handover`/`live` page and rule of
-`SYNC_ALERT_EVALUATION_RULES` (the four alerts, `route_limited`, `pace_audit`), whether it judged the rule in full
+`SYNC_ALERT_EVALUATION_RULES` (the four alerts, `route_limited`, `pace_audit`, `browser`), whether it judged the rule in full
 (`sync_alert_evaluations`: `evaluated_at` on the database clock, else the failure and since when — a part or step, a
 SQLSTATE, never SQL); a pass that cannot read its frame marks the rows failing. A failure is logged when it starts or
 changes and its end once, never every pass. The api watchdog's leg beside alert 5 reads the rows while `sync` beats:
@@ -1367,4 +1371,5 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
+| A page browser's alert | one constant or line in `engine/browser-alerts.ts` + `tests/sync-browser-alerts.test.ts` |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

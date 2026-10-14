@@ -1152,13 +1152,13 @@ select p.label, r.rule,
        e.failure
   from sync_pages sp
   join pages p on p.id = sp.page_id
- cross join unnest(array['page_stopped','live_degraded','freshness','stuck','route_limited','pace_audit']) as r(rule)
+ cross join unnest(array['page_stopped','live_degraded','freshness','stuck','route_limited','pace_audit','browser']) as r(rule)
   left join sync_alert_evaluations e on e.page_id = sp.page_id and e.rule = r.rule
  where sp.mode in ('handover', 'live')
  order by 1, 2;
 ```
 
-Healthy: six rows a page, `age_s` under 60, `behind_s` 0, no `failure`. A row without `age_s` was never recorded.
+Healthy: seven rows a page, `age_s` under 60, `behind_s` 0, no `failure`. A row without `age_s` was never recorded.
 
 **Tip contexts.** A Fansly ledger tip is bridged to its optional note and conversation by the tip id the `/message`
 answer carries, never by time or amount. The engine's rows carry observation lineage (`source_observation_id`);

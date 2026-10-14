@@ -109931,6 +109931,564 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "browser": {
+                            "type": "object",
+                            "properties": {
+                              "profileId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "container": {
+                                "type": "string"
+                              },
+                              "transport": {
+                                "type": "string",
+                                "enum": [
+                                  "node",
+                                  "browser"
+                                ]
+                              },
+                              "leavePendingSince": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "link": {
+                                "type": "object",
+                                "properties": {
+                                  "lastStateAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "stateAgeMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "error": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastStateAt",
+                                  "stateAgeMs",
+                                  "error"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "state": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "stopReason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "retryAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "exitOpen": {
+                                    "type": "boolean"
+                                  },
+                                  "mode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "automation",
+                                      "manual_login"
+                                    ]
+                                  },
+                                  "downSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "stopSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "stopReason",
+                                  "retryAt",
+                                  "exitOpen",
+                                  "mode",
+                                  "downSince",
+                                  "stopSince"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "ownerStop": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "at": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "by": {
+                                        "type": "string"
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "at",
+                                      "by",
+                                      "paused"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "login": {
+                                "type": "object",
+                                "properties": {
+                                  "needed": {
+                                    "type": "boolean"
+                                  },
+                                  "why": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "needed",
+                                  "why"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "session": {
+                                "type": "object",
+                                "properties": {
+                                  "present": {
+                                    "type": "boolean"
+                                  },
+                                  "accountId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "present",
+                                  "accountId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "proxy": {
+                                "type": "object",
+                                "properties": {
+                                  "pinnedExitIp": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "pinnedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "exitIp": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "matches": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "problem": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "pinnedExitIp",
+                                  "pinnedAt",
+                                  "exitIp",
+                                  "matches",
+                                  "problem"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "buffer": {
+                                "type": "object",
+                                "properties": {
+                                  "bytes": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "oldestAgeMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "percent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "capBytes": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "capAgeMs": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "haltedReason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "haltedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "undrainedSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "bytes",
+                                  "oldestAgeMs",
+                                  "percent",
+                                  "capBytes",
+                                  "capAgeMs",
+                                  "haltedReason",
+                                  "haltedAt",
+                                  "undrainedSince"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "delivery": {
+                                "type": "object",
+                                "properties": {
+                                  "lastEventAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "lastCommitAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "p50Ms": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "p95Ms": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastEventAt",
+                                  "lastCommitAt",
+                                  "p50Ms",
+                                  "p95Ms",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "versions": {
+                                "type": "object",
+                                "properties": {
+                                  "chrome": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "operator": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "chrome",
+                                  "operator"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "selfTest": {
+                                "type": "object",
+                                "properties": {
+                                  "ok": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "failed": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "ok",
+                                  "at",
+                                  "failed"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "alarm": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "detail": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "type": [
+                                            "string",
+                                            "number",
+                                            "boolean"
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "at",
+                                      "detail"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "alerts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "detail": {
+                                      "type": "string"
+                                    },
+                                    "since": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "detail",
+                                    "since"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "profileId",
+                              "container",
+                              "transport",
+                              "leavePendingSince",
+                              "link",
+                              "state",
+                              "ownerStop",
+                              "login",
+                              "session",
+                              "proxy",
+                              "buffer",
+                              "delivery",
+                              "versions",
+                              "selfTest",
+                              "alarm",
+                              "alerts"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -167569,6 +168127,564 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "browser": {
+                            "type": "object",
+                            "properties": {
+                              "profileId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "container": {
+                                "type": "string"
+                              },
+                              "transport": {
+                                "type": "string",
+                                "enum": [
+                                  "node",
+                                  "browser"
+                                ]
+                              },
+                              "leavePendingSince": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "link": {
+                                "type": "object",
+                                "properties": {
+                                  "lastStateAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "stateAgeMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "error": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastStateAt",
+                                  "stateAgeMs",
+                                  "error"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "state": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "stopReason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "retryAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "exitOpen": {
+                                    "type": "boolean"
+                                  },
+                                  "mode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "automation",
+                                      "manual_login"
+                                    ]
+                                  },
+                                  "downSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "stopSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "stopReason",
+                                  "retryAt",
+                                  "exitOpen",
+                                  "mode",
+                                  "downSince",
+                                  "stopSince"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "ownerStop": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "at": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "by": {
+                                        "type": "string"
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "at",
+                                      "by",
+                                      "paused"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "login": {
+                                "type": "object",
+                                "properties": {
+                                  "needed": {
+                                    "type": "boolean"
+                                  },
+                                  "why": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "needed",
+                                  "why"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "session": {
+                                "type": "object",
+                                "properties": {
+                                  "present": {
+                                    "type": "boolean"
+                                  },
+                                  "accountId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "present",
+                                  "accountId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "proxy": {
+                                "type": "object",
+                                "properties": {
+                                  "pinnedExitIp": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "pinnedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "exitIp": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "matches": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "problem": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "pinnedExitIp",
+                                  "pinnedAt",
+                                  "exitIp",
+                                  "matches",
+                                  "problem"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "buffer": {
+                                "type": "object",
+                                "properties": {
+                                  "bytes": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "oldestAgeMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "percent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "capBytes": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "capAgeMs": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "haltedReason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "haltedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "undrainedSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "bytes",
+                                  "oldestAgeMs",
+                                  "percent",
+                                  "capBytes",
+                                  "capAgeMs",
+                                  "haltedReason",
+                                  "haltedAt",
+                                  "undrainedSince"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "delivery": {
+                                "type": "object",
+                                "properties": {
+                                  "lastEventAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "lastCommitAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "p50Ms": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "p95Ms": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastEventAt",
+                                  "lastCommitAt",
+                                  "p50Ms",
+                                  "p95Ms",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "versions": {
+                                "type": "object",
+                                "properties": {
+                                  "chrome": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "operator": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "chrome",
+                                  "operator"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "selfTest": {
+                                "type": "object",
+                                "properties": {
+                                  "ok": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "failed": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "ok",
+                                  "at",
+                                  "failed"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "alarm": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "detail": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "type": [
+                                            "string",
+                                            "number",
+                                            "boolean"
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "at",
+                                      "detail"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "alerts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "detail": {
+                                      "type": "string"
+                                    },
+                                    "since": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "detail",
+                                    "since"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "profileId",
+                              "container",
+                              "transport",
+                              "leavePendingSince",
+                              "link",
+                              "state",
+                              "ownerStop",
+                              "login",
+                              "session",
+                              "proxy",
+                              "buffer",
+                              "delivery",
+                              "versions",
+                              "selfTest",
+                              "alarm",
+                              "alerts"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

@@ -466,6 +466,21 @@ export const pageBrowsers = pgTable("page_browsers", {
   handoverLastSendAt: timestamp("handover_last_send_at", { withTimezone: true }),
   // 0278: the owner said the container stopped before the buffer was drained.
   bufferUndrainedSince: timestamp("buffer_undrained_since", { withTimezone: true }),
+  // 0280 (Project Browser PR 17): the operator's start as it goes, its last
+  // alarm, the delivery of its events, the owner's stop
+  // (`recordPageBrowserState`, `recordPageBrowserAlarm`, `setPageBrowserOwnerStop`).
+  retryAt: timestamp("retry_at", { withTimezone: true }),
+  downSince: timestamp("down_since", { withTimezone: true }),
+  stopSince: timestamp("stop_since", { withTimezone: true }),
+  deliveryP50Ms: bigint("delivery_p50_ms", { mode: "number" }),
+  deliveryP95Ms: bigint("delivery_p95_ms", { mode: "number" }),
+  deliveryAt: timestamp("delivery_at", { withTimezone: true }),
+  alarmKind: text("alarm_kind"),
+  alarmAt: timestamp("alarm_at", { withTimezone: true }),
+  alarmDetail: jsonbSafe("alarm_detail").$type<Record<string, unknown>>(),
+  ownerStopAt: timestamp("owner_stop_at", { withTimezone: true }),
+  ownerStopBy: text("owner_stop_by"),
+  ownerStopPaused: boolean("owner_stop_paused").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -478,6 +493,25 @@ export const pageBrowserForgottenProfiles = pgTable("page_browser_forgotten_prof
   forgottenAt: timestamp("forgotten_at", { withTimezone: true }).notNull().defaultNow(),
   forgottenBy: text("forgotten_by").notNull(),
   wasRegistered: boolean("was_registered").notNull(),
+});
+
+// Project Browser (0280, PR 17): the owner's one-shot commands to a page's
+// browser, run once by the page's owner over its link (`page-browser-commands.ts`).
+export const pageBrowserCommands = pgTable("page_browser_commands", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  commandId: uuid("command_id").notNull().unique().default(sql`gen_random_uuid()`),
+  profileId: uuid("profile_id").notNull().references(() => pageBrowsers.profileId, { onDelete: "cascade" }),
+  pageId: bigint("page_id", { mode: "number" }).notNull(),
+  kind: text("kind").$type<"restartBrowser" | "selfTest">().notNull(),
+  requestedBy: text("requested_by").notNull(),
+  note: text("note"),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  takenGeneration: bigint("taken_generation", { mode: "bigint" }),
+  takenAt: timestamp("taken_at", { withTimezone: true }),
+  doneAt: timestamp("done_at", { withTimezone: true }),
+  ok: boolean("ok"),
+  detail: text("detail"),
 });
 
 export const notificationIncidents = pgTable(

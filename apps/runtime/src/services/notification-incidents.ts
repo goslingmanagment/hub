@@ -83,16 +83,69 @@ export const SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY = "public_lookup";
  * watchdog alone (`services/ops-watchdog.ts`): opened while such a pair
  * exists, resolved once every pair is judged again. */
 export const SYNC_ENGINE_EVALUATOR_SUBKEY = "evaluator";
+/** Project Browser (plan §4.11; PR 17): a page's browser — its operator
+ * silent or unreachable, a login needed, its proxy, its exit IP changed, its
+ * buffer, a failed self-test, Fansly's protocol changed under it, control of
+ * Chrome lost. One latch per page and kind (`browser:<kind>`), opened by the
+ * alert evaluator from what the operator said (its `state` and `alarm`),
+ * resolved 10 clean minutes after; a page off its browser has none. */
+export const SYNC_ENGINE_BROWSER_KINDS = [
+  "browser_down",
+  "login_required",
+  "proxy",
+  "exit_ip_changed",
+  "buffer",
+  "selftest_failed",
+  "protocol_changed",
+  "cdp_lost",
+] as const;
+export type SyncEngineBrowserKind = (typeof SYNC_ENGINE_BROWSER_KINDS)[number];
+export const SYNC_ENGINE_BROWSER_SUBKEY_PREFIX = "browser:";
+export type SyncEngineBrowserSubKey = `${typeof SYNC_ENGINE_BROWSER_SUBKEY_PREFIX}${SyncEngineBrowserKind}`;
 export type SyncEngineIncidentSubKey =
   | SyncEngineAlertSubKey
   | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
   | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
   | typeof SYNC_ENGINE_EVALUATOR_SUBKEY
-  | SyncEngineRouteSubKey;
+  | SyncEngineRouteSubKey
+  | SyncEngineBrowserSubKey;
 
 /** The latch subKey of one route's incident. */
 export function syncEngineRouteSubKey(route: string): SyncEngineRouteSubKey {
   return `${SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${route}`;
+}
+
+/** The latch subKey of one kind of a page browser's incident. */
+export function syncEngineBrowserSubKey(kind: SyncEngineBrowserKind): SyncEngineBrowserSubKey {
+  return `${SYNC_ENGINE_BROWSER_SUBKEY_PREFIX}${kind}`;
+}
+
+const SYNC_ENGINE_BROWSER_OPEN_TITLES: Record<SyncEngineBrowserKind, string> = {
+  browser_down: "🚨 Page browser down: its operator is silent or unreachable, or the browser does not come up — nothing of the page goes",
+  login_required: "🚨 Page browser needs a login: Fansly signed the browser out — log in through the dashboard",
+  proxy: "🚨 Page browser cannot reach Fansly through its proxy (unavailable or refusing the login)",
+  exit_ip_changed: "🚨 Page browser stopped: its proxy's exit IP changed — it stands until the owner decides",
+  buffer: "🚨 Page browser buffer filling up (what the browser keeps for Hub) — at the cap the page stops",
+  selftest_failed: "🚨 Page browser self-test failed: one of its guards did not hold — the page stands",
+  protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands",
+  cdp_lost: "🚨 Page browser lost control of Chrome (CDP) — a request it held may have left",
+};
+
+const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string> = {
+  browser_down: "Page browser up again (10 min clean)",
+  login_required: "Page browser logged in again",
+  proxy: "Page browser reaches Fansly through its proxy again",
+  exit_ip_changed: "Page browser's exit IP settled (10 min clean)",
+  buffer: "Page browser buffer back below its alarm",
+  selftest_failed: "Page browser self-test passes again",
+  protocol_changed: "Page browser saw nothing new from Fansly for 10 min",
+  cdp_lost: "Page browser under control again (10 min clean)",
+};
+
+function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBrowserKind | null {
+  if (subKey === null || subKey === undefined || !subKey.startsWith(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX)) return null;
+  const kind = subKey.slice(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX.length);
+  return (SYNC_ENGINE_BROWSER_KINDS as readonly string[]).includes(kind) ? kind as SyncEngineBrowserKind : null;
 }
 
 const SYNC_ENGINE_ROUTE_OPEN_TITLE = "🚨 Fansly Sync Engine route held: a 429 stops one endpoint of a page "
@@ -246,6 +299,8 @@ function openTitleForIncident(
   // first line.
   if (input.kind === "fansly_sync_engine") {
     if (isSyncEngineRouteSubKey(input.subKey)) return SYNC_ENGINE_ROUTE_OPEN_TITLE;
+    const browser = syncEngineBrowserKind(input.subKey);
+    if (browser !== null) return SYNC_ENGINE_BROWSER_OPEN_TITLES[browser];
     const subKey = syncEngineSubKey(input.subKey);
     return subKey === null ? "🚨 Fansly Sync Engine alert" : SYNC_ENGINE_OPEN_TITLES[subKey];
   }
@@ -415,6 +470,8 @@ function resolveDetailForIncident(
       return "Fansly sync chunks starting again";
     case "fansly_sync_engine": {
       if (isSyncEngineRouteSubKey(input.subKey)) return SYNC_ENGINE_ROUTE_RESOLVE_DETAIL;
+      const browser = syncEngineBrowserKind(input.subKey);
+      if (browser !== null) return SYNC_ENGINE_BROWSER_RESOLVE_DETAILS[browser];
       const subKey = syncEngineSubKey(input.subKey);
       return subKey === null ? "Fansly Sync Engine alert cleared" : SYNC_ENGINE_RESOLVE_DETAILS[subKey];
     }

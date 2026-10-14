@@ -38,6 +38,7 @@ import {
   setSyncPageManualLogin,
   holdSyncPageManualLoginPause,
   endSyncPageManualLogin,
+  requestBrowserDrain,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncPages,
   trustSyncPageCredentials,
@@ -259,7 +260,7 @@ const UPDATES = [
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
   "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode", "setSyncPageTransport",
-  "confirmBrowserLeave", "assertBrowserLeft",
+  "confirmBrowserLeave", "assertBrowserLeft", "requestBrowserDrain",
   "setSyncPageManualLogin", "holdSyncPageManualLoginPause", "endSyncPageManualLogin",
 ];
 
@@ -375,6 +376,9 @@ async function runEveryPageRowUpdate(
       await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
       return endSyncPageManualLogin(tx, { pageId, by: "engine" });
     })).toBe(true)],
+    // The owner's drain of the stopped browser's buffer (PR 17): a pending leave again, the page on Node.
+    ["requestBrowserDrain", pageId, async () => expect(await db.transaction(async (tx) => requestBrowserDrain(tx as unknown as Database, { pageId })))
+      .toEqual({ kind: "requested", leave: generation })],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 

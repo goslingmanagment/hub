@@ -13,6 +13,7 @@ import {
 import {
   ensurePollRows,
   insertAgentKey,
+  insertPageBrowser,
   setConfigOverride,
   upsertDemand,
   type Database,
@@ -22,6 +23,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { SYNC_PAGE_REFRESH_AUDIT_EVENT } from "../apps/runtime/src/modules/sync-engine/index.ts";
+import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -250,6 +252,29 @@ describe("owner routes: status and work", () => {
     expect(left).toMatchObject({ mode: "shadow", owner: { running: false }, shadow: null });
     expect(left.queue.planned).toEqual({ runnable: 0, waitingByReason: {} });
     expect(left.sendsLastHour).toEqual({ urgent: 0, requests: 0, planned: 0, byResource: {} });
+  });
+
+  it("only a page with a browser has the «Браузер» block (Project Browser PR 17), on the owner's and the agents' status; no secret in it", async () => {
+    const pageId = (await testDb!.pool.query<{ id: string }>("select id::text from pages where label = 'lora-2'")).rows[0]!.id;
+    const profileId = randomUUID();
+    await insertPageBrowser(db(), {
+      profileId,
+      container: "page-browser-lora-2",
+      pageId: Number(pageId),
+      ...sealPageBrowserSecrets(appContext.config, { engineToken: "engine-token-5e1a", apiToken: "api-token-a0c3", vncPassword: "vnc-password-77d9" }),
+    });
+    try {
+      const response = await ownerGet("/api/v1/sync/pages");
+      const document = syncPagesResponseSchema.parse(response.json());
+      const withBrowser = document.pages.find((page) => page.pageLabel === "lora-2")!;
+      expect(withBrowser.browser).toMatchObject({ profileId, container: "page-browser-lora-2", transport: "node", alerts: [] });
+      for (const page of document.pages.filter((entry) => entry.pageLabel !== "lora-2")) expect("browser" in page, page.pageLabel ?? "").toBe(false);
+      for (const secret of ["engine-token-5e1a", "api-token-a0c3", "vnc-password-77d9"]) expect(response.body).not.toContain(secret);
+      const agent = agentSyncStatusResponseSchema.parse((await agentGet("/api/v1/agent/sync/pages?pageLabel=lora-2", DATASETS)).json());
+      expect(agent.pages[0]!.browser).toMatchObject({ profileId, transport: "node" });
+    } finally {
+      await testDb!.pool.query("delete from page_browsers where profile_id = $1", [profileId]);
+    }
   });
 
   it("a page's work rows newest first, filtered, each with why it waits", async () => {

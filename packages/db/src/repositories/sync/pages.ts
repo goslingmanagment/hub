@@ -532,6 +532,37 @@ export async function assertBrowserLeft(tx: Database, input: { pageId: number })
   return BigInt(leave);
 }
 
+/**
+ * The owner asks for what a page's stopped browser kept (Project Browser PR
+ * 17, `sync browser drain`): a page on Node whose browser's buffer is marked
+ * not drained gets a pending leave of its browser again (0278) — the host
+ * ends Node's slot, runs the leave (the operator told to stand stopped, its
+ * kept outcomes and buffer taken, the mark cleared), and Node takes the page
+ * again. Under the page's row lock, in the caller's transaction. Returns the
+ * pending leave's generation; `not_node`: the page is on its browser (its
+ * slot takes what it keeps); `pending`: a leave is pending already.
+ */
+export async function requestBrowserDrain(
+  tx: Database,
+  input: { pageId: number },
+): Promise<{ kind: "requested"; leave: bigint } | { kind: "not_node" | "pending" | "no_page" }> {
+  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null }>(sql`
+    select transport, browser_leave_generation::text as leave from sync_pages where page_id = ${input.pageId} for no key update
+  `);
+  const row = current.rows[0];
+  if (row === undefined) return { kind: "no_page" };
+  if (row.transport !== "node") return { kind: "not_node" };
+  if (row.leave !== null) return { kind: "pending" };
+  const updated = await tx.execute<{ leave: string }>(sql`
+    update sync_pages
+       set browser_leave_generation = owner_generation, browser_leave_requested_at = clock_timestamp(), updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+    returning browser_leave_generation::text as leave
+  `);
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { kind: "requested", leave: BigInt(updated.rows[0]!.leave) };
+}
+
 // ── mode ──────────────────────────────────────────────────────────────────────
 
 /** The transition the owner makes (`sync page mode`): the only one there is

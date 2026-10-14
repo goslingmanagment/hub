@@ -12,9 +12,11 @@ import { textArrayParam, timestampParam, toDate } from "./values.ts";
 // unjudged. Nothing here deletes: the rows of a page go with its erasure, and
 // a rule the vocabulary dropped is never read again.
 
-/** The evaluator's rules: the page alerts 1–4, the route incidents and the
- *  pace backstop. The one vocabulary of the evaluator (it writes exactly these)
- *  and of the watchdog (it reads exactly these). */
+/** The evaluator's rules: the page alerts 1–4, the route incidents, the
+ *  pace backstop and the page browser's incidents (Project Browser PR 17; a
+ *  page on Node is judged on its transport alone). The one vocabulary of the
+ *  evaluator (it writes exactly these) and of the watchdog (it reads exactly
+ *  these). */
 export const SYNC_ALERT_EVALUATION_RULES = [
   "page_stopped",
   "live_degraded",
@@ -22,6 +24,7 @@ export const SYNC_ALERT_EVALUATION_RULES = [
   "stuck",
   "route_limited",
   "pace_audit",
+  "browser",
 ] as const;
 export type SyncAlertEvaluationRule = (typeof SYNC_ALERT_EVALUATION_RULES)[number];
 

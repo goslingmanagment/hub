@@ -1379,7 +1379,7 @@ describe("sync_alert_evaluations.sql (bug hunt Д11: the alert evaluator's proof
     expect(sql).not.toMatch(/on delete cascade/);
     // The rule's vocabulary is the code's: no CHECK pins it.
     expect(sql).not.toMatch(/rule in \(/);
-    expect(SYNC_ALERT_EVALUATION_RULES).toEqual(["page_stopped", "live_degraded", "freshness", "stuck", "route_limited", "pace_audit"]);
+    expect(SYNC_ALERT_EVALUATION_RULES).toEqual(["page_stopped", "live_degraded", "freshness", "stuck", "route_limited", "pace_audit", "browser"]);
     const body = sql.slice(sql.indexOf("create table if not exists sync_alert_evaluations ("), sql.indexOf("\n);"));
     expect([...body.matchAll(/^\s{2}([a-z_]+) (?:bigint|text|timestamptz)\b/gm)].map((match) => match[1])).toEqual(columns);
   });
