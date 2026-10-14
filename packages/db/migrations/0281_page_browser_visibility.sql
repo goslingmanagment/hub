@@ -1,4 +1,4 @@
--- 0280_page_browser_visibility.sql
+-- 0281_page_browser_visibility.sql
 --
 -- Project Browser (docs/plans/project-browser/plan.md §4.9, §4.11; stage 3
 -- PR 17): what the engine keeps of a page's browser for the owner to see and
@@ -101,15 +101,15 @@ alter table page_browsers
   );
 
 comment on column page_browsers.down_since is
-  'Project Browser (0280): since when the operator has not said ready (its browser not up); null while ready.';
+  'Project Browser (0281): since when the operator has not said ready (its browser not up); null while ready.';
 comment on column page_browsers.alarm_kind is
-  'Project Browser (0280): the operator''s last alarm (spec §6.1), with alarm_at and its scalar details (no secrets).';
+  'Project Browser (0281): the operator''s last alarm (spec §6.1), with alarm_at and its scalar details (no secrets).';
 comment on column page_browsers.owner_stop_at is
-  'Project Browser (0280): the owner stopped the page''s browser (sync browser stop): the engine keeps its exit closed and Chrome stopped until sync browser start.';
+  'Project Browser (0281): the owner stopped the page''s browser (sync browser stop): the engine keeps its exit closed and Chrome stopped until sync browser start.';
 comment on column page_browsers.halt_reason is
-  'Project Browser (0280): a mirror of the halt the page''s operator holds for the owner''s decision on its volume (its reason, halt_at, halt_id), written with its state: for the owner''s view and the id his sync browser start clears. The operator enforces it, never this column.';
+  'Project Browser (0281): a mirror of the halt the page''s operator holds for the owner''s decision on its volume (its reason, halt_at, halt_id), written with its state: for the owner''s view and the id his sync browser start clears. The operator enforces it, never this column.';
 comment on column sync_pages.browser_stop_paused is
-  'Project Browser (0280): the page''s whole pause is the one the owner''s browser stop put on it; sync browser start lifts only that one, and the owner''s own change of the whole pause makes it his.';
+  'Project Browser (0281): the page''s whole pause is the one the owner''s browser stop put on it; sync browser start lifts only that one, and the owner''s own change of the whole pause makes it his.';
 
 create table if not exists page_browser_commands (
   id bigserial primary key,
@@ -140,7 +140,7 @@ create table if not exists page_browser_commands (
 create index if not exists page_browser_commands_pending_idx on page_browser_commands (page_id, id) where done_at is null;
 
 comment on table page_browser_commands is
-  'Project Browser (0280): the owner''s one-shot commands to a page''s browser (sync browser start|stop|snapshot|selftest), run once by the engine that owns the page over its link; never run after expires_at. Each ends with an outcome: ok, failed (the operator said no, or not run), expired (not sent before its expiry: nobody took it, or its taker went before sending), unknown (sent, no answer: never sent again).';
+  'Project Browser (0281): the owner''s one-shot commands to a page''s browser (sync browser start|stop|snapshot|selftest), run once by the engine that owns the page over its link; never run after expires_at. Each ends with an outcome: ok, failed (the operator said no, or not run), expired (not sent before its expiry: nobody took it, or its taker went before sending), unknown (sent, no answer: never sent again).';
 
 do $$
 begin

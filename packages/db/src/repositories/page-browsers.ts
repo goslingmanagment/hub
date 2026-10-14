@@ -54,29 +54,29 @@ export interface PageBrowserRow {
   /** The owner said the container stopped before the operator's buffer was
    *  drained (0278): what it kept waits there. Null: drained. */
   bufferUndrainedSince: Date | null;
-  /** The operator's next start after a failure (0280; `state.retryAtWall`). */
+  /** The operator's next start after a failure (0281; `state.retryAtWall`). */
   retryAt: Date | null;
-  /** Since when the operator has not said `ready` (0280): its browser is not
+  /** Since when the operator has not said `ready` (0281): its browser is not
    *  up. Null while it is ready (or before its first state). */
   downSince: Date | null;
-  /** Since when the operator has said its current stop reason (0280). */
+  /** Since when the operator has said its current stop reason (0281). */
   stopSince: Date | null;
   /** The delivery of the operator's events to the engine's commit over the
-   *  last minutes (0280), as the engine measured it, and when it said so. */
+   *  last minutes (0281), as the engine measured it, and when it said so. */
   deliveryP50Ms: number | null;
   deliveryP95Ms: number | null;
   deliveryAt: Date | null;
-  /** The operator's last alarm (0280; spec §6.1 `alarm`, scalar details). */
+  /** The operator's last alarm (0281; spec §6.1 `alarm`, scalar details). */
   alarmKind: string | null;
   alarmAt: Date | null;
   alarmDetail: Record<string, string | number | boolean> | null;
-  /** The owner's `sync browser stop` (0280): when and by whom (null: not
+  /** The owner's `sync browser stop` (0281): when and by whom (null: not
    *  stopped by the owner). Whether it put the page's pause is the page's
    *  (`sync_pages.browser_stop_paused`). */
   ownerStopAt: Date | null;
   ownerStopBy: string | null;
   /** A mirror of the halt the operator holds for the owner's decision on
-   *  its volume (0280; `state.halt`): its reason, since when, its id. The
+   *  its volume (0281; `state.halt`): its reason, since when, its id. The
    *  operator enforces it, never this mirror. Null: none said. */
   haltReason: string | null;
   haltAt: Date | null;
@@ -273,7 +273,7 @@ export interface PageBrowserStateInput {
   operatorVersion: string;
   selfTest: { ok: boolean; at: Date; failed: string | null } | null;
   buffer: { bytes: number; oldestAgeMs: number };
-  /** The operator's next start after a failure (`state.retryAtWall`; 0280).
+  /** The operator's next start after a failure (`state.retryAtWall`; 0281).
    *  Absent: not said (kept as it is). */
   retryAt?: Date | null;
   /** The halt the operator holds for the owner's decision (`state.halt`,
@@ -285,7 +285,7 @@ export interface PageBrowserStateInput {
 /** The operator's last `state`, at the database's clock. The link works:
  *  the engine's link error is cleared with it. Since when the browser is not
  *  up (`down_since`: any step but `ready`) and since when it says its stop
- *  reason (`stop_since`) are kept across states (0280). */
+ *  reason (`stop_since`) are kept across states (0281). */
 export async function recordPageBrowserState(db: Database, input: PageBrowserStateInput): Promise<boolean> {
   const retry = input.retryAt === undefined ? sql`retry_at` : sql`${input.retryAt === null ? null : input.retryAt.toISOString()}::timestamptz`;
   const result = await db.execute(sql`
@@ -477,7 +477,7 @@ export async function clearPageBrowserUndrained(db: Database, input: { profileId
 }
 
 /** The delivery of the operator's events to the engine's commit over the
- *  last minutes, as the engine measured it (0280). */
+ *  last minutes, as the engine measured it (0281). */
 export async function recordPageBrowserDelivery(
   db: Database,
   input: { profileId: string; p50Ms: number | null; p95Ms: number | null },
@@ -493,7 +493,7 @@ export async function recordPageBrowserDelivery(
   return result.rows.length === 1;
 }
 
-/** The operator's alarm (spec §6.1 `alarm`; 0280): its kind, its instant
+/** The operator's alarm (spec §6.1 `alarm`; 0281): its kind, its instant
  *  (never later than the database's clock) and its scalar details. The newest
  *  alarm wins; an older one written late changes nothing. */
 export async function recordPageBrowserAlarm(
@@ -531,7 +531,7 @@ function inTransaction<T>(db: Database, body: (tx: Database) => Promise<T>): Pro
 }
 
 /**
- * The owner stops the page's browser (`sync browser stop`, plan §4.11; 0280):
+ * The owner stops the page's browser (`sync browser stop`, plan §4.11; 0281):
  * the mark the engine keeps the browser stopped by, and its author. A page
  * already stopped by the owner keeps its first mark. Under the page row
  * lock, then the browser's row. Null: no profile bound to the page.
@@ -608,7 +608,7 @@ export interface PageBrowserOfPage {
   transport: "node" | "browser";
   /** The page's pending leave of its browser (0278): since when. */
   leaveSince: Date | null;
-  /** The page's whole pause is the owner's browser stop's (0280). */
+  /** The page's whole pause is the owner's browser stop's (0281). */
   browserStopPaused: boolean;
   /** The intake (0276): the operator's instant of the last event committed,
    *  the last commit, and a halted buffer (null: none). */
@@ -662,7 +662,7 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
 }
 
 /** What a page's browser may be told, read fresh by the page's owner right
- *  before it commands it (0280): the page's transport, its pending leave and
+ *  before it commands it (0281): the page's transport, its pending leave and
  *  its owner generation, its pause, the owner's login of the browser and the
  *  owner's stop. (A halt for the owner's decision is the operator's: it
  *  refuses a start itself.) */
@@ -673,7 +673,7 @@ export interface PageBrowserControlRead {
   leaveGeneration: bigint | null;
   ownerGeneration: bigint | null;
   pausedAll: boolean;
-  /** The whole pause is the one the owner's browser stop put (0280). */
+  /** The whole pause is the one the owner's browser stop put (0281). */
   browserStopPaused: boolean;
   /** The owner's login of the page's browser (0279; null: no engine row). */
   manualLogin: "off" | "wanted" | "ending" | null;

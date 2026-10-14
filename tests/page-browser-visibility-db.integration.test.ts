@@ -39,7 +39,7 @@ import { samplePageBrowserMetrics } from "../apps/runtime/src/sync/engine/metric
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { harnessConfig, seedHarnessPage } from "./helpers/sync-engine.ts";
 
-// The data of PR 17 (Project Browser plan §4.11; 0280): what the engine keeps
+// The data of PR 17 (Project Browser plan §4.11; 0281): what the engine keeps
 // of what a page's operator says (its start as it goes, its alarm, the
 // delivery of its events), the owner's stop, and his one-shot commands —
 // taken by the page's owner, run once, never past their expiry.
@@ -78,7 +78,7 @@ function state(profileId: string, patch: Partial<PageBrowserStateInput> = {}): P
   };
 }
 
-describe("the operator's state as the engine keeps it (0280)", () => {
+describe("the operator's state as the engine keeps it (0281)", () => {
   it("since when it is not up, and since when it says its stop reason, kept across states; its next retry", async (context) => {
     if (!testDb) return context.skip();
     const { profileId } = await browserPage();
@@ -136,7 +136,7 @@ describe("the operator's state as the engine keeps it (0280)", () => {
   });
 });
 
-describe("the owner's stop, the halt the operator holds as Hub mirrors it, and the pause the stop owns (0280)", () => {
+describe("the owner's stop, the halt the operator holds as Hub mirrors it, and the pause the stop owns (0281)", () => {
   it("keeps its first mark; the start lifts it and says the halt the operator holds — a mirror, written with every state and never cleared by Hub", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();
@@ -358,7 +358,7 @@ describe("the page row lock (Astra PR 17 round 2)", () => {
   });
 });
 
-describe("the owner's commands (0280)", () => {
+describe("the owner's commands (0281)", () => {
   it("taken by the page's owner, ended once by it; a newer owner takes one nothing was sent of — never one that was sent", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();

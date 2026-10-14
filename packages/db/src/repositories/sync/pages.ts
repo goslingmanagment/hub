@@ -568,7 +568,7 @@ export async function requestBrowserDrain(
 }
 
 /**
- * The owner's browser stop pauses the page (Project Browser PR 17; 0280):
+ * The owner's browser stop pauses the page (Project Browser PR 17; 0281):
  * under the page's row lock, in the caller's transaction. A page not paused
  * is paused with `note`, and the pause is the stop's (`browser_stop_paused`)
  * — `sync browser start` lifts it. A page on the pause its open login put on
@@ -603,7 +603,7 @@ export async function pausePageForBrowserStop(
 
 /**
  * The owner's `sync browser start` lifts the pause its stop put on the page,
- * and only that one (0280): a pause the owner changed since — paused or
+ * and only that one (0281): a pause the owner changed since — paused or
  * resumed by his own lever — is his and stays. While a login of the page's
  * browser is open the page stays paused: the pause goes back to the login
  * (`manual_login_paused`), which lifts it at its end. Under the page's row
@@ -1687,7 +1687,7 @@ export class SyncPageManualLoginOpenError extends Error {
  * when the login ends. The login lifts only what it set.
  *
  * The owner's own change of the whole pause (a pause or a resume) makes it
- * his also against the owner's browser stop (0280): the stop no longer
+ * his also against the owner's browser stop (0281): the stop no longer
  * counts it as the pause it put on the page (`browser_stop_paused` false), so
  * `sync browser start` lifts only a pause still its own — the model of the
  * login's pause.

@@ -466,7 +466,7 @@ export const pageBrowsers = pgTable("page_browsers", {
   handoverLastSendAt: timestamp("handover_last_send_at", { withTimezone: true }),
   // 0278: the owner said the container stopped before the buffer was drained.
   bufferUndrainedSince: timestamp("buffer_undrained_since", { withTimezone: true }),
-  // 0280 (Project Browser PR 17): the operator's start as it goes, its last
+  // 0281 (Project Browser PR 17): the operator's start as it goes, its last
   // alarm, the delivery of its events, the owner's stop
   // (`recordPageBrowserState`, `recordPageBrowserAlarm`, `setPageBrowserOwnerStop`).
   retryAt: timestamp("retry_at", { withTimezone: true }),
@@ -499,7 +499,7 @@ export const pageBrowserForgottenProfiles = pgTable("page_browser_forgotten_prof
   wasRegistered: boolean("was_registered").notNull(),
 });
 
-// Project Browser (0280, PR 17): the owner's one-shot commands to a page's
+// Project Browser (0281, PR 17): the owner's one-shot commands to a page's
 // browser, run once by the page's owner over its link (`page-browser-commands.ts`).
 export const pageBrowserCommands = pgTable("page_browser_commands", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -1086,7 +1086,7 @@ export const syncPages = pgTable(
     // through — undici from `sync`, or the page's own browser.
     transport: text("transport").$type<"node" | "browser">().notNull().default("node"),
     // 0278: a pending leave of the page's browser, and the last confirmed one.
-    // 0280 (Project Browser PR 17): the whole pause is the browser stop's.
+    // 0281 (Project Browser PR 17): the whole pause is the browser stop's.
     browserStopPaused: boolean("browser_stop_paused").notNull().default(false),
     browserLeaveGeneration: bigint("browser_leave_generation", { mode: "bigint" }),
     browserLeaveRequestedAt: timestamp("browser_leave_requested_at", { withTimezone: true }),

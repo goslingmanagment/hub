@@ -1006,7 +1006,7 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   tried under it: the hold names its digest as refused.
 
 - **What the operator says, and the owner's levers** (PR 17, `fansly/browser-record.ts`, `fansly/browser-control.ts`,
-  `browser-levers.ts`, `browser-status.ts`; 0280): over the link of the page's owner (its slot, or a leave) the
+  `browser-levers.ts`, `browser-status.ts`; 0281): over the link of the page's owner (its slot, or a leave) the
   operator's `state` goes on its profile's row — at once when it moved, else every 15 s, only a state it said — its
   link refused or broken (`link_error`), its last `alarm`, and the delivery of its events from their instant to the
   intake's commit (p50/p95). The page's status carries a `browser` block only for a page with a profile bound to it.

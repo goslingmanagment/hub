@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Project Browser (plan §4.11, §4.13; 0280, PR 17): the owner's one-shot
+// Project Browser (plan §4.11, §4.13; 0281, PR 17): the owner's one-shot
 // commands to a page's browser — `sync browser start` (`restartBrowser`),
 // `stop` and `snapshot` (`stopPage`: the operator answers once Chrome is
 // down, so its answer is the stop's confirmation) and `sync browser
