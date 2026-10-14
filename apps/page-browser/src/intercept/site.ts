@@ -86,7 +86,8 @@
 // cancelled before its answer stops the page (`request_unended`); an answer
 // whose body still comes 20 s after the grant (spec §3) has its tunnels cut.
 // A request of a document the site replaced is never released (amendment
-// 41, documents.ts).
+// 41, documents.ts). The page that stops ends what is in flight: an answer
+// already begun keeps its status and headers, its body a mark.
 //
 // `siteDone` — sent or not (the gate's word), when (Chrome's moment, never
 // before the gate's first bytes), the status, `Retry-After`, the error and
@@ -609,8 +610,14 @@ export class SiteRequests {
    *  every request of the site ends — a released one as sent when anything
    *  of it may have left — and nothing waits any more. */
   endAll(reason: string, browserGone = true): void {
+    const why = `the page stopped: ${reason}`;
     for (const op of [...this.#ops.values()]) {
-      this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: `the page stopped: ${reason}` });
+      const main = op.main;
+      // An answer already begun keeps what it said — its status, its
+      // headers (Retry-After) — and its body is a mark: the engine's hole
+      // and backfill (PR 13), never lost.
+      if (main?.answered && main.status !== null) this.#finish(op, { status: main.status, headers: main.headers, preflightAnswer: false, whole: op.capture === null ? null : false, error: why });
+      else this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: why });
     }
     this.#awaitingMain.clear();
     if (browserGone) {

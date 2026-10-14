@@ -749,6 +749,23 @@ describe("the gate and the end of a request (spec §9; stage 1, amendments 23, 3
     await until(() => w.buffer.siteRequests().length === 0, 3000, "its id to go");
   });
 
+  it("the page stops while an answer's body comes: its status and Retry-After kept, its body a mark — site.response complete: false and siteDone incomplete in one commit (Astra's review of PR 7)", async () => {
+    const w = await world();
+    const request = w.chrome.request(`${API}/notifications`, {
+      headers: siteHeaders("/api/v1/notifications"),
+      script: { status: 429, headers: [{ name: "content-type", value: "application/json" }, { name: "retry-after", value: "7" }], chunkDelayMs: 150, chunks: [JSON_BODY.subarray(0, 20), JSON_BODY.subarray(20)] },
+    });
+    await until(() => request.stage === "response", 3000, "the answer");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    w.site.endAll("the engine's closeExit", false);
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ sent: true, status: 429, retryAfter: "7", body: "incomplete", error: { afterSendStart: true, message: "the page stopped: the engine's closeExit" } });
+    const [response] = siteResponses(w.buffer);
+    expect(response).toMatchObject({ siteRequestId: done!.siteRequestId, attemptId: done!.attemptId, status: 429, complete: false, bodyId: null, body: { decodedBytes: 0 } });
+    expect(response!.headers).toMatchObject({ "retry-after": "7" });
+    expect(readdirSync(join(w.buffer.dir, "bodies"))).toEqual([]);
+  });
+
   it("an admission past its deadline at the release is not used: nothing leaves", async () => {
     const w = await world();
     w.engine.answer = (ask) => ({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() - 1, attemptId: 61 });
