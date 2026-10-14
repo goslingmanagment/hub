@@ -127,6 +127,16 @@ async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>):
   return { activity, faultMono };
 }
 
+/** The stop the exit closed for, as the engine saw it: the operator says
+ *  first that the exit closed (its `state` as the exit is cut) and a moment
+ *  later the step with its reason (the page's transition) — so the reason is
+ *  read once a state with one came since the fault, or after `waitMs`
+ *  without one (then the check says none was seen). */
+async function stoppedSince(ctx: Ctx, faultMono: number, reasons: readonly string[], halted: boolean | null, waitMs = 3000): Promise<string[]> {
+  await ctx.page.engine.waitState((state) => state.stopReason !== null, waitMs, faultMono);
+  return stoppedFor(transitions(ctx.page), faultMono, reasons, halted);
+}
+
 /** After a stop that holds: it holds for `holdMs`, then the engine starts
  *  the page and it comes up. */
 async function standsThenStarts(ctx: Ctx, fromMono: number, holdMs: number, what: string): Promise<Record<string, string[]>> {
@@ -196,7 +206,7 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
     // A killed Chrome is named chrome_crashed when s6 has reaped it by the
     // time the operator asks, cdp_lost otherwise; either is a failure with a
     // retry. Which one, the run notes.
-    if (closed) checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["cdp_lost", "chrome_crashed"], false);
+    if (closed) checks.stopReason = await stoppedSince(ctx, faultMono, ["cdp_lost", "chrome_crashed"], false);
     ctx.notes.stopReason = transitions(ctx.page).find((state) => state.atMono >= faultMono && state.stopReason !== null)?.stopReason ?? null;
     const alarm = engine.alarms.find(({ atMono, alarm: a }) => atMono >= faultMono && a.kind === "cdp_lost");
     checks.alarm = alarm ? [] : ["no cdp_lost alarm"];
@@ -225,7 +235,7 @@ function proxyFault(how: "down" | "auth", site = false): Scenario["run"] {
     // The exit IP is checked every 2 s on the stand (engine.ts STAND_PARAMS).
     await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
     checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 3500);
-    checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, how === "down" ? ["proxy_unavailable"] : ["proxy_auth"], false);
+    checks.stopReason = await stoppedSince(ctx, faultMono, how === "down" ? ["proxy_unavailable"] : ["proxy_auth"], false);
     const outageMs = 2500 + Math.round(ctx.random() * 2000);
     await sleep(outageMs);
     checks.stoodWhileDown = stoodBetween(transitions(ctx.page), faultMono + 3500, mono(), "while the proxy failed");
@@ -260,7 +270,7 @@ async function exitIpChange(ctx: Ctx): Promise<ScenarioOutcome> {
   await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
   activity.stop();
   checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 3500);
-  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["exit_ip_changed"], true);
+  checks.stopReason = await stoppedSince(ctx, faultMono, ["exit_ip_changed"], true);
   await ctx.stand.config({ exitIp: STAND_EXIT_IP });
   const restored = mono();
   // Two checks and the longest retry would have passed: it still stands.
@@ -322,8 +332,18 @@ function engineRestart(inFlight: boolean): Scenario["run"] {
     let restartMono = 0;
     const { activity, faultMono } = await atMoment(ctx, async (running) => {
       running.stop();
-      burst = await before.issueHub(inFlight ? 2 : 5);
-      before.sendIssued(burst, "/api/v1/account/me", inFlight ? "delayMs=8000" : "");
+      if (inFlight) {
+        // With the site live, one operation of the page in flight
+        // (admissions.ts): the request goes in its turn.
+        let sent: number | null = null;
+        await waitFor(async () => (sent = await before.sendHubInTurn("/api/v1/account/me", "delayMs=8000")) !== null, 20_000, 100);
+        burst = sent === null ? [] : [sent];
+      } else {
+        // Outcomes on their way at the restart: a burst, past the turns (no
+        // session of the site, so nothing of it leaves).
+        burst = await before.issueHub(5);
+        before.sendIssued(burst);
+      }
       if (inFlight) {
         const rids = burst.map((id) => before.ridOf(id));
         await waitFor(async () => (await ctx.stand.journal(ctx.journalSince)).some((event) => event.type === "req" && event.role === "api" && event.method !== "OPTIONS" && rids.includes(String(event.rid))), 25_000, 150);
@@ -407,7 +427,7 @@ async function diskFull(ctx: Ctx): Promise<ScenarioOutcome> {
   const checks: Record<string, string[]> = {};
   await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
   checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 2500);
-  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["disk_full"], false);
+  checks.stopReason = await stoppedSince(ctx, faultMono, ["disk_full"], false);
   const alarm = engine.alarms.find(({ atMono, alarm: a }) => atMono >= faultMono && a.kind === "buffer" && a.detail.full === true);
   checks.alarm = alarm ? [] : ["no buffer alarm saying full"];
   const fullMs = 2500 + Math.round(ctx.random() * 2000);
@@ -463,7 +483,7 @@ async function plannedStop(ctx: Ctx): Promise<ScenarioOutcome> {
   activity.stop();
   const checks: Record<string, string[]> = {};
   checks.exitClosed = exitClosedWithin(transitions(ctx.page), closures(ctx.page), faultMono, 1000);
-  checks.stopReason = stoppedFor(transitions(ctx.page), faultMono, ["owner_stop"], true);
+  checks.stopReason = await stoppedSince(ctx, faultMono, ["owner_stop"], true);
   Object.assign(checks, await standsThenStarts(ctx, mono(), 3000, "after stopPage"));
   return { faultMono, checks, attempts: activity.issued };
 }

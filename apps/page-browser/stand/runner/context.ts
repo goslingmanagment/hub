@@ -96,12 +96,24 @@ export class Page {
     return engine;
   }
 
+  /** Where the page's engine stands in a buffer: the highest number any of
+   *  its engines committed or acknowledged. A run's numbers start after it
+   *  (C7, criteria.ts `eventsComplete`): a number an earlier engine
+   *  acknowledged and never committed (the control `control-hole`) was lost
+   *  in that earlier run, and that run's C7 showed it — the operator deleted
+   *  it before this run began. */
+  async positionIn(bufferId: string): Promise<number> {
+    const acked = Math.max(0, ...this.engines.map((engine) => engine.ackedUpTo(bufferId)));
+    return Math.max(acked, await this.#store.committedUpTo(bufferId));
+  }
+
   /** The engine restarts: the old one is gone, a new one owns the page. */
   async restartEngine(options: { naive?: boolean; ackEarly?: boolean } = {}): Promise<StandEngine> {
     const previous = this.engine;
     await previous.drop("clean");
     const engine = this.newEngine(options);
     engine.run = previous.run;
+    engine.holdAdmissions(previous.admissionsHeld);
     await engine.takeOver();
     this.engine = engine;
     return engine;
@@ -110,8 +122,10 @@ export class Page {
 
 /** The Hub requests a run keeps issuing while the fault happens: each is
  *  an attempt the engine records, sends, and must see resolved exactly
- *  once. With no site in the work tab (until PR 7) the operator answers
- *  each "not sent"; its outcome still goes through the buffer. */
+ *  once — each in its turn, one operation of the page in flight
+ *  (admissions.ts). Without a live session of the site in the work tab the
+ *  operator answers each "not sent"; its outcome still goes through the
+ *  buffer. */
 export class Activity {
   readonly #page: Page;
   readonly #everyMs: number;
@@ -135,7 +149,10 @@ export class Activity {
     if (!engine.connected) return;
     this.#busy = true;
     try {
-      this.issued.push(...(await engine.sendHub(1)));
+      // One operation in flight per page (admissions.ts): a Hub request
+      // goes in its turn, or waits for the next tick.
+      const attemptId = await engine.sendHubInTurn();
+      if (attemptId !== null) this.issued.push(attemptId);
     } catch {
       // the database is down: an engine without it issues nothing
       this.errors += 1;

@@ -73,9 +73,12 @@ async function ceiling(page: Page, until: () => boolean, paceMs: number, roundTr
       await sleep(500);
       continue;
     }
+    // In its turn: one operation of the page in flight, the site's requests
+    // among them (admissions.ts).
+    let attemptId: number | null = null;
+    await waitFor(async () => until() || !engine.connected || (attemptId = await engine.sendHubInTurn().catch(() => null)) !== null, 30_000, 50);
     const began = mono();
-    const [attemptId] = await engine.sendHub(1).catch(() => [] as number[]);
-    if (attemptId !== undefined) {
+    if (attemptId !== null) {
       counts.set(page.info.name, (counts.get(page.info.name) ?? 0) + 1);
       const outcome = await engine.waitOutcome(attemptId, 30_000);
       if (outcome) roundTrips.push(outcome.atMono - began);
@@ -130,7 +133,7 @@ async function main(): Promise<void> {
   log("load.up", { startMs });
   for (const page of pages) {
     page.engine.wireMax.clear();
-    if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
+    if (page.engine.bufferId) positions.set(page.engine.bufferId, await page.positionIn(page.engine.bufferId));
   }
 
   // The resources, every 5 s (spec §4, threshold 8) — and the capture's

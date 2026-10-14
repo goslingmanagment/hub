@@ -33,12 +33,25 @@ export type PagesByAddress = ReadonlyMap<string, string>;
  *  its window (15 s) outlasts a short run. */
 export type GrantUse = Map<Grant, { preflight: number; main: number }>;
 
+/** The host a socket's address names (null: not an address). */
+function socketHost(url: string | null): string | null {
+  try {
+    return new URL(url ?? "").host;
+  } catch {
+    return null;
+  }
+}
+
 /** No API request and no socket reached Fansly without an admission in
  *  force — its own: the page's, for that address, inside its window. And one
  *  admission is one operation: one request and at most one preflight
  *  (owner decision №1), or one socket — a second arrival under it is a
  *  repeat, whatever came first. An arrival that is no page's (it did not come
- *  from a page's address) has no admission at all. */
+ *  from a page's address) has no admission at all. A socket's admission is
+ *  one socket of its host: the address `wsAdmit` names is a label — CDP's
+ *  word on the oldest socket of the host still waiting, or the host alone
+ *  when CDP has said nothing yet (src/rpc/protocol.ts, PR 10; ws/sockets.ts)
+ *  — and the operator binds the socket to its admission at its handshake. */
 export function unadmittedArrivals(events: readonly JournalEvent[], grants: readonly Grant[], pages: PagesByAddress, slackMs = ARRIVAL_SLACK_MS, used: GrantUse = new Map()): string[] {
   const violations: string[] = [];
   const inWindow = (grant: Grant, event: JournalEvent) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs;
@@ -52,7 +65,7 @@ export function unadmittedArrivals(events: readonly JournalEvent[], grants: read
       continue;
     }
     const target = api ? `${String(event.host)}${String(event.path)}` : String(event.url);
-    const own = grants.filter((grant) => grant.page === page && (api ? grant.kind === "hub" || grant.kind === "site" : grant.kind === "ws") && grant.target === target);
+    const own = grants.filter((grant) => grant.page === page && (api ? (grant.kind === "hub" || grant.kind === "site") && grant.target === target : grant.kind === "ws" && socketHost(grant.target) !== null && socketHost(grant.target) === socketHost(target)));
     if (own.length === 0) {
       violations.push(`${what} arrived without any admission of ${page} for it`);
       continue;
@@ -163,8 +176,10 @@ export function exactlyOnce(resolutions: readonly Resolution[]): string[] {
 
 export interface BufferBounds {
   bufferId: string;
-  /** The last number the engine had committed when the run began (0: none
-   *  — a buffer that is new to the engine starts at 1). */
+  /** Where the page's engine stood when the run began: the last number any
+   *  of its engines had committed or acknowledged (0: none — a buffer that
+   *  is new to the engine starts at 1). Below it the operator had deleted
+   *  everything before the run: what an earlier run lost, that run showed. */
   start: number;
   /** The highest number the operator sent during the run, as the engine saw
    *  it on the wire — recorded apart from what was stored. */

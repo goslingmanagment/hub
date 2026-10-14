@@ -9,10 +9,16 @@
 // absolute deadline, which is what the criteria compare the stand's journal
 // with.
 //
-// Admissions follow the engine's rules as far as the stand needs them: one
-// operation in flight per page, the next no sooner than `paceMs` after the
-// previous one ended (plan §4.3, "Fansly rate ceiling"), the send window of
-// 15 s (plan §4.14).
+// Admissions follow the engine's rules as far as the stand needs them
+// (admissions.ts): one operation in flight per page — a Hub request
+// (`sendHubInTurn`) or a site request alike —, the next no sooner than
+// `paceMs` after the previous one that may have left ended (plan §4.3,
+// "Fansly rate ceiling"), nothing before the operator's `quiesced`, the send
+// window of 15 s (plan §4.14). Between the runs of a series nothing is
+// admitted (`holdAdmissions`): every attempt is issued, and settled, inside
+// the run it is judged in. The bursts some scenarios send at once
+// (`issueHub` + `sendIssued`) go past the turns on purpose: outcomes on
+// their way at a fault.
 
 import { createHash, randomUUID } from "node:crypto";
 
@@ -39,15 +45,13 @@ import {
 } from "../../src/rpc/protocol.ts";
 import { atLeast } from "../../src/state/steps.ts";
 import { mono, sleep, STAND_ACCOUNT_ID } from "../shared.ts";
+import { Admissions, siteTarget } from "./admissions.ts";
 import type { Store, StoredEvent } from "./store.ts";
+
+export { siteTarget };
 
 /** Plan §4.14: the send window of an admission. */
 export const SEND_WINDOW_MS = 15_000;
-
-/** host + path + query of a site request, as the stand's journal has it. */
-export function siteTarget(request: Pick<SiteAdmit, "host" | "path" | "query">): string {
-  return `${request.host}${request.path}${request.query ? `?${request.query.replace(/^\?/, "")}` : ""}`;
-}
 
 export interface Grant {
   kind: "hub" | "site" | "ws";
@@ -95,6 +99,13 @@ export interface EngineOptions {
    *  in memory: the control that shows the contiguity check can fail. */
   ackEarly?: boolean;
   log?: (event: string, fields?: Record<string, unknown>) => void;
+}
+
+/** A Hub request's outcome that says it may have left (as the engine's
+ *  pacer reads it, pacer.ts `complete`). */
+function resultMayHaveLeft(result: Result): boolean {
+  const outcome = result.outcome;
+  return outcome.kind === "response" || ((outcome.kind === "transport_error" || outcome.kind === "timeout") && outcome.sent);
 }
 
 export const STAND_ENV: Hello["env"] = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.52, longitude: 13.405, accuracyM: 50 } };
@@ -155,14 +166,49 @@ export class StandEngine {
   #acked = new Map<string, number>();
   #subscribed = false;
   #stalled = false;
-  #inFlight: { ref: string; kind: "site" | "ws"; method: string; target: string } | null = null;
-  #lastEndMono = 0;
-  #siteQueue: SiteAdmit[] = [];
+  readonly #admissions: Admissions;
+  /** Socket admissions asked while admissions are held. */
+  #heldSockets: WsAdmit[] = [];
+  /** The highest number acknowledged to the operator, by buffer: where this
+   *  engine stands in it (with `ackEarly`, past what it committed). */
+  readonly #ackedMax = new Map<string, number>();
   #helloResolve: ((ok: boolean, reason: string) => void) | null = null;
   #closeWaiters: Array<() => void> = [];
 
   constructor(options: EngineOptions) {
     this.options = options;
+    this.#admissions = new Admissions({
+      now: mono,
+      paceMs: options.paceMs ?? 2500,
+      issue: async (request, target) => (await options.store.issue(options.page, this.run, "site", [/[?&]rid=([^&]+)/.exec(target)?.[1] ?? null]))[0]!,
+      admit: (request, target, attemptId) => this.#admitSite(request, target, attemptId),
+      refuse: (request, reason) => {
+        this.refusals.push({ kind: "site", ref: request.siteRequestId, reason, atMono: mono() });
+        this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: request.siteRequestId, admit: false, reason });
+      },
+      endWaitOver: (what) => this.#log("admission.end_wait_over", { what }),
+    });
+  }
+
+  /** Nothing is admitted while held — the site's requests and sockets wait —
+   *  and what waited is taken up once it is not. */
+  holdAdmissions(on: boolean): void {
+    this.#admissions.hold(on);
+    if (on) return;
+    for (const message of this.#heldSockets.splice(0)) this.#onWsAdmit(message);
+  }
+
+  get admissionsHeld(): boolean {
+    return this.#admissions.held;
+  }
+
+  /** The highest number of `bufferId` this engine acknowledged (0: none). */
+  ackedUpTo(bufferId: string): number {
+    return this.#ackedMax.get(bufferId) ?? 0;
+  }
+
+  #ack(bufferId: string, uptoSeq: number): void {
+    if (this.#send({ type: "ack", ownerGeneration: this.generation, bufferId, uptoSeq })) this.#ackedMax.set(bufferId, Math.max(this.#ackedMax.get(bufferId) ?? 0, uptoSeq));
   }
 
   #log(event: string, fields: Record<string, unknown> = {}): void {
@@ -180,6 +226,9 @@ export class StandEngine {
   /** The owner of the page is new: the next generation, recorded first. */
   async takeOver(): Promise<number> {
     this.generation = await this.options.store.nextGeneration(this.options.page);
+    // A new owner admits nothing before the operator says the earlier
+    // owner's work is over (`quiesced`, plan §4.7).
+    this.#admissions.ready(false);
     return this.generation;
   }
 
@@ -223,6 +272,7 @@ export class StandEngine {
         if (this.#ws === ws) {
           this.#closedAt = mono();
           this.closures.push(this.#closedAt);
+          this.#linkGone();
         }
         this.#log("engine.closed", { code: event.code });
         this.#helloResolve?.(false, `closed (${event.code})`);
@@ -272,6 +322,7 @@ export class StandEngine {
     const ws = this.#ws;
     this.#ws = null;
     this.#subscribed = false;
+    this.#linkGone();
     if (ws && ws.readyState <= WebSocket.OPEN) {
       const closed = new Promise<void>((resolve) => this.#closeWaiters.push(resolve));
       ws.close();
@@ -300,6 +351,13 @@ export class StandEngine {
         await sleep(250);
       }
     }
+  }
+
+  /** What was asked on the connection that went and not answered: the
+   *  operator asks it again on the next one (spec §6.2). */
+  #linkGone(): void {
+    this.#admissions.linkGone();
+    this.#heldSockets = [];
   }
 
   /** When the connection to the operator last closed (null: open). */
@@ -354,6 +412,7 @@ export class StandEngine {
         return;
       case "quiesced":
         this.quiesced.push(message);
+        this.#admissions.ready(true);
         return;
       case "commandResult":
         this.#commandResults.get(message.commandId)?.(message);
@@ -382,11 +441,8 @@ export class StandEngine {
       case "siteDone":
       case "wsDone":
         this.outcomeMessages.push({ atMono: at, message });
-        if (message.type !== "result" && this.#inFlight?.ref === (message.type === "siteDone" ? message.siteRequestId : message.connectionId)) {
-          this.#inFlight = null;
-          this.#lastEndMono = mono();
-          this.#pump();
-        }
+        if (message.type === "siteDone") this.#admissions.done(message.siteRequestId, message.sent);
+        else if (message.type === "result") this.#admissions.hubDone(message.attemptId, resultMayHaveLeft(message));
         this.#chain(() => this.#onOutcome(message));
         return;
       case "recoverResult":
@@ -399,11 +455,11 @@ export class StandEngine {
         return;
       case "siteAdmit":
         this.siteAsked.push({ siteRequestId: message.siteRequestId, method: message.method, target: siteTarget(message), atMono: at });
-        this.#siteQueue.push(message);
-        this.#pump();
+        this.#admissions.ask(message);
         return;
       case "wsAdmit":
-        this.#onWsAdmit(message);
+        if (this.#admissions.held) this.#heldSockets.push(message);
+        else this.#onWsAdmit(message);
         return;
       default:
         this.protocolErrors.push(`an unexpected message ${JSON.stringify(message).slice(0, 200)}`);
@@ -454,7 +510,7 @@ export class StandEngine {
     if (this.options.ackEarly) {
       const last = events.at(-1)!.seq;
       this.#acked.set(bufferId, last);
-      this.#send({ type: "ack", ownerGeneration: this.generation, bufferId, uptoSeq: last });
+      this.#ack(bufferId, last);
       await this.options.store.commitEvents(this.options.page, this.run, bufferId, events as unknown as StoredEvent[]).catch((error: unknown) => {
         this.eventsLost += events.length;
         this.#log("events.lost", { error: String(error) });
@@ -467,7 +523,7 @@ export class StandEngine {
       this.commitMs.push(mono() - began);
       const last = events.at(-1)!.seq;
       this.committedBatches.push({ bufferId, first: events[0]!.seq, last, fresh, atMono: mono() });
-      this.#send({ type: "ack", ownerGeneration: this.generation, bufferId, uptoSeq: last });
+      this.#ack(bufferId, last);
     } catch (error) {
       // Not committed, not acknowledged: the stream stalls, and is
       // subscribed again from the last committed number once the database
@@ -535,8 +591,7 @@ export class StandEngine {
   /** The site's requests that wait now: asked an admission and not given
    *  one yet, or admitted and not ended. */
   waiting(): Array<{ siteRequestId: string; method: string; target: string }> {
-    const queued = this.#siteQueue.map((next) => ({ siteRequestId: next.siteRequestId, method: next.method, target: siteTarget(next) }));
-    return this.#inFlight?.kind === "site" ? [{ siteRequestId: this.#inFlight.ref, method: this.#inFlight.method, target: this.#inFlight.target }, ...queued] : queued;
+    return this.#admissions.waiting();
   }
 
   #onCheck(attemptId: number): void {
@@ -544,50 +599,47 @@ export class StandEngine {
     this.#send({ type: "checkResult", ownerGeneration: this.generation, attemptId, admit: true, deadlineMono });
   }
 
-  /** The site's requests, one at a time, paced (plan §4.3). */
-  #pump(): void {
-    while (this.#inFlight === null && this.#siteQueue.length > 0) {
-      const next = this.#siteQueue.shift()!;
-      const now = mono();
-      if (now >= next.waitDeadlineMono) {
-        this.refusals.push({ kind: "site", ref: next.siteRequestId, reason: "wait_expired", atMono: now });
-        this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: next.siteRequestId, admit: false, reason: "wait_expired" });
-        continue;
-      }
-      const wait = this.#lastEndMono + (this.options.paceMs ?? 2500) - now;
-      if (wait > 0) {
-        this.#siteQueue.unshift(next);
-        setTimeout(() => this.#pump(), wait);
-        return;
-      }
-      const target = siteTarget(next);
-      this.#inFlight = { ref: next.siteRequestId, kind: "site", method: next.method, target };
-      void this.options.store.issue(this.options.page, this.run, "site", [/[?&]rid=([^&]+)/.exec(target)?.[1] ?? null]).then(
-        ([attemptId]) => {
-          const deadlineMono = this.#grant("site", next.siteRequestId, attemptId!, next.method, target);
-          this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: next.siteRequestId, admit: true, deadlineMono, attemptId });
-        },
-        () => {
-          this.#inFlight = null;
-          this.refusals.push({ kind: "site", ref: next.siteRequestId, reason: "buffer_full", atMono: mono() });
-          this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: next.siteRequestId, admit: false, reason: "buffer_full" });
-        },
-      );
-      return;
-    }
+  /** A site request's admission (admissions.ts decides which and when). One
+   *  that cannot be written to the operator never reached it: nothing can
+   *  go under it, and the engine settles its attempt as not sent itself —
+   *  the place in flight is free again. */
+  #admitSite(request: SiteAdmit, target: string, attemptId: number): void {
+    const deadlineMono = this.#grant("site", request.siteRequestId, attemptId, request.method, target);
+    if (this.#send({ type: "siteAdmitResult", ownerGeneration: this.generation, siteRequestId: request.siteRequestId, admit: true, deadlineMono, attemptId })) return;
+    this.grants.pop();
+    this.#notDelivered(attemptId, "siteAdmitResult");
+    this.#admissions.done(request.siteRequestId, false);
   }
 
   #onWsAdmit(message: WsAdmit): void {
+    if (mono() >= message.waitDeadlineMono) {
+      this.refusals.push({ kind: "ws", ref: message.connectionId, reason: "wait_expired", atMono: mono() });
+      this.#send({ type: "wsAdmitResult", ownerGeneration: this.generation, connectionId: message.connectionId, admit: false, reason: "wait_expired", retryNotBeforeWall: null });
+      return;
+    }
     void this.options.store.issue(this.options.page, this.run, "ws", [message.url]).then(
       ([attemptId]) => {
         const deadlineMono = this.#grant("ws", message.connectionId, attemptId!, null, message.url);
-        this.#send({ type: "wsAdmitResult", ownerGeneration: this.generation, connectionId: message.connectionId, admit: true, deadlineMono, attemptId });
+        if (this.#send({ type: "wsAdmitResult", ownerGeneration: this.generation, connectionId: message.connectionId, admit: true, deadlineMono, attemptId })) return;
+        this.grants.pop();
+        this.#notDelivered(attemptId!, "wsAdmitResult");
       },
       () => {
         this.refusals.push({ kind: "ws", ref: message.connectionId, reason: "store", atMono: mono() });
         this.#send({ type: "wsAdmitResult", ownerGeneration: this.generation, connectionId: message.connectionId, admit: false, reason: "the engine cannot record it", retryNotBeforeWall: null });
       },
     );
+  }
+
+  /** An admission the operator never got: its attempt ends not sent, by the
+   *  engine's own word (as main's engine settles a grant it could not write,
+   *  browser-site.ts `grant`). */
+  #notDelivered(attemptId: number, what: string): void {
+    this.#chain(async () => {
+      await this.options.store.commitOutcome(this.options.page, this.run, attemptId, what, "not_delivered", false, { type: what, attemptId, delivered: false }, this.options.naive === true).catch((error: unknown) => {
+        this.#log("outcome.commit_failed", { attemptId, error: String(error) });
+      });
+    });
   }
 
   // ── what the engine asks ───────────────────────────────────────────────
@@ -604,14 +656,16 @@ export class StandEngine {
     return ids;
   }
 
-  /** The `send` of attempts issued before. */
-  sendIssued(ids: readonly number[], path = "/api/v1/account/me", query = ""): void {
+  /** The `send` of attempts issued before; false: not all could be
+   *  written. */
+  sendIssued(ids: readonly number[], path = "/api/v1/account/me", query = ""): boolean {
     const live = this.state?.sessionFingerprint ?? createHash("sha256").update("pb-suite: no live session").digest("hex");
+    let all = true;
     for (const attemptId of ids) {
       const target = `apiv3.fansly.com${path}?rid=${this.ridOf(attemptId)}${query ? `&${query}` : ""}`;
       this.#hubTargets.set(attemptId, target);
       const now = mono();
-      this.#send({
+      const written = this.#send({
         type: "send",
         ownerGeneration: this.generation,
         attemptId,
@@ -626,7 +680,32 @@ export class StandEngine {
         sendDeadlineMono: now + this.windowMs,
         requestDeadlineMono: now + this.windowMs + 20_000,
       });
+      all &&= written;
     }
+    return all;
+  }
+
+  /** One Hub request in its turn (admissions.ts): issued and sent only when
+   *  no other operation of the page is in flight, the pace has passed and it
+   *  is not the site's turn; its `result` ends the turn. Null: not now. */
+  async sendHubInTurn(path = "/api/v1/account/me", query = ""): Promise<number | null> {
+    if (!this.connected || this.#silent) return null;
+    const turn = this.#admissions.takeHub();
+    if (turn === null) return null;
+    let attemptId: number;
+    try {
+      [attemptId] = (await this.issueHub(1)) as [number];
+    } catch (error) {
+      turn.release(false);
+      throw error;
+    }
+    turn.bind(attemptId);
+    if (!this.sendIssued([attemptId], path, query)) {
+      // Never written: the operator never had it.
+      this.#notDelivered(attemptId, "send");
+      turn.release(false);
+    }
+    return attemptId;
   }
 
   /** The request id (in the URL) of a Hub attempt this engine issued. */

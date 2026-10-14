@@ -299,6 +299,13 @@ async function settle(s: Stand, page: Page, label: string, naive: boolean): Prom
   await engine.settled();
 }
 
+/** Between runs the engines admit nothing (engine.ts `holdAdmissions`): an
+ *  attempt issued while a run is judged would be counted in it without the
+ *  time to settle — or, issued under no run, never judged at all. */
+function holdAdmissions(s: Stand): void {
+  for (const page of s.pages.values()) for (const engine of new Set([page.engine, ...page.enginesOfRun])) engine.holdAdmissions(true);
+}
+
 async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, dir: string): Promise<ScenarioRecord> {
   const info = s.topology.pages.find((candidate) => (scenario.page === "disk" ? candidate.buffer === "tmpfs" : candidate.buffer === "volume"));
   if (!info) throw new Error(`the stand has no ${scenario.page} page`);
@@ -326,6 +333,9 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
     for (const p of s.pages.values()) {
       p.engine.run = label;
       p.enginesOfRun = [p.engine];
+      // Admissions open with the run's label: whatever waited since the run
+      // before is admitted (or refused) under this one, and judged here.
+      p.engine.holdAdmissions(false);
     }
     const notes: Record<string, unknown> = {};
     let armed = false;
@@ -361,7 +371,7 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       await page.engine.settled();
       journalSince = await s.stand.mark();
       for (const engine of page.enginesOfRun) engine.wireMax.clear();
-      if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
+      if (page.engine.bufferId) positions.set(page.engine.bufferId, await page.positionIn(page.engine.bufferId));
       // The run's start sentinel goes only to a capture proven live.
       notes.captureLiveMs = await proveCaptureLive(s, info, seed);
       await sendSentinel(info.controlIp, ports.start);
@@ -385,10 +395,14 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       };
       log("run.start", { scenario: scenario.name, run, seed, momentMs });
       outcome = await scenario.run(ctx);
+      // Nothing more is admitted under this run: what it issued settles, and
+      // is judged, with nothing issued after it.
+      holdAdmissions(s);
       await settle(s, page, label, outcome.naive === true);
     } catch (caught) {
       error = caught instanceof Error ? (caught.stack ?? caught.message) : String(caught);
     }
+    holdAdmissions(s);
     if (sentinels.length > 0) {
       await sendSentinel(info.controlIp, ports.end);
       sentinels.push(ports.end);
@@ -455,6 +469,7 @@ async function main(): Promise<void> {
   if (unknown.length > 0) throw new Error(`unknown scenarios: ${unknown.join(", ")}`);
   const chosen = SCENARIOS.filter((scenario) => (only === null || only.includes(scenario.name)) && !except.has(scenario.name));
   const s = await openStand();
+  holdAdmissions(s);
   const dir = join(s.topology.results, "series", name);
   mkdirSync(dir, { recursive: true });
   const series: SeriesRecord = { name, seed, runs, revision: process.env.PB_SUITE_REV ?? "unknown", image: process.env.PB_SUITE_IMAGE ?? "unknown", startedWall: Date.now(), finishedWall: null, scenarios: chosen.map((scenario) => scenario.name) };

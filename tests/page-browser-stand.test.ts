@@ -41,11 +41,13 @@ import {
 } from "../apps/page-browser/stand/runner/criteria.ts";
 import type { Grant } from "../apps/page-browser/stand/runner/engine.ts";
 import { loadVerdict, type Threshold } from "../apps/page-browser/stand/runner/load.ts";
+import { Admissions } from "../apps/page-browser/stand/runner/admissions.ts";
 import { SCENARIOS } from "../apps/page-browser/stand/runner/scenarios.ts";
 import { rng, runSeed, type RunRecord, type ScenarioRecord, type SeriesRecord } from "../apps/page-browser/stand/runner/series.ts";
 import { standFrameOf } from "../apps/page-browser/stand/runner/store.ts";
 import { COMMON_CHECKS, judge, SETUP_FAILURE, violationsOf, type Checks, type Control } from "../apps/page-browser/stand/runner/verdict.ts";
 import { verifySeries } from "../apps/page-browser/stand/runner/verify.ts";
+import type { SiteAdmit } from "../apps/page-browser/src/rpc/protocol.ts";
 
 // The stand's criteria (Project Browser plan §5, stage 2; PR 19) are pure
 // functions over a run's evidence: each must hold on clean evidence and
@@ -99,6 +101,16 @@ describe("C1: no request or socket without an admission in force", () => {
     expect(unadmittedArrivals([socketOpen(500, "ws-3", { url: "wss://chatws.fansly.com/?v=3" })], grants, PAGES)).toEqual([expect.stringContaining("arrived without any admission of p1")]);
     expect(unadmittedArrivals([socketOpen(500, "ws-4", { from: "10.0.1.102" })], grants, PAGES)).toEqual([expect.stringContaining("without any admission of p2")]);
     expect(unadmittedArrivals([socketOpen(20_000, "ws-5")], grants, PAGES)).toEqual([expect.stringContaining("outside its admission window")]);
+  });
+
+  it("a socket's admission is one socket of its host: the address wsAdmit names is a label — the host alone while CDP has said nothing yet", () => {
+    // The operator asked before CDP told of the socket (ws/sockets.ts): the
+    // admission names the host only, the socket opens at /?v=3.
+    const labelled = [grant("ws", "wss://wsv3.fansly.com/", 400)];
+    expect(unadmittedArrivals([socketOpen(500, "ws-1")], labelled, PAGES)).toEqual([]);
+    expect(unadmittedArrivals([socketOpen(500, "ws-1"), socketOpen(600, "ws-2")], labelled, PAGES)).toEqual([expect.stringContaining("arrived again under one admission")]);
+    expect(unadmittedArrivals([socketOpen(500, "ws-3", { url: "wss://chatws.fansly.com/?v=3" })], labelled, PAGES)).toEqual([expect.stringContaining("arrived without any admission of p1")]);
+    expect(unadmittedArrivals([socketOpen(20_000, "ws-4")], labelled, PAGES)).toEqual([expect.stringContaining("outside its admission window")]);
   });
 });
 
@@ -560,6 +572,177 @@ describe("the series' verifier", () => {
     // Every common criterion a control can trip on the stand has one.
     const tripped = new Set(SCENARIOS.filter((scenario) => scenario.control && scenario.needs.length === 0).flatMap((scenario) => Object.keys(scenario.control!)));
     expect([...tripped].sort()).toEqual(["C1", "C2", "C3", "C4", "C5", "C6", "C7"]);
+  });
+});
+
+describe("the stand's engine admits as main's engine does: one operation in flight (admissions.ts)", () => {
+  // A clock and timers of the test's own: the admissions are driven step by
+  // step.
+  const harness = (options: { paceMs?: number; endWaitMs?: number } = {}) => {
+    let now = 1000;
+    const timers: Array<{ at: number; run: () => void } | null> = [];
+    const admitted: string[] = [];
+    const refused: Array<{ id: string; reason: string }> = [];
+    const over: string[] = [];
+    let attempts = 0;
+    const admissions = new Admissions({
+      now: () => now,
+      paceMs: options.paceMs ?? 2500,
+      endWaitMs: options.endWaitMs ?? 60_000,
+      issue: () => Promise.resolve(++attempts),
+      admit: (request) => admitted.push(request.siteRequestId),
+      refuse: (request, reason) => refused.push({ id: request.siteRequestId, reason }),
+      endWaitOver: (what) => over.push(what),
+      setTimer: (run, ms) => timers.push({ at: now + ms, run }) - 1,
+      clearTimer: (index) => {
+        timers[index as number] = null;
+      },
+    });
+    const ask = (id: string, waitMs = 60_000): SiteAdmit => {
+      const request: SiteAdmit = { type: "siteAdmit", siteRequestId: id, method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", query: "", resourceType: "XHR", route: "account.me", operation: "read", sessionFingerprint: null, pausedMono: now, waitDeadlineMono: now + waitMs };
+      admissions.ask(request);
+      return request;
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const advance = async (ms: number) => {
+      now += ms;
+      for (let index = 0; index < timers.length; index++) {
+        const timer = timers[index];
+        if (timer && timer.at <= now) {
+          timers[index] = null;
+          timer.run();
+        }
+      }
+      await settle();
+    };
+    return { admissions, ask, admitted, refused, over, settle, advance };
+  };
+
+  it("one operation in flight, a Hub request or a site request alike: neither goes while the other waits for its end", async () => {
+    const { admissions, ask, admitted, settle, advance } = harness();
+    const hub = admissions.takeHub();
+    expect(hub).not.toBeNull();
+    hub!.bind(7);
+    ask("site-1");
+    await settle();
+    // The Hub request is in flight: the site waits, and so does a second Hub.
+    expect(admitted).toEqual([]);
+    expect(admissions.takeHub()).toBeNull();
+    // Its result: sent. The pace, then the site's turn.
+    admissions.hubDone(7, true);
+    await settle();
+    expect(admitted).toEqual([]);
+    await advance(2500);
+    expect(admitted).toEqual(["site-1"]);
+    // The site request in flight: no Hub request goes beside it.
+    await advance(5000);
+    expect(admissions.takeHub()).toBeNull();
+    admissions.done("site-1", true);
+    await advance(2500);
+    expect(admissions.takeHub()).not.toBeNull();
+  });
+
+  it("Hub and site take turns while both wait", async () => {
+    const { admissions, ask, admitted, settle, advance } = harness({ paceMs: 0 });
+    for (const id of ["s1", "s2", "s3"]) ask(id);
+    await settle();
+    expect(admitted).toEqual(["s1"]);
+    // The Hub request wants its turn: s1 ends, the Hub goes before s2.
+    expect(admissions.takeHub()).toBeNull();
+    admissions.done("s1", true);
+    await settle();
+    expect(admitted).toEqual(["s1"]);
+    const hub = admissions.takeHub();
+    expect(hub).not.toBeNull();
+    hub!.bind(1);
+    // The Hub's end: the site's turn, not a second Hub request's.
+    admissions.hubDone(1, true);
+    expect(admissions.takeHub()).toBeNull();
+    await advance(0);
+    expect(admitted).toEqual(["s1", "s2"]);
+  });
+
+  it("a request that never left sets no pace: what a restarted browser left behind is cleared at once, not one pace each", async () => {
+    const { admissions, ask, admitted, settle, advance } = harness();
+    for (const id of ["old-1", "old-2", "old-3", "new"]) ask(id);
+    for (const id of ["old-1", "old-2", "old-3"]) {
+      await settle();
+      expect(admitted.at(-1)).toBe(id);
+      // The operator: "not used: its request had ended" — nothing left.
+      admissions.done(id, false);
+    }
+    await settle();
+    expect(admitted).toEqual(["old-1", "old-2", "old-3", "new"]);
+    // A request that may have left: the next one waits for the pace.
+    admissions.done("new", true);
+    ask("next");
+    await settle();
+    expect(admitted).not.toContain("next");
+    await advance(2499);
+    expect(admitted).not.toContain("next");
+    await advance(1);
+    expect(admitted.at(-1)).toBe("next");
+  });
+
+  it("an id is admitted once; what a connection that went asked and was not answered is dropped, and taken again when asked again", async () => {
+    const { admissions, ask, admitted, settle } = harness();
+    ask("a");
+    ask("a");
+    ask("b");
+    await settle();
+    expect(admitted).toEqual(["a"]);
+    // The connection goes: "b" (asked, not answered) is dropped; "a" is in
+    // flight and its end still counts.
+    admissions.linkGone();
+    admissions.done("a", false);
+    await settle();
+    expect(admitted).toEqual(["a"]);
+    expect(admissions.waiting()).toEqual([]);
+    // The operator asks again on the next connection: "a" ended, "b" not.
+    ask("a");
+    ask("b");
+    await settle();
+    expect(admitted).toEqual(["a", "b"]);
+  });
+
+  it("held between runs, and before the operator's quiesced: nothing is admitted; what waits is taken up after — refused when its wait is over", async () => {
+    const { admissions, ask, admitted, refused, settle, advance } = harness();
+    admissions.hold(true);
+    ask("short", 1000);
+    ask("long");
+    await settle();
+    expect(admitted).toEqual([]);
+    expect(admissions.takeHub()).toBeNull();
+    await advance(1500);
+    expect(admitted).toEqual([]);
+    // A new owner: nothing before quiesced either.
+    admissions.ready(false);
+    admissions.hold(false);
+    await settle();
+    expect(admitted).toEqual([]);
+    admissions.ready(true);
+    await settle();
+    expect(refused).toEqual([{ id: "short", reason: "wait_expired" }]);
+    expect(admitted).toEqual(["long"]);
+  });
+
+  it("an operation whose end never comes frees the place after the end wait, as one that may have left", async () => {
+    const { admissions, ask, admitted, over, settle, advance } = harness({ endWaitMs: 60_000 });
+    ask("lost");
+    ask("next", 120_000);
+    await settle();
+    expect(admitted).toEqual(["lost"]);
+    await advance(59_999);
+    expect(admitted).toEqual(["lost"]);
+    await advance(1);
+    expect(over).toEqual(["site request lost"]);
+    // It may have left: the pace holds the next one.
+    expect(admitted).toEqual(["lost"]);
+    await advance(2500);
+    expect(admitted).toEqual(["lost", "next"]);
+    // An end that comes late changes nothing.
+    admissions.done("lost", true);
+    expect(admissions.waiting().map((request) => request.siteRequestId)).toEqual(["next"]);
   });
 });
 
