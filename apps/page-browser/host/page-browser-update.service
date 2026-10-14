@@ -1,0 +1,23 @@
+# Project Browser — the daily look for a new Chrome (plan §4.10; stage 3,
+# PR 18): the newest Chrome Stable in Google's repository, verified with the
+# key pinned beside this unit; a newer one archived, built into
+# hub-page-browser:<Chrome>-<commit> on the commit the last deploy kept, and
+# proposed to the owner (the system journal, update/status, update/notify).
+# It never updates a page: that waits for the owner (plan §8 №15) —
+# page-browser-update.sh update / rollout.
+[Unit]
+Description=Project Browser: look for a newer Chrome, fetch, verify and build it, propose the update (no page touched)
+Documentation=file:///opt/agency-hub/page-browser/page-browser-update.sh
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agency-hub/page-browser/page-browser-update.sh check
+# A build is dockerd's work, out of this unit's limits: the timer runs it at
+# night, outside the hours a page is updated in.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h

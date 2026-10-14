@@ -95,6 +95,8 @@ async function setUp(
     siteTimings?: OperatorDeps["siteTimings"];
     /** How long the site's document may take (30 s in the operator). */
     siteLoadMs?: number;
+    /** The page's slot past its admission's deadline (22 s in the operator). */
+    slotLimitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -154,7 +156,7 @@ async function setUp(
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -1478,8 +1480,12 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     admitting = true;
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.model.navigations.length === 3 && s.operator.page.step === "site_loaded", 10_000, "the new start's site");
+    const ended = s.engine.of("siteDone").length;
     const admitted = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
     await until(() => admitted.outcome === "continued", 3000, "its admission");
+    // One admitted request of the page at a time: the read in its turn,
+    // once the site's request ended.
+    await until(() => s.engine.of("siteDone").length > ended, 5000, "the site's request to end");
     s.engine.send(identity(9503, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9503, 10_000);
     await until(() => s.operator.page.step === "ready", 5000, "ready in the new start");
@@ -1543,7 +1549,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "their ids to go");
   });
 
-  it("a request of the site in flight at the confirmation is waited out before that reload: the reload cancels nothing, and nothing stops the page", async () => {
+  it("one admitted request of the page at a time: the identity read admitted while a request of the site is in flight is not released (not sent, \"pace\", the gate's refusal logged); after that request's answer it confirms, and the reload cancels nothing and stops nothing", async () => {
     let attempt = 9800;
     const answers: Array<{ admit: number } | { refuse: string }> = [{ refuse: "held" }];
     const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
@@ -1554,20 +1560,89 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     const flying = read(s, "/api/v1/notifications");
     await until(() => s.operator.site.released === 1, 3000, "the request in flight");
     s.model.hubBody = account("123456789");
+    // An engine that overlaps them: the read is refused, nothing of it goes.
     s.engine.send(identity(9901, FINGERPRINT));
-    await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000);
-    // Confirmed by the read, but the tab does not navigate while it flies.
-    expect(s.model.navigations).toHaveLength(1);
-    expect(s.operator.site.released).toBe(1);
+    expect(await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000)).toMatchObject({ outcome: { kind: "aborted_before_send", refusal: "pace" } });
+    expect(s.lines.join("\n")).toContain('"kind":"in_flight_refused"');
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801, 10_000)).toMatchObject({ sent: true, status: 200 });
+    // In its turn: confirmed, the tab loaded anew once.
+    s.engine.send(identity(9902, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9902, 10_000);
     await until(() => s.operator.page.step === "ready", 8000, "the page ready");
     expect(s.model.navigations).toHaveLength(2);
-    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801)).toMatchObject({ sent: true, status: 200 });
     const answered = s.chrome.commands.findIndex((command) => command.method === "Fetch.continueResponse" && command.params.requestId === flying.interceptionId);
     const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
     expect(answered).toBeGreaterThan(-1);
     expect(answered).toBeLessThan(reload);
     expect(s.operator.page.snapshot.stopReason).toBeNull();
     expect(s.engine.of("state").every((state) => state.stopReason === null)).toBe(true);
+  });
+
+  it("the engine's closeExit keeps the page's slot while a released request of the site has no end: openExit is refused until Chrome is started anew (Astra's 2)", async () => {
+    let attempt = 9600;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // A request of the site released; its answer does not come.
+    s.model.siteAnswerDelayMs = 60_000;
+    const flying = read(s, "/api/v1/notifications");
+    // Its tunnel up and its records written: Chrome waits for the answer.
+    await until(() => flying.proxyStatus === 200 && s.model.requests.includes(flying) && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    expect(owner).toMatch(/^site:/);
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    // The site's operations are ended (told not sent); the slot is kept.
+    expect(s.operator.site.live).toBe(0);
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    expect(await command(s.engine, "openExit")).toMatchObject({ ok: false, detail: expect.stringContaining(`has no end yet (${owner})`) });
+    expect(s.operator.egress.exitOpen).toBe(false);
+    // A fresh Chrome: nothing of the old one can go; the page comes up.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded" && s.operator.egress.exitOpen, 10_000, "the page anew");
+    expect(s.operator.egress.gate.slotOwner).toBeNull();
+  });
+
+  it("a request's end for the page's slot is Chrome's answer to its resolution, never the decision: while the fail of an ended operation's answer is unanswered, the slot stays (Astra's round 2)", async () => {
+    let attempt = 9650;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // Released, its records written; its answer comes 800 ms later.
+    s.model.siteAnswerDelayMs = 800;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => flying.proxyStatus === 200 && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    // Its operation ends (the engine's closeExit); its answer is still to come.
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    expect(s.operator.site.live).toBe(0);
+    // Chrome does not answer the fail of that answer (yet).
+    let answer: (() => void) | null = null;
+    s.chrome.handlers.set("Fetch.failRequest", () => new Promise((resolve) => (answer = () => resolve({}))));
+    await until(() => s.chrome.commands.some((sent) => sent.method === "Fetch.failRequest" && sent.params.requestId === flying.interceptionId), 3000, "the answer's fail sent");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Decided, not done: the slot is still the operation's.
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    expect(s.operator.egress.gate.slotPending).toHaveLength(1);
+    // Chrome answers it: the request is over, and the slot free.
+    answer!();
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the slot free once answered");
+  });
+
+  it("the page's slot past its bound with a released request's end unknown: the page stops (request_unended), Chrome goes, and only then is the slot free", async () => {
+    let attempt = 9700;
+    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
+    // Admissions of 1 s here.
+    const answer = s.engine.onMessage;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 1000, attemptId: ++attempt });
+      else answer?.(message);
+    };
+    s.model.siteAnswerDelayMs = 60_000;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => flying.proxyStatus === 200 && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 5000, "the stop past the bound");
+    expect(s.lines.join("\n")).toContain('"e":"slot.unended"');
+    await until(() => s.operator.egress.gate.slotOwner === null, 5000, "Chrome gone, the slot free");
   });
 
   it("waits for the engine: a new connection is asked again by the same id; the wait is the engine's parameter, and past it the request fails (Failed)", async () => {

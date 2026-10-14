@@ -85,8 +85,13 @@ export type Resolution = "answered" | "refused" | "unanswered";
 
 export interface PausedOptions {
   decide: (request: PausedRequest) => PausedDecision;
-  /** Every resolution, for the request journal (logs/). */
+  /** Every resolution, for the request journal (logs/): called as it is
+   *  decided, before Chrome has answered it. */
   onDecided?: (request: PausedRequest, decision: PausedDecision) => void;
+  /** Every resolution once Chrome answered it (or did not: `unanswered`).
+   *  What depends on the resolution having happened — a request's end for
+   *  the page's slot — goes here, never in `onDecided`. */
+  onResolved?: (request: PausedRequest, decision: PausedDecision, resolution: Resolution) => void;
   /** Chrome did not answer a resolution: the request may still be paused. */
   onIndeterminate?: (request: PausedRequest, why: string) => void;
   log?: Logger;
@@ -221,6 +226,7 @@ export class PausedRequests {
       this.#resolving -= 1;
       if (resolution !== "unanswered") this.#cdp.ack(request.seq);
     }
+    this.#options.onResolved?.(request, decision, resolution);
     return resolution;
   }
 }
