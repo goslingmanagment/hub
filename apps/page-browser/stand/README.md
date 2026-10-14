@@ -176,8 +176,11 @@ deadline does not say that the request still waited. Hub's own path
 journals no end of its request (its deadline refusal is the outcome
 `aborted_before_send`, `send_deadline_passed`), so only site requests count
 here. The control (`control-site-late-send`, and `control-held-late` in
-main) must show a request arriving after its journaled deadline over a
-CONNECT held across it, and C1 calling it late.
+main) must show a request arriving after its journaled deadline over the
+very CONNECT held across it — the arrival's SOCKS connection, which the
+front journals with every request, is that held one — and C1 calling it
+late. A late arrival over another connection does not make the control
+pass; it is a C1 violation in its own right.
 
 | Scenario | Needs | A pass proves |
 |---|---|---|
@@ -202,12 +205,12 @@ CONNECT held across it, and C1 calling it late.
 | `control-duplicate` | — | **control**: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate |
 | `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — the lost event is the tail, and C7 must catch it (the operator's numbers) |
 | `control-lost-frames` | — | **control**: events made and lost before the engine ever received them — the stand's Fansly sends three frames into a socket opened from the page's own address (one, under an admission), which the operator never saw; and it answers a request sent under a site admission of a real attempt, whose outcome the stand commits as the engine does on `siteDone` while no `site.response` event of it ever comes (main's operator sends neither: PR 7 — this half stands in for the engine's side). No number is missing, nothing came on the wire, no gap mark — C7 must catch both against the stand's own record of what it made |
-| `control-held-late` | — | **control**: the expiry's control side, live in main — a request admitted for 6 s is sent from the page's own address through a CONNECT the SOCKS5 holds 10 s: the run must show it arriving after its deadline over the CONNECT held across it (the check `control-site-late-send` runs on the real operator); C1 must call it late, and C7 must miss the outcome of a request Fansly answered |
+| `control-held-late` | — | **control**: the expiry's control side, live in main — a request admitted for 6 s is sent from the page's own address through a CONNECT the SOCKS5 holds 10 s: the run must show it arriving after its deadline over the very CONNECT held across it (the check `control-site-late-send` runs on the real operator); C1 must call it late, and C7 must miss the outcome of a request Fansly answered |
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |
 | `site-proxy-down` | PR 7 | the site's requests that waited when the proxy failed — asked an admission and not given one, or admitted and not ended; recorded right before the failure, and there must be some — never go after it is back, whatever admission they get then (plan §4.5) |
 | `site-admission-expiry` | PR 7 | an admission of 6 s runs out while the site request waits for its connection — the SOCKS5 holds the API host's CONNECT 10 s, inside the 15 s after which the operator's own SOCKS5 client would give up, so it is the deadline that must stop the request — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2); the run must show the operator's deadline refusal of one site request with a CONNECT held across its deadline |
-| `control-site-late-send` | PR 7 | **control**: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like: a request must be seen arriving after its journaled deadline over a CONNECT held across it, and C1 must catch it |
+| `control-site-late-send` | PR 7 | **control**: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like: a request must be seen arriving after its journaled deadline over the very CONNECT held across it, and C1 must catch it |
 | `site-engine-restart` | PR 7 | the engine restarts while a Hub request that reached Fansly waits for its answer (the stand holds the answer 8 s; the run waits for that request's arrival first, and must show it was unanswered at the restart): `recover` never says `not_sent` of it |
 | `site-closed-writes` | PR 6, PR 7 | the site tries its closed writes — its own reports say a write was cancelled, and there must be one — and none reaches Fansly |
 | `site-forbidden-ws` | PR 7 | a forbidden socket message never leaves; the page stops with `unknown_ws_message` |

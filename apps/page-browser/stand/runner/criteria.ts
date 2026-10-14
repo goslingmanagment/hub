@@ -535,23 +535,33 @@ export function expiredArrivals(events: readonly JournalEvent[], expired: readon
 }
 
 /** A late send, as an operator that did not check the deadline makes it:
- *  an admitted request's id arrived after its (journaled) deadline, a
- *  CONNECT of the host from the page was held across that deadline, and C1
- *  calls that very arrival late. The control's evidence: without one, it
- *  showed nothing. */
-export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: Array<{ rid: string; attemptId: number; lateMs: number }>; violations: string[] } {
-  const late: Array<{ rid: string; attemptId: number; lateMs: number }> = [];
+ *  an admitted request's id arrived after its (journaled) deadline over the
+ *  very CONNECT that was held across that deadline — the arrival's SOCKS
+ *  connection (`socksId`, journaled by the front with every request) is one
+ *  of those holds — and C1 calls that arrival late. The control's evidence:
+ *  without one, it showed nothing. A late arrival over another connection
+ *  does not show it (it is a C1 violation in its own right all the same). */
+export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: Array<{ rid: string; attemptId: number; lateMs: number; socksId: number }>; violations: string[] } {
+  const late: Array<{ rid: string; attemptId: number; lateMs: number; socksId: number }> = [];
+  let elsewhere = 0;
   for (const grant of grants) {
     if (grant.page !== page || grant.kind === "ws" || grant.target === null || grant.target.split("/")[0] !== host) continue;
     const rid = ridIn(grant.target);
-    if (rid === null || heldAcross(events, pageAddress, host, grant.deadlineMono).length === 0) continue;
+    if (rid === null) continue;
+    const held = new Set(heldAcross(events, pageAddress, host, grant.deadlineMono).map((hold) => hold.socksId));
+    if (held.size === 0) continue;
     for (const arrival of events) {
       if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
       if (!unadmittedArrivals([arrival], grants, pages).some((violation) => violation.includes("arrived outside its admission window"))) continue;
-      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono) });
+      const socksId = arrival.socksId === null || arrival.socksId === undefined ? null : Number(arrival.socksId);
+      if (socksId === null || !held.has(socksId)) {
+        elsewhere += 1;
+        continue;
+      }
+      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId });
     }
   }
-  return { late, violations: late.length > 0 ? [] : ["no admitted request arrived after its deadline over a CONNECT held across it, with C1 calling it late: the control showed no late send"] };
+  return { late, violations: late.length > 0 ? [] : [`no admitted request arrived after its deadline over the CONNECT held across that deadline, with C1 calling it late (${elsewhere} late over another connection): the control showed no late send`] };
 }
 
 /** A request was in flight when the engine restarted: one of `rids` had

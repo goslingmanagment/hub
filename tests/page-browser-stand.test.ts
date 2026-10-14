@@ -269,13 +269,25 @@ describe("an admission that runs out while its request waits for its connection"
     expect(found(held, refused, [{ ...admission, kind: "hub" }]).violations).toEqual([expect.stringContaining("(0 site request(s) of p1 admitted")]);
   });
 
-  it("the control's late send: the request arrived after its journaled deadline over a CONNECT held across it, and C1 calls it late", () => {
-    const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1")];
-    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320 }], violations: [] });
+  it("the control's late send: the request arrived after its journaled deadline over the very CONNECT held across it, and C1 calls it late", () => {
+    const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })];
+    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320, socksId: 7 }], violations: [] });
     // Nothing late; late with no hold across the deadline; inside the window.
     expect(lateUnderHold(held, [admission], "p1", PAGE_IP, API, PAGES).violations).toEqual([expect.stringContaining("the control showed no late send")]);
-    expect(lateUnderHold([apiRequest(620, "GET", "/api/v1/a?rid=r1")], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
-    expect(lateUnderHold([...held, apiRequest(250, "GET", "/api/v1/a?rid=r1")], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
+    expect(lateUnderHold([apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
+    expect(lateUnderHold([...held, apiRequest(250, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
+  });
+
+  it("a late arrival over another connection does not show the control's late send (Astra's counter-example) — it stays a C1 violation", () => {
+    // SOCKS #7 held 10…10 010 ms across a 6 s admission; the request arrives at 14 050 ms over SOCKS #9, which was never held.
+    const sixSeconds = grant("site", `${API}/api/v1/a?rid=r1`, 0, { attemptId: 41, ref: "s-1", deadlineMono: 6000 });
+    const events = [socks("socks.hold", 10, 7), socks("socks.release", 10_010, 7), socks("socks.connect", 14_000, 9), apiRequest(14_050, "GET", "/api/v1/a?rid=r1", { socksId: 9 })];
+    expect(lateUnderHold(events, [sixSeconds], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [], violations: [expect.stringContaining("(1 late over another connection): the control showed no late send")] });
+    expect(unadmittedArrivals(events, [sixSeconds], PAGES)).toEqual([expect.stringContaining("arrived outside its admission window")]);
+    // An arrival with no SOCKS connection known, likewise.
+    expect(lateUnderHold([...events.slice(0, 2), apiRequest(14_050, "GET", "/api/v1/a?rid=r1", { socksId: null })], [sixSeconds], "p1", PAGE_IP, API, PAGES).late).toEqual([]);
+    // Over #7 itself, once let go: shown.
+    expect(lateUnderHold([...events.slice(0, 2), apiRequest(10_050, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [sixSeconds], "p1", PAGE_IP, API, PAGES).late).toEqual([{ rid: "r1", attemptId: 41, lateMs: 4050, socksId: 7 }]);
   });
 });
 
