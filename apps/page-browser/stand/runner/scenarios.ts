@@ -779,6 +779,12 @@ function admissionExpiry(late: boolean): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
     const api = FANSLY_HOSTS.api[0];
+    // Every admission of the fault carries the run's windows, and the first
+    // one after it needs a new connection: nothing is admitted until the
+    // CONNECTs are held and the API's connections dropped — what the setup
+    // admitted (with the usual 15 s) ends first, unheld.
+    engine.holdAdmissions(true);
+    await waitFor(() => !engine.admissionInFlight, 20_000, 50);
     engine.windowMs = late ? 14_000 : 6000;
     engine.journalWindowMs = late ? 6000 : null;
     const sinceWall = Date.now() - 1000;
@@ -786,6 +792,7 @@ function admissionExpiry(late: boolean): Scenario["run"] {
       const { activity, faultMono } = await atMoment(ctx, async () => {
         await ctx.stand.socks({ hold: { host: api, ms: 10_000 } });
         await ctx.stand.drop(api);
+        engine.holdAdmissions(false);
       });
       await sleep(14_000);
       await ctx.stand.socks({ hold: null });

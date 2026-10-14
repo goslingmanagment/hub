@@ -98,6 +98,11 @@ export class Admissions {
     return this.#held;
   }
 
+  /** An admitted operation is in flight (its end not come yet). */
+  get busy(): boolean {
+    return this.#inFlight !== null;
+  }
+
   /** Held between runs: nothing is admitted until released. */
   hold(on: boolean): void {
     this.#held = on;

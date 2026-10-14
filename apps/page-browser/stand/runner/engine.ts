@@ -204,6 +204,11 @@ export class StandEngine {
     return this.#admissions.held;
   }
 
+  /** An admitted operation of the page is in flight. */
+  get admissionInFlight(): boolean {
+    return this.#admissions.busy;
+  }
+
   /** The highest number of `bufferId` this engine acknowledged (0: none). */
   ackedUpTo(bufferId: string): number {
     return this.#ackedMax.get(bufferId) ?? 0;
