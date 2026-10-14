@@ -24,6 +24,8 @@
 //     write, a closed read) reached it, nor a preflight of it;
 //   - the page's files and a third-party host pass, a third-party preflight
 //     is handed on and Chrome's network service lives after it;
+//   - two requests of one method and URL at once, each with its preflight,
+//     are two operations under two admissions;
 //   - a request the page aborts while it waits, and one of a document the
 //     site replaced, never leave, and a late admission of them is not used;
 //     a request nobody admits fails at the end of its wait;
@@ -642,7 +644,19 @@ phase2.thirdParty = await evaluate(`fetch("https://widget.thirdparty.net/collect
 phase2.thirdPartyArrived = arrivals.slice(before.arrivals).map((arrival) => `${arrival.method} ${arrival.host}${arrival.path}`);
 await evaluate(`xhr("afterThird", "GET", "/account/me?after=1")`, true);
 phase2.afterThird = await evaluate("JSON.stringify(window.results.afterThird)");
-// d. The page cancels a released request before its answer: the strict rule stops the page.
+// d. Two requests of one method and URL at once, each with its preflight:
+// each is its own operation, under its own admission (Astra's review of PR 7).
+before = mark();
+await evaluate(`Promise.all([xhr("twinA", "GET", "/account/me?twin=1"), xhr("twinB", "GET", "/account/me?twin=1")])`, true);
+await sleep(300);
+const twins = {
+  asked: asks.length - before.asks,
+  admissions: admissions.length - before.admissions,
+  arrived: arrivals.slice(before.arrivals).map((arrival) => arrival.method),
+  done: committed.filter((done) => admissions.slice(before.admissions).some((admission) => admission.attemptId === done.attemptId)).map((done) => ({ sent: done.sent, status: done.status, body: done.body })),
+  page: [String(await evaluate("JSON.stringify(window.results.twinA)")), String(await evaluate("JSON.stringify(window.results.twinB)"))],
+};
+// e. The page cancels a released request before its answer: the strict rule stops the page.
 before = mark();
 await evaluate(`(() => { const x = new XMLHttpRequest(); x.open("GET", API + "/vault/albumsnew"); for (const [k, v] of Object.entries(H)) x.setRequestHeader(k, v); x.send(); window.slowXhr = x; return true; })()`);
 for (let i = 0; i < 100 && !arrivals.slice(before.arrivals).some((arrival) => arrival.method === "GET" && arrival.path === "/api/v1/vault/albumsnew"); i++) await sleep(50);
@@ -746,6 +760,7 @@ check(replacedAfter.arrived.every((line) => !line.includes("/subscribers")) && r
 check(String(phase2.fresh).includes('"status":200'), `the new document's request went: ${String(phase2.fresh)}`);
 check(phase2.thirdParty === 200 && (phase2.thirdPartyArrived as string[]).join(",") === "OPTIONS widget.thirdparty.net/collect,POST widget.thirdparty.net/collect", `a third-party request with a preflight passed: ${String(phase2.thirdParty)} ${JSON.stringify(phase2.thirdPartyArrived)}`);
 check(String(phase2.afterThird).includes('"status":200'), `and Chrome's network service lives after it: ${String(phase2.afterThird)}`);
+check(twins.asked === 2 && twins.admissions === 2 && twins.arrived.filter((method) => method === "GET").length === 2 && twins.done.length === 2 && twins.done.every((done) => done.sent && done.status === 200) && twins.page.every((page) => page.includes('"status":200')), `two requests of one URL at once, each with its preflight: two operations, two admissions, each its own request: ${JSON.stringify(twins)}`);
 const swDone = committed.find((done) => asks.find((ask) => ask.siteRequestId === done.siteRequestId)?.query === "?viasw=1");
 check(phase3.swReady === true && String(phase3.viaSw).includes('"status":200') && swDone?.status === 200 && swDone.body === "incomplete", `a request the site's service worker passes on is admitted; its body, which only the page's own request gets, is a mark, never an empty fact: ${JSON.stringify(swDone ?? null)}`);
 check(String(phase3.viaWorker).includes('"status":429') && JSON.stringify(phase3.viaWorkerDone).includes('"status":429,"body":"buffered"'), `a worker's request is admitted and its answer kept: ${String(phase3.viaWorker)} ${JSON.stringify(phase3.viaWorkerDone)}`);

@@ -460,14 +460,91 @@ describe("a CORS preflight (owner decision №1)", () => {
     expect(w.site.live).toBe(0);
   });
 
-  it("a request that never follows its answered preflight ends its operation after a wait (Chrome tells no end of a preflight handed on by fulfill)", async () => {
-    const w = await world({ timings: { mainWaitMs: 150, opLimitMs: 5000 } });
+  it("a request that never follows its passed preflight, of which Chrome tells nothing, holds its operation to the operation's limit: then the page stops (request_unended) — one admission, one end", async () => {
+    const w = await world({ timings: { mainWaitMs: 150, opLimitMs: 400, requestLimitMs: 5000 } });
     const request = w.chrome.request(`${API}/message?groupId=1`, { headers: siteHeaders("/api/v1/message"), script: { preflight: 204 } });
     // The request is gone without a word (its document went).
     request.ended = true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(w.done.size).toBe(0);
     const [done] = await doneOf(w);
-    expect(done).toMatchObject({ sent: true, status: null, error: { message: "the request did not follow its preflight" } });
+    expect(done).toMatchObject({ sent: true, status: null, error: { message: expect.stringContaining("no answer and no end") } });
+    expect(w.faults.map((fault) => fault.reason)).toEqual(["request_unended"]);
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+  });
+
+  it("a request that pauses long after its passed preflight goes under the same admission: one operation, one siteAdmit, one siteDone (Astra's review of PR 7)", async () => {
+    const w = await world({ timings: { mainWaitMs: 150 } });
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { preflight: 204, mainDelayMs: 600 } });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 5001, sent: true, status: 200, body: "buffered" });
+    expect(request.outcome).toBe("continued");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+    expect(w.done.size).toBe(1);
+    expect(w.chrome.wire).toEqual([
+      { role: "preflight", method: "OPTIONS", url: `${API}/account/me` },
+      { role: "main", method: "GET", url: `${API}/account/me` },
+    ]);
+  });
+
+  it("a request whose passed preflight's operation ended before it paused is failed, never asked as an operation of its own (Astra's review of PR 7)", async () => {
+    const w = await world({ timings: { opLimitMs: 300, requestLimitMs: 5000 } });
+    const request = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { preflight: 204, mainDelayMs: 700 } });
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ sent: true, status: null, error: { message: expect.stringContaining("no answer and no end") } });
+    expect(w.faults.map((fault) => fault.reason)).toEqual(["request_unended"]);
+    await until(() => request.outcome === "failed", 3000, "the late request to fail");
+    expect(request.failReason).toBe("Failed");
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
+    expect(w.chrome.wire).toEqual([{ role: "preflight", method: "OPTIONS", url: `${API}/account/me` }]);
+  });
+
+  it("a request taken by its method and URL while Chrome had named no request of the preflight: the request Chrome names later is an operation of its own, and keeps its own end (Astra's review of PR 7)", async () => {
+    const w = await world();
+    const admit = w.engine.answer;
+    w.engine.answer = (ask) => (w.engine.of("siteAdmit").length === 1 ? admit(ask) : null);
+    // Chrome tells of the preflight's request only later (the sessions'
+    // order is not guaranteed); a read without platform data keeps no body.
+    w.chrome.request(`${API}/device/id`, { headers: siteHeaders("/api/v1/device/id"), script: { preflight: 204, preflightDelayMs: 100, willBeSentDelayMs: 300 } });
+    await until(() => w.chrome.wire.length === 1, 3000, "the preflight in flight");
+    // Another request of the same method and URL, slow to answer: taken for it.
+    const taken = w.chrome.request(`${API}/device/id`, { headers: siteHeaders("/api/v1/device/id"), script: { chunkDelayMs: 600 } });
+    await until(() => w.engine.of("siteAdmit").length === 2, 3000, "the preflight's own request asked on its own");
+    expect(taken.outcome).toBe("continued");
+    // Chrome names the preflight's request now: not the operation's any more.
+    const [first] = await doneOf(w);
+    expect(first).toMatchObject({ attemptId: 5001, sent: true, status: 200 });
+    const ask = w.engine.of("siteAdmit")[1]!;
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 89 });
+    await doneOf(w, 2);
+    expect(w.done.get(89)).toMatchObject({ sent: true, status: 200 });
     expect(w.faults).toEqual([]);
+  });
+
+  it("a request of the same method and URL while another's preflight is in flight, Chrome having named that preflight's request: an operation of its own, asked on its own, never released under the other's admission (Astra's review of PR 7)", async () => {
+    const w = await world();
+    const admit = w.engine.answer;
+    w.engine.answer = (ask) => (w.engine.of("siteAdmit").length === 1 ? admit(ask) : null);
+    const first = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { preflight: 204, preflightDelayMs: 150 } });
+    await until(() => w.chrome.wire.length === 1, 3000, "the first one's preflight in flight");
+    const second = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await until(() => w.engine.of("siteAdmit").length === 2, 3000, "the second one asked on its own");
+    expect(second.outcome).toBe("paused");
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 5001, sent: true, status: 200 });
+    expect(first.outcome).toBe("continued");
+    expect(w.chrome.wire).toEqual([
+      { role: "preflight", method: "OPTIONS", url: `${API}/account/me` },
+      { role: "main", method: "GET", url: `${API}/account/me` },
+    ]);
+    expect(w.chrome.wire.length).toBe(2);
+    // Its own admission: it goes, and ends on its own.
+    const ask = w.engine.of("siteAdmit")[1]!;
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 88 });
+    await doneOf(w, 2);
+    expect(w.done.get(88)).toMatchObject({ sent: true, status: 200 });
+    expect(second.outcome).toBe("continued");
   });
 
   it("a request whose session is not the one its admission was asked under is not released: the session changed between the preflight and the request", async () => {

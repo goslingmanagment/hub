@@ -13,6 +13,8 @@ export interface SiteScript {
   preflight?: number;
   /** The preflight's answer comes this long after it went. */
   preflightDelayMs?: number;
+  /** The request pauses this long after its preflight was handed on. */
+  mainDelayMs?: number;
   status?: number;
   headers?: Array<{ name: string; value: string }>;
   /** The body in chunks; its content-length is declared unless `chunked`. */
@@ -328,13 +330,13 @@ export class SiteChrome {
     // Chrome 155 tells nothing more of a preflight handed on by fulfill —
     // no responseReceived, no loadingFinished: its request pauses next, or
     // fails Chrome's CORS check, or was aborted meanwhile and never comes.
-    setImmediate(() => {
+    setTimeout(() => {
       const main = request.main;
       if (main === null || main.ended) return;
       const status = Number(command.params.responseCode);
       if (status >= 200 && status < 300) this.#pause(main, (main as SiteModelRequest & { resourceType?: string }).resourceType ?? "XHR");
       else this.#end(main, "net::ERR_FAILED", false);
-    });
+    }, request.main?.script.mainDelayMs ?? 0);
     return {};
   }
 
