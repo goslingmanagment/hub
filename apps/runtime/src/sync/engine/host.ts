@@ -140,7 +140,10 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // until the owner says its container is stopped (`--browser-stopped`). The
 // wait is no stall: every look is reported to the process's watchdog. A
 // host that starts again finds the leave pending and runs it before
-// anything else. A shutdown leaves the browser running.
+// anything else. A shutdown leaves the browser running. The owner's drain of
+// a stopped container's buffer (`sync browser drain`, PR 17) is such a leave
+// for a page that stays on Node: a pending leave ends Node's slot, the leave
+// takes what the browser kept, and Node takes the page again.
 //
 // The owner's login of a page's browser (Project Browser plan §4.8; PR 15):
 // a page whose transport is `browser` follows it over its slot's link
@@ -496,6 +499,14 @@ export class SyncEngineHost {
           slot.leaving = true;
           this.#o.logger.info({ pageId: page.pageId, pageLabel: page.pageLabel, from: slot.sender, to: sender },
             "Fansly sync host: the page's transport changed; its slot ends and the page is taken again");
+          slot.stop.abort();
+        } else if (slot.sender === "node" && leave !== null && !slot.leaving) {
+          // The owner asked for what a stopped browser kept (`sync browser
+          // drain`, PR 17): Node's slot ends, the leave takes it — the
+          // browser kept stopped — and Node takes the page again after.
+          slot.leaving = true;
+          this.#o.logger.info({ pageId: page.pageId, pageLabel: page.pageLabel },
+            "Fansly sync host: the owner asked to drain the page's stopped browser; Node's slot ends for the leave");
           slot.stop.abort();
         } else if (slot.sender === "node" && !slot.leaving) {
           await this.#followLogin(slot, senders.get(page.pageId)?.manualLogin ?? "off");
@@ -1077,6 +1088,7 @@ export class SyncEngineHost {
         // No request goes from a leave: no floor to raise, no demand.
         raiseTakeoverFloor: () => undefined,
         enqueue: async () => undefined,
+        leave: true,
         ...(this.#o.browserOverrides === undefined ? {} : { overrides: this.#o.browserOverrides }),
       });
     } catch (error) {

@@ -8,6 +8,7 @@ import {
   BODY_PART_BYTES,
   encodeBodyFrame,
   type Ack,
+  type Alarm,
   type BufferEvent,
   type CheckResult,
   type Command,
@@ -235,6 +236,9 @@ export class FakeOperator {
   readonly wsAnswers: WsAdmitResult[] = [];
   /** The engine's commands, in order. */
   readonly commands: Command[] = [];
+  /** The answer to a command but `stopPage` (PR 17: the owner's levers);
+   *  null: "not in this fake". */
+  onOtherCommand: ((command: Command) => { ok: boolean; detail: string | null } | Promise<{ ok: boolean; detail: string | null }>) | null = null;
   /** `quiesced` waits for this (null: at once). */
   holdQuiesce: Promise<void> | null = null;
   /** The last send `quiesced` names (null: the last physical one, if any). */
@@ -311,11 +315,14 @@ export class FakeOperator {
         },
         onCommand: async (command) => {
           this.commands.push(command);
-          // The manual login (PR 15): the mode, and a start of a page that stands.
+          // The manual login (PR 15): the mode.
           if (command.command.kind === "setMode") {
             this.pushState({ mode: command.command.mode });
             return { ok: true, detail: `the mode is ${command.command.mode}` };
           }
+          // A test's own answer to the other commands (PR 17).
+          if (command.command.kind !== "stopPage" && this.onOtherCommand !== null) return this.onOtherCommand(command);
+          // A start of a page that stands (PR 15).
           if (command.command.kind === "restartBrowser") {
             this.pushState({ step: "site_loaded", stopReason: null, retryAtWall: null, exitOpen: true });
             return { ok: true, detail: "the start began" };
@@ -545,6 +552,11 @@ export class FakeOperator {
     this.live = fingerprint;
     this.state = { ...this.state, sessionFingerprint: fingerprint };
     this.pushState();
+  }
+
+  /** The operator's alarm (spec §6.1; PR 17). */
+  alarm(kind: Alarm["kind"], detail: Alarm["detail"] = {}): void {
+    this.server.send({ type: "alarm", atWall: Date.now(), kind, detail });
   }
 
   pushState(patch: Partial<State> = {}): void {

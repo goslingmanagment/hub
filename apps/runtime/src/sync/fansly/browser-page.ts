@@ -20,6 +20,7 @@ import { errorName, type SyncLogger } from "../engine/commit.ts";
 import { TAKEOVER_FACTOR } from "../engine/pacer.ts";
 import type { Clock, Metrics, PageTransport } from "../engine/ports.ts";
 import type { DemandSignal, EngineRegistry } from "../engine/resource.ts";
+import { BrowserControl, type BrowserControlTiming } from "./browser-control.ts";
 import { BrowserBufferIntake, type BrowserIntakeTiming } from "./browser-intake.ts";
 import { BrowserLoginDriver, type BrowserLoginTiming } from "./browser-login.ts";
 import { BrowserRecorder, type BrowserRecorderTiming } from "./browser-record.ts";
@@ -89,6 +90,7 @@ export interface BrowserPageOverrides {
   leaveWaitMs?: number;
   loginTiming?: Partial<BrowserLoginTiming>;
   recorderTiming?: Partial<BrowserRecorderTiming>;
+  controlTiming?: Partial<BrowserControlTiming>;
 }
 
 export interface BrowserPageDeps {
@@ -113,6 +115,9 @@ export interface BrowserPageDeps {
   /** The slot follows the owner's login of the page's browser (PR 15): a
    *  page's slot, never a leave. */
   login?: boolean;
+  /** A leave of the browser (no actor): its control records what the
+   *  operator says and keeps the owner's stop, and starts nothing. */
+  leave?: boolean;
   overrides?: BrowserPageOverrides;
 }
 
@@ -129,6 +134,8 @@ export interface BrowserPage {
   readonly login: BrowserLoginDriver | null;
   /** What the operator says of itself, recorded (PR 17). */
   readonly recorder: BrowserRecorder;
+  /** The owner's stop, start and commands (PR 17). */
+  readonly control: BrowserControl;
   /** The intake and the socket's guard run (the link was started with the
    *  transport). */
   start(): void;
@@ -197,6 +204,19 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     metrics,
     ...(overrides.recorderTiming === undefined ? {} : { timing: overrides.recorderTiming }),
   });
+  const control = new BrowserControl({
+    db,
+    pageId,
+    profileId,
+    generation,
+    client,
+    bridge,
+    clock: deps.clock,
+    logger,
+    metrics,
+    role: deps.leave === true ? "leave" : "slot",
+    ...(overrides.controlTiming === undefined ? {} : { timing: overrides.controlTiming }),
+  });
   const { socket, applier, intake } = browserIntakeOf(deps, client, (lagsMs) => recorder.delivered(lagsMs));
   const guard = new BrowserWsGuard({
     db,
@@ -226,10 +246,12 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     guard,
     login,
     recorder,
+    control,
     start() {
       recorder.start();
       intake.start();
       guard.start();
+      control.start();
       login?.start();
     },
     async leave() {
@@ -246,6 +268,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     stop() {
       stopped ??= (async () => {
         await login?.stop();
+        await control.stop();
         await recorder.stop();
         await guard.stop();
         await intake.stop();

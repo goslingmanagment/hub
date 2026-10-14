@@ -443,9 +443,9 @@ export class PageBrowserRpcClient {
   /** A command of this owner (spec §6.1 `command`): its result, or null when
    *  it could not be sent, the link went before the result, or none came
    *  within `waitMs` — whether it ran is then not known. `notAfterMono` is
-   *  the operator's clock (CLOCK_MONOTONIC): later, it is not executed. */
-  command(kind: CommandKind | { kind: "setMode"; mode: Mode }, notAfterMono: number, waitMs: number): Promise<CommandResult | null> {
-    const commandId = randomUUID();
+   *  the operator's clock (CLOCK_MONOTONIC): later, it is not executed.
+   *  `commandId`: the owner's own id of it (the operator runs an id once). */
+  command(kind: CommandKind | { kind: "setMode"; mode: Mode }, notAfterMono: number, waitMs: number, commandId: string = randomUUID()): Promise<CommandResult | null> {
     const command: Command["command"] = typeof kind === "string" ? { kind } : kind;
     return new Promise((resolve) => {
       const timer = setTimeout(() => settle(null), waitMs);

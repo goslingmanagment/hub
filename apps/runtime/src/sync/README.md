@@ -970,8 +970,9 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   (`--browser-stopped`; `scripts/deploy-page-browser.sh to-node` removes the container first, then says it): what
   the operator kept is then marked not drained (`page_browsers.buffer_undrained_since`, alert 2
   `browser_buffer_undrained`) until an operator of that profile says its open buffer keeps nothing and the intake
-  committed its last event — the drain of a stopped
-  container's buffer without taking the page back to its browser is PR 17's. A host that starts again finds the
+  committed its last event — drained, while the page stays on Node, by the owner's `sync browser drain` (PR 17: Node's
+  slot ends for a leave of the browser — told to stand stopped, what it kept taken — then Node again). A host that
+  starts again finds the
   leave pending and runs it first. The deploy refuses to roll back to an image that does not know the page
   transport while a page is on its browser or leaving it (`verify_rollback_target_runs_no_browser_page`): what the
   target can do is read from the image itself — the runtime image's label `agency-hub.sync-page-transport` (Dockerfile;
@@ -979,8 +980,7 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   stay applied when a deploy rolls back to an old image; an image or a count that cannot be read refuses too. A leave that waits for its operator is no stall of the process:
   every look is reported to the watchdog. `browser` needs the page's browser ready: a profile
   bound to the page with a pinned exit IP and an environment (`page_browsers.pinned_exit_ip`, `env`, 0277 — the
-  hello's settings besides the proxy; nothing writes them but `setPageBrowserSettings` yet: the owner's lever is
-  `sync browser pin-ip`, PR 17). `node` needs a stored Node session (or `--prepare`); a page leaving its browser waits
+  hello's settings besides the proxy; the owner's lever is `sync browser pin-ip`, PR 17). `node` needs a stored Node session (or `--prepare`); a page leaving its browser waits
   for its confirmed leave (above). A page whose browser is not ready (no profile bound, no pin, no environment) is not taken at all: it waits
   (`browser_not_ready`), no owner generation is spent on it and no owner beats — alert 1 after its bound — and nothing is sent.
 - **A browser page's slot** (`fansly/browser-page.ts`): one link to the operator (the hello's settings read anew at
@@ -1005,6 +1005,19 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   (`saveVerifiedFanslyCredentials`); the verify of what is stored then lifts the hold (A3). A stored session is never
   tried under it: the hold names its digest as refused.
 
+- **What the operator says, and the owner's levers** (PR 17, `fansly/browser-record.ts`, `fansly/browser-control.ts`,
+  `browser-levers.ts`, `browser-status.ts`; 0280): over the link of the page's owner (its slot, or a leave) the
+  operator's `state` goes on its profile's row — at once when it moved, else every 15 s, only a state it said — its
+  link refused or broken (`link_error`), its last `alarm`, and the delivery of its events from their instant to the
+  intake's commit (p50/p95). The page's status carries a `browser` block only for a page with a profile bound to it.
+  The owner's levers (`sync browser stop|start|selftest|snapshot|pin-ip|drain`, audited `admin.sync_browser_*`) are
+  carried out by the page's owner over its link: its stop (`page_browsers.owner_stop_*`, the page paused) is kept by
+  `stopPage` until the operator says it stopped; a slot on the browser starts a browser that stands
+  (`restartBrowser`: never started, or stopped by a leave or a stop since lifted) unless the page is paused, stopped
+  by the owner or in the manual login — never one halted for the owner's decision; the owner's one-shot commands
+  (`page_browser_commands`: a start, a self-test with the exit closed for it) are taken by the owner of the page and
+  run once by their id, never past their expiry. A leave records and keeps the owner's stop, nothing more. The
+  journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
   and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the
@@ -1372,4 +1385,5 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
 | A page browser's alert | one constant or line in `engine/browser-alerts.ts` + `tests/sync-browser-alerts.test.ts` |
+| Stop, start, self-test a page's browser; pin its exit IP; drain a stopped one | `pnpm cli sync browser stop <page>` (or `--all`), `start`, `selftest`, `pin-ip`, `drain` (audited); `sync browser status [--page <label>]` |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

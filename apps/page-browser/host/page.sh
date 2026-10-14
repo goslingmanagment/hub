@@ -26,6 +26,10 @@
 #   page.sh down --page <name>
 #   page.sh forget --page <name>
 #   page.sh status [--page <name>]
+#   page.sh log --page <name> [--kind requests|connections|states|sockets]
+#              [--since <iso>] [--path <prefix>] [--method <M>]
+#              (the operator's journals on the page's buffer volume, read
+#              here: Hub's containers cannot reach them — plan §4.11)
 #
 # A page's files: $PB_BASE/pages/<page>/page.env (the Compose variables:
 # image and the previous one, profile, addresses, SOCKS5, zone, language)
@@ -67,8 +71,13 @@ fail() {
 command="${1:-}"
 [[ -n "$command" ]] && shift
 PAGE="" IMAGE="" SOCKS="" PROFILE="" NEW_PROFILE=0 TZ_ARG="" LANG_ARG=""
+LOG_KIND="requests" LOG_SINCE="" LOG_PATH="" LOG_METHOD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --kind) LOG_KIND="$2"; shift 2 ;;
+    --since) LOG_SINCE="$2"; shift 2 ;;
+    --path) LOG_PATH="$2"; shift 2 ;;
+    --method) LOG_METHOD="$2"; shift 2 ;;
     --page) PAGE="$2"; shift 2 ;;
     --image) IMAGE="$2"; shift 2 ;;
     --socks) SOCKS="$2"; shift 2 ;;
@@ -463,6 +472,40 @@ status() {
   done
 }
 
+# The operator's journals (plan §4.11; logs/journal.ts): JSON Lines on the
+# page's buffer volume, a file per kind and UTC day (gzip once the day is
+# over), each line with its instant (`at`). Read-only, here on the host: the
+# lines of one kind from --since on, of a path that starts with --path, of
+# --method — e.g. that `POST /api/v1/message/ack` never left. The journals
+# hold no secrets (no tokens, cookies, headers, queries or bodies).
+journal() {
+  [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
+  [[ "$LOG_KIND" =~ ^(requests|connections|states|sockets)$ ]] || fail "--kind: requests, connections, states or sockets"
+  [[ -z "$LOG_SINCE" || "$LOG_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9:.]+Z?)?$ ]] || fail "--since: a UTC date or instant (2026-10-14 or 2026-10-14T10:00:00Z)"
+  [[ -z "$LOG_METHOD" || "$LOG_METHOD" =~ ^[A-Z]{3,7}$ ]] || fail "--method: GET, POST …"
+  local profile mount file day
+  profile="$(value PB_PROFILE_ID "$(env_file)")"
+  [[ -n "$profile" ]] || fail "page $PAGE has no profile"
+  mount="$(docker volume inspect -f '{{.Mountpoint}}' "pb-buffer-$profile")" || fail "no volume pb-buffer-$profile"
+  for file in "$mount/logs/$LOG_KIND"-*.jsonl*; do
+    [[ -f "$file" ]] || continue
+    day="${file##*/"$LOG_KIND"-}"
+    day="${day:0:10}"
+    [[ -z "$LOG_SINCE" || ! "$day" < "${LOG_SINCE:0:10}" ]] || continue
+    zcat -f -- "$file"
+  done | awk -v since="$LOG_SINCE" -v path="$LOG_PATH" -v method="$LOG_METHOD" '
+    function field(name) {
+      if (match($0, "\"" name "\":\"[^\"]*\"")) return substr($0, RSTART + length(name) + 4, RLENGTH - length(name) - 5)
+      return ""
+    }
+    {
+      if (since != "" && field("at") < since) next
+      if (path != "" && index(field("path"), path) != 1) next
+      if (method != "" && field("method") != method) next
+      print
+    }'
+}
+
 # One page operation at a time on the server: a profile's owner is checked
 # and claimed (its page's files written) under the same lock.
 if [[ "$command" =~ ^(up|add-profile|remove-profile|rollback|down|forget)$ ]]; then
@@ -481,5 +524,6 @@ case "$command" in
   down) down ;;
   forget) forget ;;
   status) status ;;
-  *) fail "usage: page.sh up|add-profile|remove-profile|rollback|down|forget|status [options]" ;;
+  log) journal ;;
+  *) fail "usage: page.sh up|add-profile|remove-profile|rollback|down|forget|status|log [options]" ;;
 esac

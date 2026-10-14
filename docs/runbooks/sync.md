@@ -216,11 +216,12 @@ session follows (below).
 - Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
   after the browser confirmed it stopped, with no socket open and everything it kept taken. A browser whose buffer
   cannot be opened, or whose kept answers do not read, holds the leave until they can be taken. Until then the page waits
-  (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser does not start it again.
+  (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser starts it again (below).
 - The browser cannot confirm (its container is down or does not answer): take it off for good with
   `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
   gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and
-  the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained.
+  the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained — bring the
+  container up again (`scripts/deploy-page-browser.sh up …`) and `pnpm cli sync browser drain <page>` (below).
 - A rollback of the Hub to an image from before the page transport (one without the label
   `agency-hub.sync-page-transport`) is refused by the deploy while a page is on its browser or leaving it: move such
   pages to Node first.
@@ -276,6 +277,70 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   `ssh root@<server> systemctl enable --now page-browser-update.timer`.
 - **Stand check**: `apps/page-browser/stand/chrome-update.sh --from <image> --to <image>` — an update and both
   rollbacks of a page with a live profile, on the Docker of the machine it runs on (its header: how on agency-de).
+
+## A page's browser: what it says, and the owner's levers (Project Browser)
+
+A page with a browser profile bound to it has a «Браузер» block on the «Синк» tab (a line on its card, the whole of
+it on its detail), a `browser` key in `/api/v1/sync/pages`, `sync page status` and the agents' `hub sync-status`:
+the page's transport, what the operator last said (its step, its stop reason, its next retry, and how old that is),
+the owner's stop, the login, the session (present, its account — never a token), the exit IP against the pinned one,
+the buffer against its caps (2 GiB, 72 h), the delivery of its events, Chrome's and the operator's versions, the last
+self-test and alarm, and the browser's alerts that hold. A page without a browser has none of it.
+
+```sh
+pnpm cli sync browser status --page lilly-1
+pnpm cli sync browser stop lilly-1 --note 'why'
+pnpm cli sync browser stop --all
+pnpm cli sync browser start lilly-1
+pnpm cli sync browser selftest lilly-1
+pnpm cli sync browser snapshot lilly-1
+pnpm cli sync browser pin-ip lilly-1 --ip 203.0.113.7 \
+  --env '{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}'
+pnpm cli sync browser drain lilly-1
+scripts/deploy-page-browser.sh log root@<server> --page lilly-1 --path /api/v1/message/ack --method POST [--since 2026-10-14]
+```
+
+Every lever is audited (`admin.sync_browser_<lever>`) and carried out by the engine that owns the page, over its link
+to the operator; the CLI waits for what the operator says.
+
+- `stop` pauses the page at once (`paused_all`, the note says the browser's stop) and the operator closes its exit,
+  then stops Chrome. It stays stopped — nothing starts it — until `start`, which lifts the stop and the pause the stop
+  put (a pause of yours from before stays), and starts the browser, also one halted for your decision (a changed exit
+  IP, a guard that failed). `operatorConfirmed: false`: no owner runs the page or its operator cannot be reached;
+  the page is paused all the same.
+- A page on its browser starts it by itself when it stands — at the switch to `browser`, and back — but never while
+  the page is paused or stopped by you, never while you log it in, never one halted for your decision.
+- `selftest` closes the exit for the test and opens it again when it passes; a test that fails stops the page
+  (`selftest_failed`, its next start tests again).
+- `snapshot` stops the browser as `stop` does and waits until its operator says it stopped: then pack the volume it
+  prints on the server (Hub's containers have no Docker), and `start`.
+- `pin-ip` sets the exit IP the browser may open its exit through and its environment (the proxy's region); check
+  the IP first (`pnpm cli page proxy-ip …`). Until both are set the page cannot be switched to its browser.
+- `drain` takes what a stopped container kept while the page stays on Node: bring the container up first. Node's slot
+  ends for the leave (the browser is told to stand stopped, its kept answers and its buffer are taken, the mark is
+  cleared), then Node takes the page again. An operator that cannot be reached holds the page (alert 2
+  `browser_leave_unconfirmed`): `sync page transport <page> node --browser-stopped` gives it back to Node.
+- The journals (requests, connections, states, sockets) are on the page's volume: `scripts/deploy-page-browser.sh log`
+  reads them on the server, e.g. that `POST /api/v1/message/ack` never left. No secret is in them.
+
+The browser's alerts (`fansly_sync_engine:<page>:browser:<kind>`, paged at once, resolved 10 clean minutes after),
+judged only for a page on its browser:
+
+| Kind | When |
+|---|---|
+| `browser_down` | no state from the operator for 2 min while the page's owner runs; the engine's link refused (`token`, `protocol_version`) or broken by a protocol error; the browser not up for 2 min for another reason (Chrome crashed, the environment, a request that did not end, a start that hangs); the `late_send` alarm |
+| `login_required` | Fansly signed the browser out (not while you log it in) |
+| `proxy` | the proxy unavailable or refusing its login, the browser down for 2 min |
+| `exit_ip_changed` | the exit IP is not the pinned one: the browser stands until you decide (`pin-ip`, `start`) |
+| `buffer` | the buffer full, the disk full, the buffer that does not open, or past 50 % / 80 % of a cap |
+| `selftest_failed` | a guard of the self-test did not hold |
+| `protocol_changed` | an unknown socket message, request headers that differ from the site's |
+| `cdp_lost` | control of Chrome lost (CDP, the holder's overflow, owner decision №10's fallback release) |
+
+Your stop, your pause, your login and a credentials hold explain a browser that is down (`browser_down`, `proxy`); a
+guard that failed always pages. The metrics every 5 min in `ops_metric_samples` (none while every page is on Node):
+`page_browser_buffer_bytes`, `page_browser_buffer_age_ms`, `page_browser_delivery_ms` (p50, p95),
+`page_browser_selftest_failed`, `page_browser_alerts`.
 
 ## Holds, breakers and quarantine
 
