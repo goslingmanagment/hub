@@ -116,15 +116,98 @@ async function waitGap(ctx: Ctx, reason: string, sinceMono: number, timeoutMs = 
   return gapCommitted(gaps, sinceMono, reason);
 }
 
-/** The run's background and its fault at the random moment. */
-async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>): Promise<{ activity: Activity; faultMono: number }> {
+/** The run's background and its fault at the random moment. `inFlight`
+ *  (a loss of control with the site live): the fault meets an admitted
+ *  request in flight — the moment is drawn inside that state, proven right
+ *  before the fault (`admittedInFlight`). */
+async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>, options: { inFlight?: boolean } = {}): Promise<{ activity: Activity; faultMono: number }> {
   const activity = new Activity(ctx.page);
   activity.start();
-  await sleep(ctx.momentMs);
-  ctx.arm();
-  const faultMono = mono();
-  await fault(activity);
-  return { activity, faultMono };
+  if (!options.inFlight) {
+    await sleep(ctx.momentMs);
+    ctx.arm();
+    const faultMono = mono();
+    await fault(activity);
+    return { activity, faultMono };
+  }
+  const api = FANSLY_HOSTS.api[0];
+  try {
+    const held = await admittedInFlight(ctx, api);
+    await sleep(ctx.momentMs);
+    // Proven again at the fault: not proven, the run is not set up.
+    const lost = await notInFlight(ctx, api, held, 500);
+    if (lost !== null) throw new Error(`no admitted request in flight at the fault: ${lost}`);
+    ctx.notes.inFlightAtFault = { kind: held.grant.kind, attemptId: held.grant.attemptId, socksId: held.socksId, msToDeadline: Math.round(held.grant.deadlineMono - mono()), heldForMs: Math.round(mono() - held.heldMono), waitedMs: held.waitedMs };
+    ctx.arm();
+    const faultMono = mono();
+    await fault(activity);
+    // The hold goes once the exit is closed (or the operator's link with it).
+    const engine = ctx.page.engine;
+    await waitFor(() => engine.states.some((seen) => seen.atMono >= faultMono && !seen.state.exitOpen) || (engine.closedAtMono ?? 0) >= faultMono, 8000, 25);
+    return { activity, faultMono };
+  } finally {
+    await ctx.stand.socks({ hold: null });
+  }
+}
+
+/** How long the stand's SOCKS5 holds each CONNECT of the API host while a
+ *  loss of control waits for its admitted request: inside its 15 s window,
+ *  and longer than the moment and the loss take. */
+const HELD_CONNECT_MS = 12_000;
+
+interface HeldAdmission {
+  grant: Grant;
+  socksId: number;
+  heldMono: number;
+  waitedMs: number;
+}
+
+/** The state a loss of control is to meet with the site live (condition №1,
+ *  decision №10): an admission of the page — Hub's or the site's, one at a
+ *  time — whose request is released and unfinished, inside its deadline,
+ *  its connection held by the stand's SOCKS5. Made: the API's connections
+ *  are dropped and every new CONNECT of its host held; then proven: an
+ *  admission without its end, its deadline well ahead (given after the
+ *  drop, or caught by it and sent again on a new connection), and a CONNECT
+ *  of the page's held since the drop. Not reached in 15 s: the run
+ *  cannot be set up (not counted). */
+async function admittedInFlight(ctx: Ctx, api: string): Promise<HeldAdmission> {
+  await ctx.stand.socks({ hold: { host: api, ms: HELD_CONNECT_MS } });
+  await ctx.stand.drop(api);
+  const since = mono();
+  let found = null as HeldAdmission | null;
+  await waitFor(async () => {
+    const engine = ctx.page.engine;
+    // One admission in flight at a time: the one without its end — given
+    // after the drop, or before it and caught by it (Chrome sends it again
+    // on a new connection, held too).
+    const grant = engine.grants.find((candidate) => candidate.kind !== "ws" && candidate.attemptId > 0 && candidate.deadlineMono - mono() > ctx.momentMs + 2000 && !engine.outcomeMessages.some((seen) => seen.message.attemptId === candidate.attemptId) && candidate.generation === engine.generation);
+    if (grant === undefined) return false;
+    const hold = heldNow(await ctx.stand.journal(ctx.journalSince), ctx.page.info.egressIp, api, since);
+    if (hold === null) return false;
+    found = { grant, socksId: hold.socksId, heldMono: hold.mono, waitedMs: Math.round(mono() - since) };
+    return true;
+  }, 15_000, 50);
+  if (found === null) throw new Error("no admitted request of the page got to wait for its held connection in 15 s");
+  return found;
+}
+
+/** A CONNECT of the page to the API host held since `since` and still held. */
+function heldNow(journal: readonly JournalEvent[], pageAddress: string, api: string, since: number): { socksId: number; mono: number } | null {
+  const ended = new Set(journal.filter((event) => event.type === "socks.release" || event.type === "socks.closed").map((event) => Number(event.socksId)));
+  const hold = journal.find((event) => event.type === "socks.hold" && event.from === pageAddress && event.host === api && event.mono >= since && !ended.has(Number(event.socksId)));
+  return hold === undefined ? null : { socksId: Number(hold.socksId), mono: hold.mono };
+}
+
+/** Why the state is not there any more (null: it is): the admission's end
+ *  came, its deadline is near, or its connection is no longer held. */
+async function notInFlight(ctx: Ctx, api: string, held: HeldAdmission, marginMs: number): Promise<string | null> {
+  const engine = ctx.page.engine;
+  if (engine.outcomeMessages.some((seen) => seen.message.attemptId === held.grant.attemptId)) return `attempt ${held.grant.attemptId} ended`;
+  if (held.grant.deadlineMono - mono() < marginMs) return `attempt ${held.grant.attemptId}'s deadline is ${Math.round(held.grant.deadlineMono - mono())} ms away`;
+  const journal = await ctx.stand.journal(ctx.journalSince);
+  if (journal.some((event) => (event.type === "socks.release" || event.type === "socks.closed") && Number(event.socksId) === held.socksId)) return `its connection (SOCKS ${held.socksId}) is no longer held`;
+  return null;
 }
 
 /** The stop the exit closed for, as the engine saw it: the operator says
@@ -152,11 +235,13 @@ async function standsThenStarts(ctx: Ctx, fromMono: number, holdMs: number, what
 // ── the operator's process ───────────────────────────────────────────────
 
 /** The operator killed (SIGKILL) or hung (SIGSTOP, then the watchdog). */
-function operatorLoss(how: "kill" | "hang"): Scenario["run"] {
+/** `inFlight` (the site live): the fault meets an admitted request in
+ *  flight (atMoment). */
+function operatorLoss(how: "kill" | "hang", inFlight = false): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
     const pid = await servicePid(ctx, "operator");
-    const { activity, faultMono } = await atMoment(ctx, () => inPage(ctx, ["kill", how === "kill" ? "-KILL" : "-STOP", String(pid)]).then(() => undefined));
+    const { activity, faultMono } = await atMoment(ctx, () => inPage(ctx, ["kill", how === "kill" ? "-KILL" : "-STOP", String(pid)]).then(() => undefined), { inFlight });
     // The connection to the engine goes with the process (the watchdog's
     // kill, for a hung one: 5 s without a heartbeat).
     const dropped = await engine.waitClosed(how === "kill" ? 5000 : 12_000);
@@ -188,7 +273,7 @@ function operatorLoss(how: "kill" | "hang"): Scenario["run"] {
 /** Control of Chrome lost: the holder killed, Chrome killed, or the
  *  DevTools connection broken with every process alive. The exit closes,
  *  Chrome goes, and the page starts again by itself. */
-function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
+function controlLoss(how: "holder" | "chrome" | "cdp-break", inFlight = false): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
     const fault = async () => {
@@ -196,7 +281,7 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break"): Scenario["run"] {
       else if (how === "chrome") await inPage(ctx, ["kill", "-KILL", String(await servicePid(ctx, "chrome"))]);
       else await breakCdp(ctx);
     };
-    const { activity, faultMono } = await atMoment(ctx, fault);
+    const { activity, faultMono } = await atMoment(ctx, fault, { inFlight });
     const checks: Record<string, string[]> = {};
     const closed = await engine.waitState((state) => !state.exitOpen, 6000, faultMono);
     // The broken connection is mended before the next Chrome connects.
@@ -330,23 +415,27 @@ function engineRestart(inFlight: boolean): Scenario["run"] {
     let burst: number[] = [];
     let engine = before;
     let restartMono = 0;
+    if (inFlight) {
+      // Made and proven before the fault, not hoped for at it: the site's
+      // session live, one Hub request sent in its turn (one operation of
+      // the page in flight, admissions.ts) and arrived at Fansly, its answer
+      // held 8 s — the restart meets it in flight. Not proven: the run is
+      // not set up (not counted).
+      if (!(await waitFor(() => (before.state?.sessionFingerprint ?? null) !== null, 20_000, 100))) throw new Error("no live session of the site: a Hub request could not go");
+      let sent: number | null = null;
+      await waitFor(async () => (sent = await before.sendHubInTurn("/api/v1/account/me", "delayMs=8000")) !== null, 20_000, 100);
+      burst = sent === null ? [] : [sent];
+      const rids = burst.map((id) => before.ridOf(id));
+      const arrived = await waitFor(async () => (await ctx.stand.journal(ctx.journalSince)).some((event) => event.type === "req" && event.role === "api" && event.method !== "OPTIONS" && rids.includes(String(event.rid))), 10_000, 100);
+      if (!arrived || burst.some((id) => before.outcomeMessages.some((seen) => seen.message.attemptId === id))) throw new Error(`the held Hub request did not reach Fansly unanswered (${arrived ? "answered" : "not arrived"})`);
+    }
     const { activity, faultMono } = await atMoment(ctx, async (running) => {
       running.stop();
-      if (inFlight) {
-        // With the site live, one operation of the page in flight
-        // (admissions.ts): the request goes in its turn.
-        let sent: number | null = null;
-        await waitFor(async () => (sent = await before.sendHubInTurn("/api/v1/account/me", "delayMs=8000")) !== null, 20_000, 100);
-        burst = sent === null ? [] : [sent];
-      } else {
+      if (!inFlight) {
         // Outcomes on their way at the restart: a burst, past the turns (no
         // session of the site, so nothing of it leaves).
         burst = await before.issueHub(5);
         before.sendIssued(burst);
-      }
-      if (inFlight) {
-        const rids = burst.map((id) => before.ridOf(id));
-        await waitFor(async () => (await ctx.stand.journal(ctx.journalSince)).some((event) => event.type === "req" && event.role === "api" && event.method !== "OPTIONS" && rids.includes(String(event.rid))), 25_000, 150);
       }
       restartMono = mono();
       engine = await ctx.page.restartEngine();
@@ -865,9 +954,9 @@ export const SCENARIOS: Scenario[] = [
   { name: "control-lost-frames", proves: "control: frames Fansly sends into a socket of the page that the engine never receives, and a site answer whose outcome is stored and whose site.response event never comes, no gap mark over them — C7 must catch both against the stand's own record of what it made", needs: [], page: "main", moment: [0, 500], control: { C7: ["not stored as ws.in events", "has no stored site.response event"] }, run: controlLostFrames },
   { name: "control-held-late", proves: "control: a request admitted for 6 s goes from the page's address through a CONNECT held 10 s — the run must show it arriving after its deadline over the CONNECT held across it; C1 must call it late, and C7 must miss the outcome of a request Fansly answered", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived outside its admission window"], C7: ["was answered by Fansly"] }, run: controlHeldLate },
   { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
-  { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },
-  { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },
-  { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome")) },
+  { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill", true)) },
+  { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break", true)) },
+  { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome", true)) },
   { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: what waited at the failure never goes after the proxy is back, whatever admission it gets then (plan §4.5)", needs: ["PR7"], page: "main", moment: [3000, 6000], site: SITE_TRAFFIC, run: withSite(proxyFault("down", true)) },
   { name: "site-admission-expiry", proves: "an admission (6 s) runs out while the site request waits for its connection (the operator journals it not sent for its deadline; the SOCKS5 held its host's CONNECT 10 s across that deadline — inside the operator's 15 s SOCKS5 timeout) — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry(false)) },
   { name: "control-site-late-send", proves: "control: the same hold, the operator told 14 s while the engine journals 6 s — a request must be seen arriving after its journaled deadline over a CONNECT held across it, as an unchecked deadline looks, and C1 must catch it", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, control: { C1: ["arrived outside its admission window"] }, run: admissionExpiry(true) },

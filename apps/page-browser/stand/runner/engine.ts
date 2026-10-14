@@ -454,6 +454,10 @@ export class StandEngine {
         return;
       case "recoverResult":
         this.recoverResults.push(message);
+        // A Hub attempt in flight that recover answers for has its end:
+        // `not_sent` never left; `unknown` may have (an operator that started
+        // again knows no more) — the place in flight is free either way.
+        for (const answer of message.attempts) if (answer.state !== "outcome_resent") this.#admissions.hubDone(answer.attemptId, answer.state === "unknown");
         return;
       case "check":
         this.#onCheck(message.attemptId);
