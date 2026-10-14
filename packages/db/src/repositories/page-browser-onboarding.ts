@@ -22,6 +22,13 @@ import type { FanslySendHolderIdentity } from "./fansly-send-guard.ts";
 // generation (`link_generation`): every take raises it, so does the binding,
 // and each write of a link is made under `lockOnboardingLink` of its own
 // generation — an earlier link writes nothing.
+//
+// The onboarding itself has a generation too (`onboarding_generation`,
+// Astra's review of PR 16, items 1–2): every change of `onboarding` raises it
+// and voids the identity request and its answer. An account read proves the
+// profile's account only under the generation it was read in, sent after the
+// engine saw the automation back in that generation — and the binding takes
+// it only while that generation still holds, the onboarding open.
 
 export type PageBrowserOnboardingState = "off" | "login" | "open" | "closing";
 export type OnboardingIdentitySource = "onboarding" | "credentials_verify";
@@ -34,8 +41,12 @@ export type OnboardingIdentityResult =
     accountId: string;
     username: string | null;
     displayName: string | null;
-    /** When the request left the browser (ISO), or its completion. */
+    /** When the request left the browser (ISO): the operator's own `sent`,
+     *  never an instant unknown to the engine. */
     sentAt: string;
+    /** The onboarding generation it was read in (decimal): it proves the
+     *  account only while that generation holds. */
+    onboardingGeneration: string;
     /** The live session the answer came under. */
     sessionFingerprint: string;
     observationId: number;
@@ -56,6 +67,8 @@ export interface OnboardingProfile {
   /** The proxy given for the page to be (its auth sealed). */
   proxy: { url: string; encryptedAuth: string | null; keyVersion: number | null } | null;
   linkGeneration: bigint;
+  /** Raised at every change of `onboarding` (Astra's review of PR 16). */
+  onboardingGeneration: bigint;
   pinnedExitIp: string | null;
   pinnedExitIpAt: Date | null;
   env: Record<string, unknown> | null;
@@ -92,6 +105,7 @@ type SqlRow = {
   proxyAuth: string | null;
   proxyKeyVersion: number | null;
   linkGeneration: string;
+  onboardingGeneration: string;
   pinnedExitIp: string | null;
   pinnedExitIpAt: Date | string | null;
   env: unknown;
@@ -129,6 +143,7 @@ const columns = sql`
   b.onboarding_proxy_auth as "proxyAuth",
   b.onboarding_proxy_key_version as "proxyKeyVersion",
   b.link_generation::text as "linkGeneration",
+  b.onboarding_generation::text as "onboardingGeneration",
   b.pinned_exit_ip as "pinnedExitIp",
   b.pinned_exit_ip_at as "pinnedExitIpAt",
   b.env,
@@ -179,6 +194,7 @@ function profileOf(row: SqlRow): OnboardingProfile {
     socksEndpoint: row.socksEndpoint,
     proxy: row.proxyUrl === null ? null : { url: row.proxyUrl, encryptedAuth: row.proxyAuth, keyVersion: row.proxyKeyVersion },
     linkGeneration: BigInt(row.linkGeneration),
+    onboardingGeneration: BigInt(row.onboardingGeneration),
     pinnedExitIp: row.pinnedExitIp,
     pinnedExitIpAt: dateOf(row.pinnedExitIpAt),
     env: objectOf(row.env),
@@ -350,6 +366,13 @@ export type SetOnboardingResult =
   | { kind: "bound"; pageId: number }
   | { kind: "no_profile" };
 
+/** A change of `onboarding`: its generation raised, the identity request and
+ *  its answer void. */
+const voidedIdentity = sql`
+  onboarding_generation = onboarding_generation + 1,
+  identity_request_id = null, identity_request_source = null, identity_requested_at = null,
+  identity_result = null`;
+
 /** Where the owner may move the onboarding from (`closing` is the engine's
  *  to end). */
 const OWNER_MOVES: Record<"login" | "open" | "closing", readonly PageBrowserOnboardingState[]> = {
@@ -363,7 +386,9 @@ const OWNER_MOVES: Record<"login" | "open" | "closing", readonly PageBrowserOnbo
 };
 
 /** The owner moves the onboarding of a profile no page has. Locked with the
- *  row: one move at a time. */
+ *  row: one move at a time. Every move raises the onboarding generation and
+ *  voids the identity request and its answer: what the browser's account was
+ *  before it proves nothing after (a person may log it in again). */
 export async function setPageBrowserOnboarding(
   tx: Database,
   input: { profileId: string; to: "login" | "open" | "closing"; by: string },
@@ -381,6 +406,7 @@ export async function setPageBrowserOnboarding(
   await tx.execute(sql`
     update page_browsers
        set onboarding = ${input.to}, onboarding_changed_at = clock_timestamp(), onboarding_changed_by = ${input.by},
+           ${voidedIdentity},
            updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid
   `);
@@ -453,6 +479,7 @@ export async function endPageBrowserOnboarding(tx: Database, input: { profileId:
   const result = await tx.execute(sql`
     update page_browsers
        set onboarding = 'off', onboarding_changed_at = clock_timestamp(), onboarding_changed_by = ${input.by},
+           ${voidedIdentity},
            updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid and page_id is null and onboarding = 'closing'
     returning profile_id
@@ -461,16 +488,22 @@ export async function endPageBrowserOnboarding(tx: Database, input: { profileId:
 }
 
 /** The engine's answer to an identity request, under its link's lock. Only
- *  the request it answers (a newer one waits for its own). True: written. */
+ *  the request it answers (a newer one waits for its own; a move voided it).
+ *  An account only while the onboarding is open in the generation it was
+ *  read in. True: written. */
 export async function recordOnboardingIdentity(
   tx: Database,
   input: { profileId: string; result: OnboardingIdentityResult },
 ): Promise<boolean> {
+  const fresh = input.result.ok
+    ? sql`and onboarding = 'open' and onboarding_generation = ${input.result.onboardingGeneration}::bigint`
+    : sql``;
   const result = await tx.execute(sql`
     update page_browsers
        set identity_result = ${JSON.stringify(input.result)}::jsonb, updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid and page_id is null
        and identity_request_id = ${input.result.requestId}::uuid
+       ${fresh}
     returning profile_id
   `);
   return result.rows.length === 1;
@@ -566,24 +599,66 @@ export async function readProfileIntakePosition(db: Database, profileId: string)
 
 // ── the binding ────────────────────────────────────────────────────────────
 
+export type OnboardingBindingRefusal = "no_profile" | "bound" | "not_open" | "identity_changed";
+
+/**
+ * The profile's row locked for its binding (`for update`, until the caller's
+ * transaction ends: the owner's moves and the engine's grants wait), and
+ * whether the identity check `requestId` still proves its account: no page
+ * yet, the onboarding open, that request the profile's and answered with an
+ * account in the onboarding generation that still holds (Astra's review of
+ * PR 16, item 2). The profile as locked, or why not.
+ */
+export async function lockOnboardingForBinding(
+  tx: Database,
+  input: { profileId: string; requestId: string },
+): Promise<{ ok: true; profile: OnboardingProfile; identity: Extract<OnboardingIdentityResult, { ok: true }> } | { ok: false; why: OnboardingBindingRefusal }> {
+  if (!/^[0-9a-f-]{36}$/i.test(input.profileId)) return { ok: false, why: "no_profile" };
+  const locked = await tx.execute<SqlRow>(sql`select ${columns} from page_browsers b where b.profile_id = ${input.profileId}::uuid for update of b`);
+  const row = locked.rows[0];
+  if (row === undefined) return { ok: false, why: "no_profile" };
+  const profile = profileOf(row);
+  if (profile.pageId !== null) return { ok: false, why: "bound" };
+  if (profile.onboarding !== "open") return { ok: false, why: "not_open" };
+  const identity = profile.identityResult;
+  if (
+    profile.identityRequest?.id !== input.requestId || identity === null || !identity.ok || identity.requestId !== input.requestId
+    || identity.onboardingGeneration !== profile.onboardingGeneration.toString()
+  ) {
+    return { ok: false, why: "identity_changed" };
+  }
+  return { ok: true, profile, identity };
+}
+
 /**
  * Bind a profile no page has to the page just created (plan §3.2, step 4),
- * in the caller's transaction with the page's own rows: its onboarding off,
- * its link fenced off (`link_generation` raised), the proxy it carried for
- * the page cleared (the page keeps it now). No copy: the volumes are named by
- * the profile. False: the profile is gone or bound already — the caller rolls
- * back.
+ * in the caller's transaction with the page's own rows, after
+ * `lockOnboardingForBinding`: its onboarding off, its link fenced off
+ * (`link_generation` raised), the proxy it carried for the page cleared (the
+ * page keeps it now). No copy: the volumes are named by the profile. Only
+ * while the identity check `requestId` still proves its account, in the
+ * generation `onboardingGeneration`, the onboarding open. False: not so —
+ * the caller rolls back.
  */
-export async function bindOnboardedProfile(tx: Database, input: { profileId: string; pageId: number }): Promise<boolean> {
+export async function bindOnboardedProfile(
+  tx: Database,
+  input: { profileId: string; pageId: number; requestId: string; onboardingGeneration: bigint },
+): Promise<boolean> {
   const result = await tx.execute(sql`
     update page_browsers
        set page_id = ${input.pageId}::bigint,
            onboarding = 'off', onboarding_changed_at = clock_timestamp(), onboarding_changed_by = 'binding',
            link_generation = link_generation + 1,
+           onboarding_generation = onboarding_generation + 1,
            onboarding_proxy_url = null, onboarding_proxy_auth = null, onboarding_proxy_key_version = null,
            identity_request_id = null, identity_request_source = null, identity_requested_at = null,
            updated_at = clock_timestamp()
-     where profile_id = ${input.profileId}::uuid and page_id is null
+     where profile_id = ${input.profileId}::uuid and page_id is null and onboarding = 'open'
+       and onboarding_generation = ${input.onboardingGeneration.toString()}::bigint
+       and identity_request_id = ${input.requestId}::uuid
+       and identity_result->>'requestId' = ${input.requestId}
+       and identity_result->>'ok' = 'true'
+       and identity_result->>'onboardingGeneration' = onboarding_generation::text
     returning profile_id
   `);
   return result.rows.length === 1;

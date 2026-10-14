@@ -4,7 +4,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  bindOnboardedProfile,
   findOnboardingProfile,
   registerPageBrowserProfile,
   requestOnboardingIdentity,
@@ -22,7 +21,8 @@ import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page
 import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { BrowserOnboardingTask } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A } from "./helpers/page-browser-operator.ts";
+import { bindProvenProfile } from "./helpers/page-browser-onboarding.ts";
+import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
 import { harnessConfig, until } from "./helpers/sync-engine.ts";
 
 // A new page's onboarding through its browser on the engine's side (Project
@@ -135,6 +135,56 @@ async function untilLoginMode(r: Rig): Promise<void> {
 /** The admissions of the site the engine answered, admitted ones. */
 function granted(r: Rig): Array<SiteAdmitResult & { admit: true }> {
   return r.operator.siteAnswers.filter((answer): answer is SiteAdmitResult & { admit: true } => answer.admit);
+}
+
+/** What the fake operator says to the engine, intercepted: each message
+ *  (and body frame) passed on as it is, changed, dropped (null) or held until
+ *  `release` (its order kept). */
+function intercept(r: Rig, take: (message: Record<string, unknown>) => Record<string, unknown> | null | "hold") {
+  const server = r.operator.server as unknown as { send: (message: unknown) => boolean; sendBinary: (frame: Buffer) => boolean };
+  const send = server.send.bind(server);
+  const sendBinary = server.sendBinary.bind(server);
+  const held: Array<() => void> = [];
+  let holdingFrames = false;
+  server.sendBinary = (frame) => {
+    if (holdingFrames) {
+      held.push(() => sendBinary(frame));
+      return true;
+    }
+    return sendBinary(frame);
+  };
+  server.send = (message) => {
+    const taken = take(message as Record<string, unknown>);
+    if (taken === "hold") {
+      held.push(() => send(message));
+      return true;
+    }
+    return taken === null ? true : send(taken);
+  };
+  return {
+    /** Body frames are held from now on too (they go before their result). */
+    holdFrames: () => void (holdingFrames = true),
+    release: () => {
+      holdingFrames = false;
+      for (const go of held.splice(0)) go();
+    },
+  };
+}
+
+/** The login opened through the form and closed again, then one identity
+ *  request: its id. */
+async function loginThenAsk(r: Rig): Promise<string> {
+  await untilLoginMode(r);
+  await moveOnboarding(r.profileId, "open");
+  await until(async () => r.operator.state.mode === "automation", 10_000, "the automation back");
+  const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "onboarding" });
+  if (requested.kind !== "requested") throw new Error("not requested");
+  return requested.requestId;
+}
+
+async function answerOf(r: Rig, requestId: string) {
+  await until(async () => (await findOnboardingProfile(db(), r.profileId))!.identityResult?.requestId === requestId, 10_000, "the identity answered");
+  return (await findOnboardingProfile(db(), r.profileId))!.identityResult!;
 }
 
 async function journal(profileId: string) {
@@ -300,9 +350,7 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     const pageId = Number(created.rows[0]!.id);
     await moveOnboarding(r.profileId, "open");
     const commandsBefore = r.operator.commands.length;
-    await db().transaction(async (tx) => {
-      expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: r.profileId, pageId })).toBe(true);
-    });
+    expect(await bindProvenProfile(db(), { profileId: r.profileId, pageId })).toBe(true);
     await until(async () => !task.links.has(r.profileId), 10_000, "the link closed once bound");
     const bound = (await findOnboardingProfile(db(), r.profileId))!;
     expect(bound).toMatchObject({ pageId, onboarding: "off", proxy: null });
@@ -327,5 +375,96 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     expect(rows[0]).toMatchObject({ source: "browser_site", account_id: null });
     expect(JSON.stringify(rows)).not.toContain("secret-of-the-login");
     await until(async () => r.operator.eventAcks.some((ack) => ack.uptoSeq === 2), 5_000, "acknowledged");
+  });
+});
+
+describe("the account read through the browser proves it only when fresh (Astra's review of PR 16, item 1)", () => {
+  it("names no account when the operator never said when the read left: no `sent`, the result's own instant or none", async (context) => {
+    if (!testDb) return context.skip();
+    // No `sent` and no instant in the result (an operator that cannot tell).
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    r.operator.reportSend = false;
+    startTask(r);
+    const first = await answerOf(r, await loginThenAsk(r));
+    expect(first).toMatchObject({ ok: false, error: expect.stringContaining("did not say when the account's read left it") });
+    expect(r.operator.physical).toHaveLength(1);
+    // Its answer is journaled all the same (capture before parse), and the
+    // send counted at its completion.
+    expect((await journal(r.profileId)).at(-1)).toMatchObject({ operation: "account_me", outcome: "response" });
+    // The `sent` lost on the way, the result carrying the instant: unknown too.
+    r.operator.reportSend = true;
+    intercept(r, (message) => (message.type === "sent" ? null : message));
+    const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "credentials_verify" });
+    const second = await answerOf(r, requested.kind === "requested" ? requested.requestId : "");
+    expect(second).toMatchObject({ ok: false, error: expect.stringContaining("did not say when the account's read left it") });
+    expect(r.operator.physical).toHaveLength(2);
+  });
+
+  it("names no account when its `sent` puts it before the automation came back for the login (an operator on another clock)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    // Its `sent` an hour behind the gate's own instant.
+    intercept(r, (message) => (message.type === "sent" ? { ...message, sentMono: Number(message.sentMono) - 3_600_000 } : message));
+    startTask(r);
+    const answer = await answerOf(r, await loginThenAsk(r));
+    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining("read before the browser's login closed") });
+  });
+
+  it("names nothing when its answer comes after the owner opened the login again: the read was of before â€” its request is void", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    // The read's answer held on its way to the engine (its `sent` goes).
+    let holding = true;
+    const held = intercept(r, (message) => (holding && message.type === "result" ? "hold" : message));
+    held.holdFrames();
+    startTask(r);
+    await loginThenAsk(r);
+    await until(async () => r.operator.physical.length === 1, 10_000, "the read sent");
+    // The owner opens the login again; a person logs the browser into
+    // another account; the login closed again.
+    await moveOnboarding(r.profileId, "login");
+    await until(async () => r.operator.state.mode === "manual_login", 10_000, "the manual login again");
+    r.operator.setSession(SESSION_B);
+    await moveOnboarding(r.profileId, "open");
+    await until(async () => r.operator.state.mode === "automation", 10_000, "the automation back again");
+    holding = false;
+    held.release();
+    await until(async () => r.operator.acks.includes(r.operator.sends[0]!.attemptId), 10_000, "the held answer taken");
+    const profile = (await findOnboardingProfile(db(), r.profileId))!;
+    // Not the account of before the new login: the request is void.
+    expect(profile.identityRequest).toBeNull();
+    expect(profile.identityResult).toBeNull();
+    expect(profile.onboardingGeneration).toBeGreaterThanOrEqual(3n);
+  });
+
+  it("opened without a login (a profile logged in before): asks the operator for the automation all the same, and reads the account after its answer", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.setSession(SESSION_A);
+    await moveOnboarding(r.profileId, "open");
+    startTask(r);
+    const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "credentials_verify" });
+    const answer = await answerOf(r, requested.kind === "requested" ? requested.requestId : "");
+    expect(answer).toMatchObject({ ok: true, accountId: ACCOUNT });
+    // The operator never left the automation; its answer is the boundary.
+    expect(r.operator.commands.some((command) => command.command.kind === "setMode" && "mode" in command.command && command.command.mode === "manual_login")).toBe(false);
+    expect(r.operator.commands.some((command) => command.command.kind === "setMode" && "mode" in command.command && command.command.mode === "automation")).toBe(true);
+  });
+
+  it("proves the account with the operator's own `sent` after the login closed, in the generation that holds", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    startTask(r);
+    const answer = await answerOf(r, await loginThenAsk(r));
+    const profile = (await findOnboardingProfile(db(), r.profileId))!;
+    expect(answer).toMatchObject({ ok: true, accountId: ACCOUNT, onboardingGeneration: profile.onboardingGeneration.toString() });
+    // The automation was asked for after the owner closed the login: its
+    // answer is the boundary the read went after.
+    const kinds = r.operator.commands.map((command) => command.command.kind === "setMode" ? `setMode:${command.command.mode}` : command.command.kind);
+    expect(kinds.lastIndexOf("setMode:automation")).toBeGreaterThan(kinds.indexOf("setMode:manual_login"));
   });
 });

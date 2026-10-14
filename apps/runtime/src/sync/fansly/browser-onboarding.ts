@@ -95,7 +95,16 @@ import { accountOf } from "./identity-without-page.ts";
 //   under the request's source (`onboarding`, `credentials_verify`) — and its
 //   answer journaled in `observations` (`pull`, no page: the account it names
 //   as its native ref) with the profile's `identity_result`, in one
-//   transaction; the operator's copy acknowledged after.
+//   transaction; the operator's copy acknowledged after. It proves the
+//   account (Astra's review of PR 16, item 1; PR 15's rule) only when the
+//   operator's own `sent` came — its clock at the gate's first bytes; without
+//   it the send instant is unknown and proves nothing — and that instant lies
+//   after the automation came back in the onboarding generation that still
+//   holds: once the owner closed the login (`open`, a new generation) the
+//   link asks the operator for the automation and takes the instant its
+//   answer arrived as the login's boundary (no person is in the browser
+//   after it); a read sent before it, or answered once a move made another
+//   generation, names no account.
 // - Given up (`closing`): the browser stopped (`stopPage`: the exit closed,
 //   Chrome quit; the profile kept), the automation back, then `off`.
 // - The buffer's events: the site's answers journaled in `observations`
@@ -342,6 +351,11 @@ export class OnboardingLink {
   /** When the pin the browser halted under was set (a changed exit IP): a
    *  pin set after it — the owner's word on the IP — starts it again. */
   #haltedPinAt: number | null = null;
+  /** The login's boundary in an open onboarding: the generation and the
+   *  instant (this process's monotonic clock) the operator's answer that the
+   *  automation is back arrived. An identity read proves the account only if
+   *  it was sent after it, in that generation. */
+  #automationBack: { generation: bigint; mono: number } | null = null;
   #identity: Promise<void> | null = null;
   #lastRecorded: { at: number; key: string } | null = null;
   #subscribed: string | null = null;
@@ -516,8 +530,12 @@ export class OnboardingLink {
         await this.#startIfStanding(state, "the browser stands: its login screen comes with its start");
         return;
       case "open":
-        if (state.mode !== "automation") {
-          await this.#command({ kind: "setMode", mode: "automation" }, "the owner closed the login");
+        if (state.mode !== "automation" || this.#automationBack?.generation !== profile.onboardingGeneration) {
+          // Asked even of an operator that says it is in the automation: its
+          // answer, after the change, is the boundary of this generation's
+          // login (the state may lag behind a command).
+          const result = await this.#command({ kind: "setMode", mode: "automation" }, "the owner closed the login");
+          if (result?.ok === true) this.#automationBack = { generation: profile.onboardingGeneration, mono: this.#clock.monoNow() };
           return;
         }
         await this.#startIfStanding(state, "the browser stands: the account is checked through it");
@@ -588,13 +606,14 @@ export class OnboardingLink {
     }
   }
 
-  /** The profile is still no page's and still this link's. */
-  async #stillHolds(): Promise<boolean> {
+  /** The profile as locked, still no page's and still this link's (null:
+   *  not so). */
+  async #stillHeld(): Promise<OnboardingProfile | null> {
     try {
-      await this.#fenced(async () => undefined);
-      return this.#holds();
+      const profile = await this.#fenced(async (_tx, locked) => locked);
+      return this.#holds() ? profile : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -750,10 +769,12 @@ export class OnboardingLink {
     const request = profile.identityRequest;
     if (request === null || this.#identity !== null) return;
     if (profile.identityResult?.requestId === request.id) return;
-    if (profile.onboarding !== "open" || !takesHubRequests(state)) {
+    const boundary = this.#automationBack;
+    const bounded = boundary !== null && boundary.generation === profile.onboardingGeneration;
+    if (profile.onboarding !== "open" || !takesHubRequests(state) || !bounded) {
       if (profile.onboarding === "open" && Date.now() - request.requestedAt.getTime() < this.#t.identityWaitMs) return;
       const why = profile.onboarding !== "open" ? `the onboarding is ${profile.onboarding}, not open`
-        : state.mode !== "automation" ? "a person is in the browser (its login is open)"
+        : state.mode !== "automation" || !bounded ? "a person is in the browser (its login is open)"
         : state.stopReason !== null ? `the browser stands (${state.stopReason})`
           : state.sessionFingerprint === null ? "the browser knows no live session: log it in first"
             : `the browser is not up at the site (${state.step})`;
@@ -764,7 +785,7 @@ export class OnboardingLink {
         });
       return;
     }
-    this.#identity = this.#inSlot(() => this.#checkIdentity(request.id, request.source, state.sessionFingerprint!))
+    this.#identity = this.#inSlot(() => this.#checkIdentity(request.id, request.source, state.sessionFingerprint!, boundary!))
       .catch((error: unknown) => {
         if (error instanceof OnboardingLinkLostError) return;
         this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: the identity check failed; asked again on the next look");
@@ -774,7 +795,7 @@ export class OnboardingLink {
       });
   }
 
-  async #checkIdentity(requestId: string, source: "onboarding" | "credentials_verify", fingerprint: string): Promise<void> {
+  async #checkIdentity(requestId: string, source: "onboarding" | "credentials_verify", fingerprint: string, boundary: { generation: bigint; mono: number }): Promise<void> {
     const signal = this.#stop.signal;
     const spec = fanslyWireSpec("account.me");
     if (spec.legacyOperation === null || spec.kind === null) throw new Error("account.me is journaled under its legacy operation and its kind");
@@ -794,9 +815,16 @@ export class OnboardingLink {
       pauseMs: grant.pauseMs,
     }));
     const admission = this.pacer.arm(grant, attemptId, issuedMono);
-    const sent = await this.#sendIdentity(admission, fingerprint, signal);
+    const sent = await this.#sendIdentity(admission, fingerprint, signal, { requestId, generation: boundary.generation });
     const outcome = sent.outcome;
     await this.#complete(admission, token, outcome, outcome.kind === "response" ? outcome.status : null);
+    const failure = (why: string): OnboardingIdentityResult => ({
+      requestId,
+      ok: false,
+      error: redactSensitiveText(why).slice(0, 400),
+      httpStatus: outcome.kind === "response" ? outcome.status : null,
+      at: new Date().toISOString(),
+    });
     let result: OnboardingIdentityResult;
     let observation: { kind: string; payload: unknown; payloadHash: Buffer; accountId: string } | null = null;
     try {
@@ -806,29 +834,37 @@ export class OnboardingLink {
       const read = outcome.kind === "response" ? readFanslyWireResponse(spec, {}, outcome) : null;
       if (read === null || read.kind !== "accepted") throw new Error("Fansly session verification returned an invalid account");
       const journal = prepareJournalBody({ kind: spec.kind }, { response: read.response, contractAccepted: true });
+      // Captured whatever it proves (capture before parse).
       observation = { kind: spec.kind, payload: journal.payload, payloadHash: journal.payloadHash, accountId: account.id };
-      result = {
-        requestId,
-        ok: true,
-        accountId: account.id,
-        username: account.username ?? null,
-        displayName: account.displayName ?? null,
-        sentAt: (admission.sentWall ?? new Date()).toISOString(),
-        sessionFingerprint: fingerprint,
-        observationId: 0,
-        attemptId,
-      };
+      // Proof: the operator's own `sent`, after the login's boundary.
+      if (sent.sentFloorMono === null || admission.sentWall === null) {
+        result = failure("the browser did not say when the account's read left it: what it names proves nothing — check again");
+      } else if (sent.sentFloorMono <= boundary.mono) {
+        result = failure("the account was read before the browser's login closed: check again");
+      } else {
+        result = {
+          requestId,
+          ok: true,
+          accountId: account.id,
+          username: account.username ?? null,
+          displayName: account.displayName ?? null,
+          sentAt: admission.sentWall.toISOString(),
+          onboardingGeneration: boundary.generation.toString(),
+          sessionFingerprint: fingerprint,
+          observationId: 0,
+          attemptId,
+        };
+      }
     } catch (error) {
-      result = {
-        requestId,
-        ok: false,
-        error: redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 400),
-        httpStatus: outcome.kind === "response" ? outcome.status : null,
-        at: new Date().toISOString(),
-      };
+      result = failure(error instanceof Error ? error.message : String(error));
     }
-    await this.#fenced(async (tx) => {
-      if (observation !== null && result.ok) {
+    await this.#fenced(async (tx, profile) => {
+      if (result.ok && (profile.onboarding !== "open" || profile.onboardingGeneration !== boundary.generation)) {
+        // A move since (a login opened again, given up): the read is of
+        // before it. (A move voids the request too: nothing is written then.)
+        result = failure("the onboarding changed while the account was read: check again");
+      }
+      if (observation !== null) {
         const inserted = await insertObservation(tx, {
           source: "pull",
           producer: "fansly-onboarding:account.me",
@@ -840,7 +876,7 @@ export class OnboardingLink {
           payloadHash: observation.payloadHash,
           idempotencyKey: `fansly-onboarding:${this.profileId}:attempt:${attemptId}`,
         });
-        result = { ...result, observationId: inserted.observationId };
+        if (result.ok) result = { ...result, observationId: inserted.observationId };
       }
       await recordOnboardingIdentity(tx, { profileId: this.profileId, result });
     });
@@ -851,27 +887,41 @@ export class OnboardingLink {
   }
 
   /** One Hub request `GET /account/me` through the browser, under the
-   *  admission: its outcome as the engine takes outcomes, and whether it
-   *  arrived whole (only then is the operator's copy acknowledged). */
-  async #sendIdentity(admission: Admission, fingerprint: string, signal: AbortSignal): Promise<{ outcome: FanslyWireOutcome; whole: boolean }> {
+   *  admission: its outcome as the engine takes outcomes, whether it arrived
+   *  whole (only then is the operator's copy acknowledged), and the earliest
+   *  instant the operator's own `sent` puts its send at (this process's
+   *  clock; null: no `sent` came — the instant is unknown). */
+  async #sendIdentity(
+    admission: Admission,
+    fingerprint: string,
+    signal: AbortSignal,
+    asked: { requestId: string; generation: bigint },
+  ): Promise<{ outcome: FanslyWireOutcome; whole: boolean; sentFloorMono: number | null }> {
     const client = this.client;
     const attemptId = admission.attemptId;
     let granted = false;
     let reported: number | null = null;
+    let sentFloorMono: number | null = null;
     let firstAnswer: Promise<CheckReply> | null = null;
-    let settle!: (value: { outcome: FanslyWireOutcome; whole: boolean }) => void;
-    const done = new Promise<{ outcome: FanslyWireOutcome; whole: boolean }>((resolve) => (settle = resolve));
+    let settle!: (value: { outcome: FanslyWireOutcome; whole: boolean; sentFloorMono: number | null }) => void;
+    const done = new Promise<{ outcome: FanslyWireOutcome; whole: boolean; sentFloorMono: number | null }>((resolve) => (settle = resolve));
     let finished = false;
     const finish = (outcome: FanslyWireOutcome, whole = true) => {
       if (finished) return;
       finished = true;
-      settle({ outcome, whole });
+      settle({ outcome, whole, sentFloorMono });
     };
     const maySent = (message: string) => finish(reported === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: reported });
     const answerCheck = async (liveSession: string): Promise<CheckReply> => {
       if (finished) return { admit: false, reason: "lease_inactive" };
       if (liveSession !== fingerprint) return { admit: false, reason: "session_mismatch" };
-      if (!(await this.#stillHolds())) return { admit: false, reason: "generation_stale" };
+      // Still this link's, the onboarding still open in the generation the
+      // request was asked in, the request not voided.
+      const profile = await this.#stillHeld();
+      if (profile === null) return { admit: false, reason: "generation_stale" };
+      if (profile.onboarding !== "open" || profile.onboardingGeneration !== asked.generation || profile.identityRequest?.id !== asked.requestId) {
+        return { admit: false, reason: "lease_inactive" };
+      }
       if (finished) return { admit: false, reason: "lease_inactive" };
       const refusal = this.pacer.checkRemoteGrant(admission);
       if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
@@ -885,7 +935,12 @@ export class OnboardingLink {
         return firstAnswer;
       },
       onSent: (message) => {
-        reported ??= this.#bridge.fromKernel(message.sentMono) + SEND_REPORT_GUARD_MS;
+        if (reported !== null) return;
+        const at = this.#bridge.fromKernel(message.sentMono);
+        // The pause runs from the latest it may have been, the proof from
+        // the earliest (the two clocks' shift is read, not known).
+        reported = at + SEND_REPORT_GUARD_MS;
+        sentFloorMono = at - SEND_REPORT_GUARD_MS;
       },
       onResult: (delivered) => {
         const taken = this.#identityOutcome(delivered, fingerprint, reported);
@@ -929,14 +984,15 @@ export class OnboardingLink {
     }
   }
 
+  /** The result as the engine takes it. Its send instant is the operator's
+   *  `sent` as it came (`reported`), never the result's own: without a `sent`
+   *  the instant is unknown — the completion stands in for the pause
+   *  (`completion_fallback`), and it proves nothing (PR 15's rule). */
   #identityOutcome(delivered: DeliveredResult, fingerprint: string, reported: number | null): { outcome: FanslyWireOutcome; whole: boolean } {
     const { result, body, bodyProblem } = delivered;
     const o = result.outcome;
-    const sentAt = (mono: number | null) => (mono === null ? reported : this.#bridge.fromKernel(mono) + SEND_REPORT_GUARD_MS);
-    const sentError = (message: string, mono: number | null = null): FanslyWireOutcome => {
-      const at = sentAt(mono);
-      return at === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: at };
-    };
+    const sentError = (message: string): FanslyWireOutcome =>
+      reported === null ? { kind: "transport_error", sent: true, message } : { kind: "transport_error", sent: true, message, sentMono: reported };
     if (result.sessionFingerprint !== fingerprint) {
       if (o.kind === "aborted_before_send" || ((o.kind === "transport_error" || o.kind === "timeout") && !o.sent)) {
         return { outcome: { kind: "aborted_before_send", refusal: "session_mismatch" }, whole: true };
@@ -952,12 +1008,12 @@ export class OnboardingLink {
         return { outcome: reported === null ? { kind: o.kind, sent: true, message: o.message } : { kind: o.kind, sent: true, message: o.message, sentMono: reported }, whole: true };
       }
       case "response": {
-        if (bodyProblem !== null || body === null) return { outcome: sentError(`the browser answered, but ${bodyProblem ?? "its body is missing"}`, o.sentMono), whole: false };
-        if (o.preflight === true && o.status >= 200 && o.status < 300) return { outcome: sentError("only the CORS preflight of the request went", o.sentMono), whole: true };
+        if (bodyProblem !== null || body === null) return { outcome: sentError(`the browser answered, but ${bodyProblem ?? "its body is missing"}`), whole: false };
+        if (o.preflight === true && o.status >= 200 && o.status < 300) return { outcome: sentError("only the CORS preflight of the request went"), whole: true };
         if (o.source === "cache_unconfirmed" || o.source === "service_worker") {
-          return { outcome: sentError(`the answer is not the server's confirmed word (${o.source})`, o.sentMono), whole: true };
+          return { outcome: sentError(`the answer is not the server's confirmed word (${o.source})`), whole: true };
         }
-        const at = sentAt(o.sentMono);
+        const at = reported;
         return {
           outcome: {
             kind: "response",

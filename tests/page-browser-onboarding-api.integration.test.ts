@@ -1,15 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type Server } from "node:http";
 import { connect as tcpConnect, type AddressInfo, type Socket } from "node:net";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bindOnboardedProfile, findOnboardingProfile, registerPageBrowserProfile, type Database } from "@agency_hub_core/db";
+import { findOnboardingProfile, insertObservation, registerPageBrowserProfile, setPageBrowserOnboarding, type Database } from "@agency_hub_core/db";
+import { fanslyWireSpec } from "@agency_hub_core/fansly";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { bindNewFanslyPageThroughBrowser } from "../apps/runtime/src/services/page-browser-onboarding.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { bindProvenProfile, proveOnboardingAccount } from "./helpers/page-browser-onboarding.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { harnessConfig, until } from "./helpers/sync-engine.ts";
 
@@ -100,7 +103,7 @@ async function rig() {
     const header = response.headers["set-cookie"];
     return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
   };
-  return { profileId, server, port: Number(new URL(address).port), screen, cookie: await cookieOf("owner-onb"), lead: await cookieOf("lead-onb") };
+  return { profileId, app, server, port: Number(new URL(address).port), screen, cookie: await cookieOf("owner-onb"), lead: await cookieOf("lead-onb") };
 }
 
 type Rig = Awaited<ReturnType<typeof rig>>;
@@ -161,7 +164,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
     const page = await testDb.pool.query<{ id: string }>("insert into pages (model_id, platform, label) values ($1, 'fansly', 'ari-2') returning id", [model.rows[0]!.id]);
     await testDb.pool.query("update page_browsers set onboarding = 'off' where profile_id = $1", [r.profileId]);
-    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: r.profileId, pageId: Number(page.rows[0]!.id) })).toBe(true));
+    expect(await bindProvenProfile(db(), { profileId: r.profileId, pageId: Number(page.rows[0]!.id) })).toBe(true);
     for (const path of ["/pin", "/login/start", "/login/finish", "/close"]) {
       expect((await post(r, path, path === "/pin" ? { ip: "203.0.113.9" } : undefined)).json(), path).toMatchObject({ error: "profile_bound" });
     }
@@ -202,7 +205,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
     const page = await testDb.pool.query<{ id: string }>("insert into pages (model_id, platform, label) values ($1, 'fansly', 'ari-2') returning id", [model.rows[0]!.id]);
     await testDb.pool.query("update page_browsers set onboarding = 'off' where profile_id = $1", [r.profileId]);
-    await db().transaction(async (tx) => bindOnboardedProfile(tx as unknown as Database, { profileId: r.profileId, pageId: Number(page.rows[0]!.id) }));
+    expect(await bindProvenProfile(db(), { profileId: r.profileId, pageId: Number(page.rows[0]!.id) })).toBe(true);
     await until(async () => again.closed() && r.screen.open.size === 0, 5_000, "the screen closed once bound");
   }, 60_000);
 
@@ -220,5 +223,53 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     expect((await findOnboardingProfile(db(), r.profileId))!.pageId).toBeNull();
     // The Node path is the same as before: a pasted session needs its proxy.
     expect((await r.server.inject({ method: "POST", url: "/api/v1/admin/credentials/verify", headers: { cookie: r.cookie }, payload: { platform: "fansly", session: { authorization: "x" } } })).statusCode).toBe(400);
+  });
+
+  it("refuses the page's creation when the onboarding was given up, or its login opened again, after the account's check — nothing created, the profile unbound (Astra's review of PR 16, item 2)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    expect((await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.50:1080", username: "u", password: "p" } })).statusCode).toBe(200);
+    const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
+    const account = "300000000000000916";
+    /** The account's check as the engine's link answers it, its answer journaled. */
+    const checked = async () => {
+      await proveOnboardingAccount(db(), r.profileId, account);
+      const payload = { account: { id: account, username: "ari2", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 } };
+      const observation = await insertObservation(db(), {
+        source: "pull",
+        producer: "fansly-onboarding:account.me",
+        platform: "fansly",
+        accountId: null,
+        nativeAccountRef: account,
+        kind: fanslyWireSpec("account.me").kind!,
+        payload,
+        payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+        idempotencyKey: `test-onboarding:${randomUUID()}`,
+      });
+      await testDb!.pool.query("update page_browsers set identity_result = jsonb_set(identity_result, '{observationId}', to_jsonb($2::bigint)) where profile_id = $1", [r.profileId, observation.observationId]);
+      const identity = (await findOnboardingProfile(db(), r.profileId))!.identityResult;
+      if (identity === null || !identity.ok) throw new Error("not proven");
+      return identity;
+    };
+    const move = (to: "login" | "closing") => db().transaction((tx) => setPageBrowserOnboarding(tx as unknown as Database, { profileId: r.profileId, to, by: "owner:1" }));
+    const create = (identity: Awaited<ReturnType<typeof checked>>) =>
+      bindNewFanslyPageThroughBrowser(r.app, { modelId: Number(model.rows[0]!.id), label: "ari-2", profileId: r.profileId, by: "owner:1", identity });
+    // Given up between the check and the creation.
+    const first = await checked();
+    await move("closing");
+    await expect(create(first)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining("is no longer open") });
+    await testDb.pool.query("update page_browsers set onboarding = 'off' where profile_id = $1", [r.profileId]);
+    // Its login opened again (a person may log it into another account).
+    const second = await checked();
+    await move("login");
+    await expect(create(second)).rejects.toMatchObject({ statusCode: 409 });
+    expect((await testDb.pool.query("select 1 from pages where label = 'ari-2'")).rows).toEqual([]);
+    expect((await testDb.pool.query("select 1 from sync_pages")).rows).toEqual([]);
+    expect((await findOnboardingProfile(db(), r.profileId))!.pageId).toBeNull();
+    // The check that still holds: the page born bound.
+    const third = await checked();
+    const born = await create(third);
+    expect(born.account.id).toBe(account);
+    expect((await findOnboardingProfile(db(), r.profileId))!).toMatchObject({ pageId: born.page.id, onboarding: "off" });
   });
 });

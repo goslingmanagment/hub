@@ -1098,10 +1098,16 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
   `sync_attempts`' sequence, so the operator never sees an id twice). The identity check is one `GET /account/me`
   through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
-  (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. The site's answers go
-  to `observations` keyed by the profile, with the buffer's position on its row. The binding (the API's, one
-  transaction with the page's birth: `browser` transport, credentials untrusted until the engine's own check under the
-  page's hello) raises the generation: the link closes, and the page's slot takes the browser.
+  (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. It proves the account
+  only with the operator's own `sent` (without it the instant is unknown and proves nothing — PR 15's rule), sent
+  after the boundary of the owner's login: every change of `onboarding` raises `onboarding_generation` and voids the
+  request and its answer, and once the onboarding is open the link asks the operator for the automation (even one in
+  it) and takes the arrival of its answer as that generation's boundary; an answer of another generation is never
+  recorded as an account. The site's answers go to `observations` keyed by the profile, with the buffer's position on
+  its row. The binding (the API's, one transaction with the page's birth: `browser` transport, credentials untrusted
+  until the engine's own check under the page's hello) locks the profile's row first and goes on only while the
+  onboarding is open and the check is the profile's, answered in the generation that holds — else nothing is
+  created; it raises the generation: the link closes, and the page's slot takes the browser.
 
 ## Classes
 

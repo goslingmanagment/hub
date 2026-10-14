@@ -438,6 +438,7 @@ export const pageBrowsers = pgTable("page_browsers", {
   onboardingProxyAuth: text("onboarding_proxy_auth"),
   onboardingProxyKeyVersion: integer("onboarding_proxy_key_version"),
   linkGeneration: bigint("link_generation", { mode: "bigint" }).notNull().default(sql`0`),
+  onboardingGeneration: bigint("onboarding_generation", { mode: "bigint" }).notNull().default(sql`0`),
   identityRequestId: uuid("identity_request_id"),
   identityRequestSource: text("identity_request_source").$type<"onboarding" | "credentials_verify">(),
   identityRequestedAt: timestamp("identity_requested_at", { withTimezone: true }),

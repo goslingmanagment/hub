@@ -34,6 +34,12 @@
 --                           a profile no page has (its hello's owner
 --                           generation): an earlier link's writes are fenced
 --                           off by it, and the binding raises it too
+--   onboarding_generation   raised at every change of `onboarding` (the
+--                           owner's moves, the engine's end, the binding),
+--                           which also voids the identity request and its
+--                           answer: an account read under an earlier one —
+--                           before a person could have logged the browser in
+--                           again — proves nothing, and binds no page
 --   identity_request_id, identity_request_source, identity_requested_at
 --                           the owner asked for the account the profile's
 --                           live session belongs to (`onboarding`: the page's
@@ -77,6 +83,7 @@ alter table page_browsers
   add column if not exists onboarding_proxy_auth text,
   add column if not exists onboarding_proxy_key_version integer,
   add column if not exists link_generation bigint not null default 0,
+  add column if not exists onboarding_generation bigint not null default 0,
   add column if not exists identity_request_id uuid,
   add column if not exists identity_request_source text,
   add column if not exists identity_requested_at timestamptz,
@@ -99,6 +106,8 @@ alter table page_browsers
   ),
   drop constraint if exists page_browsers_link_generation_check,
   add constraint page_browsers_link_generation_check check (link_generation >= 0),
+  drop constraint if exists page_browsers_onboarding_generation_check,
+  add constraint page_browsers_onboarding_generation_check check (onboarding_generation >= 0),
   drop constraint if exists page_browsers_identity_request_check,
   add constraint page_browsers_identity_request_check check (
     (identity_request_id is null) = (identity_requested_at is null)
@@ -116,6 +125,8 @@ comment on column page_browsers.onboarding_proxy_auth is
   'Project Browser (0281): the username and password of the proxy the owner gave for the page to be, one encrypted JSON envelope (onboarding_proxy_key_version names the key); the page takes it at the binding.';
 comment on column page_browsers.link_generation is
   'Project Browser (0281): raised every time an engine takes the link to a profile no page has (the hello''s owner generation) and at the binding: an earlier link''s writes are fenced off by it.';
+comment on column page_browsers.onboarding_generation is
+  'Project Browser (0281): raised at every change of onboarding (and at the binding), voiding the identity request and its answer: an account read under an earlier one proves nothing.';
 comment on column page_browsers.identity_result is
   'Project Browser (0281): the engine''s answer to identity_request_id — the account the browser''s live session belongs to, read by one GET /account/me through the browser and journaled in observations — or why there is none.';
 
@@ -133,7 +144,7 @@ begin
   if exists (select 1 from pg_roles where rolname = 'read_only') then
     -- every new column but the proxy's sealed auth
     grant select (onboarding, onboarding_changed_at, onboarding_changed_by, socks_endpoint, onboarding_proxy_url,
-      onboarding_proxy_key_version, link_generation, identity_request_id, identity_request_source, identity_requested_at,
+      onboarding_proxy_key_version, link_generation, onboarding_generation, identity_request_id, identity_request_source, identity_requested_at,
       identity_result)
       on page_browsers to read_only;
   end if;

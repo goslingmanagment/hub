@@ -5,10 +5,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bindOnboardedProfile,
   deleteUnboundPageBrowser,
+  endPageBrowserOnboarding,
   findOnboardingProfile,
   lastBrowserProfileSendAt,
   listOnboardingLinksWanted,
   listUnboundPageBrowsers,
+  lockOnboardingForBinding,
   lockOnboardingLink,
   OnboardingLinkLostError,
   PageBrowserRegistrationError,
@@ -22,6 +24,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { bindProvenProfile, proveOnboardingAccount, type OnboardingProof } from "./helpers/page-browser-onboarding.ts";
 
 // The data of a new page's onboarding through its browser (Project Browser
 // plan §3.2, §3.4; 0281; stage 3 PR 16): a profile registered with its page
@@ -84,9 +87,10 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     const pageId = await page("ari-2");
     const a = await profile();
     const b = await profile();
-    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: a, pageId })).toBe(true));
+    const proof = await proveOnboardingAccount(db(), a);
+    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: a, pageId, ...proof })).toBe(true));
     // Bound once only.
-    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: a, pageId })).toBe(false));
+    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId: a, pageId, ...proof })).toBe(false));
     // A second profile on the same page: the unique key refuses it.
     await expect(testDb.pool.query("update page_browsers set page_id = $1 where profile_id = $2", [pageId, b])).rejects.toThrow(/page_browsers_page_key/);
     // A bound profile with an onboarding: the check refuses it.
@@ -121,7 +125,7 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     await expect(db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 1n }))).rejects.toBeInstanceOf(OnboardingLinkLostError);
     await db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 2n }));
     const pageId = await page("eva-1");
-    await db().transaction(async (tx) => expect(await bindOnboardedProfile(tx as unknown as Database, { profileId, pageId })).toBe(true));
+    expect(await bindProvenProfile(db(), { profileId, pageId })).toBe(true);
     await expect(db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 2n }))).rejects.toBeInstanceOf(OnboardingLinkLostError);
     expect(await takeOnboardingLink(db(), profileId)).toBeNull();
   });
@@ -155,4 +159,80 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     expect(last).not.toBeNull();
     expect(Date.now() - last!.getTime()).toBeGreaterThanOrEqual(1_500);
   });
+
+  it("raises the onboarding's generation at every change of it and voids the identity request and its answer (Astra's review of PR 16, items 1–2)", async (context) => {
+    if (!testDb) return context.skip();
+    const profileId = await profile();
+    const generation = async () => (await findOnboardingProfile(db(), profileId))!.onboardingGeneration;
+    expect(await generation()).toBe(0n);
+    const proof = await proveOnboardingAccount(db(), profileId);
+    expect(proof.onboardingGeneration).toBe(1n);
+    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ ok: true, onboardingGeneration: "1" });
+    // The owner opens the login again: the check and its answer are void.
+    expect(await move(profileId, "login")).toMatchObject({ kind: "changed" });
+    expect(await findOnboardingProfile(db(), profileId)).toMatchObject({ onboardingGeneration: 2n, identityRequest: null, identityResult: null });
+    // An answer of the voided request is never written.
+    const late = { ...(await proofResult(proof)), requestId: proof.requestId };
+    expect(await db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result: late }))).toBe(false);
+    // Given up, then ended by the engine: each a change of its own.
+    await move(profileId, "closing");
+    expect(await db().transaction((tx) => endPageBrowserOnboarding(tx as unknown as Database, { profileId, by: "engine" }))).toBe(true);
+    expect(await generation()).toBe(4n);
+  });
+
+  it("records an account only while the onboarding is open in the generation it was read in; a failure always", async (context) => {
+    if (!testDb) return context.skip();
+    const profileId = await profile();
+    await move(profileId, "open");
+    const requested = await requestOnboardingIdentity(db(), { profileId, source: "onboarding" });
+    const requestId = requested.kind === "requested" ? requested.requestId : "";
+    const ok = (onboardingGeneration: string) => ({ requestId, ok: true as const, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration, sessionFingerprint: "f", observationId: 0, attemptId: 1 });
+    const write = (result: Parameters<typeof recordOnboardingIdentity>[1]["result"]) => db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result }));
+    // Read in the generation before this one: not written.
+    expect(await write(ok("0"))).toBe(false);
+    expect(await write(ok("1"))).toBe(true);
+    expect(await write({ requestId, ok: false, error: "x", httpStatus: null, at: new Date().toISOString() })).toBe(true);
+  });
+
+  it("binds only on the check that still proves the account: not after the onboarding was given up, its login opened again, or another check asked (Astra's review of PR 16, item 2)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await page("ari-2");
+    const bind = (profileId: string, proof: OnboardingProof) => db().transaction(async (tx) => ({
+      locked: await lockOnboardingForBinding(tx as unknown as Database, { profileId, requestId: proof.requestId }),
+      bound: await bindOnboardedProfile(tx as unknown as Database, { profileId, pageId, ...proof }),
+    }));
+    // Given up after the check.
+    const gaveUp = await profile();
+    const gaveUpProof = await proveOnboardingAccount(db(), gaveUp);
+    await move(gaveUp, "closing");
+    expect(await bind(gaveUp, gaveUpProof)).toEqual({ locked: { ok: false, why: "not_open" }, bound: false });
+    // Its login opened and closed again after the check: the proof is of before.
+    const again = await profile();
+    const againProof = await proveOnboardingAccount(db(), again);
+    await move(again, "login");
+    await move(again, "open");
+    expect(await bind(again, againProof)).toEqual({ locked: { ok: false, why: "identity_changed" }, bound: false });
+    // Another check asked since (not answered yet).
+    const asked = await profile();
+    const askedProof = await proveOnboardingAccount(db(), asked);
+    await requestOnboardingIdentity(db(), { profileId: asked, source: "credentials_verify" });
+    expect(await bind(asked, askedProof)).toEqual({ locked: { ok: false, why: "identity_changed" }, bound: false });
+    // An account recorded under a generation that no longer holds (written
+    // around the repository): neither the lock nor the binding take it.
+    const forged = await profile();
+    const forgedProof = await proveOnboardingAccount(db(), forged);
+    await testDb.pool.query("update page_browsers set identity_result = jsonb_set(identity_result, '{onboardingGeneration}', '\"0\"') where profile_id = $1", [forged]);
+    expect(await bind(forged, forgedProof)).toEqual({ locked: { ok: false, why: "identity_changed" }, bound: false });
+    for (const profileId of [gaveUp, again, asked, forged]) expect((await findOnboardingProfile(db(), profileId))!.pageId).toBeNull();
+    // The proof that still holds binds.
+    const fresh = await profile();
+    const freshProof = await proveOnboardingAccount(db(), fresh);
+    const bound = await bind(fresh, freshProof);
+    expect(bound.locked.ok && bound.bound).toBe(true);
+  });
 });
+
+/** The ok answer a proof stands for. */
+async function proofResult(proof: OnboardingProof) {
+  return { ok: true as const, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration: proof.onboardingGeneration.toString(), sessionFingerprint: "f", observationId: 0, attemptId: 1 };
+}

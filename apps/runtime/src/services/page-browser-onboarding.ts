@@ -10,10 +10,12 @@ import {
   findObservationEnvelopesByIds,
   findOnboardingProfile,
   insertAuditEvent,
+  lockOnboardingForBinding,
   requestOnboardingIdentity,
   upsertDemands,
   type Database,
   type OnboardingIdentityResult,
+  type OnboardingBindingRefusal,
   type OnboardingIdentitySource,
   type OnboardingProfile,
 } from "@agency_hub_core/db";
@@ -42,7 +44,11 @@ import { saveProxy } from "./page-context.ts";
 //   observation), its engine row born on its browser, the profile bound to it
 //   and its history walks — no copy of the profile (its volumes are named by
 //   it), no session in Hub. A refused creation writes nothing: the profile
-//   stays unbound.
+//   stays unbound. The creation takes the profile's row lock first and goes
+//   on only while the check still proves the account — the onboarding open,
+//   the check the profile's, in the onboarding generation it was read in: an
+//   onboarding given up, or a login opened again, since the check refuses the
+//   whole creation (Astra's review of PR 16, item 2).
 //
 // The API never talks to the engine but through the database: it writes the
 // request (`identity_request_id`), the engine's onboarding link answers
@@ -121,6 +127,10 @@ export async function checkFanslyIdentityThroughBrowser(
       return result;
     }
     if (profile.pageId !== null) throw new ConflictError(`Page browser profile ${input.profileId} was bound meanwhile`);
+    if (profile.identityRequest?.id !== requested.requestId) {
+      // A move of the onboarding voided it (a login opened again, given up).
+      throw new AppError("The browser's onboarding changed while its account was checked: check again", 409, "onboarding_changed");
+    }
     if (Date.now() >= deadline) {
       throw new AppError(
         "The engine has not read the account through the browser yet: try again in a few seconds (is the sync process running?)",
@@ -144,6 +154,13 @@ async function accountOfObservation(db: Database, observationId: number): Promis
   return read.value.account;
 }
 
+const BINDING_REFUSALS: Record<OnboardingBindingRefusal, string> = {
+  no_profile: "is gone",
+  bound: "is bound to a page already",
+  not_open: "is no longer open (given up, or its login opened again)",
+  identity_changed: "was checked again, or its login opened again, since its account was read",
+};
+
 /**
  * A new Fansly page on its own browser: the account checked through the
  * browser, then the page born bound to the profile, in one transaction.
@@ -155,49 +172,79 @@ export async function onboardFanslyPageThroughBrowser(
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   const profile = await unboundProfile(app.db, input.profileId);
+  assertPageLabel(profile, input);
+  if (profile.proxy === null) throw new AppError("No proxy is given for the new page's browser", 409, "browser_not_ready");
+  const identity = await checkFanslyIdentityThroughBrowser(app, { profileId: input.profileId, source: "onboarding" });
+  return bindNewFanslyPageThroughBrowser(app, { ...input, modelId: model.id, identity });
+}
+
+/** The page's label must be the name the server knows its container by
+ *  (to-node, up, down). */
+function assertPageLabel(profile: OnboardingProfile, input: { profileId: string; label: string }): void {
   const name = profilePageName(profile);
-  // The server knows the container by this name (to-node, up, down): the
-  // page's label must be it.
   if (input.label !== name) {
     throw new BadRequestError(`The browser of profile ${input.profileId} was made for the page "${name}": its label must be "${name}"`);
   }
-  const proxy = onboardingProxyOf(app, profile);
-  if (proxy === null) throw new AppError("No proxy is given for the new page's browser", 409, "browser_not_ready");
-  const identity = await checkFanslyIdentityThroughBrowser(app, { profileId: input.profileId, source: "onboarding" });
-  const account = await accountOfObservation(app.db, identity.observationId);
-  if (account.id !== identity.accountId) throw new Error("The identity check's observation names another account");
+}
 
+/**
+ * The page born bound to the profile, in one transaction, on the proof of
+ * the identity check `identity` — re-read under the profile's row lock taken
+ * first: the onboarding still open, that check still the profile's, in the
+ * generation it was read in; its proxy as stored now. Anything else refuses
+ * the whole creation: nothing is written, the profile stays unbound.
+ */
+export async function bindNewFanslyPageThroughBrowser(
+  app: OnboardingContext,
+  input: { modelId: number; label: string; profileId: string; by: string; actorUserId?: number | null; identity: Extract<OnboardingIdentityResult, { ok: true }> },
+) {
+  const account = await accountOfObservation(app.db, input.identity.observationId);
+  if (account.id !== input.identity.accountId) throw new Error("The identity check's observation names another account");
   let born;
   try {
     born = await app.db.transaction(async (raw) => {
-    const tx = raw as unknown as Database;
-    const created = await createFanslyPage(tx, { modelId: model.id, label: input.label });
-    if (!created) throw new Error(`Page "${input.label}" was not created`);
-    // No session of the page in Hub: it lives in the browser's profile.
-    await saveProxy({ ...app, db: tx }, created.id, proxy);
-    await applyAccountMeToPage(tx, { pageId: created.id, account, syncType: "light" });
-    await createLiveSyncPage(tx, {
-      pageId: created.id,
-      by: `onboarding:${input.by}`,
-      identityAccountId: account.id,
-      identityCheckedAt: new Date(identity.sentAt),
-      // Untrusted until the engine's own check under the page's hello.
-      credentialsGeneration: null,
-      transport: "browser",
-    });
-    if (!(await bindOnboardedProfile(tx, { profileId: input.profileId, pageId: created.id }))) {
-      throw new ConflictError(`Page browser profile ${input.profileId} was bound or removed meanwhile`);
-    }
-    const work = fanslyNewPageWork({ pageId: created.id, now: new Date() });
-    await upsertDemands(tx, work);
-    await insertAuditEvent(tx, {
-      actorUserId: input.actorUserId ?? null,
-      platformAccountId: created.id,
-      source: "api",
-      eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT,
-      metadata: { step: "bind", profileId: input.profileId, pageLabel: input.label, accountId: account.id, observationId: identity.observationId },
-    });
-    return { created, queuedAtBirth: work.map((row) => row.resource) };
+      const tx = raw as unknown as Database;
+      const locked = await lockOnboardingForBinding(tx, { profileId: input.profileId, requestId: input.identity.requestId });
+      if (!locked.ok) {
+        if (locked.why === "no_profile") throw new NotFoundError(`No page browser profile ${input.profileId}`);
+        throw new ConflictError(`The onboarding of page browser profile ${input.profileId} ${BINDING_REFUSALS[locked.why]}: nothing was created`);
+      }
+      const { profile, identity } = locked;
+      assertPageLabel(profile, input);
+      const proxy = onboardingProxyOf(app, profile);
+      if (proxy === null) throw new AppError("No proxy is given for the new page's browser", 409, "browser_not_ready");
+      if (identity.accountId !== account.id) throw new ConflictError("The account the browser named changed meanwhile: check again");
+      const created = await createFanslyPage(tx, { modelId: input.modelId, label: input.label });
+      if (!created) throw new Error(`Page "${input.label}" was not created`);
+      // No session of the page in Hub: it lives in the browser's profile.
+      await saveProxy({ ...app, db: tx }, created.id, proxy);
+      await applyAccountMeToPage(tx, { pageId: created.id, account, syncType: "light" });
+      await createLiveSyncPage(tx, {
+        pageId: created.id,
+        by: `onboarding:${input.by}`,
+        identityAccountId: account.id,
+        identityCheckedAt: new Date(identity.sentAt),
+        // Untrusted until the engine's own check under the page's hello.
+        credentialsGeneration: null,
+        transport: "browser",
+      });
+      const bound = await bindOnboardedProfile(tx, {
+        profileId: input.profileId,
+        pageId: created.id,
+        requestId: identity.requestId,
+        onboardingGeneration: profile.onboardingGeneration,
+      });
+      if (!bound) throw new ConflictError(`Page browser profile ${input.profileId} was bound or removed meanwhile`);
+      const work = fanslyNewPageWork({ pageId: created.id, now: new Date() });
+      await upsertDemands(tx, work);
+      await insertAuditEvent(tx, {
+        actorUserId: input.actorUserId ?? null,
+        platformAccountId: created.id,
+        source: "api",
+        eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT,
+        metadata: { step: "bind", profileId: input.profileId, pageLabel: input.label, accountId: account.id, observationId: identity.observationId },
+      });
+      return { created, queuedAtBirth: work.map((row) => row.resource) };
     });
   } catch (error) {
     if (

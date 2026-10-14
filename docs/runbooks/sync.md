@@ -995,7 +995,8 @@ session, the browser logs in from its own device and IP (plan §3.2 «Подкл
    the form (the `sync` process admits the site's login requests by the profile key: one at a time, the owner's
    pause, journaled in `fansly_send_log` with `page_id` null and `browser_profile_id`), «Завершить вход», «Проверить
    аккаунт» (one `GET /account/me` through the browser, its answer in `observations`), «Создать страницу» — the page
-   born on its browser (transport `browser`), its profile bound to it, in one transaction.
+   born on its browser (transport `browser`), its profile bound to it, in one transaction. A login opened again, or
+   the onboarding given up, voids the check: the creation then refuses with 409 and creates nothing — check again.
 3. **Then** the page's own slot takes the browser: it verifies the account through it first (the page is born
    untrusted), then works as any browser page.
 
