@@ -16,6 +16,8 @@ import {
   seedBundledAiPersona,
   setPageOfapiAccountId,
   storeProxyConfig,
+  upsertMediaOrder,
+  upsertMessageMediaOffer,
   upsertVoiceProfile,
   upsertAiPersona,
   writeThreadChain,
@@ -3177,6 +3179,96 @@ describe("Fansly media in the kernel transcript (chat-extension R20 HF-7a)", () 
     }));
     expect(onlyFans).toContain("Model: hey you");
     expect(onlyFans).not.toContain("[Photo]");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("Fansly PPV purchase marks in the kernel transcript (chat-extension R20 HF-7в)", () => {
+  // Predicate of the new behaviour: a Fansly page and the transcript the hub
+  // loads itself (no clientContext). The released Fansly extension (2.10.1)
+  // sends its own transcript, its own purchase marks in it: its Reply
+  // (fan/fan) and Coach (group/fan) prompts do not move with the hub's orders.
+  const group = "880004";
+  const video = "810000000000000301";
+  const lineage = (n: number) => ({
+    observedAt: new Date(),
+    contentHash: n.toString(16).padStart(64, "0"),
+    sourceEventId: n,
+    sourceObservationId: n,
+    sourceAccountSeq: n,
+  });
+
+  async function promptOf(feature: string, body: Record<string, unknown>) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { clientRequestId: randomUUID(), ...body },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return capture.input!.body.prompt;
+  }
+
+  it("marks a paid attachment the fan bought on the kernel lane only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3)`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain, price_mills, media_metadata)
+       values ($1, 'fansly', $2, '7811', null, true, now() - interval '5 minutes', 'unlock me', 15000, $3::jsonb),
+              ($1, 'fansly', $2, '7812', $4, false, now() - interval '1 minute', 'thanks', null, '[]'::jsonb)`,
+      [fanslyPageId, group, JSON.stringify([{ id: video, type: "video/mp4", canView: true, isReady: null, duration: 12.5 }]), FAN],
+    );
+    // The media plane recorded the attachment and its PPV row.
+    await upsertMessageMediaOffer(appContext.db, {
+      pageId: fanslyPageId, platform: "fansly", messageRef: "7811", offerOrdinal: 0, mediaOfferRef: video,
+      bundleRef: null, conversationRef: group, fanPlatformUserId: null, messageCreatedAt: null, offerType: 1,
+      mimeType: "video/mp4", durationMs: 12_500, priceMills: 15_000n,
+      permissionEntries: [{ type: 2, flags: 1, price: 15_000, metadata: "" }],
+      purchaseState: "unknown", orderRef: null, salesCount: null, salesNetMills: null, salesPendingMills: null,
+      ...lineage(1),
+    });
+    const kernel = async () => JSON.stringify(await promptOf("fast-reply", {
+      pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN,
+    }));
+    const legacyContext = {
+      transcript: "[10:00] Model: [Video - PPV $15.00, unknown] unlock me\n[10:04] Fan: thanks",
+      messageCount: 2,
+      fanDisplayName: "Legacy Fan",
+      fanSpendingData: "",
+      fanSubscriptionData: "",
+    };
+    const legacy = async () => [
+      await promptOf("fast-reply", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: FAN, messageCount: 100, clientContext: legacyContext,
+      }),
+      await promptOf("coach-chat", {
+        pageLabel: "svc-fs", platform: "fansly", conversationRef: group, fanRef: FAN, messageCount: 100,
+        chatterQuestion: "What should I send next?", clientContext: legacyContext,
+      }),
+    ];
+
+    // No order, no walk: the hub cannot tell.
+    expect(await kernel()).toContain("Model: [Video - PPV $15.00, unknown] unlock me");
+    const legacyBefore = await legacy();
+
+    // The fan's order lands in media_orders.
+    await upsertMediaOrder(appContext.db, {
+      pageId: fanslyPageId, platform: "fansly", mediaOfferRef: video, buyerPlatformUserId: FAN,
+      occurredAt: new Date(Date.now() - 2 * 60_000), orderRef: null, bundleRef: null, orderType: 1, priceMills: null,
+      conversationRef: group, messageRef: "7811", ...lineage(2),
+    });
+    expect(await kernel()).toContain("Model: [Video - PPV $15.00, purchased] unlock me");
+    // The 2.10.1 requests are what they were.
+    expect(await legacy()).toEqual(legacyBefore);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

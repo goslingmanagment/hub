@@ -1223,7 +1223,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const plain = await askFansly();
     expect(plain.status, plain.response.body).toBe(200);
     // Before this change: 400 live_text_not_allowed. Now ignored while the switch is off.
-    for (const rows of [undefined, PROD_ROWS]) {
+    // R20 HF-2: the same under a "*" row with fresh text on, which reaches no Fansly page.
+    for (const rows of [undefined, PROD_ROWS, { ...PROD_ROWS, "*": { freshText: true } }]) {
       if (rows !== undefined) {
         // The mode production runs, and the OnlyFans pilot pages' rows.
         await switchFreshText("serve", rows);

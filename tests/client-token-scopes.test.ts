@@ -18,8 +18,8 @@ import {
 import { platforms, type Platform } from "@agency_hub_core/shared";
 
 import { OPERATION_FEATURES } from "../apps/runtime/src/modules/ai/index.ts";
-import { clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
-import { CLIENT_FEATURE_REQUIREMENTS } from "../apps/runtime/src/services/client-features.ts";
+import { clientAiFeatureExistsOn, clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
+import { CLIENT_FEATURE_REQUIREMENTS, clientFeatureExistsOn } from "../apps/runtime/src/services/client-features.ts";
 import {
   CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE,
   clientTokenIngestKinds,
@@ -94,6 +94,18 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
       expect(key in schemas, key).toBe(true);
       expect(operations, key).not.toContain(key);
     }
+  });
+
+  it("[R20 HF-4б] holds the three voice-note routes, page-scoped; the released clients' page list stays off", () => {
+    for (const key of ["voiceNoteCreate", "voiceNoteStatus", "voiceNoteAudio"]) {
+      expect(operations, key).toContain(key);
+      expect(schemas[key]!.auth, key).toEqual({ kind: "apiKey", scope: "page" });
+      expect(paths[key]!.path, key).toMatch(/^\/api\/v1\/pages\/:pageLabel\/voice-notes(\/|$)/);
+    }
+    // `capabilities.voiceNotes` on GET /api/v1/pages is the released clients'
+    // hint; the narrow token reads the bootstrap's `voice` instead.
+    expect(operations).not.toContain("pages");
+    expect(clientTokenRouteRefusal("pages", principal({ clientProfile: "chat-extension" }))).toBeInstanceOf(ForbiddenError);
   });
 
   it("captures only ai_acceptance, a journaled kind, and client_health, which is never journaled", () => {
@@ -278,7 +290,33 @@ describe("the narrow token's AI switch", () => {
     });
     // Each Fansly flag exists on Fansly alone.
     for (const flag of ["drafts", "voice", "notesFill"] as const) {
-      expect(CLIENT_FEATURE_REQUIREMENTS[flag].platforms, flag).toEqual(["fansly"]);
+      expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]), flag).toEqual(["fansly"]);
+    }
+  });
+
+  it("[R20 HF-2] Help is the extension's on OnlyFans only; every other feature exists on both, and on Fansly each waits for a flag", () => {
+    // The owner removed Help from the extension's Fansly site: the narrow token's Help there is refused
+    // `platform_unsupported` (the route, tests/client-ai-fansly-drafts.integration.test.ts).
+    expect(clientAiFeatureExistsOn("help-me", "onlyfans")).toBe(true);
+    expect(clientAiFeatureExistsOn("help-me", "fansly")).toBe(false);
+    for (const feature of OPERATION_FEATURES.filter((name) => name !== "help-me")) {
+      for (const platform of platforms) {
+        expect(clientAiFeatureExistsOn(feature, platform), `${platform} ${feature}`).toBe(true);
+      }
+      // On Fansly no generation is left to the master switch alone, and its flag exists there.
+      const flag = clientAiFeatureFlag(feature, "fansly");
+      expect(flag, feature).not.toBeNull();
+      expect(clientFeatureExistsOn(flag!, "fansly"), feature).toBe(true);
+    }
+    // Coach, Recap and Review keep their flags, which exist on Fansly since HF-2.
+    for (const flag of ["coach", "recap", "review"] as const) {
+      expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]), flag).toEqual(["onlyfans", "fansly"]);
+    }
+    // A feature the switch does not know is not its to refuse by platform (the feature route refuses it).
+    for (const feature of ["constructor", "toString", "__proto__", "hasOwnProperty", "scan"]) {
+      for (const platform of platforms) {
+        expect(clientAiFeatureExistsOn(feature, platform), `${platform} ${feature}`).toBe(true);
+      }
     }
   });
 

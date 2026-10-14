@@ -122292,7 +122292,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, `limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is `not_enqueued` (no request was made: the native queue never took the part, or the client's last check before its own request refused it) or `native_rejected` with the platform's 4xx other than 401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is over, until a late `sent` or a manual resolve. `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / `platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. The admission is decided after the repeat check, with the switches. `claim` and `renew` need `newcomers` everywhere; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on a page of a platform where the custody exists, with a purpose and group that platform admits: no switch, flag or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where every switch of one of its sends exists: OnlyFans; Fansly once `newcomers` exists there, and until then every action that starts something on a Fansly page, and the status read, is 409 `client_feature_disabled` / `platform_unsupported`. A refusal by the switches is 409 `client_feature_disabled` with the reason.",
+        "description": "Database-only: no platform request, no queued work; the hub never sends the message itself. `fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, `release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a desktop new-follower command may have greeted the fan (409 `custody_held`). `dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, `limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` while another person or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, read under a row lock inside that transaction, so a change of them waits for the dispatch and holds from the next one; a value that only the environment sets admits no dispatch. Custody never expires: past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is `not_enqueued` (no request was made: the native queue never took the part, or the client's last check before its own request refused it) or `native_rejected` with the platform's 4xx other than 401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is over, until a late `sent` or a manual resolve. `registerNativeSend` records a proven send from the composer, once per page and message, and frees nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch for (`uncertain-held`); a part inside its ticket is in flight. A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / `platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. The admission is decided after the repeat check, with the switches. `claim` and `renew` need `newcomers` everywhere; `release`, `sent` and `failed` end what the hub already admitted and need only the page grant; `registerNativeSend` reports a send that already happened and needs only the page grant on a page of a platform where the custody exists, with a purpose and group that platform admits: no switch, flag or minimum version refuses it, and it admits no dispatch. The custody exists on a platform where every switch of one of its sends exists: OnlyFans and Fansly. On Fansly the owner's switches are the page's own row (`newcomers`; the `\"*\"` row never reaches a Fansly page). A refusal by the switches is 409 `client_feature_disabled` with the reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -155229,7 +155229,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed.",
+        "description": "Admits at most one billable ElevenLabs render per (user, clientRequestId); returns 202 with the queued/dispatched view immediately (the synthesis runs detached). A replay of an already-admitted request re-runs no admission gate. Structured error codes (in the body `error` field): 400 voice_script_invalid / voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 idempotency_mismatch (same id, different request) / voice_no_profile / conversation_fan_mismatch (a request with `fanRef`: the page's capture holds the group `conversationRef` names as another fan's chat); 429 voice_quota_denied; 503 voice_provider_unavailable (live flag on but ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is unconfigured, or an active erasure temporarily owns the page writer fence). Quota refusal writes no render row and consumes no character budget. The same clientRequestId remains a 429 while the budget is exhausted, but may be admitted after capacity is restored; a concurrent already-admitted winner is replayed. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "requestBody": {
           "required": true,
           "content": {
@@ -155619,7 +155619,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident switch is off.",
+        "description": "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident switch is off. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "parameters": [
           {
             "schema": {
@@ -155826,6 +155826,41 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -155836,7 +155871,7 @@
         "tags": [
           "voice"
         ],
-        "description": "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, cache-control private/no-store, x-content-type-options nosniff). The content-type is honest because setVoiceProfile constrains output_format to an MP3-only allowlist (non-MP3 ElevenLabs formats are rejected at profile-set time). The handler writes the body directly; server OpenAPI generation rewrites the 200 media type to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category — clients match the structured body code (the existing gate-code pattern), and 410 stays category `validation` in the SDK taxonomy.",
+        "description": "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, cache-control private/no-store, x-content-type-options nosniff). The content-type is honest because setVoiceProfile constrains output_format to an MP3-only allowlist (non-MP3 ElevenLabs formats are rejected at profile-set time). The handler writes the body directly; server OpenAPI generation rewrites the 200 media type to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category — clients match the structured body code (the existing gate-code pattern), and 410 stays category `validation` in the SDK taxonomy. A narrow chat-extension device token reaches this route behind its page's `voice` flag, checked first on every call like every flagged client route: 409 client_feature_disabled with its `reason`. The flag decides whether the extension uses voice on the page at all, never what a clientRequestId already admitted: a refused replay admits nothing, and the same id replays the same render once the flag is back. The voice-notes lane's own switches answer after it, with their own codes. A full device token is not asked.",
         "parameters": [
           {
             "schema": {
@@ -155947,6 +155982,41 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {

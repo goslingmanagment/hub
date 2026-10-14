@@ -31,7 +31,11 @@ import {
 import { CLIENT_AUDIENCE_NEW_CLASSES } from "@agency_hub_core/db";
 
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
-import { clientFeatureExistsOn, evaluateClientFeature } from "../apps/runtime/src/services/client-features.ts";
+import {
+  clientFeatureExistsOn,
+  clientFeatureNeedsOn,
+  evaluateClientFeature,
+} from "../apps/runtime/src/services/client-features.ts";
 import { CLIENT_BOOTSTRAP_LIMITS } from "../apps/runtime/src/services/client-limits.ts";
 import { BadRequestError } from "../apps/runtime/src/services/errors.ts";
 import * as sdk from "../packages/sdk/src/index.ts";
@@ -255,7 +259,12 @@ describe("audience-new contract", () => {
       served: SERVED_CLIENT_CAPABILITIES.filter((capability) => capability !== "audience-new-v1"),
     })).toEqual({ available: false, reason: "hub_not_ready" });
     expect(clientFeatureExistsOn("newcomers", "onlyfans")).toBe(true);
-    expect(clientFeatureExistsOn("newcomers", "fansly")).toBe(false);
+    // R20 HF-2: `newcomers` exists on Fansly too, without this list: the route
+    // serves `audience-new-v1`, a part of the feature on OnlyFans alone, so a
+    // Fansly page is refused `platform_unsupported` whatever its switches say.
+    expect(clientFeatureExistsOn("newcomers", "fansly")).toBe(true);
+    expect(clientFeatureNeedsOn("newcomers", "audience-new-v1", "onlyfans")).toBe(true);
+    expect(clientFeatureNeedsOn("newcomers", "audience-new-v1", "fansly")).toBe(false);
 
     for (const name of [
       "CLIENT_AUDIENCE_NEW_COVERAGE_REASONS", "CLIENT_AUDIENCE_NEW_DEFAULT_LIMIT",

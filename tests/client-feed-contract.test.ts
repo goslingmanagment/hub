@@ -296,7 +296,11 @@ describe("archive feed contract (H-9c)", () => {
     expect(CLIENT_TOKEN_PROFILES["chat-extension"].operations).toContain("clientConversationFeed");
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("archive-feed-v1");
     expect(SERVED_CLIENT_CAPABILITIES).toContain("archive-feed-v1");
-    expect(CLIENT_FEATURE_REQUIREMENTS.preview).toEqual({ platforms: ["onlyfans"], capabilities: ["archive-feed-v1"] });
+    // R20 HF-2: on Fansly the feed is a read by conversation (HF-10), so the preview needs that too.
+    expect(CLIENT_FEATURE_REQUIREMENTS.preview).toEqual({
+      onlyfans: { capabilities: ["archive-feed-v1"] },
+      fansly: { capabilities: ["archive-feed-v1", "conversation-recaps-v1"] },
+    });
     const preview = (served: readonly string[]) => evaluateClientFeature({
       settings: { enabled: true, features: { "*": { preview: true } }, hostBindings: {} },
       page: { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },
@@ -443,6 +447,27 @@ describe("archive feed rows on the wire (H-9c)", () => {
     // A large bundle is still one caption within the wire's bounds.
     const bundle = labels(Array.from({ length: 60 }, (_unused, index) => ({ id: index, type: index % 2 ? "photo" : "video" })));
     expect(bundle).toEqual(["[Media Bundle: 30 Photos, 30 Videos]"]);
+  });
+
+  it("captions a Fansly row with the hub's own media labels, within the same bounds (R20 HF-7в)", () => {
+    // The Fansly material head stores a MIME type; read the OnlyFans way it is `[Media]`.
+    const fansly = { mediaMetadata: [{ id: "810000000000000001", type: "image/jpeg" }, { id: "840000000000000001", type: "other" }] };
+    const item = (captions: ReadonlyMap<string, string[]> | null, over: Partial<ConversationFeedRow> = fansly) => {
+      const wired = toClientFeedItem(storedRow(over), captions);
+      expect(clientFeedItemSchema.parse(wired)).toEqual(wired);
+      expect(frozenFeedItemSchema.parse(wired)).toEqual(wired);
+      return wired.attachmentLabels;
+    };
+    expect(item(new Map([["9002", ["Photo"]]]))).toEqual(["[Photo]"]);
+    expect(item(new Map([["9002", ["Video", "Media Bundle: 2 Photos"]]]))).toEqual(["[Video]", "[Media Bundle: 2 Photos]"]);
+    // A Fansly row with no media label (a tip's attachment alone): no caption.
+    expect(item(new Map())).toEqual([]);
+    // No captions (OnlyFans): the row's own list, as before.
+    expect(item(null)).toEqual(["[Media Bundle]"]);
+    expect(toClientFeedItem(storedRow(fansly)).attachmentLabels).toEqual(["[Media Bundle]"]);
+    // The wire's bounds hold for them too.
+    expect(item(new Map([["9002", Array.from({ length: 60 }, () => "Photo")]]))).toHaveLength(50);
+    expect(item(new Map([["9002", ["x".repeat(100)]]]))[0]).toHaveLength(80);
   });
 
   it("answers no time rather than a time the client's schema refuses", () => {

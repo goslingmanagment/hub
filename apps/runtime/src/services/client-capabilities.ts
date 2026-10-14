@@ -39,12 +39,14 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // the hub serves all of `previewSend`.
   "preview-send-custody-v1",
   // H-7c: GET /api/v1/client/pages/:pageLabel/audience-new, the "new
-  // subscribers" list. With it the hub serves all of `newcomers`; the owner's
-  // switches decide from here on.
+  // subscribers" list. With it the hub serves all of `newcomers` on OnlyFans;
+  // the owner's switches decide from here on. Fansly's `newcomers` does not
+  // need it (R20 HF-2): the extension finds its new subscribers itself.
   "audience-new-v1",
   // R20 HF-3: the claim route takes a manual greeting group (no AI generation)
   // and admits the greeting custody by platform (client-claim-admission.ts).
-  // Nothing on Fansly is reachable through it until `newcomers` exists there.
+  // With it and the custody the hub serves all of `newcomers` on Fansly (R20
+  // HF-2); the page's own row decides from here on.
   "manual-greeting-v1",
   // R20 HF-8в: the AI feature stream takes `coverageCheck` and answers each of
   // its ids in the `context_v1` frame, for a caller that advertises
@@ -54,8 +56,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // R20 HF-10: the reads by conversation. The shared recaps read, the dossier
   // save from a generation and the archive feed take `conversationRef` (on
   // Fansly the group, checked against the fan; client-conversation.ts). On
-  // OnlyFans the field equal to the fan changes nothing; nothing on Fansly is
-  // reachable through it until `recap` and `preview` exist there.
+  // OnlyFans the field equal to the fan changes nothing; on Fansly `recap` and
+  // `preview` need it (R20 HF-2): without it they read `hub_not_ready` there.
   "conversation-recaps-v1",
   // R20 HF-5: the AI feature stream admits Hi on Fansly by the body's
   // `startProof` (the start of the conversation and its personal messages, as
@@ -63,6 +65,13 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // for a caller that advertises `hi-start-proof-v1` in
   // `x-kernel-ai-capabilities` and sends no `clientContext`.
   "hi-start-proof-v1",
+  // R20 HF-4б: the voice notes in the narrow token. The three voice-note routes
+  // (create, status, audio) behind the page's `voice` flag; the render's body
+  // takes `fanRef`, the fan apart from the Fansly group (R20 HF-4а); and the
+  // bootstrap's `voice` reads `lane_off` on a page the voice-notes lane does
+  // not serve. With it the hub serves all of `voice`; the owner's switches and
+  // the lane decide from here on.
+  "voice-notes-v1",
 ];
 
 /**

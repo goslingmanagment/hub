@@ -1,11 +1,10 @@
 import type { ClientFeatureFlagName } from "@agency_hub_core/contracts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { clientFeatureExistsOn, clientVersionRefusal } from "./client-features.ts";
-import { loadClientSwitches, requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
+import { loadClientSwitches, requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError } from "./errors.ts";
 
 /**
@@ -23,7 +22,10 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  *   or above the owner's minimum (critic 6: a bad release is stopped on the
  *   hub, not only in the bootstrap). On OnlyFans that is still Reply, Fix, Hi,
  *   Ping, the voice script and the notes fill: their Fansly flags do not exist
- *   there.
+ *   there; and Help.
+ * - A feature the extension does not have on the platform is refused
+ *   `platform_unsupported` first, whatever the switches say: Help on Fansly
+ *   (R20 HF-2; the owner removed it from the extension's Fansly site).
  *
  * Which of the two a feature takes depends on the platform the request names
  * (`body.platform`): the feature route refuses, before any context load, a
@@ -61,6 +63,23 @@ const CLIENT_AI_PLATFORM_FEATURE_FLAGS: ReadonlyMap<string, ClientFeatureFlagNam
   ["fan-notes-fill", "notesFill"],
 ]);
 
+/**
+ * The narrow token's AI features with no flag of their own, by the platforms
+ * the extension has them on; a feature not listed is on every platform. Help
+ * is the extension's on OnlyFans only: the owner removed it from the Fansly
+ * site (chat-extension R20 spec «Help — убран владельцем», HF-2). A full
+ * device token (the released Fansly extension, the desktop) keeps it: this
+ * switch never asks one.
+ */
+const CLIENT_AI_UNFLAGGED_FEATURE_PLATFORMS: ReadonlyMap<string, readonly Platform[]> = new Map([
+  ["help-me", ["onlyfans"]],
+]);
+
+/** Whether the extension has this AI feature on this platform at all (the narrow token's AI switch asks it first). */
+export function clientAiFeatureExistsOn(feature: string, platform: Platform): boolean {
+  return CLIENT_AI_UNFLAGGED_FEATURE_PLATFORMS.get(feature)?.includes(platform) ?? true;
+}
+
 /** The flag that decides a narrow token's generation of this feature on this
  *  platform; null when only the master switch and the version do. */
 export function clientAiFeatureFlag(feature: string, platform: Platform): ClientFeatureFlagName | null {
@@ -81,14 +100,13 @@ export async function requireClientTokenAiFeature(
   if (principal.clientProfile === undefined) {
     return;
   }
+  if (!clientAiFeatureExistsOn(input.feature, input.platform)) {
+    throw new ClientFeatureDisabledError(input.feature, "platform_unsupported");
+  }
   const flag = clientAiFeatureFlag(input.feature, input.platform);
   if (flag !== null) {
-    const page = await findPageSummaryByLabel(app.db, input.pageLabel);
-    if (!page) {
-      // A missing page answers like one not granted: the refusal reveals nothing.
-      throw new ClientFeatureDisabledError(flag, "not_granted");
-    }
-    await requireClientFeature(app, request, principal, { id: page.id }, flag);
+    // A missing page answers like one not granted: the refusal reveals nothing.
+    await requireClientFeatureOnLabel(app, request, principal, input.pageLabel, flag);
     return;
   }
   const switches = await loadClientSwitches(app);

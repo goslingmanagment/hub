@@ -133,12 +133,16 @@ async function chatExtensionAuditIds(): Promise<number[]> {
   return rows.rows.map((row) => Number(row.id));
 }
 
-/** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly
- *  alone; fresh text (R20 HF-8б) on both; every other flag on OnlyFans alone. */
-const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
-const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
+/**
+ * Where a flag exists (R20 HF-2). Fansly's own flags (its AI generations', HF-12,
+ * and the extension's own panels there) exist on Fansly alone; sending from the
+ * preview, ChatSpace's navigation and socket tap and the Spenders statistics on
+ * OnlyFans alone; every other flag on both.
+ */
+const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill", "notes", "vault", "registration"];
+const ONLYFANS_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "stats"];
 const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
-  BOTH_PLATFORM_FLAGS.includes(flag) || (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on
+  !(on === "onlyfans" ? FANSLY_FLAGS : ONLYFANS_FLAGS).includes(flag)
 );
 /** Every flag off on a page of platform `on`: for `reason` where the flag
  *  exists, `platform_unsupported` where it does not. */
@@ -377,6 +381,79 @@ describe("owner switches of the chat extension", () => {
     await trap!.assertNoOutbound();
   });
 
+  it("[R20 HF-2] a Fansly page is switched on by its own row alone: flag_off under any \"*\" row, available with its row; OnlyFans reads as before", async (context) => {
+    if (!server) return context.skip();
+    const current = "chat-extension/1.2.0";
+    const everything = Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, true]));
+    const featuresOf = async (label: string) =>
+      (await bootstrapAs(chatterToken)).pages.find((page) => page.pageLabel === label)!.features;
+    const setFeatures = (value: Record<string, Record<string, boolean>>) =>
+      patchOk([{ key: "chatExtensionFeatures", value: JSON.stringify(value) }]);
+    /** What a page of the platform reads when every flag it can have is on. */
+    const everyAvailable = (on: "onlyfans" | "fansly", lane: "served" | "off") => Object.fromEntries(
+      CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, !flagExistsOn(flag, on)
+        ? { available: false, reason: "platform_unsupported" }
+        // The voice-notes lane serves no page of this test (R20 HF-4б).
+        : flag === "voice" && lane === "off" ? { available: false, reason: "lane_off" } : { available: true }]),
+    );
+
+    // Every flag on for every page by the "*" row.
+    await patchOk([{ key: "chatExtensionEnabled", value: true }]);
+    await setFeatures({ "*": everything });
+    const star = await bootstrapAs(chatterToken);
+    expect(star.flags).toEqual(everything);
+    const starOnlyFans = star.pages.find((page) => page.pageLabel === "lora-of")!.features;
+    expect(starOnlyFans).toEqual(everyAvailable("onlyfans", "off"));
+    // The Fansly page: nothing is on. The row does not reach it, so no feature even asks for a binding.
+    expect(star.pages.find((page) => page.pageLabel === "lora-fansly")!.features).toEqual(everyFeature("flag_off", "fansly"));
+    for (const flag of ["coach", "recap", "preview", "newcomers", "drafts", "notes", "vault", "registration", "freshText"] as const) {
+      await expectRefused(await probe(chatterToken, "lora-fansly", flag, current), "flag_off");
+    }
+    for (const flag of ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "stats"] as const) {
+      await expectRefused(await probe(chatterToken, "lora-fansly", flag, current), "platform_unsupported");
+    }
+    expect((await probe(chatterToken, "lora-of", "coach", current)).statusCode).toBe(200);
+
+    // The page's own row. Without a platform account id the extension cannot bind the page
+    // (an OnlyMonster binding is no Fansly page's); every Fansly page on prod has one.
+    await setFeatures({ "*": everything, "lora-fansly": everything });
+    expect(await featuresOf("lora-fansly")).toEqual(everyFeature("binding_missing", "fansly"));
+    await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageIds["lora-fansly"], "500000000000000001"]);
+    expect(await featuresOf("lora-fansly")).toEqual(everyAvailable("fansly", "off"));
+    for (const flag of ["coach", "recap", "preview", "newcomers", "drafts", "notes", "vault", "registration", "freshText"] as const) {
+      const allowed = await probe(chatterToken, "lora-fansly", flag, current);
+      expect(allowed.statusCode, `${flag} ${allowed.body}`).toBe(200);
+    }
+    // What does not exist on Fansly stays so, whatever the page's row says.
+    await expectRefused(await probe(chatterToken, "lora-fansly", "previewSend", current), "platform_unsupported");
+    await expectRefused(await probe(chatterToken, "lora-fansly", "stats", current), "platform_unsupported");
+    // The OnlyFans page reads the same rows exactly as before the Fansly row was written.
+    expect(await featuresOf("lora-of")).toEqual(starOnlyFans);
+
+    // Fansly's «Новые» do not wait for the hub's list of new subscribers; OnlyFans' do.
+    hub.servesAudienceNew = false;
+    try {
+      expect((await probe(chatterToken, "lora-fansly", "newcomers", current)).statusCode).toBe(200);
+      await expectRefused(await probe(chatterToken, "lora-of", "newcomers", current), "hub_not_ready");
+    } finally {
+      hub.servesAudienceNew = true;
+    }
+
+    // One flag of the page's row opens that flag alone, and the row's `false` holds under a "*" that says on.
+    await setFeatures({ "*": everything, "lora-fansly": { coach: true, recap: false } });
+    expect(await featuresOf("lora-fansly")).toEqual({
+      ...everyFeature("flag_off", "fansly"),
+      coach: { available: true },
+    });
+    await expectRefused(await probe(chatterToken, "lora-fansly", "recap", current), "flag_off");
+    // The master switch is global: off, the Fansly page's row turns nothing on.
+    await patchOk([{ key: "chatExtensionEnabled", value: false }]);
+    expect(await featuresOf("lora-fansly")).toEqual(everyFeature("disabled", "fansly"));
+    await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "disabled");
+
+    await trap!.assertNoOutbound();
+  });
+
   it("requireClientFeature: the hub's own check of grant, switches, binding and version (critic 6)", async (context) => {
     if (!server) return context.skip();
 
@@ -407,7 +484,10 @@ describe("owner switches of the chat extension", () => {
     await expectRefused(await probe(chatterToken, "mia-of", "coach", current), "not_granted");
     await expectRefused(await probe(chatterToken, "lora-old-of", "coach", current), "not_granted");
     await expectRefused(await probe(chatterToken, "ghost-of", "coach", current), "not_granted");
-    await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "platform_unsupported");
+    // R20 HF-2: Coach exists on Fansly, and the "*" row does not reach a Fansly page; sending
+    // from the preview does not exist there at all.
+    await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "flag_off");
+    await expectRefused(await probe(chatterToken, "lora-fansly", "previewSend", current), "platform_unsupported");
     await expectRefused(await probe(chatterToken, "lora-of", "review", current), "flag_off");
     await expectRefused(await probe(chatterToken, "nova-of", "coach", current), "binding_missing");
     // Switched on, but the hub does not serve what the feature needs: a hub

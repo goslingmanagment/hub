@@ -248,9 +248,29 @@ describe("fan-notes-fill legacy mode (no noteValues)", () => {
 
   it("carries none of the merge mode's texts", () => {
     const user = buildPrompt(small()).user;
-    for (const text of ["## Current Values", "## Dates", "Quote lines", "Proposed fields", "+ Label: value", "Label: =", "- Локация:", "- График:", "- Другое:", "{noteFill", "or one the chatter recorded", "New facts come only"]) {
+    for (const text of [
+      "## Current Values", "## Dates", "Quote lines", "Proposed fields", "+ Label: value", "Label: =", "- Локация:", "- График:", "- Другое:", "{noteFill", "or one the chatter recorded", "New facts come only",
+      // Nor the merge mode's one-fact rule and its two field definitions.
+      "One fact, one field", "Never state the same fact in two fields", "is not new: do not add it again",
+      "what kind of fan he is", "are recorded here and nowhere else",
+      "What To Record",
+      // Nor the merge mode's ruling on the subscription.
+      "record it in no field", "is not content", "never his subscription", "His subscription",
+    ]) {
       expect(user, text).not.toContain(text);
     }
+    // «Характеристика» and «Медиа» are slots now: here they render the E159
+    // definitions, in their place between the heading and «Фетиши».
+    expect(user).toContain([
+      "## Fields",
+      "",
+      "- Характеристика: what the fan likes and what he pays for, in one line. You may combine the preferences he stated with what the spending data shows he pays for.",
+      "- Медиа: what content he bought and what content he likes (types and themes), from the transcript and the spending data.",
+      "- Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.",
+      "- Any other field: fill it only from explicit facts the fan stated about exactly that field.",
+      "",
+      "## Output Format",
+    ].join("\n"));
     // The three sentences that say every value comes from the fan keep their
     // E159 wording here.
     expect(user).toContain("rereads it before writing to the fan, so every value must be a fact the fan himself gave. Read the whole conversation");
@@ -355,10 +375,9 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
     ]) {
       expect(user, rule).toContain(rule);
     }
-    // The E159 definitions and rules every mode shares stay as they were.
+    // The E159 definition and rules every mode shares stay as they were
+    // («Характеристика» and «Медиа» have their own merge definitions, below).
     for (const kept of [
-      "- Характеристика: what the fan likes and what he pays for, in one line.",
-      "- Медиа: what content he bought and what content he likes (types and themes), from the transcript and the spending data.",
       "- Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.\n- Локация:",
       "- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.\n- Any other field: ",
       "Only `purchased` items count as bought.\n\n## Current Values\n\n",
@@ -385,6 +404,125 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
     expect(user).not.toMatch(/\{noteFill\w*\}/);
     // The house ban on long dashes in prompts.
     expect(`${buildPrompt(merge()).system}${user}`).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  // 2026-10-13, the owner's review of real output: the same fact landed in
+  // «Фетиши», «Медиа» and «Характеристика». The template defined
+  // «Характеристика» as what the fan likes and pays for; the chatters use the
+  // field for what kind of fan he is. How much the mode writes did not change.
+  it("puts one fact in one field: «Характеристика» is who the fan is, purchases live in «Медиа» only", () => {
+    const result = buildPrompt(merge());
+    const user = result.user;
+
+    // The two definitions, in their place between the heading and «Фетиши».
+    expect(user).toContain([
+      "## Fields",
+      "",
+      "- Характеристика: what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices or content tastes (those are «Медиа»), never his fetishes (those are «Фетиши») and never his subscription.",
+      "- Медиа: what content he bought, as the transcript's `purchased` tags and the spending data show it, and what content he says he likes (types and themes). Purchases and prices are recorded here and nowhere else. His subscription (its tier, price, dates and renewal) is not content: record it in no field.",
+      "- Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.",
+      "- Локация:",
+    ].join("\n"));
+    // The legacy definitions, which sent what he pays for into both fields.
+    for (const legacy of [
+      "what the fan likes and what he pays for",
+      "You may combine the preferences he stated with what the spending data shows he pays for.",
+      "what content he likes (types and themes), from the transcript and the spending data.",
+    ]) {
+      expect(user, legacy).not.toContain(legacy);
+    }
+
+    // The rule against repeating a fact: one bullet among «Current Values»,
+    // between the rewrite rule and the move rule, never a section of its own.
+    expect(user).toContain([
+      "- Otherwise rewrite the field in Russian: every fact of its current value, translated, plus the new facts from the chat. A fact the fan contradicted is replaced by his latest statement.",
+      "- One fact, one field. Never state the same fact in two fields: put it in the field whose definition below fits it best. A fact that a current value already holds, in any field, is not new: do not add it again.",
+      "- A fact of a current value that belongs to another listed field by the field definitions below may move there.",
+    ].join("\n"));
+    expect(user.split("One fact, one field.")).toHaveLength(2);
+    const headings = user.split("\n").filter((line) => line.startsWith("## "));
+    expect(headings.slice(0, 7)).toEqual([
+      "## Rules",
+      "## Current Values",
+      "## Dates",
+      "## Fields",
+      "## Output Format",
+      "## Conversation Transcript",
+      "## Fan Spending Data",
+    ]);
+    expect(user.indexOf("One fact, one field.")).toBeGreaterThan(user.indexOf("## Current Values\n"));
+    expect(user.indexOf("One fact, one field.")).toBeLessThan(user.indexOf("## Dates\n"));
+
+    // The owner's ruling: the output is not to get shorter. No importance
+    // bar, no cap on new facts, no «What To Record»; the value rule and the
+    // rest of the field definitions are the merge mode's first ones.
+    for (const absent of [
+      "What To Record",
+      "worth recording",
+      "record less",
+      "three to seven words",
+      "at most three new facts",
+      "as a short list",
+      "Only those facts carry this date",
+    ]) {
+      expect(`${result.system}${user}`, absent).not.toContain(absent);
+    }
+    for (const kept of [
+      "- Write every new or rewritten value in Russian, in one line, as short as its facts allow: keep every fact and drop the filler. Keep names, places and brands exactly as the fan wrote them.",
+      "Keep what is recorded, add what the chat tells, and put every fact in the field it belongs to.",
+      "- A date alone is no reason to rewrite a field: an undated fact of a current value gets its date only when you rewrite its field anyway.",
+      "- Планы и даты: upcoming events and dates he mentioned (trips, birthday, interviews, holidays), with the date or period he gave.",
+      "- Другое: important facts about him that fit no other field (origin, family, pets, health, a big life event). Only what matters for talking to him, never small talk.",
+      "A moved fact must appear in the field it moved to: nothing of a current value is dropped, except what the fan himself contradicted.",
+    ]) {
+      expect(user, kept).toContain(kept);
+    }
+    expect(result.userBlocks.at(-1)!.text.endsWith("with their quote lines, and nothing else.\n")).toBe(true);
+
+    // The house ban on long dashes, on everything the provider receives.
+    for (const block of [...result.systemBlocks, ...result.userBlocks]) {
+      expect(block.text).not.toMatch(/[\u2013\u2014]/);
+    }
+    // Static kernel text: nothing of the request reaches the rule or the
+    // definitions.
+    const other = buildPrompt(merge({ noteFields: ["Медиа", "Характеристика"], noteValues: ["PPV $44", ""], transcript: "[10:00] Fan: hi" }));
+    expect(other.userBlocks[0]!.text).toBe(result.userBlocks[0]!.text);
+  });
+
+  // 2026-10-14: the owner saw the released prompt write the fan's subscription
+  // into «Медиа» and called it useless. The subscription goes into no field.
+  it("records the subscription in no field", () => {
+    const result = buildPrompt(merge());
+    const rules = result.userBlocks[0]!.text;
+    expect(rules).toContain("His subscription (its tier, price, dates and renewal) is not content: record it in no field.");
+    expect(rules).toContain("Never his purchases, prices or content tastes (those are «Медиа»), never his fetishes (those are «Фетиши») and never his subscription.");
+    expect(rules).toContain("Purchases and prices are recorded here and nowhere else.");
+    // The wording that sent it into «Медиа» is gone.
+    for (const gone of [
+      "Purchases, prices and his subscription are recorded here",
+      "the spending and subscription data show it",
+      "prices, subscription or content tastes",
+    ]) {
+      expect(result.user, gone).not.toContain(gone);
+    }
+    // Before the conversation the subscription is named three times: the
+    // intro's data to read, and the two definitions that keep it out. No other
+    // sentence sends it into a field.
+    expect(rules.match(/subscription/gi)).toHaveLength(3);
+    expect(rules).toContain("Read the whole conversation, the spending and subscription data and the fan's bio below");
+    // The data itself still reaches the model, after the conversation.
+    expect(result.user).toContain("## Fan Subscription Data\n\n<fan_subscription_data>\n");
+
+    // Legacy mode says nothing of the kind: its prompt is the released one.
+    const legacy = buildPrompt({ ...merge(), noteValues: undefined }).user;
+    for (const text of ["record it in no field", "is not content", "never his subscription"]) {
+      expect(legacy, text).not.toContain(text);
+    }
+
+    // The house ban on long dashes, on everything the provider receives.
+    for (const block of [...result.systemBlocks, ...result.userBlocks]) {
+      expect(block.text).not.toMatch(/[\u2013\u2014]/);
+    }
   });
 
   it("keeps one fan-agnostic text before the conversation for every merge request", () => {

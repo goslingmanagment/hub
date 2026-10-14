@@ -1,5 +1,6 @@
-import type { ClientFeatureFlagName, ClientReceiptProfile } from "@agency_hub_core/contracts";
+import type { ClientFeatureFlagName, ClientHubCapabilityName, ClientReceiptProfile } from "@agency_hub_core/contracts";
 import {
+  findPageSummaryByLabel,
   getConfigOverrides,
   listClientBootstrapPages,
   lockConfigOverridesForShare,
@@ -23,6 +24,7 @@ import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   CLIENT_FEATURE_CODE_DEFAULTS,
   clientFeatureExistsOn,
+  clientFeatureNeedsOn,
   clientVersionRefusal,
   evaluateClientFeature,
   type ClientFeatureSettings,
@@ -55,13 +57,19 @@ export const CLIENT_SWITCH_KEYS = [
  * switches, the health intake's own switch (H-11b; it is not one of the five,
  * see `ClientSwitches.healthIngestEnabled`), and the two keys later PRs add,
  * listed already so the revision means the same thing from the first client on;
- * a key that does not exist yet has no audit row.
+ * a key that does not exist yet has no audit row. Then the two switches of the
+ * voice-notes lane that the bootstrap's `voice` reads (R20 HF-4б,
+ * voice-lane.ts); the lane's other two conditions are no setting (the provider
+ * is built at boot, a voice profile is a row of its own), and the client sees
+ * them within the bootstrap's TTL.
  */
 export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   ...CLIENT_SWITCH_KEYS,
   "aiLiveTextContextMode",
   "aiTranscriptDeepMaxRows",
   "chatExtensionHealthIngestEnabled",
+  "voiceNotesEnabled",
+  "voiceNotesPageAllowlist",
 ] as const;
 
 /** The resting minimum: every readable extension version passes until the owner sets one. */
@@ -329,6 +337,10 @@ async function requireClientPageRow(
  * Refuses with 409 `client_feature_disabled` and the reason, in this order:
  * - `not_granted`: the page is not an active page granted to the caller (a
  *   missing page answers the same, so the refusal reveals nothing);
+ * - `platform_unsupported` when the route serves one part of the feature
+ *   (`part`, its capability) and the feature needs no such part on the page's
+ *   platform (clientFeatureNeedsOn: the list of new subscribers on Fansly,
+ *   R20 HF-2);
  * - the feature evaluation (`platform_unsupported`, `disabled`, `flag_off`,
  *   `binding_missing`, `hub_not_ready`);
  * - `client_outdated`: the caller's `x-client-version` is below the owner's
@@ -342,7 +354,29 @@ export async function requireClientFeature(
   principal: HumanAuthPrincipal,
   page: { id: number },
   flag: ClientFeatureFlagName,
+  part?: ClientHubCapabilityName,
 ): Promise<ClientBootstrapPageRow> {
+  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
+    part !== undefined && !clientFeatureNeedsOn(flag, part, row.platform)
+      ? "platform_unsupported"
+      : clientFeatureRefusal(switches, row, flag)
+  ));
+}
+
+/**
+ * requireClientFeature for a page the request names by its label: the narrow
+ * token's AI generations behind a flag (client-ai-switch.ts) and its voice
+ * notes (R20 HF-4б, modules/voice). A label no page has answers like a page
+ * not granted, so the refusal reveals nothing.
+ */
+export async function requireClientFeatureOnLabel(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  pageLabel: string,
+  flag: ClientFeatureFlagName,
+): Promise<ClientBootstrapPageRow> {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
   return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
     clientFeatureRefusal(switches, row, flag)
   ));

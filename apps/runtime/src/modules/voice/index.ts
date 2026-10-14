@@ -1,12 +1,40 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
-import { requireApiKeyUser } from "../../services/auth.ts";
+import type { AppContext } from "../../bootstrap.ts";
+import { requireApiKeyUser, type HumanAuthPrincipal } from "../../services/auth.ts";
+import { requireClientFeatureOnLabel, type ClientFeatureRequest } from "../../services/client-switches.ts";
 import {
   createVoiceNote,
   getVoiceNoteAudio,
   getVoiceNoteStatus,
 } from "../../services/voice-notes.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+
+/**
+ * chat-extension R20 HF-4б: the narrow chat-extension device token reaches the
+ * voice notes behind its page's `voice` flag (a Fansly flag; `voice-notes-v1`).
+ * The full check of a flagged client route (requireClientFeature: the page
+ * granted, its platform, the master switch, the flag, the binding, the served
+ * capability, the minimum version), first, on each of the three routes and on
+ * every call, a replay's included: 409 `client_feature_disabled` with its
+ * reason. It decides whether the extension uses voice on the page at all; what
+ * a `clientRequestId` already admitted stays as it is (a refused replay admits
+ * nothing, and the same id replays the same render once the flag is back).
+ * Past it the lane answers as for every client, with its own switches and
+ * codes. A full device token passes untouched: the released clients are not
+ * affected.
+ */
+async function requireNarrowTokenVoice(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  pageLabel: string,
+): Promise<void> {
+  if (principal.clientProfile === undefined) {
+    return;
+  }
+  await requireClientFeatureOnLabel(app, request, principal, pageLabel, "voice");
+}
 
 // Voice-notes module (Task 6): the three page-scoped chatter-lane routes over
 // the Task 5 service. Page access is enforced twice — the declarative
@@ -26,6 +54,7 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
+    await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     const view = await createVoiceNote(
       appContext,
       principal,
@@ -43,6 +72,7 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
+    await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     return getVoiceNoteStatus(
       appContext,
       principal,
@@ -59,6 +89,7 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
+    await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     const { bytes } = await getVoiceNoteAudio(
       appContext,
       principal,
