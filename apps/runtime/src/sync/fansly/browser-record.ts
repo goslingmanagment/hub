@@ -6,6 +6,7 @@ import {
   recordPageBrowserDelivery,
   recordPageBrowserLinkError,
   recordPageBrowserState,
+  stricterHalt,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -25,7 +26,8 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //   runs), the «Браузер» block shows it;
 // - a halt for the owner's decision it says (a stop reason it does not retry
 //   by itself, `isOwnerDecisionHalt`), latched on the profile's row at once
-//   and again until it is written — whatever states follow: an operator that
+//   and again until it is written — whatever states follow (a stricter halt
+//   replaces a `login_required`, never the reverse): an operator that
 //   starts again stands with no reason, and only the owner's `sync browser
 //   start` lifts the latch — or, for `login_required`, his successful login:
 //   the operator confirms the page's expected account under its live session
@@ -165,7 +167,9 @@ export class BrowserRecorder {
   #onState(state: State): void {
     if (this.#stopped) return;
     if (isOwnerDecisionHalt(state)) {
-      this.#halt ??= state.stopReason;
+      // The stricter one is latched: a halt heard after a `login_required`
+      // replaces it (Astra round 2).
+      this.#halt = stricterHalt(this.#halt, state.stopReason);
       this.#latch();
     }
     this.#latest = state;
@@ -178,15 +182,19 @@ export class BrowserRecorder {
     const reason = this.#halt;
     if (reason === null || this.#latching !== null) return;
     const { db, profileId, pageId, logger } = this.#d;
+    let again = false;
     this.#latching = latchPageBrowserHalt(db, { profileId, reason })
       .then((latched) => {
         if (this.#halt === reason) this.#halt = null;
+        // A stricter halt heard meanwhile: latched right after.
+        again = this.#halt !== null;
         if (latched) logger.warn({ pageId, reason }, "Fansly sync browser: the browser stands for the owner's decision; latched until sync browser start");
       }, (error: unknown) => {
         logger.warn({ pageId, reason, err: errorName(error) }, "Fansly sync browser: a halt could not be latched yet; tried again");
       })
       .finally(() => {
         this.#latching = null;
+        if (again && !this.#stopped) this.#latch();
       });
   }
 

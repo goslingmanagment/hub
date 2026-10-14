@@ -1024,7 +1024,14 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   an operator that starts again stands with no reason and lifts nothing; the owner's audited `sync browser start`
   does — and a `login_required` (Fansly signed the browser out) is the one halt the login starts the browser for, and
   is lifted by a successful login: the operator confirms the expected account in the automation after a login that
-  ended since the latch. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
+  ended since the latch. A stricter halt replaces a latched `login_required`, never the reverse, and the halt the
+  operator says at the moment of a start holds it as well as the latch. The link of a page on Node for its login
+  records what its operator says as a slot does (its halts latched), and a halt it heard holds the login's start
+  until the latch holds it. A control speaks for the page only while it is its owner's (Hub's `owner_generation`)
+  and, on a login link, while the login is open — read fresh before every command, the stops too; a superseded owner
+  leaves the owner's command to the newer one. The page's pause, its login's pause, the owner's stop and the halt
+  latch are written only under the page row lock (`sync_pages`, FOR NO KEY UPDATE), taken first, whatever there is
+  to change — then the browser's row. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
   the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start` lifts only a pause still
   the stop's. A stop during an open login takes over the login's pause (its end lifts nothing), and a `start` during
   one gives the stop's pause back to the login; a drain is refused while a login is open. The link of a page on Node

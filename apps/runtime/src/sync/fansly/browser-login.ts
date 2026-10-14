@@ -15,6 +15,7 @@ import { errorName, type SyncLogger } from "../engine/commit.ts";
 import type { Clock, Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
 import { BrowserControl, browserStands, browserStandsForLogin, browserStartRefusal } from "./browser-control.ts";
 import { browserIntakeOf, openBrowserLink, type BrowserPageDeps } from "./browser-page.ts";
+import { BrowserRecorder } from "./browser-record.ts";
 import { BrowserSiteAdmission } from "./browser-site.ts";
 import type { BrowserBufferIntake } from "./browser-intake.ts";
 
@@ -88,6 +89,9 @@ export interface BrowserLoginDeps {
   pageId: number;
   /** The page's browser profile: the guard's fresh read of it. */
   profileId: string;
+  /** A halt for the owner's decision heard on the link and not yet read
+   *  back from Hub's latch (the link's control). */
+  haltHeard?: () => string | null;
   /** The slot's owner generation: its writes are fenced by it. */
   generation: bigint;
   /** The page's transport the slot runs. */
@@ -205,6 +209,7 @@ export class BrowserLoginDriver {
             state: client.state,
             generation: this.#d.generation,
             who: "login",
+            haltHeard: this.#d.haltHeard?.() ?? null,
           });
           if (refusal !== null || this.#stopped) {
             if (refusal !== null && refusal !== this.#refused) {
@@ -309,6 +314,8 @@ export interface BrowserLoginLink {
   /** The owner's commands and his stop of the browser while the link is
    *  open (PR 17): nothing started by itself. */
   readonly control: BrowserControl;
+  /** What the operator says, recorded on the profile (its halts latched). */
+  readonly recorder: BrowserRecorder;
   start(): void;
   /** Everything of the link stops, the link closes. Never rejects. */
   stop(): Promise<void>;
@@ -327,7 +334,20 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
   const { db, logger, metrics, pageId, generation } = deps;
   const { profileId, client, bridge } = await openBrowserLink(deps);
   const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics, loginOnly: true });
-  const { socket, applier, intake } = browserIntakeOf(deps, client);
+  // What the operator says, recorded as a slot on the browser does (Astra
+  // round 2): a halt for the owner's decision during the login latched in
+  // Hub, so an operator that starts again does not lift it.
+  const recorder = new BrowserRecorder({
+    db,
+    pageId,
+    profileId,
+    client,
+    clock: deps.clock,
+    logger,
+    metrics,
+    ...(deps.overrides?.recorderTiming === undefined ? {} : { timing: deps.overrides.recorderTiming }),
+  });
+  const { socket, applier, intake } = browserIntakeOf(deps, client, (lagsMs) => recorder.delivered(lagsMs));
   // The ends the site path no longer waits for (an earlier owner's, one past
   // its wait): their attempts were settled by the actor's own rules (unknown
   // at its recovery, or the end it took); the operator may drop them, or its
@@ -341,7 +361,6 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
   client.onUnclaimedResult((delivered) => {
     logger.warn({ pageId, attemptId: delivered.result.attemptId }, "Fansly sync browser login: a Hub request's outcome on a page on Node; kept by the operator");
   });
-  const login = new BrowserLoginDriver({ db, pageId, profileId, generation, transport: "node", client, bridge, clock: deps.clock, logger, metrics, ...(deps.overrides?.loginTiming === undefined ? {} : { timing: deps.overrides.loginTiming }) });
   const control = new BrowserControl({
     db,
     pageId,
@@ -355,6 +374,22 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
     role: "login",
     ...(deps.overrides?.controlTiming === undefined ? {} : { timing: deps.overrides.controlTiming }),
   });
+  const login = new BrowserLoginDriver({
+    db,
+    pageId,
+    profileId,
+    generation,
+    transport: "node",
+    client,
+    bridge,
+    clock: deps.clock,
+    logger,
+    metrics,
+    // A halt heard and not yet read back from Hub's latch holds the login's
+    // start too (Astra round 2).
+    haltHeard: () => control.haltHeard,
+    ...(deps.overrides?.loginTiming === undefined ? {} : { timing: deps.overrides.loginTiming }),
+  });
   let stopping: Promise<void> | null = null;
   return {
     profileId,
@@ -363,8 +398,10 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
     intake,
     login,
     control,
+    recorder,
     start() {
       client.start();
+      recorder.start();
       intake.start();
       control.start();
       login.start();
@@ -373,6 +410,7 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
       stopping ??= (async () => {
         await login.stop();
         await control.stop();
+        await recorder.stop();
         await intake.stop();
         await applier.drain(1_000);
         socket.stop();

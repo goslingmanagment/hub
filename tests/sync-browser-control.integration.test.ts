@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  findPageBrowser,
   getPageBrowserCommand,
   insertPageBrowser,
   insertPageBrowserCommand,
@@ -16,6 +17,7 @@ import type { PageBrowserRpcClient } from "../apps/runtime/src/services/egress/p
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { BrowserControl } from "../apps/runtime/src/sync/fansly/browser-control.ts";
 import { BrowserLoginDriver } from "../apps/runtime/src/sync/fansly/browser-login.ts";
+import { BrowserRecorder } from "../apps/runtime/src/sync/fansly/browser-record.ts";
 import { startPageBrowser, stopPageBrowsers } from "../apps/runtime/src/sync/browser-levers.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { quietLogger } from "./helpers/sync-engine-host.ts";
@@ -79,6 +81,8 @@ function link(initial: State): Link {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onAlarm: () => () => undefined,
+    onLink: () => () => undefined,
     async command(kind: Command["command"]["kind"], _notAfter: number, _waitMs: number, commandId = randomUUID()) {
       sent.push({ kind, commandId });
       return { type: "commandResult", commandId, ok: true, detail: `${kind}: done` };
@@ -106,12 +110,12 @@ async function browserPage(transport: "node" | "browser" = "browser") {
   return { pageId, profileId };
 }
 
-function control(page: { pageId: number; profileId: string }, l: Link): BrowserControl {
+function control(page: { pageId: number; profileId: string }, l: Link, role: "slot" | "leave" | "login" = "slot"): BrowserControl {
   const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
   const made = new BrowserControl({
     db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, client: l.client,
     bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
-    role: "slot", timing: { everyMs: 60_000, startEveryMs: 0 },
+    role, timing: { everyMs: 60_000, startEveryMs: 0, stopEveryMs: 0 },
   });
   made.start();
   return made;
@@ -157,8 +161,13 @@ describe("one guard for every start of a page's browser (Astra PR 17, P1-2)", ()
         const asked = await ownersStart(page.pageId);
         await ctl.tick();
         const ran = await getPageBrowserCommand(db(), asked.id);
-        expect(ran).toMatchObject({ ok: false, takenGeneration: GENERATION });
-        expect(ran!.detail).toMatch(reason);
+        if (reason.source.includes("superseded")) {
+          // A superseded owner leaves the owner's command to the newer one (Astra round 2).
+          expect(ran).toMatchObject({ takenAt: null, doneAt: null });
+        } else {
+          expect(ran).toMatchObject({ ok: false, takenGeneration: GENERATION });
+          expect(ran!.detail).toMatch(reason);
+        }
         // The slot's own start, on a browser that stands: none either.
         await ctl.tick();
         await ctl.tick();
@@ -291,12 +300,13 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     return { ...page, label };
   }
 
-  function driver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser"): BrowserLoginDriver {
+  function driver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser", haltHeard?: () => string | null): BrowserLoginDriver {
     const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
     return new BrowserLoginDriver({
       db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, transport, client: l.client,
       bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
       timing: { everyMs: 60_000, restartEveryMs: 0 },
+      ...(haltHeard === undefined ? {} : { haltHeard }),
     });
   }
 
@@ -367,5 +377,128 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     await testDb.pool.query("update sync_pages set browser_leave_generation = null, browser_leave_requested_at = null where page_id = $1", [page.pageId]);
     await login.drive();
     expect(starts(l)).toBe(1);
+  });
+  it("a halt after a login_required is not hidden behind it: latched stricter, and heard before it is latched (Astra round 2, P1-1, P1-2)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded("node");
+    const l = link(stands({ mode: "manual_login", stopReason: "login_required" }));
+    const ctl = control(page, l, "login");
+    const login = driver(page, l, "node", () => ctl.haltHeard);
+    try {
+      await loginOpen(page.pageId);
+      // Fansly signed it out (latched as the recorder would): the login starts it.
+      await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "login_required" });
+      await login.drive();
+      expect(starts(l)).toBe(1);
+      // A guard fails in the started browser; heard on the link, not latched
+      // yet; then its operator starts again with no reason.
+      l.setState(stands({ mode: "manual_login", stopReason: "header_mismatch" }));
+      l.setState(stands({ mode: "manual_login" }));
+      await login.drive();
+      expect(starts(l)).toBe(1);
+      // Hub's latch, read back, still says login_required: it does not hold
+      // what was heard, which keeps holding.
+      await ctl.tick();
+      expect(ctl.haltHeard).toBe("header_mismatch");
+      await login.drive();
+      expect(starts(l)).toBe(1);
+      // Latched now (stricter than login_required) and read back: still none.
+      await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "header_mismatch" });
+      await ctl.tick();
+      expect(ctl.haltHeard).toBeNull();
+      await login.drive();
+      expect(starts(l)).toBe(1);
+    } finally {
+      await ctl.stop();
+    }
+  });
+
+  it("the halt the operator says right now holds the login's start, whatever the latch read just before said (Astra round 2, P1-1)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded("browser");
+    const l = link(stands({ mode: "manual_login" }));
+    const login = driver(page, l, "browser");
+    await loginOpen(page.pageId);
+    // The browser stands when the driver looks; while the latch is read, the
+    // operator says a halt.
+    let reads = 0;
+    const halted = stands({ mode: "manual_login", stopReason: "header_mismatch" });
+    const plain = stands({ mode: "manual_login" });
+    Object.defineProperty(l.client, "state", { get: () => (++reads <= 1 ? plain : halted), configurable: true });
+    await login.drive();
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(starts(l)).toBe(0);
+  });
+});
+
+describe("the owner's stop over a stale link (Astra round 2, P1-3)", () => {
+  async function stoppedByOwner(transport: "node" | "browser") {
+    const page = await browserPage(transport);
+    await testDb!.pool.query("update page_browsers set owner_stop_at = clock_timestamp(), owner_stop_by = 'cli' where profile_id = $1", [page.profileId]);
+    return page;
+  }
+
+  it("a login link whose login ended neither keeps the stop nor runs a stop command", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await stoppedByOwner("node");
+    const l = link(stands({ step: "site_loaded", exitOpen: true, mode: "manual_login" }));
+    const ctl = control(page, l, "login");
+    try {
+      // manual_login is off: the login this link was opened for is over.
+      const asked = (await insertPageBrowserCommand(db(), { pageId: page.pageId, kind: "stopPage", requestedBy: "cli", ttlMs: 60_000 }))!;
+      await ctl.tick();
+      await ctl.tick();
+      expect(l.sent).toEqual([]);
+      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ takenAt: null, doneAt: null });
+      // The login open: both run.
+      await testDb.pool.query("update sync_pages set manual_login = 'wanted' where page_id = $1", [page.pageId]);
+      await ctl.tick();
+      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ ok: true });
+      await ctl.tick();
+      expect(l.sent.map((command) => command.kind)).toEqual(["stopPage", "stopPage"]);
+    } finally {
+      await ctl.stop();
+    }
+  });
+
+  for (const role of ["slot", "login"] as const) {
+    it(`a ${role} of a superseded owner neither keeps the stop nor takes a stop command (left to the newer owner)`, async (context) => {
+      if (!testDb) return context.skip();
+      const page = await stoppedByOwner(role === "slot" ? "browser" : "node");
+      await testDb.pool.query("update sync_pages set manual_login = 'wanted', owner_generation = 6 where page_id = $1", [page.pageId]);
+      const l = link(stands({ step: "ready", exitOpen: true }));
+      const ctl = control(page, l, role);
+      try {
+        const asked = (await insertPageBrowserCommand(db(), { pageId: page.pageId, kind: "stopPage", requestedBy: "cli", ttlMs: 60_000 }))!;
+        await ctl.tick();
+        await ctl.tick();
+        expect(l.sent).toEqual([]);
+        expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ takenAt: null, doneAt: null });
+      } finally {
+        await ctl.stop();
+      }
+    });
+  }
+});
+
+describe("the recorder's latch (Astra round 2, P1-1)", () => {
+  it("the recorder latches the stricter halt heard while a login_required was being latched (Astra round 2, P1-1)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage("node");
+    const l = link(stands({ mode: "manual_login" }));
+    const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
+    const recorder = new BrowserRecorder({
+      db: db(), pageId: page.pageId, profileId: page.profileId, client: l.client, clock, logger: quietLogger, metrics: { increment: () => undefined },
+    });
+    recorder.start();
+    try {
+      // Both said before the first latch is written.
+      l.setState(stands({ mode: "manual_login", stopReason: "login_required" }));
+      l.setState(stands({ mode: "manual_login", stopReason: "header_mismatch" }));
+      for (let i = 0; i < 10 && (await findPageBrowser(db(), page.profileId))?.haltReason !== "header_mismatch"; i += 1) await recorder.flushed();
+      expect((await findPageBrowser(db(), page.profileId))?.haltReason).toBe("header_mismatch");
+    } finally {
+      await recorder.stop();
+    }
   });
 });

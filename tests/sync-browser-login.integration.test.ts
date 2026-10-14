@@ -591,3 +591,23 @@ describe("a browser Fansly signed out, and the owner's login of it (PR 17 with P
     expect((await findPageBrowser(db(), r.profileId))?.haltReason).toBe("login_required");
   }, LONG_TEST_MS);
 });
+
+describe("a halt during a Node page's login (Astra PR 17 round 2, P1-2)", () => {
+  it("is latched in Hub by the login's link, and an operator that starts again with no reason is not started by the open login", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await startHost(r);
+    await login(r, "wanted");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started for the login");
+    // A guard fails in the browser the login started: it stands for the owner.
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", retryAtWall: null });
+    await until(async () => (await findPageBrowser(db(), r.profileId))?.haltReason === "header_mismatch", WAIT_MS, "the halt latched");
+    // Its operator starts again: it stands with no reason. The login stands by.
+    const starts = () => r.operator.commands.filter((command) => command.command.kind === "restartBrowser").length;
+    const before = starts();
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null, retryAtWall: null });
+    await sleep(1_500);
+    expect(starts()).toBe(before);
+    expect((await findPageBrowser(db(), r.profileId))?.haltReason).toBe("header_mismatch");
+  }, LONG_TEST_MS);
+});

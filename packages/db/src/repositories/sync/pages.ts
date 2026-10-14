@@ -607,10 +607,15 @@ export async function pausePageForBrowserStop(
  * resumed by his own lever — is his and stays. While a login of the page's
  * browser is open the page stays paused: the pause goes back to the login
  * (`manual_login_paused`), which lifts it at its end. Under the page's row
- * lock, in the caller's transaction. `lifted`: the page is unpaused;
- * `to_login`: the pause is the login's now; null: no pause of the stop's.
+ * lock, taken first and whatever there is to lift (Astra round 2: a start
+ * that found nothing to lift held no lock, and a stop committed between it
+ * and its clearing of the stop's mark was left a pause with no stop), in the
+ * caller's transaction — `sync browser start` keeps it to its end.
+ * `lifted`: the page is unpaused; `to_login`: the pause is the login's now;
+ * null: no pause of the stop's.
  */
 export async function liftBrowserStopPause(tx: Database, input: { pageId: number }): Promise<"lifted" | "to_login" | null> {
+  await tx.execute(sql`select page_id from sync_pages where page_id = ${input.pageId} for no key update`);
   const result = await tx.execute<{ toLogin: boolean }>(sql`
     update sync_pages
        set paused_all = manual_login <> 'off',

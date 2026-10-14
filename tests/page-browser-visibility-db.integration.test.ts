@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -306,6 +307,107 @@ describe("the owner's browser stop and the owner's login of the browser (PR 17 w
     await loginEnds(pageId);
     expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "exit_ip_changed" });
+  });
+});
+
+describe("the halt latch and the page row lock (Astra PR 17 round 2)", () => {
+  const tx = <T>(body: (tx: Database) => Promise<T>) => db().transaction(async (raw) => body(raw as unknown as Database));
+
+  it("a stricter halt replaces a latched login_required and is never replaced by it; a successful login lifts only login_required", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, profileId } = await browserPage();
+    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
+    const first = (await findPageBrowser(db(), profileId))!;
+    expect(first.haltReason).toBe("login_required");
+    // The login started the browser; a guard then failed: the stricter halt holds.
+    await latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" });
+    const stricter = (await findPageBrowser(db(), profileId))!;
+    expect(stricter.haltReason).toBe("header_mismatch");
+    expect(stricter.haltAt!.getTime()).toBeGreaterThanOrEqual(first.haltAt!.getTime());
+    // Fansly signs it out again: the stricter halt stays, its instant too.
+    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltAt: stricter.haltAt });
+    // A login that ends after it lifts nothing of it.
+    await tx((t) => setSyncPageManualLogin(t, { pageId, to: "wanted", by: "owner:test" }));
+    await tx((t) => setSyncPageManualLogin(t, { pageId, to: "ending", by: "owner:test" }));
+    await tx((t) => endSyncPageManualLogin(t, { pageId, by: "engine" }));
+    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
+    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
+    // Two halts but login_required: the first stands.
+    await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" });
+    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
+  });
+
+  // Every writer of the page's pause, its login's pause, the owner's stop and
+  // the halt latch waits for the page row (sync_pages, FOR NO KEY UPDATE) —
+  // whether or not it finds anything to change: one row lock, one order.
+  const WRITERS: Array<[string, (page: { pageId: number; profileId: string }) => Promise<unknown>]> = [
+    ["liftBrowserStopPause, with no pause of the stop's to lift", ({ pageId }) => tx((t) => liftBrowserStopPause(t, { pageId }))],
+    ["pausePageForBrowserStop", ({ pageId }) => tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))],
+    ["setPageBrowserOwnerStop", ({ pageId }) => setPageBrowserOwnerStop(db(), { pageId, by: "cli" })],
+    ["clearPageBrowserOwnerStop", ({ pageId }) => clearPageBrowserOwnerStop(db(), { pageId })],
+    ["latchPageBrowserHalt", ({ profileId }) => latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" })],
+    ["clearPageBrowserLoginRequiredHalt, with nothing to lift", ({ profileId }) => clearPageBrowserLoginRequiredHalt(db(), { profileId })],
+    ["setPagePause", ({ pageId }) => setPagePause(db(), { pageId, all: true, note: "mine" })],
+    ["setSyncPageManualLogin", ({ pageId }) => tx((t) => setSyncPageManualLogin(t, { pageId, to: "wanted", by: "owner:test" }))],
+  ];
+
+  for (const [name, write] of WRITERS) {
+    it(`${name} waits for the page row lock`, async (context) => {
+      if (!testDb) return context.skip();
+      const page = await browserPage();
+      const holder = await testDb.pool.connect();
+      let released = false;
+      try {
+        await holder.query("begin");
+        await holder.query("select page_id from sync_pages where page_id = $1 for no key update", [page.pageId]);
+        const writing = write(page).then(() => "done" as const);
+        // Not done while the page row is held (a loaded machine only makes a
+        // writer that does not wait look like one that does).
+        expect(await Promise.race([writing, sleep(400).then(() => "waiting" as const)])).toBe("waiting");
+        await holder.query("commit");
+        released = true;
+        expect(await writing).toBe("done");
+      } finally {
+        if (!released) await holder.query("rollback").catch(() => undefined);
+        holder.release();
+      }
+    });
+  }
+
+  it("a start racing a stop: the start holds the page row to its end — never a stop's pause with no stop (Astra round 2, P1-4)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await browserPage();
+    let startLifted!: () => void;
+    const lifted = new Promise<void>((resolve) => (startLifted = resolve));
+    let goOn!: () => void;
+    const proceed = new Promise<void>((resolve) => (goOn = resolve));
+    // The owner's start, in the lever's order: the stop's pause (none yet),
+    // then the stop's mark — a stop is asked between the two.
+    const start = tx(async (t) => {
+      expect(await liftBrowserStopPause(t, { pageId })).toBeNull();
+      startLifted();
+      await proceed;
+      await clearPageBrowserOwnerStop(t, { pageId });
+    });
+    await lifted;
+    // The owner's stop, in the lever's order: the pause, then the mark.
+    const stop = tx(async (t) => {
+      await pausePageForBrowserStop(t, { pageId, note: "stop" });
+      await setPageBrowserOwnerStop(t, { pageId, by: "cli" });
+    });
+    // The stop waits for the start (or, without the lock, it is done by now).
+    await Promise.race([stop, sleep(400)]);
+    goOn();
+    await start;
+    await stop;
+    const row = (await testDb.pool.query<{ pausedAll: boolean; stopPaused: boolean; ownerStopAt: Date | null }>(
+      `select sp.paused_all as "pausedAll", sp.browser_stop_paused as "stopPaused", b.owner_stop_at as "ownerStopAt"
+         from sync_pages sp join page_browsers b on b.page_id = sp.page_id where sp.page_id = $1`, [pageId],
+    )).rows[0]!;
+    // The stop came after the start: it stands, with its pause.
+    expect(row).toMatchObject({ pausedAll: true, stopPaused: true });
+    expect(row.ownerStopAt).not.toBeNull();
   });
 });
 

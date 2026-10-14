@@ -321,7 +321,8 @@ to the operator; the CLI waits for what the operator says.
   decision).
 - `login_required` (Fansly signed the browser out) is the halt your login decides: open «Войти в браузер» on the
   page's «Браузер» block — the login starts the browser for its screen — and once you logged in and the operator
-  confirmed the page's account, the halt is lifted with no `start`.
+  confirmed the page's account, the halt is lifted with no `start`. Any other halt that comes meanwhile (a guard
+  that failed in the started browser) replaces it and waits for your `start`.
 - A page on its browser starts it by itself when it stands — at the switch to `browser`, and back — under that same
   guard.
 - `selftest` closes the exit for the test and opens it again when it passes; a test that fails stops the page
