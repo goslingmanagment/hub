@@ -141,10 +141,11 @@ export interface HubDeps {
   /** The live session changed (state says it). */
   sessionChanged?: (fingerprint: string | null) => void;
   /** A whole answer of the engine's identity read (`account.me`, plan §4.1
-   *  step 9): its session, when it went (`sentMono`, CLOCK_MONOTONIC ms;
-   *  null: not known) and its body, sealed in the buffer — read before this
-   *  returns, it goes with the outcome's resultAck. */
-  identityAnswer?: (answer: { fingerprint: string; status: number; bodyId: string; bytes: number; sentMono: number | null }) => void;
+   *  step 9): its session, when its first bytes passed the operator's own
+   *  gate (`gateSentMono`, this process's CLOCK_MONOTONIC ms — never
+   *  Chrome's timing; null: not known) and its body, sealed in the buffer —
+   *  read before this returns, it goes with the outcome's resultAck. */
+  identityAnswer?: (answer: { fingerprint: string; status: number; bodyId: string; bytes: number; gateSentMono: number | null }) => void;
   timings?: Partial<HubTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -1036,7 +1037,10 @@ export class HubRequests {
     const moments = [sendMoment(attempt.preflight), sendMoment(attempt.main)].filter((mono): mono is number => mono !== null);
     const sentMono = moments.length > 0 ? Math.min(...moments) : null;
     if (!how.empty && !how.preflight && attempt.send.route === "account.me") {
-      this.#deps.identityAnswer?.({ fingerprint: attempt.fingerprint, status: phys.status, bodyId: sealed.bodyId, bytes: sealed.bytes, sentMono });
+      // When it went by this process's own clock alone: the gate's first
+      // bytes (Chrome's timing is another clock's).
+      const gate = [attempt.preflight?.firstBytesMono, attempt.main?.firstBytesMono].filter((mono): mono is number => typeof mono === "number");
+      this.#deps.identityAnswer?.({ fingerprint: attempt.fingerprint, status: phys.status, bodyId: sealed.bodyId, bytes: sealed.bytes, gateSentMono: gate.length > 0 ? Math.min(...gate) : null });
     }
     const outcome: Outcome = {
       kind: "response",

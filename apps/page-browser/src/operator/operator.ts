@@ -1008,11 +1008,13 @@ export class Operator {
   /** A whole answer of the engine's identity read (hub-requests/): its
    *  account id, read from the body and nothing else of it kept. A read sent
    *  before the last change of the mode (or whose send is not known since
-   *  then) names nothing: it is from before the person's login. */
-  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number; sentMono: number | null }): void {
+   *  then) names nothing: it is from before the person's login. Both
+   *  instants are this process's own clock — the gate's first bytes, never
+   *  Chrome's timing, which may run on another base. */
+  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number; gateSentMono: number | null }): void {
     try {
       if (this.#mode === "manual_login") return;
-      if (this.#identityFloorMono > Number.NEGATIVE_INFINITY && (answer.sentMono === null || answer.sentMono < this.#identityFloorMono)) {
+      if (this.#identityFloorMono > Number.NEGATIVE_INFINITY && (answer.gateSentMono === null || answer.gateSentMono < this.#identityFloorMono)) {
         this.#log("session.identity_stale", { why: "sent before the mode last changed" });
         return;
       }

@@ -45,6 +45,12 @@ import { BUTTON_CENTRE, FakeLoginSite } from "./helpers/page-browser-login-site.
 // the browser: no log line, no journal, no file of the buffer.
 
 const cleanups: Array<() => Promise<void> | void> = [];
+
+/** Hang guards, not speed checks: one awaited event — a fake Chrome's start
+ *  and self-test among them — on a loaded CI machine (the owner's PC took
+ *  over 10 s for a start), and a test of several. */
+const WAIT_MS = 30_000;
+const LONG_TEST_MS = 120_000;
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   setLogSink(null);
@@ -812,16 +818,25 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     expect(s.operator.state.accountId).toBe("123456789");
   });
 
-  it("an identity read sent before the login and answered after it names nothing: the page waits for one sent after it", async () => {
+  // Whatever clock Chrome's own timing runs on: the freshness is judged by
+  // the operator's (the gate's first bytes). CI's machine read the fake's
+  // fixed Chrome timing (777 s) as later than its own monotonic clock — a
+  // freshly started one — and took a read from before the login as fresh.
+  it.for([
+    { chrome: "the fake's fixed timing", timing: () => ({ requestTime: 777.125, sendStart: 1.5 }) },
+    { chrome: "an hour ahead of the operator's clock", timing: () => ({ requestTime: monoMs() / 1000 + 3600, sendStart: 1.5 }) },
+    { chrome: "an hour behind the operator's clock", timing: () => ({ requestTime: Math.max(0, monoMs() / 1000 - 3600), sendStart: 1.5 }) },
+  ])("an identity read sent before the login and answered after it names nothing — Chrome's timing $chrome: the page waits for one sent after it", { timeout: LONG_TEST_MS }, async ({ timing }) => {
     const s = await setUp();
+    s.model.hubTiming = timing();
     await started(s);
     const token = "fansly-token-StAlEiDeNtItY0123456789";
     const fingerprint = sessionFingerprint(token, SITE_CLIENT);
     siteRead(s, token, SITE_CLIENT);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
-    await s.engine.waitFor("siteDone", () => true, 10_000);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint, WAIT_MS);
+    await s.engine.waitFor("siteDone", () => true, WAIT_MS);
     s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
-    const identity = (attemptId: number) => ({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 30_000, requestDeadlineMono: monoMs() + 40_000 });
+    const identity = (attemptId: number) => ({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 60_000, requestDeadlineMono: monoMs() + 90_000 });
     // The identity read's answer is held at its headers until the login is over.
     const answer = s.chrome.handlers.get("Fetch.continueResponse")!;
     let release: () => void = () => undefined;
@@ -835,24 +850,25 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
       return answer(cmd);
     });
     s.engine.send(identity(9601));
-    await until(() => holding, 10_000, "the identity read sent, its answer held");
+    await until(() => holding, WAIT_MS, "the identity read sent, its answer held");
     // A person's login meanwhile.
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     const loads = s.model.navigations.length;
     expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
-    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew under the automation");
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew under the automation");
     // The earlier read's answer comes now: it names the account, under the
-    // live session — and confirms nothing.
+    // live session — and confirms nothing. The operator judged it before it
+    // sent the engine the read's result.
     release();
-    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9601, 10_000)).outcome).toMatchObject({ kind: "response", status: 200 });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9601, WAIT_MS)).outcome).toMatchObject({ kind: "response", status: 200 });
+    expect(s.lines.join("\n")).toContain("session.identity_stale");
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId).toBeNull();
-    expect(s.lines.join("\n")).toContain("session.identity_stale");
     // One sent after the login does.
     s.engine.send(identity(9602));
-    await until(() => s.operator.page.step === "ready", 10_000, "the page ready");
+    await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
+    expect(s.operator.state.accountId).toBe("123456789");
   });
 
   it("no socket of the site in the manual login: its CONNECT is refused before any admission is asked", async () => {

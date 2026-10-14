@@ -916,6 +916,8 @@ export class BrowserModel {
   /** Hub's requests this browser ran: the body they get, and what
    *  happened to each. */
   hubBody: Buffer = Buffer.from('{"success":true,"response":{"id":"1"}}');
+  /** The timing Chrome reports for a Hub request (its own clock: seconds). */
+  hubTiming: { requestTime: number; sendStart: number } = { requestTime: 777.125, sendStart: 1.5 };
   readonly hubRequests: Array<ModelRequest & { attemptId: number; headers: Array<[string, string]>; socket: Socket | null; streamed: boolean }> = [];
 
   #navigate(tab: ModelTarget): void {
@@ -1004,7 +1006,7 @@ export class BrowserModel {
 
   #hubBodyGoes(request: (typeof this.hubRequests)[number]): void {
     const session = request.sessionId;
-    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: { requestTime: 777.125, sendStart: 1.5 }, connectionReused: false } }, session);
+    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: this.hubTiming, connectionReused: false } }, session);
     this.chrome.event("Network.responseReceivedExtraInfo", { requestId: request.networkId, statusCode: 200 }, session);
     this.chrome.event("Network.dataReceived", { requestId: request.networkId, dataLength: this.hubBody.length, encodedDataLength: this.hubBody.length, ...(request.streamed ? { data: this.hubBody.toString("base64") } : {}) }, session);
     this.chrome.event("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: this.hubBody.length + 100 }, session);
