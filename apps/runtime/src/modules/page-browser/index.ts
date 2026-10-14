@@ -18,7 +18,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
-import { authenticateSessionToken, isLiveOwnerSession, recordAudit, requireOwner, SESSION_COOKIE_NAME } from "../../services/auth.ts";
+import { authenticateSessionToken, ownerSessionExpiry, recordAudit, requireOwner, SESSION_COOKIE_NAME } from "../../services/auth.ts";
 import { openPageBrowserSecret, readPageBrowserPageSettings } from "../../services/egress/page-browser-link.ts";
 import {
   callPageBrowserLogin,
@@ -43,6 +43,10 @@ const STEP_CALL_MS = 25_000;
 /** How often an open screen is looked at: still the owner's session, still
  *  the login it was opened in. */
 const SCREEN_WATCH_MS = 1_000;
+/** A look that has not answered by then closes its screen (fail closed). */
+const SCREEN_LOOK_DEADLINE_MS = 1_000;
+/** The longest wait a Node timer takes (a longer one fires at once). */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*)?(\?.*)?$/;
 
@@ -69,17 +73,23 @@ const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*
  *   open, so a person is never in the browser of a page that works. The
  *   WebSocket's upgrade is checked here as a route is: the owner's cookie
  *   session, an Origin of this host. And it is checked for as long as it
- *   lives (Astra's review of PR 15, item 2): each one is bound to the
- *   session that opened it and to the login it was opened in. The owner's
- *   close of the login closes every screen of the page before the closing
- *   is written (so before the engine can bring the automation back); while
- *   it is being written no screen of the page opens, and one that was being
- *   opened meanwhile is closed with the rest once it is written — so no
- *   screen of the page is open from the moment the closing commits. A
- *   screen whose session was revoked or expired, or whose login is no
- *   longer the open one (closed by other means), is closed within
- *   `SCREEN_WATCH_MS`. The API is one process (docker-compose.production.yml:
- *   one `api`), so its screens are all here.
+ *   lives (Astra's review of PR 15, item 2, rounds 1 and 2): each one is
+ *   bound to the session that opened it and to the login it was opened in.
+ *   The owner's close of the login closes every screen of the page before
+ *   the closing is written (so before the engine can bring the automation
+ *   back); while it is being written no screen of the page opens, and one
+ *   that was being opened meanwhile is closed with the rest once it is
+ *   written — so no screen of the page is open from the moment the closing
+ *   commits. Each screen watches itself, apart from the others and without
+ *   waiting on the database: it closes at its session's expiry (a timer
+ *   from the expiry known when it opened — a session's is fixed at its
+ *   login); every `SCREEN_WATCH_MS` it reads its session and its login
+ *   again, and closes when the session was revoked or expired, or its user
+ *   is no longer an active owner, or the login is no longer the one it was
+ *   opened in — or when that read fails or has not answered within
+ *   `SCREEN_LOOK_DEADLINE_MS` (fail closed). The API is one process
+ *   (docker-compose.production.yml: one `api`), so its screens are all
+ *   here.
  * - Every change (`POST`) is taken only from a page of the dashboard's own
  *   origin — the dashboard is served by this API, so its `Origin` names the
  *   host the request came to — as the screen's upgrade checks it (Astra's
@@ -152,70 +162,108 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     session: string;
     /** The login it was opened in (its `manual_login_changed_at`). */
     since: number | null;
-    /** Still being opened: its login not read yet. */
+    /** Still being opened: its login not read yet, not watched yet. */
     opening: boolean;
     close: () => void;
+    /** Its own watch: the next look, the deadline of the look under way,
+     *  the session's expiry. */
+    timers: { next: NodeJS.Timeout | null; deadline: NodeJS.Timeout | null; expiry: NodeJS.Timeout | null };
+    /** The session's expiry as last read (ms since the epoch). */
+    expiresAt: number;
   }
   const tunnels = new Set<Tunnel>();
   /** The pages whose login's closing is being written now (how many
    *  closings at once): no screen of theirs opens meanwhile. */
   const closing = new Map<number, number>();
-  const watchMs = appContext.pageBrowserScreenWatchMs ?? SCREEN_WATCH_MS;
-  let watch: NodeJS.Timeout | null = null;
-  let sweeping = false;
+  const watchMs = appContext.pageBrowserScreenWatch?.everyMs ?? SCREEN_WATCH_MS;
+  const deadlineMs = appContext.pageBrowserScreenWatch?.deadlineMs ?? SCREEN_LOOK_DEADLINE_MS;
 
   function track(tunnel: Tunnel): void {
     tunnels.add(tunnel);
-    if (watch !== null) return;
-    watch = setInterval(() => void sweep(), watchMs);
-    watch.unref();
   }
 
+  /** Forgotten, its watch stopped (its sockets closed or closing). */
   function untrack(tunnel: Tunnel): void {
     tunnels.delete(tunnel);
-    if (tunnels.size > 0 || watch === null) return;
-    clearInterval(watch);
-    watch = null;
+    for (const timer of Object.values(tunnel.timers)) if (timer !== null) clearTimeout(timer);
+    tunnel.timers = { next: null, deadline: null, expiry: null };
+  }
+
+  /** Closed: both sockets, its watch stopped. */
+  function shut(tunnel: Tunnel, why: string): void {
+    if (!tunnels.has(tunnel)) return;
+    untrack(tunnel);
+    tunnel.close();
+    appContext.logger.info({ pageId: tunnel.pageId, why }, "page browser screen: closed");
   }
 
   /** Close the screens `which` names: both sockets of each. */
-  function closeScreens(which: (tunnel: Tunnel) => boolean): void {
-    for (const tunnel of [...tunnels]) {
-      if (!which(tunnel)) continue;
-      untrack(tunnel);
-      tunnel.close();
-    }
+  function closeScreens(which: (tunnel: Tunnel) => boolean, why: string): void {
+    for (const tunnel of [...tunnels]) if (which(tunnel)) shut(tunnel, why);
   }
 
-  /** Each open screen: its session still an owner's, its login still the
-   *  open one — else closed. A read that fails closes it too. */
-  async function sweep(): Promise<void> {
-    if (sweeping) return;
-    sweeping = true;
-    try {
-      const sessions = new Map<string, Promise<boolean>>();
-      const logins = new Map<number, Promise<{ value: string; since: number | null } | null>>();
-      for (const tunnel of [...tunnels]) {
-        if (tunnel.opening) continue;
-        if (!sessions.has(tunnel.session)) sessions.set(tunnel.session, isLiveOwnerSession(appContext, tunnel.session).catch(() => false));
-        if (!logins.has(tunnel.pageId)) {
-          logins.set(tunnel.pageId, getSyncPageManualLogin(appContext.db, tunnel.pageId)
-            .then((login) => (login === null ? null : { value: login.value, since: login.changedAt?.getTime() ?? null }))
-            .catch(() => null));
-        }
-        const [live, login] = await Promise.all([sessions.get(tunnel.session)!, logins.get(tunnel.pageId)!]);
-        if (live && login !== null && login.value === "wanted" && login.since === tunnel.since) continue;
-        if (!tunnels.has(tunnel)) continue;
-        untrack(tunnel);
-        tunnel.close();
-      }
-    } finally {
-      sweeping = false;
-    }
+  function later(run: () => void, ms: number): NodeJS.Timeout {
+    const timer = setTimeout(run, Math.min(Math.max(0, ms), MAX_TIMER_MS));
+    timer.unref();
+    return timer;
+  }
+
+  /** The screen closes at its session's expiry — a timer, whatever the
+   *  database does meanwhile. */
+  function expireAt(tunnel: Tunnel, expiresAt: number): void {
+    if (tunnel.timers.expiry !== null && tunnel.expiresAt === expiresAt) return;
+    if (tunnel.timers.expiry !== null) clearTimeout(tunnel.timers.expiry);
+    tunnel.expiresAt = expiresAt;
+    if (expiresAt <= Date.now()) return shut(tunnel, "its session expired");
+    tunnel.timers.expiry = later(() => {
+      tunnel.timers.expiry = null;
+      // A timer longer than Node takes fires early: armed again then.
+      if (Date.now() >= tunnel.expiresAt) shut(tunnel, "its session expired");
+      else expireAt(tunnel, tunnel.expiresAt);
+    }, expiresAt - Date.now());
+  }
+
+  /** The screen's watch, its own: it starts at its open. */
+  function watchTunnel(tunnel: Tunnel, expiresAt: number): void {
+    expireAt(tunnel, expiresAt);
+    if (!tunnels.has(tunnel)) return;
+    tunnel.timers.next = later(() => look(tunnel), watchMs);
+  }
+
+  /** One look: its session still an owner's (and when it expires), its
+   *  login still the one it was opened in — else closed. A read that fails,
+   *  or has not answered by the deadline, closes it too. */
+  function look(tunnel: Tunnel): void {
+    tunnel.timers.next = null;
+    if (!tunnels.has(tunnel)) return;
+    let answered = false;
+    tunnel.timers.deadline = later(() => {
+      tunnel.timers.deadline = null;
+      if (!answered) shut(tunnel, `its session and login did not read within ${deadlineMs} ms`);
+    }, deadlineMs);
+    const done = (why: string | null, expiresAt: number | null) => {
+      if (answered) return;
+      answered = true;
+      if (tunnel.timers.deadline !== null) clearTimeout(tunnel.timers.deadline);
+      tunnel.timers.deadline = null;
+      if (!tunnels.has(tunnel)) return;
+      if (why !== null) return shut(tunnel, why);
+      expireAt(tunnel, expiresAt!);
+      if (!tunnels.has(tunnel)) return;
+      tunnel.timers.next = later(() => look(tunnel), watchMs);
+    };
+    Promise.all([ownerSessionExpiry(appContext, tunnel.session), getSyncPageManualLogin(appContext.db, tunnel.pageId)]).then(
+      ([expiry, login]) => {
+        if (expiry === null) return done("its session is no longer an owner's", null);
+        if (login === null || login.value !== "wanted" || (login.changedAt?.getTime() ?? null) !== tunnel.since) return done("its login is no longer the open one", null);
+        done(null, expiry.getTime());
+      },
+      () => done("its session and login could not be read", null),
+    );
   }
 
   server.addHook("onClose", async () => {
-    closeScreens(() => true);
+    closeScreens(() => true, "the API closes");
   });
 
   server.get("/api/v1/page-browser/pages/:pageLabel/login", {
@@ -257,11 +305,11 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // the rest once it is (`upgrade` refuses it, or it is tracked here).
     const ofPage = (tunnel: Tunnel) => tunnel.pageId === page.pageId;
     closing.set(page.pageId, (closing.get(page.pageId) ?? 0) + 1);
-    closeScreens(ofPage);
+    closeScreens(ofPage, "the owner closes the login");
     try {
       return await write(page, principal, browser, to);
     } finally {
-      closeScreens(ofPage);
+      closeScreens(ofPage, "the owner closes the login");
       const left = (closing.get(page.pageId) ?? 1) - 1;
       if (left > 0) closing.set(page.pageId, left);
       else closing.delete(page.pageId);
@@ -406,11 +454,14 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = token === null ? null : await authenticateSessionToken(appContext, token);
     if (principal === null || token === null) return refuseUpgrade(socket, 401);
     requireOwner(principal);
+    // When the session expires: the screen closes then whatever else happens.
+    const expiry = await ownerSessionExpiry(appContext, token);
+    if (expiry === null) return refuseUpgrade(socket, 401);
     const label = decodeURIComponent(match[1]!);
     const page = await pageOf(label);
     // Known before its login is read: an owner's close that comes meanwhile
     // closes it too.
-    const tunnel: Tunnel = { pageId: page.pageId, session: token, since: null, opening: true, close: () => socket.destroy() };
+    const tunnel: Tunnel = { pageId: page.pageId, session: token, since: null, opening: true, close: () => socket.destroy(), timers: { next: null, deadline: null, expiry: null }, expiresAt: expiry.getTime() };
     track(tunnel);
     let screen: Awaited<ReturnType<typeof screenOf>>;
     try {
@@ -429,6 +480,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const proxied = proxyScreenUpgrade({ req, socket, head, target: screen.target, path: `${match[2] ?? "/"}${match[3] ?? ""}`, password: screen.password, onClose: () => untrack(tunnel) });
     tunnel.close = proxied.close;
     tunnel.opening = false;
+    watchTunnel(tunnel, expiry.getTime());
   }
 }
 

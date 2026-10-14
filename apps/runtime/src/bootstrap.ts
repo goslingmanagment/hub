@@ -79,9 +79,10 @@ export interface AppContext {
    *  own addresses. Tests point it at fakes. */
   pageBrowserEndpoints?: PageBrowserEndpoints | undefined;
   /** How often the API looks whether each open screen of a page's browser
-   *  is still the owner's (its session, its login). Absent: 1 s. Tests
-   *  shorten it. */
-  pageBrowserScreenWatchMs?: number | undefined;
+   *  is still the owner's (its session, its login), and how long a look may
+   *  take before the screen closes without its answer. Absent: 1 s each.
+   *  Tests change them. */
+  pageBrowserScreenWatch?: { everyMs?: number; deadlineMs?: number } | undefined;
   /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
    *  captures a page through it any more (step 4): it is this process's holder
    *  identity — for the journal of the identity check without a page, the
