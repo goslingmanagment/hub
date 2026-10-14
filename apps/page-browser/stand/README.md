@@ -23,7 +23,7 @@ and are not part of the suites.
 | `runner/load.ts` | The common load test and spec §4's thresholds |
 | `runner/isolation.ts` | Before anything runs: no route out, no way to the host through the stand's bridges, the SOCKS5 connects only the stand's names, the stand's certificate is trusted only with the stand's CA |
 | `capture/` | tcpdump in each page container's network namespace: what left it at the OS level |
-| `inside/` | What the stand runs inside a page container: `entry.sh` in front of the image's `/init` (see "Seams"), `lever.ts` for the controls that send from the page's own address |
+| `inside/` | What the stand runs inside a page container: `entry.sh` in front of the image's `/init` (see "Seams"), `lever.ts` for the controls that send from the page's own address, `journal.ts` to read the operator's own journal |
 | `docker-compose.yml`, `page.stand.yml` | The stand's infrastructure; the stand's override of the production page file |
 | `docker-proxy.ts` | The runner's only way to Docker: exec, start/stop/restart, inspect, stats — of the stand's own containers |
 | `stand.sh`, `guard.sh`, `push.sh` | Build, up, series, load, verify, down; the server's guard; the upload to the server |
@@ -150,28 +150,34 @@ run of a site scenario loads the page anew (`restartBrowser`) after
 configuring it and waits for the page's own word on which variant it is
 (`/stand/hello?variant=…`); a run on another variant is not counted. And each
 site scenario asks its run for evidence of what it is about (requests the
-site did send, a write it did try, a request whose admission ran out over
-its own held CONNECT, a request in flight at the restart): without it the
-run fails — it would prove nothing.
+site did send, a write it did try, a request whose admission ran out while
+it waited for its connection, a request in flight at the restart): without
+it the run fails — it would prove nothing.
 
-The expiry's evidence is one request, end to end (`criteria.ts`,
-`expiredUnderHold`): admitted after the page's connections to the API host
-were dropped (`stand.dropped`), with no connection to that host open at any
-moment of its window (so it could ride none), nothing with its request id
-arrived up to its deadline, and a CONNECT of that host from the page held
-at its deadline whose connection stayed alive: held at or before the
-deadline, let go after it while still open, closed only after that. The
-SOCKS5 journals each connection's own life by its id — `socks.open`,
-`socks.hold`, `socks.release` (only for a connection still open: one that
-closed while held is never released), `socks.connect`, `socks.closed` with
-who closed it (client, upstream, the stand) and whether it was still held.
-A held CONNECT whose client gave up before the release is no way for the
-request, and no evidence. It also journals the connection
-each CONNECT becomes (`socks.connect`: `upstream`), the front journals the
-connection every request arrives on (`peer`): the pass is that this request
-never arrives; the control must show this very request arriving late on
-the connection that was held for it. A request answered before the hold, or
-one with a warm connection, is no evidence, and such a run fails.
+The expiry keeps two things apart (`criteria.ts`). **Safety** is C1's, in
+every run of every scenario: nothing arrives after its admission's
+deadline, by the stand's own record, one admission one use. **Whether a run
+of `site-admission-expiry` proves anything** comes from two sources that do
+not lean on each other: the operator's own `requests` journal
+(`/data/buffer/logs`, read in the page by `inside/journal.ts`) must end one
+specific site request — by its site request id and attempt, at or after its
+deadline — with
+
+    {"decision":"ended","admission":"site request <id> (attempt <n>)","result":"not sent: the admission's deadline passed before the send", …}
+
+(PR 7, `src/intercept/site.ts`: the send gate expired the request's window
+with nothing of it sent, then the request ended unsent — a page's cancel or
+a failed tunnel ends with another result), and the stand's SOCKS5 must show
+a CONNECT of that page's API host held across that deadline. Both, or the
+run proves nothing and fails. That request must then never arrive. The
+SOCKS5's word alone is no evidence: a tunnel cut early does not cancel the
+operator's pending CONNECT (`src/egress/proxy.ts`), so a hold across the
+deadline does not say that the request still waited. Hub's own path
+journals no end of its request (its deadline refusal is the outcome
+`aborted_before_send`, `send_deadline_passed`), so only site requests count
+here. The control (`control-site-late-send`, and `control-held-late` in
+main) must show a request arriving after its journaled deadline over a
+CONNECT held across it, and C1 calling it late.
 
 | Scenario | Needs | A pass proves |
 |---|---|---|
@@ -196,12 +202,12 @@ one with a warm connection, is no evidence, and such a run fails.
 | `control-duplicate` | — | **control**: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate |
 | `control-hole` | — | **control**: an engine that acknowledges events before it commits them, its database down while the operator's start writes its gap — the lost event is the tail, and C7 must catch it (the operator's numbers) |
 | `control-lost-frames` | — | **control**: events made and lost before the engine ever received them — the stand's Fansly sends three frames into a socket opened from the page's own address (one, under an admission), which the operator never saw; and it answers a request sent under a site admission of a real attempt, whose outcome the stand commits as the engine does on `siteDone` while no `site.response` event of it ever comes (main's operator sends neither: PR 7 — this half stands in for the engine's side). No number is missing, nothing came on the wire, no gap mark — C7 must catch both against the stand's own record of what it made |
-| `control-held-late` | — | **control**: the expiry's evidence, live in main — a request admitted for 6 s is sent from the page's own address through a CONNECT the SOCKS5 holds 10 s: the run must tie that very request to the held connection and show it arriving late on it (the checks `control-site-late-send` runs on the real operator); C1 must call it late, and C7 must miss the outcome of a request Fansly answered |
+| `control-held-late` | — | **control**: the expiry's control side, live in main — a request admitted for 6 s is sent from the page's own address through a CONNECT the SOCKS5 holds 10 s: the run must show it arriving after its deadline over the CONNECT held across it (the check `control-site-late-send` runs on the real operator); C1 must call it late, and C7 must miss the outcome of a request Fansly answered |
 | `site-steady` | PR 7 | the site works (reads, its socket, frames): every request and socket under its own admission, frames committed |
 | `site-loss-operator-kill`, `site-loss-cdp-break`, `site-loss-chrome-kill` | PR 7 | the loss scenarios with the site's requests waiting and Hub requests in flight (condition №1; decision №10's residual shows in C1) |
 | `site-proxy-down` | PR 7 | the site's requests that waited when the proxy failed — asked an admission and not given one, or admitted and not ended; recorded right before the failure, and there must be some — never go after it is back, whatever admission they get then (plan §4.5) |
-| `site-admission-expiry` | PR 7 | an admission of 6 s runs out while the SOCKS5 holds its CONNECT 10 s — inside the 15 s after which the operator's own SOCKS5 client would give up, so it is the deadline that must stop the request — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2); the run must show one admitted request whose admission ran out over its own held CONNECT |
-| `control-site-late-send` | PR 7 | **control**: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like: the held request itself must be seen arriving late on its own connection, and C1 must catch it |
+| `site-admission-expiry` | PR 7 | an admission of 6 s runs out while the site request waits for its connection — the SOCKS5 holds the API host's CONNECT 10 s, inside the 15 s after which the operator's own SOCKS5 client would give up, so it is the deadline that must stop the request — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2); the run must show the operator's deadline refusal of one site request with a CONNECT held across its deadline |
+| `control-site-late-send` | PR 7 | **control**: the same hold, the operator told 14 s while the engine journals 6 s — the send after the journaled deadline is what an unchecked deadline looks like: a request must be seen arriving after its journaled deadline over a CONNECT held across it, and C1 must catch it |
 | `site-engine-restart` | PR 7 | the engine restarts while a Hub request that reached Fansly waits for its answer (the stand holds the answer 8 s; the run waits for that request's arrival first, and must show it was unanswered at the restart): `recover` never says `not_sent` of it |
 | `site-closed-writes` | PR 6, PR 7 | the site tries its closed writes — its own reports say a write was cancelled, and there must be one — and none reaches Fansly |
 | `site-forbidden-ws` | PR 7 | a forbidden socket message never leaves; the page stops with `unknown_ws_message` |

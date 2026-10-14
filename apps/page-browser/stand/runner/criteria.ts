@@ -399,140 +399,159 @@ export function closedWriteAttempted(events: readonly JournalEvent[], pageAddres
   return violations;
 }
 
-/** A CONNECT the stand's SOCKS5 held, by its own connection's life in the
- *  journal (fansly/socks.ts): when its hold began, when the hold let it go
- *  (null: never — it closed while held), when the connection closed and
- *  who closed it (null: still open), and `upstream`: the connection to the
- *  stand's Fansly it became (the address and port the front sees it come
- *  from; null: none was made). */
+// ── an admission that runs out while its connection is being set up ──────
+// Safety is C1's, in every run: nothing arrives after its admission's
+// deadline, by the stand's own record. Whether a run of the expiry scenario
+// proves anything is a separate question, answered from two sources that do
+// not depend on each other: the operator's own journal says that one
+// specific request was not sent because its admission's deadline passed
+// before the send — not cancelled by the page, not failed with its tunnel —
+// and the stand's SOCKS5 shows a CONNECT of that page's API host held across
+// that deadline. The SOCKS5's word alone cannot say that the request was
+// still waiting (a tunnel cut early does not cancel the operator's pending
+// CONNECT, src/egress/proxy.ts), and the operator's alone cannot say it was
+// waiting for its connection.
+
+/** The operator's line in its `requests` journal (src/logs/journal.ts) at
+ *  the end of a site request, as PR 7 writes it (src/intercept/site.ts,
+ *  `#journalEnd`): the path, never the query — the request is named by its
+ *  site request id and its attempt. */
+export interface OperatorRequestLine {
+  at: string;
+  method?: string;
+  host?: string;
+  path?: string;
+  admission?: string | null;
+  decision?: string;
+  result?: string;
+}
+
+/** The result of a site request whose admission's deadline passed before
+ *  anything of it was sent: the send gate's expiry of its window, then the
+ *  request's end with nothing sent (src/intercept/site.ts). A page's cancel
+ *  ("the page cancelled the request …") or a failed tunnel ends with
+ *  another result. */
+export const DEADLINE_REFUSAL = "not sent: the admission's deadline passed before the send";
+
+/** The operator's deadline refusal of one admitted site request, from its
+ *  journal line; null: the line says something else. */
+export function deadlineRefusal(line: OperatorRequestLine): { siteRequestId: string; attemptId: number; atWall: number } | null {
+  if (line.decision !== "ended" || line.result !== DEADLINE_REFUSAL) return null;
+  const named = /^site request (.+) \(attempt (\d+)\)$/.exec(line.admission ?? "");
+  const atWall = Date.parse(line.at);
+  return named && Number.isFinite(atWall) ? { siteRequestId: named[1]!, attemptId: Number(named[2]), atWall } : null;
+}
+
+/** A CONNECT the stand's SOCKS5 held: when the hold began, and when it
+ *  ended — let go, or its connection closed, whichever came first (null:
+ *  neither, by the journal's end). */
 export interface HeldConnect {
   socksId: number;
   heldMono: number;
-  releasedMono: number | null;
-  closedMono: number | null;
-  closedBy: string | null;
-  upstream: string | null;
+  endedMono: number | null;
 }
 
-/** The held connection was alive over the deadline and the hold then let
- *  it go: held at or before the deadline, released after it, and closed —
- *  if at all — only after its release. A connection that closed while held
- *  (its client gave up, the stand cut it) was never a way for the request,
- *  whatever its timer would have said. */
-export function heldOpenOver(hold: HeldConnect, deadlineMono: number): boolean {
-  return hold.heldMono <= deadlineMono && hold.releasedMono !== null && hold.releasedMono > deadlineMono && (hold.closedMono === null || hold.closedMono >= hold.releasedMono);
+/** The CONNECTs of `host` from the page held across `atMono`: begun at or
+ *  before it, not ended before it. */
+export function heldAcross(events: readonly JournalEvent[], pageAddress: string, host: string, atMono: number): HeldConnect[] {
+  const ends = new Map<number, number>();
+  for (const event of events) {
+    if (event.type !== "socks.release" && event.type !== "socks.closed") continue;
+    const socksId = Number(event.socksId);
+    ends.set(socksId, Math.min(ends.get(socksId) ?? Infinity, event.mono));
+  }
+  return events
+    .filter((event) => event.type === "socks.hold" && event.host === host && event.from === pageAddress)
+    .map((hold) => ({ socksId: Number(hold.socksId), heldMono: hold.mono, endedMono: ends.get(Number(hold.socksId)) ?? null }))
+    .filter((hold) => hold.heldMono <= atMono && (hold.endedMono ?? Infinity) > atMono);
 }
 
-/** One admitted request whose admission ran out over a held CONNECT. */
+/** One admitted request whose admission ran out while it waited for its
+ *  connection. */
 export interface ExpiredRequest {
   attemptId: number;
   rid: string;
   target: string;
   grantedMono: number;
   deadlineMono: number;
-  /** Every CONNECT of its host the page had waiting at its deadline: the
-   *  only connections it could go by. */
+  /** When the operator journaled the refusal (wall clock). */
+  refusedWall: number;
   holds: HeldConnect[];
 }
 
-/** The requests of `page` to `host` whose admission ran out over their own
- *  connection's CONNECT (plan §5, stage 2: "истечение срока допуска во время
- *  установления соединения"). One counts only when all of this is in the
- *  journal — tied to that request, not to the page's traffic at large:
- *
- *  - it was admitted after the run dropped the page's connections to the
- *    host (`stand.dropped`), and from its admission to its deadline the page
- *    had no connection to the host it could ride: none was open at any
- *    moment of that window (each `socks.connect` and `socks.closed` of the
- *    page counted);
- *  - its admission was not used: nothing with its request id arrived up to
- *    its deadline;
- *  - a CONNECT of the host from the page was being held at its deadline,
- *    its connection alive throughout: held at or before the deadline (in
- *    the admission's window or before it), let go after the deadline while
- *    still open, closed — if at all — only after that (`heldOpenOver`); and
- *    it has been let go for `settleMs` by now, so that what follows the
- *    hold had the time to show.
- *
- *  A request answered before the hold, or one that had a warm connection,
- *  is no evidence, however long another connection was held. With none
- *  found the run proves nothing about the deadline, and says why. */
-export function expiredUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, judgedMono: number, settleMs = 2000): { expired: ExpiredRequest[]; violations: string[] } {
-  const own = (event: JournalEvent) => event.host === host && event.from === pageAddress;
-  const dropped = events.filter((event) => event.type === "stand.dropped" && (event.host === null || event.host === undefined || event.host === host)).map((event) => event.mono);
-  const connects = events.filter((event) => event.type === "socks.connect" && own(event));
-  const closes = new Map(events.filter((event) => event.type === "socks.closed").map((event) => [Number(event.socksId), event]));
-  const closedAt = new Map([...closes].map(([socksId, event]) => [socksId, event.mono]));
-  const releasedAt = new Map(events.filter((event) => event.type === "socks.release").map((event) => [Number(event.socksId), event.mono]));
-  const holds: HeldConnect[] = events
-    .filter((event) => event.type === "socks.hold" && own(event))
-    .map((hold) => {
-      const socksId = Number(hold.socksId);
-      const closed = closes.get(socksId);
-      const upstream = connects.find((connect) => Number(connect.socksId) === socksId)?.upstream;
-      return { socksId, heldMono: hold.mono, releasedMono: releasedAt.get(socksId) ?? null, closedMono: closed?.mono ?? null, closedBy: closed === undefined ? null : String(closed.by ?? "?"), upstream: typeof upstream === "string" && upstream !== "" ? upstream : null };
-    });
-  const arrivals = events.filter((event) => event.type === "req" && event.role === "api" && typeof event.rid === "string");
-  const admitted = grants.filter((grant) => grant.page === page && grant.kind !== "ws" && grant.target !== null && grant.target.split("/")[0] === host);
-  const why = { unnamed: 0, beforeTheDrop: 0, used: 0, warm: 0, notHeld: 0, closedWhileHeld: 0, justLetGo: 0 };
+/** The operator's refusal is written after the deadline (the gate's
+ *  expiry, then the request's end); this much earlier is the two clocks. */
+export const REFUSAL_SLACK_MS = 250;
+
+/** The site requests of `page` to `host` whose admission ran out while they
+ *  waited for their connection: the operator journaled the deadline refusal
+ *  of that very request (by its attempt and site request id, at or after its
+ *  deadline) and a CONNECT of the host from the page was held across that
+ *  deadline. With none, the run proves nothing about the deadline, and says
+ *  why. `toWall`: a moment of the runner's monotonic clock on the wall
+ *  clock (one kernel for the stand: the operator's journal is in wall
+ *  time). */
+export function expiredUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], operatorLines: readonly OperatorRequestLine[], page: string, pageAddress: string, host: string, toWall: (mono: number) => number): { expired: ExpiredRequest[]; violations: string[] } {
+  const refusals = new Map(operatorLines.flatMap((line) => {
+    const refusal = deadlineRefusal(line);
+    return refusal === null ? [] : [[refusal.attemptId, refusal] as const];
+  }));
+  const ended = new Map(operatorLines.flatMap((line) => {
+    const named = /\(attempt (\d+)\)$/.exec(line.admission ?? "");
+    return line.decision === "ended" && named ? [[Number(named[1]), String(line.result ?? "")] as const] : [];
+  }));
+  const admitted = grants.filter((grant) => grant.page === page && grant.kind === "site" && grant.attemptId > 0 && grant.target !== null && grant.target.split("/")[0] === host);
+  const why = { otherEnd: new Map<string, number>(), noLine: 0, early: 0, notHeld: 0, unnamed: 0 };
   const expired: ExpiredRequest[] = [];
   for (const grant of admitted) {
     const rid = ridIn(grant.target);
+    const refusal = refusals.get(grant.attemptId);
     if (rid === null) why.unnamed += 1;
-    else if (!dropped.some((at) => at <= grant.grantedMono)) why.beforeTheDrop += 1;
-    else if (arrivals.some((arrival) => arrival.rid === rid && arrival.mono <= grant.deadlineMono)) why.used += 1;
-    else if (connects.some((connect) => connect.mono <= grant.deadlineMono && (closedAt.get(Number(connect.socksId)) ?? Infinity) > grant.grantedMono)) why.warm += 1;
+    else if (refusal === undefined || refusal.siteRequestId !== grant.ref) {
+      const other = ended.get(grant.attemptId);
+      if (other === undefined) why.noLine += 1;
+      else why.otherEnd.set(other, (why.otherEnd.get(other) ?? 0) + 1);
+    } else if (refusal.atWall < toWall(grant.deadlineMono) - REFUSAL_SLACK_MS) why.early += 1;
     else {
-      const over = holds.filter((hold) => heldOpenOver(hold, grant.deadlineMono));
-      // Held over the deadline by its timer, but closed before the hold let
-      // it go (or never let go): no way for the request — no evidence.
-      const dead = holds.filter((hold) => hold.heldMono <= grant.deadlineMono && (hold.releasedMono ?? hold.closedMono ?? Infinity) > grant.deadlineMono && !heldOpenOver(hold, grant.deadlineMono));
-      if (over.length === 0) {
-        if (dead.length > 0) why.closedWhileHeld += 1;
-        else why.notHeld += 1;
-      } else if (over.some((hold) => hold.releasedMono! + settleMs > judgedMono)) why.justLetGo += 1;
-      else expired.push({ attemptId: grant.attemptId, rid, target: grant.target!, grantedMono: grant.grantedMono, deadlineMono: grant.deadlineMono, holds: over });
+      const holds = heldAcross(events, pageAddress, host, grant.deadlineMono);
+      if (holds.length === 0) why.notHeld += 1;
+      else expired.push({ attemptId: grant.attemptId, rid, target: grant.target!, grantedMono: grant.grantedMono, deadlineMono: grant.deadlineMono, refusedWall: refusal.atWall, holds });
     }
   }
   if (expired.length > 0) return { expired, violations: [] };
-  const seen = `${admitted.length} admitted to ${host}: ${why.beforeTheDrop} before the page's connections were dropped${dropped.length === 0 ? " (they never were)" : ""}, ${why.used} arrived inside their window, ${why.warm} had a connection to ride, ${why.notHeld} with no CONNECT held over their deadline, ${why.closedWhileHeld} whose CONNECT held over the deadline closed before the hold let it go, ${why.justLetGo} whose hold was let go under ${settleMs} ms ago, ${why.unnamed} without a request id; ${holds.length} CONNECT(s) held, ${holds.filter((hold) => hold.releasedMono !== null).length} let go open`;
-  return { expired, violations: [`no admitted request of ${page} ran out over its own held CONNECT (${seen}): the run proves nothing about the deadline`] };
+  const others = [...why.otherEnd].map(([result, count]) => `${count} × "${result.slice(0, 80)}"`).join(", ");
+  const seen = `${admitted.length} site request(s) of ${page} admitted to ${host}: ${why.noLine} with no end in the operator's journal, ${[...why.otherEnd.values()].reduce((a, b) => a + b, 0)} ended otherwise${others ? ` (${others})` : ""}, ${why.early} refused before their deadline, ${why.notHeld} refused with no CONNECT held across their deadline, ${why.unnamed} without a request id`;
+  return { expired, violations: [`no site request of ${page} was refused by the operator for its deadline while a CONNECT was held across it (${seen}): the run proves nothing about the deadline`] };
 }
 
-export interface LateArrival {
-  attemptId: number;
-  rid: string;
-  method: string;
-  /** How long after its admission ran out it arrived. */
-  lateMs: number;
-  /** The connection it arrived on (the front's side of it). */
-  peer: string;
-  /** The held CONNECT that connection came through; null: another one. */
-  held: HeldConnect | null;
+/** Each of those requests never arrived — not late, not ever: its admission
+ *  ran out unsent, and nothing may send it after. */
+export function expiredArrivals(events: readonly JournalEvent[], expired: readonly ExpiredRequest[]): string[] {
+  return expired.flatMap((request) =>
+    events
+      .filter((event) => event.type === "req" && event.role === "api" && event.rid === request.rid)
+      .map((arrival) => `the request ${request.rid} (attempt ${request.attemptId}, ${String(arrival.method)}) arrived ${Math.round(arrival.mono - request.deadlineMono)} ms after its admission ran out — the operator had journaled it not sent for its deadline`),
+  );
 }
 
-/** None of those requests ever arrived: with its admission run out over its
- *  own connection, a request that still reaches Fansly was sent after its
- *  deadline — shown here by its own id, and by the connection it came on:
- *  the one whose CONNECT was held past its deadline (the front's `peer` is
- *  the SOCKS5's `upstream` of that CONNECT), or another. */
-export function expiredArrivals(events: readonly JournalEvent[], expired: readonly ExpiredRequest[]): { late: LateArrival[]; violations: string[] } {
-  const late: LateArrival[] = [];
-  for (const request of expired) {
+/** A late send, as an operator that did not check the deadline makes it:
+ *  an admitted request's id arrived after its (journaled) deadline, a
+ *  CONNECT of the host from the page was held across that deadline, and C1
+ *  calls that very arrival late. The control's evidence: without one, it
+ *  showed nothing. */
+export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: Array<{ rid: string; attemptId: number; lateMs: number }>; violations: string[] } {
+  const late: Array<{ rid: string; attemptId: number; lateMs: number }> = [];
+  for (const grant of grants) {
+    if (grant.page !== page || grant.kind === "ws" || grant.target === null || grant.target.split("/")[0] !== host) continue;
+    const rid = ridIn(grant.target);
+    if (rid === null || heldAcross(events, pageAddress, host, grant.deadlineMono).length === 0) continue;
     for (const arrival of events) {
-      if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== request.rid) continue;
-      const peer = String(arrival.peer ?? "");
-      const held = request.holds.find((hold) => hold.upstream !== null && hold.upstream === peer && Number(arrival.socksId) === hold.socksId && hold.releasedMono !== null && arrival.mono >= hold.releasedMono) ?? null;
-      late.push({ attemptId: request.attemptId, rid: request.rid, method: String(arrival.method ?? ""), lateMs: Math.round(arrival.mono - request.deadlineMono), peer, held });
+      if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
+      if (!unadmittedArrivals([arrival], grants, pages).some((violation) => violation.includes("arrived outside its admission window"))) continue;
+      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono) });
     }
   }
-  return {
-    late,
-    violations: late.map(
-      (arrival) =>
-        `the request ${arrival.rid} (attempt ${arrival.attemptId}, ${arrival.method}) arrived ${arrival.lateMs} ms after its admission ran out, ${arrival.held ? `on the connection whose CONNECT was held past it (SOCKS ${arrival.held.socksId} → ${arrival.held.upstream!})` : `on another connection (${arrival.peer || "?"})`}`,
-    ),
-  };
+  return { late, violations: late.length > 0 ? [] : ["no admitted request arrived after its deadline over a CONNECT held across it, with C1 calling it late: the control showed no late send"] };
 }
 
 /** A request was in flight when the engine restarted: one of `rids` had

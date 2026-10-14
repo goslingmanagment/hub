@@ -20,7 +20,7 @@ import { atLeast } from "../../src/state/steps.ts";
 import type { SiteBehaviour } from "../fansly/front.ts";
 import { STAND_EXIT_IP, STAND_OTHER_EXIT_IP, STAND_SOCKS_USER, mono, sleep } from "../shared.ts";
 import { Activity, waitFor, type Ctx, type Page, type ScenarioOutcome } from "./context.ts";
-import { closedWriteAttempted, exitClosedWithin, expiredArrivals, expiredUnderHold, gapCommitted, inFlightAtRestart, sentAfterRecovery, stoodBetween, stoppedFor, unadmittedArrivals, upWithin, type SeenTransition, type WaitingRequest } from "./criteria.ts";
+import { closedWriteAttempted, exitClosedWithin, expiredArrivals, expiredUnderHold, gapCommitted, inFlightAtRestart, lateUnderHold, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type OperatorRequestLine, type SeenTransition, type WaitingRequest } from "./criteria.ts";
 import type { Grant, StandEngine } from "./engine.ts";
 import type { JournalEvent } from "./fansly.ts";
 import { leak } from "./leak.ts";
@@ -68,6 +68,8 @@ async function servicePid(ctx: Ctx, service: string): Promise<number> {
  *  is told goes from the page's own address, past the operator. */
 const LEVER = "/opt/page-browser/stand/inside/lever.ts";
 const LEVER_CA = "/stand/ca/ca.crt";
+/** The operator's own journal, read inside the page (inside/journal.ts). */
+const JOURNAL = "/opt/page-browser/stand/inside/journal.ts";
 
 const CDP_BREAK = "pb-suite-cdp-break";
 const BYPASS = "pb-suite-bypass";
@@ -574,32 +576,45 @@ async function controlNoCapture(ctx: Ctx): Promise<ScenarioOutcome> {
   return { faultMono, checks: {}, attempts: activity.issued };
 }
 
-/** What a run about an admission's deadline must show, from the stand's
- *  journal and the engine's admissions (criteria.ts): one admitted request
- *  whose admission ran out over its own held CONNECT — and then, of that
- *  very request: it never arrived. `late` is the control's side: that very
- *  request did arrive after its deadline, on the connection that was held
- *  for it, and C1 calls that arrival late. */
-function expiryChecks(ctx: Ctx, journal: readonly JournalEvent[], grants: readonly Grant[], host: string, late: boolean): Record<string, string[]> {
-  const { expired, violations } = expiredUnderHold(journal, grants, ctx.page.info.name, ctx.page.info.egressIp, host, mono());
-  const arrivals = expiredArrivals(journal, expired);
-  ctx.notes.expired = expired.map((request) => ({ attemptId: request.attemptId, rid: request.rid, windowMs: Math.round(request.deadlineMono - request.grantedMono), holds: request.holds.map((hold) => ({ socksId: hold.socksId, upstream: hold.upstream, heldAfterAdmissionMs: Math.round(hold.heldMono - request.grantedMono), letGoAfterDeadlineMs: Math.round((hold.releasedMono ?? Number.NaN) - request.deadlineMono), closedBy: hold.closedBy })) }));
-  ctx.notes.lateArrivals = arrivals.late.map((arrival) => ({ rid: arrival.rid, attemptId: arrival.attemptId, lateMs: arrival.lateMs, peer: arrival.peer, heldSocksId: arrival.held?.socksId ?? null }));
-  if (!late) return { heldPastDeadline: violations, heldRequestNeverArrived: arrivals.violations };
-  const onItsOwn = arrivals.late.filter((arrival) => arrival.held !== null);
-  const calledLate = onItsOwn.filter((arrival) => unadmittedArrivals(journal.filter((event) => event.type === "req" && event.rid === arrival.rid), grants, ctx.pagesByAddress).some((violation) => violation.includes("arrived outside its admission window")));
-  const shown = expired.length === 0 ? [] : onItsOwn.length === 0 ? [`none of the ${expired.length} request(s) whose admission ran out over a held CONNECT arrived on that connection afterwards (${arrivals.late.length} arrived on another): the control showed no late send`] : calledLate.length === 0 ? ["the held request arrived after its deadline on its own connection, and C1 does not call that arrival late"] : [];
-  return { heldPastDeadline: violations, lateSendShown: shown };
+/** The operator's own journal (inside/journal.ts): the `requests` lines
+ *  that end a request, written at or after `sinceWall`. */
+async function operatorEnds(ctx: Ctx, sinceWall: number): Promise<OperatorRequestLine[]> {
+  const out = await inPage(ctx, ["node", "--no-warnings", JOURNAL, JSON.stringify({ kind: "requests", sinceWall, decision: "ended" })]);
+  return out
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as OperatorRequestLine);
 }
 
-/** The expiry's evidence, live against the operator in main (it sends no
- *  request of its own yet): the engine admits one request for 6 s, and the
- *  lever sends it from the page's own address through a CONNECT the SOCKS5
- *  holds 10 s — as an operator would that did not look at the deadline. The
- *  run must tie that very request to the held connection and show it
- *  arriving late (the same checks `control-site-late-send` runs on the real
- *  operator), C1 must call it late — and C7 must miss its outcome: Fansly
- *  answered it, and the engine has nothing of it. */
+/** What a run about an admission's deadline must show (criteria.ts). The
+ *  scenario: one site request the operator journaled as not sent for its
+ *  deadline, with a CONNECT of the API host held across that deadline — or
+ *  the run proves nothing (`heldPastDeadline`); and that request never
+ *  arrives (`heldRequestNeverArrived`). The control (`late`): a request
+ *  that arrived after its deadline over a CONNECT held across it, which C1
+ *  calls late (`lateSendShown`). */
+async function expiryChecks(ctx: Ctx, journal: readonly JournalEvent[], grants: readonly Grant[], host: string, late: boolean, sinceWall: number): Promise<Record<string, string[]>> {
+  if (late) {
+    const shown = lateUnderHold(journal, grants, ctx.page.info.name, ctx.page.info.egressIp, host, ctx.pagesByAddress);
+    ctx.notes.lateArrivals = shown.late;
+    return { lateSendShown: shown.violations };
+  }
+  const offset = Date.now() - mono();
+  const lines = await operatorEnds(ctx, sinceWall);
+  const { expired, violations } = expiredUnderHold(journal, grants, lines, ctx.page.info.name, ctx.page.info.egressIp, host, (at) => at + offset);
+  ctx.notes.operatorEnds = lines.length;
+  ctx.notes.expired = expired.map((request) => ({ attemptId: request.attemptId, rid: request.rid, windowMs: Math.round(request.deadlineMono - request.grantedMono), refusedAfterDeadlineMs: Math.round(request.refusedWall - (request.deadlineMono + offset)), holds: request.holds.map((hold) => ({ socksId: hold.socksId, heldAfterAdmissionMs: Math.round(hold.heldMono - request.grantedMono), endedAfterDeadlineMs: hold.endedMono === null ? null : Math.round(hold.endedMono - request.deadlineMono) })) }));
+  return { heldPastDeadline: violations, heldRequestNeverArrived: expiredArrivals(journal, expired) };
+}
+
+/** The control's side of the expiry, live against the operator in main (it
+ *  sends no request of its own yet): the engine admits one request for
+ *  6 s, and the lever sends it from the page's own address through a CONNECT
+ *  the SOCKS5 holds 10 s — as an operator would that did not look at the
+ *  deadline. The run must show that request arriving after its deadline
+ *  over the CONNECT held across it, C1 calling it late (the same check
+ *  `control-site-late-send` runs on the real operator) — and C7 missing its
+ *  outcome: Fansly answered it, and the engine has nothing of it. */
 async function controlHeldLate(ctx: Ctx): Promise<ScenarioOutcome> {
   const api = FANSLY_HOSTS.api[0];
   const login = { username: "pb-suite-control", password: randomBytes(16).toString("hex") };
@@ -617,10 +632,8 @@ async function controlHeldLate(ctx: Ctx): Promise<ScenarioOutcome> {
     }
   });
   activity.stop();
-  // What follows the hold must have had its time (criteria.ts, settleMs).
-  await sleep(2500);
   const grants = ctx.page.enginesOfRun.flatMap((owner) => owner.grants);
-  return { faultMono, checks: expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, true), attempts: activity.issued };
+  return { faultMono, checks: await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, true, 0), attempts: activity.issued };
 }
 
 /** Events made and lost before the engine ever received them — the second
@@ -713,22 +726,27 @@ function withSite(base: Scenario["run"]): Scenario["run"] {
  *  deadline that must stop the request, not that timeout — and then lets it
  *  go.
  *
- *  The run must show one admitted request whose admission ran out over its
- *  own held CONNECT (`heldPastDeadline`; with none, it proves nothing and
- *  fails), and that request must never arrive (`heldRequestNeverArrived`) —
- *  besides C1, which judges every arrival against its own window.
+ *  Safety is C1's, as in every run: nothing arrives after its admission's
+ *  deadline. Whether the run proves anything is apart: the operator's own
+ *  journal must say of one specific site request that it was not sent
+ *  because its admission's deadline passed before the send (not a page's
+ *  cancel, not a failed tunnel), and the stand's SOCKS5 must show a CONNECT
+ *  of the API host held across that deadline (`heldPastDeadline`; with
+ *  none, the run proves nothing and fails). That request must never arrive
+ *  (`heldRequestNeverArrived`).
  *
  *  `late`: the control. The operator is given 14 s while the engine journals
  *  6 s: it sends when the CONNECT is let go, rightly by what it was told —
- *  and exactly as an operator would that did not check the deadline. That
- *  very request must be seen arriving late on the connection held for it
- *  (`lateSendShown`), and C1 must show the late send. */
+ *  and exactly as an operator would that did not check the deadline. A
+ *  request must be seen arriving after its journaled deadline over a CONNECT
+ *  held across it (`lateSendShown`), and C1 must show the late send. */
 function admissionExpiry(late: boolean): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
     const api = FANSLY_HOSTS.api[0];
     engine.windowMs = late ? 14_000 : 6000;
     engine.journalWindowMs = late ? 6000 : null;
+    const sinceWall = Date.now() - 1000;
     try {
       const { activity, faultMono } = await atMoment(ctx, async () => {
         await ctx.stand.socks({ hold: { host: api, ms: 10_000 } });
@@ -739,7 +757,7 @@ function admissionExpiry(late: boolean): Scenario["run"] {
       await sleep(8000);
       activity.stop();
       const grants = ctx.page.enginesOfRun.flatMap((owner) => owner.grants);
-      return { faultMono, checks: expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, late), attempts: activity.issued };
+      return { faultMono, checks: await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, late, sinceWall), attempts: activity.issued };
     } finally {
       engine.windowMs = 15_000;
       engine.journalWindowMs = null;
@@ -802,14 +820,14 @@ export const SCENARIOS: Scenario[] = [
   { name: "control-duplicate", proves: "control: an engine that commits without a key and acknowledges late, dropped between — C6 must catch the duplicate", needs: [], page: "main", moment: [0, 0], control: { C6: ["committed 2 times"] }, run: controlDuplicate },
   { name: "control-hole", proves: "control: an engine that acknowledges events before it commits them, its database down — C7 must catch the lost tail", needs: [], page: "main", moment: [0, 500], control: { C7: ["were never committed (the tail"] }, run: controlHole },
   { name: "control-lost-frames", proves: "control: frames Fansly sends into a socket of the page that the engine never receives, and a site answer whose outcome is stored and whose site.response event never comes, no gap mark over them — C7 must catch both against the stand's own record of what it made", needs: [], page: "main", moment: [0, 500], control: { C7: ["not stored as ws.in events", "has no stored site.response event"] }, run: controlLostFrames },
-  { name: "control-held-late", proves: "control: a request admitted for 6 s goes from the page's address through a CONNECT held 10 s — the run must tie that very request to the held connection and show it arriving late; C1 must call it late, and C7 must miss the outcome of a request Fansly answered", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived outside its admission window"], C7: ["was answered by Fansly"] }, run: controlHeldLate },
+  { name: "control-held-late", proves: "control: a request admitted for 6 s goes from the page's address through a CONNECT held 10 s — the run must show it arriving after its deadline over the CONNECT held across it; C1 must call it late, and C7 must miss the outcome of a request Fansly answered", needs: [], page: "main", moment: [0, 500], control: { C1: ["arrived outside its admission window"], C7: ["was answered by Fansly"] }, run: controlHeldLate },
   { name: "site-steady", proves: "the site works (reads, its socket, frames): every request and socket under its own admission, frames committed", needs: ["PR7"], page: "main", moment: [0, 0], site: SITE_TRAFFIC, run: withSite(siteSteady) },
   { name: "site-loss-operator-kill", proves: "as loss-operator-kill with the site's requests waiting and Hub requests in flight (condition №1)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(operatorLoss("kill")) },
   { name: "site-loss-cdp-break", proves: "as loss-cdp-break with the site's requests waiting and Hub requests in flight (condition №1, decision №10's residual counted)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("cdp-break")) },
   { name: "site-loss-chrome-kill", proves: "as loss-chrome-kill with the site's traffic: a chrome_restart gap where its socket was open", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(controlLoss("chrome")) },
   { name: "site-proxy-down", proves: "as proxy-down with the site's requests waiting: what waited at the failure never goes after the proxy is back, whatever admission it gets then (plan §4.5)", needs: ["PR7"], page: "main", moment: [3000, 6000], site: SITE_TRAFFIC, run: withSite(proxyFault("down", true)) },
-  { name: "site-admission-expiry", proves: "an admission (6 s) runs out while its own CONNECT is held 10 s — inside the operator's 15 s SOCKS5 timeout — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry(false)) },
-  { name: "control-site-late-send", proves: "control: the same hold, the operator told 14 s while the engine journals 6 s — the held request itself must be seen arriving late on its own connection, as an unchecked deadline looks, and C1 must catch it", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, control: { C1: ["arrived outside its admission window"] }, run: admissionExpiry(true) },
+  { name: "site-admission-expiry", proves: "an admission (6 s) runs out while the site request waits for its connection (the operator journals it not sent for its deadline; the SOCKS5 held its host's CONNECT 10 s across that deadline — inside the operator's 15 s SOCKS5 timeout) — then the hold goes: that request never arrives, and nothing arrives after its deadline (condition №2)", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, run: withSite(admissionExpiry(false)) },
+  { name: "control-site-late-send", proves: "control: the same hold, the operator told 14 s while the engine journals 6 s — a request must be seen arriving after its journaled deadline over a CONNECT held across it, as an unchecked deadline looks, and C1 must catch it", needs: ["PR7"], page: "main", moment: [0, 1500], site: SITE_TRAFFIC, control: { C1: ["arrived outside its admission window"] }, run: admissionExpiry(true) },
   { name: "site-engine-restart", proves: "the engine restarts while a Hub request that reached Fansly waits for its answer (the answer held 8 s, the arrival confirmed first): recover never says not_sent of it", needs: ["PR7"], page: "main", moment: [300, 1500], site: SITE_TRAFFIC, run: withSite(engineRestart(true)) },
   { name: "site-closed-writes", proves: "the site tries its closed writes (message/ack; its own reports say so) and none reaches Fansly: the rules extension and the operator both refuse them", needs: ["PR6", "PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, writeEveryMs: 2000 }, run: withSite(siteClosedWrites) },
   { name: "site-forbidden-ws", proves: "a forbidden socket message never leaves: the page stops with unknown_ws_message", needs: ["PR7"], page: "main", moment: [0, 0], site: { ...SITE_TRAFFIC, forbiddenWs: true }, run: withSite(siteForbidden) },

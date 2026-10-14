@@ -14,9 +14,7 @@
 // The journal is the stand's truth: `req` when a request's headers arrived,
 // `res` when its answer was written, `ws.open` / `ws.in` / `ws.close` for
 // the socket. A request that is in the journal reached "Fansly"; one that is
-// not, did not. Each of them carries the connection it came on (`peer`: the
-// address and port of its other end — what the SOCKS5 journals as that
-// connection's `upstream`).
+// not, did not.
 //
 // It is also the record of what the stand's Fansly made, apart from anything
 // the operator or the engine say: every frame it sent into a socket has a
@@ -167,16 +165,9 @@ interface OpenSocket {
   socksId: number | null;
   /** The page it belongs to (the client's address at the SOCKS5). */
   from: string | null;
-  /** The other end of the connection it came on. */
-  peer: string;
   received: number;
 }
 
-/** The other end of an accepted connection: what the SOCKS5 journals as
- *  its `upstream`. */
-function peerOf(socket: { remoteAddress?: string | undefined; remotePort?: number | undefined }): string {
-  return `${socket.remoteAddress ?? ""}:${socket.remotePort ?? 0}`;
-}
 
 const MAX_BODY_BYTES = 48 * 1024 * 1024;
 
@@ -284,7 +275,6 @@ export class Front {
     const params = url.searchParams;
     const role = roleOf(host);
     const meta = this.#options.metaOf(req.socket.remotePort);
-    const peer = peerOf(req.socket);
     const header = req.headers["x-stand-rid"];
     const rid = (typeof header === "string" ? header : null) ?? params.get("rid");
     const streamId = "stream" in req && req.stream ? req.stream.id : null;
@@ -297,7 +287,6 @@ export class Front {
       proto,
       socksId: meta?.socksId ?? null,
       from: meta?.from ?? null,
-      peer,
       streamId: streamId ?? null,
       rid,
       headers: Object.keys(req.headers).filter((name) => !name.startsWith(":")),
@@ -312,7 +301,7 @@ export class Front {
         if (res instanceof ServerResponse) res.writeHead(status, { ...headers, "content-length": String(data.length) });
         else res.writeHead(status, { ...headers, "content-length": String(data.length) });
         res.end(data, () => {
-          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, path: `${url.pathname}${url.search}`, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer });
+          if (role !== "ipify") journal.log("res", { req: arrived.seq, host, role, method, path: `${url.pathname}${url.search}`, pathname: url.pathname, rid, status, bytes: data.length, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
         });
       };
       const delayMs = intParam(params, "delayMs", 60_000);
@@ -357,28 +346,27 @@ export class Front {
       .replace(/:\d+$/, "")
       .toLowerCase();
     const meta = this.#options.metaOf(req.socket.remotePort);
-    const peer = peerOf(req.socket);
     const path = req.url ?? "/";
     if (roleOf(host) !== "ws") {
-      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
+      journal.log("req", { host, role: roleOf(host), method: req.method ?? "", path, pathname: path.split("?")[0], proto: "http/1.1", socksId: meta?.socksId ?? null, from: meta?.from ?? null, streamId: null, rid: null, upgrade: true, headers: Object.keys(req.headers) });
       socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
       return;
     }
     const wsId = `ws-${this.#nextWs++}`;
     const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
     if (ws === null) {
-      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer });
+      journal.log("ws.refused", { host, path, socksId: meta?.socksId ?? null, from: meta?.from ?? null });
       return;
     }
-    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, from: meta?.from ?? null, peer, received: 0 };
+    const open: OpenSocket = { wsId, ws, socksId: meta?.socksId ?? null, from: meta?.from ?? null, received: 0 };
     this.#sockets.set(wsId, open);
-    journal.log("ws.open", { wsId, host, path, url: `wss://${host}${path}`, socksId: open.socksId, from: open.from, peer, origin: String(req.headers.origin ?? "") });
+    journal.log("ws.open", { wsId, host, path, url: `wss://${host}${path}`, socksId: open.socksId, from: open.from, origin: String(req.headers.origin ?? "") });
     ws.onText = (payload) => {
       open.received += 1;
       const text = payload.toString("utf8");
       // The message as it came — the stand's own traffic carries no secret —
       // cut to what a criterion needs to tell its kind.
-      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, peer, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
+      journal.log("ws.in", { wsId, socksId: open.socksId, from: open.from, n: open.received, bytes: payload.length, text: text.length > 512 ? `${text.slice(0, 512)}…` : text });
       if (/^\{"t":1,/.test(text)) this.#frame(open, 1, { session: { id: "pb-suite-stand", accountId: this.#options.config.accountId } });
     };
     ws.onBinary = (payload) => {
@@ -393,13 +381,13 @@ export class Front {
 
   /** A frame of the stand's Fansly into a socket — the only way one goes:
    *  its number is in its payload (`standFrame`), and the journal has it
-   *  with the socket, its connection and the time (`ws.out`), whatever
+   *  with the socket and the time (`ws.out`), whatever
    *  becomes of it on its way to the engine. */
   #frame(open: OpenSocket, t: number, fields: Record<string, unknown>): boolean {
     const frame = this.#nextFrame++;
     const body = JSON.stringify({ ...fields, standFrame: frame, wsId: open.wsId });
     if (!open.ws.sendText(JSON.stringify({ t, d: body })) && open.ws.closed) return false;
-    this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, from: open.from, peer: open.peer, frame, t, bytes: body.length });
+    this.#options.journal.log("ws.out", { wsId: open.wsId, socksId: open.socksId, from: open.from, frame, t, bytes: body.length });
     return true;
   }
 

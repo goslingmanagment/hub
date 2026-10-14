@@ -16,21 +16,6 @@
 //                 journaled when it began and when it was let go
 //                 (`socks.hold`, `socks.release`), so a run can show that a
 //                 connection was held past an admission's deadline.
-//
-// Each connection's own life is in the journal, by its `socksId`:
-// `socks.open` when it was accepted, `socks.hold` when its CONNECT began to
-// be held, `socks.release` when the hold let it go — written only for a
-// connection still open then: one that closed while held is never
-// released, and its timer goes with it — `socks.connect` when the front
-// took it, and `socks.closed` once, with who closed it (`by`: the client,
-// the upstream — the front —, or the stand itself: a refusal, a fault) and
-// whether it was still held then (`whileHeld`).
-//
-// Every connection it makes to the front is journaled with its own end of
-// it (`socks.connect`: `upstream`, the address and port the front sees it
-// come from) — the front journals the same pair with every request and
-// socket that arrives on that connection (`peer`), so what arrived can be
-// tied to the CONNECT it came through: the held one, or another.
 
 import { connect as tcpConnect, createServer, type Server, type Socket } from "node:net";
 
@@ -63,8 +48,6 @@ export class StandSocks {
   readonly #options: SocksOptions;
   #server: Server | null = null;
   readonly #sockets = new Set<Socket>();
-  /** The connections a fault of the stand cut (setDown). */
-  readonly #cutByStand = new WeakSet<Socket>();
   /** The loopback connections to the front, by their local port. */
   readonly #upstreams = new Map<number, SocksMeta>();
   #nextId = 1;
@@ -112,10 +95,7 @@ export class StandSocks {
       return 0;
     }
     const cut = this.#sockets.size;
-    for (const socket of this.#sockets) {
-      this.#cutByStand.add(socket);
-      socket.destroy();
-    }
+    for (const socket of this.#sockets) socket.destroy();
     const server = this.#server;
     this.#server = null;
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -127,31 +107,16 @@ export class StandSocks {
     const socksId = this.#nextId++;
     this.#sockets.add(socket);
     socket.setNoDelay(true);
+    socket.on("error", () => undefined);
     let buffered: Buffer = Buffer.alloc(0);
     let step: "greeting" | "auth" | "connect" | "relay" = "greeting";
     let target = "";
     let up = 0;
     let down = 0;
-    /** Who ended the connection first; null: not ended yet. */
-    let closedBy: "client" | "upstream" | "stand" | null = null;
-    /** The hold's timer while the CONNECT is held. */
-    let holding: NodeJS.Timeout | null = null;
-    journal.log("socks.open", { socksId, from: socket.remoteAddress ?? "", port: socket.remotePort ?? 0 });
-    socket.on("error", () => (closedBy ??= "client"));
-    socket.on("end", () => (closedBy ??= "client"));
     socket.on("close", () => {
       this.#sockets.delete(socket);
-      const whileHeld = holding !== null;
-      if (holding !== null) clearTimeout(holding);
-      holding = null;
-      const by = this.#cutByStand.has(socket) ? "stand" : (closedBy ?? "client");
-      journal.log("socks.closed", { socksId, step, target, up, down, by, whileHeld });
+      journal.log("socks.closed", { socksId, step, target, up, down });
     });
-    /** The stand ends the connection: a refusal, with its answer. */
-    const refuse = (answer: Buffer) => {
-      closedBy ??= "stand";
-      socket.end(answer);
-    };
     const reply = (code: number) => Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0]);
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
@@ -159,7 +124,6 @@ export class StandSocks {
         if (buffered.length < 2 || buffered.length < 2 + buffered[1]!) return;
         if (buffered[0] !== 5) {
           journal.log("socks.garbage", { socksId, from: socket.remoteAddress ?? "" });
-          closedBy ??= "stand";
           socket.destroy();
           return;
         }
@@ -167,7 +131,7 @@ export class StandSocks {
         buffered = buffered.subarray(2 + buffered[1]!);
         if (!methods.includes(2)) {
           journal.log("socks.login", { socksId, ok: false, why: "no password method offered" });
-          refuse(Buffer.from([5, 0xff]));
+          socket.end(Buffer.from([5, 0xff]));
           return;
         }
         socket.write(Buffer.from([5, 2]));
@@ -188,7 +152,7 @@ export class StandSocks {
         // Never the login or the password themselves.
         journal.log("socks.login", { socksId, ok, known, from: socket.remoteAddress ?? "", ...(ok ? {} : { why: known ? "the stand refuses every login now" : "a wrong login or password" }) });
         if (!ok) {
-          refuse(Buffer.from([1, 1]));
+          socket.end(Buffer.from([1, 1]));
           return;
         }
         socket.write(Buffer.from([1, 0]));
@@ -198,7 +162,7 @@ export class StandSocks {
         if (buffered.length < 5) return;
         if (buffered[0] !== 5 || buffered[1] !== 1) {
           journal.log("socks.refused", { socksId, why: "not a CONNECT" });
-          refuse(reply(7));
+          socket.end(reply(7));
           return;
         }
         const atyp = buffered[3]!;
@@ -206,7 +170,7 @@ export class StandSocks {
           // An address, not a name: the operator never sends one, and the
           // stand has nowhere to connect it.
           journal.log("socks.refused", { socksId, why: `address type ${atyp}`, target: atyp === 1 && buffered.length >= 8 ? [...buffered.subarray(4, 8)].join(".") : "" });
-          refuse(reply(REPLY_ATYP));
+          socket.end(reply(REPLY_ATYP));
           return;
         }
         const nameLength = buffered[4]!;
@@ -219,14 +183,13 @@ export class StandSocks {
         const local = this.#options.route(host, port);
         if (local === null) {
           journal.log("socks.refused", { socksId, host, port, from: socket.remoteAddress ?? "", why: "not a name of the stand: the stand connects nowhere else" });
-          refuse(reply(REPLY_NOT_ALLOWED));
+          socket.end(reply(REPLY_NOT_ALLOWED));
           return;
         }
         step = "relay";
         socket.off("data", onData);
         socket.pause();
         const from = socket.remoteAddress ?? "";
-        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
         const go = () => {
           if (socket.destroyed) return;
           const upstream = tcpConnect({ host: "127.0.0.1", port: local });
@@ -235,7 +198,7 @@ export class StandSocks {
             const meta: SocksMeta = { socksId, host, port, from };
             const localPort = upstream.localPort;
             if (localPort !== undefined) this.#upstreams.set(localPort, meta);
-            journal.log("socks.connect", { socksId, host, port, from, upstream: `${upstream.localAddress ?? ""}:${localPort ?? 0}`, heldMs: hold });
+            journal.log("socks.connect", { socksId, host, port, from });
             socket.write(reply(REPLY_OK));
             if (rest.length > 0) {
               up += rest.length;
@@ -252,32 +215,24 @@ export class StandSocks {
             });
             socket.on("drain", () => upstream.resume());
             socket.on("end", () => upstream.end());
-            upstream.on("end", () => {
-              closedBy ??= "upstream";
-              socket.end();
-            });
+            upstream.on("end", () => socket.end());
             upstream.on("close", () => {
               if (localPort !== undefined) this.#upstreams.delete(localPort);
-              closedBy ??= "upstream";
               socket.destroy();
             });
             socket.resume();
           });
           upstream.on("error", () => {
-            closedBy ??= "upstream";
             if (!socket.destroyed && step === "relay" && up === 0 && down === 0) socket.end(reply(REPLY_HOST_UNREACHABLE));
             else socket.destroy();
           });
           socket.on("close", () => upstream.destroy());
         };
+        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
         if (hold > 0) {
           journal.log("socks.hold", { socksId, host, port, from, ms: hold });
-          holding = setTimeout(() => {
-            holding = null;
-            // Only a connection still open is let go: one that closed while
-            // held cleared this timer, and is never released.
-            if (socket.destroyed || closedBy !== null) return;
-            journal.log("socks.release", { socksId, host, port, from });
+          setTimeout(() => {
+            journal.log("socks.release", { socksId, host, port, from, gone: socket.destroyed });
             go();
           }, hold);
         } else if (this.connectDelayMs > 0) setTimeout(go, this.connectDelayMs);

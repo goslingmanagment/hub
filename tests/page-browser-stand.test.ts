@@ -15,13 +15,17 @@ import {
   directArrivals,
   eventsComplete,
   exactlyOnce,
+  deadlineRefusal,
+  DEADLINE_REFUSAL,
   exitClosedWithin,
   expiredArrivals,
   expiredUnderHold,
   fanslyMade,
   forbiddenSocketMessages,
   frameRates,
+  heldAcross,
   inFlightAtRestart,
+  lateUnderHold,
   madeAndKept,
   outageBacklog,
   sentAfterRecovery,
@@ -31,6 +35,7 @@ import {
   upWithin,
   variantLoaded,
   type Kept,
+  type OperatorRequestLine,
   type SeenTransition,
   type StoredGap,
 } from "../apps/page-browser/stand/runner/criteria.ts";
@@ -206,74 +211,71 @@ describe("evidence that a run met what it is about", () => {
   });
 });
 
-describe("an admission that runs out over its own held CONNECT", () => {
+describe("an admission that runs out while its request waits for its connection", () => {
   const API = "apiv3.fansly.com";
-  const admission = grant("site", `${API}/api/v1/a?rid=r1`, 1000, { attemptId: 41, deadlineMono: 7000 });
+  // Astra's timeline: admitted at 0 for 300 ms; the host's CONNECT held at 3, let go at 606, closed at 607.
+  const admission = grant("site", `${API}/api/v1/a?rid=r1`, 0, { attemptId: 41, ref: "s-1", deadlineMono: 300 });
   const socks = (type: string, mono: number, socksId: number, fields: Record<string, unknown> = {}) => event(type, mono, { socksId, host: API, ...fields });
-  const dropped = (mono: number) => event("stand.dropped", mono, { host: API, connections: 1, from: undefined });
-  const connected = (mono: number, socksId: number) => socks("socks.connect", mono, socksId, { upstream: `127.0.0.1:${40_000 + socksId}` });
-  const arrived = (mono: number, socksId: number) => apiRequest(mono, "GET", "/api/v1/a?rid=r1", { socksId, peer: `127.0.0.1:${40_000 + socksId}` });
-  // The page's connections dropped, the request admitted (1000…7000), its CONNECT held 10 s and let go.
-  const held = [dropped(900), socks("socks.hold", 1010, 7), socks("socks.release", 11_010, 7), connected(11_012, 7)];
-  const found = (events: JournalEvent[], judgedMono = 14_000) => expiredUnderHold(events, [admission], "p1", PAGE_IP, API, judgedMono);
+  const held = [socks("socks.hold", 3, 7), socks("socks.release", 606, 7), socks("socks.closed", 607, 7)];
+  // `event` puts the wall clock at 1 000 000 + mono; the operator's journal is in wall time.
+  const toWall = (mono: number) => 1_000_000 + mono;
+  const ended = (wall: number, result: string, admission = "site request s-1 (attempt 41)"): OperatorRequestLine => ({ at: new Date(wall).toISOString(), method: "GET", host: API, path: "/api/v1/a", admission, decision: "ended", result });
+  const found = (events: JournalEvent[], lines: OperatorRequestLine[], grants: Grant[] = [admission]) => expiredUnderHold(events, grants, lines, "p1", PAGE_IP, API, toWall);
 
-  it("finds the very request: admitted with no connection to ride, unused at its deadline, its CONNECT held over it — and it never arrives", () => {
-    const { expired, violations } = found(held);
+  it("the operator's journal names a deadline refusal apart from a page's cancel or a failed tunnel", () => {
+    expect(deadlineRefusal(ended(1_000_310, DEADLINE_REFUSAL))).toEqual({ siteRequestId: "s-1", attemptId: 41, atWall: 1_000_310 });
+    expect(deadlineRefusal(ended(1_000_310, "the page cancelled the request before its answer: the page stops"))).toBeNull();
+    expect(deadlineRefusal(ended(1_000_040, "net::ERR_TUNNEL_CONNECTION_FAILED"))).toBeNull();
+    expect(deadlineRefusal({ ...ended(1_000_310, DEADLINE_REFUSAL), decision: "failed" })).toBeNull();
+    expect(deadlineRefusal(ended(1_000_310, DEADLINE_REFUSAL, "site request s-1, not admitted"))).toBeNull();
+  });
+
+  it("Astra's reproduction: the tunnel cancelled at 40 ms, the SOCKS5 let go after the deadline — the SOCKS5 alone proves nothing", () => {
+    // The CONNECT was held across the deadline, by the stand's journal...
+    expect(heldAcross(held, PAGE_IP, API, 300)).toEqual([{ socksId: 7, heldMono: 3, endedMono: 606 }]);
+    // ...but the operator ended the request at 40 ms, with its tunnel.
+    const early = found(held, [ended(1_000_040, "net::ERR_TUNNEL_CONNECTION_FAILED")]);
+    expect(early.expired).toEqual([]);
+    expect(early.violations).toEqual([expect.stringMatching(/no site request of p1 was refused by the operator for its deadline while a CONNECT was held across it \(1 site request\(s\) .* 1 ended otherwise \(1 × "net::ERR_TUNNEL_CONNECTION_FAILED"\).*\): the run proves nothing about the deadline/)]);
+    expect(expiredArrivals(held, early.expired)).toEqual([]);
+    // The page's cancel; no word of the operator at all.
+    expect(found(held, [ended(1_000_040, "the page cancelled the request before its answer: the page stops")]).violations).toEqual([expect.stringContaining("1 ended otherwise")]);
+    expect(found(held, []).violations).toEqual([expect.stringContaining("1 with no end in the operator's journal")]);
+  });
+
+  it("counts a journaled deadline refusal of that very request with a CONNECT held across its deadline — and then the request never arrives", () => {
+    const refused = [ended(1_000_310, DEADLINE_REFUSAL)];
+    const { expired, violations } = found(held, refused);
     expect(violations).toEqual([]);
-    expect(expired).toEqual([expect.objectContaining({ attemptId: 41, rid: "r1", holds: [{ socksId: 7, heldMono: 1010, releasedMono: 11_010, closedMono: null, closedBy: null, upstream: "127.0.0.1:40007" }] })]);
-    expect(expiredArrivals(held, expired)).toEqual({ late: [], violations: [] });
-    // Closed after its release (the operator let the late connection go at once): alive over the deadline all the same.
-    const closedLater = found([...held, socks("socks.closed", 11_020, 7, { by: "client", whileHeld: false })]);
-    expect(closedLater.expired[0]?.holds).toEqual([expect.objectContaining({ socksId: 7, closedMono: 11_020, closedBy: "client" })]);
+    expect(expired).toEqual([expect.objectContaining({ attemptId: 41, rid: "r1", deadlineMono: 300, refusedWall: 1_000_310, holds: [{ socksId: 7, heldMono: 3, endedMono: 606 }] })]);
+    expect(expiredArrivals(held, expired)).toEqual([]);
+    // It arrived after all: the safety half says so (and C1 with it).
+    const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1")];
+    expect(expiredArrivals(arrived, found(arrived, refused).expired)).toEqual([expect.stringContaining("the request r1 (attempt 41, GET) arrived 320 ms after its admission ran out")]);
+    expect(unadmittedArrivals(arrived, [admission], PAGES)).toEqual([expect.stringContaining("arrived outside its admission window")]);
   });
 
-  it("a held CONNECT that closed before its hold let it go is no way for the request: the run proves nothing (Astra's timeline)", () => {
-    // Held at 100, closed by its client at 500; another request admitted 1000…7000; the hold's timer said "release" at 10 100.
-    const astra = [dropped(50), socks("socks.hold", 100, 5), socks("socks.closed", 500, 5, { by: "client", whileHeld: true }), socks("socks.release", 10_100, 5)];
-    const { expired, violations } = found(astra, 14_000);
-    expect(expired).toEqual([]);
-    expect(violations).toEqual([expect.stringContaining("1 whose CONNECT held over the deadline closed before the hold let it go")]);
-    expect(expiredArrivals(astra, expired)).toEqual({ late: [], violations: [] });
-    // The stand's SOCKS5 no longer releases a closed connection: the same timeline as it is journaled now.
-    expect(found([dropped(50), socks("socks.hold", 100, 5), socks("socks.closed", 500, 5, { by: "client", whileHeld: true })], 14_000).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
-    // Closed while held after the deadline, never let go (the client gave up at 7005): no release while open — no evidence either.
-    expect(found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.closed", 7005, 7, { by: "client", whileHeld: true })]).violations).toEqual([expect.stringContaining("1 whose CONNECT held over the deadline closed before the hold let it go")]);
+  it("nor counts a refusal with no CONNECT held across the deadline, one of another request, one written before the deadline, or a Hub request's", () => {
+    const refused = [ended(1_000_310, DEADLINE_REFUSAL)];
+    // The hold ended before the deadline: let go, or its connection closed.
+    expect(found([socks("socks.hold", 3, 7), socks("socks.release", 200, 7)], refused).violations).toEqual([expect.stringContaining("1 refused with no CONNECT held across their deadline")]);
+    expect(found([socks("socks.hold", 3, 7), socks("socks.closed", 100, 7), socks("socks.release", 606, 7)], refused).violations).toEqual([expect.stringContaining("1 refused with no CONNECT held across their deadline")]);
+    // Another page's CONNECT.
+    expect(found([socks("socks.hold", 3, 7, { from: "10.0.1.102" }), socks("socks.release", 606, 7)], refused).violations).toHaveLength(1);
+    // The same attempt under another site request id; the refusal before the deadline.
+    expect(found(held, [ended(1_000_310, DEADLINE_REFUSAL, "site request s-9 (attempt 41)")]).violations).toEqual([expect.stringContaining("1 ended otherwise")]);
+    expect(found(held, [ended(1_000_020, DEADLINE_REFUSAL)]).violations).toEqual([expect.stringContaining("1 refused before their deadline")]);
+    // A Hub admission is no site request: the Hub path journals no end (src/hub-requests/hub.ts).
+    expect(found(held, refused, [{ ...admission, kind: "hub" }]).violations).toEqual([expect.stringContaining("(0 site request(s) of p1 admitted")]);
   });
 
-  it("the control's late send is that very request, on the connection that was held for it", () => {
-    const late = [...held, arrived(11_100, 7)];
-    const { expired } = found(late);
-    expect(expiredArrivals(late, expired).violations).toEqual(["the request r1 (attempt 41, GET) arrived 4100 ms after its admission ran out, on the connection whose CONNECT was held past it (SOCKS 7 → 127.0.0.1:40007)"]);
-    expect(unadmittedArrivals(late, [admission], PAGES)).toEqual([expect.stringContaining("arrived outside its admission window")]);
-    // It went by another connection: late all the same, and said so.
-    const elsewhere = [...held, connected(11_050, 9), arrived(11_100, 9)];
-    expect(expiredArrivals(elsewhere, found(elsewhere).expired)).toMatchObject({ late: [{ rid: "r1", held: null }], violations: [expect.stringContaining("on another connection (127.0.0.1:40009)")] });
-  });
-
-  it("a request already answered, then another connection held, is no evidence (and C1 is silent): the run proves nothing, and fails", () => {
-    // Admitted at 1000, it rode a connection that was there, was answered at 1100; only then a CONNECT is held, past 7000.
-    const answered = [dropped(900), connected(950, 6), arrived(1050, 6), event("res", 1100, { role: "api", host: API, method: "GET", path: "/api/v1/a?rid=r1", rid: "r1", status: 200 }), socks("socks.closed", 1150, 6), socks("socks.hold", 1200, 7), socks("socks.release", 11_200, 7), connected(11_201, 7)];
-    expect(unadmittedArrivals(answered, [admission], PAGES)).toEqual([]);
-    const { expired, violations } = found(answered);
-    expect(expired).toEqual([]);
-    expect(violations).toEqual([expect.stringMatching(/no admitted request of p1 ran out over its own held CONNECT \(1 admitted .* 1 arrived inside their window.*1 CONNECT\(s\) held, 1 let go open\): the run proves nothing about the deadline/)]);
-  });
-
-  it("nor is a request that could ride a connection already open, or one admitted before the connections were dropped", () => {
-    // A warm connection, never closed: whatever is held beside it, the request had a way.
-    expect(found([dropped(900), connected(950, 6), socks("socks.hold", 1200, 7), socks("socks.release", 11_200, 7)]).violations).toEqual([expect.stringContaining("1 had a connection to ride")]);
-    // No drop at all: a connection made before the run began is not in its journal.
-    expect(found(held.slice(1)).violations).toEqual([expect.stringContaining("1 before the page's connections were dropped (they never were)")]);
-    expect(found([dropped(1500), ...held.slice(1)]).violations).toEqual([expect.stringContaining("1 before the page's connections were dropped,")]);
-  });
-
-  it("nor a hold that was let go inside the window, began after the deadline, is another page's, or was let go a moment ago", () => {
-    expect(found([dropped(900), socks("socks.hold", 1010, 7), socks("socks.release", 5000, 7), connected(5001, 7)]).violations).toHaveLength(1);
-    expect(found([dropped(900), socks("socks.hold", 9000, 7), socks("socks.release", 19_000, 7)], 30_000).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
-    expect(found([dropped(900), socks("socks.hold", 1010, 7, { from: "10.0.1.102" }), socks("socks.release", 11_010, 7, { from: "10.0.1.102" })]).violations).toEqual([expect.stringContaining("1 with no CONNECT held over their deadline")]);
-    // Judged before what follows the hold had its time.
-    expect(found(held, 12_000).violations).toEqual([expect.stringContaining("1 whose hold was let go under 2000 ms ago")]);
-    expect(found([]).violations).toEqual([expect.stringContaining("the run proves nothing about the deadline")]);
+  it("the control's late send: the request arrived after its journaled deadline over a CONNECT held across it, and C1 calls it late", () => {
+    const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1")];
+    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320 }], violations: [] });
+    // Nothing late; late with no hold across the deadline; inside the window.
+    expect(lateUnderHold(held, [admission], "p1", PAGE_IP, API, PAGES).violations).toEqual([expect.stringContaining("the control showed no late send")]);
+    expect(lateUnderHold([apiRequest(620, "GET", "/api/v1/a?rid=r1")], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
+    expect(lateUnderHold([...held, apiRequest(250, "GET", "/api/v1/a?rid=r1")], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
   });
 });
 
