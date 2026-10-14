@@ -339,7 +339,9 @@ export class OnboardingLink {
   #slot: Promise<void> = Promise.resolve();
   #lastStartMono = Number.NEGATIVE_INFINITY;
   #unreachableSince: number | null = null;
-  #haltedPin: string | null = null;
+  /** When the pin the browser halted under was set (a changed exit IP): a
+   *  pin set after it — the owner's word on the IP — starts it again. */
+  #haltedPinAt: number | null = null;
   #identity: Promise<void> | null = null;
   #lastRecorded: { at: number; key: string } | null = null;
   #subscribed: string | null = null;
@@ -503,8 +505,8 @@ export class OnboardingLink {
       return;
     }
     this.#unreachableSince = null;
-    if (state.stopReason === "exit_ip_changed") this.#haltedPin ??= profile.pinnedExitIp;
-    else this.#haltedPin = null;
+    if (state.stopReason === "exit_ip_changed") this.#haltedPinAt ??= profile.pinnedExitIpAt?.getTime() ?? 0;
+    else this.#haltedPinAt = null;
     switch (profile.onboarding) {
       case "login":
         if (state.mode !== "manual_login") {
@@ -540,15 +542,22 @@ export class OnboardingLink {
   }
 
   /** A browser that stands is started (`restartBrowser`); one halted for a
-   *  changed exit IP is started again once the owner pinned another one. */
+   *  changed exit IP is started again once the owner pinned the IP again —
+   *  his word on what the browser should see (PR 17's `sync browser pin-ip`
+   *  then `start`, for a profile no page has). */
   async #startIfStanding(state: State, why: string): Promise<void> {
     const now = this.#clock.monoNow();
-    if (now - this.#lastStartMono < this.#t.restartEveryMs) return;
-    const repinned = state.stopReason === "exit_ip_changed" && this.#haltedPin !== null && this.#profile.pinnedExitIp !== this.#haltedPin;
-    if (!stands(state) && !repinned) return;
+    const pinnedAt = this.#profile.pinnedExitIpAt?.getTime() ?? 0;
+    const repinned = state.stopReason === "exit_ip_changed" && this.#haltedPinAt !== null && pinnedAt > this.#haltedPinAt;
+    if (repinned) {
+      this.#haltedPinAt = pinnedAt;
+      this.#lastStartMono = now;
+      await this.#command("restartBrowser", "the owner pinned the exit IP again: the browser starts again and checks it");
+      return;
+    }
+    if (!stands(state) || now - this.#lastStartMono < this.#t.restartEveryMs) return;
     this.#lastStartMono = now;
-    if (repinned) this.#haltedPin = this.#profile.pinnedExitIp;
-    await this.#command("restartBrowser", repinned ? "the owner pinned another exit IP: the browser starts again" : why);
+    await this.#command("restartBrowser", why);
   }
 
   async #command(kind: CommandKind | { kind: "setMode"; mode: Mode }, why: string): Promise<CommandResult | null> {

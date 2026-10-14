@@ -253,6 +253,22 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     expect(r.operator.sends).toHaveLength(0);
   });
 
+  it("starts a browser that stopped on another exit IP again only once the owner pinned the IP again", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    // The browser's own check named another IP: it stands for the owner's decision.
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" };
+    startTask(r);
+    await untilLoginMode(r);
+    await sleep(1_500);
+    // Never started again by itself, whatever the restart's cadence.
+    expect(r.operator.commands.filter((command) => command.command.kind === "restartBrowser")).toHaveLength(0);
+    // The owner pins (again): the browser starts and checks it.
+    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.8" });
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 5_000, "the start after the pin");
+    expect(r.operator.commands.filter((command) => command.command.kind === "restartBrowser")).toHaveLength(1);
+  });
+
   it("gives the onboarding up: the browser stopped, the automation back, then off â€” the profile stays, unbound", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });
