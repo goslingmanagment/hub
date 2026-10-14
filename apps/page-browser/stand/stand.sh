@@ -184,7 +184,7 @@ up() {
     profile="$(openssl rand -hex 16 | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')"
     mkdir -p "$WORK/pages/$page/secrets"
     chmod 700 "$WORK/pages/$page/secrets"
-    (umask 077; openssl rand -hex 16 > "$WORK/pages/$page/secrets/vnc_password"; openssl rand -hex 32 > "$WORK/pages/$page/secrets/rpc_token")
+    (umask 077; openssl rand -hex 16 > "$WORK/pages/$page/secrets/vnc_password"; openssl rand -hex 32 > "$WORK/pages/$page/secrets/rpc_token"; openssl rand -hex 32 > "$WORK/pages/$page/secrets/api_token")
     # The runner reads the page's RPC token (it plays the engine).
     chmod 644 "$WORK/pages/$page/secrets/rpc_token"
     docker volume create --label "$LABEL" --label "agency.stand.name=$PROJECT" "pb-profile-$profile" >/dev/null
