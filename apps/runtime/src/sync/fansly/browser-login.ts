@@ -35,9 +35,10 @@ import type { BrowserBufferIntake } from "./browser-intake.ts";
 //   started (`restartBrowser`), so the site's login screen comes up. The
 //   start goes under the one guard of every start of the browser
 //   (`browserStartRefusal`, PR 17), read fresh right before it: never while
-//   the owner stopped the browser (`sync browser stop`), never one latched
-//   in Hub for another decision of his, never during a leave or for a newer
-//   owner. The form's calls go from the API to the operator, which takes
+//   the owner stopped the browser (`sync browser stop`), never during a leave
+//   or for a newer owner, never one whose operator says it holds another
+//   halt for the owner — which the operator itself refuses to start (it
+//   holds its halt on its volume). The form's calls go from the API to the operator, which takes
 //   them only now. The site's login operations pass the pause in the site
 //   path (PR 8's exemption), under the pacer and the budgets.
 // - ending: a page on Node has its browser stopped first (`stopPage`: the
@@ -89,9 +90,6 @@ export interface BrowserLoginDeps {
   pageId: number;
   /** The page's browser profile: the guard's fresh read of it. */
   profileId: string;
-  /** A halt for the owner's decision heard on the link and not yet read
-   *  back from Hub's latch (the link's control). */
-  haltHeard?: () => string | null;
   /** The slot's owner generation: its writes are fenced by it. */
   generation: bigint;
   /** The page's transport the slot runs. */
@@ -209,7 +207,6 @@ export class BrowserLoginDriver {
             state: client.state,
             generation: this.#d.generation,
             who: "login",
-            haltHeard: this.#d.haltHeard?.() ?? null,
           });
           if (refusal !== null || this.#stopped) {
             if (refusal !== null && refusal !== this.#refused) {
@@ -334,9 +331,8 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
   const { db, logger, metrics, pageId, generation } = deps;
   const { profileId, client, bridge } = await openBrowserLink(deps);
   const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics, loginOnly: true });
-  // What the operator says, recorded as a slot on the browser does (Astra
-  // round 2): a halt for the owner's decision during the login latched in
-  // Hub, so an operator that starts again does not lift it.
+  // What the operator says, recorded as a slot on the browser does: its
+  // state, its alarms, the halt it holds mirrored for the owner's view.
   const recorder = new BrowserRecorder({
     db,
     pageId,
@@ -385,9 +381,6 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
     clock: deps.clock,
     logger,
     metrics,
-    // A halt heard and not yet read back from Hub's latch holds the login's
-    // start too (Astra round 2).
-    haltHeard: () => control.haltHeard,
     ...(deps.overrides?.loginTiming === undefined ? {} : { timing: deps.overrides.loginTiming }),
   });
   let stopping: Promise<void> | null = null;

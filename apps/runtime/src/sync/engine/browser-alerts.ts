@@ -27,9 +27,9 @@ import { ownerRunState } from "./status.ts";
 //   cdp_lost          control of Chrome lost (CDP, the holder's overflow, the
 //                     fallback release of owner decision №10)
 //
-// A stop that holds until the owner decides pages at once — and stays
-// latched in Hub until his start, whatever an operator that started again
-// says (`page_browsers.halt_reason`); a failure the
+// A stop that holds until the owner decides pages at once — and stays so
+// while the operator holds the halt on its volume until his start (Hub's
+// mirror of it, `page_browsers.halt_reason`); a failure the
 // operator retries by itself (its backoff, plan §4.1) pages only once the
 // browser has stayed down for `SYNC_BROWSER_DOWN_MS`. An alarm holds its kind
 // for the clean window after it (as of the alarm: its latch resolves 10 min
@@ -168,8 +168,8 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     });
   }
 
-  // A halt latched for the owner's decision, whatever the operator says now
-  // (one that started again stands with no reason): until his start.
+  // The halt the operator holds for the owner's decision (Hub's mirror of
+  // it), whatever its step says now: until his start clears it.
   if (browser.haltReason !== null) {
     const kind = STOP_KIND[browser.haltReason] ?? "browser_down";
     if (!(kind === "login_required" && browser.mode === "manual_login")) {

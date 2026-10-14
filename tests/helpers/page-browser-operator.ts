@@ -301,6 +301,7 @@ export class FakeOperator {
       operatorVersion: "test",
       buffer: { bytes: 0, oldestAgeMs: 0 },
       selfTest: { ok: true, atWall: Date.now(), failed: null },
+      halt: null,
     };
     this.server = new RpcServer({
       token: options.token ?? OPERATOR_TOKEN,
@@ -324,6 +325,20 @@ export class FakeOperator {
           if (command.command.kind === "setMode") {
             this.pushState({ mode: command.command.mode });
             return { ok: true, detail: `the mode is ${command.command.mode}` };
+          }
+          // The halt held for the owner's decision (PR 17, Astra round 3): only
+          // a clearHalt naming it clears it; it refuses a start meanwhile (the
+          // login's for login_required aside).
+          if (command.command.kind === "clearHalt") {
+            const halt = this.state.halt ?? null;
+            if (halt !== null && halt.id !== command.command.haltId) return { ok: false, detail: `the halt held is ${halt.id}: nothing cleared` };
+            this.pushState({ halt: null, ...(halt !== null && this.state.stopReason === halt.reason ? { stopReason: null } : {}) });
+            return { ok: true, detail: halt === null ? "no halt is held" : `halt ${halt.id} cleared` };
+          }
+          const held = this.state.halt ?? null;
+          if ((command.command.kind === "restartBrowser" || command.command.kind === "openExit") && held !== null
+            && !(held.reason === "login_required" && this.state.mode === "manual_login")) {
+            return { ok: false, detail: `halted for the owner's decision (${held.reason}, halt ${held.id}): clearHalt first` };
           }
           // A test's own answer to the other commands (PR 17).
           if (command.command.kind !== "stopPage" && this.onOtherCommand !== null) return this.onOtherCommand(command);

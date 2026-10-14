@@ -75,11 +75,12 @@ export interface PageBrowserRow {
    *  (`sync_pages.browser_stop_paused`). */
   ownerStopAt: Date | null;
   ownerStopBy: string | null;
-  /** The browser stopped for the owner's decision (0280): the halt's
-   *  reason and when the engine first heard it — latched, lifted only by the
-   *  owner's `sync browser start`. Null: none. */
+  /** A mirror of the halt the operator holds for the owner's decision on
+   *  its volume (0280; `state.halt`): its reason, since when, its id. The
+   *  operator enforces it, never this mirror. Null: none said. */
   haltReason: string | null;
   haltAt: Date | null;
+  haltId: string | null;
 }
 
 type SqlRow = Omit<
@@ -152,7 +153,8 @@ const publicColumns = sql`
   b.owner_stop_at as "ownerStopAt",
   b.owner_stop_by as "ownerStopBy",
   b.halt_reason as "haltReason",
-  b.halt_at as "haltAt"
+  b.halt_at as "haltAt",
+  b.halt_id as "haltId"
 `;
 
 const columns = sql`
@@ -274,6 +276,10 @@ export interface PageBrowserStateInput {
   /** The operator's next start after a failure (`state.retryAtWall`; 0280).
    *  Absent: not said (kept as it is). */
   retryAt?: Date | null;
+  /** The halt the operator holds for the owner's decision (`state.halt`,
+   *  minor 1): mirrored. Null or absent: none held (an operator from before
+   *  the addition holds none). */
+  halt?: { id: string; reason: string; at: Date } | null;
 }
 
 /** The operator's last `state`, at the database's clock. The link works:
@@ -303,6 +309,9 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            selftest_failed = ${input.selfTest?.failed ?? null},
            buffer_bytes = ${Math.max(0, Math.round(input.buffer.bytes))}::bigint,
            buffer_oldest_age_ms = ${Math.max(0, Math.round(input.buffer.oldestAgeMs))}::bigint,
+           halt_reason = ${input.halt?.reason ?? null}::text,
+           halt_at = ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz,
+           halt_id = ${input.halt?.id ?? null}::text,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()
@@ -507,16 +516,13 @@ export async function recordPageBrowserAlarm(
 
 /**
  * The page row lock (`sync_pages`, FOR NO KEY UPDATE) every writer of the
- * page's pause, its login's pause, the owner's stop and the halt latch takes
- * first, in its transaction — one row, one order (PR 17, Astra round 2): the
- * page row, then its browser's row. The same lock as the owner's pause, the
- * login's transitions and the engine's fenced writes (`lockOwnedPage`).
+ * page's pause, its login's pause and the owner's stop takes first, in its
+ * transaction — one row, one order (PR 17, Astra round 2): the page row, then
+ * its browser's row. The same lock as the owner's pause, the login's
+ * transitions and the engine's fenced writes (`lockOwnedPage`).
  */
-async function lockPageRow(tx: Database, input: { pageId: number } | { profileId: string }): Promise<void> {
-  await tx.execute("pageId" in input
-    ? sql`select page_id from sync_pages where page_id = ${input.pageId}::bigint for no key update`
-    : sql`select sp.page_id from page_browsers b join sync_pages sp on sp.page_id = b.page_id
-           where b.profile_id = ${input.profileId}::uuid for no key update of sp`);
+async function lockPageRow(tx: Database, input: { pageId: number }): Promise<void> {
+  await tx.execute(sql`select page_id from sync_pages where page_id = ${input.pageId}::bigint for no key update`);
 }
 
 /** In a transaction of its own, or as a savepoint of the caller's. */
@@ -551,29 +557,30 @@ export async function setPageBrowserOwnerStop(
 }
 
 /** The owner starts the page's browser again (`sync browser start`, his
- *  decision): the stop's mark and a latched halt are lifted, under the page
- *  row lock, then the browser's row. Returns what they were (null: no
- *  profile bound). */
+ *  decision): the stop's mark is lifted, under the page row lock, then the
+ *  browser's row. Returns whether it stood, and the halt the operator holds
+ *  as Hub mirrors it — the one his start clears (`clearHalt` with its id;
+ *  the operator lifts it, never Hub). Null: no profile bound. */
 export async function clearPageBrowserOwnerStop(
   db: Database,
   input: { pageId: number },
-): Promise<{ profileId: string; wasStopped: boolean; halt: { reason: string; at: Date } | null } | null> {
+): Promise<{ profileId: string; wasStopped: boolean; halt: { id: string | null; reason: string; at: Date } | null } | null> {
   return inTransaction(db, async (tx) => {
     await lockPageRow(tx, { pageId: input.pageId });
-    const result = await tx.execute<{ profileId: string; wasStopped: boolean; haltReason: string | null; haltAt: Date | string | null }>(sql`
+    const result = await tx.execute<{ profileId: string; wasStopped: boolean; haltReason: string | null; haltAt: Date | string | null; haltId: string | null }>(sql`
       update page_browsers b
-         set owner_stop_at = null, owner_stop_by = null, halt_reason = null, halt_at = null, updated_at = clock_timestamp()
-        from (select profile_id, owner_stop_at is not null as was_stopped, halt_reason, halt_at
+         set owner_stop_at = null, owner_stop_by = null, updated_at = clock_timestamp()
+        from (select profile_id, owner_stop_at is not null as was_stopped
                 from page_browsers where page_id = ${input.pageId}::bigint for update) old
        where b.profile_id = old.profile_id
-      returning b.profile_id::text as "profileId", old.was_stopped as "wasStopped", old.halt_reason as "haltReason", old.halt_at as "haltAt"
+      returning b.profile_id::text as "profileId", old.was_stopped as "wasStopped", b.halt_reason as "haltReason", b.halt_at as "haltAt", b.halt_id as "haltId"
     `);
     const row = result.rows[0];
     if (row === undefined) return null;
     return {
       profileId: row.profileId,
       wasStopped: row.wasStopped === true,
-      halt: row.haltReason === null ? null : { reason: row.haltReason, at: dateOf(row.haltAt)! },
+      halt: row.haltReason === null ? null : { id: row.haltId, reason: row.haltReason, at: dateOf(row.haltAt)! },
     };
   });
 }
@@ -589,75 +596,6 @@ const NOT_THE_OWNERS_DECISION: ReadonlySet<string> = new Set(["owner_stop", "buf
  *  (fail closed). */
 export function isOwnerDecisionHalt(state: { stopReason: string | null; retryAtWall: number | null }): boolean {
   return state.stopReason !== null && state.retryAtWall === null && !NOT_THE_OWNERS_DECISION.has(state.stopReason);
-}
-
-/** The halt the owner's login decides (Fansly signed the browser out): the
- *  one a login may start the browser for, and lift by succeeding. */
-export const LOGIN_DECIDES_HALT = "login_required";
-
-/**
- * Of two halts for the owner's decision, the one that holds (Astra round 2):
- * any halt but `login_required` — which the owner's login may start the
- * browser for — outranks it and is never replaced by it; else the first one
- * stands.
- */
-export function stricterHalt(current: string | null, next: string | null): string | null {
-  if (current === null) return next;
-  if (next !== null && current === LOGIN_DECIDES_HALT && next !== LOGIN_DECIDES_HALT) return next;
-  return current;
-}
-
-/**
- * The browser stopped for the owner's decision (0280): latched on the
- * profile's row when the engine first hears it, under the page row lock —
- * its first reason and instant kept, but a `login_required` that a stricter
- * halt replaces (`stricterHalt`): a halt heard after a login started the
- * browser is never hidden behind it. Lifted by the owner's decision alone:
- * his `sync browser start` (`clearPageBrowserOwnerStop`), and a
- * `login_required` also by his successful login
- * (`clearPageBrowserLoginRequiredHalt`). An operator that starts again stands
- * with no reason, and nothing it says lifts the latch. True: latched now or
- * already.
- */
-export async function latchPageBrowserHalt(db: Database, input: { profileId: string; reason: string }): Promise<boolean> {
-  return inTransaction(db, async (tx) => {
-    await lockPageRow(tx, { profileId: input.profileId });
-    const replaces = sql`(halt_reason is null or (halt_reason = ${LOGIN_DECIDES_HALT} and ${input.reason}::text <> ${LOGIN_DECIDES_HALT}))`;
-    const result = await tx.execute(sql`
-      update page_browsers
-         set halt_reason = case when ${replaces} then ${input.reason}::text else halt_reason end,
-             halt_at = case when ${replaces} then clock_timestamp() else halt_at end,
-             updated_at = clock_timestamp()
-       where profile_id = ${input.profileId}::uuid
-      returning profile_id
-    `);
-    return result.rows.length === 1;
-  });
-}
-
-/**
- * A latched `login_required` is lifted by a successful login (PR 17 with PR
- * 15): the owner's login of the page's browser ended after the latch, and
- * since then the operator confirmed the page's expected account under its
- * live session (the caller heard it). Any other halt stays for `sync browser
- * start`. True: lifted.
- */
-export async function clearPageBrowserLoginRequiredHalt(db: Database, input: { profileId: string }): Promise<boolean> {
-  return inTransaction(db, async (tx) => {
-    await lockPageRow(tx, { profileId: input.profileId });
-    const result = await tx.execute(sql`
-      update page_browsers b
-         set halt_reason = null, halt_at = null, updated_at = clock_timestamp()
-        from sync_pages sp
-       where b.profile_id = ${input.profileId}::uuid
-         and sp.page_id = b.page_id
-         and b.halt_reason = ${LOGIN_DECIDES_HALT}
-         and sp.manual_login = 'off'
-         and sp.manual_login_changed_at > b.halt_at
-      returning b.profile_id
-    `);
-    return result.rows.length === 1;
-  });
 }
 
 /** A profile bound to a page, with the page's label and transport and where
@@ -725,8 +663,9 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
 
 /** What a page's browser may be told, read fresh by the page's owner right
  *  before it commands it (0280): the page's transport, its pending leave and
- *  its owner generation, its pause, the owner's login of the browser, the
- *  owner's stop and a latched halt. */
+ *  its owner generation, its pause, the owner's login of the browser and the
+ *  owner's stop. (A halt for the owner's decision is the operator's: it
+ *  refuses a start itself.) */
 export interface PageBrowserControlRead {
   pageId: number;
   transport: "node" | "browser" | null;
@@ -739,7 +678,6 @@ export interface PageBrowserControlRead {
   /** The owner's login of the page's browser (0279; null: no engine row). */
   manualLogin: "off" | "wanted" | "ending" | null;
   ownerStopAt: Date | null;
-  haltReason: string | null;
 }
 
 /** The control read of a profile (null: no such profile, or it serves no
@@ -747,11 +685,11 @@ export interface PageBrowserControlRead {
 export async function readPageBrowserControl(db: Database, input: { profileId: string }): Promise<PageBrowserControlRead | null> {
   const result = await db.execute<{
     pageId: string; transport: string | null; leaveGeneration: string | null; ownerGeneration: string | null;
-    pausedAll: boolean | null; browserStopPaused: boolean | null; manualLogin: string | null; ownerStopAt: Date | string | null; haltReason: string | null;
+    pausedAll: boolean | null; browserStopPaused: boolean | null; manualLogin: string | null; ownerStopAt: Date | string | null;
   }>(sql`
     select b.page_id::text as "pageId", sp.transport, sp.browser_leave_generation::text as "leaveGeneration",
            sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
-           sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason"
+           sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt"
       from page_browsers b
       left join sync_pages sp on sp.page_id = b.page_id
      where b.profile_id = ${input.profileId}::uuid and b.page_id is not null
@@ -767,6 +705,5 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
     browserStopPaused: row.browserStopPaused === true,
     manualLogin: row.manualLogin === "off" || row.manualLogin === "wanted" || row.manualLogin === "ending" ? row.manualLogin : null,
     ownerStopAt: dateOf(row.ownerStopAt),
-    haltReason: row.haltReason,
   };
 }

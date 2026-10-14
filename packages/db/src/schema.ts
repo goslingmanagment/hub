@@ -480,9 +480,11 @@ export const pageBrowsers = pgTable("page_browsers", {
   alarmDetail: jsonbSafe("alarm_detail").$type<Record<string, unknown>>(),
   ownerStopAt: timestamp("owner_stop_at", { withTimezone: true }),
   ownerStopBy: text("owner_stop_by"),
-  // The halt for the owner's decision, latched (`latchPageBrowserHalt`).
+  // A mirror of the halt the operator holds for the owner's decision on its
+  // volume (`recordPageBrowserState`): the operator enforces it, not Hub.
   haltReason: text("halt_reason"),
   haltAt: timestamp("halt_at", { withTimezone: true }),
+  haltId: text("halt_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -511,7 +513,10 @@ export const pageBrowserCommands = pgTable("page_browser_commands", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   takenGeneration: bigint("taken_generation", { mode: "bigint" }),
   takenAt: timestamp("taken_at", { withTimezone: true }),
+  haltId: text("halt_id"),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
   doneAt: timestamp("done_at", { withTimezone: true }),
+  outcome: text("outcome").$type<"ok" | "failed" | "unknown" | "expired">(),
   ok: boolean("ok"),
   detail: text("detail"),
 });

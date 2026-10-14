@@ -15,8 +15,8 @@ import {
 //
 // What it says: the page's transport and a leave pending; the operator's last
 // word (its step, stop reason, next retry, exit, mode — and how old it is);
-// the engine's link error; the owner's stop and a halt latched for his
-// decision; whether a login is needed; the
+// the engine's link error; the owner's stop and the halt the operator holds
+// for his decision (Hub's mirror); whether a login is needed; the
 // session (present or not, the account it named — never its token or
 // fingerprint); the proxy as the browser meets it (the pinned exit IP and the
 // one it saw; never the proxy's address or credentials); the buffer (its

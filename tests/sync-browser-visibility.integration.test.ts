@@ -370,7 +370,7 @@ describe("the owner's levers (sync browser …), each audited", () => {
     expect(JSON.parse(printed.join("\n"))).toMatchObject({ operatorConfirmed: false, confirmation: { ok: false, detail: "the exit is closed, but Chrome is still up" } });
   }, 60_000);
 
-  it("a halt for the owner's decision is latched: an operator that starts again is not started; only the owner's start lifts it (Astra PR 17, P1-1)", async (context) => {
+  it("a halt for the owner's decision is the operator's (held across its restarts): Hub mirrors it, nothing starts it; the owner's audited start clears it by its id, then starts the browser (Astra PR 17, rounds 1 and 3)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     await onBrowser(r);
@@ -380,11 +380,12 @@ describe("the owner's levers (sync browser …), each audited", () => {
       return { ok: true, detail: "the start began" };
     };
     await startHost(r);
-    // Headers that differ from the site's: the operator halts for the owner.
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", retryAtWall: null });
-    await until(async () => (await browserRow(r.page.pageId)).haltReason === "header_mismatch", 15_000, "the halt latched");
-    // The operator starts again: it stands, with no reason.
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null, retryAtWall: null });
+    // Headers that differ from the site's: the operator holds a halt for the owner.
+    const halt = { id: randomUUID(), reason: "header_mismatch" as const, atWall: Date.now() };
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", retryAtWall: null, halt });
+    await until(async () => (await browserRow(r.page.pageId)).haltId === halt.id, 15_000, "the halt mirrored");
+    // The operator starts again: it stands with no reason, still holding the halt.
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null, retryAtWall: null, halt });
     await until(async () => (await browserRow(r.page.pageId)).stopReason === null, 10_000, "the stand recorded");
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(kindsOf(r)).toEqual([]);
@@ -393,11 +394,11 @@ describe("the owner's levers (sync browser …), each audited", () => {
 
     const printed: string[] = [];
     await cli(r, printed).parseAsync(["browser", "start", r.page.pageLabel, "--note", "headers checked"], { from: "user" });
-    expect(JSON.parse(printed.join("\n"))).toMatchObject({ haltLifted: { reason: "header_mismatch" }, result: { ok: true } });
-    expect(kindsOf(r)).toEqual(["restartBrowser"]);
-    expect((await browserRow(r.page.pageId)).haltReason).toBeNull();
+    expect(JSON.parse(printed.join("\n"))).toMatchObject({ halt: { id: halt.id, reason: "header_mismatch" }, result: { outcome: "ok", ok: true } });
+    expect(kindsOf(r)).toEqual(["clearHalt", "restartBrowser"]);
+    await until(async () => (await browserRow(r.page.pageId)).haltReason === null, 10_000, "the mirror cleared with the operator's state");
     expect(await audits(r.page.pageId, SYNC_BROWSER_AUDIT_EVENTS.start)).toEqual([
-      expect.objectContaining({ note: "headers checked", haltLifted: expect.objectContaining({ reason: "header_mismatch" }) }),
+      expect.objectContaining({ note: "headers checked", halt: expect.objectContaining({ id: halt.id, reason: "header_mismatch" }) }),
     ]);
   }, 60_000);
 
@@ -416,7 +417,7 @@ describe("the owner's levers (sync browser …), each audited", () => {
     const printed: string[] = [];
     await cli(r, printed).parseAsync(["browser", "selftest", r.page.pageLabel, "--note", "after the update"], { from: "user" });
     const asked = JSON.parse(printed.join("\n"));
-    expect(asked.result).toEqual({ ok: true, detail: "closeExit: closeExit: done; selfTest: selfTest: done; openExit: openExit: done", doneAt: expect.any(String) });
+    expect(asked.result).toEqual({ outcome: "ok", ok: true, detail: "closeExit: closeExit: done; selfTest: selfTest: done; openExit: openExit: done", doneAt: expect.any(String) });
     const commands = r.operator.commands.filter((command) => command.command.kind !== "stopPage");
     expect(commands.map((command) => command.command.kind)).toEqual(["closeExit", "selfTest", "openExit"]);
     const commandId = (await testDb.pool.query<{ id: string }>("select command_id::text as id from page_browser_commands where id = $1", [asked.command.id])).rows[0]!.id;
@@ -486,10 +487,12 @@ describe("the browser started at the switch to it", () => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(kindsOf(r)).toEqual(["restartBrowser"]);
     // Halted for the owner's decision (a changed exit IP), then standing as
-    // an operator that started again: nothing starts it but the owner.
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" });
-    await until(async () => (await browserRow(r.page.pageId)).haltReason === "exit_ip_changed", 10_000, "the halt latched");
-    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null });
+    // an operator that started again — still holding it on its volume:
+    // nothing starts it but the owner.
+    const halt = { id: randomUUID(), reason: "exit_ip_changed" as const, atWall: Date.now() };
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed", halt });
+    await until(async () => (await browserRow(r.page.pageId)).haltReason === "exit_ip_changed", 10_000, "the halt mirrored");
+    r.operator.pushState({ step: "exit_closed", exitOpen: false, stopReason: null, halt });
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(kindsOf(r)).toEqual(["restartBrowser"]);
   }, 60_000);

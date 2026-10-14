@@ -649,7 +649,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
 
   browser
     .command("start")
-    .description("start a page's browser again: the owner's stop lifted (and the pause it put), the browser started — also one halted for the owner's decision (audited)")
+    .description("start a page's browser again: the owner's stop lifted (and the pause it put), the halt its operator holds for the owner's decision cleared by its id, the browser started (audited)")
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
     .option("--wait-ms <ms>", `how long to wait for the engine to run it (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
@@ -657,7 +657,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
       await withContext(deps, async ({ db }) => {
         const asked = await startPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
         const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 5_000 });
-        deps.print(json({ ...asked, result: ran === null ? null : { ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
+        deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
       });
     });
 
@@ -671,7 +671,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
       await withContext(deps, async ({ db }) => {
         const asked = await askPageBrowserSelfTest(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
         const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 30_000 });
-        deps.print(json({ ...asked, result: ran === null ? null : { ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
+        deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
       });
     });
 
@@ -698,7 +698,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
         deps.print(json({
           ...stopped,
           operatorConfirmed: confirmed,
-          confirmation: ran === null ? null : { ok: ran.ok, detail: ran.detail, ownerGeneration: ran.takenGeneration, doneAt: ran.doneAt?.toISOString() ?? null },
+          confirmation: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, ownerGeneration: ran.takenGeneration, doneAt: ran.doneAt?.toISOString() ?? null },
           profileId,
           volumes: { profile: `pb-profile-${profileId}`, buffer: `pb-buffer-${profileId}` },
           follows: confirmed

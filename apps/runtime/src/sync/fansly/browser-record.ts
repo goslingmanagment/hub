@@ -1,12 +1,8 @@
 import {
-  clearPageBrowserLoginRequiredHalt,
-  isOwnerDecisionHalt,
-  latchPageBrowserHalt,
   recordPageBrowserAlarm,
   recordPageBrowserDelivery,
   recordPageBrowserLinkError,
   recordPageBrowserState,
-  stricterHalt,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -24,15 +20,10 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //   moved, else at most every `stateRefreshMs` — the alert evaluator's
 //   `browser_down` reads its age (no state for 2 min while the page's owner
 //   runs), the «Браузер» block shows it;
-// - a halt for the owner's decision it says (a stop reason it does not retry
-//   by itself, `isOwnerDecisionHalt`), latched on the profile's row at once
-//   and again until it is written — whatever states follow (a stricter halt
-//   replaces a `login_required`, never the reverse): an operator that
-//   starts again stands with no reason, and only the owner's `sync browser
-//   start` lifts the latch — or, for `login_required`, his successful login:
-//   the operator confirms the page's expected account under its live session
-//   (`session_confirmed`, in the automation) after a login that ended since
-//   the latch (`clearPageBrowserLoginRequiredHalt`);
+// - the halt it holds for the owner's decision on its volume (`state.halt`,
+//   Astra round 3), mirrored with the state for the owner's view and the id
+//   his start clears — the operator enforces it, never this mirror: a failed
+//   write loses nothing, the next state brings it again;
 // - its link refused (`token`, `protocol_version`, spec §6.3 rule 6) or
 //   broken by a protocol error (`protocol_error`, rule 3) — cleared by the
 //   next state;
@@ -43,12 +34,6 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //
 // Nothing secret: the protocol's state and alarms carry none (spec §6.1), and
 // the session's fingerprint is a digest the row has kept since PR 12.
-
-/** The operator confirmed the page's expected account under its live
- *  session, in the automation (its identity read; never in a login). */
-function sessionConfirmed(state: State): boolean {
-  return state.mode === "automation" && (state.step === "session_confirmed" || state.step === "ready");
-}
 
 export interface BrowserRecorderTiming {
   /** A state like the last one written is written again after this long. */
@@ -79,7 +64,7 @@ export interface BrowserRecorderDeps {
  *  which move with every event). */
 function stateKey(state: State): string {
   return JSON.stringify([state.step, state.stopReason, state.retryAtWall, state.exitOpen, state.mode, state.sessionFingerprint,
-    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest]);
+    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null]);
 }
 
 function quantile(sorted: readonly number[], q: number): number {
@@ -103,9 +88,6 @@ export class BrowserRecorder {
   #writtenKey: string | null = null;
   #writtenAt = Number.NEGATIVE_INFINITY;
   #linkError: string | null = null;
-  /** A halt heard and not latched yet (its reason). */
-  #halt: string | null = null;
-  #latching: Promise<void> | null = null;
   #delivery: Array<{ atMono: number; lagMs: number }> = [];
   #deliveryWrittenMono = Number.NEGATIVE_INFINITY;
   #deliveryWriting: Promise<void> | null = null;
@@ -135,7 +117,6 @@ export class BrowserRecorder {
     for (const unlisten of this.#unlisten.splice(0)) unlisten();
     await this.#writing?.catch(() => undefined);
     await this.#deliveryWriting?.catch(() => undefined);
-    await this.#latching?.catch(() => undefined);
   }
 
   /** The intake committed events: how long each took from the operator's
@@ -150,7 +131,6 @@ export class BrowserRecorder {
    *  delivery's figures once they are due (the timer; tests). */
   look(): void {
     if (this.#stopped) return;
-    this.#latch();
     this.#writeState();
     this.#deliveryWriting ??= this.#writeDelivery().finally(() => {
       this.#deliveryWriting = null;
@@ -161,41 +141,13 @@ export class BrowserRecorder {
   async flushed(): Promise<void> {
     while (this.#writing !== null) await this.#writing.catch(() => undefined);
     await this.#deliveryWriting?.catch(() => undefined);
-    await this.#latching?.catch(() => undefined);
   }
 
   #onState(state: State): void {
     if (this.#stopped) return;
-    if (isOwnerDecisionHalt(state)) {
-      // The stricter one is latched: a halt heard after a `login_required`
-      // replaces it (Astra round 2).
-      this.#halt = stricterHalt(this.#halt, state.stopReason);
-      this.#latch();
-    }
     this.#latest = state;
     this.#unwritten = true;
     this.#writeState();
-  }
-
-  /** The halt heard, latched in Hub (tried again on every look until it is). */
-  #latch(): void {
-    const reason = this.#halt;
-    if (reason === null || this.#latching !== null) return;
-    const { db, profileId, pageId, logger } = this.#d;
-    let again = false;
-    this.#latching = latchPageBrowserHalt(db, { profileId, reason })
-      .then((latched) => {
-        if (this.#halt === reason) this.#halt = null;
-        // A stricter halt heard meanwhile: latched right after.
-        again = this.#halt !== null;
-        if (latched) logger.warn({ pageId, reason }, "Fansly sync browser: the browser stands for the owner's decision; latched until sync browser start");
-      }, (error: unknown) => {
-        logger.warn({ pageId, reason, err: errorName(error) }, "Fansly sync browser: a halt could not be latched yet; tried again");
-      })
-      .finally(() => {
-        this.#latching = null;
-        if (again && !this.#stopped) this.#latch();
-      });
   }
 
   /** The latest state the operator said, written — at once when it differs
@@ -211,6 +163,7 @@ export class BrowserRecorder {
     this.#unwritten = false;
     const { db, profileId, logger, pageId } = this.#d;
     this.#writing = (async () => {
+      let written = false;
       try {
         await recordPageBrowserState(db, {
           profileId,
@@ -226,30 +179,22 @@ export class BrowserRecorder {
           selfTest: state.selfTest === null ? null : { ok: state.selfTest.ok, at: new Date(state.selfTest.atWall), failed: state.selfTest.failed },
           buffer: { bytes: state.buffer.bytes, oldestAgeMs: state.buffer.oldestAgeMs },
           retryAt: state.retryAtWall === null ? null : new Date(state.retryAtWall),
+          halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
         });
         this.#writtenKey = key;
         this.#writtenAt = now;
         this.#linkError = null;
-        if (sessionConfirmed(state)) {
-          // Tried again with the next state written (every stateRefreshMs).
-          await clearPageBrowserLoginRequiredHalt(db, { profileId }).then(
-            (cleared) => {
-              if (cleared) logger.info({ pageId }, "Fansly sync browser: logged in again — the login_required latch is lifted");
-            },
-            (error: unknown) => {
-              logger.warn({ pageId, err: errorName(error) }, "Fansly sync browser: the login_required latch could not be lifted yet");
-            },
-          );
-        }
+        written = true;
       } catch (error) {
-        // Written with the next state, or the next look.
+        // Written with the next state, or the next look — never at once (a
+        // database that is away is not asked in a loop).
         if (this.#latest === state) this.#unwritten = true;
         logger.warn({ pageId, err: errorName(error) }, "Fansly sync browser: the operator's state could not be recorded");
       } finally {
         this.#writing = null;
       }
       // A newer state came meanwhile.
-      if (!this.#stopped) this.#writeState();
+      if (written && !this.#stopped) this.#writeState();
     })();
   }
 

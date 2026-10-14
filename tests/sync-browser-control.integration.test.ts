@@ -7,7 +7,7 @@ import {
   getPageBrowserCommand,
   insertPageBrowser,
   insertPageBrowserCommand,
-  latchPageBrowserHalt,
+  recordPageBrowserState,
   setSyncPageManualLogin,
   type Database,
 } from "@agency_hub_core/db";
@@ -62,8 +62,14 @@ function stands(patch: Partial<State> = {}): State {
 
 interface Link {
   client: PageBrowserRpcClient;
-  sent: Array<{ kind: string; commandId: string }>;
+  sent: Array<{ kind: string; commandId: string; haltId?: string }>;
   setState(state: State): void;
+}
+
+const HALT = "33333333-3333-4333-8333-333333333333";
+/** A halt the operator holds on its volume (`state.halt`). */
+function held(reason = "header_mismatch", id = HALT): NonNullable<State["halt"]> {
+  return { id, reason: reason as NonNullable<State["halt"]>["reason"], atWall: Date.now() - 60_000 };
 }
 
 /** A stand-in for the page's link: its state, its hand-over, the commands sent. */
@@ -83,8 +89,21 @@ function link(initial: State): Link {
     },
     onAlarm: () => () => undefined,
     onLink: () => () => undefined,
-    async command(kind: Command["command"]["kind"], _notAfter: number, _waitMs: number, commandId = randomUUID()) {
-      sent.push({ kind, commandId });
+    async command(command: Command["command"]["kind"] | Command["command"], _notAfter: number, _waitMs: number, commandId = randomUUID()) {
+      const kind = typeof command === "string" ? command : command.kind;
+      const haltId = typeof command === "object" && command.kind === "clearHalt" ? command.haltId : undefined;
+      sent.push({ kind, commandId, ...(haltId === undefined ? {} : { haltId }) });
+      // As the operator: its held halt refuses a start (the login's for
+      // login_required aside), and only a clearHalt naming it clears it.
+      const halt = state.halt ?? null;
+      if (kind === "clearHalt") {
+        if (halt !== null && halt.id !== haltId) return { type: "commandResult", commandId, ok: false, detail: `the halt held is ${halt.id}: nothing cleared` };
+        state = { ...state, halt: null, stopReason: halt !== null && state.stopReason === halt.reason ? null : state.stopReason };
+        return { type: "commandResult", commandId, ok: true, detail: "cleared" };
+      }
+      if ((kind === "restartBrowser" || kind === "openExit") && halt !== null && !(halt.reason === "login_required" && state.mode === "manual_login")) {
+        return { type: "commandResult", commandId, ok: false, detail: "halted for the owner's decision: clearHalt first" };
+      }
       return { type: "commandResult", commandId, ok: true, detail: `${kind}: done` };
     },
   } as unknown as PageBrowserRpcClient;
@@ -108,6 +127,15 @@ async function browserPage(transport: "node" | "browser" = "browser") {
   });
   await testDb!.pool.query("update sync_pages set transport = $2, owner_generation = $3 where page_id = $1", [pageId, transport, GENERATION.toString()]);
   return { pageId, profileId };
+}
+
+function loginDriver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser"): BrowserLoginDriver {
+  const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
+  return new BrowserLoginDriver({
+    db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, transport, client: l.client,
+    bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
+    timing: { everyMs: 60_000, restartEveryMs: 0 },
+  });
 }
 
 function control(page: { pageId: number; profileId: string }, l: Link, role: "slot" | "leave" | "login" = "slot"): BrowserControl {
@@ -164,6 +192,9 @@ describe("one guard for every start of a page's browser (Astra PR 17, P1-2)", ()
         if (reason.source.includes("superseded")) {
           // A superseded owner leaves the owner's command to the newer one (Astra round 2).
           expect(ran).toMatchObject({ takenAt: null, doneAt: null });
+        } else if (what.includes("open in Hub")) {
+          // The owner's start during an open login: the login brings the browser up.
+          expect(ran).toMatchObject({ outcome: "ok", detail: expect.stringContaining("the open login") });
         } else {
           expect(ran).toMatchObject({ ok: false, takenGeneration: GENERATION });
           expect(ran!.detail).toMatch(reason);
@@ -188,7 +219,7 @@ describe("one guard for every start of a page's browser (Astra PR 17, P1-2)", ()
       expect(l.sent.map((command) => command.kind)).toEqual(["restartBrowser"]);
       const asked = await ownersStart(page.pageId);
       await ctl.tick();
-      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ ok: true, detail: "restartBrowser: done" });
+      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ outcome: "ok", ok: true, detail: "restartBrowser: restartBrowser: done" });
       expect(l.sent.at(-1)).toEqual({ kind: "restartBrowser", commandId: asked.commandId });
     } finally {
       await ctl.stop();
@@ -219,51 +250,127 @@ describe("the self-test closes an exit only the guard would open again", () => {
   });
 });
 
-describe("a halt for the owner's decision holds every start but his (Astra PR 17, P1-1)", () => {
-  it("latched in Hub: an operator that started again (no reason) is not started; the owner's start is", async (context) => {
+describe("a halt for the owner's decision is the operator's (Astra PR 17, round 3)", () => {
+  const mirrored = (page: { profileId: string }, halt: NonNullable<State["halt"]> | null) =>
+    recordPageBrowserState(db(), {
+      profileId: page.profileId, step: "exit_closed", stopReason: null, mode: "automation", exitOpen: false, sessionFingerprint: null, accountId: null,
+      exitIp: null, chromeVersion: "155", operatorVersion: "op", selfTest: null, buffer: { bytes: 0, oldestAgeMs: 0 },
+      halt: halt === null ? null : { id: halt.id, reason: halt.reason, at: new Date(halt.atWall) },
+    });
+  const label = async (pageId: number) => (await testDb!.pool.query<{ label: string }>("select label from pages where id = $1", [pageId])).rows[0]!.label;
+
+  it("a slot does not ask a browser whose operator holds one (its restart says no reason); the owner's start clears the halt he decided on by its id, then starts it — the mirror rewritten meanwhile changes nothing", async (context) => {
     if (!testDb) return context.skip();
     const page = await browserPage();
-    await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "header_mismatch" });
-    const l = link(stands());
+    const l = link(stands({ halt: held() }));
     const ctl = control(page, l);
     try {
+      await mirrored(page, held());
       await ctl.tick();
       await ctl.tick();
       expect(l.sent).toEqual([]);
-      // The owner's start in the CLI lifts the latch in its transaction; a
-      // start asked with the latch still there is refused.
-      const early = await ownersStart(page.pageId);
+      const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+      expect(asked.halt).toMatchObject({ id: HALT, reason: "header_mismatch" });
+      // The recorder writes the unchanged state again (Astra round 3: it re-latched the old halt).
+      await mirrored(page, held());
       await ctl.tick();
-      expect((await getPageBrowserCommand(db(), early.id))!.detail).toMatch(/stands for the owner's decision \(header_mismatch\)/);
-      await testDb.pool.query("update page_browsers set halt_reason = null, halt_at = null where profile_id = $1", [page.profileId]);
-      const asked = await ownersStart(page.pageId);
-      await ctl.tick();
-      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ ok: true });
-      expect(l.sent.map((command) => command.kind)).toEqual(["restartBrowser"]);
+      expect(l.sent.map((command) => [command.kind, command.haltId ?? null])).toEqual([["clearHalt", HALT], ["restartBrowser", null]]);
+      expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "ok", ok: true });
     } finally {
       await ctl.stop();
     }
   });
 
-  it("heard on the link before Hub has latched it: the operator's restart does not start it", async (context) => {
+  it("the owner's start names the halt he saw: a newer halt held since is not cleared, and nothing starts", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage();
+    const l = link(stands({ halt: held("header_mismatch", "44444444-4444-4444-8444-444444444444") }));
+    const ctl = control(page, l);
+    try {
+      await mirrored(page, held());
+      const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+      await ctl.tick();
+      expect(l.sent.map((command) => command.kind)).toEqual(["clearHalt"]);
+      expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "failed", detail: expect.stringContaining("nothing cleared") });
+    } finally {
+      await ctl.stop();
+    }
+  });
+
+  for (const transport of ["node", "browser"] as const) {
+    it(`the owner's start during an open login on ${transport} clears a strict halt, and the login starts the browser (Astra round 3, P1-2)`, async (context) => {
+      if (!testDb) return context.skip();
+      const page = await browserPage(transport);
+      const l = link(stands({ mode: "manual_login", stopReason: "header_mismatch", halt: held() }));
+      const ctl = control(page, l, transport === "node" ? "login" : "slot");
+      const login = loginDriver(page, l, transport);
+      try {
+        await db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId: page.pageId, to: "wanted", by: "owner:test" }));
+        await mirrored(page, held());
+        // The login stands by: its operator holds a halt that is not its own.
+        await login.drive();
+        expect(l.sent).toEqual([]);
+        const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+        await ctl.tick();
+        expect(l.sent.map((command) => command.kind)).toEqual(["clearHalt"]);
+        expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "ok", detail: expect.stringContaining("the open login") });
+        await login.drive();
+        expect(l.sent.map((command) => command.kind)).toEqual(["clearHalt", "restartBrowser"]);
+      } finally {
+        await ctl.stop();
+      }
+    });
+  }
+
+  it("a command taken, then left by an owner superseded before it sent anything, is given back — the newer owner runs it (Astra round 3, P1-3)", async (context) => {
     if (!testDb) return context.skip();
     const page = await browserPage();
     const l = link(stands({ step: "ready", exitOpen: true }));
+    // The owner is superseded right after it took the command.
+    let fired = false;
+    const base = db();
+    const hooked = new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop !== "execute") return Reflect.get(target, prop, receiver);
+        return async (query: Parameters<Database["execute"]>[0]) => {
+          const result = await target.execute(query);
+          const row = (result as { rows?: Array<Record<string, unknown>> }).rows?.[0];
+          if (!fired && row !== undefined && row.takenGeneration != null) {
+            fired = true;
+            await testDb!.pool.query("update sync_pages set owner_generation = 6 where page_id = $1", [page.pageId]);
+          }
+          return result;
+        };
+      },
+    }) as Database;
+    const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
+    const make = (database: Database, generation: bigint) => new BrowserControl({
+      db: database, pageId: page.pageId, profileId: page.profileId, generation, client: l.client,
+      bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
+      role: "slot", timing: { everyMs: 60_000, startEveryMs: 0, stopEveryMs: 0 },
+    });
+    const asked = (await insertPageBrowserCommand(db(), { pageId: page.pageId, kind: "selfTest", requestedBy: "cli", ttlMs: 60_000 }))!;
+    const old = make(hooked, GENERATION);
+    await old.tick();
+    expect(fired).toBe(true);
+    expect(l.sent).toEqual([]);
+    expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ takenAt: null, sentAt: null, doneAt: null });
+    const newer = make(db(), 6n);
+    await newer.tick();
+    expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ takenGeneration: 6n, outcome: "ok" });
+    expect(l.sent.map((command) => command.kind)).toEqual(["closeExit", "selfTest", "openExit"]);
+  });
+
+  it("a command sent and not answered ends unknown, and nobody sends it again", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage();
+    const l = link(stands({ step: "ready", exitOpen: true }));
+    (l.client as unknown as { command: () => Promise<null> }).command = async () => null;
     const ctl = control(page, l);
     try {
-      // The halt, then an operator that started again: it stands with no reason.
-      l.setState(stands({ stopReason: "unknown_ws_message" }));
-      l.setState(stands());
+      const asked = (await insertPageBrowserCommand(db(), { pageId: page.pageId, kind: "selfTest", requestedBy: "cli", ttlMs: 60_000 }))!;
       await ctl.tick();
-      await ctl.tick();
-      expect(l.sent).toEqual([]);
-      // The owner's start (his decision) runs, and the slot's own hold ends with it.
-      const asked = await ownersStart(page.pageId);
-      await ctl.tick();
-      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ ok: true });
-      l.setState(stands({ stopReason: "owner_stop" }));
-      await ctl.tick();
-      expect(l.sent.map((command) => command.kind)).toEqual(["restartBrowser", "restartBrowser"]);
+      expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ outcome: "unknown", ok: null, sentAt: expect.any(Date) });
     } finally {
       await ctl.stop();
     }
@@ -300,15 +407,7 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     return { ...page, label };
   }
 
-  function driver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser", haltHeard?: () => string | null): BrowserLoginDriver {
-    const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
-    return new BrowserLoginDriver({
-      db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, transport, client: l.client,
-      bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
-      timing: { everyMs: 60_000, restartEveryMs: 0 },
-      ...(haltHeard === undefined ? {} : { haltHeard }),
-    });
-  }
+  const driver = loginDriver;
 
   const starts = (l: Link) => l.sent.filter((command) => command.kind === "restartBrowser").length;
   const loginOpen = (pageId: number) => db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId, to: "wanted", by: "owner:test" }));
@@ -336,11 +435,10 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     });
   }
 
-  it("a browser latched in Hub for another decision of the owner's is not started by the login, even when its operator stands with no reason", async (context) => {
+  it("a browser whose operator holds another halt for the owner is not started by the login, even when it stands with no reason (restarted)", async (context) => {
     if (!testDb) return context.skip();
     const page = await seeded("browser");
-    await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "exit_ip_changed" });
-    const l = link(stands({ mode: "manual_login" }));
+    const l = link(stands({ mode: "manual_login", halt: held("exit_ip_changed") }));
     const login = driver(page, l, "browser");
     await loginOpen(page.pageId);
     await login.drive();
@@ -348,7 +446,7 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     expect(starts(l)).toBe(0);
   });
 
-  it("a browser Fansly signed out (login_required) is the one halt the login starts — said by the operator or latched in Hub", async (context) => {
+  it("a browser Fansly signed out (login_required) is the one halt the login starts — said by its stop reason or held on its volume", async (context) => {
     if (!testDb) return context.skip();
     const page = await seeded("browser");
     const l = link(stands({ mode: "manual_login", stopReason: "login_required" }));
@@ -356,8 +454,7 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     await loginOpen(page.pageId);
     await login.drive();
     expect(starts(l)).toBe(1);
-    await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "login_required" });
-    l.setState(stands({ mode: "manual_login" }));
+    l.setState(stands({ mode: "manual_login", halt: held("login_required") }));
     await login.drive();
     expect(starts(l)).toBe(2);
   });
@@ -378,42 +475,23 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
     await login.drive();
     expect(starts(l)).toBe(1);
   });
-  it("a halt after a login_required is not hidden behind it: latched stricter, and heard before it is latched (Astra round 2, P1-1, P1-2)", async (context) => {
+  it("a halt the operator holds after a login_required is not started by the login, whatever Hub mirrors (Astra rounds 2 and 3)", async (context) => {
     if (!testDb) return context.skip();
     const page = await seeded("node");
-    const l = link(stands({ mode: "manual_login", stopReason: "login_required" }));
-    const ctl = control(page, l, "login");
-    const login = driver(page, l, "node", () => ctl.haltHeard);
-    try {
-      await loginOpen(page.pageId);
-      // Fansly signed it out (latched as the recorder would): the login starts it.
-      await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "login_required" });
-      await login.drive();
-      expect(starts(l)).toBe(1);
-      // A guard fails in the started browser; heard on the link, not latched
-      // yet; then its operator starts again with no reason.
-      l.setState(stands({ mode: "manual_login", stopReason: "header_mismatch" }));
-      l.setState(stands({ mode: "manual_login" }));
-      await login.drive();
-      expect(starts(l)).toBe(1);
-      // Hub's latch, read back, still says login_required: it does not hold
-      // what was heard, which keeps holding.
-      await ctl.tick();
-      expect(ctl.haltHeard).toBe("header_mismatch");
-      await login.drive();
-      expect(starts(l)).toBe(1);
-      // Latched now (stricter than login_required) and read back: still none.
-      await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "header_mismatch" });
-      await ctl.tick();
-      expect(ctl.haltHeard).toBeNull();
-      await login.drive();
-      expect(starts(l)).toBe(1);
-    } finally {
-      await ctl.stop();
-    }
+    const l = link(stands({ mode: "manual_login", stopReason: "login_required", halt: held("login_required") }));
+    const login = driver(page, l, "node");
+    await loginOpen(page.pageId);
+    await login.drive();
+    expect(starts(l)).toBe(1);
+    // A guard fails in the started browser: the operator holds the stricter
+    // halt; it starts again with no reason (its mirror in Hub never written).
+    l.setState(stands({ mode: "manual_login", halt: held("header_mismatch", "55555555-5555-4555-8555-555555555555") }));
+    await login.drive();
+    await login.drive();
+    expect(starts(l)).toBe(1);
   });
 
-  it("the halt the operator says right now holds the login's start, whatever the latch read just before said (Astra round 2, P1-1)", async (context) => {
+  it("the halt the operator says right now holds the login's start, whatever it said just before (Astra round 2, P1-1)", async (context) => {
     if (!testDb) return context.skip();
     const page = await seeded("browser");
     const l = link(stands({ mode: "manual_login" }));
@@ -481,22 +559,42 @@ describe("the owner's stop over a stale link (Astra round 2, P1-3)", () => {
   }
 });
 
-describe("the recorder's latch (Astra round 2, P1-1)", () => {
-  it("the recorder latches the stricter halt heard while a login_required was being latched (Astra round 2, P1-1)", async (context) => {
+describe("the recorder's mirror of the operator's halt (Astra round 3)", () => {
+  it("follows what the operator holds, written with its state; a write that failed loses nothing — the next state brings it", async (context) => {
     if (!testDb) return context.skip();
     const page = await browserPage("node");
-    const l = link(stands({ mode: "manual_login" }));
+    const l = link(stands());
+    let failing = false;
+    const base = db();
+    const flaky = new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop !== "execute") return Reflect.get(target, prop, receiver);
+        return async (query: Parameters<Database["execute"]>[0]) => {
+          if (failing) throw new Error("the database is away");
+          return target.execute(query);
+        };
+      },
+    }) as Database;
     const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
     const recorder = new BrowserRecorder({
-      db: db(), pageId: page.pageId, profileId: page.profileId, client: l.client, clock, logger: quietLogger, metrics: { increment: () => undefined },
+      db: flaky, pageId: page.pageId, profileId: page.profileId, client: l.client, clock, logger: quietLogger, metrics: { increment: () => undefined },
+      timing: { stateRefreshMs: 0 },
     });
     recorder.start();
     try {
-      // Both said before the first latch is written.
-      l.setState(stands({ mode: "manual_login", stopReason: "login_required" }));
-      l.setState(stands({ mode: "manual_login", stopReason: "header_mismatch" }));
-      for (let i = 0; i < 10 && (await findPageBrowser(db(), page.profileId))?.haltReason !== "header_mismatch"; i += 1) await recorder.flushed();
-      expect((await findPageBrowser(db(), page.profileId))?.haltReason).toBe("header_mismatch");
+      failing = true;
+      l.setState(stands({ stopReason: "header_mismatch", halt: held() }));
+      await recorder.flushed();
+      expect((await findPageBrowser(db(), page.profileId))?.haltId).toBeNull();
+      failing = false;
+      // The operator says its state again (every few seconds): the mirror catches up.
+      l.setState(stands({ stopReason: "header_mismatch", halt: held() }));
+      await recorder.flushed();
+      expect(await findPageBrowser(db(), page.profileId)).toMatchObject({ haltReason: "header_mismatch", haltId: HALT });
+      // Cleared at the operator: gone from the mirror with its next state.
+      l.setState(stands({ halt: null }));
+      await recorder.flushed();
+      expect(await findPageBrowser(db(), page.profileId)).toMatchObject({ haltReason: null, haltId: null });
     } finally {
       await recorder.stop();
     }

@@ -1,6 +1,6 @@
 import {
   clearPageBrowserOwnerStop,
-  expirePageBrowserCommand,
+  expirePageBrowserCommands,
   findPageBrowserByPage,
   getPageBrowserCommand,
   insertAuditEvent,
@@ -37,9 +37,10 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //   is confirmed by the operator's answer to this very request
 //   (`page_browser_commands` `stopPage`, under the owner's generation),
 //   which comes once Chrome is down — never by a state it says on the way.
-// - `start`: the owner's decision — his stop, a halt latched for his
-//   decision and the pause still his stop's lifted, and a start of the
-//   browser asked, under the guard of every start.
+// - `start`: the owner's decision — his stop and the pause still his stop's
+//   lifted, and the halt the operator holds for his decision (as Hub mirrors
+//   it now) cleared at the operator by its id (`clearHalt`, also during a
+//   login), then a start of the browser, under the guard of every start.
 // - `selftest`: the operator's self-test, with its exit closed for it.
 // - `snapshot`: the browser stopped as by `stop`, and the profile quiet only
 //   once that stop is confirmed (the volume is packed by the host's script —
@@ -167,16 +168,17 @@ export interface BrowserCommandAsked {
   command: { id: number; kind: PageBrowserCommandKind; expiresAt: string };
 }
 
-/** `sync browser start <page>` — the owner's decision: his stop lifted, a
- *  halt latched for his decision lifted, the page's pause lifted only while
- *  it is still the one his stop put (a pause he changed since is his; while
- *  a login of the browser is open the pause goes back to the login, which
- *  lifts it at its end), and a start of the browser asked — run under the
+/** `sync browser start <page>` — the owner's decision: his stop lifted, the
+ *  page's pause lifted only while it is still the one his stop put (a pause
+ *  he changed since is his; while a login of the browser is open the pause
+ *  goes back to the login, which lifts it at its end), and a start asked:
+ *  the engine clears the halt the operator holds — the one Hub mirrors now,
+ *  named by its id (a newer one stays) — then starts the browser under the
  *  same guard as any start (during a login, the login starts it). */
 export async function startPageBrowser(
   db: Database,
   input: { pageLabel: string; actor: string; note?: string | null },
-): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; pauseToLogin: boolean; haltLifted: { reason: string; at: string } | null }> {
+): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; pauseToLogin: boolean; halt: { id: string | null; reason: string; at: string } | null }> {
   const page = await pageWithBrowser(db, input.pageLabel);
   return transaction(db, async (tx) => {
     // The page row first (the stop's order): its pause and its owner.
@@ -191,14 +193,15 @@ export async function startPageBrowser(
       requestedBy: input.actor,
       note: input.note ?? null,
       ttlMs: SYNC_BROWSER_COMMAND_TTL_MS,
+      haltId: cleared.halt?.id ?? null,
     });
     if (command === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
-    const haltLifted = cleared.halt === null ? null : { reason: cleared.halt.reason, at: cleared.halt.at.toISOString() };
+    const halt = cleared.halt === null ? null : { id: cleared.halt.id, reason: cleared.halt.reason, at: cleared.halt.at.toISOString() };
     await audit(tx, page, SYNC_BROWSER_AUDIT_EVENTS.start, input.actor, input.note, {
       wasStopped: cleared.wasStopped,
       resumed,
       pauseToLogin,
-      haltLifted,
+      halt,
       commandId: command.id,
     });
     return {
@@ -206,7 +209,7 @@ export async function startPageBrowser(
       wasStopped: cleared.wasStopped,
       resumed,
       pauseToLogin,
-      haltLifted,
+      halt,
       command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
     };
   });
@@ -322,10 +325,9 @@ export async function awaitPageBrowserCommand(
     const row = await getPageBrowserCommand(db, id);
     if (row === null) return null;
     if (row.doneAt !== null) return row;
-    if (row.takenAt === null && row.expiresAt.getTime() <= Date.now()) {
-      await expirePageBrowserCommand(db, { id });
-      return getPageBrowserCommand(db, id);
-    }
+    // Past its expiry: ended (expired, or unknown once its answer can no
+    // longer come) — nothing stays taken.
+    if (row.expiresAt.getTime() <= Date.now() && (await expirePageBrowserCommands(db, { id })) > 0) return getPageBrowserCommand(db, id);
     if (Date.now() >= deadline) return null;
     await sleep(input.everyMs ?? 500);
   }

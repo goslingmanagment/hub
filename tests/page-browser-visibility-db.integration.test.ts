@@ -4,11 +4,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  clearPageBrowserLoginRequiredHalt,
   endSyncPageManualLogin,
-  getSyncPageManualLogin,
   isOwnerDecisionHalt,
-  latchPageBrowserHalt,
   setSyncPageManualLogin,
   SyncPageManualLoginOpenError,
   liftBrowserStopPause,
@@ -16,7 +13,9 @@ import {
   setPagePause,
   listSyncPages,
   clearPageBrowserOwnerStop,
-  expirePageBrowserCommand,
+  expirePageBrowserCommands,
+  markPageBrowserCommandSent,
+  releasePageBrowserCommand,
   findPageBrowser,
   finishPageBrowserCommand,
   getPageBrowserCommand,
@@ -137,8 +136,8 @@ describe("the operator's state as the engine keeps it (0280)", () => {
   });
 });
 
-describe("the owner's stop, the halt latched for his decision, and the pause the stop owns (0280)", () => {
-  it("keeps its first mark; the start lifts it and a latched halt, and says what they were", async (context) => {
+describe("the owner's stop, the halt the operator holds as Hub mirrors it, and the pause the stop owns (0280)", () => {
+  it("keeps its first mark; the start lifts it and says the halt the operator holds — a mirror, written with every state and never cleared by Hub", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();
     const first = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@a" });
@@ -146,19 +145,19 @@ describe("the owner's stop, the halt latched for his decision, and the pause the
     const second = await setPageBrowserOwnerStop(db(), { pageId, by: "cli@b" });
     expect(second).toMatchObject({ already: true, stoppedAt: first!.stoppedAt });
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ ownerStopBy: "cli@a" });
-    expect(await latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" })).toBe(true);
-    // The first reason and instant are kept.
-    expect(await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" })).toBe(true);
-    const latched = await findPageBrowser(db(), profileId);
-    expect(latched).toMatchObject({ haltReason: "header_mismatch" });
-    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({
-      pageId, ownerStopAt: first!.stoppedAt, pausedAll: false, transport: "node", haltReason: "header_mismatch", leaveGeneration: null,
-    });
-    // No state of the operator lifts the latch: one that started again stands with no reason.
-    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null }));
-    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
-    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: true, halt: { reason: "header_mismatch", at: latched!.haltAt } });
-    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: false, halt: null });
+    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({ pageId, ownerStopAt: first!.stoppedAt, pausedAll: false, transport: "node", leaveGeneration: null });
+    // The operator holds a halt: mirrored with its state.
+    const at = new Date(Date.now() - 60_000);
+    const halt = { id: "22222222-2222-4222-8222-222222222222", reason: "header_mismatch", at };
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltAt: at, haltId: halt.id });
+    // The start lifts the owner's stop and names the mirrored halt; Hub clears nothing of it.
+    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: true, halt: { id: halt.id, reason: "header_mismatch", at } });
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltId: halt.id });
+    expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: false, halt: { id: halt.id, reason: "header_mismatch", at } });
+    // The operator's next state without it: gone from the mirror.
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltAt: null, haltId: null });
     const { pageId: bare } = await seedHarnessPage({ db: db(), pool: testDb.pool }, { mode: "live", proxyUrl: null, label: "no-browser", ownRef: "300000000000000777" });
     expect(await setPageBrowserOwnerStop(db(), { pageId: bare, by: "cli" })).toBeNull();
   });
@@ -282,72 +281,20 @@ describe("the owner's browser stop and the owner's login of the browser (PR 17 w
     await loginEnds(pageId);
     expect(await tx((t) => requestBrowserDrain(t, { pageId }))).toMatchObject({ kind: "requested" });
   });
-
-  it("a latched login_required is lifted by a login that ended after it, not before; no other halt is", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId, profileId } = await browserPage();
-    // A login that ended before the latch proves nothing of it.
-    await loginTo(pageId, "wanted");
-    await loginTo(pageId, "ending");
-    await loginEnds(pageId);
-    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
-    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
-    // Open: not yet.
-    await loginTo(pageId, "wanted");
-    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
-    await loginTo(pageId, "ending");
-    await loginEnds(pageId);
-    expect((await getSyncPageManualLogin(db(), pageId))?.value).toBe("off");
-    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(true);
-    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltAt: null });
-    // Another halt stays for the owner's start.
-    await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" });
-    await loginTo(pageId, "wanted");
-    await loginTo(pageId, "ending");
-    await loginEnds(pageId);
-    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
-    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "exit_ip_changed" });
-  });
 });
 
-describe("the halt latch and the page row lock (Astra PR 17 round 2)", () => {
+describe("the page row lock (Astra PR 17 round 2)", () => {
   const tx = <T>(body: (tx: Database) => Promise<T>) => db().transaction(async (raw) => body(raw as unknown as Database));
 
-  it("a stricter halt replaces a latched login_required and is never replaced by it; a successful login lifts only login_required", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId, profileId } = await browserPage();
-    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
-    const first = (await findPageBrowser(db(), profileId))!;
-    expect(first.haltReason).toBe("login_required");
-    // The login started the browser; a guard then failed: the stricter halt holds.
-    await latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" });
-    const stricter = (await findPageBrowser(db(), profileId))!;
-    expect(stricter.haltReason).toBe("header_mismatch");
-    expect(stricter.haltAt!.getTime()).toBeGreaterThanOrEqual(first.haltAt!.getTime());
-    // Fansly signs it out again: the stricter halt stays, its instant too.
-    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
-    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltAt: stricter.haltAt });
-    // A login that ends after it lifts nothing of it.
-    await tx((t) => setSyncPageManualLogin(t, { pageId, to: "wanted", by: "owner:test" }));
-    await tx((t) => setSyncPageManualLogin(t, { pageId, to: "ending", by: "owner:test" }));
-    await tx((t) => endSyncPageManualLogin(t, { pageId, by: "engine" }));
-    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
-    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
-    // Two halts but login_required: the first stands.
-    await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" });
-    expect((await findPageBrowser(db(), profileId))!.haltReason).toBe("header_mismatch");
-  });
-
-  // Every writer of the page's pause, its login's pause, the owner's stop and
-  // the halt latch waits for the page row (sync_pages, FOR NO KEY UPDATE) —
-  // whether or not it finds anything to change: one row lock, one order.
+  // Every writer of the page's pause, its login's pause and the owner's stop
+  // waits for the page row (sync_pages, FOR NO KEY UPDATE) — whether or not it
+  // finds anything to change: one row lock, one order. (The halt is the
+  // operator's; Hub's mirror of it decides nothing.)
   const WRITERS: Array<[string, (page: { pageId: number; profileId: string }) => Promise<unknown>]> = [
     ["liftBrowserStopPause, with no pause of the stop's to lift", ({ pageId }) => tx((t) => liftBrowserStopPause(t, { pageId }))],
     ["pausePageForBrowserStop", ({ pageId }) => tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))],
     ["setPageBrowserOwnerStop", ({ pageId }) => setPageBrowserOwnerStop(db(), { pageId, by: "cli" })],
     ["clearPageBrowserOwnerStop", ({ pageId }) => clearPageBrowserOwnerStop(db(), { pageId })],
-    ["latchPageBrowserHalt", ({ profileId }) => latchPageBrowserHalt(db(), { profileId, reason: "header_mismatch" })],
-    ["clearPageBrowserLoginRequiredHalt, with nothing to lift", ({ profileId }) => clearPageBrowserLoginRequiredHalt(db(), { profileId })],
     ["setPagePause", ({ pageId }) => setPagePause(db(), { pageId, all: true, note: "mine" })],
     ["setSyncPageManualLogin", ({ pageId }) => tx((t) => setSyncPageManualLogin(t, { pageId, to: "wanted", by: "owner:test" }))],
   ];
@@ -412,41 +359,76 @@ describe("the halt latch and the page row lock (Astra PR 17 round 2)", () => {
 });
 
 describe("the owner's commands (0280)", () => {
-  it("taken by the page's owner, run once, the answer kept once; a newer owner takes one never finished", async (context) => {
+  it("taken by the page's owner, ended once by it; a newer owner takes one nothing was sent of — never one that was sent", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();
     const asked = (await insertPageBrowserCommand(db(), { pageId, kind: "selfTest", requestedBy: "cli", note: "n", ttlMs: 60_000 }))!;
-    expect(asked).toMatchObject({ profileId, pageId, kind: "selfTest", takenAt: null, doneAt: null });
+    expect(asked).toMatchObject({ profileId, pageId, kind: "selfTest", takenAt: null, sentAt: null, doneAt: null, outcome: null, haltId: null });
     const taken = await takePageBrowserCommand(db(), { pageId, profileId, generation: 5n });
     expect(taken).toMatchObject({ id: asked.id, takenGeneration: 5n });
     // Not twice by the same owner, nor by an older one.
     expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 5n })).toBeNull();
     expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 4n })).toBeNull();
-    // The owner's process went before it finished: the next owner takes it (the operator runs its id once).
+    // Its owner went before sending anything: the next owner takes it.
     expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 6n })).toMatchObject({ id: asked.id, commandId: asked.commandId, takenGeneration: 6n });
-    // Only the owner that holds it finishes it, once.
-    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 5n, ok: true, detail: "late" })).toBe(false);
-    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 6n, ok: false, detail: "x".repeat(900) })).toBe(true);
-    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 6n, ok: true, detail: "again" })).toBe(false);
-    const done = (await getPageBrowserCommand(db(), asked.id))!;
-    expect(done).toMatchObject({ ok: false });
-    expect(done.detail).toHaveLength(500);
+    // Only the owner that holds it marks it sent and ends it, once.
+    expect(await markPageBrowserCommandSent(db(), { id: asked.id, generation: 5n })).toBe(false);
+    expect(await markPageBrowserCommandSent(db(), { id: asked.id, generation: 6n })).toBe(true);
+    // Sent: a newer owner never takes it again (its outcome is unknown, never sent twice).
     expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 7n })).toBeNull();
+    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 5n, outcome: "ok", detail: "late" })).toBe(false);
+    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 6n, outcome: "failed", detail: "x".repeat(900) })).toBe(true);
+    expect(await finishPageBrowserCommand(db(), { id: asked.id, generation: 6n, outcome: "ok", detail: "again" })).toBe(false);
+    const done = (await getPageBrowserCommand(db(), asked.id))!;
+    expect(done).toMatchObject({ outcome: "failed", ok: false });
+    expect(done.detail).toHaveLength(500);
+    // Unknown: ended without an ok.
+    const other = (await insertPageBrowserCommand(db(), { pageId, kind: "stopPage", requestedBy: "cli", ttlMs: 60_000 }))!;
+    await takePageBrowserCommand(db(), { pageId, profileId, generation: 8n });
+    await markPageBrowserCommandSent(db(), { id: other.id, generation: 8n });
+    expect(await finishPageBrowserCommand(db(), { id: other.id, generation: 8n, outcome: "unknown", detail: "no answer" })).toBe(true);
+    expect(await getPageBrowserCommand(db(), other.id)).toMatchObject({ outcome: "unknown", ok: null });
   });
 
-  it("a command nobody took is never taken past its expiry, and is closed as not run then — not before", async (context) => {
+  it("a command taken, then given back by an owner superseded before sending it, is the newer owner's (Astra round 3)", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, profileId } = await browserPage();
-    const asked = (await insertPageBrowserCommand(db(), { pageId, kind: "restartBrowser", requestedBy: "cli", ttlMs: 60_000 }))!;
-    expect(await expirePageBrowserCommand(db(), { id: asked.id })).toBe(false);
-    await testDb.pool.query("update page_browser_commands set expires_at = clock_timestamp() - interval '1 second' where id = $1", [asked.id]);
+    const asked = (await insertPageBrowserCommand(db(), { pageId, kind: "restartBrowser", requestedBy: "cli", ttlMs: 60_000, haltId: "h-1" }))!;
+    expect(asked.haltId).toBe("h-1");
+    await takePageBrowserCommand(db(), { pageId, profileId, generation: 5n });
+    expect(await releasePageBrowserCommand(db(), { id: asked.id, generation: 5n })).toBe(true);
+    expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ takenAt: null, takenGeneration: null, doneAt: null });
+    expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 6n })).toMatchObject({ id: asked.id, takenGeneration: 6n });
+    // One sent is never given back.
+    await markPageBrowserCommandSent(db(), { id: asked.id, generation: 6n });
+    expect(await releasePageBrowserCommand(db(), { id: asked.id, generation: 6n })).toBe(false);
+  });
+
+  it("past its expiry every command ends: never taken — or taken and not sent — expired; sent and not answered — unknown, once its answer can no longer come (Astra round 3)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, profileId } = await browserPage();
+    const untaken = (await insertPageBrowserCommand(db(), { pageId, kind: "restartBrowser", requestedBy: "cli", ttlMs: 60_000 }))!;
+    expect(await expirePageBrowserCommands(db(), { id: untaken.id })).toBe(0);
+    const taken = (await insertPageBrowserCommand(db(), { pageId, kind: "stopPage", requestedBy: "cli", ttlMs: 60_000 }))!;
+    const sent = (await insertPageBrowserCommand(db(), { pageId, kind: "selfTest", requestedBy: "cli", ttlMs: 60_000 }))!;
+    await testDb.pool.query("update page_browser_commands set taken_generation = 5, taken_at = clock_timestamp() where id = any($1)", [[taken.id, sent.id]]);
+    await testDb.pool.query("update page_browser_commands set sent_at = clock_timestamp() where id = $1", [sent.id]);
+    await testDb.pool.query("update page_browser_commands set expires_at = clock_timestamp() - interval '1 second' where page_id = $1", [pageId]);
+    // Never taken past its expiry, by anyone.
     expect(await takePageBrowserCommand(db(), { pageId, profileId, generation: 9n })).toBeNull();
-    expect(await expirePageBrowserCommand(db(), { id: asked.id })).toBe(true);
-    expect(await getPageBrowserCommand(db(), asked.id)).toMatchObject({ ok: false, detail: expect.stringContaining("not run") });
+    expect(await getPageBrowserCommand(db(), untaken.id)).toMatchObject({ outcome: "expired", ok: false, detail: expect.stringContaining("no owner") });
+    expect(await getPageBrowserCommand(db(), taken.id)).toMatchObject({ outcome: "expired", ok: false, detail: expect.stringContaining("went before sending") });
+    // Sent: its answer may still come within the grace.
+    expect(await getPageBrowserCommand(db(), sent.id)).toMatchObject({ doneAt: null, outcome: null });
+    await testDb.pool.query("update page_browser_commands set expires_at = clock_timestamp() - interval '61 seconds' where id = $1", [sent.id]);
+    expect(await expirePageBrowserCommands(db(), { pageId })).toBe(1);
+    expect(await getPageBrowserCommand(db(), sent.id)).toMatchObject({ outcome: "unknown", ok: null, detail: expect.stringContaining("never sent again") });
     const { pageId: bare } = await seedHarnessPage({ db: db(), pool: testDb.pool }, { mode: "live", proxyUrl: null, label: "no-browser-2", ownRef: "300000000000000778" });
     expect(await insertPageBrowserCommand(db(), { pageId: bare, kind: "selfTest", requestedBy: "cli", ttlMs: 1_000 })).toBeNull();
     await expect(testDb.pool.query("insert into page_browser_commands (profile_id, page_id, kind, requested_by, expires_at) values ($1, $2, 'profileSnapshot', 'x', now())", [profileId, pageId]))
       .rejects.toThrow(/page_browser_commands_kind_check/);
+    await expect(testDb.pool.query("update page_browser_commands set done_at = now(), outcome = 'ok', ok = null where id = $1", [untaken.id]))
+      .rejects.toThrow(/page_browser_commands_done_check/);
   });
 });
 

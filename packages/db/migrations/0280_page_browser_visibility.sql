@@ -84,7 +84,8 @@ alter table page_browsers
   add column if not exists owner_stop_at timestamptz,
   add column if not exists owner_stop_by text,
   add column if not exists halt_reason text,
-  add column if not exists halt_at timestamptz;
+  add column if not exists halt_at timestamptz,
+  add column if not exists halt_id text;
 
 alter table sync_pages add column if not exists browser_stop_paused boolean not null default false;
 
@@ -96,6 +97,7 @@ alter table page_browsers
     and (alarm_detail is null or jsonb_typeof(alarm_detail) = 'object')
     and (owner_stop_at is null) = (owner_stop_by is null)
     and (halt_reason is null) = (halt_at is null)
+    and (halt_id is null or halt_reason is not null)
   );
 
 comment on column page_browsers.down_since is
@@ -105,7 +107,7 @@ comment on column page_browsers.alarm_kind is
 comment on column page_browsers.owner_stop_at is
   'Project Browser (0280): the owner stopped the page''s browser (sync browser stop): the engine keeps its exit closed and Chrome stopped until sync browser start.';
 comment on column page_browsers.halt_reason is
-  'Project Browser (0280): the browser stopped for the owner''s decision (its stop reason), latched when the engine first heard it; no state of the operator lifts it, only the owner''s audited sync browser start.';
+  'Project Browser (0280): a mirror of the halt the page''s operator holds for the owner''s decision on its volume (its reason, halt_at, halt_id), written with its state: for the owner''s view and the id his sync browser start clears. The operator enforces it, never this column.';
 comment on column sync_pages.browser_stop_paused is
   'Project Browser (0280): the page''s whole pause is the one the owner''s browser stop put on it; sync browser start lifts only that one, and the owner''s own change of the whole pause makes it his.';
 
@@ -121,25 +123,30 @@ create table if not exists page_browser_commands (
   expires_at timestamptz not null,
   taken_generation bigint,
   taken_at timestamptz,
+  halt_id text,
+  sent_at timestamptz,
   done_at timestamptz,
+  outcome text,
   ok boolean,
   detail text,
   constraint page_browser_commands_command_id_key unique (command_id),
   constraint page_browser_commands_kind_check check (kind in ('restartBrowser', 'stopPage', 'selfTest')),
-  constraint page_browser_commands_done_check check ((done_at is null) = (ok is null)),
-  constraint page_browser_commands_taken_check check ((taken_at is null) = (taken_generation is null))
+  constraint page_browser_commands_outcome_check check (outcome in ('ok', 'failed', 'unknown', 'expired')),
+  constraint page_browser_commands_done_check check ((done_at is null) = (outcome is null) and (ok is null) = (outcome is null or outcome = 'unknown')),
+  constraint page_browser_commands_taken_check check ((taken_at is null) = (taken_generation is null)),
+  constraint page_browser_commands_sent_check check (sent_at is null or taken_at is not null)
 );
 
 create index if not exists page_browser_commands_pending_idx on page_browser_commands (page_id, id) where done_at is null;
 
 comment on table page_browser_commands is
-  'Project Browser (0280): the owner''s one-shot commands to a page''s browser (sync browser start|stop|snapshot|selftest), run once by the engine that owns the page over its link; never run after expires_at.';
+  'Project Browser (0280): the owner''s one-shot commands to a page''s browser (sync browser start|stop|snapshot|selftest), run once by the engine that owns the page over its link; never run after expires_at. Each ends with an outcome: ok, failed (the operator said no, or not run), expired (not sent before its expiry: nobody took it, or its taker went before sending), unknown (sent, no answer: never sent again).';
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'read_only') then
     grant select (retry_at, down_since, stop_since, delivery_p50_ms, delivery_p95_ms, delivery_at, alarm_kind, alarm_at,
-      alarm_detail, owner_stop_at, owner_stop_by, halt_reason, halt_at)
+      alarm_detail, owner_stop_at, owner_stop_by, halt_reason, halt_at, halt_id)
       on page_browsers to read_only;
     grant select on page_browser_commands to read_only;
   end if;

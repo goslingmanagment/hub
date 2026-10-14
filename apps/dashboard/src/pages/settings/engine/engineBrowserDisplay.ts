@@ -120,8 +120,8 @@ export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
     return { kind: "silent", text: "оператор молчит", tone: "warn" };
   }
   const { state } = browser;
-  // A halt for the owner's decision stays his, whatever an operator that
-  // started again says.
+  // A halt the operator holds for the owner's decision (on its volume, kept
+  // across its restarts) stays his until his start clears it.
   if (browser.halt !== null) return { kind: "halted", text: `стоит: ${browserStopWords(browser.halt.reason)}`, tone: "danger" };
   if (browser.ownerStop !== null || state.stopReason === "owner_stop") return { kind: "stopped", text: "остановлен", tone: "warn" };
   if (state.stopReason !== null && state.retryAt === null) {

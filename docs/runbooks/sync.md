@@ -313,12 +313,14 @@ to the operator; the CLI waits for what the operator says.
   stopped and the page paused after the login closes, until `start`. A `start` during the login gives the pause
   back to the login (the page stays paused until it closes) and the login starts the browser it needs. `drain` is
   refused while a login is open.
-- `start` is your decision: it lifts your stop, the stop's pause and a halt for your decision (a changed exit IP, a
-  guard that failed — latched in Hub when it is first heard: an operator whose container started again stands with
-  no reason, and still nothing starts it but you), and starts the browser. A start — yours or the slot's own — is
-  refused, with its reason, for a page not on its browser or leaving it, of a newer owner, paused by you, stopped
-  by you, or in a login (the login starts the browser itself, never one you stopped or one halted for your
-  decision).
+- `start` is your decision: it lifts your stop and the stop's pause, clears the halt the operator holds for your
+  decision (a changed exit IP, a guard that failed — the one the «Браузер» block showed when you ran it; the operator
+  keeps it on its volume, across its restarts, and refuses every start until then; a newer halt since stays), and
+  starts the browser. A start — yours or the slot's own — is refused, with its reason, for a page not on its browser
+  or leaving it, of a newer owner, paused by you, stopped by you, or in a login (the login starts the browser
+  itself, never one you stopped or one halted for another decision of yours). The command's `outcome`: `ok`,
+  `failed`, `expired` (never sent: no owner ran it in time) or `unknown` (sent, no answer — never sent again: look
+  at the block, and run `start` again if it still stands).
 - `login_required` (Fansly signed the browser out) is the halt your login decides: open «Войти в браузер» on the
   page's «Браузер» block — the login starts the browser for its screen — and once you logged in and the operator
   confirmed the page's account, the halt is lifted with no `start`. Any other halt that comes meanwhile (a guard
@@ -347,10 +349,10 @@ judged only for a page on its browser:
 | `browser_down` | no state from the operator for 2 min while the page's owner runs; the engine's link refused (`token`, `protocol_version`) or broken by a protocol error; the browser not up for 2 min for another reason (Chrome crashed, the environment, a request that did not end, a start that hangs); the `late_send` alarm |
 | `login_required` | Fansly signed the browser out (not while you log it in) |
 | `proxy` | the proxy unavailable or refusing its login, the browser down for 2 min |
-| `exit_ip_changed` | the exit IP is not the pinned one: the browser stands until you decide (`pin-ip`, `start`); latched until then |
+| `exit_ip_changed` | the exit IP is not the pinned one: the browser stands until you decide (`pin-ip`, `start`); the operator holds it until then |
 | `buffer` | the buffer full, the disk full, the buffer that does not open, or past 50 % / 80 % of a cap |
 | `selftest_failed` | a guard of the self-test did not hold |
-| `protocol_changed` | an unknown socket message, request headers that differ from the site's; latched until your `start` |
+| `protocol_changed` | an unknown socket message, request headers that differ from the site's; the operator holds it until your `start` |
 | `cdp_lost` | control of Chrome lost (CDP, the holder's overflow, owner decision №10's fallback release) |
 
 Your stop, your pause, your login and a credentials hold explain a browser that is down (`browser_down`, `proxy`); a

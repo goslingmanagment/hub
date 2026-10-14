@@ -78,6 +78,7 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     ownerStopBy: null,
     haltReason: null,
     haltAt: null,
+    haltId: null,
     ...overrides,
   };
 }
@@ -169,7 +170,7 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
     expect(kinds({ browser: { step: "exit_closed", exitOpen: false, stopReason: "login_required", mode: "manual_login" } })).toEqual({});
   });
 
-  it("a halt latched for the owner's decision holds its kind whatever the operator says now (Astra PR 17, P1-1)", () => {
+  it("a halt the operator holds for the owner's decision (Hub's mirror) holds its kind whatever its step says now (Astra PR 17, P1-1)", () => {
     const latched = { haltReason: "header_mismatch", haltAt: at(-5 * MINUTE) };
     // An operator that started again: it stands with no reason, down for long.
     const restarted = { ...latched, step: "exit_closed", exitOpen: false, stopReason: null, downSince: at(-5 * MINUTE) };

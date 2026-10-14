@@ -1013,25 +1013,29 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   The owner's levers (`sync browser stop|start|selftest|snapshot|pin-ip|drain`, audited `admin.sync_browser_*`) are
   carried out by the page's owner over its link: the owner's one-shot commands (`page_browser_commands`: a stop, a
   start, a self-test with the exit closed for it) are taken by the owner of the page and run once by their id, never
-  past their expiry — a stop's answer comes once Chrome is down and is the stop's confirmation (a snapshot waits for
-  it, never for a state); the owner's stop (`page_browsers.owner_stop_*`) is kept by `stopPage`; a slot on the
-  browser starts a browser that stands (never started, or stopped by a leave or a stop since lifted). Every start —
-  the slot's, the owner's, a self-test's `openExit`, and the one PR 15's login driver asks for — passes one guard
-  read fresh right before it goes (`browserStartRefusal`: no leave pending, this owner's generation, no owner stop,
-  no halt; for the slot's and the owner's also the page on its browser, no pause and no login — Hub's
-  `manual_login`, not only the operator's mode; the login's start, on Node or on the browser, only while its login
-  is `wanted`). A halt for the owner's decision is latched in Hub when it is first heard (`page_browsers.halt_reason`):
-  an operator that starts again stands with no reason and lifts nothing; the owner's audited `sync browser start`
-  does — and a `login_required` (Fansly signed the browser out) is the one halt the login starts the browser for, and
-  is lifted by a successful login: the operator confirms the expected account in the automation after a login that
-  ended since the latch. A stricter halt replaces a latched `login_required`, never the reverse, and the halt the
-  operator says at the moment of a start holds it as well as the latch. The link of a page on Node for its login
-  records what its operator says as a slot does (its halts latched), and a halt it heard holds the login's start
-  until the latch holds it. A control speaks for the page only while it is its owner's (Hub's `owner_generation`)
-  and, on a login link, while the login is open — read fresh before every command, the stops too; a superseded owner
-  leaves the owner's command to the newer one. The page's pause, its login's pause, the owner's stop and the halt
-  latch are written only under the page row lock (`sync_pages`, FOR NO KEY UPDATE), taken first, whatever there is
-  to change — then the browser's row. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
+  past their expiry, each ended once — `ok`, `failed`, `expired` (never sent: nobody took it, or its taker went
+  before sending) or `unknown` (sent, no answer: never sent again; only a command nothing was sent of is taken by a
+  newer owner, and one superseded before sending gives it back) — a stop's answer comes once Chrome is down and is
+  the stop's confirmation (a snapshot waits for it, never for a state); the owner's stop
+  (`page_browsers.owner_stop_*`) is kept by `stopPage`; a slot on the browser starts a browser that stands (never
+  started, or stopped by a leave or a stop since lifted). Every start — the slot's, the owner's, a self-test's
+  `openExit`, and the one PR 15's login driver asks for — passes one guard read fresh right before it goes
+  (`browserStartRefusal`: no leave pending, this owner's generation, no owner stop; for the slot's and the owner's
+  also the page on its browser, no pause and no login — Hub's `manual_login`, not only the operator's mode; the
+  login's start, on Node or on the browser, only while its login is `wanted`; a slot and the login do not ask a
+  browser whose operator holds a halt). A halt for the owner's decision is the operator's (Astra round 3): it holds
+  it on its volume (`halt.json`, written before the browser stops, kept across restarts of the operator and its
+  container) and refuses every start and the exit's opening until it is cleared — by a `clearHalt` naming its id,
+  sent only for the owner's audited `sync browser start` (the halt Hub mirrored when he asked; also during a login,
+  on Node or on the browser), or, for `login_required` (Fansly signed the browser out — the one halt the owner's
+  login may start the browser for), by the operator itself once it confirms the expected account after that login.
+  A stricter halt replaces a held `login_required`, never the reverse. Hub keeps a mirror of it with the operator's
+  state (`page_browsers.halt_*`) for the status, the alerts and the id the owner's start names — never the
+  enforcement. A control speaks for the page only while it is its owner's (Hub's `owner_generation`) and, on a
+  login link, while the login is open — read fresh before every command, the stops too. The link of a page on Node
+  for its login records what its operator says as a slot does and runs the owner's commands. The page's pause, its
+  login's pause and the owner's stop are written only under the page row lock (`sync_pages`, FOR NO KEY UPDATE),
+  taken first, whatever there is to change — then the browser's row. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
   the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start` lifts only a pause still
   the stop's. A stop during an open login takes over the login's pause (its end lifts nothing), and a `start` during
   one gives the stop's pause back to the login; a drain is refused while a login is open. The link of a page on Node
