@@ -582,6 +582,29 @@ export async function reconcileCatalogAutomationsPresence(
   return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
+/**
+ * chat-extension R20 HF-7д: the message texts of a page's automations, as the
+ * catalog captured them from `/message/automated` (no request of its own).
+ * Every automation the page has a row for, a removed one too (`missing_since`):
+ * a welcome message already sent stays one. Only a template that parsed and
+ * carries text; the texts as stored, in automation order. One range of the
+ * primary key.
+ */
+export async function listPageAutomatedMessageTexts(
+  db: Database,
+  input: { pageId: number },
+): Promise<string[]> {
+  const result = await db.execute<{ message_text: string }>(sql`
+    select message_text
+      from page_automated_messages
+     where page_id = ${input.pageId}
+       and parse_ok
+       and message_text is not null
+     order by automation_ref
+  `);
+  return result.rows.map((row) => String(row.message_text));
+}
+
 // ── gift codes → page_promo_links (WP-F1's table, the second link kind) ──────
 
 export interface UpsertPageGiftCodeInput extends CatalogLineage {

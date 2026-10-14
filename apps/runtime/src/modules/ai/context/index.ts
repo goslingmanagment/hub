@@ -5,16 +5,26 @@ import {
   aiTranscriptRowCap,
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
+  listDmLiveMessageMarkers,
   readDmLiveUnion,
   type AiTranscriptUnionRow,
   type ArchiveMessageRow,
   type DmLiveReaderMessage,
   type DmLiveUnionItem,
+  type FanslyMessageMarkers,
 } from "@agency_hub_core/db";
 import { millsToDollarsNumber, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import { UNCONFIRMED_SOCKET_MESSAGE_LABEL } from "./chat-access.ts";
+import {
+  AUTOMATED_MESSAGE_LABEL,
+  fanslyAutomationReason,
+  type FanslyAutomationEvidence,
+  type FanslyAutomationInput,
+  type FanslyAutomationManifest,
+  type FanslyAutomationReason,
+} from "./fansly-automation.ts";
 import {
   formatFanSpendingData,
   formatFanSubscriptionData,
@@ -39,6 +49,8 @@ import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./chat-access.ts";
 export * from "./context-frame.ts";
+export * from "./fansly-automation.ts";
+export * from "./fansly-coverage.ts";
 export * from "./fansly-fan-identity.ts";
 export * from "./fansly-media.ts";
 export * from "./fansly-ppv.ts";
@@ -137,6 +149,127 @@ function liveMessageToArchiveShape(message: DmLiveReaderMessage) {
   };
 }
 
+/** R20 HF-7д: one served message as the automation classifier reads it. */
+type ServedAutomationEvidence = FanslyAutomationEvidence & { messageRef: string; source: "rest" | "live" };
+
+/** R20 HF-7д: an archive row as the automation classifier reads it. */
+function archiveAutomationEvidence(row: ArchiveMessageRow): ServedAutomationEvidence {
+  return {
+    messageRef: row.messageRef,
+    source: "rest",
+    fromModel: row.isSentByMe,
+    markers: row.markers,
+    inReplyTo: row.inReplyToRef,
+    text: row.textPlain,
+  };
+}
+
+/** R20 HF-7д: a socket overlay message as the automation classifier reads it
+ *  (the same sender and text the transcript line shows). */
+function liveAutomationEvidence(message: DmLiveReaderMessage): ServedAutomationEvidence {
+  return {
+    messageRef: message.platformMessageId,
+    source: "live",
+    fromModel: message.senderRole === "model",
+    markers: message.markers,
+    inReplyTo: message.inReplyToMessageId,
+    text: normalizeDmMessageText(message.content),
+  };
+}
+
+const markersUnobserved = (markers: FanslyMessageMarkers) => !markers.typeObserved && !markers.correlationIdObserved;
+
+interface FanslyAutomationClassification {
+  /** Why each automatic message is automatic, by its exact ref. */
+  reasons: Map<string, FanslyAutomationReason>;
+  /** The model's messages whose `type` and `correlationId` were never observed. */
+  markersUnknown: Set<string>;
+  /** The model's archive rows that took the socket overlay's markers. */
+  overlayMarked: Set<string>;
+  overlayError: boolean;
+}
+
+/**
+ * R20 HF-7д: classify the served messages. A model's archive row neither of
+ * whose markers the hub observed (archived before HF-7д0) takes the markers
+ * the socket overlay holds for the same message, when it holds any; the
+ * archive keeps its own reply and text. A failed overlay read leaves those
+ * rows unknown: never a failed transcript.
+ */
+async function classifyFanslyAutomation(
+  app: Db,
+  input: { pageId: number; served: readonly ServedAutomationEvidence[]; welcome: ReadonlySet<string> },
+): Promise<FanslyAutomationClassification> {
+  const unknownRest = input.served.filter((message) => (
+    message.source === "rest" && message.fromModel && markersUnobserved(message.markers)
+  ));
+  let overlay = new Map<string, FanslyMessageMarkers>();
+  let overlayError = false;
+  try {
+    overlay = await listDmLiveMessageMarkers(app.db, {
+      pageId: input.pageId,
+      messageIds: unknownRest.map((message) => message.messageRef),
+    });
+  } catch {
+    overlayError = true;
+  }
+  const reasons = new Map<string, FanslyAutomationReason>();
+  const markersUnknown = new Set<string>();
+  const overlayMarked = new Set<string>();
+  for (const served of input.served) {
+    const fromOverlay = served.source === "rest" && served.fromModel && markersUnobserved(served.markers)
+      ? overlay.get(served.messageRef)
+      : undefined;
+    const message = fromOverlay === undefined ? served : { ...served, markers: fromOverlay };
+    if (fromOverlay !== undefined) {
+      overlayMarked.add(served.messageRef);
+    }
+    const reason = fanslyAutomationReason(message, input.welcome);
+    if (reason !== null) {
+      reasons.set(message.messageRef, reason);
+    }
+    if (message.fromModel && markersUnobserved(message.markers)) {
+      markersUnknown.add(message.messageRef);
+    }
+  }
+  return { reasons, markersUnknown, overlayMarked, overlayError };
+}
+
+/** The marks of the served window (after its cap), counted for the manifest. */
+function fanslyAutomationManifest(
+  messages: readonly TranscriptMessage[],
+  automation: FanslyAutomationClassification,
+  welcomeTexts: number | null,
+): FanslyAutomationManifest {
+  const manifest: FanslyAutomationManifest = {
+    marked: 0,
+    typeTwo: 0,
+    nonReplyCorrelation: 0,
+    welcomeText: 0,
+    modelMarkersUnknown: 0,
+    overlayMarkers: 0,
+    welcomeTexts,
+    ...(automation.overlayError ? { overlayMarkersError: true as const } : {}),
+  };
+  for (const message of messages) {
+    if (automation.markersUnknown.has(message.id)) {
+      manifest.modelMarkersUnknown += 1;
+    }
+    if (automation.overlayMarked.has(message.id)) {
+      manifest.overlayMarkers += 1;
+    }
+    const reason = automation.reasons.get(message.id);
+    if (reason === undefined) {
+      continue;
+    }
+    manifest.marked += 1;
+    if (reason === "type-2") manifest.typeTwo += 1;
+    else if (reason === "non-reply-correlation") manifest.nonReplyCorrelation += 1;
+    else manifest.welcomeText += 1;
+  }
+  return manifest;
+}
+
 /** PR3: the effective union-read mode for one generation. "unknown" = the
  * mode read failed or the stored value was invalid — NOT a silent archive
  * fallback: it is recorded in the manifest as unknown-freshness. */
@@ -186,6 +319,11 @@ export async function loadTranscriptContext(
      * unavailability episode (`readAiChatAccess`, read by the caller): its
      * served socket messages are labelled `UNCONFIRMED_SOCKET_MESSAGE_LABEL`. */
     chatUnavailable?: boolean;
+    /** chat-extension R20 HF-7д, Fansly Hi only (the caller decides): the
+     * model's welcome and mass messages of the served window are labelled
+     * `AUTOMATED_MESSAGE_LABEL` (fansly-automation.ts), and the manifest
+     * counts them. Absent, nothing is classified and nothing changes. */
+    fanslyAutomation?: FanslyAutomationInput;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -297,6 +435,20 @@ export async function loadTranscriptContext(
   const unconfirmedIds = new Set(input.chatUnavailable === true && liveUnion !== null
     ? liveUnion.flatMap((item) => item.source === "live" ? [item.message.platformMessageId] : [])
     : []);
+  // R20 HF-7д: why each served Fansly message is automatic, from the store
+  // that served it (the union serves a message in both stores from REST).
+  // Only when the caller asks: every other load classifies nothing.
+  const automation = input.fanslyAutomation === undefined
+    ? null
+    : await classifyFanslyAutomation(app, {
+      pageId: input.pageId,
+      served: liveUnion !== null
+        ? liveUnion.map((item) => item.source === "rest"
+          ? archiveAutomationEvidence(item.row)
+          : liveAutomationEvidence(item.message))
+        : serveUnion ? [] : archiveRows.map(archiveAutomationEvidence),
+      welcome: input.fanslyAutomation.welcome ?? new Set<string>(),
+    });
   const messages = normalizeTranscriptMessages(
     shaped,
     fanslyMedia !== null && fanslyMedia.bodies.size > 0
@@ -305,11 +457,21 @@ export async function loadTranscriptContext(
         ...(fanslyMedia.ppvMarked.size > 0 ? { mediaLabelBodiesCarryPpv: fanslyMedia.ppvMarked } : {}),
       }
       : {},
-  ).slice(-limit).map((message) => (
-    unconfirmedIds.has(message.id)
-      ? { ...message, labels: [...message.labels, UNCONFIRMED_SOCKET_MESSAGE_LABEL] }
-      : message
-  ));
+  ).slice(-limit).map((message) => {
+    // The released extension puts the mark first, before the media labels.
+    const automatic = automation?.reasons.has(message.id) === true;
+    const unconfirmed = unconfirmedIds.has(message.id);
+    return automatic || unconfirmed
+      ? {
+        ...message,
+        labels: [
+          ...(automatic ? [AUTOMATED_MESSAGE_LABEL] : []),
+          ...message.labels,
+          ...(unconfirmed ? [UNCONFIRMED_SOCKET_MESSAGE_LABEL] : []),
+        ],
+      }
+      : message;
+  });
   const unconfirmedSocketMessages = messages.filter((message) => unconfirmedIds.has(message.id)).length;
 
   // Both readers return newest-first, so index 0 is the head.
@@ -356,6 +518,16 @@ export async function loadTranscriptContext(
     // how many of them the hub could call bought or not bought (counts only).
     ...(fanslyMedia?.ppv ? { fanslyPpv: fanslyMedia.ppv } : {}),
     ...(fanslyMedia?.ppvError ? { fanslyPpvError: true } : {}),
+    // R20 HF-7д, only where the caller asked for the marks (Fansly Hi).
+    ...(automation !== null && input.fanslyAutomation !== undefined
+      ? {
+        fanslyAutomation: fanslyAutomationManifest(
+          messages,
+          automation,
+          input.fanslyAutomation.welcome === null ? null : input.fanslyAutomation.welcome.size,
+        ),
+      }
+      : {}),
   };
 
   const mediaByMessage = new Map<string, OnlyFansMessageMedia>();

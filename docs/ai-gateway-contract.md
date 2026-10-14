@@ -565,6 +565,68 @@ Unchanged: a request with `clientContext` (the fan fields are the client's own),
 name: the page's alias, else the display name, else the username; no saved-name line and no
 username line; no `fanIdentity` in the record).
 
+### Feature-lane automation marks on Fansly (chat-extension R20 HF-7д)
+
+Hi on a Fansly page without `clientContext` marks the model's welcome and mass messages in the
+transcript `[Automatic / mass message]`, before their other labels, as the released Fansly extension
+(2.10.1) marks the transcript of its Hi; the Hi template tells the model what the mark means. Its
+rule, in order (`apps/runtime/src/modules/ai/context/fansly-automation.ts`):
+
+- `type` 2;
+- a `correlationId` other than `'0'` on a message that answers none (`inReplyTo` empty or `'0'`);
+- a text equal to one of the page's welcome texts, whitespace collapsed.
+
+A fan's message is never marked. A marker the hub never observed is not automation, as a missing key
+is not for the released client. The markers are the store's that served the message: the archive's
+(`message_type`, `correlation_id`, `marker_field_mask`, R20 HF-7д0) or, on a page in
+`fanslyLiveOverlayReadPages`, the socket overlay's for a message the archive does not hold yet. An
+archive row written before HF-7д0 has none; it takes the markers the overlay holds for the same
+message, when the socket saw it. The welcome texts are the page's automations as the catalog
+captured them from `/message/automated` (`page_automated_messages`, a removed one too); the hub makes
+no request of its own for them. The released client reads `/message/automated` itself (its answer
+cached for 24 hours) and keeps the texts of edited automations; on production no automation text has
+changed since the catalog began (2026-08-22).
+
+`params.contextManifest.fanslyAutomation` counts what was marked in the served window: `marked`,
+by reason (`typeTwo`, `nonReplyCorrelation`, `welcomeText`), `modelMarkersUnknown` (the model's
+messages with neither marker observed in any store: only a welcome text can mark them),
+`overlayMarkers` (archive rows that took the overlay's markers) and `welcomeTexts` (how many were
+compared; null when their read failed, and then the markers alone decide; `overlayMarkersError`
+when the overlay's could not be read). A failed read never fails the generation.
+
+Only Hi is marked, as in the released client; the other features read the same transcript as
+before. Hi's gate on this lane is the client's start proof (R20 HF-5), which counts the personal
+messages itself; the marks change the prompt, not the gate. Ping's segment and the fan's silence
+read only the fan's text messages, so automation never moves them: on the same chat they are the
+released client's.
+
+Unchanged: a request with `clientContext` (its transcript is the client's, marked by the client),
+and OnlyFans (no Fansly markers; nothing is read for them).
+
+### Feature-lane transcript coverage on Fansly (chat-extension R20 HF-7д)
+
+`transcriptCoverage` says how much of the conversation the transcript shows: the Recap stores it
+with the recap (`params.transcriptCoverage`, read by the recap readers), and the short Recap, Coach
+and the notes fill say it in the prompt. The released Fansly extension sends it in `clientContext`
+for Coach, the short Recap and the notes fill, `full-history` only when its read reached the chat's
+first message and nothing was cut after. On a Fansly page without `clientContext`, for Coach, both
+Recaps and the notes fill, the hub says what its own stores prove
+(`apps/runtime/src/modules/ai/context/fansly-coverage.ts`):
+
+- `full-history`: the thread's Sync Engine chain is `complete` (R20 HF-8д: proven down to the chat's
+  first message) and the served window reaches the oldest message of the chat the archive holds;
+- `window`: the archive holds a message older than the served window, or Coach's prompt budget cut
+  the oldest lines of the transcript: the model reads less than the hub holds;
+- no value: the window holds everything the hub has, but nothing proves the chat began there. The
+  prompt has no note and the Recap stores null, as before this change.
+
+`params.contextManifest.transcriptCoverage` records `value`, `chain` and `reachesOldest`
+(`promptBudgetCut` when Coach's budget decided; `error` when a read failed, which leaves no value and
+never fails the generation).
+
+Unchanged: a request with `clientContext` (the client's value, as before), and OnlyFans (no
+coverage on the hub's lane).
+
 ### Feature-lane fresh text (`liveTextContext`)
 
 The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
