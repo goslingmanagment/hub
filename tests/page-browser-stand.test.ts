@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import vm from "node:vm";
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { roleOf, sitePage, siteVariant, STAND_SESSION } from "../apps/page-browser/stand/fansly/front.ts";
 import type { JournalEvent } from "../apps/page-browser/stand/fansly/journal.ts";
-import { captureCovers, parsePacket, pastTheProxy, sentinelPorts, type CaptureRules } from "../apps/page-browser/stand/runner/capture.ts";
+import { captureCovers, captureSeen, parsePacket, pastTheProxy, readyPort, sentinelPorts, type CaptureRules } from "../apps/page-browser/stand/runner/capture.ts";
 import {
   closedWriteAttempted,
   closedWrites,
@@ -143,6 +143,39 @@ describe("the other criteria of every run", () => {
     expect(captureCovers([], "10.0.0.101", "10.0.0.20", [ports.start, ports.end])).toHaveLength(1);
     // A sentinel seen in another page's namespace is not this page's.
     expect(captureCovers(packets([sentinel(ports.start), sentinel(ports.end)]), "10.0.0.102", "10.0.0.20", [ports.start, ports.end])).toHaveLength(1);
+  });
+
+  it("C4: a run begins only once the page's capture is seen live — a probe on a port of its own, in a file written to since it was sent", () => {
+    // Probes never take a run sentinel's port.
+    for (const seed of [0, 1, 19_999, 1_586_229_626]) {
+      const { start, end } = sentinelPorts(seed);
+      for (const attempt of [0, 1, 9]) expect([start, end]).not.toContain(readyPort(seed, attempt));
+      expect(readyPort(seed, 0)).toBeGreaterThanOrEqual(10_000);
+      expect(readyPort(seed, 0)).toBeLessThan(20_000);
+    }
+    const dir = mkdtempSync(path.join(tmpdir(), "pb-suite-capture-"));
+    try {
+      const sentWall = 1_791_946_336_317;
+      const probe = (wall: number, port: number) => `${(wall / 1000).toFixed(6)} eth0  In  IP 10.0.0.20.40123 > 10.0.0.101.${port}: UDP, length 17`;
+      const write = (name: string, lines: string[], mtimeWall: number) => {
+        writeFileSync(path.join(dir, name), `${lines.join("\n")}\n`);
+        utimesSync(path.join(dir, name), mtimeWall / 1000, mtimeWall / 1000);
+      };
+      // The capture that a run stopped: its last line long before the probe.
+      write("old.txt", [probe(sentWall - 8000, 10_001)], sentWall - 7000);
+      expect(captureSeen(dir, sentWall, "10.0.0.101", "10.0.0.20", 10_001)).toBe(false);
+      // The new tcpdump, not listening yet: its file is there, the probe is not.
+      write("new.txt", [], sentWall + 200);
+      expect(captureSeen(dir, sentWall, "10.0.0.101", "10.0.0.20", 10_001)).toBe(false);
+      // Listening: the probe is in it — and only the probe's own port counts.
+      write("new.txt", [probe(sentWall + 300, 10_001)], sentWall + 300);
+      expect(captureSeen(dir, sentWall, "10.0.0.101", "10.0.0.20", 10_001)).toBe(true);
+      expect(captureSeen(dir, sentWall, "10.0.0.101", "10.0.0.20", 10_002)).toBe(false);
+      expect(captureSeen(dir, sentWall, "10.0.0.102", "10.0.0.20", 10_001)).toBe(false);
+      expect(captureSeen(path.join(dir, "missing"), sentWall, "10.0.0.101", "10.0.0.20", 10_001)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("C6: one outcome, or a recover's answer; never 'not sent' of a request that arrived", () => {

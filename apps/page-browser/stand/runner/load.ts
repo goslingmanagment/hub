@@ -28,7 +28,7 @@ import { captureCovers, pastTheProxy, readCapture, sendSentinel } from "./captur
 import { waitFor, type Page } from "./context.ts";
 import { closedWrites, directArrivals, eventsComplete, fanslyMade, forbiddenSocketMessages, frameRates, outageBacklog, unadmittedArrivals, type BufferBounds, type RatePhase } from "./criteria.ts";
 import type { ContainerSample } from "./docker.ts";
-import { keptOfMade, openStand, pagesByAddress, startPage, type Stand } from "./series.ts";
+import { keptOfMade, openStand, pagesByAddress, proveCaptureLive, startPage, type Stand } from "./series.ts";
 
 function args(argv: string[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -142,6 +142,8 @@ async function main(): Promise<void> {
   const bufferAges: number[] = [];
   let sampling = true;
   let nextPort = 20_000;
+  // The first sentinel goes only to captures proven live (series.ts).
+  for (const [index, page] of pages.entries()) await proveCaptureLive(s, page.info, index);
   const sentinel = async () => {
     const port = nextPort++;
     for (const page of pages) {

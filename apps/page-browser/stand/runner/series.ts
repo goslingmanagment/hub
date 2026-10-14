@@ -21,7 +21,7 @@ import { join } from "node:path";
 
 import { siteVariant } from "../fansly/front.ts";
 import { mono, sleep } from "../shared.ts";
-import { captureCovers, pastTheProxy, readCapture, sendSentinel, sentinelPorts } from "./capture.ts";
+import { captureCovers, captureSeen, pastTheProxy, readCapture, readyPort, sendSentinel, sentinelPorts } from "./capture.ts";
 import { Page, loadTopology, waitFor, type Ctx, type PageInfo, type ScenarioOutcome, type Topology } from "./context.ts";
 import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, fanslyMade, forbiddenSocketMessages, madeAndKept, unadmittedArrivals, variantLoaded, type BufferBounds, type FanslyMade, type GrantUse, type Kept, type PagesByAddress, type Resolution } from "./criteria.ts";
 import { Docker } from "./docker.ts";
@@ -252,6 +252,26 @@ async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Che
   return checks;
 }
 
+/** The page's capture is live now, before a run's start sentinel goes: a
+ *  probe datagram the runner sends is seen in it. A capture just (re)started
+ *  — `startPage` starts one a run stopped (control-no-capture), or one older
+ *  than its page — needs a moment before tcpdump listens; a start sentinel
+ *  sent in that moment is lost, and the run has no evidence of what left
+ *  (C4). Probes go every second; with none seen in `timeoutMs` the run
+ *  cannot be set up (an error before the fault: not counted, run again).
+ *  Returns how long it took. */
+export async function proveCaptureLive(s: Stand, info: PageInfo, seed: number, timeoutMs = 10_000): Promise<number> {
+  const dir = join(s.topology.results, "capture", info.name);
+  const began = mono();
+  for (let attempt = 0; ; attempt++) {
+    const port = readyPort(seed, attempt);
+    const sentWall = Date.now();
+    await sendSentinel(info.controlIp, port);
+    if (await waitFor(() => captureSeen(dir, sentWall, info.controlIp, s.topology.engineIp, port), 1000, 100)) return Math.round(mono() - began);
+    if (mono() - began > timeoutMs) throw new Error(`the capture of ${info.name} is not live: none of ${attempt + 1} probe(s) in ${timeoutMs} ms reached it`);
+  }
+}
+
 /** The capture's last lines are on disk once the run's last sentinel is. */
 async function awaitSentinel(s: Stand, page: Page, port: number, fromWall: number): Promise<void> {
   const dir = join(s.topology.results, "capture", page.info.name);
@@ -342,6 +362,8 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       journalSince = await s.stand.mark();
       for (const engine of page.enginesOfRun) engine.wireMax.clear();
       if (page.engine.bufferId) positions.set(page.engine.bufferId, await s.store.committedUpTo(page.engine.bufferId));
+      // The run's start sentinel goes only to a capture proven live.
+      notes.captureLiveMs = await proveCaptureLive(s, info, seed);
       await sendSentinel(info.controlIp, ports.start);
       sentinels.push(ports.start);
       const ctx: Ctx = {

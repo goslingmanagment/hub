@@ -20,7 +20,7 @@
 // run in the page's own namespace.
 
 import { createSocket } from "node:dgram";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface Packet {
@@ -104,6 +104,39 @@ export function pastTheProxy(packets: readonly Packet[], rules: CaptureRules): s
 export function sentinelPorts(seed: number): { start: number; end: number } {
   const start = 20_000 + (Math.abs(seed) % 20_000);
   return { start, end: start + 20_001 };
+}
+
+/** The port of a probe that the page's capture is live before a run
+ *  begins (series.ts): apart from every run sentinel's (20 000 and up). */
+export function readyPort(seed: number, attempt: number): number {
+  return 10_000 + ((Math.abs(seed) + attempt) % 10_000);
+}
+
+/** A datagram to `port` from the engine is in a capture file written to
+ *  since `sinceWall`: a capture is listening in the page's namespace now. */
+export function captureSeen(dir: string, sinceWall: number, pageIp: string, engineIp: string, port: number, slackMs = 1000): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(".txt"));
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      if (statSync(path).mtimeMs < sinceWall - slackMs) continue;
+      const packets = readFileSync(path, "utf8")
+        .split("\n")
+        .flatMap((line) => {
+          const packet = parsePacket(line);
+          return packet && packet.atWall >= sinceWall - slackMs ? [packet] : [];
+        });
+      if (captureCovers(packets, pageIp, engineIp, [port]).length === 0) return true;
+    } catch {
+      // a file that went away meanwhile
+    }
+  }
+  return false;
 }
 
 /** A sentinel: one datagram from the runner to the page's control address. */
