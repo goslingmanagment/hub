@@ -1084,6 +1084,24 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
   Nothing is ever sent again from what the operator kept. An undici page has no `held`, and its recovery is as it
   always was.
+- **A new page's browser** (PR 16, `fansly/browser-onboarding.ts`; 0281; plan §3.2 «Подключение новой страницы через
+  браузер»): a profile `scripts/deploy-page-browser.sh add-profile` made serves no page yet. While the owner's
+  onboarding of it is under way (`page_browsers.onboarding`) or an identity request waits, the `sync` process that
+  holds the onboarding lock (`(58216, 2)`) links to its operator by the profile alone — the hello names page 0 and no
+  expected account; every take raises `link_generation`, the hello's owner generation and the fence of every write
+  and grant — and follows the onboarding as a page's login is followed: the manual login and the browser started
+  (`login`), the automation back (`open`), the browser stopped (`closing`, then `off`); a browser halted for another
+  exit IP starts again only once the owner pins the IP again. The site's login operations and the reads its interface
+  makes are admitted by the profile key (`loginOnly`; the rest of the site and its socket refused): one in flight,
+  the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
+  profile's last send (the journal's and the operator's `quiesced`), the hour's ceiling and a 429's route hold — each
+  journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
+  `sync_attempts`' sequence, so the operator never sees an id twice). The identity check is one `GET /account/me`
+  through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
+  (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. The site's answers go
+  to `observations` keyed by the profile, with the buffer's position on its row. The binding (the API's, one
+  transaction with the page's birth: `browser` transport, credentials untrusted until the engine's own check under the
+  page's hello) raises the generation: the link closes, and the page's slot takes the browser.
 
 ## Classes
 
