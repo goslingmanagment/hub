@@ -853,6 +853,46 @@ describe("the loss boundary: a frame CDP told late", () => {
       }, LONG_TEST_MS);
     }
   }
+
+  // The operator names its start's gap, and a full buffer's, from the last
+  // event it saved, of any kind: a site answer stamped at its take, while a
+  // frame Chrome saw before it was still on its way through CDP — never
+  // saved. The engine reads it back no later than the last socket event it
+  // took before the gap.
+  it("a boundary the operator names from a site answer (its start, a full buffer): read back no later than the last socket event before it — a message CDP was still telling is inside the repair's window", async (context) => {
+    if (!testDb) return context.skip();
+    for (const reason of ["operator_start", "buffer_full", "disk_full"] as const) {
+      await resetIntegrationDatabase(testDb.pool);
+      const r = await rig();
+      const now = Date.now();
+      const before = randomUUID();
+      open(r.operator, before, now - 600_000);
+      const verified = frame(r.operator, before, WS_SESSION_FRAME, now - 590_000);
+      const engine = await r.start();
+      await committedUpTo(r.page.pageId, verified.seq);
+      await repaired(r.page.pageId);
+      const last = frame(r.operator, before, WS_NOOP_FRAME, now - 300_000);
+      const answer = r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, now - 100_000);
+      // Chrome saw it at now − 240 s; CDP told it after the answer, and the
+      // break came first: it never reached the buffer.
+      const missed = now - 240_000;
+      r.operator.gap(reason, answer, now - 10_000);
+      close(r.operator, before, now - 10_000);
+      const after = randomUUID();
+      open(r.operator, after, now - 5_000);
+      const reverified = frame(r.operator, after, WS_SESSION_FRAME, now - 4_000);
+      await committedUpTo(r.page.pageId, reverified.seq);
+      const rows = await connections(r.page.pageId);
+      expect(rows[1]!.gapSince.getTime(), reason).toBe(last.atWall);
+      const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+      expect(pass.targets, reason).toHaveLength(1);
+      expect(pass.since!.getTime(), reason).toBeLessThanOrEqual(missed);
+      // From the answer's take, the window would start at now − 160 s.
+      expect(answer.atWall - 60_000 - missed, reason).toBe(80_000);
+      expect(engine.metrics.count("sync_browser_gaps", { reason, boundary: "known" }), reason).toBe(1);
+      await engine.crash();
+    }
+  }, LONG_TEST_MS);
 });
 
 describe("the site's answers", () => {

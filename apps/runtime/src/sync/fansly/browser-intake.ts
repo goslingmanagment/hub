@@ -113,7 +113,10 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   §4.4, step 6). The engine's own machinery backfills a socket's gap: the
 //   next connection's `gap_since` (0196) is where its `repair.ws-gap` reads
 //   back from. So the gap lowers the next connection's `gap_since` to its
-//   boundary (kept in `events_gap_since` until a connection takes it); a
+//   boundary (kept in `events_gap_since` until a connection takes it), never
+//   later than the loss boundary then: the operator names its start's and a
+//   full buffer's from the last event it saved, of any kind — a site's answer
+//   at its take, while a frame CDP was still telling may be older; a
 //   boundary the operator cannot name (`fromSeq`/`fromWall` null: nothing
 //   before it in its buffer) is the loss boundary — and with none, the
 //   previous connection's end, as for the engine's own socket. Every reason
@@ -727,7 +730,10 @@ export class BrowserBufferIntake {
             }
             case "gap": {
               batch.gaps += 1;
-              const boundary = event.fromWall === null ? lossBoundary : new Date(Math.min(event.fromWall, now.getTime()));
+              // The operator's boundary, never later than the last socket
+              // event taken before it (all before it in its buffer are).
+              const named = event.fromWall === null ? null : new Date(Math.min(event.fromWall, now.getTime()));
+              const boundary = minDate(named, lossBoundary);
               gapSince = minDate(gapSince, boundary);
               metrics.increment("sync_browser_gaps", { pageId, reason: event.reason, boundary: event.fromWall === null ? "unknown" : "known" });
               logger.info({ pageId, reason: event.reason, fromSeq: event.fromSeq, boundary: boundary?.toISOString() ?? null },
