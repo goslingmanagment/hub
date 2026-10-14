@@ -450,16 +450,18 @@ export async function setSyncPageTransport(
   return { kind: "changed", from, to: input.to, leave: leave === null ? null : BigInt(leave) };
 }
 
-/** Every page's transport and its pending leave of the browser (the host's
- *  pass). */
-export async function listSyncPageSenders(db: Database): Promise<Map<number, { transport: SyncPageTransport; leave: SyncPageBrowserLeave | null }>> {
-  const result = await db.execute<{ pageId: string; transport: SyncPageTransport; leave: string | null; since: Date | string | null }>(sql`
-    select page_id::text as "pageId", transport, browser_leave_generation::text as leave, browser_leave_requested_at as since
+/** Every page's transport, its pending leave of the browser and the owner's
+ *  login of it (0279) — the host's pass. */
+export async function listSyncPageSenders(db: Database): Promise<Map<number, { transport: SyncPageTransport; leave: SyncPageBrowserLeave | null; manualLogin: SyncPageManualLogin }>> {
+  const result = await db.execute<{ pageId: string; transport: SyncPageTransport; leave: string | null; since: Date | string | null; manualLogin: SyncPageManualLogin }>(sql`
+    select page_id::text as "pageId", transport, browser_leave_generation::text as leave, browser_leave_requested_at as since,
+           manual_login as "manualLogin"
       from sync_pages
   `);
   return new Map(result.rows.map((row) => [Number(row.pageId), {
     transport: row.transport,
     leave: row.leave === null ? null : { generation: BigInt(row.leave), since: toRequiredDate(row.since!) },
+    manualLogin: row.manualLogin,
   }]));
 }
 
@@ -1413,6 +1415,125 @@ export async function removeSyncPageLiftedDmExclusion(
   `);
   const row = result.rows[0];
   return row === undefined ? null : { lifted: row.lifted ?? [], removed: row.removed === true, mode: row.mode };
+}
+
+// ── the owner's login of the page's browser (0279; Project Browser PR 15) ──
+
+/** The owner's login of a page's browser (plan §4.8): `off`; `wanted` — the
+ *  owner opened it, the page is on the owner's pause and the engine puts its
+ *  operator into the manual login; `ending` — the owner closed it, the
+ *  engine brings the automation back and writes `off` (lifting the pause the
+ *  login put on the page) once its operator confirmed. */
+export const SYNC_PAGE_MANUAL_LOGINS = ["off", "wanted", "ending"] as const;
+export type SyncPageManualLogin = (typeof SYNC_PAGE_MANUAL_LOGINS)[number];
+
+export interface SyncPageManualLoginRow {
+  value: SyncPageManualLogin;
+  /** The login put the page on the owner's pause: lifted again at its end. */
+  paused: boolean;
+  /** The owner's pause of the page now (`paused_all`). */
+  pausedAll: boolean;
+  changedAt: Date | null;
+  changedBy: string | null;
+}
+
+type ManualLoginSqlRow = { value: SyncPageManualLogin; paused: boolean; pausedAll: boolean; changedAt: Date | string | null; changedBy: string | null };
+
+const manualLoginColumns = sql`
+  manual_login as value, manual_login_paused as paused, paused_all as "pausedAll",
+  manual_login_changed_at as "changedAt", manual_login_changed_by as "changedBy"
+`;
+
+function manualLoginOf(row: ManualLoginSqlRow): SyncPageManualLoginRow {
+  return { value: row.value, paused: row.paused === true, pausedAll: row.pausedAll === true, changedAt: toDate(row.changedAt), changedBy: row.changedBy };
+}
+
+/** The page's login of its browser (null: no engine row). Read apart from
+ *  the page row, whose statements every image since the hold set shares. */
+export async function getSyncPageManualLogin(db: Database, pageId: number): Promise<SyncPageManualLoginRow | null> {
+  const result = await db.execute<ManualLoginSqlRow>(sql`select ${manualLoginColumns} from sync_pages where page_id = ${pageId}`);
+  const row = result.rows[0];
+  return row === undefined ? null : manualLoginOf(row);
+}
+
+export type SetSyncPageManualLoginResult =
+  | { kind: "changed"; from: SyncPageManualLogin; to: SyncPageManualLogin; row: SyncPageManualLoginRow }
+  | { kind: "unchanged"; row: SyncPageManualLoginRow }
+  | { kind: "no_page" };
+
+/**
+ * The owner opens (`wanted`) or closes (`ending`) the login of the page's
+ * browser, under the page's row lock (FOR NO KEY UPDATE: ordered with the
+ * page's admissions), in the caller's transaction — the owner's lever writes
+ * its audit row with it. Opening puts the page on the owner's pause at once,
+ * remembering whether it was the login that did (`manual_login_paused`), so
+ * no admission of ordinary work commits after it; a closing login opened
+ * again keeps that memory. Closing a login that is not open changes
+ * nothing. Wakes the page's actor.
+ */
+export async function setSyncPageManualLogin(
+  tx: Database,
+  input: { pageId: number; to: "wanted" | "ending"; by: string },
+): Promise<SetSyncPageManualLoginResult> {
+  const current = await tx.execute<ManualLoginSqlRow>(sql`select ${manualLoginColumns} from sync_pages where page_id = ${input.pageId} for no key update`);
+  const row = current.rows[0];
+  if (row === undefined) return { kind: "no_page" };
+  const from = row.value;
+  const moves = input.to === "wanted" ? from !== "wanted" : from === "wanted";
+  if (!moves) return { kind: "unchanged", row: manualLoginOf(row) };
+  const updated = await tx.execute<ManualLoginSqlRow>(sql`
+    update sync_pages
+       set manual_login = ${input.to},
+           manual_login_paused = case when ${input.to} = 'wanted' and manual_login = 'off' then not paused_all else manual_login_paused end,
+           paused_all = case when ${input.to} = 'wanted' then true else paused_all end,
+           manual_login_changed_at = clock_timestamp(),
+           manual_login_changed_by = ${input.by},
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+    returning ${manualLoginColumns}
+  `);
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { kind: "changed", from, to: input.to, row: manualLoginOf(updated.rows[0]!) };
+}
+
+/**
+ * The page stays on its pause while its login is open: the engine puts it
+ * back if it was lifted meanwhile (the login's own pause, then). Fenced by
+ * the caller's `lockOwnedPage` in the same transaction. True: written.
+ */
+export async function holdSyncPageManualLoginPause(tx: Database, input: { pageId: number }): Promise<boolean> {
+  const result = await tx.execute(sql`
+    update sync_pages
+       set paused_all = true, manual_login_paused = true, updated_at = clock_timestamp()
+     where page_id = ${input.pageId} and manual_login <> 'off' and not paused_all
+    returning page_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * The automation is back (the engine confirmed it with the page's operator,
+ * or the operator cannot be in a login any more): the login is `off`, and
+ * the pause it put on the page is lifted. Only a closing login ends — or,
+ * with `evenIfWanted`, an open one that has nothing to log in (no browser
+ * any more). Fenced by the caller's `lockOwnedPage`. True: ended.
+ */
+export async function endSyncPageManualLogin(tx: Database, input: { pageId: number; by: string; evenIfWanted?: boolean }): Promise<boolean> {
+  const from = input.evenIfWanted === true ? sql`manual_login <> 'off'` : sql`manual_login = 'ending'`;
+  const result = await tx.execute(sql`
+    update sync_pages
+       set manual_login = 'off',
+           paused_all = case when manual_login_paused then false else paused_all end,
+           manual_login_paused = false,
+           manual_login_changed_at = clock_timestamp(),
+           manual_login_changed_by = ${input.by},
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId} and ${from}
+    returning page_id
+  `);
+  if (result.rows.length === 0) return false;
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return true;
 }
 
 /**

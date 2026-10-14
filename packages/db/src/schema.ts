@@ -1020,6 +1020,12 @@ export const syncPages = pgTable(
     browserLeftAt: timestamp("browser_left_at", { withTimezone: true }),
     browserLeftBy: text("browser_left_by").$type<"operator" | "owner">(),
     browserLeftGeneration: bigint("browser_left_generation", { mode: "bigint" }),
+    // 0279 (Project Browser PR 15): the owner's login of the page's browser —
+    // off, wanted (paused, its operator in the manual login), ending.
+    manualLogin: text("manual_login").$type<"off" | "wanted" | "ending">().notNull().default("off"),
+    manualLoginPaused: boolean("manual_login_paused").notNull().default(false),
+    manualLoginChangedAt: timestamp("manual_login_changed_at", { withTimezone: true }),
+    manualLoginChangedBy: text("manual_login_changed_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   },
@@ -1035,6 +1041,7 @@ export const syncPages = pgTable(
       (${table.browserLeaveGeneration} is null) = (${table.browserLeaveRequestedAt} is null)
       and (${table.browserLeftBy} is null or ${table.browserLeftBy} in ('operator', 'owner'))
       and (${table.browserLeftBy} is null) = (${table.browserLeftAt} is null)`),
+    manualLoginCheck: check("sync_pages_manual_login_check", sql`${table.manualLogin} in ('off', 'wanted', 'ending')`),
   }),
 );
 

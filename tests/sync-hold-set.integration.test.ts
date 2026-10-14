@@ -35,6 +35,9 @@ import {
   setSyncPageTransport,
   confirmBrowserLeave,
   assertBrowserLeft,
+  setSyncPageManualLogin,
+  holdSyncPageManualLoginPause,
+  endSyncPageManualLogin,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncPages,
   trustSyncPageCredentials,
@@ -257,6 +260,7 @@ const UPDATES = [
   "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt", "insertSiteAdmission",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode", "setSyncPageTransport",
   "confirmBrowserLeave", "assertBrowserLeft",
+  "setSyncPageManualLogin", "holdSyncPageManualLoginPause", "endSyncPageManualLogin",
 ];
 
 /** Run every function that updates a page row over a live page (the engine's
@@ -349,6 +353,24 @@ async function runEveryPageRowUpdate(
     ["setSyncPageTransport", pageId, () => db.transaction(async (tx) => setSyncPageTransport(tx as unknown as Database, { pageId, to: "node" }))],
     ["assertBrowserLeft", pageId, async () => expect(await db.transaction(async (tx) => assertBrowserLeft(tx as unknown as Database, { pageId })))
       .toBe(generation)],
+    // The owner's login of the page's browser (0279): opened (the page on its
+    // pause), the pause put back by the engine once lifted, closed, ended
+    // under the owner's fence.
+    ["setSyncPageManualLogin", pageId, async () => expect(await db.transaction(async (tx) => setSyncPageManualLogin(tx as unknown as Database, { pageId, to: "wanted", by: "test" })))
+      .toMatchObject({ kind: "changed", from: "off", to: "wanted" })],
+    ["setPagePause", pageId, () => setPagePause(db, { pageId, all: false })],
+    ["holdSyncPageManualLoginPause", pageId, async () => expect(await db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
+      return holdSyncPageManualLoginPause(tx, { pageId });
+    })).toBe(true)],
+    ["setSyncPageManualLogin", pageId, async () => expect(await db.transaction(async (tx) => setSyncPageManualLogin(tx as unknown as Database, { pageId, to: "ending", by: "test" })))
+      .toMatchObject({ kind: "changed", from: "wanted", to: "ending" })],
+    ["endSyncPageManualLogin", pageId, async () => expect(await db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
+      return endSyncPageManualLogin(tx, { pageId, by: "engine" });
+    })).toBe(true)],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 

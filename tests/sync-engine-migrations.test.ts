@@ -919,6 +919,8 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
       // of its browser — not holds.
       "sync_pages_transport_check",
       "sync_pages_browser_leave_check",
+      // 0279 (Project Browser PR 15): the owner's login of the page's browser.
+      "sync_pages_manual_login_check",
     ]);
   });
 

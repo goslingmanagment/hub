@@ -2,6 +2,7 @@ import type { SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../.
 import type { LinkStatus, MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
 import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
+import { classifySiteRequest } from "../engine/site-admission.ts";
 
 // The site path of a browser page over its operator's RPC (Project Browser,
 // plan §3.2 «Путь допуска для запросов, которые движок не выбирал сам»,
@@ -41,6 +42,12 @@ import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason,
 //   the transport's held outcomes take it (PR 13). Once the actor committed
 //   an end it came for, it is acknowledged (`resultAck`): until then the
 //   operator keeps it.
+// - A page on Node (PR 15): its link to the operator serves the owner's
+//   login alone (`loginOnly`). Only the manual login's own requests — the
+//   login operations and the login screens' reads, asked while the operator
+//   says it is in the manual login — wait for the engine; every other
+//   request of the site and every socket is refused (`mode`) at once: the
+//   page's reads and its socket are Node's.
 
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
@@ -127,6 +134,8 @@ export interface BrowserSiteAdmissionOptions {
   /** The engine's monotonic clock (the pacer's). */
   monoNow: () => number;
   metrics?: Metrics;
+  /** A page on Node (PR 15): only the manual login's own requests. */
+  loginOnly?: boolean;
 }
 
 export class BrowserSiteAdmission implements SiteAdmissionPort {
@@ -276,8 +285,16 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       waiters: [],
     };
     if (host === null) return this.#answerRefusal(entry, "mode");
+    if (this.#o.loginOnly === true && !this.#ofTheLogin(entry.request)) return this.#answerRefusal(entry, "mode");
     if (this.#sessionDiffers(message.sessionFingerprint)) return this.#answerRefusal(entry, "session_mismatch");
     this.#entries.set(message.siteRequestId, entry);
+  }
+
+  /** A request of the manual login itself: a login operation, or a read of
+   *  the login screens, asked in the manual login (`classifySiteRequest`). */
+  #ofTheLogin(request: PendingSiteRequest): boolean {
+    const classified = classifySiteRequest(request);
+    return !("refuse" in classified) && classified.exempt;
   }
 
   #onWsAdmit(message: WsAdmit): void {
@@ -309,8 +326,9 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       reported: false,
       waiters: [],
     };
-    // Only the site's own socket host (the second socket, chatws, is closed).
-    if (!hostOk) return this.#answerRefusal(entry, "mode");
+    // Only the site's own socket host (the second socket, chatws, is closed);
+    // none on a page on Node: its socket is the engine's own.
+    if (!hostOk || this.#o.loginOnly === true) return this.#answerRefusal(entry, "mode");
     if (this.#sessionDiffers(message.sessionFingerprint)) return this.#answerRefusal(entry, "session_mismatch");
     this.#entries.set(message.connectionId, entry);
   }

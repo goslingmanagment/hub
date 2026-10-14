@@ -545,4 +545,23 @@ describe("database migration invariants", () => {
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0278_sync_pages_browser_leave.sql"');
   });
+
+  it("keeps a page's manual login (Project Browser PR 15) brief, defaulted to off, and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const login = statementsOf(await readFile("packages/db/migrations/0279_sync_pages_manual_login.sql", "utf8"));
+    expect(login).toContain("set local lock_timeout = '5s';");
+    // A constant default: catalog only, and every existing page stays off.
+    expect(login).toContain("alter table sync_pages add column if not exists manual_login text not null default 'off';");
+    expect(login).toContain("alter table sync_pages add column if not exists manual_login_paused boolean not null default false;");
+    for (const column of ["manual_login_changed_at timestamptz", "manual_login_changed_by text"]) {
+      expect(login).toContain(`add column if not exists ${column}`);
+      expect(login.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
+    }
+    expect(login).toMatch(/check \(manual_login in \('off', 'wanted', 'ending'\)\) not valid;/);
+    expect(login).toContain("alter table sync_pages validate constraint sync_pages_manual_login_check;");
+    // No statement opens a login: only the owner's lever does.
+    expect(login).not.toMatch(/update\s+sync_pages/i);
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0279_sync_pages_manual_login.sql"');
+  });
 });

@@ -301,6 +301,15 @@ export class FakeOperator {
         },
         onCommand: async (command) => {
           this.commands.push(command);
+          // The manual login (PR 15): the mode, and a start of a page that stands.
+          if (command.command.kind === "setMode") {
+            this.pushState({ mode: command.command.mode });
+            return { ok: true, detail: `the mode is ${command.command.mode}` };
+          }
+          if (command.command.kind === "restartBrowser") {
+            this.pushState({ step: "site_loaded", stopReason: null, retryAtWall: null, exitOpen: true });
+            return { ok: true, detail: "the start began" };
+          }
           if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
           if (this.lateAfterStop !== null) {
             const late = this.lateAfterStop;
