@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBuffer, type Appended, type BufferOptions } from "../apps/page-browser/src/buffer/buffer.ts";
+import { chromeToOperator, tightestOf } from "../apps/page-browser/src/cdp/chrome-clock.ts";
 import { Cdp, CdpError } from "../apps/page-browser/src/cdp/client.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { Egress, type SocketTicket, type TunnelRecord } from "../apps/page-browser/src/egress/proxy.ts";
@@ -14,7 +15,7 @@ import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/uti
 import { guardExpression } from "../apps/page-browser/src/ws/guard.ts";
 import { GuardInstaller } from "../apps/page-browser/src/ws/install.ts";
 import { BoundaryFile } from "../apps/page-browser/src/ws/boundary.ts";
-import { SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
+import { CALIBRATION_MAX_MS, SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
 import {
   FakeCdpPort,
   FakeChrome,
@@ -709,20 +710,23 @@ describe("the handshake's outcome (wsDone)", () => {
 });
 
 describe("frames (plan §4.4)", () => {
-  // Astra's review of PR 15, rounds 5 and 6: an event's stamp is on the
-  // operator's clock — Chrome's timestamp mapped by the smallest (take −
-  // Chrome) offset seen, so a delivery delay never makes it late and
-  // Chrome's own base never crosses; a gap's boundary is the last event
-  // received before the loss, never a late close.
+  // Astra's review of PR 15, rounds 5–7: an event's stamp is Chrome's
+  // timestamp on the operator's clock, by an active calibration of its
+  // session (at most its round trip early, never late) — so a delivery delay
+  // never makes it late, and Chrome's own base never crosses; a gap's
+  // boundary is the last event received before the loss, never a late close.
   it.for([
     { chrome: "on the operator's clock", shift: 0 },
     { chrome: "an hour ahead", shift: 3_600_000 },
     { chrome: "an hour behind", shift: -3_600_000 },
   ])("are stamped when Chrome saw them, on the operator's clock (Chrome's clock $chrome): a frame delivered five minutes late is five minutes old; the next connection's gap starts at it, not at the late close", async ({ shift }) => {
     const w = await world();
+    w.cdp.clockShiftMs = shift;
     const chrome = (mono: number) => mono + shift;
-    // Opened: its events delivered at once — the offset learned.
+    // Opened: the session's clock calibrated with its first event.
     const first = await opened(w, "WS1", 43, "S1", chrome);
+    await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
+    expect(w.sockets.clockOf("S1")!.spread).toBeLessThanOrEqual(CALIBRATION_MAX_MS);
     // The last frame Chrome saw five minutes ago, and the close; CDP tells
     // both only now.
     const take = monoMs();
@@ -740,11 +744,10 @@ describe("frames (plan §4.4)", () => {
     const frame = events.find((event) => event.kind === "ws.in")!;
     const close = events.find((event) => event.kind === "ws.close")!;
     const gap = events.find((event) => event.kind === "gap")!;
-    // Five minutes old (plus the smallest delivery delay seen: well under
-    // a second here), never the take.
-    expect(frame.atMono as number).toBeGreaterThanOrEqual(lateFrame);
-    expect(frame.atMono as number).toBeLessThan(lateFrame + 1_000);
-    expect(take - (frame.atMono as number)).toBeGreaterThan(299_000);
+    // Five minutes old — at most the calibration's round trip early, never
+    // later — not the take.
+    expect(frame.atMono as number).toBeLessThanOrEqual(lateFrame);
+    expect(frame.atMono as number).toBeGreaterThanOrEqual(lateFrame - w.sockets.clockOf("S1")!.spread);
     // Every stamp at most its take.
     for (const event of events) expect(event.atMono as number, String(event.kind)).toBeLessThanOrEqual(monoMs());
     // The gap starts at the last frame received — not the close, not now.
@@ -1434,6 +1437,152 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     return { connectionId, lastSaved, bytes };
   }
 
+  // Astra's review of PR 15, round 7: the first events of a session told
+  // late, before it has a calibration, are stamped no later than what is
+  // proven of their connection (its CONNECT, its handshake as the proxy saw
+  // it): a gap from them starts early, never late; a calibration is taken
+  // only from a short round trip, and goes with its session.
+  async function lateFirstBatch(shift: number) {
+    const { chrome, holder, openBuffer } = await holderWorld();
+    chrome.clockShiftMs = shift;
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    let past = 0;
+    const { cdp, sockets } = await operatorSide(holder, buffer, { now: () => monoMs() - past });
+    cleanups.push(() => cdp.close());
+    const chromeAt = (mono: number) => (mono + shift) / 1000;
+    // Its calibration answers only once the batch is in (a pause of the operator).
+    let answer: () => void = () => undefined;
+    const metrics = chrome.handlers.get("Performance.getMetrics")!;
+    chrome.handlers.set("Performance.getMetrics", async (command) => {
+      await new Promise<void>((resolve) => (answer = resolve));
+      return metrics(command);
+    });
+    const t = monoMs();
+    const wallT = Date.now();
+    // The CONNECT and the handshake went five minutes ago (the proxy's clock).
+    past = 310_000;
+    await admitted(sockets, 91);
+    past = 0;
+    tunnelOf!.event({ kind: "handshake_sent", mono: t - 305_000, wall: wallT - 305_000 });
+    // Chrome saw its answer, a frame and the close five minutes ago; CDP
+    // tells them all only now.
+    chrome.event("Network.webSocketCreated", { requestId: "WS-L", url: URL_WS }, "S1");
+    chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-L", timestamp: chromeAt(t - 305_000) }, "S1");
+    chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS-L", timestamp: chromeAt(t - 304_000), response: { status: 101, headers: {} } }, "S1");
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS-L", timestamp: chromeAt(t - 300_000), response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: "late" }) } }, "S1");
+    chrome.event("Network.webSocketClosed", { requestId: "WS-L", timestamp: chromeAt(t - 299_000) }, "S1");
+    await until(() => eventsOf(buffer).some((event) => event.kind === "ws.close"), 3000, "the batch kept");
+    expect(sockets.clockOf("S1")).toBeNull();
+    answer();
+    chrome.handlers.set("Performance.getMetrics", metrics);
+    await until(() => sockets.clockOf("S1") !== null, 3000, "the session calibrated");
+    return { chrome, buffer, sockets, t, wallT, chromeAt };
+  }
+
+  it.for([
+    { chrome: "on the operator's clock", shift: 0 },
+    { chrome: "an hour ahead", shift: 3_600_000 },
+    { chrome: "an hour behind", shift: -3_600_000 },
+  ])("Astra's round 7: the first batch told five minutes late, before its session's calibration (Chrome's clock $chrome): stamped no later than its handshake — the next gap from there, a message missed four minutes ago inside the repair's window", async ({ shift }) => {
+    const { chrome, buffer, sockets, t, wallT, chromeAt } = await lateFirstBatch(shift);
+    const late = eventsOf(buffer);
+    for (const [kind, seen] of [["ws.open", t - 304_000], ["ws.in", t - 300_000], ["ws.close", t - 299_000]] as const) {
+      const event = late.find((one) => one.kind === kind)!;
+      // Never later than when Chrome saw it; no earlier than its CONNECT.
+      expect(event.atMono as number, kind).toBeLessThanOrEqual(seen);
+      expect(event.atMono as number, kind).toBeGreaterThanOrEqual(t - 310_000 - 1_000);
+    }
+    // The next connection, the session calibrated now: its events mapped,
+    // its gap from the late frame's stamp.
+    await admitted(sockets, 92);
+    handshake(chrome, "WS-M");
+    answered(chrome, "WS-M");
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS-M", timestamp: chromeAt(monoMs() - 2_000), response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: "fresh" }) } }, "S1");
+    await until(() => eventsOf(buffer).filter((event) => event.kind === "ws.in").length === 2, 3000, "the next connection's frame");
+    const events = eventsOf(buffer);
+    const gap = events.find((event) => event.kind === "gap")!;
+    const lateFrame = events.find((event) => event.kind === "ws.in")!;
+    expect(gap).toMatchObject({ reason: "ws_reconnect", fromSeq: lateFrame.seq, fromWall: lateFrame.atWall });
+    const missed = wallT - 240_000;
+    // The repair reads back 60 s before the gap (ws-gap.ts): the message inside.
+    expect((gap.fromWall as number) - 60_000).toBeLessThanOrEqual(missed);
+    expect(gap.fromWall as number).toBeLessThanOrEqual(wallT - 300_000);
+    // A calibrated stamp: at most the round trip early, never late.
+    const fresh = events.filter((event) => event.kind === "ws.in")[1]!;
+    const seen = (fresh.atMono as number);
+    expect(seen).toBeLessThanOrEqual(monoMs() - 2_000 + 1);
+  });
+
+  it("a calibration from a round trip over a second is refused: the session stays uncalibrated (its events stamped by what is proven) until a short one is taken", async () => {
+    const { chrome, holder, openBuffer } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    const lines: string[] = [];
+    const { cdp, sockets } = await operatorSide(holder, buffer, { log: (event, fields) => lines.push(`${event} ${JSON.stringify(fields ?? {})}`) });
+    cleanups.push(() => cdp.close());
+    chrome.clockDelayMs = CALIBRATION_MAX_MS + 300;
+    await admitted(sockets, 93);
+    handshake(chrome, "WS-S");
+    await until(() => lines.some((line) => line.startsWith("clock.refused")), 5000, "the slow calibration refused");
+    expect(sockets.clockOf("S1")).toBeNull();
+    expect(lines.find((line) => line.startsWith("clock.refused"))).toContain("a round trip of");
+    // Its events meanwhile: no later than its handshake (the proxy's).
+    answered(chrome, "WS-S");
+    await until(() => eventsOf(buffer).some((event) => event.kind === "ws.open"), 3000, "the open kept");
+    const open = eventsOf(buffer).find((event) => event.kind === "ws.open")!;
+    expect(open.atMono as number).toBeLessThanOrEqual(monoMs());
+    // A short round trip: taken.
+    chrome.clockDelayMs = 0;
+    await until(() => sockets.clockOf("S1") !== null, 5000, "a calibration taken on retry");
+    expect(sockets.clockOf("S1")!.spread).toBeLessThanOrEqual(CALIBRATION_MAX_MS);
+  });
+
+  it("a calibration's readings as one: the largest lower bound — never past the true offset, at most the smallest round trip short of it", () => {
+    // Chrome's clock 1 h behind the operator's: true offset +3_600_000 ms.
+    // Each reading: Chrome read somewhere inside [t0, t1].
+    const trueOffset = 3_600_000;
+    const read = (t0: number, t1: number, at: number) => ({ offset: t0 - (at - trueOffset), spread: t1 - t0, takenMono: t1 });
+    const readings = [read(1_000, 1_400, 1_390), read(2_000, 2_002, 2_001), read(3_000, 3_900, 3_010)];
+    const clock = tightestOf(readings)!;
+    expect(clock.offset).toBeLessThanOrEqual(trueOffset);
+    expect(trueOffset - clock.offset).toBeLessThanOrEqual(clock.spread);
+    expect(clock.spread).toBe(2);
+    expect(clock.takenMono).toBe(3_900);
+    // A Chrome timestamp mapped by it: never after the same instant here, at
+    // most the spread before it; never after the event's take.
+    const instant = 50_000;
+    const mapped = chromeToOperator((instant - trueOffset) / 1000, clock, 60_000);
+    expect(mapped).toBeLessThanOrEqual(instant);
+    expect(instant - mapped).toBeLessThanOrEqual(clock.spread + 1e-6);
+    expect(chromeToOperator((instant - trueOffset) / 1000, clock, 49_000)).toBe(49_000);
+    expect(tightestOf([])).toBeNull();
+  });
+
+  it("a calibration is its session's: another session (a new target) has none until its own; a new CDP link or a new Chrome drops them all", async () => {
+    const { chrome, holder, openBuffer } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    const { cdp, sockets } = await operatorSide(holder, buffer);
+    cleanups.push(() => cdp.close());
+    await admitted(sockets, 94);
+    handshake(chrome, "WS-1");
+    await until(() => sockets.clockOf("S1") !== null, 3000, "S1 calibrated");
+    expect(sockets.clockOf("S2")).toBeNull();
+    // A socket event of another session: its own calibration.
+    chrome.event("Network.webSocketCreated", { requestId: "WS-2", url: URL_WS }, "S2");
+    await until(() => sockets.clockOf("S2") !== null, 3000, "S2 calibrated");
+    // A new CDP link: none kept.
+    sockets.clocksInvalidated("a new link to the CDP holder (test)");
+    expect(sockets.clockOf("S1")).toBeNull();
+    expect(sockets.clockOf("S2")).toBeNull();
+    chrome.event("Network.webSocketCreated", { requestId: "WS-3", url: URL_WS }, "S1");
+    await until(() => sockets.clockOf("S1") !== null, 3000, "S1 calibrated again");
+    // A new Chrome: none kept either.
+    await sockets.chromeStarting();
+    expect(sockets.clockOf("S1")).toBeNull();
+  });
+
   it("Astra's round 5: a worker stuck past every bound — its tunnel carried a handshake CDP does not show: the page stops, B is not admitted, and A's late events (freshly stamped) never reach anyone", async () => {
     const { chrome, holder, openBuffer, stored } = await holderWorld();
     const buffer = openBuffer();
@@ -1458,7 +1607,8 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-A", timestamp: monoMs() / 1000 }, "W0");
     chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS-A", timestamp: monoMs() / 1000, response: { status: 101, headers: {} } }, "W0");
     chrome.event("Network.webSocketFrameReceived", { requestId: "WS-A", response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: "a-frame" }) } }, "W0");
-    await until(() => holder.holder!.stats.lastSeq === delivered + 4 && stored() === 0, 3000, "A's late events taken");
+    // (The holder numbers the answers of the clock's calibration too.)
+    await until(() => holder.holder!.stats.lastSeq >= delivered + 4 && stored() === 0, 3000, "A's late events taken");
     expect(eventsOf(buffer)).toEqual([]);
     // The page stopped (the browser went), a new Chrome starts: C is its own.
     sockets.endAll("ws_unaccounted");

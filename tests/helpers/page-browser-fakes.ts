@@ -56,6 +56,17 @@ type Reply = Record<string, unknown> | { error: { code: number; message: string 
 export class FakeChrome {
   readonly commands: CdpCommand[] = [];
   readonly handlers = new Map<string, (command: CdpCommand) => Reply | Promise<Reply>>();
+  /** Chrome's TimeTicks against the operator's clock, and how long its
+   *  metrics take to answer (`Performance.getMetrics`: an active calibration). */
+  clockShiftMs = 0;
+  clockDelayMs = 0;
+
+  constructor() {
+    this.handlers.set("Performance.getMetrics", async () => {
+      if (this.clockDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.clockDelayMs));
+      return { metrics: [{ name: "Timestamp", value: (monoMs() + this.clockShiftMs) / 1000 }] };
+    });
+  }
   readonly connections: WsConnection[] = [];
   #server: HttpServer | null = null;
   port = 0;
@@ -1108,6 +1119,17 @@ export const UNANSWERED = Symbol("unanswered");
 export class FakeCdpPort implements CdpPort {
   readonly commands: CdpCommand[] = [];
   readonly handlers = new Map<string, (command: CdpCommand) => unknown>();
+  /** Chrome's TimeTicks against the operator's clock, and how long its
+   *  metrics take to answer (`Performance.getMetrics`: an active calibration). */
+  clockShiftMs = 0;
+  clockDelayMs = 0;
+
+  constructor() {
+    this.handlers.set("Performance.getMetrics", async () => {
+      if (this.clockDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.clockDelayMs));
+      return { metrics: [{ name: "Timestamp", value: (monoMs() + this.clockShiftMs) / 1000 }] };
+    });
+  }
   readonly acks: number[] = [];
   readonly #listeners = new Map<string, EventHandler[]>();
   #seq = 0;

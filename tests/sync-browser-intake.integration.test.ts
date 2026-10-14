@@ -646,9 +646,11 @@ describe("gaps", () => {
     expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
   }, 60_000);
 
-  // Astra's review of PR 15, round 6: CDP told the last frame (five minutes
-  // old) and the close only now. The operator stamps the frame when Chrome
-  // saw it and starts the gap at it (page-browser-ws.test.ts); here, the
+  // Astra's review of PR 15, rounds 6 and 7: CDP told the last frame (five
+  // minutes old) and the close only now. The operator stamps the frame no
+  // later than Chrome saw it — by its session's calibration, or before one
+  // by what is proven of its connection — and starts the gap at it
+  // (page-browser-ws.test.ts); here, the
   // database's side of it: a message missed four minutes ago is inside the
   // window the repair reads back — where a boundary of "now" (the take)
   // left it out by 180 s.

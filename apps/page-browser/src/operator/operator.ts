@@ -742,6 +742,8 @@ export class Operator {
           continue;
         }
         this.#log("holder.linked", { cdpUp: link.cdpUp, stored: link.stored, lastSeq: link.lastSeq });
+        // A new CDP link: Chrome's clock is calibrated anew for its sessions.
+        this.sockets.clocksInvalidated("a new link to the CDP holder");
         // What the holder kept from before this instance is handled first:
         // paused requests among it are failed (cdp/paused.ts), and Chrome
         // has answered that before anything else is decided.
