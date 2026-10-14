@@ -167,7 +167,8 @@ export class HolderUnderS6 {
       onExit: (code) => {
         this.exits.push(code);
         void holder.close().then(() => {
-          if (!this.#stopped) setTimeout(() => void this.start(), 30);
+          // s6's restart, unless the test stopped it meanwhile (its directory goes then).
+          if (!this.#stopped) setTimeout(() => void (this.#stopped ? undefined : this.start()), 30);
         });
       },
       log: quiet,
