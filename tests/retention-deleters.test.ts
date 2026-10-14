@@ -95,6 +95,10 @@ const SANCTIONED_DELETER_FILES = [
   // requests once refused or settled, and the oldest finished ids. No SQL
   // deletion: the journal keeps every admission.
   "apps/runtime/src/sync/fansly/browser-site.ts",
+  // Project Browser (stage 3 PR 15, Astra's review item 2): Map/Set.delete
+  // forget the API's open screens of a page's browser once closed, and the
+  // closings of a login once written. No SQL deletion.
+  "apps/runtime/src/modules/page-browser/index.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.
