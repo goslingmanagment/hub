@@ -4,12 +4,19 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { operationsOutsideClientTokenProfile } from "@agency_hub_core/contracts";
+
 import {
   CLIENT_SDK_FIXTURE_ROOT,
   CLIENT_SDK_NAMES,
   CLIENT_SDK_REGISTRY,
 } from "../apps/runtime/src/services/client-sdk-registry.ts";
-import { COMPAT_OPERATION_EXERCISERS, laneFor, loadFrozenSdk } from "./helpers/client-sdk-compat.ts";
+import {
+  COMPAT_OPERATION_EXERCISERS,
+  COMPAT_SHARED_OPERATIONS,
+  laneFor,
+  loadFrozenSdk,
+} from "./helpers/client-sdk-compat.ts";
 
 // H-1a: the registry of frozen client SDKs and its fixtures stay one-to-one,
 // content-addressed, and exactly what scripts/register-client-sdk.mjs writes.
@@ -62,8 +69,17 @@ describe("client SDK registry", () => {
         expect(CLIENT_SDK_NAMES).toContain(client.name);
         expect(client.versions.length).toBeGreaterThan(0);
         for (const version of client.versions) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-        // chat-extension has no lane until H-3's narrow token: fail here, not in prod.
+        // A registered client the suite cannot drive fails here, not in prod.
         expect(() => laneFor(client.name)).not.toThrow();
+        if (client.name === "chat-extension") {
+          // H-3, critic 2 on H-1a: its lane runs with the narrow token, and the
+          // row lists nothing that token is refused — a gap shows up here, not in prod.
+          expect(laneFor(client.name).tokenClient).toBe("chat-extension");
+          expect(operationsOutsideClientTokenProfile("chat-extension", row.operations), row.bundleSha256).toEqual([]);
+          expect(laneFor(client.name).refusedSharedOperations).toEqual(
+            operationsOutsideClientTokenProfile("chat-extension", COMPAT_SHARED_OPERATIONS),
+          );
+        }
       }
       expect(row.operations).toEqual([...new Set(row.operations)].sort());
       for (const operation of row.operations) {

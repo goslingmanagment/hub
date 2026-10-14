@@ -42,6 +42,40 @@ export interface ClientSdkRegistryRow {
 export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
   // client-sdk-registry:begin
   {
+    "bundleSha256": "1b19619f20e8a1656a091c0be6c7e859921a0f75f97b8636648ca8d06f186019",
+    "contractHash": "9137410d6c88a628b538e61b912e209b79c087144e4ac8f21edbea7c6f587493",
+    "sourceCommit": "bd3eec0657bca31e418e377288214b920575211b",
+    "vendorDistSha256": "8e569bdb7e12ada6b2afb58b51befeec72acb481f9f9e137d808a5a70982c05a",
+    "zodVersion": "4.6.5",
+    "status": "candidate",
+    "clients": [
+      {
+        "name": "chat-extension",
+        "versions": [
+          "0.2.5"
+        ]
+      }
+    ],
+    "operations": [
+      "authIssueDeviceTokenWithPassword",
+      "authRevokeCurrentDeviceToken",
+      "clientAiUsageDaily",
+      "clientAudienceNew",
+      "clientBootstrap",
+      "clientConversationFeed",
+      "clientConversationRecaps",
+      "clientFanClaim",
+      "clientFanClaimStatus",
+      "clientFanProfileFromGeneration",
+      "clientSpenderAwaitingReply",
+      "clientSpenderStats",
+      "pageConversationProfile",
+      "pageSpenderAutoLists",
+      "spenderDetail"
+    ],
+    "fixture": "tests/fixtures/client-sdks/1b19619f20e8"
+  },
+  {
     "bundleSha256": "1da6e2f4cf2260f14311cb263331cad4e2176f0af8a0675ee83135a1c653f094",
     "contractHash": "a6f77fbb2ecffe7223855ac8760bfc590bb49cdfd0fc27e760ed06bdf42497b9",
     "sourceCommit": "a3449f77746e5ea83091330a6388213bedd9ec7f",
@@ -140,6 +174,42 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
       "voiceNoteStatus"
     ],
     "fixture": "tests/fixtures/client-sdks/6d2ce2a90751"
+  },
+  {
+    "bundleSha256": "eb9748670d9761bfc3caac97003ffbdcecb1407756f0284a06223821e8f8c161",
+    "contractHash": "030124539ce7c649519ca0acafe8c6c131e3620025e7b858650857baa7119bbc",
+    "sourceCommit": "6ee3d627e204efd791424b5ae5802b9e4a48b82c",
+    "vendorDistSha256": "bd65e2476a58b208e6f4ffa4797904d0ad9f40acb1d43e993ea0e176eec7e384",
+    "zodVersion": "4.6.5",
+    "status": "released",
+    "clients": [
+      {
+        "name": "chat-extension",
+        "versions": [
+          "0.2.2",
+          "0.2.3",
+          "0.2.4"
+        ]
+      }
+    ],
+    "operations": [
+      "authIssueDeviceTokenWithPassword",
+      "authRevokeCurrentDeviceToken",
+      "clientAiUsageDaily",
+      "clientAudienceNew",
+      "clientBootstrap",
+      "clientConversationFeed",
+      "clientConversationRecaps",
+      "clientFanClaim",
+      "clientFanClaimStatus",
+      "clientFanProfileFromGeneration",
+      "clientSpenderAwaitingReply",
+      "clientSpenderStats",
+      "pageConversationProfile",
+      "pageSpenderAutoLists",
+      "spenderDetail"
+    ],
+    "fixture": "tests/fixtures/client-sdks/eb9748670d97"
   },
   // client-sdk-registry:end
 ];
