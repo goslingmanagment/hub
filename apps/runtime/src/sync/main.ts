@@ -12,6 +12,8 @@ import {
 } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, SYNC_POOL_TIMEOUTS, type SyncContext } from "./context.ts";
 import { createIncidentAlertSink, SyncAlertEvaluator } from "./engine/alerts.ts";
+import { createEffectiveConfigPauseSource } from "./engine/ports.ts";
+import { buildFanslySendHolderIdentity, createDefaultFanslySendOsProbe } from "../services/fansly-send-guard/os-probe.ts";
 import type { SyncLogger } from "./engine/commit.ts";
 import { SyncEngineHost } from "./engine/host.ts";
 import {
@@ -20,6 +22,7 @@ import {
   type StallTracking,
   type SyncStall,
 } from "./engine/watchdog.ts";
+import { BrowserOnboardingTask } from "./fansly/browser-onboarding.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyPublicLookupReader } from "./fansly/public-lookup.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
@@ -121,6 +124,26 @@ export function createSyncPublicLookupTask(context: SyncContext): SyncRuntimeTas
   };
 }
 
+/** The onboarding links of new pages' browsers (Project Browser PR 16):
+ *  one process at a time drives them, under their own advisory lock; nothing
+ *  runs while no profile without a page is being onboarded. */
+export function createSyncBrowserOnboardingTask(context: SyncContext): SyncRuntimeTask {
+  const task = new BrowserOnboardingTask({
+    db: context.db,
+    connectionString: context.config.databaseUrl,
+    config: context.config,
+    logger: context.logger,
+    pause: createEffectiveConfigPauseSource(context.db, context.rawConfig),
+    holder: buildFanslySendHolderIdentity(createDefaultFanslySendOsProbe(), "sync"),
+  });
+  return {
+    async start() {
+      task.start();
+    },
+    stop: () => task.stop(),
+  };
+}
+
 export interface SyncRuntime {
   readonly instanceId: string;
   /** Stops the stall watchdog, then the engine host (the step in flight
@@ -144,6 +167,10 @@ export interface StartSyncRuntimeOptions {
   /** The public account reader; default `createSyncPublicLookupTask(context)`
    *  with the default host, none otherwise. */
   publicLookup?: SyncRuntimeTask | null;
+  /** The new pages' browser onboarding (PR 16); default
+   *  `createSyncBrowserOnboardingTask(context)` with the default host, none
+   *  otherwise. */
+  onboarding?: SyncRuntimeTask | null;
   /** The stall watchdog (`engine/watchdog.ts`); default: 120 s, its incident
    *  through `createStallIncidentReport`, `process.exit(70)`; null: none. It
    *  watches every heartbeat beat and the default host and evaluator (a host
@@ -181,12 +208,17 @@ export async function startSyncRuntime(
   const publicLookup = options.publicLookup !== undefined
     ? options.publicLookup
     : options.host === undefined ? createSyncPublicLookupTask(context) : null;
+  const onboarding = options.onboarding !== undefined
+    ? options.onboarding
+    : options.host === undefined ? createSyncBrowserOnboardingTask(context) : null;
   try {
     await host?.start();
     await alerts?.start();
     await publicLookup?.start();
+    await onboarding?.start();
   } catch (error) {
     watchdog?.stop();
+    await onboarding?.stop().catch(() => undefined);
     await publicLookup?.stop().catch(() => undefined);
     await alerts?.stop().catch(() => undefined);
     await host?.stop().catch(() => undefined);
@@ -206,7 +238,7 @@ export async function startSyncRuntime(
         // released while the process still heartbeats. The public reader's
         // request in flight (≤ its 20 s budget) finishes beside them.
         await alerts?.stop();
-        await Promise.all([publicLookup?.stop(), host?.stop()]);
+        await Promise.all([publicLookup?.stop(), host?.stop(), onboarding?.stop()]);
         clearInterval(keepAlive);
         await heartbeat.stop();
       })();

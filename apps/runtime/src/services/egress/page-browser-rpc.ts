@@ -162,8 +162,11 @@ export interface DeliveredResult {
 export interface AttemptHandlers {
   /** The operator holds the request paused until the answer (it waits a
    *  few seconds, then fails the request): an asynchronous answer is written
-   *  when it settles, on the connection the check came on only. */
-  onCheck(check: Check): CheckReply | Promise<CheckReply>;
+   *  when it settles, on the connection the check came on only — or at once,
+   *  by `answerNow` (true: written now; the settled answer is then not
+   *  written again), when it must leave inside the handler's own critical
+   *  section (a new page's identity read: under the profile's row lock). */
+  onCheck(check: Check, answerNow: (reply: CheckReply) => boolean): CheckReply | Promise<CheckReply>;
   onSent(sent: Sent): void;
   onResult(delivered: DeliveredResult): void;
 }
@@ -887,17 +890,28 @@ export class PageBrowserRpcClient {
     };
     // Nothing waits for this attempt here: it is never admitted.
     if (handlers === undefined) return this.#answerCheck(check, refused);
+    const epoch = this.#epoch;
+    let answered = false;
+    const answerNow = (reply: CheckReply): boolean => {
+      // On another connection the operator failed the paused request already.
+      if (answered || this.#epoch !== epoch) return false;
+      answered = true;
+      this.#answerCheck(check, reply);
+      return true;
+    };
     let reply: CheckReply | Promise<CheckReply>;
     try {
-      reply = handlers.onCheck(check);
+      reply = handlers.onCheck(check, answerNow);
     } catch (error) {
-      return this.#answerCheck(check, failed(error));
+      if (!answered) this.#answerCheck(check, failed(error));
+      return;
     }
-    if (!(reply instanceof Promise)) return this.#answerCheck(check, reply);
-    const epoch = this.#epoch;
+    if (!(reply instanceof Promise)) {
+      if (!answered) this.#answerCheck(check, reply);
+      return;
+    }
     void reply.then((settled) => settled, failed).then((settled) => {
-      // On another connection the operator failed the paused request already.
-      if (this.#epoch === epoch) this.#answerCheck(check, settled);
+      answerNow(settled);
     });
   }
 

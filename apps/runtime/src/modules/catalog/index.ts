@@ -36,10 +36,12 @@ import {
 import { updatePageCredentials } from "../../services/connections.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import {
+  AppError,
   BadRequestError,
   ConflictError,
   NotFoundError,
 } from "../../services/errors.ts";
+import { checkFanslyIdentityThroughBrowser, onboardFanslyPageThroughBrowser } from "../../services/page-browser-onboarding.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../../services/page-onboarding.ts";
 import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import {
@@ -282,7 +284,26 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const body = request.body;
-    if (body.platform === "fansly") {
+    if ("browserProfileId" in body) {
+      // Project Browser PR 16: a page connected through its own server
+      // browser — its account checked through the browser, the page born on
+      // it and the profile bound to it, in one transaction.
+      const born = await onboardFanslyPageThroughBrowser(appContext, {
+        modelSlug: body.modelSlug,
+        label: body.label,
+        profileId: body.browserProfileId,
+        by: `api:${principal.user.username}`,
+        actorUserId: principal.user.id,
+      });
+      const page = await getPageSummary(appContext, body.label);
+      return {
+        page: serializeAssignedPage(page),
+        verified: true,
+        syncQueued: born.queuedAtBirth.length > 0,
+        syncWarning: null,
+        syncRetry: null,
+      };
+    } else if (body.platform === "fansly") {
       // Step 4 S4-05: the page is born live on the Fansly Sync Engine, whose
       // host adopts it on its next pass; no legacy sync is queued for it. Its
       // initial sync is the history walks its birth queued (`new_page`).
@@ -373,7 +394,18 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireOwner(principal);
     const body = request.body;
     try {
-      if (body.platform === "fansly") {
+      if ("browserProfileId" in body) {
+        // Project Browser PR 16: the account of a new page's browser, read
+        // through it by the engine (`GET /account/me`, journaled without a
+        // page, its answer in observations).
+        const identity = await checkFanslyIdentityThroughBrowser(appContext, { profileId: body.browserProfileId, source: "credentials_verify" });
+        return {
+          valid: true as const,
+          platform: "fansly" as const,
+          username: identity.username,
+          displayName: identity.displayName,
+        };
+      } else if (body.platform === "fansly") {
         // The create-page check: no page yet, so the no-page identity check
         // (step 4 S4-05) — journaled, unpaced (owner decision №4), through
         // the proxy the page will get.
@@ -411,6 +443,10 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         };
       }
     } catch (error) {
+      // The browser's own answers keep their status: not open yet, not
+      // answered yet, no such profile.
+      if (error instanceof AppError && error.statusCode !== 400) throw error;
+      if (error instanceof BadRequestError && error.message.startsWith("Credential verification failed: ")) throw error;
       throw new BadRequestError(
         `Credential verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
       );

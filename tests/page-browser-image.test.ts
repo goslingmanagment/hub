@@ -301,7 +301,9 @@ describe("a page's container on the server (page.sh)", () => {
   });
 
   it("runs one page operation at a time", () => {
-    expect(page).toMatch(/\^\(up\|rollback\|down\|forget\)\$ \]\]; then\n {2}exec 8>"\$PB_BASE\/\.page\.lock"\n {2}flock -w 900 8/);
+    // add-profile and remove-profile (PR 16) too: a profile's owner is
+    // checked and claimed under the same lock.
+    expect(page).toMatch(/\^\(up\|add-profile\|remove-profile\|rollback\|down\|forget\)\$ \]\]; then\n {2}exec 8>"\$PB_BASE\/\.page\.lock"\n {2}flock -w 900 8/);
   });
 
   it("gives a profile to one page at a time, and Chrome keeps its own profile lock", () => {

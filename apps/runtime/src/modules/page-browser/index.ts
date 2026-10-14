@@ -1,25 +1,50 @@
 import type { IncomingMessage } from "node:http";
+import { isIP } from "node:net";
 import type { Duplex } from "node:stream";
+
+import type { FastifyReply } from "fastify";
 
 import {
   routeSchemas,
   type PageBrowserLoginChangeResponse,
   type PageBrowserLoginResponse,
   type PageBrowserLoginStepResponse,
+  type PageBrowserProfileChangeResponse,
+  type PageBrowserProfileResponse,
+  type PageBrowserProfileSummary,
 } from "@agency_hub_core/contracts";
 import {
   endSyncPageManualLogin,
+  findOnboardingProfile,
   findPageByLabel,
   getSyncPageManualLogin,
   getSyncPageTransport,
+  listUnboundPageBrowsers,
+  lockPageBrowserProfile,
+  pageBrowserEnvOf,
+  setOnboardingProxy,
+  setPageBrowserOnboarding,
+  setPageBrowserSettings,
   setSyncPageManualLogin,
   type Database,
-  type PageBrowserRow,
+  type OnboardingProfile,
 } from "@agency_hub_core/db";
+import {
+  createProxyRequestDispatcher,
+  encryptJson,
+  normalizeProxyConfig,
+  redactSensitiveText,
+  undiciRequest,
+} from "@agency_hub_core/shared";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { authenticateSessionToken, ownerSessionExpiry, recordAudit, requireOwner, SESSION_COOKIE_NAME } from "../../services/auth.ts";
-import { openPageBrowserSecret, readPageBrowserPageSettings } from "../../services/egress/page-browser-link.ts";
+import {
+  onboardingLinkProblem,
+  onboardingProxyMismatch,
+  openPageBrowserSecret,
+  readPageBrowserPageSettings,
+} from "../../services/egress/page-browser-link.ts";
 import {
   callPageBrowserLogin,
   PAGE_BROWSER_ENDPOINTS,
@@ -28,7 +53,9 @@ import {
   type LoginAnswer,
   type LoginCall,
 } from "../../services/egress/page-browser-login.ts";
-import { AppError, NotFoundError } from "../../services/errors.ts";
+import { AppError, BadRequestError, NotFoundError } from "../../services/errors.ts";
+import { onboardingProxyOf, PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, profilePageName } from "../../services/page-browser-onboarding.ts";
+import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** The owner's login of a page's browser in the audit log: opened, closed,
@@ -49,47 +76,66 @@ const SCREEN_LOOK_DEADLINE_MS = 1_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*)?(\?.*)?$/;
+/** A new page's browser's screen, by its profile (PR 16). */
+const PROFILE_SCREEN_PATH = /^\/api\/v1\/page-browser\/profiles\/([0-9a-f-]{36})\/screen(\/[^?#]*)?(\?.*)?$/;
+
+/** Whose browser a login is of: a page's (its manual login,
+ *  `sync_pages.manual_login`), or a profile no page has yet (its onboarding,
+ *  `page_browsers.onboarding`, PR 16). */
+type Target =
+  | { kind: "page"; key: string; pageId: number; label: string }
+  | { kind: "profile"; key: string; profileId: string };
+
+/** The login of a target as the screens watch it: open or not, and since
+ *  when (which login it is). */
+interface LoginNow {
+  open: boolean;
+  since: number | null;
+}
 
 /**
  * The owner's login of a page's server browser (Project Browser plan §4.8;
- * stage 3 PR 15), under `/api/v1/page-browser/`. Owner session only.
+ * stage 3 PR 15), under `/api/v1/page-browser/`, and a new page's onboarding
+ * through its browser (plan §3.2 «Подключение новой страницы через браузер»;
+ * PR 16) under `/api/v1/page-browser/profiles/`. Owner session only.
  *
- * - The login's state is the owner's lever (`sync_pages.manual_login`, with
- *   its audit row): opening it puts the page on its pause at once; the
- *   engine that owns the page follows it — the browser into the manual login
- *   and back — as only it may command the browser. Nothing here talks to the
- *   engine but through the database.
- * - The form's calls go to the page's operator over pb-control with the API's
- *   own token (`page_browsers.encrypted_api_token`); the operator takes them
- *   only in the manual login the engine switched on. The login, the password
- *   and the code live in the request for the time of the hand-over: the body
- *   is never logged (Fastify logs no body), never audited (a step's fact and
- *   result only), never in an error.
+ * - The login's state is the owner's lever (`sync_pages.manual_login` for a
+ *   page; `page_browsers.onboarding` for a profile no page has; with its
+ *   audit row): opening a page's puts the page on its pause at once; the
+ *   engine that owns the page — or the onboarding link of the profile —
+ *   follows it, the browser into the manual login and back, as only it may
+ *   command the browser. Nothing here talks to the engine but through the
+ *   database.
+ * - The form's calls go to the browser's operator over pb-control with the
+ *   API's own token (`page_browsers.encrypted_api_token`); the operator takes
+ *   them only in the manual login the engine switched on. The login, the
+ *   password and the code live in the request for the time of the hand-over:
+ *   the body is never logged (Fastify logs no body), never audited (a step's
+ *   fact and result only), never in an error.
  * - The screenshot: the operator's JPEG, passed on, kept nowhere. Polled by
  *   the open login page every second: its route logs at warn only.
  * - The browser's own screen (KasmVNC): its web client and WebSocket under
- *   `…/screen/`, passed to the container with the page's own screen password
- *   (`page_browsers.encrypted_vnc_password`) — only while the page's login is
- *   open, so a person is never in the browser of a page that works. The
- *   WebSocket's upgrade is checked here as a route is: the owner's cookie
- *   session, an Origin of this host. And it is checked for as long as it
- *   lives (Astra's review of PR 15, item 2, rounds 1 and 2): each one is
- *   bound to the session that opened it and to the login it was opened in.
- *   The owner's close of the login closes every screen of the page before
- *   the closing is written (so before the engine can bring the automation
- *   back); while it is being written no screen of the page opens, and one
- *   that was being opened meanwhile is closed with the rest once it is
- *   written — so no screen of the page is open from the moment the closing
- *   commits. Each screen watches itself, apart from the others and without
- *   waiting on the database: it closes at its session's expiry (a timer
- *   from the expiry known when it opened — a session's is fixed at its
- *   login); every `SCREEN_WATCH_MS` it reads its session and its login
- *   again, and closes when the session was revoked or expired, or its user
- *   is no longer an active owner, or the login is no longer the one it was
- *   opened in — or when that read fails or has not answered within
- *   `SCREEN_LOOK_DEADLINE_MS` (fail closed). The API is one process
- *   (docker-compose.production.yml: one `api`), so its screens are all
- *   here.
+ *   `…/screen/`, passed to the container with the browser's own screen
+ *   password (`page_browsers.encrypted_vnc_password`) — only while its login
+ *   is open, so a person is never in a browser that works. The WebSocket's
+ *   upgrade is checked here as a route is: the owner's cookie session, an
+ *   Origin of this host. And it is checked for as long as it lives (Astra's
+ *   review of PR 15, item 2, rounds 1 and 2): each one is bound to the
+ *   session that opened it and to the login it was opened in. The owner's
+ *   close of the login closes every screen of its browser before the closing
+ *   is written (so before the engine can bring the automation back); while
+ *   it is being written no screen of it opens, and one that was being opened
+ *   meanwhile is closed with the rest once it is written — so no screen of
+ *   it is open from the moment the closing commits. Each screen watches
+ *   itself, apart from the others and without waiting on the database: it
+ *   closes at its session's expiry (a timer from the expiry known when it
+ *   opened — a session's is fixed at its login); every `SCREEN_WATCH_MS` it
+ *   reads its session and its login again, and closes when the session was
+ *   revoked or expired, or its user is no longer an active owner, or the
+ *   login is no longer the one it was opened in — or when that read fails or
+ *   has not answered within `SCREEN_LOOK_DEADLINE_MS` (fail closed). The API
+ *   is one process (docker-compose.production.yml: one `api`), so its
+ *   screens are all here.
  * - Every change (`POST`) is taken only from a page of the dashboard's own
  *   origin — the dashboard is served by this API, so its `Origin` names the
  *   host the request came to — as the screen's upgrade checks it (Astra's
@@ -98,6 +144,16 @@ const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*
  *   still sends with a POST; the API has no CSRF token, and a browser sends
  *   `Origin` with every POST. Refused: 403 `cross_origin`, before the
  *   session is read.
+ * - A new page's onboarding (PR 16): the proxy of the page to be (saved
+ *   sealed, the SOCKS5 its container admits only; its exit IP read through
+ *   it for the owner), the exit IP pinned (the browser checks it itself
+ *   before it opens its exit: its own word is what the view shows), the
+ *   login as a page's, and the onboarding given up (the engine stops the
+ *   browser; `remove-profile` deletes the profile). The account check and
+ *   the page's creation are the catalog's (`/api/v1/admin/credentials/verify`,
+ *   `/api/v1/admin/pages`, with `browserProfileId`). Only a profile no page
+ *   has: once bound, the page's own levers hold (PR 15's login, PR 17's
+ *   `sync browser pin-ip`).
  */
 export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -110,23 +166,58 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     return { pageId: found.page.id, label };
   }
 
-  /** The page's browser, or why it has none Hub can use. */
-  async function browserOf(pageId: number): Promise<{ profile: PageBrowserRow } | { problem: string }> {
-    const read = await readPageBrowserPageSettings(appContext.db, pageId);
-    return "problem" in read ? { problem: read.problem } : { profile: read.profile };
+  function pageTarget(page: { pageId: number; label: string }): Target {
+    return { kind: "page", key: `page:${page.pageId}`, pageId: page.pageId, label: page.label };
   }
 
-  function call(profile: PageBrowserRow, what: LoginCall, timeoutMs: number): Promise<LoginAnswer> {
+  /** A profile no page has yet, or the refusal. */
+  async function profileOf(profileId: string): Promise<OnboardingProfile> {
+    const profile = await findOnboardingProfile(appContext.db, profileId);
+    if (profile === null) throw new NotFoundError(`No page browser profile ${profileId}`);
+    if (profile.pageId !== null) throw new AppError(`Profile ${profileId} serves a page now: its login is the page's`, 409, "profile_bound");
+    return profile;
+  }
+
+  function profileTarget(profileId: string): Target {
+    return { kind: "profile", key: `profile:${profileId}`, profileId };
+  }
+
+  /** The browser of a target as the form reaches it — its container and its
+   *  sealed tokens — or why it has none Hub can use. */
+  async function browserOf(target: Target): Promise<{ container: string; encryptedApiToken: string; encryptedVncPassword: string } | { problem: string }> {
+    if (target.kind === "page") {
+      const read = await readPageBrowserPageSettings(appContext.db, target.pageId);
+      return "problem" in read ? { problem: read.problem } : read.profile;
+    }
+    const profile = await findOnboardingProfile(appContext.db, target.profileId);
+    if (profile === null) return { problem: "the profile is gone" };
+    const problem = onboardingLinkProblem(profile);
+    return problem !== null ? { problem } : profile;
+  }
+
+  /** The target's login now: open or not, and since when. */
+  async function loginNow(target: Target): Promise<LoginNow | null> {
+    if (target.kind === "page") {
+      const login = await getSyncPageManualLogin(appContext.db, target.pageId);
+      return login === null ? null : { open: login.value === "wanted", since: login.changedAt?.getTime() ?? null };
+    }
+    const profile = await findOnboardingProfile(appContext.db, target.profileId);
+    return profile === null || profile.pageId !== null ? null : { open: profile.onboarding === "login", since: profile.onboardingChangedAt?.getTime() ?? null };
+  }
+
+  function call(browser: { container: string; encryptedApiToken: string }, what: LoginCall, timeoutMs: number): Promise<LoginAnswer> {
     return callPageBrowserLogin({
-      url: endpoints().rpcUrl(profile.container),
-      token: openPageBrowserSecret(appContext.config, profile.encryptedApiToken),
+      url: endpoints().rpcUrl(browser.container),
+      token: openPageBrowserSecret(appContext.config, browser.encryptedApiToken),
       call: what,
       timeoutMs,
     });
   }
 
-  function screenUrl(label: string): string {
-    const base = `/api/v1/page-browser/pages/${encodeURIComponent(label)}/screen`;
+  function screenUrl(target: Target): string {
+    const base = target.kind === "page"
+      ? `/api/v1/page-browser/pages/${encodeURIComponent(target.label)}/screen`
+      : `/api/v1/page-browser/profiles/${target.profileId}/screen`;
     const socketPath = `${base.slice(1)}/websockify`;
     return `${base}/index.html?autoconnect=1&resize=remote&path=${encodeURIComponent(socketPath)}`;
   }
@@ -144,23 +235,23 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     }
   }
 
-  /** The page's login is open and its browser ready: the browser and the
+  /** The target's login is open and its browser ready: the browser and the
    *  instant the login was opened (which login it is), or why not. */
-  async function openLoginOf(pageId: number): Promise<{ profile: PageBrowserRow; since: number | null }> {
-    const login = await getSyncPageManualLogin(appContext.db, pageId);
-    if (login === null || login.value !== "wanted") throw new AppError("The login of the page's browser is not open", 409, "login_not_open");
-    const browser = await browserOf(pageId);
-    if ("problem" in browser) throw new AppError(`The page's browser is not ready: ${browser.problem}`, 409, "browser_not_ready");
-    return { profile: browser.profile, since: login.changedAt?.getTime() ?? null };
+  async function openLoginOf(target: Target): Promise<{ browser: { container: string; encryptedApiToken: string; encryptedVncPassword: string }; since: number | null }> {
+    const login = await loginNow(target);
+    if (login === null || !login.open) throw new AppError("The login of the browser is not open", 409, "login_not_open");
+    const browser = await browserOf(target);
+    if ("problem" in browser) throw new AppError(`The browser is not ready: ${browser.problem}`, 409, "browser_not_ready");
+    return { browser, since: login.since };
   }
 
   // ── the screens open now (Astra's review of PR 15, item 2) ──────────────
 
   interface Tunnel {
-    pageId: number;
+    target: Target;
     /** The owner's session token that opened it. */
     session: string;
-    /** The login it was opened in (its `manual_login_changed_at`). */
+    /** The login it was opened in (its changed-at instant). */
     since: number | null;
     /** Still being opened: its login not read yet, not watched yet. */
     opening: boolean;
@@ -172,9 +263,9 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     expiresAt: number;
   }
   const tunnels = new Set<Tunnel>();
-  /** The pages whose login's closing is being written now (how many
+  /** The targets whose login's closing is being written now (how many
    *  closings at once): no screen of theirs opens meanwhile. */
-  const closing = new Map<number, number>();
+  const closing = new Map<string, number>();
   const watchMs = appContext.pageBrowserScreenWatch?.everyMs ?? SCREEN_WATCH_MS;
   const deadlineMs = appContext.pageBrowserScreenWatch?.deadlineMs ?? SCREEN_LOOK_DEADLINE_MS;
 
@@ -194,7 +285,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     if (!tunnels.has(tunnel)) return;
     untrack(tunnel);
     tunnel.close();
-    appContext.logger.info({ pageId: tunnel.pageId, why }, "page browser screen: closed");
+    appContext.logger.info({ target: tunnel.target.key, why }, "page browser screen: closed");
   }
 
   /** Close the screens `which` names: both sockets of each. */
@@ -252,19 +343,38 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       if (!tunnels.has(tunnel)) return;
       tunnel.timers.next = later(() => look(tunnel), watchMs);
     };
-    Promise.all([ownerSessionExpiry(appContext, tunnel.session), getSyncPageManualLogin(appContext.db, tunnel.pageId)]).then(
+    Promise.all([ownerSessionExpiry(appContext, tunnel.session), loginNow(tunnel.target)]).then(
       ([expiry, login]) => {
         if (expiry === null) return done("its session is no longer an owner's", null);
-        if (login === null || login.value !== "wanted" || (login.changedAt?.getTime() ?? null) !== tunnel.since) return done("its login is no longer the open one", null);
+        if (login === null || !login.open || login.since !== tunnel.since) return done("its login is no longer the open one", null);
         done(null, expiry.getTime());
       },
       () => done("its session and login could not be read", null),
     );
   }
 
+  /** Close a target's login: its screens close before the closing is
+   *  written, none opens while it is written, and one that was being opened
+   *  meanwhile closes with the rest once it is. */
+  async function closingScreensOf<T>(target: Target, why: string, write: () => Promise<T>): Promise<T> {
+    const ofTarget = (tunnel: Tunnel) => tunnel.target.key === target.key;
+    closing.set(target.key, (closing.get(target.key) ?? 0) + 1);
+    closeScreens(ofTarget, why);
+    try {
+      return await write();
+    } finally {
+      closeScreens(ofTarget, why);
+      const left = (closing.get(target.key) ?? 1) - 1;
+      if (left > 0) closing.set(target.key, left);
+      else closing.delete(target.key);
+    }
+  }
+
   server.addHook("onClose", async () => {
     closeScreens(() => true, "the API closes");
   });
+
+  // ── a page's login (PR 15) ───────────────────────────────────────────────
 
   server.get("/api/v1/page-browser/pages/:pageLabel/login", {
     schema: routeSchemas.pageBrowserLoginGet,
@@ -274,15 +384,16 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const page = await pageOf(request.params.pageLabel);
+    const target = pageTarget(page);
     const [transport, login, browser] = await Promise.all([
       getSyncPageTransport(appContext.db, page.pageId),
       getSyncPageManualLogin(appContext.db, page.pageId),
-      browserOf(page.pageId),
+      browserOf(target),
     ]);
     if (transport === null || login === null) throw new AppError(`The page ${page.label} has no engine row`, 404, "sync_page_not_found");
     const ready = !("problem" in browser);
     let step: PageBrowserLoginStepResponse | null = null;
-    if (ready && login.value !== "off") step = stepOf(await call(browser.profile, { type: "login.state" }, READ_CALL_MS));
+    if (ready && login.value !== "off") step = stepOf(await call(browser, { type: "login.state" }, READ_CALL_MS));
     return {
       page: { label: page.label, pageId: page.pageId },
       transport,
@@ -290,30 +401,17 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       browser: { ready, problem: ready ? null : browser.problem, reachable: step === null ? null : !step.unreachable },
       screen: step?.screen ?? null,
       refused: step?.refused ?? null,
-      screenUrl: screenUrl(page.label),
+      screenUrl: screenUrl(target),
     };
   });
 
   async function change(request: { params: { pageLabel: string } }, principal: Awaited<ReturnType<typeof requirePrincipal>>, to: "wanted" | "ending"): Promise<PageBrowserLoginChangeResponse> {
     const page = await pageOf(request.params.pageLabel);
-    const browser = await browserOf(page.pageId);
+    const target = pageTarget(page);
+    const browser = await browserOf(target);
     if (to === "wanted" && "problem" in browser) throw new AppError(`The page's browser is not ready: ${browser.problem}`, 409, "browser_not_ready");
     if (to === "wanted") return write(page, principal, browser, to);
-    // The page's screens close before the closing is written (the engine
-    // brings the automation back only once it reads it), none opens while
-    // it is written, and one that was being opened meanwhile closes with
-    // the rest once it is (`upgrade` refuses it, or it is tracked here).
-    const ofPage = (tunnel: Tunnel) => tunnel.pageId === page.pageId;
-    closing.set(page.pageId, (closing.get(page.pageId) ?? 0) + 1);
-    closeScreens(ofPage, "the owner closes the login");
-    try {
-      return await write(page, principal, browser, to);
-    } finally {
-      closeScreens(ofPage, "the owner closes the login");
-      const left = (closing.get(page.pageId) ?? 1) - 1;
-      if (left > 0) closing.set(page.pageId, left);
-      else closing.delete(page.pageId);
-    }
+    return closingScreensOf(target, "the owner closes the login", () => write(page, principal, browser, to));
   }
 
   async function write(
@@ -359,17 +457,14 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     return change(request, principal, "ending");
   });
 
-  async function step(request: { params: { pageLabel: string } }, principal: Awaited<ReturnType<typeof requirePrincipal>>, what: LoginCall & { type: "login.submit" | "login.code" }): Promise<PageBrowserLoginStepResponse> {
-    const page = await pageOf(request.params.pageLabel);
-    const { profile } = await openLoginOf(page.pageId);
-    const answer = stepOf(await call(profile, what, STEP_CALL_MS));
-    // The step's fact and result: never what was typed.
-    await recordAudit({ db: appContext.db }, {
-      ...auditCtx(principal),
-      eventType: PAGE_BROWSER_LOGIN_AUDIT_EVENT,
-      platformAccountId: page.pageId,
-      metadata: { pageLabel: page.label, step: what.type === "login.submit" ? "submit" : "code", screen: answer.screen?.screen ?? null, refused: answer.refused, unreachable: answer.unreachable },
-    });
+  /** A step of the form: its fact and result audited, never what was typed. */
+  async function step(target: Target, principal: Awaited<ReturnType<typeof requirePrincipal>>, what: LoginCall & { type: "login.submit" | "login.code" }): Promise<PageBrowserLoginStepResponse> {
+    const { browser } = await openLoginOf(target);
+    const answer = stepOf(await call(browser, what, STEP_CALL_MS));
+    const fact = { step: what.type === "login.submit" ? "submit" : "code", screen: answer.screen?.screen ?? null, refused: answer.refused, unreachable: answer.unreachable };
+    await recordAudit({ db: appContext.db }, target.kind === "page"
+      ? { ...auditCtx(principal), eventType: PAGE_BROWSER_LOGIN_AUDIT_EVENT, platformAccountId: target.pageId, metadata: { pageLabel: target.label, ...fact } }
+      : { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata: { profileId: target.profileId, ...fact } });
     return answer;
   }
 
@@ -380,7 +475,8 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return step(request, principal, { type: "login.submit", login: request.body.login, password: request.body.password });
+    const target = pageTarget(await pageOf(request.params.pageLabel));
+    return step(target, principal, { type: "login.submit", login: request.body.login, password: request.body.password });
   });
 
   server.post("/api/v1/page-browser/pages/:pageLabel/login/code", {
@@ -390,20 +486,16 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return step(request, principal, { type: "login.code", code: request.body.code });
+    const target = pageTarget(await pageOf(request.params.pageLabel));
+    return step(target, principal, { type: "login.code", code: request.body.code });
   });
 
-  server.get("/api/v1/page-browser/pages/:pageLabel/login/screenshot", {
-    schema: routeSchemas.pageBrowserLoginScreenshot,
-    logLevel: "warn",
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const page = await pageOf(request.params.pageLabel);
-    const { profile } = await openLoginOf(page.pageId);
-    const answer = await call(profile, { type: "login.screenshot" }, READ_CALL_MS);
-    if (answer.kind === "refused") throw new AppError(`The page's browser gives no screenshot now (${answer.reason})`, 409, `screenshot_${answer.reason}`);
-    if (answer.kind !== "screenshot") throw new AppError("The page's browser cannot be reached", 409, "browser_unreachable");
+  /** The target's live screenshot, passed on as it came. */
+  async function screenshot(target: Target, reply: FastifyReply): Promise<void> {
+    const { browser } = await openLoginOf(target);
+    const answer = await call(browser, { type: "login.screenshot" }, READ_CALL_MS);
+    if (answer.kind === "refused") throw new AppError(`The browser gives no screenshot now (${answer.reason})`, 409, `screenshot_${answer.reason}`);
+    if (answer.kind !== "screenshot") throw new AppError("The browser cannot be reached", 409, "browser_unreachable");
     reply.hijack();
     reply.raw.writeHead(200, {
       "content-type": "image/jpeg",
@@ -412,14 +504,22 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       "x-content-type-options": "nosniff",
     });
     reply.raw.end(answer.jpeg);
+  }
+
+  server.get("/api/v1/page-browser/pages/:pageLabel/login/screenshot", {
+    schema: routeSchemas.pageBrowserLoginScreenshot,
+    logLevel: "warn",
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await screenshot(pageTarget(await pageOf(request.params.pageLabel)), reply);
   });
 
-  /** The page's screen may be opened now: its login open, its browser
+  /** The target's screen may be opened now: its login open, its browser
    *  ready. The browser's screen target and password, or the refusal. */
-  async function screenOf(label: string): Promise<{ pageId: number; since: number | null; target: { host: string; port: number }; password: string }> {
-    const page = await pageOf(label);
-    const { profile, since } = await openLoginOf(page.pageId);
-    return { pageId: page.pageId, since, target: endpoints().screen(profile.container), password: openPageBrowserSecret(appContext.config, profile.encryptedVncPassword) };
+  async function screenOf(target: Target): Promise<{ since: number | null; target: { host: string; port: number }; password: string }> {
+    const { browser, since } = await openLoginOf(target);
+    return { since, target: endpoints().screen(browser.container), password: openPageBrowserSecret(appContext.config, browser.encryptedVncPassword) };
   }
 
   server.get("/api/v1/page-browser/pages/:pageLabel/screen/*", {
@@ -428,14 +528,277 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const screen = await screenOf(request.params.pageLabel);
+    const screen = await screenOf(pageTarget(await pageOf(request.params.pageLabel)));
+    const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";
+    reply.hijack();
+    proxyScreenRequest({ req: request.raw, res: reply.raw, target: screen.target, path: `/${request.params["*"]}${query}`, password: screen.password });
+  });
+
+  // ── a new page's onboarding through its browser (PR 16) ──────────────────
+
+  function operatorView(profile: OnboardingProfile): PageBrowserProfileSummary["operator"] {
+    return {
+      step: profile.step,
+      stopReason: profile.stopReason,
+      mode: profile.mode,
+      exitOpen: profile.exitOpen,
+      exitIp: profile.exitIp,
+      accountId: profile.accountId,
+      sessionKnown: profile.sessionFingerprint !== null,
+      selfTest: profile.selftestOk === null || profile.selftestAt === null ? null : { ok: profile.selftestOk, at: profile.selftestAt.toISOString(), failed: profile.selftestFailed },
+      lastStateAt: profile.lastStateAt?.toISOString() ?? null,
+      linkError: profile.linkError,
+    };
+  }
+
+  function summaryOf(profile: OnboardingProfile): PageBrowserProfileSummary {
+    return {
+      profileId: profile.profileId,
+      name: profilePageName(profile),
+      container: profile.container,
+      onboarding: profile.onboarding,
+      createdAt: profile.createdAt.toISOString(),
+      proxySet: profile.proxy !== null,
+      pinnedExitIp: profile.pinnedExitIp,
+      envSet: pageBrowserEnvOf(profile.env) !== null,
+      operator: operatorView(profile),
+    };
+  }
+
+  server.get("/api/v1/page-browser/profiles", {
+    schema: routeSchemas.pageBrowserProfiles,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return { profiles: (await listUnboundPageBrowsers(appContext.db)).map(summaryOf) };
+  });
+
+  server.get("/api/v1/page-browser/profiles/:profileId", {
+    schema: routeSchemas.pageBrowserProfileGet,
+    // Polled by the open onboarding page every second.
+    logLevel: "warn",
+  }, async (request): Promise<PageBrowserProfileResponse> => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const profile = await profileOf(request.params.profileId);
+    const target = profileTarget(profile.profileId);
+    const problem = onboardingLinkProblem(profile);
+    let screen: PageBrowserLoginStepResponse | null = null;
+    if (problem === null && profile.onboarding === "login") screen = stepOf(await call(profile, { type: "login.state" }, READ_CALL_MS));
+    const request_ = profile.identityRequest;
+    const result = profile.identityResult;
+    const answered = request_ !== null && result !== null && result.requestId === request_.id;
+    const env = pageBrowserEnvOf(profile.env);
+    return {
+      profile: summaryOf(profile),
+      socksEndpoint: profile.socksEndpoint,
+      proxy: profile.proxy === null ? null : { url: profile.proxy.url, username: proxyUsername(profile) },
+      env,
+      login: { state: profile.onboarding, changedAt: profile.onboardingChangedAt?.toISOString() ?? null },
+      browser: { ready: problem === null, problem, reachable: screen === null ? null : !screen.unreachable },
+      screen: screen?.screen ?? null,
+      refused: screen?.refused ?? null,
+      screenUrl: screenUrl(target),
+      identity: {
+        requestedAt: request_?.requestedAt.toISOString() ?? null,
+        pending: request_ !== null && !answered,
+        ok: result === null ? null : result.ok,
+        accountId: result?.ok === true ? result.accountId : null,
+        username: result?.ok === true ? result.username : null,
+        displayName: result?.ok === true ? result.displayName : null,
+        checkedAt: result === null ? null : result.ok ? result.sentAt : result.at,
+        error: result?.ok === false ? result.error : null,
+      },
+    };
+  });
+
+  /** The proxy's username, shown so the owner sees which one is set (never
+   *  its password). */
+  function proxyUsername(profile: OnboardingProfile): string | null {
+    try {
+      return onboardingProxyOf(appContext, profile)?.username ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function audit(principal: Awaited<ReturnType<typeof requirePrincipal>>, metadata: Record<string, unknown>): Promise<void> {
+    await recordAudit({ db: appContext.db }, { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata });
+  }
+
+  server.post("/api/v1/page-browser/profiles/:profileId/proxy", {
+    schema: routeSchemas.pageBrowserProfileProxy,
+  }, async (request) => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const profile = await profileOf(request.params.profileId);
+    if (profile.onboarding === "login") throw new AppError("The browser's login is open: close it before its proxy changes", 409, "login_open");
+    let proxy: ReturnType<typeof normalizeProxyConfig>;
+    try {
+      const given = request.body.proxy;
+      proxy = normalizeProxyConfig({ url: given.url, username: given.username ?? null, password: given.password ?? null });
+      if (appContext.pageBrowserProxyTest === undefined) await assertAllowedProxyTarget(proxy);
+    } catch (error) {
+      throw new BadRequestError(`Invalid proxy: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`);
+    }
+    const mismatch = await onboardingProxyMismatch(profile, proxy);
+    if (mismatch !== null) throw new BadRequestError(`Invalid proxy: ${mismatch}`);
+    const exitIp = await exitIpThrough(proxy);
+    const encryptedAuth = proxy.username || proxy.password
+      ? JSON.stringify(encryptJson({ username: proxy.username ?? null, password: proxy.password ?? null }, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion))
+      : null;
+    if (!(await setOnboardingProxy(appContext.db, { profileId: profile.profileId, url: proxy.url, encryptedAuth, keyVersion: encryptedAuth === null ? null : appContext.config.encryptionKeyVersion }))) {
+      throw new AppError(`Profile ${profile.profileId} serves a page now`, 409, "profile_bound");
+    }
+    await audit(principal, { profileId: profile.profileId, step: "proxy", exitIp });
+    return { exitIp };
+  });
+
+  /** The exit IP seen through a proxy (`api.ipify.org`, as the dashboard's
+   *  proxy test reads it). */
+  async function exitIpThrough(proxy: ReturnType<typeof normalizeProxyConfig>): Promise<string> {
+    if (appContext.pageBrowserProxyTest !== undefined) return appContext.pageBrowserProxyTest(proxy);
+    const dispatcher = createProxyRequestDispatcher(proxy);
+    try {
+      const { statusCode, body } = await undiciRequest("https://api.ipify.org?format=json", { method: "GET", signal: AbortSignal.timeout(30_000), dispatcher });
+      const text = await body.text();
+      if (statusCode < 200 || statusCode >= 300) throw new Error(`IP check returned HTTP ${statusCode}`);
+      const ip = (JSON.parse(text) as { ip?: unknown }).ip;
+      if (typeof ip !== "string" || isIP(ip) === 0) throw new Error("the IP check named no address");
+      return ip;
+    } catch (error) {
+      throw new BadRequestError(`Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`);
+    } finally {
+      await dispatcher.close();
+    }
+  }
+
+  server.post("/api/v1/page-browser/profiles/:profileId/pin", {
+    schema: routeSchemas.pageBrowserProfilePin,
+  }, async (request) => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const ip = request.body.ip.trim();
+    if (isIP(ip) === 0) throw new BadRequestError(`Not an IP address: ${ip}`);
+    // Only a profile no page has (a page's pin is PR 17's `sync browser
+    // pin-ip`), locked with its row; the same write that lever makes.
+    const pinned = await appContext.db.transaction(async (raw): Promise<"pinned" | "bound" | "no_profile"> => {
+      const tx = raw as unknown as Database;
+      const locked = await lockPageBrowserProfile(tx, request.params.profileId);
+      if (locked === null) return "no_profile";
+      if (locked.pageId !== null) return "bound";
+      await setPageBrowserSettings(tx, { profileId: request.params.profileId, pinnedExitIp: ip });
+      return "pinned";
+    });
+    if (pinned === "no_profile") throw new NotFoundError(`No page browser profile ${request.params.profileId}`);
+    if (pinned === "bound") throw new AppError(`Profile ${request.params.profileId} serves a page now: its pin is sync browser pin-ip`, 409, "profile_bound");
+    await audit(principal, { profileId: request.params.profileId, step: "pin", pinnedExitIp: ip });
+    return { pinnedExitIp: ip };
+  });
+
+  async function changeOnboarding(profileId: string, principal: Awaited<ReturnType<typeof requirePrincipal>>, to: "login" | "open" | "closing"): Promise<PageBrowserProfileChangeResponse> {
+    const profile = await profileOf(profileId);
+    if (to === "login") {
+      const problem = onboardingLinkProblem(profile);
+      if (problem !== null) throw new AppError(`The browser is not ready: ${problem}`, 409, "browser_not_ready");
+    }
+    const writeIt = () => appContext.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      const result = await setPageBrowserOnboarding(tx, { profileId, to, by: `owner:${principal.user.id}` });
+      switch (result.kind) {
+        case "no_profile":
+          throw new NotFoundError(`No page browser profile ${profileId}`);
+        case "bound":
+          throw new AppError(`Profile ${profileId} serves a page now`, 409, "profile_bound");
+        case "refused":
+          throw new AppError(`The onboarding cannot go to ${to}: ${result.why}`, 409, "onboarding_refused");
+        case "unchanged":
+          return { state: result.state, changed: false };
+        case "changed":
+          await recordAudit({ db: tx }, { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata: { profileId, step: to === "login" ? "open" : to === "open" ? "close" : "give_up", from: result.from, to: result.to } });
+          return { state: result.to, changed: true };
+      }
+    });
+    // Leaving the login: its screens close before it is written.
+    return to === "login" ? writeIt() : closingScreensOf(profileTarget(profileId), "the owner closes the login", writeIt);
+  }
+
+  server.post("/api/v1/page-browser/profiles/:profileId/login/start", {
+    schema: routeSchemas.pageBrowserProfileLoginStart,
+  }, async (request) => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return changeOnboarding(request.params.profileId, principal, "login");
+  });
+
+  server.post("/api/v1/page-browser/profiles/:profileId/login/finish", {
+    schema: routeSchemas.pageBrowserProfileLoginFinish,
+  }, async (request) => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return changeOnboarding(request.params.profileId, principal, "open");
+  });
+
+  server.post("/api/v1/page-browser/profiles/:profileId/close", {
+    schema: routeSchemas.pageBrowserProfileClose,
+  }, async (request) => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return changeOnboarding(request.params.profileId, principal, "closing");
+  });
+
+  server.post("/api/v1/page-browser/profiles/:profileId/login/submit", {
+    schema: routeSchemas.pageBrowserProfileLoginSubmit,
+    config: { rateLimit: { max: 20, timeWindow: 60_000 } },
+  }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await profileOf(request.params.profileId);
+    return step(profileTarget(request.params.profileId), principal, { type: "login.submit", login: request.body.login, password: request.body.password });
+  });
+
+  server.post("/api/v1/page-browser/profiles/:profileId/login/code", {
+    schema: routeSchemas.pageBrowserProfileLoginCode,
+    config: { rateLimit: { max: 20, timeWindow: 60_000 } },
+  }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await profileOf(request.params.profileId);
+    return step(profileTarget(request.params.profileId), principal, { type: "login.code", code: request.body.code });
+  });
+
+  server.get("/api/v1/page-browser/profiles/:profileId/login/screenshot", {
+    schema: routeSchemas.pageBrowserProfileLoginScreenshot,
+    logLevel: "warn",
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await profileOf(request.params.profileId);
+    await screenshot(profileTarget(request.params.profileId), reply);
+  });
+
+  server.get("/api/v1/page-browser/profiles/:profileId/screen/*", {
+    schema: routeSchemas.pageBrowserProfileScreen,
+    logLevel: "warn",
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await profileOf(request.params.profileId);
+    const screen = await screenOf(profileTarget(request.params.profileId));
     const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";
     reply.hijack();
     proxyScreenRequest({ req: request.raw, res: reply.raw, target: screen.target, path: `/${request.params["*"]}${query}`, password: screen.password });
   });
 
   // The screen's WebSocket: an upgrade never reaches Fastify's routes. Every
-  // upgrade of the API comes here; only the screen's path is taken.
+  // upgrade of the API comes here; only the screens' paths are taken.
   server.server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on("error", () => undefined);
     void upgrade(req, socket, head).catch((error: unknown) => {
@@ -446,7 +809,9 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   async function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    const match = SCREEN_PATH.exec(req.url ?? "");
+    const pageMatch = SCREEN_PATH.exec(req.url ?? "");
+    const profileMatch = pageMatch === null ? PROFILE_SCREEN_PATH.exec(req.url ?? "") : null;
+    const match = pageMatch ?? profileMatch;
     if (match === null) return refuseUpgrade(socket, 404);
     // A page of another origin may not open the owner's screen.
     if (!fromThisOrigin(req.headers)) return refuseUpgrade(socket, 403);
@@ -457,22 +822,27 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // When the session expires: the screen closes then whatever else happens.
     const expiry = await ownerSessionExpiry(appContext, token);
     if (expiry === null) return refuseUpgrade(socket, 401);
-    const label = decodeURIComponent(match[1]!);
-    const page = await pageOf(label);
+    let target: Target;
+    if (pageMatch !== null) {
+      target = pageTarget(await pageOf(decodeURIComponent(pageMatch[1]!)));
+    } else {
+      await profileOf(profileMatch![1]!);
+      target = profileTarget(profileMatch![1]!);
+    }
     // Known before its login is read: an owner's close that comes meanwhile
     // closes it too.
-    const tunnel: Tunnel = { pageId: page.pageId, session: token, since: null, opening: true, close: () => socket.destroy(), timers: { next: null, deadline: null, expiry: null }, expiresAt: expiry.getTime() };
+    const tunnel: Tunnel = { target, session: token, since: null, opening: true, close: () => socket.destroy(), timers: { next: null, deadline: null, expiry: null }, expiresAt: expiry.getTime() };
     track(tunnel);
     let screen: Awaited<ReturnType<typeof screenOf>>;
     try {
-      screen = await screenOf(label);
+      screen = await screenOf(target);
     } catch (error) {
       untrack(tunnel);
       throw error;
     }
     // Closed meanwhile, or the login's closing is being written now (what
     // was read may be the login before it): no screen.
-    if (!tunnels.has(tunnel) || closing.has(page.pageId)) {
+    if (!tunnels.has(tunnel) || closing.has(target.key)) {
       untrack(tunnel);
       return refuseUpgrade(socket, 409);
     }

@@ -1054,9 +1054,20 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   applied; one the journal cannot keep (not JSON, past the traversal's limit) is a loss on its connection. The
   session's confirmation verifies the row and asks for `repair.ws-gap`; the socket's refusal asks for
   `account.verify`. A `gap` of any reason lowers the next connection's `gap_since` (where the repair reads back
-  from) to its boundary — one the operator cannot name is the last event the engine took, of any buffer; a loss the
-  intake finds itself also reopens the connection still open (`loss_since`, read back from the loss's own time),
-  repaired at once when verified, and the repair reads a browser connection's gap back a week
+  from) to its boundary, never later than the loss boundary at it (the operator names its start's and a full
+  buffer's from the last event it saved, of any kind) — one the operator cannot name is the loss boundary
+  (`events_last_wall`): the latest socket open or frame the engine took, of any buffer, stamped by Chrome's own time
+  of it (never later than Chrome saw it; CDP tells them in order), so a message missed after it is no older. A
+  site's answer and a gap are stamped at the operator's take, and a frame CDP tells late can follow them with an
+  older stamp; a close of the operator's own (its browser gone, its start) is stamped at its take while what CDP
+  still had is dropped — none of them moves the boundary (a boundary at the take would start the repair late by the
+  delivery delay, outside its 60 s margin once that is longer). With none taken yet a loss is bounded by the
+  previous connection's end, or, the page with none, by when its browser profile was made
+  (`page_browsers.created_at`, before any socket that browser could open) — never the next connection's opening,
+  which would leave out a first connection lost whole (a late first 101 after its tunnel ended: the operator drops
+  its frames and marks a gap it cannot name). A loss the intake finds itself (events the operator no longer has, a
+  new volume's untaken tail) also reopens the connection still open (`loss_since`, read back from the loss boundary
+  or that bound), repaired at once when verified, and the repair reads a browser connection's gap back a week
   (`SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS`). The site's answers go
   to `observations` (`browser_site`, `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through
   the codec (`browser-site-capture.ts`), complete; one the operator could not keep whole leaves a mark and — of the
@@ -1073,6 +1084,45 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
   Nothing is ever sent again from what the operator kept. An undici page has no `held`, and its recovery is as it
   always was.
+- **A new page's browser** (PR 16, `fansly/browser-onboarding.ts`; 0280; plan §3.2 «Подключение новой страницы через
+  браузер»): a profile `scripts/deploy-page-browser.sh add-profile` made serves no page yet. While the owner's
+  onboarding of it is under way (`page_browsers.onboarding`) or an identity request waits, the `sync` process that
+  holds the onboarding lock (`(58216, 2)`) links to its operator by the profile alone — the hello names page 0 and no
+  expected account; every take raises `link_generation`, the hello's owner generation and the fence of every write
+  and grant — and follows the onboarding as a page's login is followed: the manual login and the browser started
+  (`login`), the automation back (`open`), the browser stopped (`closing`, then `off`); a browser halted for another
+  exit IP starts again only once the owner pins the IP again. The site's login operations and the reads its interface
+  makes are admitted by the profile key (`loginOnly`; the rest of the site and its socket refused): one in flight,
+  the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
+  profile's last send (the journal's and the operator's `quiesced`), and a page's site decision (`decideSite`): the
+  route and family budgets of `route-policy.ts`, the hour's ceiling and a 429's route hold, all read from the
+  profile's journal on every slot (a hold as `route_hold_ms=` on its send), so a restart keeps them — each
+  journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
+  `sync_attempts`' sequence, so the operator never sees an id twice) — only while the onboarding is the owner's
+  login, checked under the profile's row lock at the journal entry and again, in the same generation, at the grant
+  itself (the owner's moves and the binding take that lock: one that commits first refuses the grant). The identity check is one `GET /account/me`
+  through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
+  (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. It proves the account
+  only with the operator's own `sent` (without it the instant is unknown and proves nothing — PR 15's rule), sent
+  after the boundary of the owner's login: every change of `onboarding` raises `onboarding_generation` and voids the
+  request and its answer, and once the onboarding is open the link asks the operator for the automation (even one in
+  it) and takes the arrival of its answer as that generation's boundary; an answer of another generation is never
+  recorded as an account. And the read's session must be the one that exists after the login: PR 15's confirmation
+  (a page is ready only after a fresh identity read under the live session) is the operator's for a profile too — it
+  confirms whatever account the read names, but, once the mode changed, only under the session the site's own
+  authorized GET showed from the document the operator loaded after the change — bound by Chrome's loader: the one
+  named in answer to the navigation started in that mode, committed and still the frame's, and the GET's own (a
+  late request of the replaced document never counts); a load under way at the change is followed by a load anew
+  once it is in. Until then the Hub request's headers may still be the session of before the login. The engine
+  records the account only once the operator's state says so (`session_confirmed`, that account, that session),
+  and again at the write. A request is read once: its read is bound to its attempt (`identity_attempt_id`) in a
+  committed transaction before it may go, and its grant checks the binding under the profile's lock; a link that
+  finds the request bound and unanswered (the link before it ended) never reads it again — it answers it as not
+  known, and a new request reads anew (never an automatic re-send). The site's answers go to `observations` keyed by the profile, with the buffer's position on
+  its row. The binding (the API's, one transaction with the page's birth: `browser` transport, credentials untrusted
+  until the engine's own check under the page's hello) locks the profile's row first and goes on only while the
+  onboarding is open and the check is the profile's, answered in the generation that holds — else nothing is
+  created; it raises the generation: the link closes, and the page's slot takes the browser.
 
 ## Classes
 

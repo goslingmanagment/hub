@@ -975,6 +975,45 @@ pnpm cli sync probe --page lora-1 --operation account.me
 pnpm cli sync why --page lora-1 --resource probe.manual --subject ''
 ```
 
+### Onboarding a page through its own browser (Project Browser)
+
+A new page can be connected through its own server browser instead of a pasted session: Hub never holds its
+session, the browser logs in from its own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
+
+1. **The profile**, from the workstation — the container with a new profile, an empty buffer and its own secrets,
+   then its row in Hub with its page empty (the secrets go on the Hub CLI's standard input):
+
+   ```sh
+   scripts/deploy-page-browser.sh add-profile root@152.53.191.242 --page ari-2 --image hub-page-browser:<tag> \
+     --socks <socks-host>:<port> --env '{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}'
+   ```
+
+   `--page` is the new page's label. `pnpm cli sync browser-profile list` shows the profiles no page has yet. When
+   Hub refuses the profile (its own word: nothing written), the script removes what it made. Any other failure — Hub's
+   answer lost — leaves the outcome unknown (Hub may have registered it; with `--existing`, bound to the page): the
+   script removes nothing and prints what is left and the two commands to resolve it — `sync browser-profile show
+   --profile <uuid>` in the api container, then, if Hub has none, `remove-profile … --page <name> --profile <uuid>`.
+   A profile Hub forgot (removed, or said absent) is never registered again: an add still under way is refused.
+2. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy (the
+   SOCKS5 the container was made for, with its login and password — saved sealed; Hub shows its exit IP), the exit IP
+   pinned (the browser opens its exit only when it sees that IP itself, and says what it saw), the login through
+   the form (the `sync` process admits the site's login requests by the profile key: one at a time, the owner's
+   pause, journaled in `fansly_send_log` with `page_id` null and `browser_profile_id`), «Завершить вход», «Проверить
+   аккаунт» (one `GET /account/me` through the browser, its answer in `observations`), «Создать страницу» — the page
+   born on its browser (transport `browser`), its profile bound to it, in one transaction. A login opened again, or
+   the onboarding given up, voids the check: the creation then refuses with 409 and creates nothing — check again.
+3. **Then** the page's own slot takes the browser: it verifies the account through it first (the page is born
+   untrusted), then works as any browser page.
+
+Given up: «Отказаться от подключения» stops the browser (the profile kept, unbound). Removing the profile — its row
+in Hub first (refused for a bound one), then its container, files and volumes on the server:
+
+```sh
+scripts/deploy-page-browser.sh remove-profile root@152.53.191.242 --page ari-2
+```
+
+An existing page that moves to its browser gets its profile bound at once: `add-profile … --page lilly-1 --existing`.
+
 ## Watchdog restarts, shutdown and deploys
 
 **The stall watchdog.** A hung database call is an error the engine handles (the `sync` pool's timeouts: 30 s to

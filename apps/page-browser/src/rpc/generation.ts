@@ -8,6 +8,10 @@
 // copy (plan §3.2). So the highest generation is kept for every page the
 // profile has served: one of another page says nothing about this one, and
 // going back to a page finds its own floor again.
+//
+// Page 0 is a profile that serves no page yet (Project Browser PR 16: a new
+// page's onboarding, its engine link keyed by the profile alone): its own
+// floor, kept as any page's.
 
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
@@ -34,7 +38,7 @@ export class GenerationStore {
     for (const line of text.split("\n")) {
       if (line.trim() === "") continue;
       const [page, generation] = line.trim().split(/\s+/).map(Number);
-      if (Number.isSafeInteger(page) && page! > 0 && Number.isSafeInteger(generation) && generation! >= 0) {
+      if (Number.isSafeInteger(page) && page! >= 0 && Number.isSafeInteger(generation) && generation! >= 0) {
         this.#floors.set(page!, Math.max(generation!, this.#floors.get(page!) ?? 0));
       } else {
         this.#log("unreadable", { error: "a line that is not a page and a generation" });

@@ -54,6 +54,8 @@ export class Documents {
   onReplaced: () => void = () => undefined;
   /** Told when Chrome names the request a preflight was made for. */
   onPreflight: (preflightId: string, requestId: string) => void = () => undefined;
+  /** Told when Chrome names a request's document (its loader). */
+  onLoader: (networkId: string, loaderId: string) => void = () => undefined;
 
   constructor(cdp: CdpPort) {
     cdp.on("Network.requestWillBeSent", (event) => this.#onWillBeSent(event));
@@ -83,6 +85,19 @@ export class Documents {
     if (known !== undefined && known.loader !== "") remember(this.#replaced, known.loader, true);
     remember(this.#frames, frameId, { loader: "", navigations: (known?.navigations ?? 0) + 1, commits: known?.commits ?? 0, retired: true });
     this.onReplaced();
+  }
+
+  /** The request's document (its loader, or its request's for a
+   *  preflight); null: Chrome has not named it (yet), or it has none. */
+  loaderOfRequest(networkId: string | null): string | null {
+    return this.#loader(networkId);
+  }
+
+  /** The frame's document now: the loader Chrome committed last; null when
+   *  none is committed — or the operator retired it and the next is not in. */
+  currentLoader(frameId: string | null): string | null {
+    const loader = frameId === null ? undefined : this.#frames.get(frameId)?.loader;
+    return loader === undefined || loader === "" ? null : loader;
   }
 
   /** How many documents Chrome committed in the frame so far. */
@@ -117,6 +132,7 @@ export class Documents {
     const params = event.params as { requestId?: unknown; loaderId?: unknown; initiator?: { type?: unknown; requestId?: unknown } };
     if (typeof params.requestId !== "string") return;
     remember(this.#loaderOf, params.requestId, typeof params.loaderId === "string" ? params.loaderId : "");
+    if (typeof params.loaderId === "string" && params.loaderId !== "") this.onLoader(params.requestId, params.loaderId);
     if (params.initiator?.type === "preflight" && typeof params.initiator.requestId === "string") {
       remember(this.#preflightOf, params.requestId, params.initiator.requestId);
       this.onPreflight(params.requestId, params.initiator.requestId);
