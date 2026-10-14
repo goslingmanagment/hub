@@ -657,7 +657,7 @@ forward_failed() {
 # The update stops where it is (resumable): the owner moved the page, or
 # what it must judge cannot be read — never judged blind.
 hold() {
-  sset "HELD_FROM=$(sget STEP)" "REASON=$1"
+  sset "HELD_FROM=$(sget STEP)" "HELD_WHY=$1"
   alert update_held "$1 — the update holds: page-browser-update.sh resume|rollback --page $PAGE"
   step_to held
 }
@@ -750,10 +750,10 @@ handover_forced() {
 # The page back to its browser. <key>: where the instant goes (the
 # database's clock, before the lever): the engine's checks count only what
 # the operator said after it. A give-back already done (a resume after a
-# crash) keeps the instant it had.
+# crash) keeps the instant it had. 1 refused; 3 the Hub cannot be read.
 handover_back() {
   local key="$1" note="$2"
-  if ! hub_read; then return 1; fi
+  if ! hub_read; then return 3; fi
   if [[ "$H_TRANSPORT" == browser && -z "$H_LEAVE" ]]; then
     [[ -n "$(sget "$key")" ]] || sset "$key=$H_NOW"
     return 0
@@ -874,10 +874,13 @@ step_give_back() {
     step_to engine_checked
     return
   fi
-  if ! handover_back GIVEN_BACK_MS "the page returns to its browser on the new image"; then
-    forward_failed "the Hub refused to give the page back to its browser"
-    return
-  fi
+  local rc=0
+  handover_back GIVEN_BACK_MS "the page returns to its browser on the new image" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) hold "the Hub cannot be read: the page is not given back blind"; return ;;
+    *) forward_failed "the Hub refused to give the page back to its browser"; return ;;
+  esac
   step_to given_back
 }
 
@@ -1117,10 +1120,13 @@ rb_host_checks() {
 
 rb_give_back() {
   if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_CHANGED)" == 1 ]]; then
-    if ! handover_back RB_GIVEN_BACK_MS "rollback: the page returns to its browser on its previous image"; then
-      rollback_failed "the Hub refused to give the page back to its browser"
-      return
-    fi
+    local rc=0
+    handover_back RB_GIVEN_BACK_MS "rollback: the page returns to its browser on its previous image" || rc=$?
+    case "$rc" in
+      0) ;;
+      3) hold "rollback: the Hub cannot be read: the page is not given back blind"; return ;;
+      *) rollback_failed "the Hub refused to give the page back to its browser"; return ;;
+    esac
     sset RB_STEP=given_back
   else
     sset RB_STEP=given_back RB_CHECKS=skipped
@@ -1131,12 +1137,15 @@ rb_engine_checks() {
   if [[ "$(sget RB_CHECKS)" != skipped ]]; then
     local rc=0
     wait_ready "$(sget FROM_CHROME)" "$(sget RB_GIVEN_BACK_MS)" "$(sget FROM_REVISION)" || rc=$?
-    if ((rc == 0)); then
-      sset RB_CHECKS=passed
-    else
-      sset "RB_CHECKS=$( ((rc == 4)) && echo unknown || echo failed)"
-      alert rollback_checks "back on $(sget FROM_IMAGE) with its snapshot, but its start is not confirmed: $ENGINE_WHY"
-    fi
+    case "$rc" in
+      0) sset RB_CHECKS=passed ;;
+      # Unknown never ends the rollback: it holds at this step for the owner.
+      3|4) hold "rollback: $ENGINE_WHY"; return ;;
+      *)
+        sset RB_CHECKS=failed
+        alert rollback_checks "back on $(sget FROM_IMAGE) with its snapshot, but its start did not pass: $ENGINE_WHY"
+        ;;
+    esac
   fi
   alert rolled_back "the update to $(sget TO_IMAGE) is rolled back ($(sget REASON)): the page is on $(sget FROM_IMAGE) with its profile from before (engine checks: $(sget RB_CHECKS))"
   step_to rolled_back
@@ -1168,10 +1177,13 @@ step_abort() {
     fi
   fi
   if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_CHANGED)" == 1 ]]; then
-    if ! handover_back RB_GIVEN_BACK_MS "abort: the page returns to its browser, unchanged"; then
-      rollback_failed "the Hub refused to give the page back to its browser"
-      return
-    fi
+    local rc=0
+    handover_back RB_GIVEN_BACK_MS "abort: the page returns to its browser, unchanged" || rc=$?
+    case "$rc" in
+      0) ;;
+      3) hold "abort: the Hub cannot be read: the page is not given back blind"; return ;;
+      *) rollback_failed "the Hub refused to give the page back to its browser"; return ;;
+    esac
   fi
   alert aborted "the update to $(sget TO_IMAGE) did not happen ($(sget REASON)): the page is as it was, on $(sget FROM_IMAGE)"
   step_to aborted
@@ -1479,18 +1491,24 @@ snapshot_pending() {
   [[ -f "$file" ]] && ! terminal "$(value STEP "$file")"
 }
 
+# Only a confirmed outcome ends the operation: an unknown state leaves it
+# where it is — resumable, and reported by the timer every pass — until
+# the container is seen back as it was.
 snap_stop() {
   if [[ "$(sget WAS_RUNNING)" == 1 ]]; then
     if ! container_read "$PAGE"; then
-      sset "REASON=$STATE_WHY"
-      alert snapshot_failed "$STATE_WHY: nothing is stopped blind"
-      step_to failed
+      alert snapshot_waiting "$STATE_WHY: the snapshot of $PAGE waits at step $(sget STEP) (resume --page $PAGE)"
       return 1
     fi
     if [[ "$C_STATE" == running ]]; then
       local chrome
       chrome="$(chrome_state "$PAGE")"
+      if [[ "$chrome" == unknown ]]; then
+        alert snapshot_waiting "Chrome's state in $(container_of "$PAGE") cannot be read: the snapshot of $PAGE waits (resume --page $PAGE)"
+        return 1
+      fi
       if [[ "$chrome" != down ]]; then
+        # Confirmed: Chrome runs and nothing was stopped — the page as it was.
         sset "REASON=Chrome is $chrome"
         alert snapshot_failed "Chrome is $chrome in $(container_of "$PAGE"): stop the page's browser first (sync browser stop)"
         step_to failed
@@ -1867,7 +1885,11 @@ report_pages() {
     fi
     if [[ "$alerts" == 1 && -n "$step" ]] && ! terminal "$step"; then
       if [[ "$step" == held || "$step" == rollback_failed ]]; then
-        PAGE="$page" alert update_waiting "its update stands at $step ($(value REASON "$state")): the owner decides (resume or rollback)"
+        local why
+        why="$(value HELD_WHY "$state")"
+        [[ "$step" == held && -n "$why" ]] || why="$(value RB_FAILED "$state")"
+        [[ -n "$why" ]] || why="$(value REASON "$state")"
+        PAGE="$page" alert update_waiting "its update stands at $step ($why): the owner decides (resume or rollback)"
       elif lock_free; then
         PAGE="$page" alert update_stuck "its update stopped at step $step: page-browser-update.sh resume --page $page"
       fi

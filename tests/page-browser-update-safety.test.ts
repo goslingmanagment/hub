@@ -214,6 +214,40 @@ describe("6 · a standalone snapshot is an operation with its record", () => {
     expect(host.snapshots().filter((name) => name.endsWith(".meta"))).toHaveLength(1);
   });
 
+  it("Astra's round 2: killed after the stop, then Docker cannot answer once during resume — the operation stays resumable, reported every pass, and ends only with the container back", () => {
+    host = makeHost(onNode);
+    expect(host.run(["snapshot", "--page", PAGE], { crashOn: "docker stop" }).status).toBe(137);
+    host.edit((state) => {
+      state.behaviour.inspectFails = 1;
+    });
+    const blind = host.run(["resume", "--page", PAGE]);
+    expect(blind.status).toBe(1);
+    expect(blind.ops).toEqual([]);
+    expect(snapshotState(host).STEP).toBe("planned");
+    expect(containerOf(host)).toMatchObject({ running: false });
+    // Reported by the timer, pass after pass.
+    for (let pass = 0; pass < 2; pass++) {
+      host.run(["check", "--no-build"], { env: { PB_CHROME_REPO: "https://nowhere.example.test" } });
+    }
+    expect(host.journal().filter((line) => line.event === "update_stuck" && line.detail.includes("its snapshot stopped at step planned"))).toHaveLength(2);
+    // Docker answers again: resume ends it with the container back.
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.ops).toEqual(["profile snapshot", `page.sh up ${FROM}`]);
+    expect(snapshotState(host).STEP).toBe("done");
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
+  });
+
+  it("Chrome's state cannot be read before the stop: nothing stopped, nothing ended", () => {
+    host = makeHost((state) => {
+      onNode(state);
+      state.containers[`page-browser-${PAGE}`]!.chrome = "unknown";
+    });
+    const run = host.run(["snapshot", "--page", PAGE]);
+    expect(run.status).toBe(2);
+    expect(run.ops).toEqual([]);
+  });
+
   it("refused while Chrome runs: nothing stopped, the record says why", () => {
     host = makeHost();
     const run = host.run(["snapshot", "--page", PAGE]);
@@ -224,6 +258,39 @@ describe("6 · a standalone snapshot is an operation with its record", () => {
 });
 
 describe("what the Hub cannot tell holds the update for the owner", () => {
+  it("a rollback whose old image's start the Hub cannot tell: held at that step, not ended — resumed, it ends on the engine's word", () => {
+    host = makeHost((state) => {
+      state.behaviour.profileCheckFails = [TO];
+    });
+    expect(host.run(UPDATE, { crashOn: "hub transport browser" }).status).toBe(137);
+    expect(host.update()).toMatchObject({ STEP: "rolling_back", RB_STEP: "host_checked" });
+    // The Hub down: the page is not given back blind.
+    host.edit((state) => {
+      state.behaviour.hubDown = true;
+    });
+    expect(host.run(["resume", "--page", PAGE]).status).toBe(1);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "host_checked" });
+    expect(host.update().HELD_WHY).toContain("rollback: the Hub cannot be read: the page is not given back blind");
+    // Given back, then the Hub stops answering: the old image's start unknown.
+    host.edit((state) => {
+      state.behaviour.hubDown = false;
+      state.behaviour.sqlFailAfter = 1;
+      (state as { sqlReads?: number }).sqlReads = 0;
+    });
+    const blind = host.run(["resume", "--page", PAGE]);
+    expect(blind.status).toBe(1);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "given_back" });
+    expect(host.update().HELD_WHY).toContain("rollback: the Hub cannot be read");
+    expect(host.update().RB_CHECKS).toBeUndefined();
+    host.edit((state) => {
+      delete state.behaviour.sqlFailAfter;
+    });
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status).toBe(1);
+    expect(resumed.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed" });
+  });
+
   it("the Hub stops answering during the engine checks: held, not rolled back blind", () => {
     host = makeHost((state) => {
       state.behaviour.engine = { [TO_CHROME]: "never" };
@@ -233,7 +300,7 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
     expect(run.status).toBe(1);
     expect(run.ops).toEqual(["hub transport node", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"]);
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "given_back" });
-    expect(host.update().REASON).toContain("the Hub cannot be read");
+    expect(host.update().HELD_WHY).toContain("the Hub cannot be read");
     expect(events(host)).not.toContain("rolled_back");
   });
 
