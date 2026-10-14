@@ -148,6 +148,8 @@ export class StandEngine {
   readonly siteAsked: Array<{ siteRequestId: string; method: string; target: string; atMono: number }> = [];
   /** ackEarly: events acknowledged whose commit failed. */
   eventsLost = 0;
+  /** ackEarly: their numbers. */
+  readonly lostSeqs: number[] = [];
   /** How long each commit to the stand's Postgres took, ms. */
   readonly commitMs: number[] = [];
   /** When the operator closed (or lost) the connection — not the engine's
@@ -513,6 +515,7 @@ export class StandEngine {
       this.#ack(bufferId, last);
       await this.options.store.commitEvents(this.options.page, this.run, bufferId, events as unknown as StoredEvent[]).catch((error: unknown) => {
         this.eventsLost += events.length;
+        this.lostSeqs.push(...events.map((event) => event.seq));
         this.#log("events.lost", { error: String(error) });
       });
       return;

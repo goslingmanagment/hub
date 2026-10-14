@@ -11,6 +11,7 @@ import type { Docker } from "./docker.ts";
 import { StandEngine, STAND_ENV } from "./engine.ts";
 import type { StandFansly } from "./fansly.ts";
 import type { Store } from "./store.ts";
+import type { Planted } from "./verdict.ts";
 
 export interface PageInfo {
   /** The page's name on the stand (p1, p2 … and disk). */
@@ -208,4 +209,7 @@ export interface ScenarioOutcome {
   /** The control that commits without a key: its outcomes are read from
    *  the naive table. */
   naive?: boolean;
+  /** A control: the violations its run planted, named as exactly as the
+   *  run knows them (verdict.ts `Planted`). */
+  planted?: Planted[];
 }

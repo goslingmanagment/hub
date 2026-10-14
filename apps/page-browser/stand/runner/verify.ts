@@ -129,7 +129,9 @@ export function verifySeries(dir: string): Verdict {
       }
       counted += 1;
       moments.add(file.momentMs);
-      const derived = judge(checks, control);
+      // A control's run passes only with the violations it planted, as its
+      // own file names them.
+      const derived = judge(checks, control, Array.isArray(file.planted) ? file.planted : null);
       if (derived.ok) passed += 1;
       else problem(`${label}: ${control ? "the control did not do what it exists for" : "failed"} — ${derived.why[0] ?? "?"}${derived.why.length > 1 ? ` (+${derived.why.length - 1} more)` : ""}`);
       if (file.ok !== derived.ok) problem(`${label}: its file says ok=${String(file.ok)}, its checks say ${String(derived.ok)}`);

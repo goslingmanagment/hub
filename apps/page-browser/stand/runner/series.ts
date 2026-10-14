@@ -28,7 +28,7 @@ import { Docker } from "./docker.ts";
 import { StandFansly, type JournalEvent } from "./fansly.ts";
 import { SCENARIOS, type Need, type Scenario } from "./scenarios.ts";
 import { Store } from "./store.ts";
-import { judge, SETUP_FAILURE, violationsOf, type Checks, type COMMON_CHECKS, type Control } from "./verdict.ts";
+import { judge, SETUP_FAILURE, violationsOf, type Checks, type COMMON_CHECKS, type Control, type Planted } from "./verdict.ts";
 
 export interface RunRecord {
   scenario: string;
@@ -39,6 +39,8 @@ export interface RunRecord {
   invalid: boolean;
   violations: string[];
   checks: Checks;
+  /** A control's run: the violations it planted (verdict.ts). */
+  planted?: Planted[];
   notes: Record<string, unknown>;
   startedWall: number;
   durationMs: number;
@@ -432,8 +434,9 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
       }
     }
     const violations = violationsOf(checks);
-    const ok = !invalid && judge(checks, scenario.control ?? null).ok;
-    const result: RunRecord = { scenario: scenario.name, run, seed, momentMs, ok, invalid, violations, checks, notes, startedWall, durationMs: Math.round(mono() - started) };
+    const planted = outcome?.planted ?? null;
+    const ok = !invalid && judge(checks, scenario.control ?? null, planted).ok;
+    const result: RunRecord = { scenario: scenario.name, run, seed, momentMs, ok, invalid, violations, checks, ...(planted ? { planted } : {}), notes, startedWall, durationMs: Math.round(mono() - started) };
     writeFileSync(join(dir, scenario.name, `run-${run}.json`), `${JSON.stringify(result, null, 2)}\n`);
     record.runs.push({ run, seed, momentMs, ok, invalid, violations });
     log("run.end", { scenario: scenario.name, run, ok, invalid, violations: violations.length, ms: result.durationMs });

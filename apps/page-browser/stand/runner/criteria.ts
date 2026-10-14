@@ -16,6 +16,7 @@ import { atLeast, type Step } from "../../src/state/steps.ts";
 import type { JournalEvent } from "../fansly/journal.ts";
 import type { Grant } from "./engine.ts";
 import type { OutcomeRow } from "./store.ts";
+import type { Planted } from "./verdict.ts";
 
 /** Plan §4.6 — on stage 1 the only writes that may go are the login's
  *  (spec §2.4); every other write is closed for now (owner decision №2). */
@@ -93,7 +94,7 @@ export function unadmittedArrivals(events: readonly JournalEvent[], grants: read
 export function closedWrites(events: readonly JournalEvent[]): string[] {
   return events
     .filter((event) => event.type === "req" && event.role === "api" && WRITES.has(String(event.method)) && !LOGIN_PATHS.includes(String(event.pathname)))
-    .map((event) => `a closed write reached Fansly: ${String(event.method)} ${String(event.host)}${String(event.pathname)}`);
+    .map((event) => `a closed write reached Fansly: ${String(event.method)} ${String(event.host)}${String(event.pathname)}${typeof event.rid === "string" ? ` (rid ${event.rid})` : ""}`);
 }
 
 /** Spec §2.6: the authorization and the ping, nothing else, ever left in
@@ -549,6 +550,17 @@ export function expiredArrivals(events: readonly JournalEvent[], expired: readon
   );
 }
 
+/** One late send the control showed: and the very words C1 says of it. */
+export interface LateSend {
+  rid: string;
+  attemptId: number;
+  lateMs: number;
+  socksId: number;
+  /** C1's violation of that arrival — its method, address and request id,
+   *  and how far past its deadline it came. */
+  violation: string;
+}
+
 /** A late send, as an operator that did not check the deadline makes it:
  *  an admitted request's id arrived after its (journaled) deadline over the
  *  very CONNECT that was held across that deadline — the arrival's SOCKS
@@ -556,8 +568,8 @@ export function expiredArrivals(events: readonly JournalEvent[], expired: readon
  *  of those holds — and C1 calls that arrival late. The control's evidence:
  *  without one, it showed nothing. A late arrival over another connection
  *  does not show it (it is a C1 violation in its own right all the same). */
-export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: Array<{ rid: string; attemptId: number; lateMs: number; socksId: number }>; violations: string[] } {
-  const late: Array<{ rid: string; attemptId: number; lateMs: number; socksId: number }> = [];
+export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: LateSend[]; violations: string[] } {
+  const late: LateSend[] = [];
   let elsewhere = 0;
   for (const grant of grants) {
     if (grant.page !== page || grant.kind === "ws" || grant.target === null || grant.target.split("/")[0] !== host) continue;
@@ -567,13 +579,14 @@ export function lateUnderHold(events: readonly JournalEvent[], grants: readonly 
     if (held.size === 0) continue;
     for (const arrival of events) {
       if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
-      if (!unadmittedArrivals([arrival], grants, pages).some((violation) => violation.includes("arrived outside its admission window"))) continue;
+      const called = unadmittedArrivals([arrival], grants, pages).find((violation) => violation.includes("arrived outside its admission window"));
+      if (called === undefined) continue;
       const socksId = arrival.socksId === null || arrival.socksId === undefined ? null : Number(arrival.socksId);
       if (socksId === null || !held.has(socksId)) {
         elsewhere += 1;
         continue;
       }
-      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId });
+      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, violation: called });
     }
   }
   return { late, violations: late.length > 0 ? [] : [`no admitted request arrived after its deadline over the CONNECT held across that deadline, with C1 calling it late (${elsewhere} late over another connection): the control showed no late send`] };
@@ -586,6 +599,77 @@ export function inFlightAtRestart(events: readonly JournalEvent[], rids: readonl
   const answered = new Map(events.filter((event) => event.type === "res").map((event) => [Number(event.req), event.mono]));
   const inFlight = arrived.filter((event) => (answered.get(event.seq) ?? Infinity) > restartMono);
   return inFlight.length > 0 ? [] : [`no request was in flight at the engine's restart (${arrived.length} of ${rids.length} had arrived, none still unanswered): the run proves nothing about recovery after a send`];
+}
+
+// ── what a control planted (verdict.ts `Planted`) ────────────────────────
+// Each control names the violations of its own planted event as exactly as
+// it knows them; its run passes only with those and no other violation of
+// the checks it trips.
+
+function plant(check: string, phrase: string, subject: string[], min = 1, max: number | null = 1): Planted {
+  return { check, phrase, subject, min, max };
+}
+
+/** control-leak: the read and the write sent from no page with request id
+ *  `rid`, the socket from no page, its forbidden message (with `rid`). */
+export function plantedLeak(rid: string): Planted[] {
+  return [
+    plant("C1", "arrived without any admission", [`GET apiv3.fansly.com/api/v1/account/me?rid=${rid} arrived without any admission: it came from `]),
+    plant("C1", "arrived without any admission", [`POST apiv3.fansly.com/api/v1/message/ack?rid=${rid} arrived without any admission: it came from `]),
+    plant("C1", "a socket (", ["wss://wsv3.fansly.com/?v=3) arrived without any admission: it came from ", "which is no page of the stand"]),
+    plant("C2", "a closed write reached Fansly", [`POST apiv3.fansly.com/api/v1/message/ack (rid ${rid})`]),
+    plant("C3", "a forbidden socket message reached Fansly", [rid]),
+  ];
+}
+
+/** control-bypass: one connection from the page's address to the SOCKS5's
+ *  address on 443 — its packets in the capture, one arrival at the direct
+ *  listener. */
+export function plantedBypass(pageAddress: string, socksIp: string): Planted[] {
+  return [plant("C4", "traffic past the proxy", [`Out IP ${pageAddress}.`, `> ${socksIp}.443:`], 1, null), plant("C5", "a connection past the proxy reached the stand directly", [`directly from ${pageAddress}`])];
+}
+
+/** control-no-capture: the capture of the page (by its control address)
+ *  stopped. */
+export function plantedNoCapture(controlIp: string): Planted[] {
+  return [plant("C4", "no live capture of the page covers the run", [`sentinel(s) to ${controlIp} are not in it`])];
+}
+
+/** control-double-open: the second socket the lever opened under one
+ *  admission. */
+export function plantedRepeat(wsId: string): Planted[] {
+  return [plant("C1", "arrived again under one admission", [`a socket (${wsId}, `])];
+}
+
+/** control-duplicate: the naive engine's attempts, each committed twice at
+ *  most (which of them got delivered again is the moment's). */
+export function plantedDuplicates(attemptIds: readonly number[]): Planted[] {
+  return attemptIds.map((attemptId) => plant("C6", "committed 2 times", [`attempt ${attemptId}: committed 2 times`], 0, 1));
+}
+
+/** control-hole: the events the ack-early engine acknowledged and lost — the
+ *  tail, exactly those numbers. */
+export function plantedTail(bufferId: string, lost: readonly number[]): Planted[] {
+  if (lost.length === 0) return [];
+  return [plant("C7", "were never committed (the tail", [`buffer ${bufferId}: events ${Math.min(...lost)}…${Math.max(...lost)} were never committed (the tail`])];
+}
+
+/** control-lost-frames: the frames pushed into the lever's socket, and the
+ *  lever's site answer without its event. */
+export function plantedLostFrames(page: string, wsId: string, pushed: number, rid: string): Planted[] {
+  return [plant("C7", "not stored as ws.in events", [`Fansly sent ${page} ${pushed} frame(s) on ${wsId} that are not stored`]), plant("C7", "has no stored site.response event", [`(rid ${rid})`])];
+}
+
+/** The expiry's controls: each late send C1 called late, in C1's own
+ *  words (its request, how far past its deadline). */
+export function plantedLate(late: readonly LateSend[]): Planted[] {
+  return late.map((send) => plant("C1", "arrived outside its admission window", [send.violation]));
+}
+
+/** control-held-late: the lever's request Fansly answered, of which the
+ *  engine keeps nothing. */
+export function plantedUnkeptAnswer(page: string, rid: string): Planted[] {
+  return [plant("C7", "was answered by Fansly", [`?rid=${rid} of ${page} was answered by Fansly`])];
 }
 
 // ── the load test's thresholds (spec §4) ──────────────────────────────────

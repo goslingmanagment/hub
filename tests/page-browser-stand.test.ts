@@ -28,6 +28,15 @@ import {
   lateUnderHold,
   madeAndKept,
   outageBacklog,
+  plantedBypass,
+  plantedDuplicates,
+  plantedLate,
+  plantedLeak,
+  plantedLostFrames,
+  plantedNoCapture,
+  plantedRepeat,
+  plantedTail,
+  plantedUnkeptAnswer,
   sentAfterRecovery,
   stoodBetween,
   stoppedFor,
@@ -316,7 +325,7 @@ describe("an admission that runs out while its request waits for its connection"
 
   it("the control's late send: the request arrived after its journaled deadline over the very CONNECT held across it, and C1 calls it late", () => {
     const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })];
-    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320, socksId: 7 }], violations: [] });
+    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320, socksId: 7, violation: "GET apiv3.fansly.com/api/v1/a?rid=r1 arrived outside its admission window (ms after the deadline: 320)" }], violations: [] });
     // Nothing late; late with no hold across the deadline; inside the window.
     expect(lateUnderHold(held, [admission], "p1", PAGE_IP, API, PAGES).violations).toEqual([expect.stringContaining("the control showed no late send")]);
     expect(lateUnderHold([apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
@@ -332,7 +341,7 @@ describe("an admission that runs out while its request waits for its connection"
     // An arrival with no SOCKS connection known, likewise.
     expect(lateUnderHold([...events.slice(0, 2), apiRequest(14_050, "GET", "/api/v1/a?rid=r1", { socksId: null })], [sixSeconds], "p1", PAGE_IP, API, PAGES).late).toEqual([]);
     // Over #7 itself, once let go: shown.
-    expect(lateUnderHold([...events.slice(0, 2), apiRequest(10_050, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [sixSeconds], "p1", PAGE_IP, API, PAGES).late).toEqual([{ rid: "r1", attemptId: 41, lateMs: 4050, socksId: 7 }]);
+    expect(lateUnderHold([...events.slice(0, 2), apiRequest(10_050, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [sixSeconds], "p1", PAGE_IP, API, PAGES).late).toEqual([expect.objectContaining({ rid: "r1", attemptId: 41, lateMs: 4050, socksId: 7 })]);
   });
 });
 
@@ -444,12 +453,17 @@ describe("a run's verdict, from its checks", () => {
     expect(judge(withoutCapture, null)).toEqual({ ok: false, why: [expect.stringContaining('no check "C4')] });
   });
 
-  it("a control passes only when each check it exists for shows its violation, and no other check fails", () => {
+  it("a control passes only when each check it exists for shows the violations its run planted — those and no others —, and no other check fails", () => {
     const control: Control = { C1: ["arrived without any admission"] };
+    const planted = [{ check: "C1", phrase: "arrived without any admission", subject: ["GET x"], min: 1, max: 1 }];
     const tripped = { ...clean(), [COMMON_CHECKS[0]]: ["GET x arrived without any admission"] };
-    expect(judge(tripped, control).ok).toBe(true);
-    expect(judge(clean(), control)).toEqual({ ok: false, why: [expect.stringContaining('did not show "arrived without any admission"')] });
-    expect(judge({ ...tripped, [COMMON_CHECKS[3]]: ["traffic past the proxy: …"] }, control)).toEqual({ ok: false, why: [expect.stringContaining("a check the control is not about failed")] });
+    expect(judge(tripped, control, planted).ok).toBe(true);
+    expect(judge(clean(), control, planted).why).toEqual(expect.arrayContaining([expect.stringContaining('did not show "arrived without any admission"')]));
+    expect(judge({ ...tripped, [COMMON_CHECKS[3]]: ["traffic past the proxy: …"] }, control, planted)).toEqual({ ok: false, why: [expect.stringContaining("a check the control is not about failed")] });
+    // The same phrase about something it did not plant; the planted one twice; a run that names nothing.
+    expect(judge({ ...clean(), [COMMON_CHECKS[0]]: ["GET x arrived without any admission", "GET y arrived without any admission"] }, control, planted)).toEqual({ ok: false, why: [expect.stringContaining("a violation the control did not plant — C1 no request or socket without an admission in force: GET y")] });
+    expect(judge({ ...clean(), [COMMON_CHECKS[0]]: ["GET x arrived without any admission", "GET x arrived without any admission"] }, control, planted).why).toEqual([expect.stringContaining("showed 2 time(s) in C1, expected 1")]);
+    expect(judge(tripped, control).why).toEqual(expect.arrayContaining([expect.stringContaining("named nothing it planted")]));
   });
 });
 
@@ -463,7 +477,14 @@ describe("the series' verifier", () => {
   const NAME = "loss-holder-kill";
   const CONTROL = "control-leak";
   const controlOf = (name: string) => SCENARIOS.find((scenario) => scenario.name === name)?.control ?? null;
-  const leaked = (): Checks => ({ ...clean(), [COMMON_CHECKS[0]]: ["GET x arrived without any admission", "a socket (ws-1, wss://x) arrived without any admission"], [COMMON_CHECKS[1]]: ["a closed write reached Fansly: POST x"], [COMMON_CHECKS[2]]: ["a forbidden socket message reached Fansly: {}"] });
+  const leakJournal = [
+    apiRequest(1, "GET", "/api/v1/account/me?rid=leak-1", { from: "10.0.1.20" }),
+    apiRequest(2, "POST", "/api/v1/message/ack?rid=leak-1", { from: "10.0.1.20" }),
+    socketOpen(3, "ws-1", { from: "10.0.1.20" }),
+    event("ws.in", 4, { from: "10.0.1.20", text: JSON.stringify({ t: 46001, d: JSON.stringify({ chatRoomId: "leak-1" }) }) }),
+  ];
+  const leaked = (): Checks => ({ ...clean(), [COMMON_CHECKS[0]]: unadmittedArrivals(leakJournal, [], PAGES), [COMMON_CHECKS[1]]: closedWrites(leakJournal), [COMMON_CHECKS[2]]: forbiddenSocketMessages(leakJournal) });
+  const leakPlanted = plantedLeak("leak-1");
 
   /** A scenario's record and run files; `runs` are the run files' own
    *  checks (or a whole run file), `summary` may contradict them. */
@@ -472,7 +493,8 @@ describe("the series' verifier", () => {
     const control = controlOf(scenario);
     const entries = runs.map((run, index) => {
       const checks = run.checks ?? clean();
-      const file: RunRecord = { scenario, run: index + 1, seed: 7 + index, momentMs: 100 * index, ok: judge(checks, control).ok, invalid: false, violations: violationsOf(checks), checks, notes: {}, startedWall: 1, durationMs: 1, ...run.file };
+      const planted = control ? leakPlanted : undefined;
+      const file: RunRecord = { scenario, run: index + 1, seed: 7 + index, momentMs: 100 * index, ok: judge(checks, control, planted ?? null).ok, invalid: false, violations: violationsOf(checks), checks, ...(planted ? { planted } : {}), notes: {}, startedWall: 1, durationMs: 1, ...run.file };
       writeFileSync(path.join(dir, scenario, `run-${file.run}.json`), JSON.stringify(file));
       return { run: file.run, seed: file.seed, momentMs: file.momentMs, ok: file.ok, invalid: file.invalid, violations: file.violations, ...run.summary };
     });
@@ -534,15 +556,18 @@ describe("the series' verifier", () => {
   });
 
   it("does not pass a control without its violation, a short scenario, an unknown one, a main scenario skipped, or an unfinished series", () => {
-    series([NAME, CONTROL, "loss-chrome-kill", "no-such-scenario", "proxy-down"], null);
+    series([NAME, CONTROL, "control-bypass", "loss-chrome-kill", "no-such-scenario", "proxy-down"], null);
     write(NAME, [{}]);
     write(CONTROL, [{ checks: leaked() }, { checks: { ...leaked(), [COMMON_CHECKS[2]]: [] } }]);
+    // A control's run file that names nothing it planted does not pass either.
+    write("control-bypass", [{ checks: { ...clean(), [COMMON_CHECKS[3]]: ["traffic past the proxy: x"], [COMMON_CHECKS[4]]: ["a connection past the proxy reached the stand directly from x"] }, file: { planted: [] } }]);
     write("loss-chrome-kill", [], { skipped: "not today" });
     expect(verifySeries(dir).problems).toEqual(
       expect.arrayContaining([
         expect.stringContaining("did not finish"),
         expect.stringContaining(`${NAME}: 1 counted runs of 2`),
         expect.stringContaining(`${CONTROL} run 2: the control did not do what it exists for`),
+        expect.stringContaining("control-bypass run 1: the control did not do what it exists for — the control's run named nothing it planted"),
         expect.stringContaining("loss-chrome-kill: skipped, and it waits for nothing"),
         expect.stringContaining("no-such-scenario: not a scenario of the stand"),
         expect.stringContaining("proxy-down: no record"),
@@ -743,6 +768,139 @@ describe("the stand's engine admits as main's engine does: one operation in flig
     // An end that comes late changes nothing.
     admissions.done("lost", true);
     expect(admissions.waiting().map((request) => request.siteRequestId)).toEqual(["next"]);
+  });
+});
+
+describe("each control passes only with the very violations its run planted — a false positive or a real violation never hides in it", () => {
+  const controlOf = (name: string): Control => SCENARIOS.find((scenario) => scenario.name === name)!.control!;
+  const checksOf = (found: Record<number, string[]>): Checks => {
+    const checks = clean();
+    for (const [index, violations] of Object.entries(found)) checks[COMMON_CHECKS[Number(index)]!] = violations;
+    return checks;
+  };
+  const C1 = 0;
+  const C2 = 1;
+  const C3 = 2;
+  const C4 = 3;
+  const C5 = 4;
+  const C6 = 5;
+  const C7 = 6;
+  const unplanted = (verdict: { ok: boolean; why: string[] }) => {
+    expect(verdict.ok).toBe(false);
+    expect(verdict.why).toEqual(expect.arrayContaining([expect.stringContaining("a violation the control did not plant")]));
+  };
+  const API = "apiv3.fansly.com";
+  const socks = (type: string, mono: number, socksId: number) => event(type, mono, { socksId, host: API });
+
+  it("control-site-late-send: exactly the late send over the held CONNECT (its request, its deadline) — another late request, or a socket C1 calls late, fails it", () => {
+    const hub = grant("hub", `${API}/api/v1/account/me?rid=hub-1`, 0, { attemptId: 41, ref: "41", deadlineMono: 6000 });
+    const journal = [socks("socks.hold", 10, 7), socks("socks.release", 10_010, 7), apiRequest(10_040, "OPTIONS", "/api/v1/account/me?rid=hub-1", { socksId: 7 })];
+    const shown = lateUnderHold(journal, [hub], "p1", PAGE_IP, API, PAGES);
+    const planted = plantedLate(shown.late);
+    const control = controlOf("control-site-late-send");
+    expect(judge(checksOf({ [C1]: unadmittedArrivals(journal, [hub], PAGES) }), control, planted)).toEqual({ ok: true, why: [] });
+    // The false positive of stand t9: a socket admitted under a label C1 once took for late.
+    const socketGrant = grant("ws", SOCKET, 0, { attemptId: 42, deadlineMono: 6000 });
+    unplanted(judge(checksOf({ [C1]: unadmittedArrivals([...journal, socketOpen(12_000, "ws-9")], [hub, socketGrant], PAGES) }), control, planted));
+    // Another request late — the same phrase, not the planted send.
+    const other = grant("hub", `${API}/api/v1/account/me?rid=hub-2`, 0, { attemptId: 43, ref: "43", deadlineMono: 6000 });
+    unplanted(judge(checksOf({ [C1]: unadmittedArrivals([...journal, apiRequest(10_500, "GET", "/api/v1/account/me?rid=hub-2", { socksId: 8 })], [hub, other], PAGES) }), control, planted));
+    // No late send found: nothing planted, the control fails.
+    expect(judge(checksOf({ [C1]: unadmittedArrivals(journal, [hub], PAGES) }), control, plantedLate([])).ok).toBe(false);
+  });
+
+  it("control-held-late: the lever's late request and its unkept answer — another unkept answer fails it", () => {
+    const site = grant("site", `${API}/api/v1/account/me?rid=held-1`, 0, { attemptId: 0, ref: "held-1", deadlineMono: 6000 });
+    const journal = [socks("socks.hold", 10, 7), socks("socks.release", 10_010, 7), apiRequest(10_040, "GET", "/api/v1/account/me?rid=held-1", { socksId: 7 }), event("res", 10_060, { role: "api", host: API, method: "GET", path: "/api/v1/account/me?rid=held-1", status: 200, socksId: 7 })];
+    const planted = [...plantedLate(lateUnderHold(journal, [site], "p1", PAGE_IP, API, PAGES).late), ...plantedUnkeptAnswer("p1", "held-1")];
+    const kept: Kept = { frames: new Map(), outcomes: new Map(), responses: new Map(), gaps: [] };
+    const c7 = (events: JournalEvent[], grants: Grant[]) => madeAndKept(fanslyMade(events, grants, PAGES), kept).violations;
+    const control = controlOf("control-held-late");
+    expect(judge(checksOf({ [C1]: unadmittedArrivals(journal, [site], PAGES), [C7]: c7(journal, [site]) }), control, planted)).toEqual({ ok: true, why: [] });
+    const hub = grant("hub", `${API}/api/v1/account/me?rid=hub-5`, 9000, { attemptId: 5 });
+    const more = [...journal, apiRequest(9100, "GET", "/api/v1/account/me?rid=hub-5"), event("res", 9200, { role: "api", host: API, method: "GET", path: "/api/v1/account/me?rid=hub-5", status: 200 })];
+    unplanted(judge(checksOf({ [C1]: unadmittedArrivals(more, [site, hub], PAGES), [C7]: c7(more, [site, hub]) }), control, planted));
+  });
+
+  it("control-leak: its own read, write, socket and message — the page's own unadmitted request, closed write or forbidden message fails it", () => {
+    const runner = "10.0.1.20";
+    const journal = [
+      apiRequest(1, "GET", "/api/v1/account/me?rid=leak-1", { from: runner }),
+      apiRequest(2, "POST", "/api/v1/message/ack?rid=leak-1", { from: runner }),
+      socketOpen(3, "ws-1", { from: runner }),
+      event("ws.in", 4, { from: runner, text: JSON.stringify({ t: 46001, d: JSON.stringify({ chatRoomId: "leak-1" }) }) }),
+    ];
+    const checks = (events: JournalEvent[]) => checksOf({ [C1]: unadmittedArrivals(events, [], PAGES), [C2]: closedWrites(events), [C3]: forbiddenSocketMessages(events) });
+    const control = controlOf("control-leak");
+    const planted = plantedLeak("leak-1");
+    expect(judge(checks(journal), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(checks([...journal, apiRequest(5, "GET", "/api/v1/account/me?rid=page-1")]), control, planted));
+    unplanted(judge(checks([...journal, apiRequest(6, "POST", "/api/v1/message/ack?rid=page-2", { from: runner })]), control, planted));
+    unplanted(judge(checks([...journal, event("ws.in", 7, { text: JSON.stringify({ t: 46001, d: JSON.stringify({ chatRoomId: "page" }) }) })]), control, planted));
+  });
+
+  it("control-bypass: the one connection to the SOCKS5's address on 443 — any other packet past the proxy, or another direct arrival, fails it", () => {
+    const rules: CaptureRules = { pageIps: ["10.0.0.101", PAGE_IP], socks: { ip: "10.0.1.10", port: 1080 }, engineIp: "10.0.0.20", rpcPort: 7700 };
+    const lines = ["1791922007.0 eth1  Out IP 10.0.1.101.55030 > 10.0.1.10.443: Flags [S], seq 2, length 0", "1791922007.1 eth1  Out IP 10.0.1.101.55030 > 10.0.1.10.443: Flags [P.], length 15"];
+    const c4 = (more: string[] = []) => pastTheProxy([...lines, ...more].map((line) => parsePacket(line)!), rules);
+    const control = controlOf("control-bypass");
+    const planted = plantedBypass(PAGE_IP, "10.0.1.10");
+    const direct = directArrivals([event("direct.connect", 1, { from: PAGE_IP })]);
+    expect(judge(checksOf({ [C4]: c4(), [C5]: direct }), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(checksOf({ [C4]: c4(["1791922007.2 eth1  Out IP 10.0.1.101.5555 > 8.8.8.8.53: UDP, length 30"]), [C5]: direct }), control, planted));
+    unplanted(judge(checksOf({ [C4]: c4(), [C5]: [...direct, ...directArrivals([event("direct.connect", 2, { from: "10.0.1.102" })])] }), control, planted));
+  });
+
+  it("control-no-capture: the page's own capture gone — traffic past the proxy fails it", () => {
+    const ports = sentinelPorts(99);
+    const sentinel = `1791922010.1 eth0  In  IP 10.0.0.20.40123 > 10.0.0.101.${ports.start}: UDP, length 17`;
+    const c4 = captureCovers([parsePacket(sentinel)!], "10.0.0.101", "10.0.0.20", [ports.start, ports.end]);
+    const control = controlOf("control-no-capture");
+    const planted = plantedNoCapture("10.0.0.101");
+    expect(judge(checksOf({ [C4]: c4 }), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(checksOf({ [C4]: [...c4, "traffic past the proxy: 1791922011 eth1  Out IP 10.0.1.101.1 > 10.0.1.10.443"] }), control, planted));
+  });
+
+  it("control-double-open: the lever's second socket only — a third socket, or one outside any window, fails it", () => {
+    const sockets = [grant("ws", SOCKET, 400)];
+    const control = controlOf("control-double-open");
+    const planted = plantedRepeat("ws-2");
+    const c1 = (events: JournalEvent[]) => checksOf({ [C1]: unadmittedArrivals(events, sockets, PAGES) });
+    expect(judge(c1([socketOpen(500, "ws-1"), socketOpen(600, "ws-2")]), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(c1([socketOpen(500, "ws-1"), socketOpen(600, "ws-2"), socketOpen(700, "ws-3")]), control, planted));
+    unplanted(judge(c1([socketOpen(500, "ws-1"), socketOpen(600, "ws-2"), socketOpen(30_000, "ws-4")]), control, planted));
+  });
+
+  it("control-duplicate: its own attempts committed twice — another attempt's duplicate, or a missing outcome, fails it", () => {
+    const row = (attemptId: number) => ({ attemptId, run: "r", type: "result", kind: "transport_error", sent: false, committedMono: 1 });
+    const control = controlOf("control-duplicate");
+    const planted = plantedDuplicates([3, 4, 5]);
+    const c6 = (extra: Array<Parameters<typeof exactlyOnce>[0][number]> = []) => checksOf({ [C6]: exactlyOnce([{ attemptId: 3, outcomes: [row(3), row(3)], recovered: null, arrived: false }, { attemptId: 4, outcomes: [row(4)], recovered: null, arrived: false }, ...extra]) });
+    expect(judge(c6(), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(c6([{ attemptId: 9, outcomes: [row(9), row(9)], recovered: null, arrived: false }]), control, planted));
+    unplanted(judge(c6([{ attemptId: 5, outcomes: [], recovered: null, arrived: false }]), control, planted));
+  });
+
+  it("control-hole: exactly the tail its engine acknowledged and lost — a hole in the middle, or more of the tail lost, fails it", () => {
+    const control = controlOf("control-hole");
+    const planted = plantedTail("b", [14]);
+    expect(judge(checksOf({ [C7]: eventsComplete([{ bufferId: "b", start: 10, wireMax: 14, stored: [11, 12, 13] }]) }), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(checksOf({ [C7]: eventsComplete([{ bufferId: "b", start: 10, wireMax: 14, stored: [11, 13] }]) }), control, planted));
+    unplanted(judge(checksOf({ [C7]: eventsComplete([{ bufferId: "b", start: 10, wireMax: 14, stored: [11, 12] }]) }), control, planted));
+  });
+
+  it("control-lost-frames: the frames pushed into the lever's socket and the lever's site answer — another socket's lost frames fail it", () => {
+    const sent = (mono: number, frame: number, wsId: string) => event("ws.out", mono, { wsId, frame, t: 0 });
+    const site = grant("site", `${API}/api/v1/account/me?rid=lost-1`, 4000, { attemptId: 9, ref: "lost-1" });
+    const journal = [sent(5000, 101, "ws-5"), sent(5100, 102, "ws-5"), sent(5200, 103, "ws-5"), apiRequest(4100, "GET", "/api/v1/account/me?rid=lost-1"), event("res", 4200, { role: "api", host: API, method: "GET", path: "/api/v1/account/me?rid=lost-1", status: 200 })];
+    const kept: Kept = { frames: new Map([["p1", new Set<number>()]]), outcomes: new Map([["p1", new Set([9])]]), responses: new Map([["p1", new Set<string>()]]), gaps: [] };
+    const c7 = (events: JournalEvent[]) => checksOf({ [C7]: madeAndKept(fanslyMade(events, [site], PAGES), kept).violations });
+    const control = controlOf("control-lost-frames");
+    const planted = plantedLostFrames("p1", "ws-5", 3, "lost-1");
+    expect(judge(c7(journal), control, planted)).toEqual({ ok: true, why: [] });
+    unplanted(judge(c7([...journal, sent(5300, 104, "ws-6")]), control, planted));
+    // Fewer frames lost than pushed: not the planted event either.
+    expect(judge(c7(journal.slice(1)), control, planted).ok).toBe(false);
   });
 });
 

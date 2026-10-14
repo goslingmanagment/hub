@@ -150,7 +150,9 @@ export class StandSocks {
         const known = extra || (username === this.#options.username && password === this.#options.password);
         const ok = known && !this.refuseAuth;
         // Never the login or the password themselves.
-        journal.log("socks.login", { socksId, ok, known, from: socket.remoteAddress ?? "", ...(ok ? {} : { why: known ? "the stand refuses every login now" : "a wrong login or password" }) });
+        // `extra`: a control's own login (its planted connections are told
+        // apart by it, runner/criteria.ts `Planted`).
+        journal.log("socks.login", { socksId, ok, known, ...(extra ? { extra: true } : {}), from: socket.remoteAddress ?? "", ...(ok ? {} : { why: known ? "the stand refuses every login now" : "a wrong login or password" }) });
         if (!ok) {
           socket.end(Buffer.from([1, 1]));
           return;

@@ -23,6 +23,22 @@ export type Checks = Record<string, string[]>;
  *  with the violations it must show. Every other check must hold. */
 export type Control = Record<string, string[]>;
 
+/** One violation a control's run planted, named as exactly as the run knows
+ *  the planted event: the check it trips (by the start of the check's
+ *  name), the phrase the control exists for, the texts that name the event
+ *  itself — its request id, its socket, its attempt, its numbers, its
+ *  lateness —, and how many violations it may make (`max` null: any number,
+ *  for one connection's packets). A control's run passes only when every
+ *  violation of the checks it trips is one it planted: a false positive or a
+ *  real violation cannot hide behind the control's phrase. */
+export interface Planted {
+  check: string;
+  phrase: string;
+  subject: string[];
+  min: number;
+  max: number | null;
+}
+
 export function violationsOf(checks: Checks): string[] {
   return Object.entries(checks).flatMap(([name, found]) => found.map((violation) => `${name}: ${violation}`));
 }
@@ -34,22 +50,42 @@ export function missingChecks(checks: Checks): string[] {
 }
 
 /** Passed? An ordinary run: every common check there, no violation at all.
- *  A control: each check it exists for shows each of its violations, and no
- *  other check shows any. */
-export function judge(checks: Checks, control: Control | null): { ok: boolean; why: string[] } {
+ *  A control: each check it exists for shows each of its violations — and
+ *  only the violations its run planted (`planted`), each as many times as it
+ *  may —, and no other check shows any. */
+export function judge(checks: Checks, control: Control | null, planted: readonly Planted[] | null = null): { ok: boolean; why: string[] } {
   const why: string[] = missingChecks(checks).map((name) => `the run has no check "${name}"`);
   if (control === null) {
     why.push(...violationsOf(checks));
     return { ok: why.length === 0, why };
   }
   const tripped = Object.keys(control);
+  const plants: readonly Planted[] = Array.isArray(planted) ? planted : [];
+  if (plants.length === 0) why.push("the control's run named nothing it planted: nothing it shows can be told from a false positive");
+  for (const plant of plants) {
+    if (!(control[plant.check] ?? []).includes(plant.phrase)) why.push(`the run planted "${plant.phrase}" in ${plant.check}, which the control is not about`);
+  }
+  const counts = new Map<Planted, number>(plants.map((plant) => [plant, 0]));
   for (const prefix of tripped) {
     const found = Object.entries(checks)
       .filter(([name]) => name.startsWith(prefix))
-      .flatMap(([, violations]) => violations);
-    for (const wanted of control[prefix]!) {
-      if (!found.some((violation) => violation.includes(wanted))) why.push(`the control did not show "${wanted}" in ${prefix}`);
+      .flatMap(([name, violations]) => violations.map((violation) => ({ name, violation })));
+    for (const { name, violation } of found) {
+      const matching = plants.filter((plant) => plant.check === prefix && violation.includes(plant.phrase) && plant.subject.every((text: string) => violation.includes(text)));
+      if (matching.length === 0) {
+        why.push(`a violation the control did not plant — ${name}: ${violation}`);
+        continue;
+      }
+      const into = matching.find((plant) => plant.max === null || counts.get(plant)! < plant.max) ?? matching[0]!;
+      counts.set(into, counts.get(into)! + 1);
     }
+    for (const wanted of control[prefix]!) {
+      if (!plants.some((plant) => plant.check === prefix && plant.phrase === wanted && counts.get(plant)! > 0)) why.push(`the control did not show "${wanted}" in ${prefix}`);
+    }
+  }
+  for (const plant of plants) {
+    const count = counts.get(plant)!;
+    if (count < plant.min || (plant.max !== null && count > plant.max)) why.push(`the planted "${plant.phrase}" (${plant.subject.join(" … ")}) showed ${count} time(s) in ${plant.check}, expected ${plant.max === plant.min ? plant.min : `${plant.min} to ${plant.max ?? "any"}`}`);
   }
   for (const [name, found] of Object.entries(checks)) {
     if (found.length > 0 && !tripped.some((prefix) => name.startsWith(prefix))) why.push(`a check the control is not about failed — ${name}: ${found[0]!}`);

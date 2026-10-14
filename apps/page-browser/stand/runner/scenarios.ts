@@ -20,11 +20,11 @@ import { atLeast } from "../../src/state/steps.ts";
 import type { SiteBehaviour } from "../fansly/front.ts";
 import { STAND_EXIT_IP, STAND_OTHER_EXIT_IP, STAND_SOCKS_USER, mono, sleep } from "../shared.ts";
 import { Activity, waitFor, type Ctx, type Page, type ScenarioOutcome } from "./context.ts";
-import { closedWriteAttempted, exitClosedWithin, expiredArrivals, expiredUnderHold, gapCommitted, inFlightAtRestart, lateUnderHold, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type OperatorRequestLine, type SeenTransition, type WaitingRequest } from "./criteria.ts";
+import { closedWriteAttempted, exitClosedWithin, expiredArrivals, expiredUnderHold, gapCommitted, inFlightAtRestart, lateUnderHold, plantedBypass, plantedDuplicates, plantedLate, plantedLeak, plantedLostFrames, plantedNoCapture, plantedRepeat, plantedTail, plantedUnkeptAnswer, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type OperatorRequestLine, type SeenTransition, type WaitingRequest } from "./criteria.ts";
 import type { Grant, StandEngine } from "./engine.ts";
 import type { JournalEvent } from "./fansly.ts";
 import { leak } from "./leak.ts";
-import type { Control } from "./verdict.ts";
+import type { Control, Planted } from "./verdict.ts";
 
 export type Need = "PR6" | "PR7";
 
@@ -491,11 +491,12 @@ async function plannedStop(ctx: Ctx): Promise<ScenarioOutcome> {
 // ── controls: each must show its violation in every run ──────────────────
 
 async function controlLeak(ctx: Ctx): Promise<ScenarioOutcome> {
+  const rid = `leak-${Math.floor(ctx.random() * 1e9)}`;
   const { activity, faultMono } = await atMoment(ctx, async () => {
-    ctx.notes.leak = await leak({ ip: ctx.topology.socksIp, port: ctx.topology.socksPort, username: STAND_SOCKS_USER, password: ctx.topology.socksPassword }, ctx.topology.caFile, `leak-${Math.floor(ctx.random() * 1e9)}`);
+    ctx.notes.leak = await leak({ ip: ctx.topology.socksIp, port: ctx.topology.socksPort, username: STAND_SOCKS_USER, password: ctx.topology.socksPassword }, ctx.topology.caFile, rid);
   });
   activity.stop();
-  return { faultMono, checks: {}, attempts: activity.issued };
+  return { faultMono, checks: {}, attempts: activity.issued, planted: plantedLeak(rid) };
 }
 
 async function controlBypass(ctx: Ctx): Promise<ScenarioOutcome> {
@@ -511,7 +512,7 @@ async function controlBypass(ctx: Ctx): Promise<ScenarioOutcome> {
     }
   });
   activity.stop();
-  return { faultMono, checks: {}, attempts: activity.issued };
+  return { faultMono, checks: {}, attempts: activity.issued, planted: plantedBypass(ctx.page.info.egressIp, target) };
 }
 
 /** An engine that commits outcomes with no key and acknowledges late,
@@ -530,7 +531,7 @@ async function controlDuplicate(ctx: Ctx): Promise<ScenarioOutcome> {
   await sleep(2500);
   const normal = await ctx.page.restartEngine();
   await normal.connectRetrying(20_000);
-  return { faultMono, checks: {}, attempts: issued, naive: true };
+  return { faultMono, checks: {}, attempts: issued, naive: true, planted: plantedDuplicates(issued) };
 }
 
 /** An engine that acknowledges events before it commits them, with its
@@ -564,7 +565,8 @@ async function controlHole(ctx: Ctx): Promise<ScenarioOutcome> {
   const normal = await ctx.page.restartEngine();
   await normal.connectRetrying(20_000);
   await normal.ensureUp(60_000);
-  return { faultMono, checks: {}, attempts: [] };
+  ctx.notes.lostSeqs = early.lostSeqs;
+  return { faultMono, checks: {}, attempts: [], planted: plantedTail(early.bufferId, early.lostSeqs) };
 }
 
 /** One socket is admitted; two are opened under it — from the page's own
@@ -584,7 +586,17 @@ async function controlDoubleOpen(ctx: Ctx): Promise<ScenarioOutcome> {
     }
   });
   activity.stop();
-  return { faultMono, checks: {}, attempts: activity.issued };
+  // The repeat is the lever's second socket — told apart by the control's
+  // own SOCKS5 login — and nothing else.
+  const levers = leverSockets(await ctx.stand.journal(ctx.journalSince));
+  ctx.notes.leverSockets = levers;
+  return { faultMono, checks: {}, attempts: activity.issued, planted: levers.length === 2 ? plantedRepeat(levers[1]!) : [] };
+}
+
+/** The sockets opened over a control's own SOCKS5 login, in order. */
+function leverSockets(journal: readonly JournalEvent[]): string[] {
+  const extra = new Set(journal.filter((event) => event.type === "socks.login" && event.extra === true && event.ok === true).map((event) => Number(event.socksId)));
+  return journal.filter((event) => event.type === "ws.open" && extra.has(Number(event.socksId))).map((event) => String(event.wsId));
 }
 
 /** The capture stops in the middle of the run: with no live capture there
@@ -593,7 +605,7 @@ async function controlNoCapture(ctx: Ctx): Promise<ScenarioOutcome> {
   const { activity, faultMono } = await atMoment(ctx, () => ctx.docker.action(ctx.page.info.capture, "stop", 1));
   await sleep(1000);
   activity.stop();
-  return { faultMono, checks: {}, attempts: activity.issued };
+  return { faultMono, checks: {}, attempts: activity.issued, planted: plantedNoCapture(ctx.page.info.controlIp) };
 }
 
 /** The operator's own journal (inside/journal.ts): the `requests` lines
@@ -613,18 +625,19 @@ async function operatorEnds(ctx: Ctx, sinceWall: number): Promise<OperatorReques
  *  arrives (`heldRequestNeverArrived`). The control (`late`): a request
  *  that arrived after its deadline over a CONNECT held across it, which C1
  *  calls late (`lateSendShown`). */
-async function expiryChecks(ctx: Ctx, journal: readonly JournalEvent[], grants: readonly Grant[], host: string, late: boolean, sinceWall: number): Promise<Record<string, string[]>> {
+async function expiryChecks(ctx: Ctx, journal: readonly JournalEvent[], grants: readonly Grant[], host: string, late: boolean, sinceWall: number): Promise<{ checks: Record<string, string[]>; planted?: Planted[] }> {
   if (late) {
     const shown = lateUnderHold(journal, grants, ctx.page.info.name, ctx.page.info.egressIp, host, ctx.pagesByAddress);
-    ctx.notes.lateArrivals = shown.late;
-    return { lateSendShown: shown.violations };
+    ctx.notes.lateArrivals = shown.late.map(({ violation: _violation, ...send }) => send);
+    // The control's C1 may show these late sends and nothing else.
+    return { checks: { lateSendShown: shown.violations }, planted: plantedLate(shown.late) };
   }
   const offset = Date.now() - mono();
   const lines = await operatorEnds(ctx, sinceWall);
   const { expired, violations } = expiredUnderHold(journal, grants, lines, ctx.page.info.name, ctx.page.info.egressIp, host, (at) => at + offset);
   ctx.notes.operatorEnds = lines.length;
   ctx.notes.expired = expired.map((request) => ({ attemptId: request.attemptId, rid: request.rid, windowMs: Math.round(request.deadlineMono - request.grantedMono), refusedAfterDeadlineMs: Math.round(request.refusedWall - (request.deadlineMono + offset)), holds: request.holds.map((hold) => ({ socksId: hold.socksId, heldAfterAdmissionMs: Math.round(hold.heldMono - request.grantedMono), endedAfterDeadlineMs: hold.endedMono === null ? null : Math.round(hold.endedMono - request.deadlineMono) })) }));
-  return { heldPastDeadline: violations, heldRequestNeverArrived: expiredArrivals(journal, expired) };
+  return { checks: { heldPastDeadline: violations, heldRequestNeverArrived: expiredArrivals(journal, expired) } };
 }
 
 /** The control's side of the expiry, live against the operator in main (it
@@ -653,7 +666,8 @@ async function controlHeldLate(ctx: Ctx): Promise<ScenarioOutcome> {
   });
   activity.stop();
   const grants = ctx.page.enginesOfRun.flatMap((owner) => owner.grants);
-  return { faultMono, checks: await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, true, 0), attempts: activity.issued };
+  const expiry = await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, true, 0);
+  return { faultMono, checks: expiry.checks, attempts: activity.issued, planted: [...(expiry.planted ?? []), ...plantedUnkeptAnswer(ctx.page.info.name, rid)] };
 }
 
 /** Events made and lost before the engine ever received them — the second
@@ -681,6 +695,7 @@ async function controlLostFrames(ctx: Ctx): Promise<ScenarioOutcome> {
   const path = `/api/v1/account/me?rid=${rid}`;
   let pushed = 0;
   let siteAttempt = 0;
+  let wsId: string | undefined;
   const { activity, faultMono } = await atMoment(ctx, async () => {
     await ctx.stand.socks({ extraLogin: login });
     try {
@@ -692,7 +707,6 @@ async function controlLostFrames(ctx: Ctx): Promise<ScenarioOutcome> {
         (out) => out.trim(),
         (error: unknown) => `failed: ${String(error)}`,
       );
-      let wsId: string | undefined;
       await waitFor(async () => (wsId = (await ctx.stand.state()).sockets.find((open) => open.from === ctx.page.info.egressIp)?.wsId) !== undefined, 8000, 100);
       for (let n = 0; wsId !== undefined && n < 3; n++) {
         pushed += await ctx.stand.push(200, wsId);
@@ -718,6 +732,7 @@ async function controlLostFrames(ctx: Ctx): Promise<ScenarioOutcome> {
       siteAnswered: answered?.status === 200 ? [] : [`Fansly did not answer the site request ${rid}: the control showed nothing about a lost site.response`],
     },
     attempts: [...activity.issued, ...(siteAttempt > 0 ? [siteAttempt] : [])],
+    planted: wsId === undefined ? [] : plantedLostFrames(ctx.page.info.name, wsId, pushed, rid),
   };
 }
 
@@ -777,7 +792,8 @@ function admissionExpiry(late: boolean): Scenario["run"] {
       await sleep(8000);
       activity.stop();
       const grants = ctx.page.enginesOfRun.flatMap((owner) => owner.grants);
-      return { faultMono, checks: await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, late, sinceWall), attempts: activity.issued };
+      const expiry = await expiryChecks(ctx, await ctx.stand.journal(ctx.journalSince), grants, api, late, sinceWall);
+      return { faultMono, checks: expiry.checks, attempts: activity.issued, ...(expiry.planted ? { planted: expiry.planted } : {}) };
     } finally {
       engine.windowMs = 15_000;
       engine.journalWindowMs = null;
