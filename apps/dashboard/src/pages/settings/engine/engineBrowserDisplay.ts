@@ -10,6 +10,9 @@ import { engineAgeText, engineClockText, engineCount } from "./engineDisplay.js"
 
 export type EngineBrowser = AgentSyncBrowserStatus;
 
+/** A number and its unit stay on one line. */
+const NBSP = "\u00a0";
+
 /** No word from the operator for longer than this: the engine's own bound
  *  for `browser_down` (`SYNC_BROWSER_STATE_SILENT_MS`). */
 export const BROWSER_SILENT_MS = 2 * 60_000;
@@ -117,6 +120,9 @@ export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
     return { kind: "silent", text: "оператор молчит", tone: "warn" };
   }
   const { state } = browser;
+  // A halt for the owner's decision stays his, whatever an operator that
+  // started again says.
+  if (browser.halt !== null) return { kind: "halted", text: `стоит: ${browserStopWords(browser.halt.reason)}`, tone: "danger" };
   if (browser.ownerStop !== null || state.stopReason === "owner_stop") return { kind: "stopped", text: "остановлен", tone: "warn" };
   if (state.stopReason !== null && state.retryAt === null) {
     return { kind: "halted", text: `стоит: ${browserStopWords(state.stopReason)}`, tone: "danger" };
@@ -162,6 +168,13 @@ export function browserOwnerStopText(browser: EngineBrowser, now: number): strin
   return `остановлен владельцем в ${engineClockText(stop.at, now)}${stop.paused ? ", страница на паузе" : ""}`;
 }
 
+/** A halt for the owner's decision, latched until his start. */
+export function browserHaltText(browser: EngineBrowser, now: number): string | null {
+  const { halt } = browser;
+  if (halt === null) return null;
+  return `ждёт решения владельца: ${browserStopWords(halt.reason)} (с ${engineClockText(halt.at, now)})`;
+}
+
 export function browserLoginText(browser: EngineBrowser): string {
   if (browser.login.needed) {
     return browser.login.why === "login_required" ? "нужен вход: Fansly вышел из аккаунта в браузере" : "нужен вход: Fansly не принимает сессию";
@@ -200,7 +213,7 @@ export function browserBufferText(browser: EngineBrowser): string {
   if (buffer.bytes === null) return "нет данных";
   const parts = [bytesText(buffer.bytes)];
   if (buffer.oldestAgeMs !== null && buffer.bytes > 0) parts.push(`старейшее ${msText(buffer.oldestAgeMs)}`);
-  if (buffer.percent !== null) parts.push(`${buffer.percent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} % потолка`);
+  if (buffer.percent !== null) parts.push(`${buffer.percent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}${NBSP}% потолка`);
   return parts.join(" · ");
 }
 
@@ -247,12 +260,15 @@ export function browserAlarmText(browser: EngineBrowser, now: number): string | 
   return `${browserAlarmWords(alarm.kind)}${age === null ? "" : `, ${age} назад`}`;
 }
 
-/** The browser's alerts that hold now, in words, with their reason. */
+/** The browser's alerts that hold now, in words — the kind once: a stop
+ *  reason says it in its own words, any other reason follows the kind. */
 export function browserAlertLines(browser: EngineBrowser, now: number): string[] {
   return browser.alerts.map((alert) => {
     const since = alert.since === null ? null : engineAgeText(alert.since, now);
-    const reason = STOP_WORDS[alert.detail] ?? alarmDetailWords(alert.detail);
-    return `${browserAlertWords(alert.kind)}${reason === null ? "" : `: ${reason}`}${since === null ? "" : ` (${since})`}`;
+    const stop = STOP_WORDS[alert.detail];
+    const reason = stop === undefined ? alarmDetailWords(alert.detail) : null;
+    const words = stop ?? `${browserAlertWords(alert.kind)}${reason === null ? "" : `: ${reason}`}`;
+    return `${words}${since === null ? "" : ` (${since.replace(" ", NBSP)})`}`;
   });
 }
 
@@ -260,7 +276,7 @@ function alarmDetailWords(detail: string): string | null {
   if (detail === "no_state") return "оператор молчит больше 2 мин";
   if (detail.startsWith("link_")) return LINK_ERROR_WORDS[detail.slice(5)] ?? detail;
   if (detail.startsWith("alarm_")) return browserAlarmWords(detail.slice(6));
-  if (detail.startsWith("buffer_")) return `заполнен на ${detail.slice(7)} %`;
+  if (detail.startsWith("buffer_")) return `заполнен на ${detail.slice(7)}${NBSP}%`;
   if (detail.startsWith("not_up:")) return `не поднимается (${browserStepWords(detail.slice(7))})`;
   return detail;
 }

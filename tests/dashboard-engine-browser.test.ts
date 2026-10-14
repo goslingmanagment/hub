@@ -84,7 +84,9 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     }));
     expect(html).toContain("data-browser-alerts");
     expect(html.indexOf("data-browser-alerts")).toBeLessThan(html.indexOf('data-browser-row="transport"'));
-    expect(html).toContain("Тревога — сменился выходной IP: сменился выходной IP прокси (5 мин)");
+    // The kind once: a stop reason says it in its own words.
+    expect(html).toContain("Тревога — сменился выходной IP прокси (5 мин)");
+    expect(html).not.toContain("сменился выходной IP: сменился");
     expect(html).toContain("Тревога — Fansly изменил протокол: заголовки расходятся с сайтом (2 мин)");
     expect(html).toContain("198.51.100.9 — не совпадает с закреплённым 203.0.113.7");
     expect(html).toContain("не выгружен с");
@@ -95,6 +97,25 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     expect(browserStateText(browserStatus({ state: { ...browserStatus().state, mode: "manual_login" } }), NOW_MS)).toBe("готов · ручной вход");
     expect(browserLinkText(browserStatus({ link: { lastStateAt: null, stateAgeMs: null, error: "token" } }), NOW_MS)).toBe("оператор не принял токен страницы");
     expect(browserExitIpText(browserStatus({ proxy: { pinnedExitIp: null, pinnedAt: null, exitIp: null, matches: null, problem: null } }))).toBe("IP не закреплён");
+  });
+
+  it("a halt latched for the owner's decision stays so whatever an operator that started again says, with the command that lifts it (Astra PR 17, P1-1)", () => {
+    const html = render(browserStatus({
+      state: { step: "exit_closed", stopReason: null, retryAt: null, exitOpen: false, mode: "automation", downSince: ago(300_000), stopSince: null },
+      halt: { reason: "header_mismatch", at: "2026-10-14T11:55:00.000Z" },
+    }));
+    expect(html).toContain('data-browser-state="halted"');
+    expect(html).toContain("стоит: заголовки запросов расходятся с сайтом");
+    expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: заголовки запросов расходятся с сайтом \(с [^)]+\) · pnpm cli sync browser start lilly-1/);
+  });
+
+  it("a number and its percent sign stay on one line", () => {
+    const raw = renderToStaticMarkup(createElement(EngineBrowserBlock, {
+      browser: browserStatus({ alerts: [{ kind: "buffer", detail: "buffer_80", since: null }] }), pageLabel: "lilly-1", now: NOW_MS,
+    }));
+    expect(raw).toContain("0,1\u00a0% потолка");
+    expect(raw).toContain("заполнен на 80\u00a0%");
+    expect(raw).not.toMatch(/\d %/);
   });
 
   it("the login line is PR 15's slot: what it passes stands beside it", () => {

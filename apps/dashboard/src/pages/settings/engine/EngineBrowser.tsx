@@ -7,6 +7,7 @@ import {
   browserBufferTroubleLines,
   browserDeliveryText,
   browserExitIpText,
+  browserHaltText,
   browserHeadline,
   browserLinkText,
   browserLoginText,
@@ -79,6 +80,7 @@ export function EngineBrowserBlock({
 }) {
   const alerts = browserAlertLines(browser, now);
   const ownerStop = browserOwnerStopText(browser, now);
+  const halt = browserHaltText(browser, now);
   const bufferTrouble = browserBufferTroubleLines(browser, now);
   const silent = browser.link.error !== null || browser.link.stateAgeMs === null || browser.link.stateAgeMs > BROWSER_SILENT_MS;
   const onBrowser = browser.transport === "browser";
@@ -119,6 +121,11 @@ export function EngineBrowserBlock({
         {ownerStop !== null && (
           <Row label="Остановка" warn testId="owner-stop">
             {ownerStop} · pnpm cli sync browser start {pageLabel}
+          </Row>
+        )}
+        {halt !== null && (
+          <Row label="Решение" warn testId="halt">
+            {halt} · pnpm cli sync browser start {pageLabel}
           </Row>
         )}
         <Row label="Вход" warn={browser.login.needed} testId="login">
