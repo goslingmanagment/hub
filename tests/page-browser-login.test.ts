@@ -713,7 +713,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     });
   }
 
-  it("a ready page is not ready while a person is in it: back at the loaded site until the automation, its identity confirmed then", async () => {
+  it("a ready page is not ready while a person is in it: back at the loaded site until the automation, and ready only once a fresh identity read confirms it", async () => {
     const s = await setUp();
     await started(s);
     const token = "fansly-token-ReAdYbEfOrE0123456789";
@@ -743,10 +743,62 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     s.engine.send(identity(9502));
     expect((await s.engine.waitFor("result", (message) => message.attemptId === 9502, 10_000)).outcome).toMatchObject({ sent: false });
     expect(s.model.hubRequests).toHaveLength(issued);
-    // The automation: the site loaded anew, and ready again under the
-    // identity of the live session.
+    // The automation: the site loaded anew — and not ready on the identity
+    // read from before the login, though the session is the same (Astra's
+    // review of PR 15, item 6): a person was in the page meanwhile.
+    const loads = s.model.navigations.length;
     expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(s.operator.state.accountId).toBeNull();
+    // A fresh identity read under the live session: ready again.
+    s.engine.send(identity(9503));
     await until(() => s.operator.page.step === "ready", 10_000, "the page ready again");
+    expect(s.operator.state.accountId).toBe("123456789");
+  });
+
+  it("an identity read sent before the login and answered after it names nothing: the page waits for one sent after it", async () => {
+    const s = await setUp();
+    await started(s);
+    const token = "fansly-token-StAlEiDeNtItY0123456789";
+    const fingerprint = sessionFingerprint(token, SITE_CLIENT);
+    siteRead(s, token, SITE_CLIENT);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    await s.engine.waitFor("siteDone", () => true, 10_000);
+    s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
+    const identity = (attemptId: number) => ({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 30_000, requestDeadlineMono: monoMs() + 40_000 });
+    // The identity read's answer is held at its headers until the login is over.
+    const answer = s.chrome.handlers.get("Fetch.continueResponse")!;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let holding = false;
+    s.chrome.handlers.set("Fetch.continueResponse", async (cmd) => {
+      if (s.model.hubRequests.some((request) => request.interceptionId === cmd.params.requestId)) {
+        holding = true;
+        await held;
+      }
+      return answer(cmd);
+    });
+    s.engine.send(identity(9601));
+    await until(() => holding, 10_000, "the identity read sent, its answer held");
+    // A person's login meanwhile.
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    const loads = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew under the automation");
+    // The earlier read's answer comes now: it names the account, under the
+    // live session — and confirms nothing.
+    release();
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9601, 10_000)).outcome).toMatchObject({ kind: "response", status: 200 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(s.operator.state.accountId).toBeNull();
+    expect(s.lines.join("\n")).toContain("session.identity_stale");
+    // One sent after the login does.
+    s.engine.send(identity(9602));
+    await until(() => s.operator.page.step === "ready", 10_000, "the page ready");
   });
 
   it("no socket of the site in the manual login: its CONNECT is refused before any admission is asked", async () => {

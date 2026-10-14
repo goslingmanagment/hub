@@ -289,6 +289,42 @@ describe("a page on its browser", () => {
   }, 60_000);
 });
 
+describe("after a login: the account checked anew (Astra's review of PR 15, item 6)", () => {
+  it("a page on its browser, its session's fingerprint unchanged by the login: nothing ordinary goes before a fresh account check, and a proof sent before the end counts for nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.state = { ...r.operator.state, step: "ready", exitOpen: true };
+    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
+    const trusted = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
+    await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [r.page.pageId, trusted]);
+    await startHost(r);
+    await until(async () => r.operator.physical.length >= 1, 20_000, "the page running on its browser");
+
+    await login(r, "wanted");
+    await until(async () => r.operator.state.mode === "manual_login", 10_000, "the manual login");
+    // The session is the same one throughout (SESSION_A): the digest the
+    // engine trusted before the login is the one it would compute after it.
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    const ended = (await getSyncPageManualLogin(db(), r.page.pageId))!.changedAt!;
+    // A proof sent before the end, applied late, writes nothing.
+    await expect(testDb.pool.query("select identity_checked_at >= $2::timestamptz as fenced from sync_pages where page_id = $1", [r.page.pageId, ended])).resolves.toMatchObject({ rows: [{ fenced: true }] });
+
+    // The first request of the engine after the end is the account's check;
+    // the ordinary ones come only once its proof is recorded.
+    await until(async () => (await testDb!.pool.query("select 1 from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2 and resource <> 'account.verify'", [r.page.pageId, ended])).rowCount! > 0, 20_000, "ordinary work again");
+    const after = (await testDb.pool.query<{ resource: string; admitted_at: Date; completed_at: Date | null }>(
+      "select resource, admitted_at, completed_at from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2 order by id", [r.page.pageId, ended],
+    )).rows;
+    expect(after[0]).toMatchObject({ resource: "account.verify" });
+    const firstOrdinary = after.find((attempt) => attempt.resource !== "account.verify")!;
+    expect(after[0]!.completed_at).not.toBeNull();
+    expect(firstOrdinary.admitted_at.getTime()).toBeGreaterThanOrEqual(after[0]!.completed_at!.getTime());
+    // Trusted again: the same digest, by the check sent after the login.
+    expect((await testDb.pool.query("select credentials_generation from sync_pages where page_id = $1", [r.page.pageId])).rows[0]).toEqual({ credentials_generation: trusted });
+  }, 60_000);
+});
+
 describe("the owner's pause and the login (Astra's review of PR 15, item 5)", () => {
   const lever = (r: Rig, action: "pause" | "resume", what: { all?: boolean; requests?: boolean }) =>
     changeSyncPagePause(db(), createFanslyRegistry(), { pageLabel: r.page.pageLabel, action, ...what });

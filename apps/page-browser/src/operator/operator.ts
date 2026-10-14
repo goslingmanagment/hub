@@ -61,12 +61,13 @@
 // the login operations through beside the interface's reads, Hub's
 // requests and the site's socket stay out, the page is never ready — and
 // off again, with the checks before the page resumes: the exit IP now, the
-// session and the account by the engine's identity read under the live
-// session. The API's calls of the login form (`login.*`, their own token)
-// are taken only while the mode is that owner's: the screen, its
-// screenshot, the owner's input typed in as a person types it. What was
-// typed lives in the call for the time of the hand-over: never in a log
-// line, a journal, the buffer or an error.
+// session and the account by an identity read of the engine's under the
+// live session sent after the mode changed (what was confirmed before a
+// person could be in the page confirms nothing). The API's calls of the
+// login form (`login.*`, their own token) are taken only while the mode is
+// that owner's: the screen, its screenshot, the owner's input typed in as a
+// person types it. What was typed lives in the call for the time of the
+// hand-over: never in a log line, a journal, the buffer or an error.
 //
 // What holds, whatever happens:
 // - No API request leaves without the engine's admission. A Hub request goes
@@ -287,6 +288,11 @@ export class Operator {
   /** The account the engine's identity read named, and under which
    *  session (plan §4.1, step 9). */
   #identity: { accountId: string; fingerprint: string } | null = null;
+  /** An identity read sent before this instant (CLOCK_MONOTONIC ms) names
+   *  nothing: what it confirmed was before the last change of the mode — a
+   *  person may have been in the page since (Astra's review of PR 15,
+   *  item 6). */
+  #identityFloorMono = Number.NEGATIVE_INFINITY;
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -996,9 +1002,16 @@ export class Operator {
   }
 
   /** A whole answer of the engine's identity read (hub-requests/): its
-   *  account id, read from the body and nothing else of it kept. */
-  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number }): void {
+   *  account id, read from the body and nothing else of it kept. A read sent
+   *  before the last change of the mode (or whose send is not known since
+   *  then) names nothing: it is from before the person's login. */
+  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number; sentMono: number | null }): void {
     try {
+      if (this.#mode === "manual_login") return;
+      if (this.#identityFloorMono > Number.NEGATIVE_INFINITY && (answer.sentMono === null || answer.sentMono < this.#identityFloorMono)) {
+        this.#log("session.identity_stale", { why: "sent before the mode last changed" });
+        return;
+      }
       if (answer.status !== 200 || answer.bytes > IDENTITY_BODY_MAX) return;
       const body = this.buffer.readBody(answer.bodyId, 0, Math.max(1, answer.bytes));
       if (body === null) return;
@@ -1510,6 +1523,11 @@ export class Operator {
 
   #setMode(mode: Mode, generation: number | null, why: string): void {
     this.#cancelLogin(`the mode changes to ${mode}`);
+    // What the engine's identity read confirmed was before a person could
+    // be in the page: the session and the account are read anew, by a read
+    // sent from now on, before the page is ready again.
+    this.#identity = null;
+    this.#identityFloorMono = monoMs();
     this.#mode = mode;
     this.#modeGeneration = generation;
     this.#log("mode", { mode, generation, why });

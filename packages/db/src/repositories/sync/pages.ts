@@ -1517,6 +1517,16 @@ export async function holdSyncPageManualLoginPause(tx: Database, input: { pageId
  * the pause it put on the page is lifted. Only a closing login ends — or,
  * with `evenIfWanted`, an open one that has nothing to log in (no browser
  * any more). Fenced by the caller's `lockOwnedPage`. True: ended.
+ *
+ * What the engine verified of the page's credentials before is no longer
+ * trusted (Astra's review of PR 15, item 6): a person was in the page's
+ * browser, whatever its session's fingerprint says now. In the same write
+ * that lifts the pause, the trusted digest goes (`credentials_generation`
+ * null: checks-only, the verify raised at the next pick — G2) and no
+ * identity proof sent before this instant counts any more
+ * (`identity_checked_at` raised to it: a late answer of an earlier check
+ * writes nothing). Ordinary work resumes only once a check sent after the
+ * login proves the page's account again.
  */
 export async function endSyncPageManualLogin(tx: Database, input: { pageId: number; by: string; evenIfWanted?: boolean }): Promise<boolean> {
   const from = input.evenIfWanted === true ? sql`manual_login <> 'off'` : sql`manual_login = 'ending'`;
@@ -1525,6 +1535,8 @@ export async function endSyncPageManualLogin(tx: Database, input: { pageId: numb
        set manual_login = 'off',
            paused_all = case when manual_login_paused then false else paused_all end,
            manual_login_paused = false,
+           credentials_generation = null,
+           identity_checked_at = greatest(identity_checked_at, clock_timestamp()),
            manual_login_changed_at = clock_timestamp(),
            manual_login_changed_by = ${input.by},
            updated_at = clock_timestamp()

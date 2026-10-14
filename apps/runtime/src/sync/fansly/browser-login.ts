@@ -38,7 +38,10 @@ import type { BrowserBufferIntake } from "./browser-intake.ts";
 //   operator checks the exit IP, a page on its browser loads the site anew
 //   and is ready only once the engine's identity read names the expected
 //   account under the live session); then `off`, under this owner's fence —
-//   the pause the login put on the page lifted with it.
+//   the pause the login put on the page lifted with it, and the page's
+//   credentials no longer trusted (`endSyncPageManualLogin`): nothing
+//   ordinary goes before an account check sent after the login proves them
+//   again (G2), whatever the session's fingerprint says.
 // - off, while the operator still says it is in the manual login (the same
 //   owner, a login closed by other means): the automation is back.
 // - An operator that cannot be reached is no one in the manual login a
