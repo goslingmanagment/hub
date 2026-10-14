@@ -54,8 +54,9 @@ export class StandSocks {
   #down = false;
   refuseAuth = false;
   connectDelayMs = 0;
-  /** A CONNECT of this name is answered only after `ms`. */
-  hold: { host: string; ms: number } | null = null;
+  #hold: { host: string; ms: number } | null = null;
+  /** The CONNECTs held now, by SOCKS id: each one's release. */
+  readonly #held = new Map<number, { host: string; release: () => void }>();
   /** A second login, taken while a control runs (control.ts): a one-time
    *  one, so the page's own never leaves the runner and the operator. */
   extraLogin: { username: string; password: string } | null = null;
@@ -66,6 +67,19 @@ export class StandSocks {
 
   get down(): boolean {
     return this.#down;
+  }
+
+  /** A CONNECT of this name is answered only after `ms`. Lifted (null, or
+   *  another name), the CONNECTs it holds are let go at once — not at the
+   *  end of their own `ms`: after a fault the stand's network is open, and
+   *  only the page's own reaction may stop a send. */
+  get hold(): { host: string; ms: number } | null {
+    return this.#hold;
+  }
+
+  set hold(value: { host: string; ms: number } | null) {
+    this.#hold = value;
+    for (const [, held] of [...this.#held]) if (value === null || value.host !== held.host) held.release();
   }
 
   get open(): number {
@@ -230,13 +244,18 @@ export class StandSocks {
           });
           socket.on("close", () => upstream.destroy());
         };
-        const hold = this.hold !== null && this.hold.host === host ? this.hold.ms : 0;
+        const hold = this.#hold !== null && this.#hold.host === host ? this.#hold.ms : 0;
         if (hold > 0) {
           journal.log("socks.hold", { socksId, host, port, from, ms: hold });
-          setTimeout(() => {
-            journal.log("socks.release", { socksId, host, port, from, gone: socket.destroyed });
+          let timer: NodeJS.Timeout | null = null;
+          const release = (early: boolean) => {
+            if (!this.#held.delete(socksId)) return;
+            if (timer) clearTimeout(timer);
+            journal.log("socks.release", { socksId, host, port, from, gone: socket.destroyed, ...(early ? { early: true } : {}) });
             go();
-          }, hold);
+          };
+          this.#held.set(socksId, { host, release: () => release(true) });
+          timer = setTimeout(() => release(false), hold);
         } else if (this.connectDelayMs > 0) setTimeout(go, this.connectDelayMs);
         else go();
       }

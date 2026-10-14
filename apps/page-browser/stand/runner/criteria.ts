@@ -666,6 +666,12 @@ export function plantedLate(late: readonly LateSend[]): Planted[] {
   return late.map((send) => plant("C1", "arrived outside its admission window", [send.violation]));
 }
 
+/** control-loss-release: the read sent from the page's address right after
+ *  the loss, with no admission. */
+export function plantedRelease(page: string, rid: string): Planted[] {
+  return [plant("C1", "arrived without any admission", [`GET apiv3.fansly.com/api/v1/account/me?rid=${rid} arrived without any admission of ${page} for it`])];
+}
+
 /** control-held-late: the lever's request Fansly answered, of which the
  *  engine keeps nothing. */
 export function plantedUnkeptAnswer(page: string, rid: string): Planted[] {

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { connect as tcpConnect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import vm from "node:vm";
@@ -7,7 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { roleOf, sitePage, siteVariant, STAND_SESSION } from "../apps/page-browser/stand/fansly/front.ts";
-import type { JournalEvent } from "../apps/page-browser/stand/fansly/journal.ts";
+import { Journal, type JournalEvent } from "../apps/page-browser/stand/fansly/journal.ts";
+import { StandSocks } from "../apps/page-browser/stand/fansly/socks.ts";
 import { captureCovers, captureSeen, parsePacket, pastTheProxy, readyPort, sentinelPorts, type CaptureRules } from "../apps/page-browser/stand/runner/capture.ts";
 import {
   closedWriteAttempted,
@@ -34,6 +36,7 @@ import {
   plantedLeak,
   plantedLostFrames,
   plantedNoCapture,
+  plantedRelease,
   plantedRepeat,
   plantedTail,
   plantedUnkeptAnswer,
@@ -822,6 +825,17 @@ describe("each control passes only with the very violations its run planted — 
     unplanted(judge(checksOf({ [C1]: unadmittedArrivals(more, [site, hub], PAGES), [C7]: c7(more, [site, hub]) }), control, planted));
   });
 
+  it("control-loss-release: the read let go from the page right after the loss, unadmitted, its answer inside the loss's gap mark — another unadmitted request of the page fails it", () => {
+    const journal = [apiRequest(9000, "GET", "/api/v1/account/me?rid=release-1"), event("res", 9010, { role: "api", host: API, method: "GET", path: "/api/v1/account/me?rid=release-1", status: 200 })];
+    const kept: Kept = { frames: new Map(), outcomes: new Map(), responses: new Map(), gaps: [{ page: "p1", reason: "chrome_restart", fromWall: 0, atWall: 1e15 }] };
+    const checks = (events: JournalEvent[]) => checksOf({ [C1]: unadmittedArrivals(events, [], PAGES), [C7]: madeAndKept(fanslyMade(events, [], PAGES), kept).violations });
+    const control = controlOf("control-loss-release");
+    const planted = plantedRelease("p1", "release-1");
+    expect(judge(checks(journal), control, planted)).toEqual({ ok: true, why: [] });
+    // Another request of the page, let go with no admission: not the planted one.
+    unplanted(judge(checks([...journal, apiRequest(9100, "GET", "/api/v1/messaging/groups?rid=site-x")]), control, planted));
+  });
+
   it("control-leak: its own read, write, socket and message — the page's own unadmitted request, closed write or forbidden message fails it", () => {
     const runner = "10.0.1.20";
     const journal = [
@@ -958,6 +972,49 @@ describe("the stand's Fansly", () => {
     expect(idle).toContain(`"?variant=" + "idle"`);
     expect(idle).not.toMatch(/XMLHttpRequest|WebSocket/);
     expect(Buffer.byteLength(JSON.stringify({ t: 1, d: JSON.stringify({ token: STAND_SESSION.token, v: 3 }) }))).toBe(authorizationBytes(STAND_SESSION.token));
+  });
+
+  it("lets go of a CONNECT it holds the moment the hold is lifted — not at the end of the hold's own time", async () => {
+    const front = createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => front.listen(0, "127.0.0.1", resolve));
+    const free = createServer();
+    await new Promise<void>((resolve) => free.listen(0, "127.0.0.1", resolve));
+    const port = (free.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => free.close(() => resolve()));
+    const journal = new Journal();
+    const socks = new StandSocks({ listenHost: "127.0.0.1", port, username: "u", password: "p", journal, route: () => (front.address() as AddressInfo).port });
+    await socks.listen();
+    const client: Socket = tcpConnect({ host: "127.0.0.1", port });
+    try {
+      let received = Buffer.alloc(0);
+      client.on("data", (data: Buffer) => (received = Buffer.concat([received, data])));
+      const bytes = async (count: number, timeoutMs: number) => {
+        const until = Date.now() + timeoutMs;
+        while (received.length < count && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
+        return received.length >= count;
+      };
+      await new Promise<void>((resolve) => client.once("connect", () => resolve()));
+      socks.hold = { host: "apiv3.fansly.com", ms: 60_000 };
+      client.write(Buffer.from([5, 1, 2]));
+      expect(await bytes(2, 2000)).toBe(true);
+      client.write(Buffer.concat([Buffer.from([1, 1]), Buffer.from("u"), Buffer.from([1]), Buffer.from("p")]));
+      expect(await bytes(4, 2000)).toBe(true);
+      const host = Buffer.from("apiv3.fansly.com");
+      client.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([1, 187])]));
+      // Held: no answer to the CONNECT while the hold stands.
+      expect(await bytes(5, 300)).toBe(false);
+      expect(journal.since(0).events.map((event) => event.type)).toContain("socks.hold");
+      const lifted = Date.now();
+      socks.hold = null;
+      expect(await bytes(5, 2000)).toBe(true);
+      expect(Date.now() - lifted).toBeLessThan(2000);
+      expect(received[5]).toBe(0);
+      expect(journal.since(0).events.find((event) => event.type === "socks.release")).toMatchObject({ host: "apiv3.fansly.com", early: true });
+    } finally {
+      client.destroy();
+      await socks.setDown(true);
+      await new Promise<void>((resolve) => front.close(() => resolve()));
+    }
   });
 
   it("finds the stand's frame number in a socket frame as the browser received it", () => {
