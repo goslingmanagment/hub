@@ -54,9 +54,17 @@ export interface RequestLine {
   resourceType: string;
   /** The engine's admission (attempt id), or why there was none. */
   admission: string | null;
-  /** "fulfilled": answered by the operator, nothing sent (env/check.ts). */
-  decision: "continued" | "failed" | "fulfilled";
+  /** "fulfilled": answered by the operator, nothing sent (env/check.ts);
+   *  "ended": a request of the site came to its end (PR 7) — its status,
+   *  size and time. */
+  decision: "continued" | "failed" | "fulfilled" | "ended";
   result: string;
+  /** The answer's status (an end). */
+  status?: number | null;
+  /** The bytes that came over the network (an end; null: not known). */
+  bytes?: number | null;
+  /** From the pause to the end. */
+  durationMs?: number;
 }
 
 export interface StateLine {

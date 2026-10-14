@@ -140,6 +140,10 @@ export interface HubDeps {
   alarm: (kind: AlarmKind, detail: Record<string, string | number | boolean>) => void;
   /** The live session changed (state says it). */
   sessionChanged?: (fingerprint: string | null) => void;
+  /** A whole answer of the engine's identity read (`account.me`, plan §4.1
+   *  step 9): its session and its body, sealed in the buffer — read before
+   *  this returns, it goes with the outcome's resultAck. */
+  identityAnswer?: (answer: { fingerprint: string; status: number; bodyId: string; bytes: number }) => void;
   timings?: Partial<HubTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -222,7 +226,7 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
   if (map.size > REMEMBERED) map.delete(map.keys().next().value!);
 }
 
-function isPreflight(request: PausedRequest): boolean {
+export function isPreflight(request: Pick<PausedRequest, "method" | "headers">): boolean {
   return request.method === "OPTIONS" && Object.keys(request.headers).some((name) => name.toLowerCase() === "access-control-request-method");
 }
 
@@ -1030,6 +1034,9 @@ export class HubRequests {
     // operation's is its first request's.
     const moments = [sendMoment(attempt.preflight), sendMoment(attempt.main)].filter((mono): mono is number => mono !== null);
     const sentMono = moments.length > 0 ? Math.min(...moments) : null;
+    if (!how.empty && !how.preflight && attempt.send.route === "account.me") {
+      this.#deps.identityAnswer?.({ fingerprint: attempt.fingerprint, status: phys.status, bodyId: sealed.bodyId, bytes: sealed.bytes });
+    }
     const outcome: Outcome = {
       kind: "response",
       status: phys.status,

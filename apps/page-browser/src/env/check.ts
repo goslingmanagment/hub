@@ -179,6 +179,11 @@ export class EnvCheck {
     };
   }
 
+  /** Is this the check page's own origin (what `onPaused` decides)? */
+  isCheckPage(request: Pick<PausedRequest, "url">): boolean {
+    return request.url.startsWith(`${CHECK_ORIGIN}/`);
+  }
+
   /** Reads the environment in the browser and compares it with `env`. */
   async run(env: PageEnv, timeoutMs: number): Promise<EnvCheckResult> {
     const started = Date.now();

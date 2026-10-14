@@ -25,7 +25,8 @@
 // that no path claims.
 //
 // What a paused request carries — its headers, the response's headers — is
-// kept in memory for the decision only: none of it is logged here.
+// kept in memory for the decision only: none of it is logged here. Of its
+// body only the size is kept (a login's carries the password).
 
 import { CdpUnanswered, type CdpEvent, type CdpPort } from "./client.ts";
 import { errorMessage, makeLog, type Logger } from "../shared/util.ts";
@@ -62,6 +63,9 @@ export interface PausedRequest {
   frameId: string | null;
   /** The previous hop's Fetch id, when this is a redirect's next hop. */
   redirectedRequestId: string | null;
+  /** Its body's bytes: 0 none, null of a length the event does not tell
+   *  (a stream, a blob, data Chrome did not attach). Never the body itself. */
+  bodyBytes: number | null;
   /** The response stage's status and headers; null at the request stage. */
   response: PausedResponse | null;
 }
@@ -111,7 +115,7 @@ export class PausedRequests {
       requestId?: string;
       networkId?: string;
       redirectedRequestId?: string;
-      request?: { url?: string; urlFragment?: string; method?: string; headers?: Record<string, unknown> };
+      request?: { url?: string; urlFragment?: string; method?: string; headers?: Record<string, unknown>; hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> };
       resourceType?: string;
       frameId?: string;
       responseStatusCode?: number;
@@ -140,6 +144,7 @@ export class PausedRequests {
       resourceType: String(params.resourceType ?? ""),
       frameId: params.frameId ?? null,
       redirectedRequestId: params.redirectedRequestId ?? null,
+      bodyBytes: bodyBytesOf(params.request),
       response: responseStage
         ? {
             status: typeof params.responseStatusCode === "number" ? params.responseStatusCode : null,
@@ -218,4 +223,21 @@ export class PausedRequests {
     }
     return resolution;
   }
+}
+
+/** The bytes of a paused request's body as Fetch shows it: its entries'
+ *  (base64), or its text — and null when it has one of a length not shown. */
+function bodyBytesOf(request: { method?: string; hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> } | undefined): number | null {
+  if (request === undefined) return 0;
+  const entries = request.postDataEntries;
+  if (Array.isArray(entries) && entries.length > 0) {
+    let total = 0;
+    for (const entry of entries) {
+      if (typeof entry.bytes !== "string") return null;
+      total += Buffer.from(entry.bytes, "base64").length;
+    }
+    return total;
+  }
+  if (typeof request.postData === "string") return Buffer.byteLength(request.postData, "utf8");
+  return request.hasPostData === true ? null : 0;
 }

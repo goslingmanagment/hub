@@ -28,6 +28,18 @@
 //   one binary frame, the last. Headers of a response leave out
 //   `set-cookie`.
 //
+// - PR 7 (the site's own requests; spec §6.4): no shape changes. `siteAdmit`
+//   of an operation with a CORS preflight is asked at the preflight's pause
+//   with its request's method; its `sessionFingerprint` is the request's own
+//   session, the live one for a preflight, null when there is none. The
+//   `sessionFingerprint` of a `site.response` to a request without a
+//   session is the empty session's (sha256 of "fansly-session/1\n\n"); one
+//   with `complete: false` names an empty body no frames carry.
+//   `siteDone.body` is `not_platform_data` also when there is nothing to
+//   keep (no answer, a preflight's answer). An operator that starts again
+//   sends `siteDone` for what the previous one admitted: `sent` — whether
+//   it was released — and no status.
+//
 // - PR 10: no `wsAdmit` before the site's live session is known (its
 //   `sessionFingerprint` is never null from this operator): the socket gate
 //   lets the authorization go only at the live token's size. The stop
@@ -59,9 +71,11 @@
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
 // messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
-// Hub request's (PR 9): `send`, `checkResult`, and the site socket's (PR
-// 10): `wsAdmitResult`. The other kinds of command are refused as not
-// supported yet, and `siteAdmitResult` comes with PR 7.
+// Hub request's (PR 9): `send`, `checkResult`, the site socket's (PR 10):
+// `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
+// `onSite` — `siteAdmitResult` (the engine answers a `siteAdmit` with it,
+// PR 14; this operator asks none before PR 7, and drops an answer it never
+// asked for). The other kinds of command are refused as not supported yet.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
@@ -438,13 +452,13 @@ export type OperatorToEngine =
 export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
 
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult | SiteAdmitResult;
 
 /** A Hub request's messages (PR 9). */
 export type HubMessage = Send | CheckResult;
 
-/** Types of the protocol that later PRs implement. */
-const LATER_TYPES = new Set(["siteAdmitResult"]);
+/** Types of the protocol that later PRs implement (none left). */
+const LATER_TYPES = new Set<string>();
 
 /** A recover names at most this many attempts. */
 const MAX_RECOVER = 10_000;
@@ -610,6 +624,19 @@ function parseWsAdmitResult(m: Record<string, unknown>): WsAdmitResult {
   return { ...base, admit: false, reason: str(m.reason, "reason", 128), retryNotBeforeWall: retry };
 }
 
+const SITE_REFUSALS = new Set<string>(["paused", "held", "mode", "route_hold", "site_hour_cap", "buffer_full", "session_mismatch", "wait_expired"]);
+
+function parseSiteAdmitResult(m: Record<string, unknown>): SiteAdmitResult {
+  const siteRequestId = str(m.siteRequestId, "siteRequestId", 64);
+  if (!CONNECTION_ID.test(siteRequestId)) throw new Invalid("siteRequestId is not a UUID");
+  const base = { type: "siteAdmitResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), siteRequestId };
+  if (m.admit === true) return { ...base, admit: true, deadlineMono: num(m.deadlineMono, "deadlineMono"), attemptId: int(m.attemptId, "attemptId", 1) };
+  if (m.admit !== false) throw new Invalid("admit is not a boolean");
+  const reason = str(m.reason, "reason", 64);
+  if (!SITE_REFUSALS.has(reason)) throw new Invalid(`an unknown site refusal ${reason}`);
+  return { ...base, admit: false, reason: reason as Extract<SiteAdmitResult, { admit: false }>["reason"] };
+}
+
 function parseBufferMessage(type: BufferMessage["type"], m: Record<string, unknown>): BufferMessage {
   const ownerGeneration = int(m.ownerGeneration, "ownerGeneration");
   switch (type) {
@@ -662,6 +689,8 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: parseCheckResult(m) };
       case "wsAdmitResult":
         return { ok: true, message: parseWsAdmitResult(m) };
+      case "siteAdmitResult":
+        return { ok: true, message: parseSiteAdmitResult(m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }

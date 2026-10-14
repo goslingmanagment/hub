@@ -282,13 +282,19 @@ describe("commands", () => {
     expect(executed).toEqual([]);
   });
 
-  it("of a later PR's message type close the connection as a protocol error", async () => {
+  it("of an unknown type, or a site admission that is not the protocol's, close the connection as a protocol error", async () => {
     const { engine } = await setUp();
     const fake = await engine();
     fake.send(hello());
     await fake.waitFor("helloResult");
+    // A site request's id is a UUID (spec §6.1).
     fake.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: "s", admit: false, reason: "paused" });
     await until(() => fake.closed !== null);
+    const other = await engine();
+    other.send(hello());
+    await other.waitFor("helloResult");
+    other.send({ type: "teleport", ownerGeneration: 1 });
+    await until(() => other.closed !== null);
   });
 });
 
@@ -344,7 +350,14 @@ describe("the protocol's messages", () => {
     expect(parseEngineMessage(JSON.stringify(command(1, "c", "launchMissiles")))).toMatchObject({ ok: false });
     expect(parseEngineMessage(JSON.stringify(command(1, "", "stopPage")))).toMatchObject({ ok: false });
     expect(parseEngineMessage("{")).toEqual({ ok: false, error: "not JSON" });
-    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult" }))).toEqual({ ok: false, error: "siteAdmitResult is not supported by this operator yet" });
+    // The engine's answer to a site request (PR 14): strict, by the spec's refusals.
+    const siteRequestId = "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult", ownerGeneration: 2, siteRequestId, admit: true, deadlineMono: 5.5, attemptId: 3 })))
+      .toEqual({ ok: true, message: { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId, admit: true, deadlineMono: 5.5, attemptId: 3 } });
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult", ownerGeneration: 2, siteRequestId, admit: false, reason: "wait_expired" }))).toMatchObject({ ok: true });
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult", ownerGeneration: 2, siteRequestId, admit: false, reason: "because" }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: "s", admit: false, reason: "paused" }))).toMatchObject({ ok: false });
+    expect(parseEngineMessage(JSON.stringify({ type: "siteAdmitResult" }))).toMatchObject({ ok: false });
   });
 
   it("parses a socket's admission strictly (PR 10)", () => {
