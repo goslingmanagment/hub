@@ -26,6 +26,10 @@ const PROBLEMS: Record<string, string> = {
   "no browser profile is bound to the page": "к странице не привязан браузер",
   "its browser has no pinned exit IP": "у браузера не закреплён выходной IP",
   "its browser has no environment (time zone, languages, geolocation)": "у браузера не задано окружение (часовой пояс, языки, геолокация)",
+  // A new page's browser (PR 16).
+  "no proxy is given for the page to be": "не задан прокси новой страницы",
+  "its exit IP is not pinned": "не закреплён выходной IP",
+  "the profile is bound to a page": "профиль уже привязан к странице",
 };
 
 /** The API's reason a browser is not ready, in the owner's words. */

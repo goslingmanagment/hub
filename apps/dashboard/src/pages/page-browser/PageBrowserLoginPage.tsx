@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
-import { ExternalLink, MonitorSmartphone, RefreshCw } from "lucide-react";
-import type { PageBrowserLoginResponse, PageBrowserLoginStepResponse } from "@agency_hub_core/contracts";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import type { PageBrowserLoginResponse } from "@agency_hub_core/contracts";
 
 import {
   pageBrowserScreenshotUrl,
@@ -9,12 +9,12 @@ import {
   usePageBrowserLogin,
   usePageBrowserLoginStep,
   useStartPageBrowserLogin,
-  type PageBrowserLoginStep,
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildSettingsRoute, decodeRouteSegment } from "@/lib/navigation";
-import { loginChipOf, loginViewOf, stepProblemText, wantsCode, type LoginView, type Tone } from "./pageBrowserLoginView.js";
+import { Card, Chip, LiveScreenshot, LoginForm, PLAIN, PRIMARY } from "./loginParts.js";
+import { loginViewOf, stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // The owner logs a page's server browser in (Project Browser plan §4.8,
 // PR 15): the browser's live screenshot, the fields Fansly asks for now, the
@@ -22,155 +22,10 @@ import { loginChipOf, loginViewOf, stepProblemText, wantsCode, type LoginView, t
 // know. What is typed goes to the page's browser through Hub and is kept
 // nowhere; the fields are cleared once a step was sent.
 
-const TONES: Record<Tone, string> = {
-  neutral: "border-border bg-hover-alt text-text-secondary",
-  progress: "border-accent/30 bg-accent/10 text-accent",
-  good: "border-green/30 bg-green/10 text-green",
-  warning: "border-warning/30 bg-warning/10 text-warning-dark",
-  danger: "border-danger/30 bg-danger/10 text-danger",
-};
-
-const INPUT = "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-accent disabled:opacity-60";
-const PRIMARY = "w-full rounded-lg bg-accent py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50";
-const PLAIN = "inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-text-secondary hover:bg-hover disabled:opacity-50";
-
-function Chip({ view }: { view: LoginView }) {
-  const chip = loginChipOf(view);
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${TONES[chip.tone]}`} data-login-view={view.kind}>
-      {chip.label}
-    </span>
-  );
-}
-
-function Card({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
-        {aside}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/** The browser as it shows now: a new screenshot each second while this
- *  page is open and visible, the last one kept on screen meanwhile. */
-function LiveScreenshot({ pageLabel, live }: { pageLabel: string; live: boolean }) {
-  const [tick, setTick] = useState(0);
-  const [shown, setShown] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const next = () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      if (document.visibilityState === "visible") setTick((value) => value + 1);
-      else next();
-    }, 1_000);
-  };
-  useEffect(() => () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-  }, []);
-  useEffect(() => {
-    if (!live) {
-      setShown(null);
-      setFailed(false);
-    }
-  }, [live]);
-  const url = pageBrowserScreenshotUrl(pageLabel, tick);
-  return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-hover-alt">
-      {shown !== null && <img src={shown} alt="Экран серверного браузера" className="absolute inset-0 h-full w-full object-contain" />}
-      {live && (
-        // The next screenshot loads unseen and replaces the shown one.
-        <img
-          key={url}
-          src={url}
-          alt=""
-          aria-hidden
-          className="hidden"
-          onLoad={() => {
-            setShown(url);
-            setFailed(false);
-            next();
-          }}
-          onError={() => {
-            setFailed(true);
-            next();
-          }}
-        />
-      )}
-      {shown === null && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-sm text-text-muted">
-          <MonitorSmartphone size={28} className="text-text-muted" aria-hidden />
-          {live ? (failed ? "Снимка пока нет: браузер ещё не открыл экран входа." : "Загружаем снимок…") : "Снимок появится, когда вход открыт."}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SiteError({ text }: { text: string }) {
-  return (
-    <p role="alert" className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">
-      <span className="font-semibold">Fansly:</span> {text}
-    </p>
-  );
-}
-
-function LoginForm({ pageLabel, view, onAnswer }: { pageLabel: string; view: Extract<LoginView, { kind: "form" }>; onAnswer: (answer: PageBrowserLoginStepResponse) => void }) {
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const { pending, send } = usePageBrowserLoginStep(pageLabel);
-  const codeStep = wantsCode(view);
-  const handle = (event: FormEvent) => {
-    event.preventDefault();
-    if (pending) return;
-    const step: PageBrowserLoginStep = codeStep ? { kind: "code", code: code.trim() } : { kind: "submit", login: login.trim(), password };
-    // The password and the code leave the form at once: the step carries
-    // them to the API, and nothing keeps them after it (no query cache).
-    setPassword("");
-    setCode("");
-    send(step).then(onAnswer, () => onAnswer({ screen: null, refused: null, unreachable: true }));
-  };
-  return (
-    <form onSubmit={handle} className="flex flex-col gap-3" aria-busy={pending} autoComplete="off">
-      {view.siteError !== null && <SiteError text={view.siteError} />}
-      {codeStep ? (
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="pb-code" className="text-sm text-text-secondary">Код 2FA</label>
-          <input id="pb-code" inputMode="numeric" autoComplete="one-time-code" spellCheck={false} value={code} disabled={pending}
-            onChange={(event) => setCode(event.target.value)} placeholder="Код из приложения" className={`${INPUT} tracking-widest`} required maxLength={32} />
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="pb-login" className="text-sm text-text-secondary">Логин или e-mail Fansly</label>
-            <input id="pb-login" type="text" autoComplete="off" autoCapitalize="none" spellCheck={false} value={login} disabled={pending}
-              onChange={(event) => setLogin(event.target.value)} placeholder="username или почта" className={INPUT} required maxLength={320} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="pb-password" className="text-sm text-text-secondary">Пароль</label>
-            <input id="pb-password" type="password" autoComplete="new-password" value={password} disabled={pending}
-              onChange={(event) => setPassword(event.target.value)} placeholder="Можно вставить из 1Password" className={INPUT} required maxLength={1024} />
-          </div>
-        </>
-      )}
-      <button type="submit" className={PRIMARY} disabled={pending || (codeStep ? code.trim() === "" : login.trim() === "" || password === "")}>
-        {pending ? "Передаём в браузер…" : codeStep ? "Подтвердить код" : "Войти"}
-      </button>
-      <p className="text-xs text-text-muted">
-        Браузер страницы сам вставит {codeStep ? "код" : "логин и пароль"} в форму Fansly и нажмёт кнопку. Hub их не сохраняет.
-      </p>
-    </form>
-  );
-}
-
 function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view: LoginView; pageLabel: string }) {
   const start = useStartPageBrowserLogin(pageLabel);
   const finish = useFinishPageBrowserLogin(pageLabel);
+  const step = usePageBrowserLoginStep(pageLabel);
   const [problem, setProblem] = useState<string | null>(null);
   const failure = (error: unknown) => setProblem(error instanceof KernelApiError ? error.message : "Не удалось. Повторите попытку.");
   const screenLink = (
@@ -212,7 +67,7 @@ function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view:
       main = <p role="alert" className="text-sm text-danger">Hub не достучался до браузера страницы. Подождите несколько секунд или завершите вход.</p>;
       break;
     case "form":
-      main = <LoginForm pageLabel={pageLabel} view={view} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
+      main = <LoginForm view={view} step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
       break;
     case "success":
       main = (
@@ -298,7 +153,7 @@ export function PageBrowserLoginPage() {
       {header}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card title="Экран браузера" aside={<span className="text-xs text-text-muted">{live ? "обновляется раз в секунду" : "не показывается, пока вход закрыт"}</span>}>
-          <LiveScreenshot pageLabel={pageLabel} live={live} />
+          <LiveScreenshot urlFor={(tick) => pageBrowserScreenshotUrl(pageLabel, tick)} live={live} />
         </Card>
         <Body data={data} view={view} pageLabel={pageLabel} />
       </div>
