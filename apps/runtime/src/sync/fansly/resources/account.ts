@@ -6,6 +6,7 @@ import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { buildFanslyMetadata } from "../../../services/fansly.ts";
 import { identityCandidateOf } from "../../engine/errors.ts";
+import { provenSentAt } from "../../engine/send-instant.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -117,7 +118,7 @@ export function accountModule(variant: AccountVariant): ResourceModule {
         // request proved the candidate over which stored base, and when.
         const proof = {
           attemptId: input.attempt.id,
-          sentAt: (input.attempt.sentAt ?? input.attempt.admittedAt).toISOString(),
+          sentAt: provenSentAt(input.attempt).toISOString(),
           base: identityCandidateOf(input.work)?.base ?? null,
         };
         return {

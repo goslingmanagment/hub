@@ -210,6 +210,9 @@ export class FakeOperator {
   /** Awaited after the send went and its `sent` was reported, before its
    *  result is made (a test holds an answer there). */
   beforeResult: ((send: Send) => Promise<void>) | null = null;
+  /** The next this many `sent` reports are lost on the way (their results
+   *  still carry the instant). */
+  dropSent = 0;
   /** Ask the engine a second time for one operation (a misbehaving operator). */
   checkTwice = false;
   /** Runs first on every `send` (a test changes the live session there). */
@@ -663,7 +666,8 @@ export class FakeOperator {
     if (this.sendDelayMs > 0) await sleep(this.sendDelayMs);
     const sentMono = monoMs();
     this.physical.push({ attemptId: send.attemptId, url: send.url, kind: send.kind, checkedMono: waiting.checkedMono, sentMono, generation: send.ownerGeneration, session: send.sessionFingerprint });
-    if (this.reportSend) this.server.send({ type: "sent", attemptId: send.attemptId, sentMono, sentWall: Date.now(), connectionReused: false });
+    if (this.reportSend && this.dropSent > 0) this.dropSent -= 1;
+    else if (this.reportSend) this.server.send({ type: "sent", attemptId: send.attemptId, sentMono, sentWall: Date.now(), connectionReused: false });
     if (this.beforeResult !== null) await this.beforeResult(send);
     const answer = this.respond(send);
     const body = typeof answer.body === "string" ? Buffer.from(answer.body, "utf8") : answer.body;
