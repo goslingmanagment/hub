@@ -231,8 +231,15 @@ export class FakeOperator {
   lastSendMono: number | null = null;
   #statePushes: ReturnType<typeof setInterval> | null = null;
   /** After a stopPage: what the operator had written but not yet committed
-   *  when it said its state (its buffer's batch), `afterMs` later. */
+   *  when it said its state (its buffer's batch), `afterMs` later. Until
+   *  then its state counts it as pending. */
   lateAfterStop: { afterMs: number; run: () => void } | null = null;
+  /** Written and not yet committed (`state.buffer.open.pending`). */
+  pending = 0;
+  /** The bodies of the outcomes kept cannot be read now (a failing disk):
+   *  such an outcome is kept, not delivered, and a recover says `unknown`
+   *  of it — until they read again and it is asked for (buffer/replay.ts). */
+  bodiesUnreadable = false;
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -277,11 +284,17 @@ export class FakeOperator {
         onCommand: async (command) => {
           this.commands.push(command);
           if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
-          this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
           if (this.lateAfterStop !== null) {
             const late = this.lateAfterStop;
-            setTimeout(() => late.run(), late.afterMs).unref?.();
+            this.pending += 1;
+            setTimeout(() => {
+              late.run();
+              this.pending -= 1;
+            }, late.afterMs).unref?.();
           }
+          // As the real operator: a stop replaces whatever the page stood for
+          // (a buffer that cannot be opened too).
+          this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
           return { ok: true, detail: "the page is stopped" };
         },
         onSite: (message) => {
@@ -321,8 +334,7 @@ export class FakeOperator {
           this.stream.reset();
           if (up) {
             this.pushState();
-            for (const [, kept] of this.held) this.#deliver(kept.result, kept.body);
-            for (const [, end] of this.heldEnds) this.server.send(end);
+            this.#deliverKept();
           } else {
             // No check is answered any more (hub.ts linkLost).
             for (const [attemptId, waiting] of [...this.#waiting]) {
@@ -504,10 +516,37 @@ export class FakeOperator {
 
   /** The state as the operator says it: its buffer counts what it keeps —
    *  outcomes until their resultAck, events until their ack — as the real
-   *  buffer's bytes do (nothing kept: 0). */
+   *  buffer's bytes do (nothing kept: 0), and `open` says what the open
+   *  buffer holds. A buffer that cannot be opened counts nothing: 0 bytes,
+   *  `open: null`. */
   #current(): State {
-    const kept = this.held.size + this.heldEnds.size + this.buffer.kept.length;
-    return { ...this.state, buffer: { bytes: kept * 100, oldestAgeMs: kept === 0 ? 0 : 1 } };
+    if (this.buffer.unavailable !== null) return { ...this.state, buffer: { bytes: 0, oldestAgeMs: 0, open: null } };
+    const outcomes = this.held.size + this.heldEnds.size;
+    const kept = outcomes + this.buffer.kept.length;
+    return {
+      ...this.state,
+      buffer: { bytes: kept * 100, oldestAgeMs: kept === 0 ? 0 : 1, open: { id: this.buffer.id, lastSeq: this.buffer.lastSeq, outcomes, pending: this.pending } },
+    };
+  }
+
+  /** The buffer cannot be opened (`cause`), or opens again (null). While it
+   *  cannot, nothing of it is read: a recover answers `unknown`, a new
+   *  connection gets no outcome, a subscription is refused. Once it opens,
+   *  every outcome it keeps goes to the engine (as on a new connection). */
+  setBufferUnavailable(cause: string | null): void {
+    const was = this.buffer.unavailable;
+    this.buffer.unavailable = cause === null ? null : { cause };
+    this.pushState();
+    if (was !== null && cause === null) this.#deliverKept();
+  }
+
+  /** Every outcome kept, to the engine: those that can be read. */
+  #deliverKept(): void {
+    if (this.buffer.unavailable !== null) return;
+    for (const [, kept] of this.held) {
+      if (kept.body === null || !this.bodiesUnreadable) this.#deliver(kept.result, kept.body);
+    }
+    for (const [, end] of this.heldEnds) this.server.send(end);
   }
 
   /** The state every `everyMs`, as the real operator sends it every 5 s. */
@@ -581,8 +620,12 @@ export class FakeOperator {
   async #recover(attemptIds: number[]): Promise<void> {
     const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
     for (const attemptId of attemptIds) {
-      const kept = this.held.get(attemptId);
-      const end = this.heldEnds.get(attemptId);
+      // Nothing of a buffer that cannot be opened is read; an outcome whose
+      // body cannot be read stays for the next delivery (buffer/replay.ts).
+      const readable = this.buffer.unavailable === null;
+      const stored = readable ? this.held.get(attemptId) : undefined;
+      const kept = stored !== undefined && stored.body !== null && this.bodiesUnreadable ? undefined : stored;
+      const end = readable ? this.heldEnds.get(attemptId) : undefined;
       if (kept !== undefined) {
         this.#deliver(kept.result, kept.body);
         attempts.push({ attemptId, state: "outcome_resent" });

@@ -284,7 +284,11 @@ interface Quiesced { type: "quiesced"; previousGeneration: number; lastSendMono:
 interface State {
   type: "state"; step: Step; stopReason: StopReason | null; retryAtWall: WallMs | null; exitOpen: boolean;
   mode: Mode; sessionFingerprint: Sha256Hex | null; accountId: string | null; exitIp: string | null;
-  chromeVersion: string; operatorVersion: string; buffer: { bytes: number; oldestAgeMs: number };
+  chromeVersion: string; operatorVersion: string;
+  // open — что хранит открытый буфер: его id, последний выданный номер события, исходы, ждущие resultAck,
+  // и записанное, но ещё не зафиксированное. null — буфер не открывается (ноль в bytes тогда ничего не значит);
+  // поля нет — оператор старше этого добавления (неизвестно). Пустым движок считает буфер только по open.
+  buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
   selfTest: { ok: boolean; atWall: WallMs; failed: "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies" | null } | null;
 }
 interface PingPong { type: "ping" | "pong"; n: number }  // раз в 1 с; нет ответа 5 с — связь потеряна

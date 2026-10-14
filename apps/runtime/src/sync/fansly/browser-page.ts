@@ -8,7 +8,7 @@ import {
   readPageBrowserLinkSettings,
   readPageBrowserPageSettings,
 } from "../../services/egress/page-browser-link.ts";
-import type { CommandResult, Quiesced } from "../../services/egress/page-browser-protocol.ts";
+import type { CommandResult, Quiesced, State } from "../../services/egress/page-browser-protocol.ts";
 import {
   PageBrowserRpcClient,
   systemMonoBridge,
@@ -125,6 +125,22 @@ export interface BrowserPage {
   stop(): Promise<void>;
 }
 
+/**
+ * Whether the operator's buffer is drained — a positive fact, never the
+ * absence of a number (Project Browser PR 14, Astra round 2): the operator
+ * says its buffer is open (`state.buffer.open`: a buffer that cannot be
+ * opened counts 0 bytes and says nothing; an operator that does not say is
+ * unknown) and that it keeps nothing — no outcome waiting for its resultAck,
+ * nothing written and not committed yet, no byte — and the engine's intake
+ * has a subscription to that very buffer that committed its last event.
+ */
+export function browserBufferDrained(state: State | null, position: { bufferId: string; committedSeq: number } | null): boolean {
+  const open = state?.buffer.open;
+  if (state === null || open === undefined || open === null) return false;
+  if (open.outcomes !== 0 || open.pending !== 0 || state.buffer.bytes !== 0) return false;
+  return position !== null && position.bufferId === open.id && position.committedSeq >= open.lastSeq;
+}
+
 /** Why the page's browser cannot be linked to (no profile bound to the page,
  *  no pinned exit IP or environment), or null: what `openBrowserPage` would
  *  refuse with `BrowserPageNotReadyError`, asked before the page is taken. */
@@ -162,24 +178,6 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     ...(overrides.rpcTiming === undefined ? {} : { timing: overrides.rpcTiming }),
   });
   client.onQuiesced((quiesced) => onQuiesced(quiesced));
-  if (read.profile.bufferUndrainedSince !== null) {
-    // The owner said the container stopped before its buffer was drained
-    // (0278): drained once the operator says it keeps nothing.
-    let clearing = false;
-    const unlisten = client.onState((state) => {
-      if (clearing || state.buffer.bytes !== 0) return;
-      clearing = true;
-      void clearPageBrowserUndrained(db, { profileId }).then(
-        () => {
-          unlisten();
-          logger.info({ pageId }, "Fansly sync browser page: the browser's buffer is drained");
-        },
-        () => {
-          clearing = false;
-        },
-      );
-    });
-  }
 
   function onQuiesced(quiesced: Quiesced): void {
     if (quiesced.lastSendMono !== null) {
@@ -246,6 +244,25 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     enqueue: deps.enqueue,
     ...(overrides.guardTiming === undefined ? {} : { timing: overrides.guardTiming }),
   });
+  if (read.profile.bufferUndrainedSince !== null) {
+    // The owner said the container stopped before its buffer was drained
+    // (0278): drained once its operator says its open buffer keeps nothing
+    // and this intake committed its last event (`browserBufferDrained`).
+    let clearing = false;
+    const unlisten = client.onState((state) => {
+      if (clearing || !browserBufferDrained(state, intake.position)) return;
+      clearing = true;
+      void clearPageBrowserUndrained(db, { profileId }).then(
+        () => {
+          unlisten();
+          logger.info({ pageId }, "Fansly sync browser page: the browser's buffer is drained");
+        },
+        () => {
+          clearing = false;
+        },
+      );
+    });
+  }
   let stopped: Promise<void> | null = null;
   return {
     profileId,

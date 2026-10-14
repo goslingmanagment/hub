@@ -464,6 +464,12 @@ export class EventBuffer {
     return this.#unavailable ? { ...this.#unavailable } : null;
   }
 
+  /** The buffer's file is open: what `stats` counts is what it holds.
+   *  False (it cannot be opened, or is closed): its counts say nothing. */
+  get isOpen(): boolean {
+    return !this.#closed && this.#store !== null;
+  }
+
   /** Why the buffer takes no writes now, or null. A site request is not
    *  admitted while it is not null (plan §4.3). */
   refusal(): BufferRefusal | null {

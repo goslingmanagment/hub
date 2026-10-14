@@ -13,6 +13,7 @@ import {
   lockOwnedPage,
   setPageBrowserSettings,
   setSyncPageTransport,
+  settleAttemptWithoutCapture,
   storeFanslySession,
   type Database,
 } from "@agency_hub_core/db";
@@ -492,12 +493,13 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     expect(r.server.arrivals).toEqual([]);
   }, 90_000);
 
-  it("the engine died after the browser sent; the page goes to Node meanwhile: a host that starts again stops the browser and takes its kept outcome before Node sends (Astra PR 14, P1 ×2)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await onBrowser(r);
-    // The engine on its browser dies after the request went, before the
-    // capture; the operator keeps the outcome.
+  /**
+   * The engine on its browser dies after a request went, before its capture:
+   * the operator keeps the outcome, the attempt is left unfinished. The
+   * deploy confirms the dead owner, and the owner moves the page to Node
+   * while no `sync` runs. Returns the attempt.
+   */
+  async function diedAfterBrowserSent(r: Rig): Promise<AttemptRow> {
     r.operator.deliverResults = false;
     let browser!: BrowserPage;
     const crashed = await makeTestActor({
@@ -527,20 +529,28 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
     const [old] = await attempts(r.page.pageId);
     expect(old).toMatchObject({ outcome: "admitted" });
     expect(r.operator.held.has(old!.id)).toBe(true);
-    // The deploy confirms the dead owner; the owner moves the page to Node
-    // while no `sync` runs.
     await confirmSyncOwnersStopped(db(), { runningHosts: ["sync-a", "sync-b"], ownHost: "cli", confirmedBy: "test", dryRun: false, pageIds: [r.page.pageId] });
     await changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, actor: "test" });
     r.operator.deliverResults = true;
+    return old!;
+  }
+
+  const attemptOf = async (r: Rig, id: number) => (await attempts(r.page.pageId)).find((row) => row.id === id)!;
+
+  it("the engine died after the browser sent; the page goes to Node meanwhile: a host that starts again stops the browser and takes its kept outcome before Node sends (Astra PR 14, P1 ×2)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    const old = await diedAfterBrowserSent(r);
 
     await startHost(r);
     await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page running on Node");
     // The outcome the operator kept is the attempt's: captured, applied,
     // acknowledged — never closed unknown, never sent again.
-    expect((await attempts(r.page.pageId)).find((row) => row.id === old!.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
-    expect(r.operator.recovers.flat()).toContain(old!.id);
-    expect(r.operator.acks).toContain(old!.id);
-    expect(r.operator.physical.filter((request) => request.attemptId === old!.id)).toHaveLength(1);
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    expect(r.operator.recovers.flat()).toContain(old.id);
+    expect(r.operator.acks).toContain(old.id);
+    expect(r.operator.physical.filter((request) => request.attemptId === old.id)).toHaveLength(1);
     // Stopped, taken and confirmed before Node sent anything.
     expect(r.operator.commands.map((command) => command.command.kind)).toEqual(["stopPage"]);
     expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
@@ -551,6 +561,100 @@ describe("leaving the browser is confirmed before Node takes the page (Astra PR 
         where sp.page_id = $1 group by sp.browser_left_at`, [r.page.pageId],
     )).rows[0]!;
     expect(order.ok).toBe(true);
+  }, 120_000);
+
+  it("a buffer the operator cannot open is not a drained one: its 0 bytes confirm nothing, the leave waits with the kept outcome unread; once it opens, the outcome is the attempt's and Node takes the page (Astra PR 14 round 2, P1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    const old = await diedAfterBrowserSent(r);
+    // The operator's buffer cannot be opened: it counts 0 bytes, answers a
+    // recover with `unknown`, refuses the subscription — and its stopPage
+    // replaces whatever stop reason said so.
+    r.operator.setBufferUnavailable("locked");
+
+    const host = await startHost(r);
+    await until(async () => r.operator.commands.length >= 1, 20_000, "the browser stopped by the leave");
+    await until(async () => r.operator.recovers.flat().includes(old.id), 20_000, "the operator asked about the attempt");
+    await sleep(3_000);
+    expect(r.operator.state).toMatchObject({ stopReason: "owner_stop", exitOpen: false });
+    // Not confirmed: Node has not taken the page, the attempt is not closed
+    // unknown, nothing is acknowledged.
+    expect(await leftBy(r.page.pageId)).toMatchObject({ by: null });
+    expect((await leftBy(r.page.pageId)).pending).not.toBeNull();
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_leave_unconfirmed" });
+    expect(r.server.arrivals).toEqual([]);
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "admitted" });
+    expect(r.operator.held.has(old.id)).toBe(true);
+
+    // The buffer opens: what it kept goes to the engine, and is the attempt's.
+    r.operator.setBufferUnavailable(null);
+    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page running on Node");
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    expect(r.operator.acks).toContain(old.id);
+    expect(r.operator.held.size).toBe(0);
+    expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
+  }, 120_000);
+
+  it("a body that does not read for a while: the operator answers unknown and keeps the outcome; the leave asks again, at a bounded rate, and takes it as the attempt's once it reads (Astra PR 14 round 2, P1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    const old = await diedAfterBrowserSent(r);
+    // A failing disk: the outcome's body cannot be read (EIO) — the recover
+    // answers `unknown`, the outcome stays kept.
+    r.operator.bodiesUnreadable = true;
+
+    const host = await startHost(r);
+    await until(async () => r.operator.recovers.flat().includes(old.id), 20_000, "the operator asked about the attempt");
+    const firstAsked = Date.now();
+    await sleep(5_000);
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_leave_unconfirmed" });
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "admitted" });
+    expect(r.server.arrivals).toEqual([]);
+    // Asked again, never in a tight loop: first after 2 s, then 4 s, …
+    const asked = r.operator.recovers.filter((ids) => ids.includes(old.id)).length;
+    expect(asked).toBeGreaterThanOrEqual(2);
+    expect(asked).toBeLessThanOrEqual(2 + Math.ceil((Date.now() - firstAsked) / 2_000));
+
+    // The disk reads again: the next ask resends it, and it is the attempt's.
+    r.operator.bodiesUnreadable = false;
+    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 40_000, "the page running on Node");
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "response", sendMark: "transport_reported" });
+    expect(r.operator.acks).toContain(old.id);
+    expect(r.operator.held.size).toBe(0);
+    expect(r.operator.physical.filter((request) => request.attemptId === old.id)).toHaveLength(1);
+    expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
+  }, 120_000);
+
+  it("an outcome of an attempt settled already, its body unreadable when the leave connected: with nothing unfinished to ask, the leave connects again, at a bounded rate, until the operator delivers it (Astra PR 14 round 2, P1)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await onBrowser(r);
+    const old = await diedAfterBrowserSent(r);
+    // Its owner's recovery closed it `unknown`; the operator still keeps its
+    // outcome, whose body cannot be read now.
+    await db().transaction(async (tx) => settleAttemptWithoutCapture(tx as unknown as Database, { attemptId: old.id, outcome: "unknown", errorClass: "recovery:unknown" }));
+    r.operator.bodiesUnreadable = true;
+
+    const host = await startHost(r);
+    await until(async () => r.operator.commands.length >= 1, 20_000, "the browser stopped by the leave");
+    const hellos = r.operator.hellos.length;
+    await sleep(5_000);
+    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_leave_unconfirmed" });
+    expect(r.server.arrivals).toEqual([]);
+    // Connected again, never in a tight loop.
+    const again = r.operator.hellos.length - hellos;
+    expect(again).toBeGreaterThanOrEqual(1);
+    expect(again).toBeLessThanOrEqual(3);
+
+    r.operator.bodiesUnreadable = false;
+    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 60_000, "the page running on Node");
+    // A late answer of a settled attempt: kept as a fact, acknowledged, never applied in its place.
+    expect(r.operator.acks).toContain(old.id);
+    expect(r.operator.held.size).toBe(0);
+    expect(await attemptOf(r, old.id)).toMatchObject({ outcome: "unknown" });
+    expect(await leftBy(r.page.pageId)).toMatchObject({ by: "operator", pending: null });
   }, 120_000);
 });
 

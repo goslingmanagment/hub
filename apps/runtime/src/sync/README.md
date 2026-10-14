@@ -952,14 +952,20 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   Node takes the page only once it is confirmed: while it is pending the host runs a leave instead of a slot (a new
   owner generation, the operator's link, no actor) — the operator's `quiesced`, `stopPage` until it says it stopped,
   the earlier owners' outcomes it kept taken as theirs before Node's recovery could close them `unknown`
-  (`reconcileHeldOutcomesOf`), the rest of its buffer taken until a state said after the stop settled (1 s: the
-  operator's buffer counts what it committed, a batch behind what it wrote) says it keeps nothing and no
-  site socket is open — then the leave is confirmed under that generation's fence. An operator out of reach keeps
+  (`reconcileHeldOutcomesOf`), the rest of its buffer taken until it is drained — a positive fact
+  (`browserBufferDrained`): in a state said after the stop the operator says its buffer is open and keeps nothing
+  (`state.buffer.open`: no outcome, nothing uncommitted, no byte), and the intake's subscription to that buffer
+  committed its last event; a buffer that cannot be opened (it counts 0 bytes) or an operator that does not say is
+  never drained, and the leave waits — and no site socket is open. An outcome the operator keeps and does not give
+  (a body that does not read: `unknown`) is asked for again at a bounded rate (2 s, doubling to 30 s): the unfinished
+  attempts by `recover`, with none left a new connection, to which the operator delivers all it keeps. Then the
+  leave is confirmed under that generation's fence. An operator out of reach keeps
   the page waiting (`browser_leave_unconfirmed`; alert 2 of that name once the leave has been pending for 2 min,
   read from the pending leave — the page's owner beats meanwhile) until the owner says the container is stopped
   (`--browser-stopped`; `scripts/deploy-page-browser.sh to-node` removes the container first, then says it): what
   the operator kept is then marked not drained (`page_browsers.buffer_undrained_since`, alert 2
-  `browser_buffer_undrained`) until an operator of that profile says it keeps nothing — the drain of a stopped
+  `browser_buffer_undrained`) until an operator of that profile says its open buffer keeps nothing and the intake
+  committed its last event — the drain of a stopped
   container's buffer without taking the page back to its browser is PR 17's. A host that starts again finds the
   leave pending and runs it first. The deploy refuses to roll back to an image that does not know the page
   transport while a page is on its browser or leaving it (`verify_rollback_target_runs_no_browser_page`): what the

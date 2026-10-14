@@ -51,7 +51,8 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //   stopped (`scripts/deploy-page-browser.sh to-node` says it right after it
 //   removed the container). Then what the operator kept was not taken: the
 //   page's browser buffer is marked not drained (alert 2,
-//   `browser_buffer_undrained`) until its operator says it keeps nothing.
+//   `browser_buffer_undrained`) until its operator says its open buffer
+//   keeps nothing and the intake committed its last event.
 
 export const SYNC_PAGE_TRANSPORT_AUDIT_EVENT = "admin.sync_page_transport";
 

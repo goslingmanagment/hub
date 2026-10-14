@@ -214,7 +214,8 @@ session follows (below).
   connection). Only a session of the page's own account is stored, and the page starts working on Node after the
   engine verified it.
 - Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
-  after the browser confirmed it stopped, with no socket open and everything it kept taken. Until then the page waits
+  after the browser confirmed it stopped, with no socket open and everything it kept taken. A browser whose buffer
+  cannot be opened, or whose kept answers do not read, holds the leave until they can be taken. Until then the page waits
   (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser does not start it again.
 - The browser cannot confirm (its container is down or does not answer): take it off for good with
   `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is

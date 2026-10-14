@@ -33,6 +33,7 @@ import {
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
 import {
+  browserBufferDrained,
   browserPageProblem,
   BrowserPageNotReadyError,
   openBrowserPage,
@@ -125,10 +126,14 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // `quiesced` (the earlier owners' work is over), `stopPage` until the operator
 // says it stopped (its exit closed first, then Chrome), the earlier owners'
 // outcomes it kept taken as theirs (`reconcileHeldOutcomesOf`), the rest of
-// its buffer taken (late outcomes, the stream) until a state said after the
-// stop settled (`BROWSER_LEAVE_SETTLE_MS`) says it keeps nothing and no site
-// socket is open — then the leave is confirmed under that generation's
-// fence, and the next pass takes the page with Node. A page whose operator
+// its buffer taken (late outcomes, the stream) until the buffer is drained —
+// a positive fact (`browserBufferDrained`): in a state said after the stop,
+// the operator says its buffer is open and keeps nothing (no outcome, nothing
+// uncommitted, no byte), and the intake's subscription to that buffer
+// committed its last event; a buffer that cannot be opened, or of which the
+// operator says nothing, is never drained — and no site socket is open. Then
+// the leave is confirmed under that generation's fence, and the next pass
+// takes the page with Node. A page whose operator
 // cannot be reached waits (`browser_leave_unconfirmed`; the alert evaluator
 // reads the pending leave itself: alert 2 after its bound) until it can, or
 // until the owner says its container is stopped (`--browser-stopped`). The
@@ -165,11 +170,12 @@ export const SHUTDOWN_ABORT_BUDGET_MS = 5_000;
 export const BROWSER_LEAVE_RETRY_MS = 2_000;
 /** A leave looks at whether the browser's buffer is drained this often. */
 export const BROWSER_LEAVE_DRAIN_CHECK_MS = 250;
-/** Only a state the operator said this long after it confirmed the stop
- *  counts as "it keeps nothing": its buffer counts what it committed, and a
- *  commit follows an append by its batch (≤ 20 ms) — a state said at once
- *  could miss the last thing the stopping browser wrote. */
-export const BROWSER_LEAVE_SETTLE_MS = 1_000;
+/** While the browser still keeps outcomes the leave did not get (a body that
+ *  did not read: the operator answers `unknown` and keeps it), the leave asks
+ *  for them again — first after this long, then twice as long each time … */
+export const BROWSER_LEAVE_RECOVER_FIRST_MS = 2_000;
+/** … up to this. */
+export const BROWSER_LEAVE_RECOVER_MAX_MS = 30_000;
 
 export type HostPageState =
   | { kind: "running"; generation: bigint }
@@ -1022,10 +1028,10 @@ export class SyncEngineHost {
     const held = browser.transport.held!;
     const signal = run.stop.signal;
     const sleep = (ms: number) => this.#clock.sleep(ms, signal).catch(() => undefined);
-    // When the operator last said its state (null: not since this run began).
-    let stateMono: number | null = null;
+    // The states the operator said since this run began.
+    let states = 0;
     const unlisten = client.onState(() => {
-      stateMono = this.#clock.monoNow();
+      states += 1;
     });
     try {
       // 1. The earlier owners' work at the operator is over. An operator out
@@ -1036,12 +1042,12 @@ export class SyncEngineHost {
         await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
       }
       // 2. Its exit closed, then Chrome stopped: confirmed by the operator.
-      let stoppedMono = Number.POSITIVE_INFINITY;
+      let stoppedAt = Number.POSITIVE_INFINITY;
       while (!signal.aborted) {
         stall.progress("send");
         const result = await browser.leave();
         if (result?.ok === true) {
-          stoppedMono = this.#clock.monoNow();
+          stoppedAt = states;
           break;
         }
         await sleep(BROWSER_LEAVE_RETRY_MS);
@@ -1054,16 +1060,33 @@ export class SyncEngineHost {
         if (reconciled.reached) break;
         await sleep(BROWSER_LEAVE_RETRY_MS);
       }
-      // 4. The rest of its buffer: late outcomes and the stream, until a
-      //    state said after the stop settled says it keeps nothing, and no
-      //    site socket of the page is open.
+      // 4. The rest of its buffer: late outcomes and the stream, until the
+      //    buffer is drained — the operator's own word in a state said after
+      //    the stop, never a count that happens to be zero — and no site
+      //    socket of the page is open. An outcome the operator keeps and did
+      //    not give (its body did not read: `unknown`, kept for the next
+      //    delivery) is asked for again at a bounded rate: the unfinished
+      //    attempts by `recover`; with none left to ask, a new connection, to
+      //    which the operator delivers every outcome it keeps.
+      let recoverEvery = BROWSER_LEAVE_RECOVER_FIRST_MS;
+      let nextRecover = this.#clock.monoNow() + recoverEvery;
       while (!signal.aborted) {
         stall.progress("applies");
         await takeLateHeldOutcomes(d, held);
         const state = client.state;
-        const settled = stateMono !== null && stateMono - stoppedMono >= BROWSER_LEAVE_SETTLE_MS;
-        if (state !== null && settled && !state.exitOpen && state.step === "exit_closed" && state.buffer.bytes === 0
+        if (state !== null && states > stoppedAt && !state.exitOpen && state.step === "exit_closed"
+          && browserBufferDrained(state, browser.intake.position)
           && browser.intake.stopReason === null && !(await hasOpenBrowserWsConnection(this.#o.db, run.pageId))) break;
+        const kept = state?.buffer.open?.outcomes ?? 0;
+        if (kept > 0 && this.#clock.monoNow() >= nextRecover) {
+          stall.progress("recover");
+          const again = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
+          if (again.asked === 0) client.reconnect("the leave: redeliver the outcomes the operator keeps");
+          this.#o.logger.info({ pageId: run.pageId, kept, asked: again.asked, nextInMs: Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS) },
+            "Fansly sync host: the page's browser still keeps outcomes; asked for them again");
+          recoverEvery = Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS);
+          nextRecover = this.#clock.monoNow() + recoverEvery;
+        }
         await sleep(BROWSER_LEAVE_DRAIN_CHECK_MS);
       }
       if (signal.aborted) return;

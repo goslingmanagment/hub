@@ -749,7 +749,8 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     // bytes (an earlier one may carry the start gap's alone).
     const bytes = s.operator.buffer.stats().bytes;
     const state = await s.engine.waitFor("state", (message) => (message.buffer as { bytes: number }).bytes === bytes);
-    expect(state.buffer).toEqual({ bytes, oldestAgeMs: expect.any(Number) });
+    // And what the open buffer holds: its id, its last number, nothing uncommitted.
+    expect(state.buffer).toEqual({ bytes, oldestAgeMs: expect.any(Number), open: { id: bufferId, lastSeq: 31, outcomes: 0, pending: 0 } });
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId, afterSeq: 0 });
     await until(() => seqs(s.engine).length === 31, 5000, "31 events");
     expect(seqs(s.engine)).toEqual(Array.from({ length: 31 }, (_, n) => n + 1));
@@ -938,6 +939,28 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(s.operator.buffer.unavailable?.attempts).toBe(1);
     expect(readFileSync(file).equals(garbage)).toBe(true);
+  });
+
+  it("a buffer that cannot be opened says so in its state, through a stopPage too — its 0 bytes are no word that it is empty; once it opens, the state says what it holds (Astra PR 14 round 2)", async () => {
+    let holder: EventBuffer | null = null;
+    const s = await setUp({
+      buffer: { openRetryMs: [50] },
+      prepare: ({ bufferDir, stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        holder = new EventBuffer({ dir: bufferDir, idFile: join(stateDir, "buffer-id"), minFreeBytes: 0, log: quiet });
+      },
+    });
+    const held = holder as unknown as EventBuffer;
+    expect(s.engine.last("helloResult")).toMatchObject({ state: { stopReason: "buffer_unavailable", buffer: { bytes: 0, open: null } } });
+    // The engine stops the page (a page leaving its browser): the stop
+    // reason is the stop's now, the bytes still 0 — and `open` still null.
+    expect(await command(s.engine, "stopPage")).toMatchObject({ ok: true });
+    const stopped = await s.engine.waitFor("state", (state) => state.stopReason === "owner_stop");
+    expect(stopped).toMatchObject({ exitOpen: false, step: "exit_closed", buffer: { bytes: 0, open: null } });
+    await held.close();
+    await until(() => s.operator.buffer.unavailable === null, 5000, "the open");
+    const opened = await s.engine.waitFor("state", (state) => (state.buffer as { open?: unknown }).open !== null);
+    expect(opened.buffer).toMatchObject({ open: { id: held.id, lastSeq: s.operator.buffer.lastSeq, outcomes: 0, pending: expect.any(Number) } });
   });
 
   it("a locked buffer is opened again once the lock goes: the page then stands as usual and starts on the engine's word", async () => {
