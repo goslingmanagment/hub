@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -87,5 +87,56 @@ describe("page.sh: never an older Chrome on a profile a newer one wrote", () => 
     const run = pageSh(host, ["up", "--page", PAGE, "--image", FROM]);
     expect(run.status).toBe(1);
     expect(run.stderr).toContain(`has Chrome ${FROM_CHROME}, but the profile`);
+  });
+});
+
+describe("page.sh: the way back after a failed switch goes through the same guard (Astra's review of PR 18, 1)", () => {
+  it("the new Chrome opened the profile, then its container failed its health check: the previous image is not started — the page stays stopped for its snapshot", () => {
+    host = makeHost((state) => {
+      state.behaviour.unhealthyOn = [TO];
+      state.behaviour.opensProfileOn = [TO];
+      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+    });
+    const run = pageSh(host, ["up", "--page", PAGE, "--image", TO]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`page-browser-${PAGE} stays stopped: the profile is not for ${FROM}'s Chrome any more (page-browser-update.sh rollback restores its snapshot)`);
+    expect(host.state().composeUps).toEqual([TO]);
+    expect(host.state().containers[`page-browser-${PAGE}`]).toMatchObject({ image: TO, running: false });
+    expect(host.state().profiles[PROFILE]!.version).toBe(TO_CHROME);
+    expect(host.pageEnv()).toContain(`PB_IMAGE=${FROM}\n`);
+  });
+
+  it("the new container failed before its Chrome opened the profile: the previous image comes back", () => {
+    host = makeHost((state) => {
+      state.behaviour.unhealthyOn = [TO];
+    });
+    const run = pageSh(host, ["up", "--page", PAGE, "--image", TO]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`page-browser-${PAGE} is back on ${FROM}`);
+    expect(host.state().composeUps).toEqual([TO, FROM]);
+    expect(host.state().containers[`page-browser-${PAGE}`]).toMatchObject({ image: FROM, running: true });
+  });
+});
+
+describe("page.sh: what Docker cannot say is never taken for nobody or gone (Astra's review of PR 18)", () => {
+  it("the containers of a profile cannot be listed: the profile is not taken", () => {
+    host = makeHost((state) => {
+      state.behaviour.psFails = true;
+    });
+    const run = pageSh(host, ["up", "--page", PAGE, "--image", TO]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`the containers of profile ${PROFILE} cannot be listed`);
+    expect(run.composeUp).toBe(false);
+  });
+
+  it("forget of a page whose container cannot be read: its files stay", () => {
+    host = makeHost((state) => {
+      delete state.containers[`page-browser-${PAGE}`];
+      state.behaviour.inspectFails = 1;
+    });
+    const run = pageSh(host, ["forget", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`page-browser-${PAGE} cannot be read: ${PAGE} is not forgotten`);
+    expect(existsSync(path.join(host.pbBase, "pages", PAGE, "page.env"))).toBe(true);
   });
 });

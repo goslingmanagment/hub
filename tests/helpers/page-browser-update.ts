@@ -43,6 +43,9 @@ export interface FakeState {
   behaviour: Record<string, unknown>;
   urls?: Record<string, string>;
   builds?: Array<{ tag: string; labels: Record<string, string>; vendorSha256: string }>;
+  composeUps?: string[];
+  networks?: string[];
+  crashSeen?: number;
 }
 
 export interface Call {
@@ -164,6 +167,7 @@ export function makeHost(change?: (state: FakeState) => void, options: { tools?:
       if (runOptions.crashOn !== undefined) {
         const current = read();
         current.behaviour.crashOn = runOptions.crashOn;
+        current.crashSeen = 0;
         writeFileSync(statePath, JSON.stringify(current, null, 2));
       }
       // The script in a process group of its own (job control), so that a

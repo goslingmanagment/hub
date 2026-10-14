@@ -242,7 +242,12 @@ function docker(argv) {
     const name = `page-browser-${page}`;
     if (rest.includes("up")) {
       if (behaviour.composeUpFails) return 1;
-      state.containers[name] = { image: envValue(envFile, "PB_IMAGE"), running: true, health: "healthy", chrome: "down", profile: envValue(envFile, "PB_PROFILE_ID") };
+      const image = envValue(envFile, "PB_IMAGE");
+      const profileId = envValue(envFile, "PB_PROFILE_ID");
+      state.composeUps = [...(state.composeUps ?? []), image];
+      // Its Chrome ran on the profile before the health check failed.
+      if (listed(behaviour.opensProfileOn, image) && state.profiles[profileId] !== undefined) state.profiles[profileId].version = chromeOf(state.images[image]?.chrome);
+      state.containers[name] = { image, running: true, health: listed(behaviour.unhealthyOn, image) ? "unhealthy" : "healthy", chrome: "down", profile: profileId };
       return 0;
     }
     if (rest.includes("down")) {
@@ -252,9 +257,16 @@ function docker(argv) {
     return 2;
   }
   if (sub === "ps") {
+    if (behaviour.psFails) {
+      err("Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n");
+      return 1;
+    }
     const filter = rest[rest.indexOf("--filter") + 1] ?? "";
     const profile = /^volume=pb-profile-(.+)$/.exec(filter)?.[1];
-    for (const [name, container] of Object.entries(state.containers)) if (container.profile === profile) out(`${name}\n`);
+    const format = rest.includes("--format") ? rest[rest.indexOf("--format") + 1] : "";
+    for (const [name, container] of Object.entries(state.containers)) {
+      if (container.profile === profile) out(format.includes(".State") ? `${name} ${container.running ? "running" : "exited"}\n` : `${name}\n`);
+    }
     return 0;
   }
   if (sub === "compose") {
@@ -262,6 +274,13 @@ function docker(argv) {
     const service = rest[exec + 2];
     if (service === "postgres") {
       if (behaviour.hubDown) return 1;
+      if (behaviour.sqlFailAfter !== undefined) {
+        state.sqlReads = (state.sqlReads ?? 0) + 1;
+        if (state.sqlReads > behaviour.sqlFailAfter) {
+          err("could not connect to server\n");
+          return 1;
+        }
+      }
       const label = /-- pb-update:page (\S+)/.exec(input)?.[1];
       if (label === undefined || !/BEGIN READ ONLY;/.test(input)) {
         err("not a read-only query of the page\n");
@@ -279,11 +298,22 @@ function docker(argv) {
   }
   if (sub === "inspect") {
     const name = rest[rest.length - 1];
+    // Docker cannot answer (its daemon restarting, …): an error that says
+    // nothing of the container.
+    if (behaviour.inspectFails > 0) {
+      behaviour.inspectFails -= 1;
+      err("Error response from daemon: Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n");
+      return 1;
+    }
     const container = state.containers[name];
-    if (container === undefined) return 1;
+    if (container === undefined) {
+      err(`Error: No such object: ${name}\n`);
+      return 1;
+    }
     const format = rest.includes("-f") ? rest[rest.indexOf("-f") + 1] : "";
     const health = container.running ? (container.health ?? "healthy") : "unhealthy";
-    if (format.includes(".State.Running")) out(`${container.running} ${container.image} ${health}\n`);
+    if (format === "{{.State.Running}}") out(`${container.running}\n`);
+    else if (format.includes(".State.Running")) out(`${container.running} ${container.image} ${health}\n`);
     else if (format.includes(".State.Health.Status")) out(`${health}\n`);
     else out(`${container.image} ${container.running ? "running" : "exited"} ${health}\n`);
     return 0;
@@ -294,9 +324,16 @@ function docker(argv) {
       const tag = more[more.length - 1];
       const image = state.images[tag];
       if (image === undefined) return 1;
+      if (!more.includes("--format") && more.some((name) => state.images[name] === undefined)) return 1;
       const format = more.includes("--format") ? more[more.indexOf("--format") + 1] : "";
       if (format.includes("chrome-version")) out(`${image.label === false ? "<no value>" : image.chrome}\n`);
-      else if (format.includes("revision")) out(`${image.revision ?? "<no value>"}\n`);
+      else if (format.includes("revision")) {
+        if (listed(behaviour.revisionUnreadableOn, tag)) {
+          err("Error response from daemon: context deadline exceeded\n");
+          return 1;
+        }
+        out(`${image.revision ?? "<no value>"}\n`);
+      }
       else if (format.includes(".Created")) out(`${image.created ?? "2026-10-01T00:00:00Z"}\n`);
       else out("[]\n");
       return 0;
@@ -312,6 +349,35 @@ function docker(argv) {
       return 0;
     }
     return 2;
+  }
+  if (sub === "network") {
+    const [action, ...names] = rest;
+    state.networks ??= ["pb-control", "pb-egress"];
+    const name = names[names.length - 1];
+    if (action === "inspect") return state.networks.includes(name) ? 0 : 1;
+    if (action === "create") {
+      state.networks.push(name);
+      return 0;
+    }
+    if (action === "rm") {
+      state.networks = state.networks.filter((network) => network !== name);
+      return 0;
+    }
+    return 2;
+  }
+  if (sub === "rm") {
+    const name = rest[rest.length - 1];
+    if (state.containers[name] === undefined) return 1;
+    delete state.containers[name];
+    return 0;
+  }
+  if (sub === "volume" && rest[0] === "rm") {
+    for (const name of rest.slice(1)) delete state.profiles[name.replace(/^pb-(profile|buffer)-/, "")];
+    return 0;
+  }
+  if (sub === "volume" && rest[0] === "create") {
+    state.profiles[rest[1].replace(/^pb-(profile|buffer)-/, "")] ??= { version: "", marker: "" };
+    return 0;
   }
   if (sub === "volume") {
     const names = rest.slice(rest.indexOf("inspect") + 1);
@@ -514,11 +580,15 @@ switch (tool) {
     err(`fake: unknown tool ${tool}\n`);
     code = 2;
 }
+// "<op>#<n>": the n-th time that deed is done.
+const [crashOp, crashNth] = (behaviour.crashOn ?? "").split("#");
+const crashNow = behaviour.crashOn !== undefined && opOf(tool, args) === crashOp
+  && (state.crashSeen = (state.crashSeen ?? 0) + 1) >= Number(crashNth ?? 1);
 save();
 // A crash of the update right after this call's deed: the script's whole
 // process group is killed (SIGKILL: no trap runs, no subshell goes on), as
 // a power cut or an OOM kill of its unit would.
-if (behaviour.crashOn !== undefined && opOf(tool, args) === behaviour.crashOn && process.env.FAKE_PIDFILE) {
+if (crashNow && process.env.FAKE_PIDFILE) {
   const pid = Number(readFileSync(process.env.FAKE_PIDFILE, "utf8").trim());
   if (pid > 0) {
     try {

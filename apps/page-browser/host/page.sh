@@ -28,10 +28,13 @@
 # old container back.
 #
 # Chrome upgrades a profile in place and never opens one a newer Chrome
-# wrote (stage 1; plan §4.10): `up` and `rollback` refuse an image whose
-# Chrome is older than the one that last opened the page's profile. The way
-# back to an older Chrome is the profile's snapshot with it:
-# page-browser-update.sh rollback (PR 18).
+# wrote (stage 1; plan §4.10): every start of a container goes through
+# start_state, which refuses an image whose Chrome is older than the one
+# that last opened the page's profile — `up`, `rollback`, and the way back
+# after a failed switch, which leaves the page stopped instead. The way back
+# to an older Chrome is the profile's snapshot with it:
+# page-browser-update.sh rollback (PR 18). A state Docker cannot read is
+# never taken for "stopped" or "nobody".
 set -euo pipefail
 
 PB_BASE="${PB_BASE:-/opt/agency-hub/page-browser}"
@@ -95,48 +98,89 @@ healthy() {
   fi
 }
 
+# The page's container, read and never guessed: running, stopped or absent.
+# 1 (why on stderr) when Docker cannot say: unknown is never "stopped".
+container_status() {
+  local out
+  if out="$(docker inspect -f '{{.State.Running}}' "page-browser-$PAGE" 2>&1)"; then
+    case "$out" in
+      true) echo running ;;
+      false) echo stopped ;;
+      *) echo "page: page-browser-$PAGE: its state reads '$out'" >&2; return 1 ;;
+    esac
+  elif grep -qiE 'no such (object|container)' <<<"$out"; then
+    echo absent
+  else
+    echo "page: page-browser-$PAGE cannot be read: $out" >&2
+    return 1
+  fi
+}
+
+# Every start of a page's container goes through here — `up`, `rollback`,
+# the way back after a failed switch, and so every start
+# page-browser-update.sh makes: never an older Chrome on a profile a newer
+# one wrote. 2: refused (or the profile cannot be read), nothing started.
+start_state() {
+  local env="$1"
+  compatible "$(value PB_IMAGE "$env")" "$(value PB_PROFILE_ID "$env")" || return 2
+  compose_with "$env" up -d --force-recreate --no-build >/dev/null
+}
+
 # Run the candidate state (page.env.next). The host's rules admit it before
 # it starts — the page's current state and the candidate, both its own, until
 # the switch ends; if they cannot be applied, nothing changes. Healthy: the
-# candidate becomes page.env. Not: the previous state, if any, runs again,
-# and this fails.
+# candidate becomes page.env. Refused before it started: nothing changed.
+# Started and not healthy: it is stopped first — its Chrome may have opened
+# the profile — and the previous state runs again only if its Chrome may open
+# the profile as the candidate left it; else the page stays stopped until its
+# snapshot is back (page-browser-update.sh rollback). Either way this fails.
 switch_to() {
-  local what="$1" next
+  local what="$1" next rc=0 state
   next="$(next_file)"
   if ! "$PB_BASE/egress-rules.sh" apply; then
     rm -f "$next"
     fail "$what: the host's rules could not admit the new state; nothing changed"
   fi
-  if compose_with "$next" up -d --force-recreate --no-build >/dev/null && healthy; then
+  start_state "$next" || rc=$?
+  if ((rc == 0)) && healthy; then
     mv "$next" "$(env_file)"
     "$PB_BASE/egress-rules.sh" apply \
       || echo "page: warning: the host's rules still admit $PAGE's previous SOCKS5 too (run egress-rules.sh apply)" >&2
     echo "page: page-browser-$PAGE healthy on $(value PB_IMAGE "$(env_file)")"
     return 0
   fi
+  rm -f "$next"
+  if ((rc == 2)); then
+    "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the refused state's SOCKS5" >&2
+    fail "$what refused before anything started; page-browser-$PAGE is as it was"
+  fi
+  docker stop -t 20 "page-browser-$PAGE" >/dev/null 2>&1 || true
+  state="$(container_status)" || fail "$what failed, and page-browser-$PAGE cannot be read: it is left as it is"
+  [[ "$state" != running ]] || fail "$what failed, and page-browser-$PAGE does not stop: it is left as it is"
+  "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the failed state's SOCKS5" >&2
   if [[ -f "$(env_file)" ]]; then
-    rm -f "$next"
-    "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the failed state's SOCKS5" >&2
-    compose_with "$(env_file)" up -d --force-recreate --no-build >/dev/null && healthy \
-      && fail "$what failed; page-browser-$PAGE is back on $(value PB_IMAGE "$(env_file)")"
+    rc=0
+    start_state "$(env_file)" || rc=$?
+    ((rc != 2)) || fail "$what failed; page-browser-$PAGE stays stopped: the profile is not for $(value PB_IMAGE "$(env_file)")'s Chrome any more (page-browser-update.sh rollback restores its snapshot)"
+    ((rc == 0)) && healthy && fail "$what failed; page-browser-$PAGE is back on $(value PB_IMAGE "$(env_file)")"
     fail "$what failed, and page-browser-$PAGE did not come back healthy on $(value PB_IMAGE "$(env_file)")"
   fi
-  compose_with "$next" down >/dev/null 2>&1 || true
-  rm -f "$next"
+  docker rm -f "page-browser-$PAGE" >/dev/null 2>&1 || true
   "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the removed page" >&2
   fail "$what failed; the new page was removed"
 }
 
 # Who else holds a profile: another page's files, or another container
 # mounting its volume. Two Chromes on one profile would share its session
-# and corrupt it.
+# and corrupt it. 1 when Docker cannot list them: never taken for nobody.
 profile_owner() {
-  local profile="$1" file
+  local profile="$1" file users
   for file in "$PB_BASE"/pages/*/page.env; do
     [[ -f "$file" && "$file" != "$(env_file)" ]] || continue
     [[ "$(value PB_PROFILE_ID "$file")" == "$profile" ]] && { value PB_PAGE "$file"; return 0; }
   done
-  docker ps -a --filter "volume=pb-profile-$profile" --format '{{.Names}}' | grep -vx "page-browser-$PAGE" | head -n 1 || true
+  users="$(docker ps -a --filter "volume=pb-profile-$profile" --format '{{.Names}}')" || return 1
+  grep -vx "page-browser-$PAGE" <<<"$users" | sed '/^$/d' | head -n 1 || true
 }
 
 # A Chrome version out of anything that names it; ver_gt a b: a is later.
@@ -155,26 +199,33 @@ ver_gt() {
   return 1
 }
 
-# Refuses <image> on <profile> when the profile was last opened by a newer
-# Chrome than the image's. Read through a container of the image itself,
-# with no network: the profile is Chrome's user's alone.
-refuse_downgrade() {
+# Whether <image>'s Chrome may open <profile>: not when the profile was last
+# opened by a newer Chrome than the image's. Read through a container of the
+# image itself, with no network: the profile is Chrome's user's alone. 1
+# (why on stderr) when it may not — or when either cannot be read.
+compatible() {
   local image="$1" profile="$2" label image_chrome profile_chrome
-  label="$(docker image inspect --format '{{ index .Config.Labels "agency-hub.page-browser.chrome-version" }}' "$image" 2>/dev/null)" \
-    || fail "the image $image cannot be read"
+  if ! label="$(docker image inspect --format '{{ index .Config.Labels "agency-hub.page-browser.chrome-version" }}' "$image" 2>/dev/null)"; then
+    echo "page: the image $image cannot be read" >&2
+    return 1
+  fi
   image_chrome="$(chrome_of "$label" || true)"
   if [[ -z "$image_chrome" ]]; then
     image_chrome="$(chrome_of "$(docker run --rm --network none --entrypoint /usr/bin/google-chrome-stable "$image" --version 2>/dev/null)" || true)"
   fi
-  [[ -n "$image_chrome" ]] || fail "the Chrome of $image cannot be read"
-  profile_chrome="$(docker run --rm --network none --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --user 0 \
+  [[ -n "$image_chrome" ]] || { echo "page: the Chrome of $image cannot be read" >&2; return 1; }
+  if ! profile_chrome="$(docker run --rm --network none --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --user 0 \
     --entrypoint sh -v "pb-profile-$profile:/profile:ro" "$image" -c '
       if [ -f "/profile/Last Version" ]; then head -c 64 "/profile/Last Version"
       elif [ -f /profile/Default/Preferences ]; then grep -o "\"last_chrome_version\":\"[0-9.]*\"" /profile/Default/Preferences | head -n 1
-      fi' pb-helper version)" || fail "the profile $profile cannot be read"
+      fi' pb-helper version)"; then
+    echo "page: the profile $profile cannot be read" >&2
+    return 1
+  fi
   profile_chrome="$(chrome_of "$profile_chrome" || true)"
   if [[ -n "$profile_chrome" ]] && ver_gt "$profile_chrome" "$image_chrome"; then
-    fail "$image has Chrome $image_chrome, but the profile $profile was last opened by Chrome $profile_chrome: Chrome never opens a profile a newer one wrote (page-browser-update.sh rollback restores its snapshot)"
+    echo "page: $image has Chrome $image_chrome, but the profile $profile was last opened by Chrome $profile_chrome: Chrome never opens a profile a newer one wrote (page-browser-update.sh rollback restores its snapshot)" >&2
+    return 1
   fi
 }
 
@@ -213,7 +264,7 @@ up() {
     [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "--profile: a UUID"
     docker volume inspect "pb-profile-$profile" "pb-buffer-$profile" >/dev/null 2>&1 || fail "no volumes of profile $profile"
     local owner
-    owner="$(profile_owner "$profile")"
+    owner="$(profile_owner "$profile")" || fail "the containers of profile $profile cannot be listed"
     [[ -z "$owner" ]] || fail "profile $profile belongs to $owner (remove it with down, then forget)"
   fi
   octet="$(value PB_EGRESS_IP "$old" | sed -n "s/^$EGRESS_PREFIX\.//p")"
@@ -230,7 +281,8 @@ up() {
     docker volume create "pb-profile-$profile" >/dev/null
     docker volume create "pb-buffer-$profile" >/dev/null
   else
-    refuse_downgrade "$IMAGE" "$profile"
+    # Refused here before anything changes; start_state holds it again.
+    compatible "$IMAGE" "$profile" || fail "up $IMAGE refused"
   fi
   install -d -m 700 "$dir" "$dir/secrets"
   if [[ ! -s "$dir/secrets/vnc_password" ]]; then
@@ -274,7 +326,7 @@ rollback() {
   previous="$(value PB_PREVIOUS_IMAGE "$(env_file)")"
   [[ -n "$previous" ]] || fail "$PAGE has no previous image"
   docker image inspect "$previous" >/dev/null 2>&1 || fail "the previous image $previous is gone"
-  refuse_downgrade "$previous" "$(value PB_PROFILE_ID "$(env_file)")"
+  compatible "$previous" "$(value PB_PROFILE_ID "$(env_file)")" || fail "rollback to $previous refused"
   local next
   next="$(next_file)"
   (umask 077; sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next")
@@ -291,7 +343,9 @@ down() {
 # page (`up --profile`).
 forget() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
-  ! docker inspect "page-browser-$PAGE" >/dev/null 2>&1 || fail "page-browser-$PAGE still exists (down first)"
+  local state
+  state="$(container_status)" || fail "page-browser-$PAGE cannot be read: $PAGE is not forgotten"
+  [[ "$state" == absent ]] || fail "page-browser-$PAGE still exists (down first)"
   local profile
   profile="$(value PB_PROFILE_ID "$(env_file)")"
   rm -rf "$(page_dir)"
@@ -305,7 +359,9 @@ status() {
     [[ -f "$file" ]] || continue
     name="$(value PB_PAGE "$file")"
     [[ -z "$PAGE" || "$PAGE" == "$name" ]] || continue
-    state="$(docker inspect -f '{{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "page-browser-$name" 2>/dev/null)" || state="absent"
+    if ! state="$(docker inspect -f '{{.Config.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "page-browser-$name" 2>&1)"; then
+      grep -qiE 'no such (object|container)' <<<"$state" && state="absent" || state="unreadable"
+    fi
     printf '%-24s page.env %-44s running: %s\n' "page-browser-$name" "$(value PB_IMAGE "$file")" "$state"
   done
 }
