@@ -22,6 +22,12 @@
 //   engine's codec decides what of them is journaled (plan §3.2; the CDN
 //   tokens of the describer's sources must stay usable).
 //
+// - A body that grows counts in the buffer's caps while it grows (its
+//   `quota`): room is reserved before each chunk is written, and a chunk
+//   the caps have no room for is not written — the body is not whole any
+//   more, and the buffer is full. The reservation ends with the body: a
+//   sealed body counts again with the record that names it.
+//
 // Synchronous on purpose, like the store (store.ts): a chunk is tens of KB,
 // and the writes keep their order without a queue.
 
@@ -39,19 +45,30 @@ export interface SealedBody {
   sha256: string;
 }
 
+/** Room in the buffer's caps for a body while it grows. */
+export interface BodyQuota {
+  /** Room for `bytes` more; false: none (the chunk is not written). */
+  reserve(bytes: number): boolean;
+  /** The body is sealed or gone: what it reserved is given back. */
+  release(bytes: number): void;
+}
+
 /** One body as it arrives. */
 export class BodyWriter {
   readonly bodyId: string;
   readonly #dir: string;
   readonly #hash: Hash = createHash("sha256");
+  readonly #quota: BodyQuota | null;
   #fd: number | null;
   #bytes = 0;
+  #reserved = 0;
   #error: string | null = null;
   #done = false;
 
-  constructor(dir: string, bodyId: string) {
+  constructor(dir: string, bodyId: string, quota: BodyQuota | null = null) {
     this.#dir = dir;
     this.bodyId = bodyId;
+    this.#quota = quota;
     this.#fd = openSync(this.#partPath, "wx", 0o600);
   }
 
@@ -73,6 +90,18 @@ export class BodyWriter {
    *  not whole any more. */
   write(chunk: Buffer): boolean {
     if (this.#done || this.#error !== null || this.#fd === null) return false;
+    if (this.#quota !== null) {
+      // The full buffer's handler may end this body meanwhile.
+      if (!this.#quota.reserve(chunk.length)) {
+        this.#error ??= "the buffer's cap leaves no room for it";
+        return false;
+      }
+      if (this.#done || this.#fd === null) {
+        this.#quota.release(chunk.length);
+        return false;
+      }
+      this.#reserved += chunk.length;
+    }
     try {
       let offset = 0;
       while (offset < chunk.length) offset += writeSync(this.#fd, chunk, offset, chunk.length - offset);
@@ -90,6 +119,7 @@ export class BodyWriter {
   seal(): SealedBody | null {
     if (this.#done) return null;
     this.#done = true;
+    this.#release();
     const fd = this.#fd;
     this.#fd = null;
     if (fd === null || this.#error !== null) {
@@ -116,9 +146,16 @@ export class BodyWriter {
   abandon(): void {
     if (this.#done) return;
     this.#done = true;
+    this.#release();
     if (this.#fd !== null) closeQuietly(this.#fd);
     this.#fd = null;
     rmSync(this.#partPath, { force: true });
+  }
+
+  #release(): void {
+    const reserved = this.#reserved;
+    this.#reserved = 0;
+    if (reserved > 0) this.#quota?.release(reserved);
   }
 }
 
@@ -191,8 +228,8 @@ export class BodyFiles {
     }
   }
 
-  begin(): BodyWriter {
-    return new BodyWriter(this.dir, randomUUID());
+  begin(quota: BodyQuota | null = null): BodyWriter {
+    return new BodyWriter(this.dir, randomUUID(), quota);
   }
 
   /** A sealed body's size, or null when it is not there. */

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -597,6 +598,23 @@ describe("the answer's body (plan §4.2 step 7, §4.3; stage 1, amendment 8)", (
     await doneOf(w);
     expect(w.engine.of("siteAdmit")[0]).toMatchObject({ route: "site.other", sessionFingerprint: null });
     expect(siteResponses(w.buffer)[0]).toMatchObject({ route: "site.other", complete: true, sessionFingerprint: NO_SESSION });
+  });
+
+  it("a body that grows past the buffer's cap is not written past it: the buffer is full while it grows, the answer a mark (Astra's review of PR 7)", async () => {
+    const w = await world({ capBytes: 4096 });
+    const body = Buffer.alloc(16 * 1024, 0x61);
+    const chunks = Array.from({ length: 16 }, (_, i) => body.subarray(i * 1024, (i + 1) * 1024));
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { chunkDelayMs: 30, chunks } });
+    await until(() => w.buffer.refusal() === "buffer_full", 5000, "the cap reached while the body grows");
+    expect(w.buffer.stats().bytes).toBeGreaterThan(0);
+    const bodies = join(w.buffer.dir, "bodies");
+    for (const name of readdirSync(bodies)) expect(statSync(join(bodies, name)).size, name).toBeLessThanOrEqual(4096);
+    // Admissions stop with it.
+    const refused = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications") });
+    await until(() => refused.outcome === "failed", 3000, "no admission");
+    await until(() => w.engine.of("siteDone").length === 1, 5000, "its end, told from memory");
+    expect(w.engine.of("siteDone")[0]).toMatchObject({ sent: true, status: 200, body: "incomplete" });
+    expect(w.engine.of("siteAdmit")).toHaveLength(1);
   });
 
   it("a 429 with Retry-After: the status and the header go to the engine, the answer is kept as it came", async () => {

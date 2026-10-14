@@ -635,14 +635,17 @@ describe("the outcome", () => {
   it("is durable before the engine hears; a buffer that takes nothing still answers — never with a body", async () => {
     const w = await world({ capBytes: 1024 });
     const message = send(w, {}, { chunks: [Buffer.alloc(4000, 7)] });
-    // Over the cap: not kept, said from memory as a transport error.
+    // Over the cap: the body's chunk is not written (it counts while it
+    // grows — Astra's review of PR 7), the buffer is full, and the result is
+    // said from memory as a transport error.
     await until(() => w.engine.of("result").length === 1, 5000, "the unkept result");
     expect(w.engine.of("result")[0]).toEqual({
       type: "result",
       attemptId: message.attemptId,
       sessionFingerprint: FINGERPRINT,
-      outcome: { kind: "transport_error", sent: true, message: "the operator could not keep the response (buffer_full)" },
+      outcome: { kind: "transport_error", sent: true, message: "the body did not arrive whole: the body could not be written: the buffer's cap leaves no room for it" },
     });
+    expect(w.buffer.refusal()).toBe("buffer_full");
     expect(w.outcomes.has(message.attemptId)).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(readdirSync(join(w.dir, "buffer", "bodies"))).toEqual([]);

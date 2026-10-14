@@ -994,10 +994,40 @@ describe("bodies and Hub attempts (PR 9)", () => {
   it("are refused, with their outcome, past the cap", async () => {
     const root = dir();
     const buffer = open(root, { caps: { bytes: 4096 } });
-    const writer = buffer.beginBody()!;
-    writer.write(Buffer.alloc(5000, 1));
-    const sealed = writer.seal()!;
+    const first = buffer.beginBody()!;
+    expect(first.write(Buffer.alloc(2500, 1))).toBe(true);
+    const kept = first.seal()!;
+    expect(buffer.putOutcome(withBody(50, kept), { bodyId: kept.bodyId, bytes: kept.bytes }).ok).toBe(true);
+    const second = buffer.beginBody()!;
+    expect(second.write(Buffer.alloc(1000, 1))).toBe(true);
+    const sealed = second.seal()!;
     expect(buffer.putOutcome(withBody(51, sealed), { bodyId: sealed.bodyId, bytes: sealed.bytes })).toEqual({ ok: false, reason: "buffer_full" });
+  });
+
+  it("count while they grow: a chunk the cap has no room for is not written, the buffer is full, and what the body held is given back when it goes (Astra's review of PR 7)", async () => {
+    const root = dir();
+    const full: string[] = [];
+    const buffer = open(root, { caps: { bytes: 1024 }, resumePercent: 90, onFull: (reason) => full.push(reason) });
+    const writer = buffer.beginBody()!;
+    const written = Array.from({ length: 8 }, () => writer.write(Buffer.alloc(256, 7)));
+    // Four chunks fit the cap of 1 KB; the fifth would pass it.
+    expect(written).toEqual([true, true, true, true, false, false, false, false]);
+    expect(writer.error).toContain("cap");
+    expect(statSync(join(root, "store", "bodies", `${writer.bodyId}.part`)).size).toBe(1024);
+    expect(buffer.stats().bytes).toBe(1024);
+    expect(buffer.refusal()).toBe("buffer_full");
+    expect(full).toEqual(["buffer_full"]);
+    // Nothing else is taken meanwhile: neither another body's chunk nor a record.
+    const other = buffer.beginBody()!;
+    expect(other.write(Buffer.from("x"))).toBe(false);
+    expect(buffer.append(wsFrame(1)).ok).toBe(false);
+    // The body goes (not whole): its bytes are given back, and there is room again.
+    writer.abandon();
+    other.abandon();
+    expect(buffer.stats().bytes).toBe(0);
+    expect(bodiesOf(root)).toEqual([]);
+    buffer.check();
+    await until(() => buffer.refusal() === null, 3000, "room again");
   });
 
   it("an attempt's steps are durable, seen before their commit, never undone, and kept a day past the resultAck", async () => {

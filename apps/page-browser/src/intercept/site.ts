@@ -73,7 +73,9 @@
 // whole is never kept as a fact: `site.response` with `complete: false` and
 // no body is the mark the engine's intake turns into a hole seen in Hub and
 // a backfill (PR 13). There is no size limit for keeping it: the site has
-// the answer already; the buffer's caps hold the volume. A stream that
+// the answer already; the buffer's caps hold the volume — counted while the
+// body grows (buffer.ts): a chunk the caps have no room for is not written,
+// the body is a mark, and the full buffer stops the page. A stream that
 // could not be armed at the request stage (no session of the request known
 // yet) is armed at the response stage, before a byte of the body reaches
 // the page.

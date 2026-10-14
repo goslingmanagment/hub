@@ -45,7 +45,10 @@
 // Bodies (BodyRef in `result`, and in `site.response` with PR 7) are files
 // of the buffer volume (bodies.ts): written as they arrive, sealed only
 // whole, and named by the outcome or the event stored after the seal; its
-// bytes count its body's, so the caps do too. They go to the engine as
+// bytes count its body's, so the caps do too. While a body grows its bytes
+// count already (`beginBody`): each chunk reserves its room first, and one
+// the caps have no room for is not written — the buffer is full, and the
+// body is not whole (bodies.ts). They go to the engine as
 // binary frames before the JSON that names them (replay.ts, stream.ts), and
 // their file goes with the outcome's resultAck or the event's ack.
 //
@@ -372,6 +375,8 @@ export class EventBuffer {
   #walDirty = false;
   /** Stored, unacknowledged bytes and counts (the file may be larger). */
   #bytes = 0;
+  /** Bytes of bodies that still grow (not sealed, not gone). */
+  #growing = 0;
   #events = 0;
   #outcomes = 0;
   #firstSeq: number | null = null;
@@ -501,7 +506,7 @@ export class EventBuffer {
   /** What `state.buffer` says (spec §6.1), and more for tools and tests. */
   stats(): { bytes: number; oldestAgeMs: number; events: number; outcomes: number; pending: number; lastSeq: number; commits: number; full: FullReason | null; unavailable: OpenCause | null; freeDiskBytes: number } {
     return {
-      bytes: this.#bytes,
+      bytes: this.#bytes + this.#growing,
       oldestAgeMs: this.#oldestAgeMs(),
       events: this.#events,
       outcomes: this.#outcomes,
@@ -642,7 +647,7 @@ export class EventBuffer {
       }
     }
     const bytes = group.reduce((sum, item) => sum + item.bytes, 0);
-    if (this.#bytes + this.#pendingBytes + bytes > this.#caps.bytes) {
+    if (this.#bytes + this.#pendingBytes + this.#growing + bytes > this.#caps.bytes) {
       this.#enterFull("buffer_full", "bytes", `${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
       return { ok: false, reason: "buffer_full" };
     }
@@ -760,7 +765,7 @@ export class EventBuffer {
     const bodies = this.#bodies;
     if (this.#closed || bodies === null) return null;
     try {
-      return bodies.begin();
+      return bodies.begin({ reserve: (bytes) => this.#reserveBody(bytes), release: (bytes) => (this.#growing = Math.max(0, this.#growing - bytes)) });
     } catch (error) {
       this.#log("body.unwritable", { error: errorMessage(error) });
       return null;
@@ -811,10 +816,22 @@ export class EventBuffer {
     }
   }
 
+  /** Room for a growing body's next chunk: none while the buffer takes no
+   *  writes, and none past the cap — the buffer is full then. */
+  #reserveBody(bytes: number): boolean {
+    if (this.refusal() !== null) return false;
+    if (this.#bytes + this.#pendingBytes + this.#growing + bytes > this.#caps.bytes) {
+      this.#enterFull("buffer_full", "bytes", `a body's ${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
+      return false;
+    }
+    this.#growing += bytes;
+    return true;
+  }
+
   #accept(item: Pending): Appended {
     const refused = this.refusal();
     if (refused) return { ok: false, reason: refused };
-    if (this.#bytes + this.#pendingBytes + item.bytes > this.#caps.bytes) {
+    if (this.#bytes + this.#pendingBytes + this.#growing + item.bytes > this.#caps.bytes) {
       this.#enterFull("buffer_full", "bytes", `${item.bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
       return { ok: false, reason: "buffer_full" };
     }
@@ -950,7 +967,7 @@ export class EventBuffer {
   }
 
   #level(): { percent: number; by: "bytes" | "age"; bytes: number; ageMs: number } {
-    const bytes = this.#bytes + this.#pendingBytes;
+    const bytes = this.#bytes + this.#pendingBytes + this.#growing;
     const ageMs = this.#oldestAgeMs();
     const byBytes = (bytes / this.#caps.bytes) * 100;
     const byAge = (ageMs / this.#caps.ageMs) * 100;
@@ -958,7 +975,7 @@ export class EventBuffer {
   }
 
   #alarmOf(percent: number, by: BufferAlarm["by"]): BufferAlarm {
-    return { percent, by, bytes: this.#bytes + this.#pendingBytes, capBytes: this.#caps.bytes, oldestAgeMs: this.#oldestAgeMs(), capAgeMs: this.#caps.ageMs, freeDiskBytes: Number.isFinite(this.#freeDisk) ? this.#freeDisk : -1 };
+    return { percent, by, bytes: this.#bytes + this.#pendingBytes + this.#growing, capBytes: this.#caps.bytes, oldestAgeMs: this.#oldestAgeMs(), capAgeMs: this.#caps.ageMs, freeDiskBytes: Number.isFinite(this.#freeDisk) ? this.#freeDisk : -1 };
   }
 
   #raiseAlarms(level: { percent: number; by: "bytes" | "age" }): void {
