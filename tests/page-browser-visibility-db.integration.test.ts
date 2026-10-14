@@ -166,6 +166,19 @@ describe("the owner's stop, the halt the operator holds as Hub mirrors it, and t
     // The operator says it cleared that very halt: gone from the mirror.
     await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null, lastClearedHaltId: halt.id }));
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltAt: null, haltId: null });
+    // Astra round 5: a stricter halt held is never replaced by an older
+    // login_required said (no word that it was cleared); a login_required held
+    // is replaced by a stricter one said.
+    const strict = { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", reason: "header_mismatch", at };
+    const signedOut = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", reason: "login_required", at };
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt: strict }));
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "login_required", halt: signedOut }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltId: strict.id });
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "login_required", halt: signedOut, lastClearedHaltId: strict.id }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "login_required", haltId: signedOut.id });
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt: strict }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltId: strict.id });
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null, lastClearedHaltId: strict.id }));
     // Said again, then cleared by the owner's decision in Hub.
     await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt }));
     expect(await clearPageBrowserHaltMirror(db(), { profileId, haltId: "99999999-9999-4999-8999-999999999999" })).toBe(false);

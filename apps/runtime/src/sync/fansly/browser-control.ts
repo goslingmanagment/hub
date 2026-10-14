@@ -367,7 +367,16 @@ export class BrowserControl {
         const cleared = await this.#send(command, sent, { kind: "clearHalt", haltId: command.haltId }, `the owner's start (${command.requestedBy})`, `${command.commandId}:clearHalt`);
         steps.push(`clearHalt ${command.haltId}: ${cleared === null ? "no answer" : cleared.detail ?? String(cleared.ok)}`);
         if (cleared === null) return { outcome: "unknown", detail: steps.join("; ") };
-        if (!cleared.ok) return { outcome: "failed", detail: steps.join("; ") };
+        if (!cleared.ok) {
+          // The operator holds another halt, not the one he decided on (Hub's
+          // mirror kept the stricter one it lost): his decision on that one
+          // stands — its mirror goes — and the other waits for his next.
+          const other = this.#d.client.state?.halt ?? null;
+          if (other !== null && other.id !== command.haltId && (await clearPageBrowserHaltMirror(db, { profileId, haltId: command.haltId }))) {
+            steps.push(`Hub's mirror of halt ${command.haltId} cleared; the operator holds ${other.id} (${other.reason}): it waits for the owner`);
+          }
+          return { outcome: "failed", detail: steps.join("; ") };
+        }
       }
       // The owner's decision on that halt: Hub's mirror of it goes with it, in
       // the same flow (Astra round 4: it refuses starts until then).

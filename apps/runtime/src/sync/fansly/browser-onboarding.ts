@@ -647,29 +647,33 @@ export class OnboardingLink {
     const pinnedAt = profile.pinnedExitIpAt?.getTime() ?? 0;
     const held = state.halt ?? null;
     const mirror = profile.halt;
-    // The halt for a changed exit IP a newer pin decides: the operator's own,
-    // or — one it no longer says — Hub's mirror of it.
-    const ipHalt = held !== null
-      ? (held.reason === "exit_ip_changed" ? { id: held.id, atWall: held.atWall } : null)
-      : mirror !== null && mirror.reason === "exit_ip_changed" && mirror.id !== null
-        ? { id: mirror.id, atWall: mirror.at?.getTime() ?? Number.POSITIVE_INFINITY }
-        : null;
-    if (ipHalt !== null) {
-      if (pinnedAt <= ipHalt.atWall || this.#clearedForPin === pinnedAt) return;
+    // The halts that stand (Astra round 5: the stricter of the operator's and
+    // Hub's mirror, never one over the other): the operator's, and the
+    // mirror's when it is another (one the operator lost).
+    const halts: Array<{ id: string | null; reason: string; atWall: number }> = [];
+    if (held !== null) halts.push({ id: held.id, reason: held.reason, atWall: held.atWall });
+    if (mirror !== null && mirror.id !== held?.id) halts.push({ id: mirror.id, reason: mirror.reason, atWall: mirror.at?.getTime() ?? Number.POSITIVE_INFINITY });
+    const strict = halts.filter((halt) => halt.reason !== "login_required");
+    if (strict.length > 0) {
+      // A newer pin decides them only when every one is a changed exit IP
+      // held before it; any other halt is the owner's clear-halt.
+      if (!strict.every((halt) => halt.reason === "exit_ip_changed" && halt.id !== null && pinnedAt > halt.atWall)) return;
+      if (this.#clearedForPin === pinnedAt) return;
       this.#clearedForPin = pinnedAt;
       this.#lastStartMono = now;
-      const cleared = await this.#command({ kind: "clearHalt", haltId: ipHalt.id }, "the owner pinned the exit IP again: his decision on the halt for it");
-      if (cleared?.ok !== true) return;
-      await clearPageBrowserHaltMirror(this.#o.db, { profileId: this.profileId, haltId: ipHalt.id });
+      for (const halt of strict) {
+        if (held !== null && halt.id === held.id) {
+          const cleared = await this.#command({ kind: "clearHalt", haltId: halt.id }, "the owner pinned the exit IP again: his decision on the halt for it");
+          if (cleared?.ok !== true) return;
+        }
+        await clearPageBrowserHaltMirror(this.#o.db, { profileId: this.profileId, haltId: halt.id! });
+      }
       await this.#command("restartBrowser", "the owner pinned the exit IP again: the browser starts again and checks it");
       return;
     }
-    // Any other halt, the operator's or Hub's mirror of it: the owner's
-    // (`sync browser-profile clear-halt`) — but a login_required, for the
-    // login.
-    const other = held?.reason ?? mirror?.reason ?? null;
+    // Only a login_required (or none): the login's to start.
     const login = profile.onboarding === "login";
-    if (other !== null && !(other === "login_required" && login)) return;
+    if (halts.length > 0 && !login) return;
     const standing = stands(state) || (login && state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && state.stopReason === "login_required");
     if (!standing || now - this.#lastStartMono < this.#t.restartEveryMs) return;
     this.#lastStartMono = now;
@@ -694,7 +698,13 @@ export class OnboardingLink {
       return;
     }
     if (!result.ok) {
-      await finish("failed", `clearHalt: ${result.detail ?? "refused"}`);
+      // The operator holds another halt, not the one he decided on (Hub's
+      // mirror kept the stricter one it lost): his decision on that one
+      // stands — its mirror goes — and the other waits for his next.
+      const other = this.client.state?.halt ?? null;
+      const mirrorCleared = other !== null && other.id !== command.haltId
+        && (await clearPageBrowserHaltMirror(db, { profileId: this.profileId, haltId: command.haltId }));
+      await finish("failed", `clearHalt: ${result.detail ?? "refused"}${mirrorCleared ? `; Hub's mirror of halt ${command.haltId} cleared, the operator's ${other!.id} (${other!.reason}) waits for the owner` : ""}`);
       return;
     }
     const mirrored = await clearPageBrowserHaltMirror(db, { profileId: this.profileId, haltId: command.haltId });

@@ -290,6 +290,13 @@ export interface PageBrowserStateInput {
  *  reason (`stop_since`) are kept across states (0281). */
 export async function recordPageBrowserState(db: Database, input: PageBrowserStateInput): Promise<boolean> {
   const retry = input.retryAt === undefined ? sql`retry_at` : sql`${input.retryAt === null ? null : input.retryAt.toISOString()}::timestamptz`;
+  const saidId = input.halt?.id ?? null;
+  const saidReason = input.halt?.reason ?? null;
+  const cleared = input.lastClearedHaltId ?? null;
+  // Whether the halt said (or none) replaces the one the mirror holds.
+  const takes = sql`when halt_reason is null
+                      or (halt_id is not null and halt_id = ${cleared}::text)
+                      or (${saidId}::text is not null and halt_reason = 'login_required' and ${saidReason}::text <> 'login_required')`;
   const result = await db.execute(sql`
     update page_browsers
        set down_since = case when ${input.step} = 'ready' then null else coalesce(down_since, clock_timestamp()) end,
@@ -311,19 +318,16 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            selftest_failed = ${input.selfTest?.failed ?? null},
            buffer_bytes = ${Math.max(0, Math.round(input.buffer.bytes))}::bigint,
            buffer_oldest_age_ms = ${Math.max(0, Math.round(input.buffer.oldestAgeMs))}::bigint,
-           -- The mirror (Astra round 4): a halt said replaces it; one no longer
-           -- said goes only when the operator says it cleared that very halt
-           -- (a halt lost by a restart, or a file that could not be written,
-           -- stays — and refuses starts — until the owner's start clears it).
-           halt_reason = case when ${input.halt?.id ?? null}::text is not null then ${input.halt?.reason ?? null}::text
-                              when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
-                              else halt_reason end,
-           halt_at = case when ${input.halt?.id ?? null}::text is not null then ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz
-                          when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
-                          else halt_at end,
-           halt_id = case when ${input.halt?.id ?? null}::text is not null then ${input.halt?.id ?? null}::text
-                          when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
-                          else halt_id end,
+           -- The mirror (Astra rounds 4 and 5): the stricter of the halt it
+           -- holds and the one said — any halt but login_required outranks
+           -- it; else the one held stands — until the operator says it cleared
+           -- the one held (lastClearedHaltId) or the owner's decision clears it
+           -- (clearPageBrowserHaltMirror). A halt no longer said (lost by a
+           -- restart) stays; an older login_required said never replaces a
+           -- stricter one held.
+           halt_reason = case ${takes} then ${input.halt?.reason ?? null}::text else halt_reason end,
+           halt_at = case ${takes} then ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz else halt_at end,
+           halt_id = case ${takes} then ${input.halt?.id ?? null}::text else halt_id end,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()

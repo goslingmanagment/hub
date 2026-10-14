@@ -322,6 +322,36 @@ describe("a halt for the owner's decision is the operator's (Astra PR 17, round 
     }
   });
 
+  it("Astra's round 5: an older login_required the operator says never lets a start past the stricter halt Hub mirrors; the owner's start on that one clears its mirror while the operator's waits for him", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage();
+    const signedOut = held("login_required", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+    // Hub holds the stricter B; the operator, restarted, says the older A.
+    await mirrored(page, held());
+    await mirrored(page, signedOut);
+    expect((await findPageBrowser(db(), page.profileId))!.haltId).toBe(HALT);
+    const l = link(stands({ mode: "manual_login", stopReason: "login_required", halt: signedOut, lastClearedHaltId: null }));
+    const ctl = control(page, l);
+    const login = loginDriver(page, l, "browser");
+    try {
+      await db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId: page.pageId, to: "wanted", by: "owner:test" }));
+      await login.drive();
+      await ctl.tick();
+      expect(l.sent.filter((command) => command.kind === "restartBrowser")).toEqual([]);
+      // The owner's start on B: the operator holds A — B's mirror goes, A waits.
+      const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+      expect(asked.halt).toMatchObject({ id: HALT });
+      await ctl.tick();
+      expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "failed", detail: expect.stringContaining(`Hub's mirror of halt ${HALT} cleared`) });
+      expect((await findPageBrowser(db(), page.profileId))!.haltId).toBeNull();
+      // Now only the login's login_required: the login starts it.
+      await login.drive();
+      expect(l.sent.filter((command) => command.kind === "restartBrowser")).toHaveLength(1);
+    } finally {
+      await ctl.stop();
+    }
+  });
+
   it("a login_required Hub still mirrors does not hold the login's own start", async (context) => {
     if (!testDb) return context.skip();
     const page = await browserPage("node");

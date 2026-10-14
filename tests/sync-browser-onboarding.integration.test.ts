@@ -402,6 +402,26 @@ describe("a new page's onboarding through its browser, the engine's side (plan �
     await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the login's start once cleared");
   });
 
+  it("Astra's round 5: the operator says an older login_required while Hub mirrors a stricter halt — the login starts nothing until that one is cleared", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    const signedOut = { id: randomUUID(), reason: "login_required" as const, atWall: Date.now() - 60_000 };
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "login_required", halt: signedOut };
+    const strictId = randomUUID();
+    await testDb.pool.query("update page_browsers set halt_reason = 'header_mismatch', halt_at = now(), halt_id = $2 where profile_id = $1", [r.profileId, strictId]);
+    startTask(r);
+    await untilLoginMode(r);
+    await sleep(1_500);
+    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
+    // The stricter one, kept in Hub's mirror by the states that said the older one.
+    expect((await findOnboardingProfile(db(), r.profileId))!.halt).toMatchObject({ id: strictId, reason: "header_mismatch" });
+    // The owner's clear-halt of it: the operator holds another (the login's), the mirror's goes.
+    const asked = await clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId: strictId, actor: "cli@test" });
+    await awaitPageBrowserCommand(db(), asked.command.id, { waitMs: 15_000 });
+    await until(async () => (await findOnboardingProfile(db(), r.profileId))!.halt?.id === signedOut.id, 10_000, "the mirror on the operator's login_required");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the login's start");
+  });
+
   it("gives the onboarding up: the browser stopped, the automation back, then off — the profile stays, unbound", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });
