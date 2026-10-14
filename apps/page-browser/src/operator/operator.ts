@@ -105,7 +105,7 @@ import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
-import { LoginDesk, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
+import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
@@ -279,6 +279,11 @@ export class Operator {
   /** The work tab is loaded anew for a change of the mode (it waits out
    *  what is in flight first). */
   #modeReload = 0;
+  /** Changes whenever what a login call was taken under may have: a change
+   *  of the mode, a hand-over, the engine's link lost or found. A step of
+   *  the login form taken before stops at its next input step (Astra's
+   *  review of PR 15, item 3). */
+  #loginEpoch = 0;
   /** The account the engine's identity read named, and under which
    *  session (plan §4.1, step 9). */
   #identity: { accountId: string; fingerprint: string } | null = null;
@@ -455,6 +460,8 @@ export class Operator {
         onSite: (message) => this.site.onAdmitResult(message),
         onLogin: (request) => this.#onLogin(request),
         onLink: (up, reason) => {
+          // What the login form was typing for the engine of before stops.
+          this.#cancelLogin(up ? "a new engine connection" : "the engine's link was lost");
           // A new connection subscribes anew; the outcomes not acknowledged
           // go to it again (spec §6.2), a page at a time.
           this.stream.reset();
@@ -1355,6 +1362,10 @@ export class Operator {
    *  turn — each is refused there now, the generation having moved on — and
    *  there are no admissions yet: the last send the gate saw is all there is. */
   async #quiesce(): Promise<{ lastSendMono: number | null; lastSendWall: number | null }> {
+    // The login form's step under way was the earlier owner's: it stops at
+    // its next input step, and is over before anything else is.
+    this.#cancelLogin("a new owner of the page");
+    await this.login.drain();
     await this.#commandChain;
     // The manual login is its owner's (plan §4.8): a new owner switches it on
     // again if it still wants it. The automation is back first.
@@ -1454,6 +1465,7 @@ export class Operator {
    *  under this mode; one that is not waits for the engine's start. */
   async #enterManualLogin(generation: number): Promise<CommandOutcome> {
     if (this.#mode === "manual_login") {
+      if (this.#modeGeneration !== generation) this.#cancelLogin("the manual login is another owner's now");
       this.#modeGeneration = generation;
       return { ok: true, detail: "the manual login: already" };
     }
@@ -1475,6 +1487,9 @@ export class Operator {
   async #leaveManualLogin(why: string): Promise<CommandOutcome> {
     if (this.#mode === "automation") return { ok: true, detail: "the automation: already" };
     this.#setMode("automation", null, why);
+    // The login form's step under way stops at its next input step: nothing
+    // of it acts once the automation is back.
+    await this.login.drain();
     const up = atLeast(this.page.step, "exit_open") && !this.page.halted && this.egress.exitOpen;
     if (!up) return { ok: true, detail: "the automation; the page is not up: its start checks the exit IP and the session" };
     const run = this.#run;
@@ -1494,6 +1509,7 @@ export class Operator {
   }
 
   #setMode(mode: Mode, generation: number | null, why: string): void {
+    this.#cancelLogin(`the mode changes to ${mode}`);
     this.#mode = mode;
     this.#modeGeneration = generation;
     this.#log("mode", { mode, generation, why });
@@ -1527,7 +1543,9 @@ export class Operator {
   /** A call of the login form (spec §6.1 `login.*`): taken only in the
    *  manual login that the engine of the current owner generation switched
    *  on, with the page up; what types into the site, also only while that
-   *  engine is heard (its admission is what lets the login go). */
+   *  engine is heard (its admission is what lets the login go) — and only
+   *  for as long as all of it holds (`#loginGuard`, read before every input
+   *  step). */
   async #onLogin(request: LoginRequest): Promise<LoginOutcome | { kind: "refused"; reason: "not_manual_login" }> {
     const current = this.#mode === "manual_login" && this.#modeGeneration !== null && this.#modeGeneration === this.rpc.generation;
     const up = !this.page.halted && atLeast(this.page.step, "exit_open") && this.egress.exitOpen;
@@ -1538,12 +1556,33 @@ export class Operator {
       case "login.screenshot":
         return this.login.screenshot();
       case "login.submit":
-        if (!this.rpc.linkUp) return { kind: "refused", reason: "not_manual_login" };
-        return this.login.submit(request.login, request.password);
+        return this.login.submit(request.login, request.password, this.#loginGuard());
       case "login.code":
-        if (!this.rpc.linkUp) return { kind: "refused", reason: "not_manual_login" };
-        return this.login.code(request.code);
+        return this.login.code(request.code, this.#loginGuard());
     }
+  }
+
+  /** A login call's claim on the browser, taken now: null while the manual
+   *  login it was taken in lasts — the same mode, owner generation and
+   *  engine connection (`#loginEpoch`), that engine heard, the same start
+   *  of the page and the page up — else why not. */
+  #loginGuard(): LoginGuard {
+    const epoch = this.#loginEpoch;
+    const generation = this.#modeGeneration;
+    const run = this.#run;
+    return () => {
+      if (epoch !== this.#loginEpoch) return "the manual login it was taken in is over";
+      if (this.#mode !== "manual_login" || generation === null || this.#modeGeneration !== generation || this.rpc.generation !== generation) return "not the manual login it was taken in";
+      if (!this.rpc.linkUp) return "no engine link";
+      if (run !== this.#run || this.page.halted || !atLeast(this.page.step, "exit_open") || !this.egress.exitOpen) return "the page is not up as it was";
+      return null;
+    };
+  }
+
+  /** The login calls taken until now may act no more. */
+  #cancelLogin(why: string): void {
+    this.#loginEpoch += 1;
+    this.#log("login.epoch", { why });
   }
 
   async #selfTestCommand(): Promise<CommandOutcome> {

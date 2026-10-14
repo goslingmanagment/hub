@@ -14,6 +14,15 @@
 // - The screen is read again before every step (spec §7): a screen that is
 //   no longer the one the step is for stops it there (`screen_changed`).
 //   One step at a time (`busy`).
+// - Each step is the call's that asked for it, and only for as long as that
+//   call may act (Astra's review of PR 15, item 3): its guard — the manual
+//   login it was taken in, under the owner generation that switched it on,
+//   with that engine heard (operator.ts) — is read before every input step
+//   (the focus, the selection, the text, the scroll, the pointer's move, the
+//   press, the release). A guard that fails stops the step there
+//   (`not_manual_login`): nothing more is typed or pressed. The operator
+//   waits for a stopped step to end (`drain`) before the automation comes
+//   back or a new owner takes the page.
 // - Secrets: the login, the password and the code live in this call's
 //   arguments for the time of the hand-over and nowhere else — never in a
 //   log line, a journal, an error message or a field of this object. The
@@ -56,15 +65,29 @@ export interface LoginDeskDeps {
 export type LoginOutcome =
   | { kind: "state"; screen: LoginScreen; screenVersion: string; fields: LoginField[]; siteError: string | null }
   | { kind: "screenshot"; jpeg: Buffer }
-  | { kind: "refused"; reason: "screen_changed" | "busy" };
+  | { kind: "refused"; reason: "screen_changed" | "busy" | "not_manual_login" };
+
+/** The asking call's claim on the browser (operator.ts): null while it may
+ *  still act, else why not. Read before every input step. */
+export type LoginGuard = () => string | null;
 
 class ScreenChanged extends Error {}
+
+/** The call's guard failed: it may act no more. */
+class Cancelled extends Error {}
+
+/** The element a step acts on. */
+interface Located {
+  tab: string;
+  objectId: string;
+}
 
 export class LoginDesk {
   readonly #deps: LoginDeskDeps;
   readonly #timings: LoginTimings;
   readonly #log: Logger;
-  #busy = false;
+  /** The step under way (one at a time). */
+  #current: Promise<LoginOutcome> | null = null;
   /** The live session when the manual login began (the success's sign). */
   #sessionAtStart: string | null = null;
   /** The site's code went and was answered 2xx in this manual login. */
@@ -119,57 +142,74 @@ export class LoginDesk {
     }
   }
 
-  /** The login and the password into the login form, then its button. */
-  submit(login: string, password: string): Promise<LoginOutcome> {
-    return this.#step("submit", ["login", "password"], async () => {
-      await this.#type("login", ["login", "password"], login);
-      await this.#type("password", ["login", "password"], password);
+  /** The login and the password into the login form, then its button —
+   *  for as long as `guard` lets the call act. */
+  submit(login: string, password: string, guard: LoginGuard): Promise<LoginOutcome> {
+    return this.#step("submit", ["login", "password"], guard, async () => {
+      await this.#type("login", ["login", "password"], login, guard);
+      await this.#type("password", ["login", "password"], password, guard);
     });
   }
 
-  /** The 2FA code into the code form, then its button. */
-  code(code: string): Promise<LoginOutcome> {
-    return this.#step("code", ["code"], async () => {
-      await this.#type("code", ["code"], code);
+  /** The 2FA code into the code form, then its button — for as long as
+   *  `guard` lets the call act. */
+  code(code: string, guard: LoginGuard): Promise<LoginOutcome> {
+    return this.#step("code", ["code"], guard, async () => {
+      await this.#type("code", ["code"], code, guard);
     });
   }
 
-  async #step(name: "submit" | "code", needs: LoginField[], typeIn: () => Promise<void>): Promise<LoginOutcome> {
-    if (this.#busy) return { kind: "refused", reason: "busy" };
-    this.#busy = true;
+  /** The step under way, if any, has ended — one whose guard failed stops at
+   *  its next input step, and waits for no screen. Never rejects. */
+  async drain(): Promise<void> {
+    await this.#current?.catch(() => undefined);
+  }
+
+  #step(name: "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
+    if (this.#current !== null) return Promise.resolve({ kind: "refused", reason: "busy" });
+    const run = this.#run(name, needs, guard, typeIn).finally(() => {
+      if (this.#current === run) this.#current = null;
+    });
+    this.#current = run;
+    return run;
+  }
+
+  async #run(name: "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
+    let acted: LoginScreen;
     try {
-      let acted: LoginScreen;
-      try {
-        const before = await this.#recognize();
-        if (!sameFields(before.fields, needs)) {
-          this.#log("step.refused", { step: name, screen: before.screen, why: before.why });
-          return { kind: "refused", reason: "screen_changed" };
-        }
-        acted = before.screen;
-        await typeIn();
-        await this.#press(needs);
-        this.#log("step.done", { step: name, from: acted });
-      } catch (error) {
-        // Never the error of a command that carried what was typed: its
-        // message is the command's method and Chrome's words (cdp/client.ts).
-        this.#log("step.stopped", { step: name, why: error instanceof ScreenChanged ? error.message : errorMessage(error) });
+      allowed(guard);
+      const before = await this.#recognize();
+      if (!sameFields(before.fields, needs)) {
+        this.#log("step.refused", { step: name, screen: before.screen, why: before.why });
         return { kind: "refused", reason: "screen_changed" };
-      } finally {
-        await this.#release();
       }
-      // The site's answer: the next screen it shows — one the desk knows,
-      // other than the one it acted on (a form that went for a moment is
-      // no answer) — or the screen as it is when the wait is over.
-      const deadline = Date.now() + this.#timings.settleMs;
-      let seen = await this.#recognize();
-      while ((seen.screen === acted || seen.screen === "unknown") && Date.now() < deadline) {
-        await sleep(this.#timings.pollMs);
-        seen = await this.#recognize();
+      acted = before.screen;
+      await typeIn();
+      await this.#press(needs, guard);
+      this.#log("step.done", { step: name, from: acted });
+    } catch (error) {
+      if (error instanceof Cancelled) {
+        this.#log("step.cancelled", { step: name, why: error.message });
+        return { kind: "refused", reason: "not_manual_login" };
       }
-      return this.#stateOf(seen);
+      // Never the error of a command that carried what was typed: its
+      // message is the command's method and Chrome's words (cdp/client.ts).
+      this.#log("step.stopped", { step: name, why: error instanceof ScreenChanged ? error.message : errorMessage(error) });
+      return { kind: "refused", reason: "screen_changed" };
     } finally {
-      this.#busy = false;
+      await this.#release();
     }
+    // The site's answer: the next screen it shows — one the desk knows,
+    // other than the one it acted on (a form that went for a moment is
+    // no answer) — or the screen as it is when the wait is over, or when
+    // the call may no longer act (nothing waits for it then).
+    const deadline = Date.now() + this.#timings.settleMs;
+    let seen = await this.#recognize();
+    while ((seen.screen === acted || seen.screen === "unknown") && Date.now() < deadline && guard() === null) {
+      await sleep(this.#timings.pollMs);
+      seen = await this.#recognize();
+    }
+    return this.#stateOf(seen);
   }
 
   #stateOf(seen: Recognized): LoginOutcome {
@@ -201,7 +241,7 @@ export class LoginDesk {
 
   /** The element of `role` in the one form shown, by reference; the screen
    *  read again first, and it must still show `needs`. */
-  async #locate(role: LoginField | "submit", needs: LoginField[]): Promise<{ tab: string; objectId: string }> {
+  async #locate(role: LoginField | "submit", needs: LoginField[]): Promise<Located> {
     const seen = await this.#recognize();
     if (!sameFields(seen.fields, needs)) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
     const tab = this.#deps.tab();
@@ -218,20 +258,36 @@ export class LoginDesk {
     return { tab, objectId };
   }
 
+  /** A boolean the element's function answers (`Runtime.callFunctionOn`). */
+  async #ask(at: Located, functionDeclaration: string, args: Array<{ value: unknown }> = []): Promise<boolean> {
+    const reply = await this.#deps.cdp.send<{ result?: { value?: unknown } }>(
+      "Runtime.callFunctionOn",
+      { objectId: at.objectId, functionDeclaration, arguments: args, returnByValue: true },
+      at.tab,
+      this.#timings.commandMs,
+    );
+    return reply.result?.value === true;
+  }
+
   /** `text` into the field of `role`: focused, its content selected, the
    *  text inserted as typed. */
-  async #type(role: LoginField, needs: LoginField[], text: string): Promise<void> {
-    const { tab, objectId } = await this.#locate(role, needs);
+  async #type(role: LoginField, needs: LoginField[], text: string, guard: LoginGuard): Promise<void> {
+    const field = await this.#locate(role, needs);
     const cdp = this.#deps.cdp;
-    await cdp.send("DOM.focus", { objectId }, tab, this.#timings.commandMs);
-    await cdp.send("Runtime.callFunctionOn", { objectId, functionDeclaration: SELECT_ALL, returnByValue: true }, tab, this.#timings.commandMs);
-    await cdp.send("Input.insertText", { text }, tab, this.#timings.commandMs);
+    allowed(guard);
+    await cdp.send("DOM.focus", { objectId: field.objectId }, field.tab, this.#timings.commandMs);
+    allowed(guard);
+    await cdp.send("Runtime.callFunctionOn", { objectId: field.objectId, functionDeclaration: SELECT_ALL, returnByValue: true }, field.tab, this.#timings.commandMs);
+    allowed(guard);
+    await cdp.send("Input.insertText", { text }, field.tab, this.#timings.commandMs);
   }
 
   /** The form's one button, pressed at its centre — if that point hits it. */
-  async #press(needs: LoginField[]): Promise<void> {
-    const { tab, objectId } = await this.#locate("submit", needs);
+  async #press(needs: LoginField[], guard: LoginGuard): Promise<void> {
+    const button = await this.#locate("submit", needs);
+    const { tab, objectId } = button;
     const cdp = this.#deps.cdp;
+    allowed(guard);
     await cdp.send("DOM.scrollIntoViewIfNeeded", { objectId }, tab, this.#timings.commandMs).catch((error: unknown) => {
       if (!(error instanceof CdpError)) throw error;
     });
@@ -240,16 +296,16 @@ export class LoginDesk {
     if (!Array.isArray(quad) || quad.length !== 8 || !quad.every((n) => typeof n === "number" && Number.isFinite(n))) throw new ScreenChanged("the button has no box");
     const x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
     const y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
-    const hit = await cdp.send<{ result?: { value?: unknown } }>(
-      "Runtime.callFunctionOn",
-      { objectId, functionDeclaration: HIT, arguments: [{ value: x }, { value: y }], returnByValue: true },
-      tab,
-      this.#timings.commandMs,
-    );
-    if (hit.result?.value !== true) throw new ScreenChanged("something else is over the button");
-    const mouse = { x, y, button: "left", clickCount: 1 };
+    const point = [{ value: x }, { value: y }];
+    if (!(await this.#ask(button, HIT, point))) throw new ScreenChanged("something else is over the button");
+    allowed(guard);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" }, tab, this.#timings.commandMs);
+    const mouse = { x, y, button: "left", clickCount: 1 };
+    allowed(guard);
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...mouse }, tab, this.#timings.commandMs);
+    // A press whose call may act no more is not let go on the button: no
+    // click comes of it.
+    allowed(guard);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...mouse }, tab, this.#timings.commandMs);
   }
 
@@ -258,6 +314,12 @@ export class LoginDesk {
     if (tab === null) return;
     await this.#deps.cdp.send("Runtime.releaseObjectGroup", { objectGroup: GROUP }, tab, this.#timings.commandMs).catch(() => undefined);
   }
+}
+
+/** The call may act now, or the step stops here. */
+function allowed(guard: LoginGuard): void {
+  const why = guard();
+  if (why !== null) throw new Cancelled(why);
 }
 
 function sameFields(seen: readonly LoginField[], needs: readonly LoginField[]): boolean {

@@ -32,6 +32,7 @@
 //   - the site's read after the login (its interface's, PR 15) under an
 //     admission of its own too, its answer to the buffer; the account
 //     loaded under the new session is a success;
+//   - a call that may act no more stops at its next input step;
 //   - the screenshot is a JPEG of the page;
 //   - no marker in the log or the journal, nor in the buffer's files.
 //
@@ -57,7 +58,7 @@ import { classifyFanslyHost } from "../src/egress/hosts.ts";
 import { Egress } from "../src/egress/proxy.ts";
 import { SiteSession } from "../src/hub-requests/session.ts";
 import { SiteRequests } from "../src/intercept/site.ts";
-import { LoginDesk, type LoginOutcome } from "../src/login/desk.ts";
+import { LoginDesk, type LoginGuard, type LoginOutcome } from "../src/login/desk.ts";
 import type { RequestLine } from "../src/logs/journal.ts";
 import type { OperatorMode } from "../src/policy/operations.ts";
 import type { SiteAdmit, SiteDone } from "../src/rpc/protocol.ts";
@@ -483,6 +484,8 @@ async function world(): Promise<number> {
 const sessionAtStart = session.fingerprint;
 const desk = new LoginDesk({ cdp, tab: () => tab, world, session: () => session.fingerprint, timings: { settleMs: 8000, pollMs: 100 } });
 desk.begin();
+/** The call may act (the operator's guard: its manual login lasts). */
+const acting: LoginGuard = () => null;
 
 async function load(url: string): Promise<void> {
   const navigated = await cdp.send<{ errorText?: string }>("Page.navigate", { url }, tab);
@@ -505,7 +508,7 @@ const screenOf = (outcome: LoginOutcome) => (outcome.kind === "state" ? `${outco
 await load("https://fansly.com/?captcha=1");
 const typedBefore = cdp.sent.filter((method) => method === "Input.insertText" || method === "Input.dispatchMouseEvent").length;
 const captchaState = await desk.state();
-const captchaSubmit = await desk.submit(LOGIN, PASSWORD);
+const captchaSubmit = await desk.submit(LOGIN, PASSWORD, acting);
 check("a captcha frame: the screen is unknown and nothing is typed or pressed", screenOf(captchaState).startsWith("unknown") && screenOf(captchaSubmit) === "refused: screen_changed" && cdp.sent.filter((method) => method === "Input.insertText" || method === "Input.dispatchMouseEvent").length === typedBefore, { state: screenOf(captchaState), submit: screenOf(captchaSubmit) });
 
 // 2. The login screen, its screenshot.
@@ -519,20 +522,33 @@ check("the screenshot is a JPEG of the page", jpeg.length > 1000 && jpeg[0] === 
 // 3. In the automation the map closes the login: nothing leaves.
 mode = "automation";
 const arrivedBefore = arrivals.filter((arrival) => arrival.path === "/api/v1/login").length;
-const automationSubmit = await desk.submit(LOGIN, WRONG);
+const automationSubmit = await desk.submit(LOGIN, WRONG, acting);
 await sleep(500);
 check("in the automation the site's login is closed: nothing reaches the server", arrivals.filter((arrival) => arrival.path === "/api/v1/login").length === arrivedBefore && !asks.some((ask) => ask.path === "/api/v1/login"), { submit: screenOf(automationSubmit) });
 mode = "manual_login";
+
+// 3b. A call that may act no more after its first field (Astra's review of
+// PR 15, item 3): nothing more is typed, nothing is pressed, nothing reaches
+// the server.
+const inputs = () => cdp.sent.filter((method) => method === "Input.insertText").length;
+const presses = () => cdp.sent.filter((method) => method === "Input.dispatchMouseEvent").length;
+const loginArrivals = () => arrivals.filter((arrival) => arrival.path === "/api/v1/login").length;
+await load("https://fansly.com/");
+const cancelBefore = { inputs: inputs(), presses: presses(), logins: loginArrivals() };
+const cancelled: LoginGuard = () => (inputs() > cancelBefore.inputs ? "the manual login is over" : null);
+const cancelSubmit = await desk.submit(LOGIN, WRONG, cancelled);
+await sleep(300);
+check("a call that may act no more after its first field: nothing more typed, nothing pressed", screenOf(cancelSubmit) === "refused: not_manual_login" && inputs() === cancelBefore.inputs + 1 && presses() === cancelBefore.presses && loginArrivals() === cancelBefore.logins, { submit: screenOf(cancelSubmit), inputs: inputs() - cancelBefore.inputs, mouse: presses() - cancelBefore.presses });
 await load("https://fansly.com/");
 
 // 4. A wrong password: the site's own error, the fields to try again.
-const wrongState = await desk.submit(LOGIN, WRONG);
+const wrongState = await desk.submit(LOGIN, WRONG, acting);
 check("a wrong password: the site's error is shown with the login's fields", screenOf(wrongState) === 'error [login,password] "Invalid username or password"', screenOf(wrongState));
 
 // 5. The login and the password, then the code: the site's own requests carry them.
-const afterLogin = await desk.submit(LOGIN, PASSWORD);
+const afterLogin = await desk.submit(LOGIN, PASSWORD, acting);
 check("the login: the code screen follows", screenOf(afterLogin) === "code [code]", screenOf(afterLogin));
-const afterCode = await desk.code(CODE);
+const afterCode = await desk.code(CODE, acting);
 await sleep(500);
 check("the code: the success (the site's code accepted, no form)", screenOf(afterCode) === "success []", { screen: screenOf(afterCode), sessionSeen: session.fingerprint !== sessionAtStart });
 // The site's read after it, its interface's, passes in the manual login

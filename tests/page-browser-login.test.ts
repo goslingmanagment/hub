@@ -202,8 +202,13 @@ class DeskChrome implements CdpPort {
   readonly commands: Array<{ method: string; params: Record<string, unknown> }> = [];
   screen: "login" | "code" | "other" | "none" = "login";
   hit = true;
+  /** The isolated world of the document now (a new document, a new one). */
+  world = 7;
+  /** What the page does when a command reaches it (before it answers). */
+  react: ((method: string, params: Record<string, unknown>) => void) | null = null;
   send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     this.commands.push({ method, params });
+    this.react?.(method, params);
     const value = ((): unknown => {
       switch (method) {
         case "Runtime.evaluate": {
@@ -235,13 +240,16 @@ class DeskChrome implements CdpPort {
 }
 
 function desk(chrome: DeskChrome): LoginDesk {
-  return new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(7), session: () => null, timings: { settleMs: 50, pollMs: 10 }, log: () => undefined });
+  return new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(chrome.world), session: () => null, timings: { settleMs: 50, pollMs: 10 }, log: () => undefined });
 }
+
+/** A call that may act throughout. */
+const acting = () => null;
 
 describe("the desk (plan §4.8: input as a person's)", () => {
   it("focuses, replaces, inserts, and presses at the button's centre — reading the screen before each step", async () => {
     const chrome = new DeskChrome();
-    const answer = await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER);
+    const answer = await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER, acting);
     expect(answer).toMatchObject({ kind: "state", screen: "login", screenVersion: SCREEN_VERSION });
     expect(chrome.of("Input.insertText").map((command) => command.params.text)).toEqual([LOGIN_MARKER, PASSWORD_MARKER]);
     expect(chrome.of("DOM.focus")).toHaveLength(2);
@@ -258,23 +266,78 @@ describe("the desk (plan §4.8: input as a person's)", () => {
   it("presses nothing on a screen that is not the form's, or when something lies over the button", async () => {
     const other = new DeskChrome();
     other.screen = "other";
-    expect(await desk(other).submit(LOGIN_MARKER, PASSWORD_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    expect(await desk(other).submit(LOGIN_MARKER, PASSWORD_MARKER, acting)).toEqual({ kind: "refused", reason: "screen_changed" });
     expect(other.of("Input.insertText")).toHaveLength(0);
     expect(other.of("Input.dispatchMouseEvent")).toHaveLength(0);
     const code = new DeskChrome();
-    expect(await desk(code).code(CODE_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    expect(await desk(code).code(CODE_MARKER, acting)).toEqual({ kind: "refused", reason: "screen_changed" });
     const covered = new DeskChrome();
     covered.hit = false;
-    expect(await desk(covered).submit(LOGIN_MARKER, PASSWORD_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    expect(await desk(covered).submit(LOGIN_MARKER, PASSWORD_MARKER, acting)).toEqual({ kind: "refused", reason: "screen_changed" });
     expect(covered.of("Input.dispatchMouseEvent")).toHaveLength(0);
   });
 
   it("one step at a time", async () => {
     const chrome = new DeskChrome();
     const d = desk(chrome);
-    const [first, second] = await Promise.all([d.submit(LOGIN_MARKER, PASSWORD_MARKER), d.submit(LOGIN_MARKER, PASSWORD_MARKER)]);
+    const [first, second] = await Promise.all([d.submit(LOGIN_MARKER, PASSWORD_MARKER, acting), d.submit(LOGIN_MARKER, PASSWORD_MARKER, acting)]);
     expect(first.kind).toBe("state");
     expect(second).toEqual({ kind: "refused", reason: "busy" });
+  });
+
+  // Astra's review of PR 15, item 3: the guard is read before every input
+  // step, not only when the call was taken.
+  it("a call that may act no more stops at its next input step: nothing more is typed or pressed", async () => {
+    const inputs = (chrome: DeskChrome) => chrome.of("Input.insertText").map((command) => command.params.text);
+    const mouse = (chrome: DeskChrome) => chrome.of("Input.dispatchMouseEvent").map((command) => command.params.type);
+    const cases: Array<{ over: (method: string, params: Record<string, unknown>, chrome: DeskChrome) => boolean; typed: unknown[]; pressed: unknown[]; selects: number }> = [
+      // The login went in; the password's focus is not given.
+      { over: (method) => method === "Input.insertText", typed: [LOGIN_MARKER], pressed: [], selects: 1 },
+      // The password field focused: its content is not even selected.
+      { over: (method, _params, chrome) => method === "DOM.focus" && chrome.of("DOM.focus").length === 2, typed: [LOGIN_MARKER], pressed: [], selects: 1 },
+      // Both typed; the pointer is not moved onto the button.
+      { over: (method, _params, chrome) => method === "Input.insertText" && chrome.of("Input.insertText").length === 2, typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: [], selects: 2 },
+      // The pointer on the button: no press.
+      { over: (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mouseMoved", typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: ["mouseMoved"], selects: 2 },
+      // Pressed: not let go on the button, so no click comes of it.
+      { over: (method, params) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed", typed: [LOGIN_MARKER, PASSWORD_MARKER], pressed: ["mouseMoved", "mousePressed"], selects: 2 },
+    ];
+    for (const [n, c] of cases.entries()) {
+      const chrome = new DeskChrome();
+      let over: string | null = null;
+      chrome.react = (method, params) => {
+        if (c.over(method, params, chrome)) over = "the manual login is over";
+      };
+      const answer = await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
+      expect(answer, `case ${n}`).toEqual({ kind: "refused", reason: "not_manual_login" });
+      expect(inputs(chrome), `case ${n}`).toEqual(c.typed);
+      expect(mouse(chrome), `case ${n}`).toEqual(c.pressed);
+      expect(chrome.of("Runtime.callFunctionOn").filter((command) => String(command.params.functionDeclaration).includes("select()")), `case ${n}`).toHaveLength(c.selects);
+      // What it found is let go all the same.
+      expect(chrome.of("Runtime.releaseObjectGroup"), `case ${n}`).not.toHaveLength(0);
+    }
+    // A call that may not act from the start does nothing at all.
+    const idle = new DeskChrome();
+    expect(await desk(idle).code(CODE_MARKER, () => "no engine link")).toEqual({ kind: "refused", reason: "not_manual_login" });
+    expect(idle.commands.filter((command) => command.method.startsWith("Input.") || command.method === "DOM.focus")).toHaveLength(0);
+  });
+
+  it("a call that may act no more after its press waits for no screen, and its drain is over with it", async () => {
+    const chrome = new DeskChrome();
+    let over: string | null = null;
+    chrome.react = (method, params) => {
+      if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") over = "a new owner of the page";
+    };
+    // The screen stays the login form: an acting call would wait 10 s for the next one.
+    const d = new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(chrome.world), session: () => null, timings: { settleMs: 10_000, pollMs: 10 }, log: () => undefined });
+    const at = Date.now();
+    const answer = d.submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
+    await d.drain();
+    expect(Date.now() - at).toBeLessThan(2_000);
+    expect(await answer).toMatchObject({ kind: "state", screen: "login" });
+    expect(chrome.of("Input.dispatchMouseEvent").map((command) => command.params.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    // Nothing under way: the drain is over at once.
+    await d.drain();
   });
 });
 
@@ -657,6 +720,65 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(s.engine.of("wsAdmit")).toHaveLength(before);
   });
+
+  // Astra's review of PR 15, item 3: a step taken in one owner's manual
+  // login does not go on in another's, nor after it.
+  it("a step under way stops at its next input step when its owner, its manual login or its engine link goes — and what comes next waits for it", async () => {
+    for (const what of ["a new owner", "the automation back", "the engine's link lost"] as const) {
+      const s = await setUp();
+      await started(s);
+      expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+      await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+      s.site.setTab(s.operator.control.workTab!.sessionId);
+      const api = await Caller.open(s.rpcPort);
+      cleanups.push(() => api.close());
+      // The password field's focus is held at the page: the step stands there.
+      const focus = s.chrome.handlers.get("DOM.focus")!;
+      let focuses = 0;
+      let release: () => void = () => undefined;
+      let reached = false;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      s.chrome.handlers.set("DOM.focus", async (cmd) => {
+        if (++focuses === 2) {
+          reached = true;
+          await held;
+        }
+        return focus(cmd);
+      });
+      const submitting = api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER }, API_TOKEN, 20_000);
+      await until(() => reached, 5000, "the password's focus at the page");
+      let next: Promise<unknown>;
+      if (what === "a new owner") {
+        const newer = new FakeEngine();
+        newer.generation = 2;
+        await newer.connect(s.rpcPort);
+        cleanups.push(() => newer.close());
+        newer.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+        next = newer.waitFor("quiesced", () => true, 15_000);
+      } else if (what === "the automation back") {
+        // Another tab of the dashboard finished the login: the engine's setMode.
+        next = command(s.engine, { kind: "setMode", mode: "automation" });
+      } else {
+        s.engine.close();
+        await until(() => !s.operator.rpc.linkUp, 5000, "the link lost");
+        next = Promise.resolve();
+      }
+      // The hand-over's quiesced and the automation's answer wait for the step.
+      let settled = false;
+      void next.then(() => (settled = true));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (what !== "the engine's link lost") expect(settled, what).toBe(false);
+      release();
+      expect(await submitting, what).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
+      await next;
+      // The login went in before; the password never, and nothing was pressed.
+      expect(s.site.inserted, what).toEqual([LOGIN_MARKER]);
+      expect(s.site.presses, what).toBe(0);
+      expect(s.chrome.sent("Input.dispatchMouseEvent"), what).toHaveLength(0);
+      expect(s.site.posts, what).toHaveLength(0);
+      for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+    }
+  }, 60_000);
 
   it("the login operations are the manual login's only: in the automation the map closes them", async () => {
     const s = await setUp();
