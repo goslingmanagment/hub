@@ -691,12 +691,19 @@ export async function createLiveSyncPage(
     by: string;
     identityAccountId: string;
     identityCheckedAt: Date;
-    credentialsGeneration: string;
+    /** The digest of the credentials the onboarding's check proved, trusted
+     *  as they are; null — a page born on its own browser (Project Browser
+     *  PR 16): nothing ordinary goes before the engine's own account check
+     *  through the browser under the page's hello (checks-only, G2). */
+    credentialsGeneration: string | null;
+    /** The page's sender from its birth (0277): `browser` for a page born on
+     *  its own browser (PR 16). Default `node`. */
+    transport?: SyncPageTransport;
   },
 ): Promise<void> {
   if (input.by.trim().length === 0) throw new Error("createLiveSyncPage needs who onboards the page (by)");
   if (input.identityAccountId.length === 0) throw new Error("An identity account id is non-empty");
-  if (!/^[0-9a-f]{64}$/.test(input.credentialsGeneration)) {
+  if (input.credentialsGeneration !== null && !/^[0-9a-f]{64}$/.test(input.credentialsGeneration)) {
     throw new Error("A credentials generation is a sha256 hex digest");
   }
   const found = await tx.execute<{
@@ -729,10 +736,11 @@ export async function createLiveSyncPage(
   const row = await tx.execute(sql`
     insert into sync_pages (
       page_id, mode, mode_changed_at, mode_changed_by, legacy_imported_at, requests_enabled_at,
-      identity_account_id, identity_checked_at, credentials_generation
+      identity_account_id, identity_checked_at, credentials_generation, transport
     ) values (
       ${input.pageId}, 'live', clock_timestamp(), ${input.by}, clock_timestamp(), clock_timestamp(),
-      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration}
+      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration},
+      ${input.transport ?? "node"}
     )
     on conflict (page_id) do nothing
   `);

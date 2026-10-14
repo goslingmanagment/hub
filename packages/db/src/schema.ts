@@ -428,6 +428,20 @@ export const pageBrowsers = pgTable("page_browsers", {
   encryptedApiToken: text("encrypted_api_token").notNull(),
   encryptedVncPassword: text("encrypted_vnc_password").notNull(),
   keyVersion: integer("key_version").notNull(),
+  // 0281 (Project Browser PR 16): the onboarding of a profile no page has yet
+  // (`repositories/page-browser-onboarding.ts`).
+  onboarding: text("onboarding").$type<"off" | "login" | "open" | "closing">().notNull().default("off"),
+  onboardingChangedAt: timestamp("onboarding_changed_at", { withTimezone: true }),
+  onboardingChangedBy: text("onboarding_changed_by"),
+  socksEndpoint: text("socks_endpoint"),
+  onboardingProxyUrl: text("onboarding_proxy_url"),
+  onboardingProxyAuth: text("onboarding_proxy_auth"),
+  onboardingProxyKeyVersion: integer("onboarding_proxy_key_version"),
+  linkGeneration: bigint("link_generation", { mode: "bigint" }).notNull().default(sql`0`),
+  identityRequestId: uuid("identity_request_id"),
+  identityRequestSource: text("identity_request_source").$type<"onboarding" | "credentials_verify">(),
+  identityRequestedAt: timestamp("identity_requested_at", { withTimezone: true }),
+  identityResult: jsonbSafe("identity_result").$type<Record<string, unknown>>(),
   // 0276 (Project Browser PR 13): where the engine's intake of the operator's
   // buffer stands (`repositories/page-browser-intake.ts`).
   eventsBufferId: uuid("events_buffer_id"),
@@ -935,6 +949,10 @@ export const fanslySendLog = pgTable(
     httpStatus: integer("http_status"),
     // 0227: the capture's lease end; held past it, the page was closed.
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    // 0281 (Project Browser PR 16): a send through the browser of a profile
+    // no page has yet, and the attempt id its operator knows it by.
+    browserProfileId: uuid("browser_profile_id"),
+    browserAttemptId: bigint("browser_attempt_id", { mode: "number" }),
   },
   (table) => ({
     guardTokenUidx: uniqueIndex("fansly_send_log_guard_token_uidx").on(table.guardToken),

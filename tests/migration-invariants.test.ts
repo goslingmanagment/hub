@@ -564,4 +564,28 @@ describe("database migration invariants", () => {
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0279_sync_pages_manual_login.sql"');
   });
+
+  it("keeps a new page's onboarding through its browser (Project Browser PR 16) brief, defaulted, sealed and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const onboarding = statementsOf(await readFile("packages/db/migrations/0281_page_browser_onboarding.sql", "utf8"));
+    expect(onboarding).toContain("set local lock_timeout = '5s';");
+    // Constant defaults: catalog only; every existing profile stays off.
+    expect(onboarding).toContain("add column if not exists onboarding text not null default 'off'");
+    expect(onboarding).toContain("add column if not exists link_generation bigint not null default 0");
+    for (const column of ["onboarding_changed_at timestamptz", "onboarding_changed_by text", "socks_endpoint text", "onboarding_proxy_url text",
+      "onboarding_proxy_auth text", "onboarding_proxy_key_version integer", "identity_request_id uuid", "identity_request_source text",
+      "identity_requested_at timestamptz", "identity_result jsonb", "browser_profile_id uuid", "browser_attempt_id bigint"]) {
+      expect(onboarding).toContain(`add column if not exists ${column}`);
+      expect(onboarding.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
+    }
+    // A bound profile is no onboarding's; nothing writes a row.
+    expect(onboarding).toContain("check (page_id is null or onboarding = 'off')");
+    expect(onboarding).not.toMatch(/^\s*(update|insert|delete)\b/im);
+    // The read role sees every new column but the proxy's sealed auth.
+    const grant = /grant select \(([^)]*)\)\s+on page_browsers to read_only;/.exec(onboarding)?.[1] ?? "";
+    expect(grant).toContain("onboarding_proxy_url");
+    expect(grant).not.toContain("onboarding_proxy_auth");
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0281_page_browser_onboarding.sql"');
+  });
 });

@@ -16,6 +16,9 @@ Usage:
   scripts/deploy-page-browser.sh build    <user@host>
   scripts/deploy-page-browser.sh up       <user@host> --page <name> --image <tag> [--socks <host:port>]
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
+  scripts/deploy-page-browser.sh add-profile <user@host> --page <name> --image <tag> --socks <host:port>
+                                          --env <json> [--existing] [--hub-dir <dir>]
+  scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--hub-dir <dir>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
   scripts/deploy-page-browser.sh to-node  <user@host> --page <name> [--prepare] [--hub-dir <dir>]
@@ -45,6 +48,26 @@ Usage:
             update timer builds the next Chrome on the same commit.
   up        Creates or recreates a page's container; the image it replaces
             stays the page's previous one.
+  add-profile
+            A new browser profile (Project Browser PR 16): a container with
+            a profile of its own, an empty buffer and its own secrets (the
+            engine's RPC token, the API's token, the KasmVNC password), then
+            its row in Hub (`sync browser-profile add` in the api container
+            under --hub-dir, default /opt/agency-hub; the secrets go on its
+            standard input, never in a command line), its page empty: the
+            owner connects the new page in the dashboard (its proxy — the one
+            given here — its exit IP, his login, the account check, the
+            page's creation). --env is the browser's environment by the
+            proxy's region, as `sync browser pin-ip --env` takes it
+            ({"timeZone":…,"languages":[…],"geolocation":{"latitude":…,
+            "longitude":…,"accuracyM":…}}): Chrome's zone and language come
+            from it. --existing: the page <name> exists in Hub and moves to
+            its browser — the profile is bound to it at once (plan §5, stage
+            4). If Hub refuses the profile, the container and its volumes go.
+  remove-profile
+            A profile no page has, given up: Hub forgets it first (refused
+            for a profile bound to a page), then its container, its files and
+            its two volumes are deleted on the server.
   rollback  Back to the page's previous image.
   down      Removes the container; the profile's volumes stay.
   to-node   Takes the page off its browser for good when its operator cannot
@@ -102,11 +125,15 @@ PAGE_ARGS=()
 PAGE_NAME=""
 TO_NODE_PREPARE=0
 HUB_DIR=/opt/agency-hub
+ENV_JSON=""
+EXISTING_PAGE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) SSH_ARGS+=(-i "$2"); shift 2 ;;
     --ssh-port) SSH_ARGS+=(-p "$2"); shift 2 ;;
     --prepare) TO_NODE_PREPARE=1; shift ;;
+    --existing) EXISTING_PAGE=1; shift ;;
+    --env) [[ $# -ge 2 ]] || fail "$1 needs a value"; ENV_JSON="$2"; shift 2 ;;
     --hub-dir) [[ $# -ge 2 ]] || fail "$1 needs a value"; HUB_DIR="$2"; shift 2 ;;
     --page) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_NAME="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --new-profile) PAGE_ARGS+=("$1"); shift ;;
@@ -271,8 +298,65 @@ chrome() {
   run_remote "set -euo pipefail; ${REMOTE_BASE}/page-browser-update.sh${quoted}"
 }
 
+# The Hub CLI in the api container, run from --hub-dir (the caller's line
+# goes there first): the command's arguments quoted one by one; what the
+# caller pipes in goes to its standard input.
+hub_cli_line() {
+  local quoted="" arg
+  for arg in "$@"; do quoted+=" $(printf '%q' "$arg")"; done
+  printf 'docker compose --env-file .env.production -f docker-compose.production.yml exec -T api node apps/runtime/dist/cli.js%s' "$quoted"
+}
+
+# A new profile (Project Browser PR 16): the container on the server, then
+# its row in Hub with its secrets on the CLI's standard input. If Hub does
+# not take it, the container and its volumes go: nothing half-made stays.
+add_profile() {
+  [[ -n "$PAGE_NAME" ]] || fail "add-profile needs --page <name>"
+  [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || fail "not a page name: $PAGE_NAME"
+  [[ -n "$ENV_JSON" ]] || fail "add-profile needs --env <json>: the browser's environment by the proxy's region"
+  local zone lang
+  # Chrome's zone and first language, from the environment (checked again,
+  # whole, by Hub).
+  zone="$(node -e 'const e = JSON.parse(process.argv[1]); if (typeof e.timeZone !== "string") process.exit(1); process.stdout.write(e.timeZone)' "$ENV_JSON")" \
+    || fail "--env: not a JSON object with a timeZone"
+  lang="$(node -e 'const e = JSON.parse(process.argv[1]); const l = Array.isArray(e.languages) ? e.languages[0] : null; if (typeof l !== "string") process.exit(1); process.stdout.write(l)' "$ENV_JSON")" \
+    || fail "--env: no languages"
+  local made profile socks
+  made="$(page_remote add-profile "${PAGE_ARGS[@]}" --tz "$zone" --lang "$lang")" || fail "the server did not make the profile's container"
+  printf '%s\n' "$made" | grep -v '^PB_' >&2 || true
+  profile="$(printf '%s\n' "$made" | sed -n 's/^PB_PROFILE_ID=//p' | tail -n 1)"
+  socks="$(printf '%s\n' "$made" | sed -n 's/^PB_SOCKS=//p' | tail -n 1)"
+  [[ "$profile" =~ ^[0-9a-f-]{36}$ && "$socks" =~ ^[0-9.]+:[0-9]+$ ]] || fail "the server did not name the new profile"
+  local cli=(sync browser-profile add --profile "$profile" --container "page-browser-${PAGE_NAME}" --socks "$socks" --env "$ENV_JSON" --secrets-stdin)
+  [[ "$EXISTING_PAGE" == "1" ]] && cli+=(--page "$PAGE_NAME") || cli+=(--new-page "$PAGE_NAME")
+  local secrets="${REMOTE_BASE}/pages/${PAGE_NAME}/secrets"
+  if ! run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); cat $(printf '%q' "$secrets/rpc_token") $(printf '%q' "$secrets/api_token") $(printf '%q' "$secrets/vnc_password") | $(hub_cli_line "${cli[@]}")"; then
+    log "Hub did not take profile ${profile}: its container and volumes go"
+    page_remote remove-profile --page "$PAGE_NAME" || log "warning: page-browser-${PAGE_NAME} could not be removed: run remove-profile again"
+    fail "add-profile failed; nothing of profile ${profile} is kept"
+  fi
+  log "profile ${profile} of ${PAGE_NAME}: container page-browser-${PAGE_NAME} up, registered in Hub$([[ "$EXISTING_PAGE" == "1" ]] && echo " and bound to ${PAGE_NAME}" || echo "; connect the page in the dashboard (Настройки → Страницы)")"
+}
+
+# A profile no page has, given up: Hub first (it refuses a bound one), then
+# the server's container, files and volumes.
+remove_profile() {
+  [[ -n "$PAGE_NAME" ]] || fail "remove-profile needs --page <name>"
+  [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || fail "not a page name: $PAGE_NAME"
+  local profile
+  profile="$(run_remote "set -euo pipefail; sed -n 's/^PB_PROFILE_ID=//p' $(printf '%q' "${REMOTE_BASE}/pages/${PAGE_NAME}/page.env") | tail -n 1")" \
+    || fail "no page ${PAGE_NAME} on the server"
+  [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "page ${PAGE_NAME} names no profile on the server"
+  run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile")" \
+    || fail "Hub did not forget profile ${profile} (bound to a page? see sync browser-profile list): nothing removed"
+  page_remote remove-profile --page "$PAGE_NAME"
+  log "profile ${profile} of ${PAGE_NAME} removed: Hub, container, files, volumes"
+}
+
 case "$COMMAND" in
   host) host ;;
+  add-profile) add_profile ;;
+  remove-profile) remove_profile ;;
   build) build ;;
   to-node) to_node ;;
   chrome) chrome ;;
