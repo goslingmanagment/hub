@@ -1382,13 +1382,13 @@ export class SiteRequests {
 
   /** The paths' resolution of a pause, and the request's end for the page's
    *  slot (egress/gate.ts): an answer resolved at the response stage (a
-   *  preflight handed on by fulfill has no other end), or a release whose
-   *  pause was already gone (it never left). An unanswered resolution says
-   *  nothing: the request may still be Chrome's. */
+   *  preflight handed on by fulfill has no other end) — once Chrome has
+   *  answered the resolution, never as it is decided. Unanswered, or
+   *  refused (Chrome no longer knows the pause), it says nothing: the
+   *  request stays pending until Chrome's own end or the slot's bound. */
   async #resolve(request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>): Promise<Resolution> {
     const resolution = await this.#deps.resolve(request, decision);
-    const atResponse = request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill") && resolution !== "unanswered";
-    if (atResponse || (decision.action === "continue" && resolution === "refused")) this.#deps.gate.requestEnded(request.networkId);
+    if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.#deps.gate.requestEnded(request.networkId);
     return resolution;
   }
 

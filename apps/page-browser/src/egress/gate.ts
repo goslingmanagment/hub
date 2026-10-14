@@ -44,9 +44,10 @@
 //   per page). The page's slot is the operation's from its first release
 //   until its path has ended it and every request it released has its end
 //   confirmed: Chrome's loadingFinished or loadingFailed for that very
-//   request, or its answer resolved at the response stage (a preflight
-//   handed on by fulfill has no other end in Chrome 155) — or until Chrome
-//   is gone (`browserGone`). Nothing else frees it: not a window's close, a
+//   request, or its answer resolved at the response stage with Chrome's
+//   answer to that resolution (a preflight handed on by fulfill has no other
+//   end in Chrome 155; decided is not done: an unanswered or refused
+//   resolution keeps it pending) — or until Chrome is gone (`browserGone`). Nothing else frees it: not a window's close, a
 //   preflight's end while its request is still to come, a sibling's cancel,
 //   the operation's own end, the exit's close, a reset. Another operation's
 //   window is refused while it is owned: Chrome may still hold a released
@@ -323,7 +324,7 @@ export class ApiGate {
 
   /** A request released under the slot has its end confirmed: Chrome's
    *  loadingFinished or loadingFailed for it, or its answer resolved at the
-   *  response stage, or its pause gone before its release. */
+   *  response stage and that resolution answered by Chrome. */
   requestEnded(request: string | null): void {
     const slot = this.#slot;
     if (slot === null || request === null || !slot.pending.delete(request)) return;

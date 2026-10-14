@@ -375,12 +375,14 @@ export class Operator {
     this.envCheck = new EnvCheck(this.cdp, this.control);
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
-      onDecided: (request, decision) => {
-        // An answer resolved at the response stage ends its request — the
-        // page's slot learns it whoever decided (a path, or a decision for
-        // an operation that already ended).
-        if (request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.egress.gate.requestEnded(request.networkId);
-        this.#journalRequest(request, decision);
+      onDecided: (request, decision) => this.#journalRequest(request, decision),
+      // An answer resolved at the response stage — and confirmed by Chrome,
+      // never merely decided — ends its request for the page's slot,
+      // whoever decided it (a path, or a decision for an operation that
+      // already ended). Unanswered or refused, the request stays pending
+      // and the slot's bound runs.
+      onResolved: (request, decision, resolution) => {
+        if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.egress.gate.requestEnded(request.networkId);
       },
       // With CDP or the holder link down, their own loss handles it; with
       // both up, Chrome is not answering for its paused requests.

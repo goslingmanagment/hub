@@ -1601,6 +1601,30 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(s.operator.egress.gate.slotOwner).toBeNull();
   });
 
+  it("a request's end for the page's slot is Chrome's answer to its resolution, never the decision: while the fail of an ended operation's answer is unanswered, the slot stays (Astra's round 2)", async () => {
+    let attempt = 9650;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // Released, its records written; its answer comes 800 ms later.
+    s.model.siteAnswerDelayMs = 800;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => flying.proxyStatus === 200 && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    // Its operation ends (the engine's closeExit); its answer is still to come.
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    expect(s.operator.site.live).toBe(0);
+    // Chrome does not answer the fail of that answer (yet).
+    let answer: (() => void) | null = null;
+    s.chrome.handlers.set("Fetch.failRequest", () => new Promise((resolve) => (answer = () => resolve({}))));
+    await until(() => s.chrome.commands.some((sent) => sent.method === "Fetch.failRequest" && sent.params.requestId === flying.interceptionId), 3000, "the answer's fail sent");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Decided, not done: the slot is still the operation's.
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    expect(s.operator.egress.gate.slotPending).toHaveLength(1);
+    // Chrome answers it: the request is over, and the slot free.
+    answer!();
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the slot free once answered");
+  });
+
   it("the page's slot past its bound with a released request's end unknown: the page stops (request_unended), Chrome goes, and only then is the slot free", async () => {
     let attempt = 9700;
     const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
