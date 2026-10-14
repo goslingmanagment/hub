@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { REPO_ROOT, TO, writeExecutable } from "./helpers/page-browser-update.ts";
+import { FROM, makeHost, REPO_ROOT, TO, writeExecutable, type Host } from "./helpers/page-browser-update.ts";
 
 // The host's side of a Chrome update (Project Browser PR 18):
 // - deploy-page-browser.sh installs the update and its timer (not enabled:
@@ -100,3 +100,40 @@ describe("the timer: it looks, fetches, builds and proposes — never updates a 
     expect(check).not.toMatch(/PAGE_SH|hub_lever|advance|cmd_update|cmd_rollout/);
   });
 });
+
+describe("the stand check touches only what its own run made (Astra's review of PR 18, 5)", () => {
+  let stand: Host | undefined;
+  afterEach(() => {
+    stand?.cleanup();
+    stand = undefined;
+  });
+
+  it("an early failure (a --profile that is not there) removes nothing — not a kept or a parallel stand's container", () => {
+    stand = makeHost((state) => {
+      state.containers["page-browser-pr18-stand"] = { image: FROM, running: true, profile: "kept" };
+      state.containers["page-browser-pr18-abcdef"] = { image: FROM, running: true, profile: "parallel" };
+    });
+    const result = spawnSync("bash", [path.join(REPO_ROOT, "apps/page-browser/stand/chrome-update.sh"), "--from", FROM, "--to", TO, "--profile", "11111111-2222-4333-8444-555555555555"], {
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, PATH: `${stand.bin}:${process.env.PATH ?? ""}`, FAKE_SCRIPT: path.join(REPO_ROOT, "tests/helpers/page-browser-update-fake.mjs"), FAKE_STATE: stand.statePath, FAKE_LOG: stand.logPath },
+    });
+    expect(result.status).not.toBe(0);
+    const calls = readFileSync(stand.logPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { tool: string; args: string[] });
+    const removals = calls.filter((call) => call.tool === "docker" && (call.args[0] === "rm" || call.args.includes("rm") || call.args.includes("down")));
+    expect(removals).toEqual([]);
+    expect(Object.keys(stand.state().containers)).toEqual(expect.arrayContaining(["page-browser-pr18-stand", "page-browser-pr18-abcdef"]));
+  });
+
+  it("every name is the run's own, and its cleanup is bound to what it made", () => {
+    const script = read("apps/page-browser/stand/chrome-update.sh");
+    expect(script).toContain('PAGE="pr18-$RUN_ID"');
+    expect(script).toContain('BAD="hub-page-browser:pr18-$RUN_ID-wrong-extension"');
+    const cleanup = script.slice(script.indexOf("cleanup() {"), script.indexOf("\n}\n", script.indexOf("cleanup() {")));
+    expect(cleanup).toContain('if ((MADE_PAGE == 1)); then docker rm -f "$CONTAINER"');
+    expect(cleanup).toContain('if ((MADE_IMAGE == 1)); then docker image rm "$BAD"');
+    expect(cleanup).toContain('if ((OWN_PROFILE == 1)); then docker volume rm');
+    expect(script.indexOf("MADE_PAGE=1")).toBeLessThan(script.indexOf('bash "$BASE/page.sh" up'));
+  });
+});
+

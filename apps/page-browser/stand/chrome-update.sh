@@ -10,9 +10,10 @@
 #       [--profile <uuid>] [--apparmor <profile>] [--keep]
 #
 # <from> and <to>: two hub-page-browser images, <to>'s Chrome newer.
-#  1. A page `pr18-stand` (Compose project page-browser-pr18-stand) on
-#     <from>, with its own base directory (page.sh, the update script and
-#     their files, a temporary one) and the profile:
+#  1. A page of this run's own (pr18-<run>, Compose project
+#     page-browser-pr18-<run>) on <from>, with its own base directory
+#     (page.sh, the update script and their files, a temporary one) and the
+#     profile:
 #     - none given: a new profile, made live — its Chrome run once, a cookie
 #       of .fansly.com stored (`pr18=before`) and a mark file;
 #     - --profile <uuid>: the volumes pb-profile-<uuid>, pb-buffer-<uuid>
@@ -30,8 +31,10 @@
 #     before, the profile Chrome's user's alone (700).
 #  5. An image that fails the profile check (<to> with another extension ID
 #     in its files): the update rolls itself back; the same checks as 4.
-# Everything goes at the end — the page, its volumes (not a --profile's),
-# the derived image, the networks if this made them; --keep leaves it.
+# What this run made goes at the end, and nothing else — its page, its
+# volumes (never a --profile's), its derived image, the networks if it made
+# them; --keep leaves it. Every name is this run's own: runs side by side,
+# or one --kept, are never touched.
 #
 # Nothing reaches any network: the exit of the page stays closed (no engine
 # opens it), its SOCKS5 is a documentation address (192.0.2.10), the host's
@@ -66,11 +69,13 @@ done
 [[ "$FROM" == hub-page-browser:* && "$TO" == hub-page-browser:* ]] || { echo "--from and --to: hub-page-browser images" >&2; exit 2; }
 docker image inspect "$FROM" "$TO" >/dev/null || exit 2
 
-PAGE=pr18-stand
+RUN_ID="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+PAGE="pr18-$RUN_ID"
 CONTAINER="page-browser-$PAGE"
-BAD="hub-page-browser:pr18-stand-wrong-extension"
+BAD="hub-page-browser:pr18-$RUN_ID-wrong-extension"
 BASE="$(mktemp -d "${TMPDIR:-/tmp}/pb-chrome-update.XXXXXX")"
-OWN_PROFILE=0 MADE_NETWORKS=() FAILED=0
+# What this run made, as it makes it: cleanup removes these and nothing else.
+OWN_PROFILE=0 MADE_PAGE=0 MADE_IMAGE=0 MADE_NETWORKS=() FAILED=0
 log() { printf '[chrome-update] %s\n' "$*" >&2; }
 check() {
   if [[ "$2" == "$3" ]]; then log "PASS $1 ($2)"; else log "FAIL $1: $2, expected $3"; FAILED=1; fi
@@ -81,10 +86,10 @@ cleanup() {
     log "kept: $CONTAINER, its volumes, $BASE"
     return
   fi
-  docker compose -p "page-browser-$PAGE" -f "$BASE/docker-compose.page-browser.yml" --env-file "$BASE/pages/$PAGE/page.env" down >/dev/null 2>&1 || true
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  # The container's name is this run's alone.
+  if ((MADE_PAGE == 1)); then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
   if ((OWN_PROFILE == 1)); then docker volume rm "pb-profile-$PROFILE" "pb-buffer-$PROFILE" >/dev/null 2>&1 || true; fi
-  docker image rm "$BAD" >/dev/null 2>&1 || true
+  if ((MADE_IMAGE == 1)); then docker image rm "$BAD" >/dev/null 2>&1 || true; fi
   local network
   for network in "${MADE_NETWORKS[@]+"${MADE_NETWORKS[@]}"}"; do docker network rm "$network" >/dev/null 2>&1 || true; done
   rm -rf "$BASE"
@@ -156,6 +161,7 @@ on_from() {
 }
 
 # 1. The page on <from>, its profile live.
+MADE_PAGE=1
 bash "$BASE/page.sh" up --page "$PAGE" --image "$FROM" --profile "$PROFILE" --socks 192.0.2.10:1080 >&2
 if ((OWN_PROFILE == 1)); then
   cookies set pr18 before >/dev/null
@@ -186,6 +192,7 @@ check "rollback: the update's end" "$(sed -n 's/^STEP=//p' "$BASE/update/pages/$
 on_from rollback
 
 # 5. A Chrome that fails its check rolls itself back.
+MADE_IMAGE=1
 printf 'FROM %s\nRUN echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > /opt/page-browser/extension/dist/id\n' "$TO" | docker build -q -t "$BAD" - >/dev/null
 if update --page "$PAGE" --image "$BAD"; then check "a failing image: the update" "done" "rolled back"; fi
 check "a failing image: the update's end" "$(sed -n 's/^STEP=//p' "$BASE/update/pages/$PAGE/state")" "rolled_back"
