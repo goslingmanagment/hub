@@ -50,6 +50,13 @@
 --                           the session's fingerprint, the observation it was
 --                           journaled as — or why there is none
 --
+-- page_browser_forgotten_profiles (new): the profiles Hub forgot (`sync
+--   browser-profile remove`) or said it never had (`--absent-ok`, the deploy
+--   script's clean-up): never registered again — an add whose answer was
+--   lost and that would commit later is refused, so Hub's «absent» is final
+--   (Astra's review of PR 16, round 2). A registration and a forget of one
+--   profile id serialize on a transaction advisory lock of that id.
+--
 -- fansly_send_log:
 --   browser_profile_id, browser_attempt_id
 --                           a send through the browser of a profile no page
@@ -130,6 +137,16 @@ comment on column page_browsers.onboarding_generation is
 comment on column page_browsers.identity_result is
   'Project Browser (0281): the engine''s answer to identity_request_id — the account the browser''s live session belongs to, read by one GET /account/me through the browser and journaled in observations — or why there is none.';
 
+create table if not exists page_browser_forgotten_profiles (
+  profile_id uuid primary key,
+  forgotten_at timestamptz not null default now(),
+  forgotten_by text not null,
+  was_registered boolean not null
+);
+
+comment on table page_browser_forgotten_profiles is
+  'Project Browser (0281): page browser profiles Hub forgot or said it never had — never registered again (a late add is refused).';
+
 alter table fansly_send_log
   add column if not exists browser_profile_id uuid,
   add column if not exists browser_attempt_id bigint;
@@ -147,5 +164,6 @@ begin
       onboarding_proxy_key_version, link_generation, onboarding_generation, identity_request_id, identity_request_source, identity_requested_at,
       identity_result)
       on page_browsers to read_only;
+    grant select on page_browser_forgotten_profiles to read_only;
   end if;
 end $$;

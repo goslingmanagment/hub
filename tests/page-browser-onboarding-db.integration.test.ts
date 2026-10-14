@@ -25,9 +25,10 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 
-import { removeBrowserProfile } from "../apps/runtime/src/sync/browser-profile-cli.ts";
+import { buildSyncBrowserProfileCommandGroup, removeBrowserProfile } from "../apps/runtime/src/sync/browser-profile-cli.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { bindProvenProfile, proveOnboardingAccount, type OnboardingProof } from "./helpers/page-browser-onboarding.ts";
+import { harnessConfig } from "./helpers/sync-engine.ts";
 
 // The data of a new page's onboarding through its browser (Project Browser
 // plan §3.2, §3.4; 0281; stage 3 PR 16): a profile registered with its page
@@ -268,6 +269,52 @@ describe("a page browser profile's onboarding in the database (0281; PR 16)", ()
     expect(await remove(unbound, true)).toMatchObject({ profileId: unbound, outcome: "removed" });
     expect(await remove(unbound, true)).toEqual({ profileId: unbound, container: null, outcome: "absent" });
     await expect(remove(unbound, false)).rejects.toThrow(/no profile/);
+  });
+
+  it("never registers again a profile Hub forgot or said it never had: an add whose answer was lost and that commits late is refused (Astra's review of PR 16, round 2)", async (context) => {
+    if (!testDb) return context.skip();
+    const register = (profileId: string, container: string) => registerPageBrowserProfile(db(), { profileId, container, ...SEALED, socksEndpoint: "203.0.113.50:1080" });
+    // Hub said it had none (the owner's remove-profile after an unknown add) …
+    const late = randomUUID();
+    expect(await removeBrowserProfile(db(), { profileId: late, actor: "cli:test", absentOk: true })).toMatchObject({ outcome: "absent" });
+    // … then the add that was still under way commits: refused, nothing written.
+    await expect(register(late, "page-browser-late-1")).rejects.toMatchObject({ reason: "profile_forgotten" });
+    expect(await findOnboardingProfile(db(), late)).toBeNull();
+    // A profile removed is never registered again either.
+    const removed = await profile();
+    await removeBrowserProfile(db(), { profileId: removed, actor: "cli:test" });
+    await expect(register(removed, "page-browser-late-2")).rejects.toMatchObject({ reason: "profile_forgotten" });
+    expect((await testDb.pool.query("select profile_id::text, was_registered from page_browser_forgotten_profiles order by was_registered")).rows).toEqual([
+      { profile_id: late, was_registered: false },
+      { profile_id: removed, was_registered: true },
+    ]);
+  });
+
+  it("the CLI's add says Hub's refusal in its output (nothing written) — the only word the deploy script removes what it made on; `show` names a profile bound or not, or that Hub forgot it", async (context) => {
+    if (!testDb) return context.skip();
+    const config = harnessConfig(testDb.connectionString);
+    const printed: string[] = [];
+    const cli = () => buildSyncBrowserProfileCommandGroup({
+      openContext: async () => ({ db: db(), rawConfig: config, close: async () => undefined }),
+      print: (line) => void printed.push(line),
+      readStdin: async () => "engine-token-of-the-cli-test-0123\napi-token-of-the-cli-test-456789\nvnc-password-of-the-cli-test-ab\n",
+    });
+    const env = JSON.stringify({ timeZone: "Europe/Berlin", languages: ["en-US"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } });
+    const add = (profileId: string, container: string) => cli().parseAsync(["browser-profile", "add", "--profile", profileId, "--container", container, "--socks", "203.0.113.50:1080", "--env", env, "--new-page", container.replace("page-browser-", ""), "--secrets-stdin"], { from: "user" });
+    const first = randomUUID();
+    await add(first, "page-browser-cli-1");
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: first, container: "page-browser-cli-1" });
+    // The same container again: Hub refuses, and says so.
+    const second = randomUUID();
+    await expect(add(second, "page-browser-cli-1")).rejects.toThrow(/has a profile already/);
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: second, outcome: "refused" });
+    expect(await findOnboardingProfile(db(), second)).toBeNull();
+    // `show`: present, then — forgotten — absent and forgotten.
+    await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ present: true, profileId: first, pageId: null });
+    await removeBrowserProfile(db(), { profileId: first, actor: "cli:test" });
+    await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
+    expect(JSON.parse(printed.at(-1)!)).toEqual({ present: false, profileId: first, forgotten: true });
   });
 });
 

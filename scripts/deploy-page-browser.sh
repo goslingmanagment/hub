@@ -18,7 +18,7 @@ Usage:
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
   scripts/deploy-page-browser.sh add-profile <user@host> --page <name> --image <tag> --socks <host:port>
                                           --env <json> [--existing] [--hub-dir <dir>]
-  scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--hub-dir <dir>]
+  scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--profile <uuid>] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
   scripts/deploy-page-browser.sh to-node  <user@host> --page <name> [--prepare] [--hub-dir <dir>]
@@ -63,17 +63,21 @@ Usage:
             "longitude":…,"accuracyM":…}}): Chrome's zone and language come
             from it. --existing: the page <name> exists in Hub and moves to
             its browser — the profile is bound to it at once (plan §5, stage
-            4). If Hub refuses the profile, or its answer does not come
-            back, Hub is asked to forget it (`remove --absent-ok`: only one
-            no page has); the container and its volumes go only when Hub
-            says it forgot it or never had it — bound, or unknown, nothing
-            is removed and the script says so.
+            4). If Hub refuses the profile (its own word: nothing of it
+            written), the container and its volumes go. Any other failure —
+            its answer lost — leaves the outcome unknown (Hub may have
+            registered it, with --existing bound to the page): nothing is
+            removed; the script says what is left, how to ask Hub (`sync
+            browser-profile show`) and, when Hub has none, the remove-profile
+            to run with the profile's UUID.
   remove-profile
             A profile no page has, given up: Hub forgets it first (refused
             for a profile bound to a page), then its container, its files and
             its two volumes are deleted on the server — only while the page's
             files there still name the profile Hub forgot (checked under the
-            server's lock).
+            server's lock). --profile <uuid>: refused unless the page names
+            that profile. Hub never registers a forgotten profile again (an
+            add still under way is refused), so "absent" is final.
   rollback  Back to the page's previous image.
   down      Removes the container; the profile's volumes stay.
   to-node   Takes the page off its browser for good when its operator cannot
@@ -133,6 +137,7 @@ TO_NODE_PREPARE=0
 HUB_DIR=/opt/agency-hub
 ENV_JSON=""
 EXISTING_PAGE=0
+PROFILE_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) SSH_ARGS+=(-i "$2"); shift 2 ;;
@@ -143,6 +148,7 @@ while [[ $# -gt 0 ]]; do
     --hub-dir) [[ $# -ge 2 ]] || fail "$1 needs a value"; HUB_DIR="$2"; shift 2 ;;
     --page) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_NAME="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --new-profile) PAGE_ARGS+=("$1"); shift ;;
+    --profile) [[ $# -ge 2 ]] || fail "$1 needs a value"; PROFILE_ARG="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --*) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     *) fail "unexpected argument $1" ;;
   esac
@@ -336,25 +342,44 @@ add_profile() {
   local cli=(sync browser-profile add --profile "$profile" --container "page-browser-${PAGE_NAME}" --socks "$socks" --env "$ENV_JSON" --secrets-stdin)
   [[ "$EXISTING_PAGE" == "1" ]] && cli+=(--page "$PAGE_NAME") || cli+=(--new-page "$PAGE_NAME")
   local secrets="${REMOTE_BASE}/pages/${PAGE_NAME}/secrets"
-  if ! run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); cat $(printf '%q' "$secrets/rpc_token") $(printf '%q' "$secrets/api_token") $(printf '%q' "$secrets/vnc_password") | $(hub_cli_line "${cli[@]}")"; then
-    # Hub may have taken it all the same (its answer lost on the way), and
-    # bound it to a page (--existing): the container goes only once Hub
-    # says it has no record of the profile, or forgot one no page has.
-    log "Hub's answer for profile ${profile} was a refusal or did not come back: asking Hub to forget it (only while no page has it)"
-    local forgot outcome_re='"outcome": "(removed|absent)"'
-    if forgot="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile" --absent-ok)")" \
-      && [[ "$forgot" =~ $outcome_re ]]; then
-      log "Hub has no profile ${profile} (${BASH_REMATCH[1]}): its container and volumes go"
+  local registered status=0 refused_re='"outcome": "refused"'
+  registered="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); cat $(printf '%q' "$secrets/rpc_token") $(printf '%q' "$secrets/api_token") $(printf '%q' "$secrets/vnc_password") | $(hub_cli_line "${cli[@]}")")" || status=$?
+  [[ -z "$registered" ]] || printf '%s\n' "$registered"
+  if (( status != 0 )); then
+    if [[ "$registered" =~ $refused_re ]]; then
+      # Hub's own refusal: nothing of the profile was written there.
+      log "Hub refused profile ${profile} (nothing of it written there): its container and volumes go"
       page_remote remove-profile --page "$PAGE_NAME" --profile "$profile" || log "warning: page-browser-${PAGE_NAME} could not be removed: run remove-profile again"
       fail "add-profile failed; nothing of profile ${profile} is kept"
     fi
-    fail "add-profile failed, and Hub did not say profile ${profile} is no page's (bound to one, or its answer lost): nothing removed — page-browser-${PAGE_NAME} and its volumes stay; see sync browser-profile list, then remove-profile"
+    # Anything else — the answer lost, a failure that is not Hub's word:
+    # Hub may have registered it, or may still (with --existing: bound to
+    # the page). Nothing is removed here (Astra's review of PR 16, round 2).
+    left_behind "$profile"
+    fail "add-profile: whether Hub registered profile ${profile} is not known — nothing was removed"
   fi
   log "profile ${profile} of ${PAGE_NAME}: container page-browser-${PAGE_NAME} up, registered in Hub$([[ "$EXISTING_PAGE" == "1" ]] && echo " and bound to ${PAGE_NAME}" || echo "; connect the page in the dashboard (Настройки → Страницы)")"
 }
 
 # A profile no page has, given up: Hub first (it refuses a bound one), then
 # the server's container, files and volumes.
+# After an add whose outcome is unknown: what the server keeps, and how the
+# owner resolves it — Hub's word first, then remove-profile by the UUID
+# (Hub forgets it for good: a registration still under way is refused).
+left_behind() {
+  local profile="$1" show bound
+  show="'cd $(printf '%q' "$HUB_DIR") && $(hub_cli_line sync browser-profile show --profile "$profile")'"
+  if [[ "$EXISTING_PAGE" == "1" ]]; then bound=" (its pageId: bound to ${PAGE_NAME}, which runs on its browser now)"; else bound="; connect the page in the dashboard"; fi
+  cat >&2 <<EOF
+deploy-page-browser: left on ${REMOTE}, untouched: the container page-browser-${PAGE_NAME}, the volumes pb-profile-${profile} and pb-buffer-${profile}, the files ${REMOTE_BASE}/pages/${PAGE_NAME}/
+  1. Ask Hub what it holds of profile ${profile}:
+       ssh ${REMOTE} ${show}
+  2. "present": true — Hub registered it${bound}; keep everything.
+     "present": false — remove what was made (Hub then never registers ${profile}):
+       scripts/deploy-page-browser.sh remove-profile ${REMOTE} --page ${PAGE_NAME} --profile ${profile}
+EOF
+}
+
 remove_profile() {
   [[ -n "$PAGE_NAME" ]] || fail "remove-profile needs --page <name>"
   [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || fail "not a page name: $PAGE_NAME"
@@ -362,6 +387,7 @@ remove_profile() {
   profile="$(run_remote "set -euo pipefail; sed -n 's/^PB_PROFILE_ID=//p' $(printf '%q' "${REMOTE_BASE}/pages/${PAGE_NAME}/page.env") | tail -n 1")" \
     || fail "no page ${PAGE_NAME} on the server"
   [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "page ${PAGE_NAME} names no profile on the server"
+  [[ -z "$PROFILE_ARG" || "$PROFILE_ARG" == "$profile" ]] || fail "page ${PAGE_NAME} names profile ${profile} on the server, not ${PROFILE_ARG}: nothing removed"
   # Hub forgets it (or never had it: a run again after Hub's answer was
   # lost); a profile bound to a page is refused.
   run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile remove --profile "$profile" --absent-ok)" \

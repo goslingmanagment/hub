@@ -232,7 +232,7 @@ export function socksEndpointOf(ip: string, port: number): string {
 }
 
 export class PageBrowserRegistrationError extends Error {
-  constructor(readonly reason: "profile_exists" | "container_taken" | "page_has_browser" | "no_page", message: string) {
+  constructor(readonly reason: "profile_exists" | "profile_forgotten" | "container_taken" | "page_has_browser" | "no_page", message: string) {
     super(message);
     this.name = "PageBrowserRegistrationError";
   }
@@ -255,24 +255,34 @@ export interface RegisterPageBrowserInput {
   pageId?: number | null;
 }
 
+/** A registration and a forget of one profile id, one at a time (a
+ *  transaction advisory lock of the id). */
+async function lockProfileId(tx: Database, profileId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`page_browser_profile:${profileId}`}, 0))`);
+}
+
 /**
  * A new profile's row, as `add-profile` made its container: its secrets
  * sealed, the SOCKS5 its container's rules admit, its page empty (or the
  * existing page that moves to it). Refuses — and writes nothing — a profile
- * or a container that exists, and a page that has a browser already.
+ * or a container that exists, a page that has a browser already, and a
+ * profile Hub forgot (or said it never had): an add that commits late.
  */
 export async function registerPageBrowserProfile(db: Database, input: RegisterPageBrowserInput): Promise<void> {
   if (!/^[0-9a-f-]{36}$/.test(input.profileId)) throw new Error("A profile id is a UUID");
   if (!/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(input.socksEndpoint)) throw new Error("A SOCKS5 endpoint is ip:port");
   await db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
-    const clash = await tx.execute<{ profile: boolean; container: boolean; page: boolean }>(sql`
+    await lockProfileId(tx, input.profileId);
+    const clash = await tx.execute<{ profile: boolean; forgotten: boolean; container: boolean; page: boolean }>(sql`
       select exists (select 1 from page_browsers where profile_id = ${input.profileId}::uuid) as profile,
+             exists (select 1 from page_browser_forgotten_profiles where profile_id = ${input.profileId}::uuid) as forgotten,
              exists (select 1 from page_browsers where container = ${input.container}) as container,
              exists (select 1 from page_browsers where ${input.pageId ?? null}::bigint is not null and page_id = ${input.pageId ?? null}::bigint) as page
     `);
     const found = clash.rows[0]!;
     if (found.profile) throw new PageBrowserRegistrationError("profile_exists", `Profile ${input.profileId} is registered already`);
+    if (found.forgotten) throw new PageBrowserRegistrationError("profile_forgotten", `Profile ${input.profileId} was forgotten by Hub: it is never registered again (make a new one)`);
     if (found.container) throw new PageBrowserRegistrationError("container_taken", `Container ${input.container} has a profile already`);
     if (found.page) throw new PageBrowserRegistrationError("page_has_browser", `Page ${input.pageId} has a browser already`);
     if (input.pageId !== undefined && input.pageId !== null) {
@@ -295,6 +305,39 @@ export async function deleteUnboundPageBrowser(db: Database, profileId: string):
   const result = await db.execute(sql`
     delete from page_browsers where profile_id = ${profileId}::uuid and page_id is null returning profile_id
   `);
+  return result.rows.length === 1;
+}
+
+/**
+ * Hub forgets a profile (the deploy script's `remove-profile`, its clean-up
+ * after an `add` whose answer was lost), in the caller's transaction: one no
+ * page has is removed (`removed`); one Hub has not is recorded as forgotten
+ * all the same (`absent`); either way it is never registered again — a
+ * registration still under way is refused when it commits (Astra's review
+ * of PR 16, round 2). A bound one is refused (`bound`), nothing written.
+ */
+export async function forgetPageBrowserProfile(
+  tx: Database,
+  input: { profileId: string; by: string },
+): Promise<{ outcome: "removed"; profile: OnboardingProfile } | { outcome: "absent" } | { outcome: "bound"; pageId: number }> {
+  await lockProfileId(tx, input.profileId);
+  const profile = await findOnboardingProfile(tx, input.profileId);
+  if (profile !== null && profile.pageId !== null) return { outcome: "bound", pageId: profile.pageId };
+  if (profile !== null && !(await deleteUnboundPageBrowser(tx, input.profileId))) {
+    throw new Error(`Profile ${input.profileId} could not be removed`);
+  }
+  await tx.execute(sql`
+    insert into page_browser_forgotten_profiles (profile_id, forgotten_by, was_registered)
+    values (${input.profileId}::uuid, ${input.by}, ${profile !== null})
+    on conflict (profile_id) do nothing
+  `);
+  return profile === null ? { outcome: "absent" } : { outcome: "removed", profile };
+}
+
+/** Whether Hub forgot a profile (or said it never had it). */
+export async function isPageBrowserProfileForgotten(db: Database, profileId: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(profileId)) return false;
+  const result = await db.execute(sql`select 1 from page_browser_forgotten_profiles where profile_id = ${profileId}::uuid`);
   return result.rows.length === 1;
 }
 

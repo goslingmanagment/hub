@@ -1,12 +1,13 @@
 import { hostname } from "node:os";
 
-import { InvalidArgumentError, type Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 
 import {
-  deleteUnboundPageBrowser,
   findOnboardingProfile,
   findPageByLabel,
+  forgetPageBrowserProfile,
   insertAuditEvent,
+  isPageBrowserProfileForgotten,
   listUnboundPageBrowsers,
   pageBrowserEnvOf,
   PageBrowserRegistrationError,
@@ -35,8 +36,15 @@ import { SyncOwnerLeverError } from "./inspect.ts";
 //   the dashboard; refused when a page of that label exists. `--page
 //   <label>`: an existing page that moves to its browser, bound now.
 // - `remove`: a profile no page has, forgotten (its container goes after);
-//   a bound one is refused.
+//   a bound one is refused. A profile Hub forgot — removed, or said absent
+//   (`--absent-ok`) — is never registered again: an `add` whose answer was
+//   lost and that commits late is refused, so «absent» is final.
+// - `show`: one profile, bound or not, or whether Hub forgot it.
 // - `list`: the profiles no page has yet.
+// A refusal of `add` (nothing written) prints `"outcome": "refused"` before
+// it fails: the deploy script removes what it made on that word only — any
+// other failure leaves the outcome unknown (Astra's review of PR 16, round
+// 2).
 // Each change is audited (`admin.page_browser_profile`). Nothing secret is
 // printed, audited or put in an error.
 
@@ -168,31 +176,37 @@ export async function addBrowserProfile(
 }
 
 /** `remove`: a profile no page has, forgotten and audited (`removed`). A
- *  bound one is refused. With `absentOk` (the deploy script's clean-up after
- *  an `add` whose answer it did not get), a profile Hub never registered is
- *  said to be `absent` instead of refused: only `removed` and `absent` let
- *  its container go. */
+ *  bound one is refused. With `absentOk` (the deploy script's remove-profile,
+ *  run again after Hub's answer was lost), a profile Hub has not is
+ *  forgotten all the same (`absent`). Either way Hub never registers it
+ *  again. */
 export async function removeBrowserProfile(
   db: Database,
   input: { profileId: string; actor: string; absentOk?: boolean },
 ): Promise<{ profileId: string; container: string | null; outcome: "removed" | "absent" }> {
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
-    const profile = await findOnboardingProfile(tx, input.profileId);
-    if (profile === null) {
-      if (input.absentOk === true) return { profileId: input.profileId, container: null, outcome: "absent" as const };
-      throw new SyncOwnerLeverError(`no profile ${input.profileId} in Hub`);
-    }
-    if (profile.pageId !== null) throw new SyncOwnerLeverError(`profile ${input.profileId} is bound to page ${profile.pageId}: it is that page's (to-node, then down)`);
-    if (!(await deleteUnboundPageBrowser(tx, input.profileId))) throw new SyncOwnerLeverError(`profile ${input.profileId} could not be removed (bound meanwhile?)`);
+    const forgot = await forgetPageBrowserProfile(tx, { profileId: input.profileId, by: input.actor });
+    if (forgot.outcome === "bound") throw new SyncOwnerLeverError(`profile ${input.profileId} is bound to page ${forgot.pageId}: it is that page's (to-node, then down)`);
+    if (forgot.outcome === "absent" && input.absentOk !== true) throw new SyncOwnerLeverError(`no profile ${input.profileId} in Hub`);
     await insertAuditEvent(tx, {
       platformAccountId: null,
       source: "cli",
       eventType: PAGE_BROWSER_PROFILE_AUDIT_EVENT,
-      metadata: { actor: input.actor, action: "remove", profileId: input.profileId, container: profile.container, onboarding: profile.onboarding },
+      metadata: forgot.outcome === "removed"
+        ? { actor: input.actor, action: "remove", profileId: input.profileId, container: forgot.profile.container, onboarding: forgot.profile.onboarding }
+        : { actor: input.actor, action: "forget_absent", profileId: input.profileId },
     });
-    return { profileId: input.profileId, container: profile.container, outcome: "removed" as const };
+    return { profileId: input.profileId, container: forgot.outcome === "removed" ? forgot.profile.container : null, outcome: forgot.outcome };
   });
+}
+
+/** `show`: one profile as Hub holds it (bound or not), or that it has none
+ *  — and whether it forgot it. */
+export async function showBrowserProfile(db: Database, profileId: string) {
+  const profile = await findOnboardingProfile(db, profileId);
+  if (profile !== null) return { present: true as const, ...profileView(profile) };
+  return { present: false as const, profileId, forgotten: await isPageBrowserProfileForgotten(db, profileId) };
 }
 
 export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserProfileCliDeps): void {
@@ -220,18 +234,26 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     .action(async (options: { profile: string; container: string; socks: string; env: PageBrowserEnv; page?: string; newPage?: string; secretsStdin: boolean }) => {
       if ((options.page === undefined) === (options.newPage === undefined)) throw new SyncOwnerLeverError("one of --page <label> (an existing page) and --new-page <label>");
       if (!options.secretsStdin) throw new SyncOwnerLeverError("the secrets come on the standard input (--secrets-stdin), never on a command line");
-      const secrets = parseProfileSecrets(await (deps.readStdin ?? readProcessStdin)());
-      await withContext(async (ctx) => {
-        print(await addBrowserProfile(ctx, {
-          profileId: options.profile,
-          container: options.container,
-          socks: options.socks,
-          env: options.env,
-          page: options.page !== undefined ? { existing: options.page } : { new: options.newPage! },
-          secrets,
-          actor: cliActor(),
-        }));
-      });
+      try {
+        const secrets = parseProfileSecrets(await (deps.readStdin ?? readProcessStdin)());
+        await withContext(async (ctx) => {
+          print(await addBrowserProfile(ctx, {
+            profileId: options.profile,
+            container: options.container,
+            socks: options.socks,
+            env: options.env,
+            page: options.page !== undefined ? { existing: options.page } : { new: options.newPage! },
+            secrets,
+            actor: cliActor(),
+          }));
+        });
+      } catch (error) {
+        // Hub's refusal: nothing was written (a check before the write, or
+        // the registration's transaction rolled back). Only this word lets
+        // the deploy script remove what it made.
+        if (error instanceof SyncOwnerLeverError) print({ profileId: options.profile, outcome: "refused", reason: error.message });
+        throw error;
+      }
     });
 
   group
@@ -244,9 +266,25 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     });
 
   group
+    .command("show")
+    .description("one profile as Hub holds it, bound or not — or that it has none, and whether it forgot it (JSON, no secret)")
+    .requiredOption("--profile <uuid>", "the profile", parseUuid)
+    .action(async (options: { profile: string }) => {
+      await withContext(async ({ db }) => print(await showBrowserProfile(db, options.profile)));
+    });
+
+  group
     .command("list")
     .description("the profiles no page has yet: their onboarding, proxy, pin, the operator's last word (JSON, no secret)")
     .action(async () => {
       await withContext(async ({ db }) => print((await listUnboundPageBrowsers(db)).map(profileView)));
     });
+}
+
+/** The commands as a group of their own (`sync`), for a caller that runs
+ *  them without the whole CLI (tests): errors thrown, never an exit. */
+export function buildSyncBrowserProfileCommandGroup(deps: BrowserProfileCliDeps): Command {
+  const sync = new Command("sync").exitOverride();
+  registerSyncBrowserProfileCommands(sync, deps);
+  return sync;
 }

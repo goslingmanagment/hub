@@ -469,6 +469,16 @@ export const pageBrowsers = pgTable("page_browsers", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
 
+/** 0281 (Project Browser PR 16): the profiles Hub forgot (`sync browser-profile
+ *  remove`), or said it never had (`--absent-ok`) — never registered again:
+ *  an add whose answer was lost and that commits late is refused. */
+export const pageBrowserForgottenProfiles = pgTable("page_browser_forgotten_profiles", {
+  profileId: uuid("profile_id").primaryKey(),
+  forgottenAt: timestamp("forgotten_at", { withTimezone: true }).notNull().defaultNow(),
+  forgottenBy: text("forgotten_by").notNull(),
+  wasRegistered: boolean("was_registered").notNull(),
+});
+
 export const notificationIncidents = pgTable(
   "notification_incidents",
   {

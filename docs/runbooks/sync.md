@@ -989,9 +989,11 @@ session, the browser logs in from its own device and IP (plan §3.2 «Подкл
    ```
 
    `--page` is the new page's label. `pnpm cli sync browser-profile list` shows the profiles no page has yet. When
-   Hub refuses the profile, or its answer is lost, the script asks Hub to forget it (only one no page has) and removes
-   the container and its volumes only once Hub says it forgot it or never had it; otherwise it removes nothing and
-   says so — check `sync browser-profile list`, then `remove-profile`.
+   Hub refuses the profile (its own word: nothing written), the script removes what it made. Any other failure — Hub's
+   answer lost — leaves the outcome unknown (Hub may have registered it; with `--existing`, bound to the page): the
+   script removes nothing and prints what is left and the two commands to resolve it — `sync browser-profile show
+   --profile <uuid>` in the api container, then, if Hub has none, `remove-profile … --page <name> --profile <uuid>`.
+   A profile Hub forgot (removed, or said absent) is never registered again: an add still under way is refused.
 2. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy (the
    SOCKS5 the container was made for, with its login and password — saved sealed; Hub shows its exit IP), the exit IP
    pinned (the browser opens its exit only when it sees that IP itself, and says what it saw), the login through

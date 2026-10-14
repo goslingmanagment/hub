@@ -178,54 +178,65 @@ describe("deploy-page-browser.sh add-profile", () => {
     expect(made.stderr).toContain("registered in Hub and bound to lilly-1");
   });
 
-  it("Hub refuses the profile: Hub says it has none, then the container, its files and both volumes go — nothing half-made stays", () => {
+  it("Hub refuses the profile (its own word: nothing written): the container, its files and both volumes go — nothing half-made stays", () => {
     const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
       TEST_HUB_EXIT_0: "1",
-      TEST_HUB_OUT_1: '{\n  "profileId": "x",\n  "container": null,\n  "outcome": "absent"\n}',
+      TEST_HUB_OUT_0: '{\n  "profileId": "x",\n  "outcome": "refused",\n  "reason": "Container page-browser-ari-2 has a profile already"\n}',
     });
     expect(made.status).toBe(1);
     expect(made.stderr).toMatch(/add-profile failed; nothing of profile [0-9a-f-]{36} is kept/);
-    const [, forget] = hubCalls();
-    expect(forget!.args.slice(forget!.args.indexOf("node"))).toEqual(["node", "apps/runtime/dist/cli.js", "sync", "browser-profile", "remove", "--profile", forget!.args[forget!.args.indexOf("--profile") + 1], "--absent-ok"]);
+    // No call to Hub but the refused add.
+    expect(hubCalls()).toHaveLength(1);
     expect(volumes()).toEqual([]);
     expect(containers()).toEqual([]);
     expect(existsSync(path.join(pbBase, "pages/ari-2"))).toBe(false);
   });
 
-  it("the add's answer lost after Hub took the profile unbound: Hub forgets it first (removed), then the container and volumes go", () => {
-    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
-      TEST_HUB_EXIT_0: "255",
-      TEST_HUB_OUT_1: '{\n  "profileId": "x",\n  "container": "page-browser-ari-2",\n  "outcome": "removed"\n}',
-    });
+  /** The server is untouched after an add whose outcome is unknown, and the
+   *  owner is told how to resolve it: Hub's word, then remove-profile by the
+   *  profile's UUID. */
+  function expectUntouchedWithResolution(made: ReturnType<typeof run>, page: string): string {
     expect(made.status).toBe(1);
-    expect(made.stderr).toContain("(removed): its container and volumes go");
-    expect(volumes()).toEqual([]);
-    expect(containers()).toEqual([]);
-  });
+    const profile = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(path.join(pbBase, `pages/${page}/page.env`), "utf8"))![1]!;
+    expect(made.stderr).toContain(`whether Hub registered profile ${profile} is not known — nothing was removed`);
+    expect(made.stderr).toContain(`sync browser-profile show --profile ${profile}`);
+    expect(made.stderr).toContain(`scripts/deploy-page-browser.sh remove-profile root@agency-de --page ${page} --profile ${profile}`);
+    expect(volumes()).toEqual([`pb-buffer-${profile}`, `pb-profile-${profile}`]);
+    expect(containers()).toEqual([`page-browser-${page}`]);
+    // No clean-up asked of Hub either.
+    expect(hubCalls()).toHaveLength(1);
+    return profile;
+  }
 
-  it("the add's answer lost after Hub took the profile and bound it to the existing page: Hub refuses to forget it — nothing is removed (Astra's review of PR 16, item 6)", () => {
+  it("the add's answer lost with --existing (Hub may have bound the profile, or still will): nothing is removed, the way to resolve it said (Astra's review of PR 16, round 2)", () => {
+    // Astra's order: the add's answer lost before its commit; a forget asked
+    // now would find nothing yet (absent) — and the add commits after.
     const made = run("add-profile", ["--page", "lilly-1", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV, "--existing"], {
       TEST_HUB_EXIT_0: "255",
-      TEST_HUB_EXIT_1: "1",
+      TEST_HUB_OUT_1: '{"profileId": "x", "container": null, "outcome": "absent"}',
     });
-    expect(made.status).toBe(1);
-    expect(made.stderr).toContain("nothing removed — page-browser-lilly-1 and its volumes stay");
-    const profile = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(path.join(pbBase, "pages/lilly-1/page.env"), "utf8"))![1]!;
-    expect(volumes()).toEqual([`pb-buffer-${profile}`, `pb-profile-${profile}`]);
-    expect(containers()).toEqual(["page-browser-lilly-1"]);
-    expect(hubCalls()).toHaveLength(2);
+    expectUntouchedWithResolution(made, "lilly-1");
+    expect(made.stderr).toContain("bound to lilly-1");
   });
 
-  it("the add's answer lost and the forget's too: what Hub holds is unknown — nothing is removed", () => {
-    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
-      TEST_HUB_EXIT_0: "255",
-      TEST_HUB_EXIT_1: "255",
+  it("a new page's add whose answer was lost, or that failed without Hub's refusal: nothing is removed; once Hub says it has none, the printed remove-profile removes it all", () => {
+    const lost = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], { TEST_HUB_EXIT_0: "255" });
+    const profile = expectUntouchedWithResolution(lost, "ari-2");
+    // The owner asked Hub (absent), then runs the printed command: Hub forgets
+    // the profile for good, then the server removes it.
+    const removed = run("remove-profile", ["--page", "ari-2", "--profile", profile], { TEST_HUB_OUT_1: '{"profileId": "x", "outcome": "absent"}' });
+    expect(removed.status, removed.stderr).toBe(0);
+    expect(hubCalls()[1]!.args.slice(-4)).toEqual(["remove", "--profile", profile, "--absent-ok"]);
+    expect(volumes()).toEqual([]);
+    expect(containers()).toEqual([]);
+    // A failure that is not Hub's refusal (no word of it): unknown too.
+    rmSync(state, { recursive: true, force: true });
+    mkdirSync(state);
+    const failed = run("add-profile", ["--page", "eva-1", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], {
+      TEST_HUB_EXIT_0: "1",
+      TEST_HUB_OUT_0: "Error: connect ECONNREFUSED 10.0.0.5:5432",
     });
-    expect(made.status).toBe(1);
-    expect(made.stderr).toContain("nothing removed");
-    expect(volumes()).toHaveLength(2);
-    expect(containers()).toEqual(["page-browser-ari-2"]);
-    expect(existsSync(path.join(pbBase, "pages/ari-2/page.env"))).toBe(true);
+    expectUntouchedWithResolution(failed, "eva-1");
   });
 
   it("a container that does not come up healthy: its volumes and files go, Hub is never told", () => {
@@ -291,6 +302,15 @@ describe("deploy-page-browser.sh remove-profile", () => {
     expect(volumes()).toEqual(expect.arrayContaining([`pb-buffer-${now}`, `pb-profile-${now}`]));
     expect(containers()).toEqual(["page-browser-ari-2"]);
     expect(existsSync(envFile)).toBe(true);
+  });
+
+  it("remove-profile --profile refuses a page that names another profile, before Hub is asked", () => {
+    expect(run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV]).status).toBe(0);
+    const refused = run("remove-profile", ["--page", "ari-2", "--profile", "00000000-0000-4000-8000-000000000000"]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("not 00000000-0000-4000-8000-000000000000: nothing removed");
+    expect(hubCalls()).toHaveLength(1);
+    expect(volumes()).toHaveLength(2);
   });
 
   it("page.sh removes a profile only when told which one, and only that one", () => {
