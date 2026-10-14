@@ -893,16 +893,12 @@ export class OnboardingLink {
       // one and answered since this look read the profile. Never read
       // again: unanswered, it is answered as not known (an answer written
       // meanwhile stands), and a new request reads anew.
-      this.#identity = this.#fenced((tx) => recordIdentityIndeterminate(tx, {
+      this.#identity = this.#answering(this.#fenced((tx) => recordIdentityIndeterminate(tx, {
         profileId: this.profileId,
         requestId: request.id,
         attemptId: bound,
         why: "the engine's link to the browser changed while the account was read: whether the read went is not known — check again",
-      }))
-        .then(() => undefined)
-        .finally(() => {
-          this.#identity = null;
-        });
+      })));
       return;
     }
     const boundary = this.#automationBack;
@@ -914,17 +910,23 @@ export class OnboardingLink {
         : state.stopReason !== null ? `the browser stands (${state.stopReason})`
           : state.sessionFingerprint === null ? "the browser knows no live session: log it in first"
             : `the browser is not up at the site (${state.step})`;
-      this.#identity = this.#fenced((tx) => recordOnboardingIdentity(tx, { profileId: this.profileId, result: { requestId: request.id, ok: false, error: why, httpStatus: null, at: new Date().toISOString() } }))
-        .then(() => undefined)
-        .finally(() => {
-          this.#identity = null;
-        });
+      this.#identity = this.#answering(this.#fenced((tx) => recordOnboardingIdentity(tx, { profileId: this.profileId, result: { requestId: request.id, ok: false, error: why, httpStatus: null, at: new Date().toISOString() } })));
       return;
     }
-    this.#identity = this.#inSlot(() => this.#checkIdentity(request.id, request.source, state.sessionFingerprint!, boundary!))
+    this.#identity = this.#answering(this.#inSlot(() => this.#checkIdentity(request.id, request.source, state.sessionFingerprint!, boundary!)));
+  }
+
+  /** An identity request's answer under way, run apart from the look that
+   *  started it: never a rejection nobody takes (one would end the whole
+   *  `sync` process — Astra's review of PR 16, round 7). A link that lost
+   *  its profile ends (`#fenced` marked it); anything else is logged and
+   *  the next look asks again. */
+  #answering(work: Promise<unknown>): Promise<void> {
+    return work
+      .then(() => undefined)
       .catch((error: unknown) => {
         if (error instanceof OnboardingLinkLostError) return;
-        this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: the identity check failed; asked again on the next look");
+        this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: an identity request's answer failed; asked again on the next look");
       })
       .finally(() => {
         this.#identity = null;

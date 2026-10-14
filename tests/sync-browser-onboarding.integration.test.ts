@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  bindIdentityAttempt,
   findOnboardingProfile,
   registerPageBrowserProfile,
   requestOnboardingIdentity,
@@ -760,5 +761,77 @@ describe("the hour's ceiling of the site's requests counts what may have gone, a
     await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === asked.siteRequestId), 10_000, "answered");
     expect(r.operator.siteAnswers.find((answer) => answer.siteRequestId === asked.siteRequestId)).toMatchObject({ admit: false, reason: "site_hour_cap" });
     expect(await journal(r.profileId)).toHaveLength(300);
+  });
+});
+
+describe("an identity request's answer that loses its link ends the link, never the process (Astra's review of PR 16, round 7)", () => {
+  /** Unhandled rejections while `body` runs (one would end a `sync` process). */
+  async function noUnhandled(body: () => Promise<void>): Promise<unknown[]> {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown) => void seen.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      await body();
+      await sleep(300);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+    return seen;
+  }
+
+  it("a request bound to an earlier link's read, the link taken over between the look and its answer: no unhandled rejection, a new link answers it as not known", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "open" });
+    r.operator.setSession(SESSION_A);
+    // An earlier link's read granted for the request, never answered.
+    const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "onboarding" });
+    const requestId = requested.kind === "requested" ? requested.requestId : "";
+    await db().transaction((tx) => bindIdentityAttempt(tx as unknown as Database, { profileId: r.profileId, requestId, attemptId: 999_001 }));
+    let taken = 0;
+    const seen = await noUnhandled(async () => {
+      const task: BrowserOnboardingTask = startTask(r, HOLDER, {
+        afterProfileRead: async (profile) => {
+          // The look (of a link up at its operator) read the request bound
+          // and unanswered; the link is taken over before its answer is
+          // written.
+          const link = task.links.get(r.profileId);
+          if (taken > 0 || link?.client.up !== true || link.client.quiesced === null || link.client.state === null) return;
+          // Past the look that asked for the automation (the login's boundary).
+          if (!r.operator.commands.some((command) => command.command.kind === "setMode" && "mode" in command.command && command.command.mode === "automation")) return;
+          if (profile?.identityAttemptId !== 999_001 || profile.identityResult !== null) return;
+          taken += 1;
+          await takeOnboardingLink(db(), r.profileId);
+        },
+      });
+      expect(await answerOf(r, requestId)).toMatchObject({ ok: false, indeterminate: true, attemptId: 999_001 });
+      expect(taken).toBe(1);
+      expect(task.links.get(r.profileId)?.generation ?? 0n).toBeGreaterThanOrEqual(3n);
+    });
+    expect(seen).toEqual([]);
+  });
+
+  it("a refusal written for a request the browser cannot serve, the link taken over meanwhile: no unhandled rejection", async (context) => {
+    if (!testDb) return context.skip();
+    // No live session: the request is answered with why, after the wait.
+    const r = await rig({ onboarding: "open" });
+    let taken = 0;
+    let requestId = "";
+    const seen = await noUnhandled(async () => {
+      const task: BrowserOnboardingTask = startTask(r, HOLDER, {
+        afterProfileRead: async (profile) => {
+          const link = task.links.get(r.profileId);
+          if (taken > 0 || link?.client.up !== true || link.client.quiesced === null || link.client.state === null) return;
+          if (requestId === "" || profile?.identityRequest?.id !== requestId) return;
+          if (Date.now() - profile.identityRequest.requestedAt.getTime() < TIMING.identityWaitMs) return;
+          taken += 1;
+          await takeOnboardingLink(db(), r.profileId);
+        },
+      });
+      const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "onboarding" });
+      requestId = requested.kind === "requested" ? requested.requestId : "";
+      expect(await answerOf(r, requestId)).toMatchObject({ ok: false });
+      expect(taken).toBe(1);
+    });
+    expect(seen).toEqual([]);
   });
 });
