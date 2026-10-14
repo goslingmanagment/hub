@@ -316,9 +316,11 @@ export const GAP_SLACK_MS = 250;
  *  backfills it): those are counted as covered, never silently let go — and
  *  whatever is neither kept nor covered was deleted, or never recorded,
  *  before the engine had it. */
-export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS): { violations: string[]; coveredByGap: { frames: number; answers: number } } {
+export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS, blind: Blind | null = null): { violations: string[]; coveredByGap: { frames: number; answers: number }; unseenAtLoss: number } {
   const covered = (page: string, wall: number) => kept.gaps.some((gap) => gap.page === page && (gap.fromWall === null || wall >= gap.fromWall - slackMs) && wall <= gap.atWall + slackMs);
   const coveredByGap = { frames: 0, answers: 0 };
+  const inBlind = (answer: MadeAnswer) => blind !== null && answer.page === blind.page && answer.mono >= blind.fromMono && (blind.toMono === null || answer.mono <= blind.toMono);
+  let unseenAtLoss = 0;
   const violations: string[] = [];
   const lost = new Map<string, MadeFrame[]>();
   for (const frame of made.frames) {
@@ -336,9 +338,28 @@ export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS
     if (answer.kind === "site" && (answer.rid === null || !kept.responses.get(answer.page)?.has(answer.rid))) missing.push(`no stored site.response event (${answer.rid === null ? "it has no request id to find one by" : `rid ${answer.rid}`})`);
     if (missing.length === 0) continue;
     if (covered(answer.page, answer.wall)) coveredByGap.answers += 1;
+    // Answered while the page was blind: no site.response can exist, and a
+    // request of no attempt is C1's — but an attempt's outcome must.
+    else if (inBlind(answer) && (answer.attemptId === null || kept.outcomes.get(answer.page)?.has(answer.attemptId))) unseenAtLoss += 1;
     else violations.push(`${answer.method} ${answer.target} of ${answer.page} was answered by Fansly (${answer.status}) and has ${missing.join(" and ")}, and no gap mark covers when it was answered`);
   }
-  return { violations, coveredByGap };
+  return { violations, coveredByGap, unseenAtLoss };
+}
+
+/** A loss of control (operatorLoss, controlLoss): from the fault until the
+ *  page is up again (null: it never was) the operator sees nothing of its
+ *  browser's traffic — its DevTools connection, its Chrome or itself gone.
+ *  An answer Fansly gives then — to a request the page let go before the
+ *  fault, or one Chrome let go itself when its DevTools went (decision
+ *  №10's residual) — reaches no one who could keep it: the operator says of
+ *  its attempt "sent", with no answer (siteDone `status` null), and writes
+ *  no site.response; a gap mark exists only where a socket was open
+ *  (ws/sockets.ts `chrome_restart`). C7 counts such an answer
+ *  (`unseenAtLoss`) and asks only its attempt's outcome. */
+export interface Blind {
+  page: string;
+  fromMono: number;
+  toMono: number | null;
 }
 
 export interface SeenTransition {
@@ -555,7 +576,12 @@ export interface LateSend {
   rid: string;
   attemptId: number;
   lateMs: number;
-  socksId: number;
+  socksId: number | null;
+  /** Over the CONNECT held across the deadline (the control's evidence), or
+   *  the rest of the same request's operation — its request after its
+   *  preflight, on a connection of its own — let go before the deadline the
+   *  operator was told. */
+  held: boolean;
   /** C1's violation of that arrival — its method, address and request id,
    *  and how far past its deadline it came. */
   violation: string;
@@ -567,7 +593,12 @@ export interface LateSend {
  *  connection (`socksId`, journaled by the front with every request) is one
  *  of those holds — and C1 calls that arrival late. The control's evidence:
  *  without one, it showed nothing. A late arrival over another connection
- *  does not show it (it is a C1 violation in its own right all the same). */
+ *  does not show it (it is a C1 violation in its own right all the same) —
+ *  except the rest of that very operation: once its preflight came over the
+ *  held CONNECT, the operator lets its request go too, on a connection of
+ *  its own (Chrome keeps credentialed requests apart), before the deadline
+ *  it was told (`toldDeadlineMono`) — the same planted send. After the told
+ *  deadline, it is a violation of the operator's own. */
 export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: LateSend[]; violations: string[] } {
   const late: LateSend[] = [];
   let elsewhere = 0;
@@ -577,16 +608,20 @@ export function lateUnderHold(events: readonly JournalEvent[], grants: readonly 
     if (rid === null) continue;
     const held = new Set(heldAcross(events, pageAddress, host, grant.deadlineMono).map((hold) => hold.socksId));
     if (held.size === 0) continue;
+    const ofGrant: Array<{ send: LateSend; mono: number }> = [];
     for (const arrival of events) {
       if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
       const called = unadmittedArrivals([arrival], grants, pages).find((violation) => violation.includes("arrived outside its admission window"));
       if (called === undefined) continue;
       const socksId = arrival.socksId === null || arrival.socksId === undefined ? null : Number(arrival.socksId);
-      if (socksId === null || !held.has(socksId)) {
-        elsewhere += 1;
-        continue;
-      }
-      late.push({ rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, violation: called });
+      ofGrant.push({ send: { rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, held: socksId !== null && held.has(socksId), violation: called }, mono: arrival.mono });
+    }
+    // Shown over the held CONNECT: the rest of the operation inside what the
+    // operator was told is the same send; nothing else of it is.
+    const shown = ofGrant.some(({ send }) => send.held);
+    for (const { send, mono } of ofGrant) {
+      if (send.held || (shown && mono <= grant.toldDeadlineMono + ARRIVAL_SLACK_MS)) late.push(send);
+      else elsewhere += 1;
     }
   }
   return { late, violations: late.length > 0 ? [] : [`no admitted request arrived after its deadline over the CONNECT held across that deadline, with C1 calling it late (${elsewhere} late over another connection): the control showed no late send`] };

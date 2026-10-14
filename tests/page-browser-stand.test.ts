@@ -75,7 +75,10 @@ const apiRequest = (mono: number, method: string, pathWithQuery: string, fields:
 const siteRequest = (mono: number, pathWithQuery: string, fields: Record<string, unknown> = {}): JournalEvent => event("req", mono, { role: "site", host: "fansly.com", method: "GET", path: pathWithQuery, pathname: pathWithQuery.split("?")[0], ...fields });
 const SOCKET = "wss://wsv3.fansly.com/?v=3";
 const socketOpen = (mono: number, wsId: string, fields: Record<string, unknown> = {}): JournalEvent => event("ws.open", mono, { wsId, url: SOCKET, ...fields });
-const grant = (kind: Grant["kind"], target: string | null, grantedMono: number, fields: Partial<Grant> = {}): Grant => ({ kind, page: "p1", attemptId: 1, ref: "r", method: kind === "ws" ? null : "GET", target, grantedMono, deadlineMono: grantedMono + 15_000, generation: 1, ...fields });
+const grant = (kind: Grant["kind"], target: string | null, grantedMono: number, fields: Partial<Grant> = {}): Grant => {
+  const deadlineMono = fields.deadlineMono ?? grantedMono + 15_000;
+  return { kind, page: "p1", attemptId: 1, ref: "r", method: kind === "ws" ? null : "GET", target, grantedMono, deadlineMono, toldDeadlineMono: deadlineMono, generation: 1, ...fields };
+};
 const state = (atMono: number, exitOpen: boolean, step: SeenTransition["step"], stopReason: string | null = null, retryAtWall: number | null = null): SeenTransition => ({ atMono, exitOpen, step, stopReason, retryAtWall });
 
 describe("C1: no request or socket without an admission in force", () => {
@@ -328,7 +331,7 @@ describe("an admission that runs out while its request waits for its connection"
 
   it("the control's late send: the request arrived after its journaled deadline over the very CONNECT held across it, and C1 calls it late", () => {
     const arrived = [...held, apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })];
-    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320, socksId: 7, violation: "GET apiv3.fansly.com/api/v1/a?rid=r1 arrived outside its admission window (ms after the deadline: 320)" }], violations: [] });
+    expect(lateUnderHold(arrived, [admission], "p1", PAGE_IP, API, PAGES)).toEqual({ late: [{ rid: "r1", attemptId: 41, lateMs: 320, socksId: 7, held: true, violation: "GET apiv3.fansly.com/api/v1/a?rid=r1 arrived outside its admission window (ms after the deadline: 320)" }], violations: [] });
     // Nothing late; late with no hold across the deadline; inside the window.
     expect(lateUnderHold(held, [admission], "p1", PAGE_IP, API, PAGES).violations).toEqual([expect.stringContaining("the control showed no late send")]);
     expect(lateUnderHold([apiRequest(620, "GET", "/api/v1/a?rid=r1", { socksId: 7 })], [admission], "p1", PAGE_IP, API, PAGES).violations).toHaveLength(1);
@@ -363,18 +366,34 @@ describe("C7's other half: what Fansly made against what the engine keeps", () =
     expect(made.frames.map((frame) => [frame.page, frame.frame])).toEqual([["p1", 101], ["p1", 102]]);
     expect(madeAndKept(made, kept([], [])).violations).toEqual(["Fansly sent p1 2 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 101, 102"]);
     expect(madeAndKept(made, kept([101], [])).violations).toEqual([expect.stringContaining("1 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 102")]);
-    expect(madeAndKept(made, kept([101, 102], []))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 0 } });
+    expect(madeAndKept(made, kept([101, 102], []))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 0 }, unseenAtLoss: 0 });
   });
 
   it("a gap mark excuses only what lies inside it by time — and what it covers is counted, not let go in silence", () => {
     const made = fanslyMade([sent(5000, 101), sent(5500, 102)], [], PAGES);
-    expect(madeAndKept(made, kept([], [], [gap(1_004_900, 1_006_000)]))).toEqual({ violations: [], coveredByGap: { frames: 2, answers: 0 } });
+    expect(madeAndKept(made, kept([], [], [gap(1_004_900, 1_006_000)]))).toEqual({ violations: [], coveredByGap: { frames: 2, answers: 0 }, unseenAtLoss: 0 });
     // Nothing was saved before the mark: its start is unknown, everything before it is under it.
     expect(madeAndKept(made, kept([], [], [gap(null, 1_006_000)])).coveredByGap.frames).toBe(2);
     // The stream broke after the first frame was sent; the mark was written before the second; another page's mark.
-    expect(madeAndKept(made, kept([], [], [gap(1_005_400, 1_006_000)]))).toEqual({ violations: [expect.stringContaining("1 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 101")], coveredByGap: { frames: 1, answers: 0 } });
+    expect(madeAndKept(made, kept([], [], [gap(1_005_400, 1_006_000)]))).toEqual({ violations: [expect.stringContaining("1 frame(s) on ws-1 that are not stored as ws.in events, and no gap mark covers when they were sent: 101")], coveredByGap: { frames: 1, answers: 0 }, unseenAtLoss: 0 });
     expect(madeAndKept(made, kept([], [], [gap(1_004_900, 1_005_100)])).violations).toEqual([expect.stringContaining(": 102")]);
     expect(madeAndKept(made, kept([], [], [gap(null, 1_006_000, "p2")])).violations).toEqual([expect.stringContaining("2 frame(s)")]);
+  });
+
+  it("an answer Fansly gave while the page was blind — a loss of control, from the fault until the page is up again — needs only its attempt's outcome, and is counted", () => {
+    const site = grant("site", "apiv3.fansly.com/api/v1/account/me?rid=site-1", 4000, { attemptId: 7, ref: "site-1" });
+    const made = fanslyMade([apiRequest(4100, "GET", "/api/v1/account/me?rid=site-1"), answered(4200, "/api/v1/account/me?rid=site-1"), answered(4300, "/api/v1/account/me?rid=release-1")], [site], PAGES);
+    const blind = { page: "p1", fromMono: 4050, toMono: 9000 };
+    // Outside a loss: the site answer lacks its site.response, the other its outcome.
+    expect(madeAndKept(made, kept([], [7])).violations).toEqual([expect.stringContaining("rid=site-1 of p1 was answered by Fansly (200) and has no stored site.response event"), expect.stringContaining("rid=release-1 of p1 was answered by Fansly (200) and has no stored outcome")]);
+    // Inside it: counted, not let go in silence.
+    expect(madeAndKept(made, kept([], [7]), undefined, blind)).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 0 }, unseenAtLoss: 2 });
+    // The attempt's own outcome is still asked.
+    expect(madeAndKept(made, kept([], []), undefined, blind).violations).toEqual([expect.stringContaining("rid=site-1 of p1 was answered by Fansly (200) and has no stored outcome (attempt 7)")]);
+    // Before the fault, after the page is up, another page's loss: not blind.
+    expect(madeAndKept(made, kept([], [7]), undefined, { ...blind, fromMono: 4250 }).violations).toEqual([expect.stringContaining("rid=site-1")]);
+    expect(madeAndKept(made, kept([], [7]), undefined, { ...blind, toMono: 4250 }).violations).toEqual([expect.stringContaining("rid=release-1")]);
+    expect(madeAndKept(made, kept([], [7]), undefined, { ...blind, page: "p2" }).violations).toHaveLength(2);
   });
 
   it("every request Fansly answered has its stored outcome: a request the engine has nothing of is missed", () => {
@@ -390,7 +409,7 @@ describe("C7's other half: what Fansly made against what the engine keeps", () =
     expect(made.answers).toEqual([expect.objectContaining({ page: "p1", attemptId: 7, target: "apiv3.fansly.com/api/v1/account/me?rid=hub-1", status: 200 })]);
     expect(madeAndKept(made, kept([], [7])).violations).toEqual([]);
     expect(madeAndKept(made, kept([], [])).violations).toEqual(["GET apiv3.fansly.com/api/v1/account/me?rid=hub-1 of p1 was answered by Fansly (200) and has no stored outcome (attempt 7), and no gap mark covers when it was answered"]);
-    expect(madeAndKept(made, kept([], [], [gap(1_004_000, 1_005_000)]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 } });
+    expect(madeAndKept(made, kept([], [], [gap(1_004_000, 1_005_000)]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 }, unseenAtLoss: 0 });
     // Hub's own request: its outcome is all there is to keep.
     expect(made.answers[0]?.kind).toBe("hub");
     // Answered with no admission of the engine's at all (a control's own grant has no attempt).
@@ -421,7 +440,7 @@ describe("C7: a site answer is kept twice — its outcome and its site.response 
     expect(madeAndKept(made, kept([], [])).violations).toEqual([expect.stringContaining("has no stored outcome (attempt 9) and no stored site.response event (rid r1)")]);
     // Another request's event is not this one's.
     expect(madeAndKept(made, kept([9], ["r2"])).violations).toHaveLength(1);
-    expect(madeAndKept(made, kept([9], [], [{ page: "p1", reason: "operator_start", fromWall: 1_004_000, atWall: 1_004_500 }]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 } });
+    expect(madeAndKept(made, kept([9], [], [{ page: "p1", reason: "operator_start", fromWall: 1_004_000, atWall: 1_004_500 }]))).toEqual({ violations: [], coveredByGap: { frames: 0, answers: 1 }, unseenAtLoss: 0 });
   });
 });
 
@@ -810,6 +829,27 @@ describe("each control passes only with the very violations its run planted — 
     unplanted(judge(checksOf({ [C1]: unadmittedArrivals([...journal, apiRequest(10_500, "GET", "/api/v1/account/me?rid=hub-2", { socksId: 8 })], [hub, other], PAGES) }), control, planted));
     // No late send found: nothing planted, the control fails.
     expect(judge(checksOf({ [C1]: unadmittedArrivals(journal, [hub], PAGES) }), control, plantedLate([])).ok).toBe(false);
+  });
+
+  it("the rest of the late operation — its request after its preflight, on a connection of its own — is the same planted send only before the deadline the operator was told", () => {
+    // Journaled 6 s, told 14 s (the control's lie): the preflight over the held #7 at 10 050 ms, its GET over #9 at 10 060 ms.
+    const told = grant("hub", `${API}/api/v1/a?rid=r1`, 0, { attemptId: 41, ref: "41", deadlineMono: 6000, toldDeadlineMono: 14_000 });
+    const preflight = apiRequest(10_050, "OPTIONS", "/api/v1/a?rid=r1", { socksId: 7 });
+    const events = [socks("socks.hold", 10, 7), socks("socks.release", 10_010, 7), preflight, socks("socks.connect", 10_055, 9), apiRequest(10_060, "GET", "/api/v1/a?rid=r1", { socksId: 9 })];
+    const shown = lateUnderHold(events, [told], "p1", PAGE_IP, API, PAGES);
+    expect(shown.violations).toEqual([]);
+    expect(shown.late.map(({ socksId, held }) => ({ socksId, held }))).toEqual([{ socksId: 7, held: true }, { socksId: 9, held: false }]);
+    // Both planted, exactly: the control passes; another late request of the page does not hide in it.
+    const checks = (journal: JournalEvent[]) => checksOf({ [C1]: unadmittedArrivals(journal, [told], PAGES) });
+    expect(judge(checks(events), controlOf("control-site-late-send"), plantedLate(shown.late))).toEqual({ ok: true, why: [] });
+    unplanted(judge(checks([...events, apiRequest(10_070, "GET", "/api/v1/b?rid=r2")]), controlOf("control-site-late-send"), plantedLate(shown.late)));
+    // After the told deadline, the GET is the operator's own violation, never planted.
+    const past = [...events.slice(0, 4), apiRequest(14_100, "GET", "/api/v1/a?rid=r1", { socksId: 9 })];
+    const late = lateUnderHold(past, [told], "p1", PAGE_IP, API, PAGES).late;
+    expect(late.map(({ socksId }) => socksId)).toEqual([7]);
+    unplanted(judge(checks(past), controlOf("control-site-late-send"), plantedLate(late)));
+    // Without the preflight over the held CONNECT, the GET alone shows nothing.
+    expect(lateUnderHold([...events.slice(0, 2), ...events.slice(3)], [told], "p1", PAGE_IP, API, PAGES).late).toEqual([]);
   });
 
   it("control-held-late: the lever's late request and its unkept answer — another unkept answer fails it", () => {

@@ -23,7 +23,7 @@ import { siteVariant } from "../fansly/front.ts";
 import { mono, sleep } from "../shared.ts";
 import { captureCovers, captureSeen, pastTheProxy, readCapture, readyPort, sendSentinel, sentinelPorts } from "./capture.ts";
 import { Page, loadTopology, waitFor, type Ctx, type PageInfo, type ScenarioOutcome, type Topology } from "./context.ts";
-import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, fanslyMade, forbiddenSocketMessages, madeAndKept, unadmittedArrivals, variantLoaded, type BufferBounds, type FanslyMade, type GrantUse, type Kept, type PagesByAddress, type Resolution } from "./criteria.ts";
+import { ARRIVAL_SLACK_MS, closedWrites, directArrivals, eventsComplete, exactlyOnce, fanslyMade, forbiddenSocketMessages, madeAndKept, unadmittedArrivals, variantLoaded, type Blind, type BufferBounds, type FanslyMade, type GrantUse, type Kept, type PagesByAddress, type Resolution } from "./criteria.ts";
 import { Docker } from "./docker.ts";
 import { StandFansly, type JournalEvent } from "./fansly.ts";
 import { SCENARIOS, type Need, type Scenario } from "./scenarios.ts";
@@ -151,7 +151,7 @@ export async function startPage(docker: Docker, info: PageInfo): Promise<void> {
  *  mark it committed. Read again for a few seconds while something is
  *  missing: a frame sent or a request answered at the very end of a run may
  *  still be on its way through the operator's buffer. */
-export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean, waitMs = 5000): Promise<ReturnType<typeof madeAndKept>> {
+export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean, waitMs = 5000, blind: Blind | null = null): Promise<ReturnType<typeof madeAndKept>> {
   const pages = [...new Set([...made.frames, ...made.answers].map((one) => one.page))];
   const read = async (): Promise<Kept> => {
     const frames = new Map<string, Set<number>>();
@@ -166,11 +166,11 @@ export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean,
     }
     return { frames, outcomes, responses, gaps: await store.gapsOf(pages) };
   };
-  let verdict = madeAndKept(made, await read());
+  let verdict = madeAndKept(made, await read(), undefined, blind);
   const deadline = mono() + waitMs;
   while (verdict.violations.length > 0 && mono() < deadline) {
     await sleep(250);
-    verdict = madeAndKept(made, await read());
+    verdict = madeAndKept(made, await read(), undefined, blind);
   }
   return verdict;
 }
@@ -237,8 +237,8 @@ async function commonChecks(s: Stand, page: Page, run: RunEvidence): Promise<Che
   // And apart from the operator's numbers: what the stand's Fansly made —
   // the frames it sent, the requests it answered — against what is stored.
   const made = fanslyMade(journal, grants, pagesByAddress(s.topology));
-  const kept = await keptOfMade(s.store, made, run.outcome?.naive === true);
-  run.notes.fanslyMade = { frames: made.frames.length, answers: made.answers.length, coveredByGap: kept.coveredByGap };
+  const kept = await keptOfMade(s.store, made, run.outcome?.naive === true, undefined, run.outcome?.blind ?? null);
+  run.notes.fanslyMade = { frames: made.frames.length, answers: made.answers.length, coveredByGap: kept.coveredByGap, unseenAtLoss: kept.unseenAtLoss };
   const past = pastTheProxy(capture.packets, { pageIps: [page.info.controlIp, page.info.egressIp], socks: { ip: s.topology.socksIp, port: s.topology.socksPort }, engineIp: s.topology.engineIp, rpcPort: s.topology.rpcPort });
   const checks: Record<(typeof COMMON_CHECKS)[number], string[]> = {
     "C1 no request or socket without an admission in force": unadmittedArrivals(journal, grants, pagesByAddress(s.topology), ARRIVAL_SLACK_MS, s.grantUse),

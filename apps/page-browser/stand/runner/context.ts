@@ -12,6 +12,7 @@ import { StandEngine, STAND_ENV } from "./engine.ts";
 import type { StandFansly } from "./fansly.ts";
 import type { Store } from "./store.ts";
 import type { Planted } from "./verdict.ts";
+import type { Blind } from "./criteria.ts";
 
 export interface PageInfo {
   /** The page's name on the stand (p1, p2 … and disk). */
@@ -212,4 +213,7 @@ export interface ScenarioOutcome {
   /** A control: the violations its run planted, named as exactly as the
    *  run knows them (verdict.ts `Planted`). */
   planted?: Planted[];
+  /** A loss of control: when the page could not see its browser's traffic
+   *  (criteria.ts `Blind`, for C7). */
+  blind?: Blind;
 }

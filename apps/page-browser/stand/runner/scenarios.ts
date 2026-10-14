@@ -20,7 +20,7 @@ import { atLeast } from "../../src/state/steps.ts";
 import type { SiteBehaviour } from "../fansly/front.ts";
 import { STAND_EXIT_IP, STAND_OTHER_EXIT_IP, STAND_SOCKS_USER, mono, sleep } from "../shared.ts";
 import { Activity, waitFor, type Ctx, type Page, type ScenarioOutcome } from "./context.ts";
-import { closedWriteAttempted, exitClosedWithin, expiredArrivals, expiredUnderHold, gapCommitted, inFlightAtRestart, lateUnderHold, plantedBypass, plantedDuplicates, plantedLate, plantedLeak, plantedLostFrames, plantedNoCapture, plantedRepeat, plantedTail, plantedRelease, plantedUnkeptAnswer, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type OperatorRequestLine, type SeenTransition, type WaitingRequest } from "./criteria.ts";
+import { closedWriteAttempted, exitClosedWithin, type Blind, expiredArrivals, expiredUnderHold, gapCommitted, heldAcross, inFlightAtRestart, lateUnderHold, plantedBypass, plantedDuplicates, plantedLate, plantedLeak, plantedLostFrames, plantedNoCapture, plantedRepeat, plantedTail, plantedRelease, plantedUnkeptAnswer, sentAfterRecovery, stoodBetween, stoppedFor, upWithin, type OperatorRequestLine, type SeenTransition, type WaitingRequest } from "./criteria.ts";
 import type { Grant, StandEngine } from "./engine.ts";
 import type { JournalEvent } from "./fansly.ts";
 import { leak } from "./leak.ts";
@@ -98,6 +98,13 @@ function transitions(page: Page): SeenTransition[] {
 
 function closures(page: Page): number[] {
   return page.enginesOfRun.flatMap((engine) => engine.closures);
+}
+
+/** A loss of control's blind stretch: from the fault until the page was up
+ *  again (criteria.ts `Blind`). */
+function blindSince(ctx: Ctx, faultMono: number): Blind {
+  const up = transitions(ctx.page).find((state) => state.atMono >= faultMono && state.exitOpen && atLeast(state.step, "exit_open"));
+  return { page: ctx.page.info.name, fromMono: faultMono, toMono: up?.atMono ?? null };
 }
 
 function isUp(engine: StandEngine): boolean {
@@ -272,7 +279,7 @@ function operatorLoss(how: "kill" | "hang", inFlight = false): Scenario["run"] {
     Object.assign(checks, await standsThenStarts(ctx, back, 3000, "after the operator started again"));
     ctx.notes.upAfterMs = Math.round(mono() - faultMono);
     checks.gap = await waitGap(ctx, "operator_start", faultMono);
-    return { faultMono, checks, attempts: activity.issued };
+    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, faultMono) };
   };
 }
 
@@ -315,7 +322,7 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break", inFlight = false, p
     if (alarm) ctx.notes.alarm = alarm.alarm.detail;
     await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 40_000, faultMono);
     checks.upByItself = upWithin(transitions(ctx.page), faultMono, 40_000, "after the control loss");
-    return { faultMono, checks, attempts: activity.issued, ...(planted ? { planted } : {}) };
+    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, faultMono), ...(planted ? { planted } : {}) };
   };
 }
 
@@ -969,7 +976,22 @@ function admissionExpiry(late: boolean): Scenario["run"] {
         await ctx.stand.drop(api);
         engine.holdAdmissions(false);
       });
-      await sleep(14_000);
+      // The hold stays until an admission given after the fault — a site
+      // request's (the control: any request's) — is past its deadline with
+      // its request still waiting and a CONNECT held across that deadline:
+      // a Hub request may take the page's one admission first, and an
+      // admission can find its request gone (its outcome comes at once).
+      // Lifting the hold lets go of every held CONNECT at once (socks.ts):
+      // one let go before that deadline would only send its request in time.
+      const pastDeadline = async () => {
+        const now = mono();
+        const waited = ctx.page.enginesOfRun.flatMap((owner) => owner.grants.filter((grant) => grant.page === ctx.page.info.name && (late ? grant.kind !== "ws" : grant.kind === "site") && grant.attemptId > 0 && grant.grantedMono >= faultMono && now > grant.deadlineMono + 1000 && !owner.outcomeMessages.some((seen) => seen.message.attemptId === grant.attemptId && seen.atMono < grant.deadlineMono)));
+        if (waited.length === 0) return false;
+        const journal = await ctx.stand.journal(ctx.journalSince);
+        return waited.some((grant) => heldAcross(journal, ctx.page.info.egressIp, api, grant.deadlineMono).length > 0);
+      };
+      await sleep(8000);
+      ctx.notes.holdLiftedAfterMs = (await waitFor(pastDeadline, 30_000, 250)) ? Math.round(mono() - faultMono) : null;
       await ctx.stand.socks({ hold: null });
       await sleep(8000);
       activity.stop();
