@@ -35,14 +35,41 @@
 // - A connection closed by the operator (superseded, lost, a protocol
 //   error) is destroyed if its peer has not taken the close within a few
 //   seconds: a peer that stopped reading does not keep its socket forever.
+// - The API's calls of the login form (`login.*`, plan §4.8; PR 15) come on
+//   the same endpoint with the API's own token: a connection whose first
+//   message is a `login.*` call is the API's. Every call carries the token,
+//   checked first, in constant time; a wrong one is refused and the
+//   connection closes. The API's connections never touch the engine's: no
+//   hello, no generation, no link. A call's answer goes on its connection —
+//   a screenshot's JPEG as binary frames before the JSON that names it. A
+//   call is never logged with what it carries: its type and id only.
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 
 import { CommandLedger, type CommandOutcome } from "./ledger.ts";
 import type { GenerationStore } from "./generation.ts";
-import { parseEngineValue, PROTOCOL, SUPPORTED_MAJORS, type BufferMessage, type Command, type Hello, type HelloResult, type HubMessage, type OperatorToEngine, type SiteAdmitResult, type State, type WsAdmitResult } from "./protocol.ts";
+import type { LoginOutcome } from "../login/desk.ts";
+import {
+  BODY_PART_BYTES,
+  encodeBodyFrame,
+  parseEngineValue,
+  parseLoginRequest,
+  PROTOCOL,
+  SUPPORTED_MAJORS,
+  type BufferMessage,
+  type Command,
+  type Hello,
+  type HelloResult,
+  type HubMessage,
+  type LoginReply,
+  type LoginRequest,
+  type OperatorToEngine,
+  type SiteAdmitResult,
+  type State,
+  type WsAdmitResult,
+} from "./protocol.ts";
 import { acceptWebSocket, type WsConnection } from "../shared/ws.ts";
 import { errorMessage, makeLog, monoMs, type Logger } from "../shared/util.ts";
 
@@ -70,11 +97,17 @@ export interface RpcHandlers {
   onSite?: (message: SiteAdmitResult) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
+  /** A call of the login form (PR 15), its token checked. Without a
+   *  handler every call is refused as not in the manual login. */
+  onLogin?: (request: LoginRequest) => Promise<LoginOutcome | { kind: "refused"; reason: "not_manual_login" }>;
 }
 
 export interface RpcServerOptions {
   /** The page's RPC token (plan §3.1). */
   token: string;
+  /** The API's own token for the login form's calls (PR 15); null: the
+   *  container has none, and every call is refused. */
+  apiToken?: string | null;
   generations: GenerationStore;
   handlers: RpcHandlers;
   pingMs?: number;
@@ -88,6 +121,8 @@ interface Conn {
   ws: WsConnection;
   greeted: boolean;
   generation: number;
+  /** The API's connection of the login form (its first message a call). */
+  api: boolean;
 }
 
 const CLOSE_PROTOCOL = 1008;
@@ -96,6 +131,10 @@ const CLOSE_SUPERSEDED = 4002;
 const CLOSE_LINK_LOST = 4003;
 /** A closed connection's peer gets this long to take what is queued. */
 const CLOSE_GRACE_MS = 5000;
+/** The API's connections at once: the oldest goes when one more comes. */
+const MAX_API_CONNECTIONS = 4;
+/** An API connection with no call this long is closed. */
+const API_IDLE_MS = 120_000;
 
 function digest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
@@ -128,6 +167,8 @@ export class RpcServer {
   #linkLossMs: number;
   #timer: NodeJS.Timeout | null = null;
   #lastPingAt = 0;
+  /** The API's connections, with when each was last heard. */
+  readonly #apiConns = new Map<Conn, number>();
 
   constructor(options: RpcServerOptions) {
     this.#options = options;
@@ -258,6 +299,8 @@ export class RpcServer {
     this.#timer = null;
     this.#active?.ws.destroy("the operator stops");
     this.#setActive(null);
+    for (const conn of this.#apiConns.keys()) conn.ws.destroy("the operator stops");
+    this.#apiConns.clear();
     const server = this.#server;
     this.#server = null;
     if (server) {
@@ -267,9 +310,16 @@ export class RpcServer {
   }
 
   #tick(): void {
+    const now = monoMs();
+    for (const [api, heard] of this.#apiConns) {
+      if (api.ws.closed) this.#apiConns.delete(api);
+      else if (now - heard > API_IDLE_MS) {
+        this.#apiConns.delete(api);
+        this.#close(api, 1000);
+      }
+    }
     const conn = this.#active;
     if (!conn || conn.ws.closed) return;
-    const now = monoMs();
     if (now - this.#lastHeard > this.#linkLossMs) {
       this.#log("link.lost", { silentMs: Math.round(now - this.#lastHeard), generation: conn.generation });
       this.#drop(conn, CLOSE_LINK_LOST, `nothing from the engine for ${Math.round(now - this.#lastHeard)} ms`);
@@ -290,7 +340,7 @@ export class RpcServer {
   }
 
   #adopt(ws: WsConnection): void {
-    const conn: Conn = { ws, greeted: false, generation: 0 };
+    const conn: Conn = { ws, greeted: false, generation: 0, api: false };
     const helloTimer = setTimeout(() => {
       if (!conn.greeted) ws.close(CLOSE_PROTOCOL);
     }, this.#options.helloTimeoutMs ?? 5000);
@@ -302,16 +352,33 @@ export class RpcServer {
         this.#protocolError(conn, "not JSON");
         return;
       }
+      if (conn.api) {
+        this.#onLoginCall(conn, value);
+        return;
+      }
       if (!conn.greeted) {
         clearTimeout(helloTimer);
+        const type = (value as { type?: unknown } | null)?.type;
+        if (typeof type === "string" && type.startsWith("login.")) {
+          // The API's connection: the login form's calls, nothing else.
+          conn.greeted = true;
+          conn.api = true;
+          this.#adoptApi(conn);
+          this.#onLoginCall(conn, value);
+          return;
+        }
         this.#onHello(conn, value);
         return;
       }
       this.#onMessage(conn, value);
     };
-    ws.onBinary = () => this.#protocolError(conn, "a binary frame from the engine");
+    ws.onBinary = () => this.#protocolError(conn, conn.api ? "a binary frame from the API" : "a binary frame from the engine");
     ws.onClose = (reason) => {
       clearTimeout(helloTimer);
+      if (conn.api) {
+        this.#apiConns.delete(conn);
+        return;
+      }
       if (this.#active !== conn) return;
       this.#setActive(null);
       this.#log("link.closed", { reason, generation: conn.generation });
@@ -320,8 +387,83 @@ export class RpcServer {
   }
 
   #protocolError(conn: Conn, error: string): void {
+    if (conn.api) {
+      this.#log("login.protocol_error", { error });
+      this.#apiConns.delete(conn);
+      this.#close(conn, CLOSE_PROTOCOL);
+      return;
+    }
     this.#log("protocol.error", { error, generation: conn.generation });
     this.#drop(conn, CLOSE_PROTOCOL, `a protocol error: ${error}`);
+  }
+
+  // ── the login form's calls (PR 15) ─────────────────────────────────────
+
+  #adoptApi(conn: Conn): void {
+    if (this.#apiConns.size >= MAX_API_CONNECTIONS) {
+      const oldest = this.#apiConns.keys().next().value!;
+      this.#apiConns.delete(oldest);
+      this.#close(oldest, 1000);
+    }
+    this.#apiConns.set(conn, monoMs());
+  }
+
+  #onLoginCall(conn: Conn, value: unknown): void {
+    if (conn.ws.closed) return;
+    this.#apiConns.set(conn, monoMs());
+    const raw = (value ?? {}) as { callId?: unknown; token?: unknown };
+    const callId = typeof raw.callId === "string" && /^[A-Za-z0-9-]{1,64}$/.test(raw.callId) ? raw.callId : "";
+    // The token before anything else, as the engine's hello.
+    const expected = this.#options.apiToken ?? null;
+    if (expected === null || typeof raw.token !== "string" || !tokenMatches(raw.token, expected)) {
+      this.#log("login.refused", { reason: "token", callId });
+      conn.ws.sendText(JSON.stringify({ type: "login.refused", callId, reason: "token" } satisfies LoginReply));
+      this.#apiConns.delete(conn);
+      this.#close(conn, CLOSE_REFUSED);
+      return;
+    }
+    const parsed = parseLoginRequest(value);
+    if (!parsed.ok) {
+      this.#protocolError(conn, parsed.error);
+      return;
+    }
+    const request = parsed.request;
+    this.#log("login.call", { type: request.type, callId: request.callId });
+    const handler = this.#options.handlers.onLogin;
+    const outcome = handler ? handler(request) : Promise.resolve({ kind: "refused" as const, reason: "not_manual_login" as const });
+    void outcome.then(
+      (done) => this.#answerLogin(conn, request, done),
+      (error: unknown) => {
+        this.#log("login.failed", { type: request.type, callId: request.callId, error: errorMessage(error) });
+        this.#answerLogin(conn, request, { kind: "refused", reason: "screen_changed" });
+      },
+    );
+  }
+
+  #answerLogin(conn: Conn, request: LoginRequest, outcome: LoginOutcome | { kind: "refused"; reason: "not_manual_login" }): void {
+    if (conn.ws.closed) return;
+    const callId = request.callId;
+    let reply: LoginReply;
+    switch (outcome.kind) {
+      case "refused":
+        reply = { type: "login.refused", callId, reason: outcome.reason };
+        break;
+      case "state":
+        reply = { type: "login.stateResult", callId, screen: outcome.screen, screenVersion: outcome.screenVersion, fields: outcome.fields, siteError: outcome.siteError };
+        break;
+      case "screenshot": {
+        const bodyId = randomUUID();
+        const jpeg = outcome.jpeg;
+        const parts = Math.max(1, Math.ceil(jpeg.length / BODY_PART_BYTES));
+        for (let part = 0; part < parts; part++) {
+          conn.ws.sendBinary(encodeBodyFrame(bodyId, part, part === parts - 1, jpeg.subarray(part * BODY_PART_BYTES, (part + 1) * BODY_PART_BYTES)));
+        }
+        reply = { type: "login.screenshotResult", callId, jpeg: { bodyId, decodedBytes: jpeg.length, sha256: createHash("sha256").update(jpeg).digest("hex") } };
+        break;
+      }
+    }
+    conn.ws.sendText(JSON.stringify(reply));
+    this.#log("login.answered", { type: request.type, callId, answer: reply.type, ...(reply.type === "login.refused" ? { reason: reply.reason } : {}), ...(reply.type === "login.stateResult" ? { screen: reply.screen } : {}) });
   }
 
   #refuseHello(conn: Conn, reason: "token" | "protocol_major" | "generation_stale"): void {

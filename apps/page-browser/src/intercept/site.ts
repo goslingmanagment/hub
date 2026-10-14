@@ -191,6 +191,10 @@ export interface SiteDeps {
   /** The page must stop: the exit is closed when this returns. */
   fault: (reason: "request_unended", note: string) => void;
   journal: (line: RequestLine) => void;
+  /** A login operation ended (PR 15: the login desk's sign of the success):
+   *  its route, its status (null: no answer; a preflight's answer is not
+   *  its request's) and whether it was sent. Never what it carried. */
+  loginEnded?: (end: { route: string; status: number | null; sent: boolean }) => void;
   timings?: Partial<SiteTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -1280,6 +1284,7 @@ export class SiteRequests {
     // unless its document is gone (replaced, or loaded anew by the operator).
     if (end.status === null && !end.reload && !this.#sent(op) && !this.documents.replaced(op.document)) this.#failures += 1;
     op.end();
+    if (op.operation === "login") this.#deps.loginEnded?.({ route: op.route, status: end.preflightAnswer ? null : end.status, sent: this.#sent(op) });
     // The body: whole and sealed, a mark, or none to keep.
     const capture = op.capture;
     let body: OutcomeBody | null = null;

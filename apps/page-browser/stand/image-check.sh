@@ -55,6 +55,7 @@ PAGE="image-check"
 mkdir -m 700 "$WORK/secrets"
 (umask 077; openssl rand -hex 16 > "$WORK/secrets/vnc_password")
 (umask 077; openssl rand -hex 32 > "$WORK/secrets/rpc_token")
+(umask 077; openssl rand -hex 32 > "$WORK/secrets/api_token")
 cat > "$WORK/page.env" <<EOF
 PB_PAGE=$PAGE
 PB_IMAGE=$IMAGE

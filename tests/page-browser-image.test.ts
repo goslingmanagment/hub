@@ -139,10 +139,19 @@ describe("the operator's services (PR 4)", () => {
     expect(run).toContain("install -o pb-operator -g pb-operator -m 400 /run/secrets/rpc_token /run/pb/operator/rpc_token");
     expect(read("apps/page-browser/s6/scripts/init-net")).toContain("install -d -o pb-operator -g pb-operator -m 700 /run/pb/operator");
     const compose = read("docker-compose.page-browser.yml");
-    expect(compose).toContain("      - vnc_password\n      - rpc_token\n");
+    expect(compose).toContain("      - vnc_password\n      - rpc_token\n      - api_token\n");
     expect(compose).toContain("  rpc_token:\n    file: ${PB_SECRETS_DIR:?the page's secrets directory}/rpc_token");
     expect(read("apps/page-browser/host/page.sh")).toContain('(umask 077; openssl rand -hex 32 > "$dir/secrets/rpc_token")');
     expect(read("apps/page-browser/stand/image-check.sh")).toContain('openssl rand -hex 32 > "$WORK/secrets/rpc_token"');
+  });
+
+  it("give the operator the API's own token of the login form the same way, never the engine's (PR 15)", () => {
+    const run = read(`${services}/operator/run`);
+    expect(run).toContain("install -o pb-operator -g pb-operator -m 400 /run/secrets/api_token /run/pb/operator/api_token");
+    const compose = read("docker-compose.page-browser.yml");
+    expect(compose).toContain("  api_token:\n    file: ${PB_SECRETS_DIR:?the page's secrets directory}/api_token");
+    expect(read("apps/page-browser/host/page.sh")).toContain('(umask 077; openssl rand -hex 32 > "$dir/secrets/api_token")');
+    expect(read("apps/page-browser/src/operator/config.ts")).toContain("the API token is the engine's RPC token: each must be its own");
   });
 });
 

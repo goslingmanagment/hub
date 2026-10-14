@@ -1,0 +1,629 @@
+import { createHash, randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Socket } from "node:net";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { CdpPort, EventHandler } from "../apps/page-browser/src/cdp/client.ts";
+import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
+import { LoginDesk } from "../apps/page-browser/src/login/desk.ts";
+import { locateExpression, PROBE, recognize, SCREEN_VERSION, type FormMarks, type PageMarks, type SessionMarks } from "../apps/page-browser/src/login/screens.ts";
+import { loadConfig } from "../apps/page-browser/src/operator/config.ts";
+import { Operator } from "../apps/page-browser/src/operator/operator.ts";
+import { decodeBodyFrame, parseLoginRequest } from "../apps/page-browser/src/rpc/protocol.ts";
+import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
+import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
+import {
+  BrowserModel,
+  FakeChrome,
+  FakeChromeControl,
+  FakeEngine,
+  fakeIpify,
+  FakeSocks,
+  hello,
+  HolderUnderS6,
+  proxyConnect,
+  RPC_TOKEN,
+  SOCKS_PASSWORD,
+  SOCKS_USER,
+  tempDir,
+  tlsLikeServer,
+  until,
+  writeExtensionPackage,
+  writeNetSelftest,
+} from "./helpers/page-browser-fakes.ts";
+import { BUTTON_CENTRE, FakeLoginSite } from "./helpers/page-browser-login-site.ts";
+
+// The login form in the operator (Project Browser plan §4.8, §4.13; spec
+// §6.1 `login.*`, §7; stage 3 PR 15): the API's calls on the RPC endpoint
+// with their own token, the manual login switched by the engine's `setMode`
+// of the current owner generation only, the screens recognized from the
+// isolated world, the owner's input typed as a person types (DOM.focus,
+// Input.insertText, a press at the button's centre), the site's own login
+// requests under the engine's admission — and what was typed nowhere but in
+// the browser: no log line, no journal, no file of the buffer.
+
+const cleanups: Array<() => Promise<void> | void> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  setLogSink(null);
+  forgetSecrets();
+});
+
+/** Markers: what the owner "types". Nothing else is a credential here. */
+const LOGIN_MARKER = "pb15-login-marker-4d1e";
+const PASSWORD_MARKER = "pb15-password-marker-9b7c2a";
+const CODE_MARKER = "731948";
+const API_TOKEN = "api-token-fedcba9876543210fedcba9876543210";
+const SITE_TOKEN = "fansly-token-AfTeRlOgIn0123456789";
+const SITE_CLIENT = "720167541418239001";
+
+const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: null, ...marks });
+const page = (forms: FormMarks[], extra: Partial<PageMarks> = {}): PageMarks => ({ origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms, ...extra });
+
+describe("the screens (spec §7; signs fansly-login/1)", () => {
+  const none: SessionMarks = { live: null, atStart: null };
+  it("knows the login, the code, the error, the success — and nothing else", () => {
+    expect(recognize(page([form({ password: 1, login: 1 })]), none)).toMatchObject({ screen: "login", fields: ["login", "password"], siteError: null });
+    expect(recognize(page([form({ code: 1 })]), none)).toMatchObject({ screen: "code", fields: ["code"] });
+    expect(recognize(page([form({ password: 1, login: 1, error: "Invalid username or password" })]), none)).toMatchObject({ screen: "error", fields: ["login", "password"], siteError: "Invalid username or password" });
+    expect(recognize(page([form({ code: 1, error: "Invalid code" })]), none)).toMatchObject({ screen: "error", fields: ["code"], siteError: "Invalid code" });
+    expect(recognize(page([]), { live: "b".repeat(64), atStart: "a".repeat(64) })).toMatchObject({ screen: "success", fields: [] });
+    expect(recognize(page([]), { live: "b".repeat(64), atStart: null })).toMatchObject({ screen: "success" });
+    // The site's code accepted: its new session may not show before the
+    // automation is back (the manual login closes its reads).
+    expect(recognize(page([]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "success" });
+    // A form still shown wins: an accepted code with the code form again is no success.
+    expect(recognize(page([form({ code: 1 })]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "code" });
+  });
+
+  it("a page without a form after the login alone (an e-mail notice, say) is unknown, never a success", () => {
+    expect(recognize(page([]), { live: null, atStart: null, codeAccepted: false }).screen).toBe("unknown");
+  });
+
+  it("the desk counts the code accepted only from a sent POST /login/twofa answered 2xx, in this manual login", async () => {
+    const chrome = new DeskChrome();
+    chrome.screen = "none";
+    const d = desk(chrome);
+    d.begin();
+    d.loginEnded({ route: "auth.login", status: 200, sent: true });
+    d.loginEnded({ route: "auth.twofa", status: 403, sent: true });
+    d.loginEnded({ route: "auth.twofa", status: null, sent: true });
+    d.loginEnded({ route: "auth.twofa", status: 200, sent: false });
+    expect(await d.state()).toMatchObject({ screen: "unknown" });
+    d.loginEnded({ route: "auth.twofa", status: 200, sent: true });
+    expect(await d.state()).toMatchObject({ screen: "success" });
+    // A new manual login starts from nothing.
+    d.begin();
+    expect(await d.state()).toMatchObject({ screen: "unknown" });
+  });
+
+  it("anything that does not match every sign is unknown: nothing is pressed there", () => {
+    const unknown = (marks: PageMarks | null, session: SessionMarks = none) => recognize(marks, session).screen;
+    expect(unknown(null)).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1 })], { captcha: true }))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1 })], { origin: "https://evil.example" }))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1 }), form({ code: 1 })]))).toBe("unknown");
+    // A consent box, a second field, two buttons, no button, a code beside a password.
+    expect(unknown(page([form({ password: 1, login: 1, other: 1 })]))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1, submit: 2 })]))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1, submit: 0 })]))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, code: 1 })]))).toBe("unknown");
+    expect(unknown(page([form({ password: 2, login: 1 })]))).toBe("unknown");
+    // No form: the session from before the manual login says nothing.
+    expect(unknown(page([]))).toBe("unknown");
+    expect(unknown(page([]), { live: "a".repeat(64), atStart: "a".repeat(64) })).toBe("unknown");
+    expect(unknown(page([], { readyState: "loading" }), { live: "b".repeat(64), atStart: null })).toBe("unknown");
+  });
+
+  it("the probe and the locator read no value of a field", () => {
+    for (const source of [PROBE, locateExpression("password"), locateExpression("submit")]) {
+      expect(source).not.toMatch(/\.value\b/);
+      expect(source).not.toMatch(/selectionStart|selectionEnd|getSelection/);
+    }
+  });
+});
+
+describe("the API's token in the container (operator/config.ts)", () => {
+  it("is its own: read when there, absent as none, never short, never the engine's", () => {
+    const temp = tempDir();
+    cleanups.push(temp.remove);
+    const rpc = join(temp.dir, "rpc_token");
+    const api = join(temp.dir, "api_token");
+    writeFileSync(rpc, `${RPC_TOKEN}\n`);
+    const env = { PB_RPC_TOKEN_FILE: rpc, PB_API_TOKEN_FILE: api };
+    expect(loadConfig(env).apiToken).toBeNull();
+    writeFileSync(api, `${API_TOKEN}\n`);
+    expect(loadConfig(env).apiToken).toBe(API_TOKEN);
+    writeFileSync(api, "short");
+    expect(() => loadConfig(env)).toThrow(/shorter/);
+    writeFileSync(api, RPC_TOKEN);
+    expect(() => loadConfig(env)).toThrow(/each must be its own/);
+  });
+});
+
+describe("the calls (spec §6.1 `login.*`)", () => {
+  it("are read strictly, and an error names the field, never what was typed", () => {
+    const base = { callId: "c-1", token: API_TOKEN };
+    expect(parseLoginRequest({ ...base, type: "login.submit", login: LOGIN_MARKER, password: PASSWORD_MARKER })).toEqual({ ok: true, request: { ...base, type: "login.submit", login: LOGIN_MARKER, password: PASSWORD_MARKER } });
+    for (const bad of [
+      { ...base, type: "login.submit", login: LOGIN_MARKER, password: `${PASSWORD_MARKER}\n` },
+      { ...base, type: "login.submit", login: LOGIN_MARKER, password: PASSWORD_MARKER.repeat(100) },
+      { ...base, type: "login.submit", login: "", password: PASSWORD_MARKER },
+      { ...base, type: "login.code", code: `${CODE_MARKER}${"9".repeat(40)}` },
+      { ...base, type: "login.submit", login: LOGIN_MARKER },
+      { ...base, callId: "bad id!", type: "login.state" },
+      { ...base, type: "login.other" },
+    ]) {
+      const parsed = parseLoginRequest(bad);
+      expect(parsed.ok).toBe(false);
+      const error = parsed.ok ? "" : parsed.error;
+      expect(error).not.toContain(PASSWORD_MARKER);
+      expect(error).not.toContain(LOGIN_MARKER);
+      expect(error).not.toContain(CODE_MARKER);
+    }
+  });
+});
+
+// ── the desk alone, on an in-process Chrome ─────────────────────────────────
+
+class DeskChrome implements CdpPort {
+  readonly commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+  screen: "login" | "code" | "other" | "none" = "login";
+  hit = true;
+  send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    this.commands.push({ method, params });
+    const value = ((): unknown => {
+      switch (method) {
+        case "Runtime.evaluate": {
+          const expression = String(params.expression);
+          if (expression.includes("pbLoginProbe")) {
+            if (this.screen === "login") return { result: { value: page([form({ password: 1, login: 1 })]) } };
+            if (this.screen === "code") return { result: { value: page([form({ code: 1 })]) } };
+            if (this.screen === "none") return { result: { value: page([]) } };
+            return { result: { value: page([form({ password: 1, login: 1, other: 1 })]) } };
+          }
+          return { result: { objectId: `o-${this.commands.length}` } };
+        }
+        case "DOM.getBoxModel":
+          return { model: { content: [0, 0, 100, 0, 100, 40, 0, 40] } };
+        case "Runtime.callFunctionOn":
+          return { result: { value: String(params.functionDeclaration).includes("elementFromPoint") ? this.hit : true } };
+        default:
+          return {};
+      }
+    })();
+    return Promise.resolve(value as T);
+  }
+  on(_method: string, _handler: EventHandler): void {}
+  ack(): void {}
+  holdAcks(): void {}
+  of(method: string) {
+    return this.commands.filter((command) => command.method === method);
+  }
+}
+
+function desk(chrome: DeskChrome): LoginDesk {
+  return new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(7), session: () => null, timings: { settleMs: 50, pollMs: 10 }, log: () => undefined });
+}
+
+describe("the desk (plan §4.8: input as a person's)", () => {
+  it("focuses, replaces, inserts, and presses at the button's centre — reading the screen before each step", async () => {
+    const chrome = new DeskChrome();
+    const answer = await desk(chrome).submit(LOGIN_MARKER, PASSWORD_MARKER);
+    expect(answer).toMatchObject({ kind: "state", screen: "login", screenVersion: SCREEN_VERSION });
+    expect(chrome.of("Input.insertText").map((command) => command.params.text)).toEqual([LOGIN_MARKER, PASSWORD_MARKER]);
+    expect(chrome.of("DOM.focus")).toHaveLength(2);
+    const presses = chrome.of("Input.dispatchMouseEvent").map((command) => command.params);
+    expect(presses.map((event) => event.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    expect(presses[1]).toMatchObject({ x: 50, y: 20, button: "left", clickCount: 1 });
+    // Read before typing each field and before the press, then after.
+    const probes = chrome.commands.filter((command) => command.method === "Runtime.evaluate" && String(command.params.expression).includes("pbLoginProbe"));
+    expect(probes.length).toBeGreaterThanOrEqual(4);
+    // Every reference it took is let go.
+    expect(chrome.of("Runtime.releaseObjectGroup")).not.toHaveLength(0);
+  });
+
+  it("presses nothing on a screen that is not the form's, or when something lies over the button", async () => {
+    const other = new DeskChrome();
+    other.screen = "other";
+    expect(await desk(other).submit(LOGIN_MARKER, PASSWORD_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    expect(other.of("Input.insertText")).toHaveLength(0);
+    expect(other.of("Input.dispatchMouseEvent")).toHaveLength(0);
+    const code = new DeskChrome();
+    expect(await desk(code).code(CODE_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    const covered = new DeskChrome();
+    covered.hit = false;
+    expect(await desk(covered).submit(LOGIN_MARKER, PASSWORD_MARKER)).toEqual({ kind: "refused", reason: "screen_changed" });
+    expect(covered.of("Input.dispatchMouseEvent")).toHaveLength(0);
+  });
+
+  it("one step at a time", async () => {
+    const chrome = new DeskChrome();
+    const d = desk(chrome);
+    const [first, second] = await Promise.all([d.submit(LOGIN_MARKER, PASSWORD_MARKER), d.submit(LOGIN_MARKER, PASSWORD_MARKER)]);
+    expect(first.kind).toBe("state");
+    expect(second).toEqual({ kind: "refused", reason: "busy" });
+  });
+});
+
+// ── the operator end to end ────────────────────────────────────────────────
+
+interface SetUp {
+  dir: string;
+  operator: Operator;
+  engine: FakeEngine;
+  chrome: FakeChrome;
+  model: BrowserModel;
+  socks: FakeSocks;
+  site: FakeLoginSite;
+  logDir: string;
+  lines: string[];
+  rpcPort: number;
+}
+
+async function setUp(options: { apiToken?: string | null } = {}): Promise<SetUp> {
+  const temp = tempDir();
+  cleanups.push(temp.remove);
+  const lines: string[] = [];
+  setLogSink((line) => lines.push(line));
+  const chrome = new FakeChrome();
+  await chrome.boot();
+  await chrome.shutdown();
+  cleanups.push(() => chrome.shutdown());
+  const model = new BrowserModel(chrome);
+  const site = new FakeLoginSite(model, { login: LOGIN_MARKER, password: PASSWORD_MARKER, code: CODE_MARKER, token: SITE_TOKEN, clientId: SITE_CLIENT });
+  const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
+  await holder.start();
+  cleanups.push(() => holder.stop());
+  const socks = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
+  await socks.start();
+  cleanups.push(() => socks.stop());
+  const ipify = await fakeIpify(() => "203.0.113.7");
+  cleanups.push(ipify.close);
+  socks.routes.set("api.ipify.org:443", ipify.port);
+  const server = await tlsLikeServer();
+  cleanups.push(server.close);
+  socks.routes.set("apiv3.fansly.com:443", server.port);
+  const control = new FakeChromeControl(chrome);
+  const chromeEnv = join(temp.dir, "chrome-env");
+  control.onStart = () => model.chromeStarts(chromeEnv);
+  const netSelftest = join(temp.dir, "net-selftest.json");
+  writeNetSelftest(netSelftest);
+  const logDir = join(temp.dir, "logs");
+  const extensionDir = join(temp.dir, "extension");
+  writeExtensionPackage(extensionDir);
+  const operator = new Operator({
+    config: {
+      holderSock: holder.socketPath,
+      proxyHost: "127.0.0.1",
+      proxyPort: 0,
+      rpcHost: "127.0.0.1",
+      rpcPort: 0,
+      rpcToken: RPC_TOKEN,
+      apiToken: options.apiToken === undefined ? API_TOKEN : options.apiToken,
+      netSelftestPath: netSelftest,
+      chromeEnvPath: chromeEnv,
+      logDir,
+      stateDir: join(temp.dir, "state"),
+      bufferDir: join(temp.dir, "buffer"),
+      extensionDir,
+      heartbeatPath: join(temp.dir, "alive"),
+      operatorVersion: "test",
+    },
+    chrome: control,
+    exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
+    loginTimings: { settleMs: 3000, pollMs: 20 },
+    timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
+  });
+  const ports = await operator.start();
+  cleanups.push(() => operator.stop());
+  model.proxyPort = ports.proxyPort;
+  await until(() => operator.cdp.linked, 3000, "the holder link");
+  const engine = new FakeEngine();
+  await engine.connect(ports.rpcPort);
+  cleanups.push(() => engine.close());
+  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+  await engine.waitFor("helloResult");
+  return { dir: temp.dir, operator, engine, chrome, model, socks, site, logDir, lines, rpcPort: ports.rpcPort };
+}
+
+let commandN = 0;
+function command(engine: FakeEngine, command: Record<string, unknown>, generation = engine.generation): Promise<Record<string, unknown>> {
+  const commandId = `c-${++commandN}`;
+  engine.send({ type: "command", ownerGeneration: generation, commandId, notAfterMono: monoMs() + 10_000, command });
+  return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
+}
+
+/** The API's end of the login form: one WebSocket, calls by id. */
+class Caller {
+  readonly replies: Array<Record<string, unknown>> = [];
+  readonly frames: Buffer[] = [];
+  closed: number | null = null;
+  #ws: WebSocket | null = null;
+
+  static async open(port: number): Promise<Caller> {
+    const caller = new Caller();
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`);
+      ws.binaryType = "arraybuffer";
+      caller.#ws = ws;
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("no connection"));
+      ws.onclose = (event) => (caller.closed = event.code);
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) caller.frames.push(Buffer.from(event.data));
+        else caller.replies.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+      };
+    });
+    return caller;
+  }
+
+  async call(type: string, fields: Record<string, unknown> = {}, token = API_TOKEN, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+    const callId = randomUUID();
+    this.#ws!.send(JSON.stringify({ type, callId, token, ...fields }));
+    let found: Record<string, unknown> | undefined;
+    await until(() => (found = this.replies.find((reply) => reply.callId === callId)) !== undefined || this.closed !== null, timeoutMs, `the answer to ${type}`);
+    return found ?? { closed: this.closed };
+  }
+
+  close(): void {
+    this.#ws?.close();
+  }
+}
+
+/** The page started, the site loaded (step 8), the engine admitting every
+ *  site request and every check. */
+async function started(s: SetUp, generation = 1): Promise<void> {
+  let attempt = 7000;
+  s.engine.onMessage = (message) => {
+    if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: generation, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: ++attempt });
+    if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: generation, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+  };
+  expect(await command(s.engine, { kind: "restartBrowser" })).toMatchObject({ ok: true });
+  await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded");
+  s.site.setTab(s.operator.control.workTab!.sessionId);
+}
+
+/** Every file under `dir`, as bytes (the buffer's SQLite and bodies). */
+function filesUnder(dir: string): Buffer[] {
+  const out: Buffer[] = [];
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) out.push(...filesUnder(path));
+    else out.push(readFileSync(path));
+  }
+  return out;
+}
+
+describe("the login form through the operator (plan §4.8; PR 15)", () => {
+  it("takes no call before the engine's manual login, and none with a wrong token", async () => {
+    const s = await setUp();
+    await started(s);
+    const api = await Caller.open(s.rpcPort);
+    cleanups.push(() => api.close());
+    expect(await api.call("login.state")).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
+    expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER })).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
+    expect(s.site.inserted).toEqual([]);
+    // The engine's token is not the API's.
+    const wrong = await Caller.open(s.rpcPort);
+    expect(await wrong.call("login.state", {}, RPC_TOKEN)).toMatchObject({ type: "login.refused", reason: "token" });
+    await until(() => wrong.closed !== null, 3000, "the wrong token's connection to close");
+    // An API connection is not the engine's: the engine's link stands.
+    expect(s.operator.rpc.linkUp).toBe(true);
+  });
+
+  it("a container without an API token refuses every call", async () => {
+    const s = await setUp({ apiToken: null });
+    const api = await Caller.open(s.rpcPort);
+    expect(await api.call("login.state")).toMatchObject({ type: "login.refused", reason: "token" });
+  });
+
+  it("the manual login only by the current owner: an earlier generation's setMode is refused, and a new owner ends it", async () => {
+    const s = await setUp();
+    await started(s);
+    const api = await Caller.open(s.rpcPort);
+    cleanups.push(() => api.close());
+    // A second engine of a newer generation takes the page.
+    const newer = new FakeEngine();
+    newer.generation = 2;
+    await newer.connect(s.rpcPort);
+    cleanups.push(() => newer.close());
+    newer.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await newer.waitFor("quiesced");
+    // The old one's command never reaches the operator's mode.
+    s.engine.send({ type: "command", ownerGeneration: 1, commandId: "old-1", notAfterMono: monoMs() + 10_000, command: { kind: "setMode", mode: "manual_login" } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.state.mode).toBe("automation");
+    expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
+    // The current owner's does.
+    expect(await command(newer, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    expect(s.operator.state.mode).toBe("manual_login");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    expect(await api.call("login.state")).toMatchObject({ type: "login.stateResult", screen: "login", screenVersion: SCREEN_VERSION, fields: ["login", "password"], siteError: null });
+    // Generation 3 comes: the manual login was generation 2's.
+    const third = new FakeEngine();
+    third.generation = 3;
+    await third.connect(s.rpcPort);
+    cleanups.push(() => third.close());
+    third.send(hello({ ownerGeneration: 3, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await third.waitFor("quiesced");
+    expect(s.operator.state.mode).toBe("automation");
+    expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
+  });
+
+  it("end to end: the screen, its screenshot, the login and the code typed in, the site's own login under the engine's admission, the success; then the automation with its checks — and nothing typed anywhere but in the browser", async () => {
+    const s = await setUp();
+    await started(s);
+    const api = await Caller.open(s.rpcPort);
+    cleanups.push(() => api.close());
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    const loadsBefore = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true, detail: expect.stringContaining("the manual login") });
+    await s.engine.waitFor("state", (state) => state.mode === "manual_login");
+    // The site is loaded anew for its login screen.
+    await until(() => s.model.navigations.length > loadsBefore && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    s.site.setTab(s.operator.control.workTab!.sessionId);
+
+    // The screen, and the screenshot: its bytes as frames before the JSON.
+    expect(await api.call("login.state")).toMatchObject({ type: "login.stateResult", screen: "login", fields: ["login", "password"] });
+    const shot = await api.call("login.screenshot");
+    expect(shot).toMatchObject({ type: "login.screenshotResult" });
+    const ref = shot.jpeg as { bodyId: string; decodedBytes: number; sha256: string };
+    const frame = decodeBodyFrame(api.frames.at(-1)!);
+    expect(frame).toMatchObject({ bodyId: ref.bodyId, part: 0, last: true });
+    expect(frame.data.toString()).toBe("FAKEJPEG:login");
+    expect(createHash("sha256").update(frame.data).digest("hex")).toBe(ref.sha256);
+
+    // A wrong password first: the site's error, the fields to try again.
+    const wrong = await api.call("login.submit", { login: LOGIN_MARKER, password: "pb15-wrong-marker" });
+    expect(wrong).toMatchObject({ type: "login.stateResult", screen: "error", fields: ["login", "password"], siteError: "Invalid username or password" });
+    // The login and the password, typed in; the site's own POST of them.
+    const asked = s.engine.of("siteAdmit").length;
+    const afterSubmit = await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER });
+    expect(afterSubmit).toMatchObject({ type: "login.stateResult", screen: "code", fields: ["code"], siteError: null });
+    expect(s.site.fields.login).toBe(LOGIN_MARKER);
+    expect(s.site.presses).toBe(2);
+    const loginAsk = s.engine.of("siteAdmit").slice(asked).find((ask) => ask.path === "/api/v1/login")!;
+    expect(loginAsk).toMatchObject({ method: "POST", host: "apiv3.fansly.com", route: "auth.login", operation: "login", sessionFingerprint: null });
+    // The code, typed in; the site's own POST of it; the success.
+    const afterCode = await api.call("login.code", { code: CODE_MARKER });
+    expect(afterCode).toMatchObject({ type: "login.stateResult", screen: "success", fields: [], siteError: null });
+    const codeAsk = s.engine.of("siteAdmit").find((ask) => ask.path === "/api/v1/login/twofa")!;
+    expect(codeAsk).toMatchObject({ method: "POST", route: "auth.twofa", operation: "login" });
+    await until(() => s.engine.of("siteDone").filter((done) => [loginAsk.siteRequestId, codeAsk.siteRequestId].includes(done.siteRequestId)).length === 2, 5000, "both logins' ends");
+    for (const done of s.engine.of("siteDone").filter((end) => [loginAsk.siteRequestId, codeAsk.siteRequestId].includes(end.siteRequestId))) {
+      // Its answer is not kept: a login's answer carries secrets.
+      expect(done).toMatchObject({ sent: true, status: 200, body: "not_platform_data" });
+    }
+    // The site's read after the login is not the manual login's (closed by
+    // the map), but its session is the page's now.
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT));
+    expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/account/me")).toBe(false);
+    // No socket of the site while a person is in the page.
+    expect(s.operator.page.step).toBe("site_loaded");
+
+    // The automation is back: the exit IP checked, the site loaded anew.
+    const loads = s.model.navigations.length;
+    const back = await command(s.engine, { kind: "setMode", mode: "automation" });
+    expect(back).toMatchObject({ ok: true });
+    expect(String(back.detail)).toContain("the exit IP 203.0.113.7 is the pinned one");
+    expect(s.operator.state.mode).toBe("automation");
+    await until(() => s.model.navigations.length > loads, 10_000, "the site loaded anew under the automation");
+    expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
+
+    // What was typed reached the browser — and nothing else.
+    expect(s.site.inserted).toEqual([LOGIN_MARKER, "pb15-wrong-marker", LOGIN_MARKER, PASSWORD_MARKER, CODE_MARKER]);
+    await s.operator.journals.flushed();
+    await s.operator.buffer.close();
+    const written = [...filesUnder(s.logDir), ...filesUnder(join(s.dir, "buffer")), ...filesUnder(join(s.dir, "state"))];
+    expect(written.length).toBeGreaterThan(0);
+    for (const marker of [LOGIN_MARKER, PASSWORD_MARKER, CODE_MARKER, "pb15-wrong-marker"]) {
+      expect(s.lines.join("\n"), marker).not.toContain(marker);
+      for (const file of written) expect(file.includes(marker), marker).toBe(false);
+      for (const message of s.engine.messages) expect(JSON.stringify(message), marker).not.toContain(marker);
+    }
+    // The facts are there: the steps, the login's path, its end.
+    const log = s.lines.join("\n");
+    expect(log).toContain('"e":"step.done"');
+    expect(Buffer.concat(filesUnder(s.logDir)).toString()).toContain("/api/v1/login/twofa");
+  });
+
+  it("a press goes to the button's centre only (spec §7: nothing pressed where something else lies)", async () => {
+    const s = await setUp();
+    await started(s);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    s.site.setTab(s.operator.control.workTab!.sessionId);
+    const api = await Caller.open(s.rpcPort);
+    cleanups.push(() => api.close());
+    s.site.covered = true;
+    expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER })).toMatchObject({ type: "login.refused", reason: "screen_changed" });
+    expect(s.site.presses).toBe(0);
+    expect(s.site.posts).toHaveLength(0);
+    s.site.covered = false;
+    s.site.screen = "captcha";
+    expect(await api.call("login.state")).toMatchObject({ screen: "unknown", fields: [] });
+    expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER })).toMatchObject({ reason: "screen_changed" });
+    expect(s.chrome.sent("Input.dispatchMouseEvent").filter((cmd) => cmd.params.x === BUTTON_CENTRE.x && cmd.params.type === "mousePressed")).toHaveLength(0);
+  });
+
+  /** The site's own read with a session (its headers as the site sets them). */
+  function siteRead(s: SetUp, token: string, clientId: string): void {
+    const path = "/api/v1/account/me";
+    s.model.pause(`https://apiv3.fansly.com${path}?ngsw-bypass=true`, "GET", s.operator.control.workTab!.sessionId, "XHR", {
+      Accept: "application/json, text/plain, */*",
+      authorization: token,
+      "fansly-client-check": fanslyClientCheck(path, clientId),
+      "fansly-client-id": clientId,
+      "fansly-client-ts": String(Date.now()),
+      "fansly-session-id": "720167541418230022",
+    });
+  }
+
+  it("a ready page is not ready while a person is in it: back at the loaded site until the automation, its identity confirmed then", async () => {
+    const s = await setUp();
+    await started(s);
+    const token = "fansly-token-ReAdYbEfOrE0123456789";
+    const fingerprint = sessionFingerprint(token, SITE_CLIENT);
+    siteRead(s, token, SITE_CLIENT);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    // The engine's identity read names the page's account: ready.
+    s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
+    const identity = (attemptId: number) => ({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
+    await s.engine.waitFor("siteDone", () => true, 10_000);
+    s.engine.send(identity(9501));
+    await until(() => s.operator.page.step === "ready", 10_000, "the page ready");
+    // The manual login: never ready while it lasts, though the session is
+    // the one the identity named.
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    expect(s.operator.page.step).not.toBe("ready");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    // The site's read again under that session: closed in the manual login.
+    siteRead(s, token, SITE_CLIENT);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(s.operator.admissionsOpen()).toBe(true);
+    // Hub's request under the live session does not go while a person is in
+    // the page: answered, not sent.
+    const issued = s.model.hubRequests.length;
+    s.engine.send(identity(9502));
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9502, 10_000)).outcome).toMatchObject({ sent: false });
+    expect(s.model.hubRequests).toHaveLength(issued);
+    // The automation: the site loaded anew, and ready again under the
+    // identity of the live session.
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "ready", 10_000, "the page ready again");
+  });
+
+  it("no socket of the site in the manual login: its CONNECT is refused before any admission is asked", async () => {
+    const s = await setUp();
+    await started(s);
+    siteRead(s, SITE_TOKEN, SITE_CLIENT);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT));
+    // In the automation the socket's CONNECT is asked of the engine.
+    const asked = proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
+    await s.engine.waitFor("wsAdmit");
+    const ask = s.engine.last("wsAdmit")!;
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: false, reason: "held", retryNotBeforeWall: null });
+    (await asked).socket.destroy();
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    const before = s.engine.of("wsAdmit").length;
+    const refused = await proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
+    refused.socket.destroy();
+    expect(refused.status).not.toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.engine.of("wsAdmit")).toHaveLength(before);
+  });
+
+  it("the login operations are the manual login's only: in the automation the map closes them", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const request = s.model.pause("https://apiv3.fansly.com/api/v1/login", "POST", tab, "XHR", { "content-type": "application/json" }, JSON.stringify({ username: LOGIN_MARKER, password: PASSWORD_MARKER }));
+    await until(() => request.outcome === "failed", 3000, "the login to be failed");
+    expect(request.failReason).toBe("BlockedByClient");
+    expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/login")).toBe(false);
+  });
+});

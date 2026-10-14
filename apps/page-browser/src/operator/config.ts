@@ -16,6 +16,10 @@ export interface OperatorConfig {
   rpcPort: number;
   /** The page's RPC token: the engine's hello must carry it. */
   rpcToken: string;
+  /** The API's own token for the login form's calls (plan §4.8, PR 15);
+   *  null: the container has none — every call is refused. Never the
+   *  engine's. Absent: as null. */
+  apiToken?: string | null;
   /** The kernel check's result (s6 service net-selftest). */
   netSelftestPath: string;
   /** The page's environment for Chrome's start (env/handover.ts). */
@@ -46,6 +50,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     throw new Error(`no RPC token in ${tokenFile}`);
   }
   if (rpcToken.length < MIN_TOKEN_LENGTH) throw new Error(`the RPC token in ${tokenFile} is shorter than ${MIN_TOKEN_LENGTH} characters`);
+  const apiTokenFile = env.PB_API_TOKEN_FILE || "/run/pb/operator/api_token";
+  let apiToken: string | null;
+  try {
+    apiToken = readFileSync(apiTokenFile, "utf8").trim();
+  } catch {
+    // A container made before PR 15: no login form, the rest runs.
+    apiToken = null;
+  }
+  if (apiToken !== null && apiToken.length < MIN_TOKEN_LENGTH) throw new Error(`the API token in ${apiTokenFile} is shorter than ${MIN_TOKEN_LENGTH} characters`);
+  if (apiToken !== null && apiToken === rpcToken) throw new Error("the API token is the engine's RPC token: each must be its own");
   return {
     holderSock: envStr("PB_HOLDER_SOCK", "/run/pb/operator/holder.sock"),
     proxyHost: "127.0.0.1",
@@ -54,6 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     rpcHost: envStr("PB_RPC_HOST", "0.0.0.0"),
     rpcPort: envInt("PB_RPC_PORT", 7700),
     rpcToken,
+    apiToken,
     netSelftestPath: envStr("PB_NET_SELFTEST", "/run/pb/net-selftest.json"),
     chromeEnvPath: envStr("PB_CHROME_ENV", HANDOVER_PATH),
     logDir: envStr("PB_LOG_DIR", "/data/buffer/logs"),

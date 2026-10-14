@@ -194,6 +194,11 @@ up() {
   if [[ ! -s "$dir/secrets/rpc_token" ]]; then
     (umask 077; openssl rand -hex 32 > "$dir/secrets/rpc_token")
   fi
+  # The API's own token for the login form's calls (plan §4.8): never the
+  # engine's.
+  if [[ ! -s "$dir/secrets/api_token" ]]; then
+    (umask 077; openssl rand -hex 32 > "$dir/secrets/api_token")
+  fi
   local next
   next="$(next_file)"
   (umask 077; : > "$next")
