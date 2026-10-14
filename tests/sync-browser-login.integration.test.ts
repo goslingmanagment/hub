@@ -4,8 +4,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  findPageBrowser,
+  getPageBrowserCommand,
   getSyncPageManualLogin,
   insertPageBrowser,
+  latchPageBrowserHalt,
   setPageBrowserSettings,
   setSyncPageManualLogin,
   setSyncPageTransport,
@@ -17,6 +20,7 @@ import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { changeSyncPagePause, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
+import { startPageBrowser, stopPageBrowsers } from "../apps/runtime/src/sync/browser-levers.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A } from "./helpers/page-browser-operator.ts";
@@ -502,5 +506,88 @@ describe("the owner's pause and the login (Astra's review of PR 15, item 5)", ()
     // The login over (no engine here: as it ends it), the owner resumes.
     await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_paused = false where page_id = $1", [r.page.pageId]);
     expect(await lever(r, "resume", { all: true })).toMatchObject({ pausedAll: false });
+  }, LONG_TEST_MS);
+});
+
+describe("the owner's browser stop and start during a login (PR 17 with PR 15)", () => {
+  it("a page on Node: the stop during an open login is run over the login's link and confirmed, takes over the login's pause — the login's end does not lift it, and the login does not start the browser again; the owner's start does both", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await startHost(r);
+    await login(r, "wanted");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started for the login");
+    const [stop] = await stopPageBrowsers(db(), { pageLabel: r.page.pageLabel, actor: "cli@test" });
+    expect(stop).toMatchObject({ pausedByStop: true, pauseFromLogin: true });
+    await until(async () => (await getPageBrowserCommand(db(), stop!.command.id))?.doneAt != null, WAIT_MS, "the stop run");
+    expect(await getPageBrowserCommand(db(), stop!.command.id)).toMatchObject({ ok: true });
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: false, pausedAll: true });
+    // The login stands by: no start of a browser the owner stopped (a
+    // negative check — the wait only gives a wrong driver the time).
+    const starts = () => r.operator.commands.filter((command) => command.command.kind === "restartBrowser").length;
+    const before = starts();
+    await sleep(1_500);
+    expect(starts()).toBe(before);
+    // The login closes: the page stays on the stop's pause.
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "off", pausedAll: true });
+    expect((await testDb.pool.query("select browser_stop_paused from sync_pages where page_id = $1", [r.page.pageId])).rows[0]).toEqual({ browser_stop_paused: true });
+    // The owner's start: the stop's pause lifted.
+    expect(await startPageBrowser(db(), { pageLabel: r.page.pageLabel, actor: "cli@test" })).toMatchObject({ resumed: true, pauseToLogin: false, wasStopped: true });
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ pausedAll: false });
+  }, LONG_TEST_MS);
+
+  it("a page on Node: the owner's start during the login gives the pause back to the login, and the login starts the browser it needs", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await startHost(r);
+    await login(r, "wanted");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started for the login");
+    const [stop] = await stopPageBrowsers(db(), { pageLabel: r.page.pageLabel, actor: "cli@test" });
+    await until(async () => (await getPageBrowserCommand(db(), stop!.command.id))?.doneAt != null, WAIT_MS, "the stop run");
+    const starts = () => r.operator.commands.filter((command) => command.command.kind === "restartBrowser").length;
+    const before = starts();
+    expect(await startPageBrowser(db(), { pageLabel: r.page.pageLabel, actor: "cli@test" })).toMatchObject({ resumed: false, pauseToLogin: true });
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: true, pausedAll: true });
+    await until(async () => starts() > before, WAIT_MS, "the login's start of the browser");
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ pausedAll: false });
+  }, LONG_TEST_MS);
+});
+
+describe("a browser Fansly signed out, and the owner's login of it (PR 17 with PR 15)", () => {
+  it("a page on its browser halted with login_required: its slot does not start it, its login does; a login that ends with the account confirmed lifts the latch", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "login_required" };
+    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
+    await startHost(r);
+    await until(async () => (await findPageBrowser(db(), r.profileId))?.haltReason === "login_required", WAIT_MS, "the halt latched");
+    // The slot does not start a browser that stands for the owner's decision.
+    await sleep(1_000);
+    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
+    // The owner logs in: the login starts it, the latch stays while it is open.
+    await login(r, "wanted");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the login's start");
+    expect((await findPageBrowser(db(), r.profileId))?.haltReason).toBe("login_required");
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
+    // The operator confirms the page's account under the live session.
+    r.operator.pushState({ step: "ready", mode: "automation", exitOpen: true, stopReason: null });
+    await until(async () => (await findPageBrowser(db(), r.profileId))?.haltReason === null, WAIT_MS, "the latch lifted by the login");
+  }, LONG_TEST_MS);
+
+  it("a latched login_required stays when the operator is up again without a login since", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.operator.state = { ...r.operator.state, step: "ready", exitOpen: true };
+    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
+    await latchPageBrowserHalt(db(), { profileId: r.profileId, reason: "login_required" });
+    await startHost(r);
+    await until(async () => (await findPageBrowser(db(), r.profileId))?.lastStateAt != null, WAIT_MS, "the operator's state recorded");
+    r.operator.pushState({ step: "ready" });
+    await sleep(1_000);
+    expect((await findPageBrowser(db(), r.profileId))?.haltReason).toBe("login_required");
   }, LONG_TEST_MS);
 });

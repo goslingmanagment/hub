@@ -232,7 +232,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
   });
   if (bufferUndrainedSince !== null) clearUndrainedOnceDrained(deps, profileId, client, intake);
   const login = deps.login === true
-    ? new BrowserLoginDriver({ db, pageId, generation, transport: "browser", client, bridge, clock: deps.clock, logger, metrics, ...(overrides.loginTiming === undefined ? {} : { timing: overrides.loginTiming }) })
+    ? new BrowserLoginDriver({ db, pageId, profileId, generation, transport: "browser", client, bridge, clock: deps.clock, logger, metrics, ...(overrides.loginTiming === undefined ? {} : { timing: overrides.loginTiming }) })
     : null;
   let stopped: Promise<void> | null = null;
   return {

@@ -568,9 +568,11 @@ export function isOwnerDecisionHalt(state: { stopReason: string | null; retryAtW
 /**
  * The browser stopped for the owner's decision (0280): latched on the
  * profile's row when the engine first hears it — its first reason and
- * instant kept — and lifted only by the owner's `sync browser start`
- * (`clearPageBrowserOwnerStop`): an operator that starts again stands with no
- * reason, and nothing it says lifts the latch. True: latched now or already.
+ * instant kept — and lifted by the owner's decision alone: his `sync
+ * browser start` (`clearPageBrowserOwnerStop`), and for `login_required` also
+ * his successful login (`clearPageBrowserLoginRequiredHalt`). An operator
+ * that starts again stands with no reason, and nothing it says lifts the
+ * latch. True: latched now or already.
  */
 export async function latchPageBrowserHalt(db: Database, input: { profileId: string; reason: string }): Promise<boolean> {
   const result = await db.execute(sql`
@@ -580,6 +582,28 @@ export async function latchPageBrowserHalt(db: Database, input: { profileId: str
            updated_at = clock_timestamp()
      where profile_id = ${input.profileId}::uuid
     returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
+/**
+ * A latched `login_required` is lifted by a successful login (PR 17 with PR
+ * 15): the owner's login of the page's browser ended after the latch, and
+ * since then the operator confirmed the page's expected account under its
+ * live session (the caller heard it). Any other halt stays for `sync browser
+ * start`. True: lifted.
+ */
+export async function clearPageBrowserLoginRequiredHalt(db: Database, input: { profileId: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers b
+       set halt_reason = null, halt_at = null, updated_at = clock_timestamp()
+      from sync_pages sp
+     where b.profile_id = ${input.profileId}::uuid
+       and sp.page_id = b.page_id
+       and b.halt_reason = 'login_required'
+       and sp.manual_login = 'off'
+       and sp.manual_login_changed_at > b.halt_at
+    returning b.profile_id
   `);
   return result.rows.length === 1;
 }
@@ -649,7 +673,8 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
 
 /** What a page's browser may be told, read fresh by the page's owner right
  *  before it commands it (0280): the page's transport, its pending leave and
- *  its owner generation, its pause, the owner's stop and a latched halt. */
+ *  its owner generation, its pause, the owner's login of the browser, the
+ *  owner's stop and a latched halt. */
 export interface PageBrowserControlRead {
   pageId: number;
   transport: "node" | "browser" | null;
@@ -659,6 +684,8 @@ export interface PageBrowserControlRead {
   pausedAll: boolean;
   /** The whole pause is the one the owner's browser stop put (0280). */
   browserStopPaused: boolean;
+  /** The owner's login of the page's browser (0279; null: no engine row). */
+  manualLogin: "off" | "wanted" | "ending" | null;
   ownerStopAt: Date | null;
   haltReason: string | null;
 }
@@ -668,11 +695,11 @@ export interface PageBrowserControlRead {
 export async function readPageBrowserControl(db: Database, input: { profileId: string }): Promise<PageBrowserControlRead | null> {
   const result = await db.execute<{
     pageId: string; transport: string | null; leaveGeneration: string | null; ownerGeneration: string | null;
-    pausedAll: boolean | null; browserStopPaused: boolean | null; ownerStopAt: Date | string | null; haltReason: string | null;
+    pausedAll: boolean | null; browserStopPaused: boolean | null; manualLogin: string | null; ownerStopAt: Date | string | null; haltReason: string | null;
   }>(sql`
     select b.page_id::text as "pageId", sp.transport, sp.browser_leave_generation::text as "leaveGeneration",
            sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
-           b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason"
+           sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason"
       from page_browsers b
       left join sync_pages sp on sp.page_id = b.page_id
      where b.profile_id = ${input.profileId}::uuid and b.page_id is not null
@@ -686,6 +713,7 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
     ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
     pausedAll: row.pausedAll === true,
     browserStopPaused: row.browserStopPaused === true,
+    manualLogin: row.manualLogin === "off" || row.manualLogin === "wanted" || row.manualLogin === "ending" ? row.manualLogin : null,
     ownerStopAt: dateOf(row.ownerStopAt),
     haltReason: row.haltReason,
   };

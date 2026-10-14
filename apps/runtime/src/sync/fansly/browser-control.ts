@@ -30,18 +30,26 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //
 // One guard (`browserStartRefusal`), read fresh right before each command
 // that brings the browser up — `restartBrowser`, a self-test's `openExit`;
-// the start of a slot and the owner's start alike: never a page not on its
-// browser, leaving it, or of a newer owner; never while the owner stopped it
-// or paused the page, nor while a person logs it in; never a browser halted
-// for the owner's decision. That halt is latched in Hub (`halt_reason`,
-// written by the recorder when it hears it, lifted only by the owner's
-// audited `sync browser start`): an operator that starts again stands with
-// no reason and knows nothing of it. Until the latch is read back, the halt
-// this control heard on its link holds its own starts too.
+// the start of a slot, the owner's start and the login's (PR 15's driver)
+// alike: never a page leaving its browser, or of a newer owner; never while
+// the owner stopped it; never a browser halted for the owner's decision. That
+// halt is latched in Hub (`halt_reason`, written by the recorder when it
+// hears it, lifted by the owner's audited `sync browser start` — and a
+// `login_required` by his successful login): an operator that starts again
+// stands with no reason and knows nothing of it. Until the latch is read
+// back, the halt this control heard on its link holds its own starts too.
+// A slot's start and the owner's: only a page on its browser, never while the
+// owner paused the page or a login of its browser is open (Hub's
+// `manual_login`, not only the operator's mode) — the login brings up the
+// browser it needs itself: a merely stopped one, or one stopped because
+// Fansly signed it out (`login_required`: the login is the owner's decision
+// it waits for), on Node or on its browser.
 //
 // Nothing goes to the operator before its hand-over to this owner
 // (`quiesced`). A leave of the browser keeps the owner's stop and nothing
-// more: it starts nothing and takes no command.
+// more: it starts nothing and takes no command. The link of a page on Node
+// for its login (`role: "login"`) takes the owner's commands and keeps his
+// stop, and starts nothing by itself.
 
 export interface BrowserControlTiming {
   /** How often the owner's levers are looked at. */
@@ -72,8 +80,9 @@ export interface BrowserControlDeps {
   clock: Clock;
   logger: SyncLogger;
   metrics: Metrics;
-  /** `slot`: the page's slot on its browser; `leave`: a leave of it. */
-  role: "slot" | "leave";
+  /** `slot`: the page's slot on its browser; `leave`: a leave of it;
+   *  `login`: the link of a page on Node for the owner's login (PR 15). */
+  role: "slot" | "leave" | "login";
   timing?: Partial<BrowserControlTiming>;
 }
 
@@ -89,34 +98,51 @@ export function browserStoppedByOwner(state: State): boolean {
   return state.step === "exit_closed" && !state.exitOpen && state.stopReason === "owner_stop";
 }
 
+/** The halt the owner's login is the decision for. */
+const LOGIN_DECIDES = "login_required";
+
+/** The browser stopped because Fansly signed it out: it stands for the
+ *  owner's login, which may bring it up (plan §4.8 — «нужен вход», then the
+ *  owner logs in on the live screen). */
+export function browserStandsForLogin(state: State): boolean {
+  return state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && state.stopReason === LOGIN_DECIDES;
+}
+
 /**
  * Why the page's browser may not be brought up now (null: it may) — one guard
  * for the start of a slot (`who: "slot"`, which also respects a halt it heard
- * itself and not yet read back) and the owner's own start (`who: "owner"`:
- * his start lifted the stop and the latch it names, in its transaction), read
- * fresh right before the command goes.
+ * itself and not yet read back), the owner's own start (`who: "owner"`: his
+ * start lifted the stop and the latch it names, in its transaction) and the
+ * start the owner's open login asks for (`who: "login"`, PR 15's driver: on
+ * Node or on its browser, under the login's own pause; a `login_required`
+ * halt is the one it decides), read fresh right before the command goes.
  */
 export function browserStartRefusal(input: {
   control: PageBrowserControlRead | null;
   state: State | null;
   generation: bigint;
-  who: "slot" | "owner";
+  who: "slot" | "owner" | "login";
   /** A halt for the owner's decision this control heard on its link. */
   haltHeard?: string | null;
 }): string | null {
-  const { control, state } = input;
+  const { control, state, who } = input;
   if (control === null) return "the page's browser serves no page";
   if (state === null) return "the operator cannot be reached";
-  if (control.transport !== "browser") return `the page is not on its browser (its transport is ${control.transport ?? "unknown"})`;
+  if (who === "login" && control.manualLogin !== "wanted") return `the login of the page's browser is not open (${control.manualLogin ?? "no engine row"})`;
+  if (who !== "login" && control.transport !== "browser") return `the page is not on its browser (its transport is ${control.transport ?? "unknown"})`;
   if (control.leaveGeneration !== null) return "a leave of the page's browser is pending";
   if (control.ownerGeneration !== input.generation) return "this owner of the page was superseded";
   if (control.ownerStopAt !== null) return "the owner stopped the page's browser (sync browser start lifts the stop)";
-  if (control.haltReason !== null) return `the browser stands for the owner's decision (${control.haltReason}): sync browser start`;
-  if (input.who === "slot" && (input.haltHeard ?? null) !== null) {
-    return `the browser stands for the owner's decision (${input.haltHeard!}): sync browser start`;
+  if (control.haltReason !== null && !(who === "login" && control.haltReason === LOGIN_DECIDES)) {
+    return `the browser stands for the owner's decision (${control.haltReason}): sync browser start`;
   }
+  const heard = input.haltHeard ?? null;
+  if (who !== "owner" && heard !== null && !(who === "login" && heard === LOGIN_DECIDES)) {
+    return `the browser stands for the owner's decision (${heard}): sync browser start`;
+  }
+  if (who === "login") return null;
   if (control.pausedAll) return "the page is paused (sync page resume --all)";
-  if (state.mode === "manual_login") return "a login of the page's browser is open";
+  if (control.manualLogin !== "off" || state.mode === "manual_login") return "a login of the page's browser is open: the login brings up the browser it needs";
   return null;
 }
 
@@ -183,7 +209,7 @@ export class BrowserControl {
     // Hub's latch is read back: it governs from now on.
     if (control.haltReason !== null) this.#haltHeard = null;
     // The owner's command first, in order.
-    if (this.#d.role === "slot") {
+    if (this.#d.role !== "leave") {
       const command = await takePageBrowserCommand(db, { pageId, profileId, generation });
       if (command !== null) {
         let outcome: { ok: boolean; detail: string | null };

@@ -385,10 +385,10 @@ async function runEveryPageRowUpdate(
     ["pausePageForBrowserStop", pageId, async () => {
       await db.transaction(async (tx) => setPagePause(tx as unknown as Database, { pageId, all: false }));
       expect(await db.transaction(async (tx) => pausePageForBrowserStop(tx as unknown as Database, { pageId, note: "stop" })))
-        .toEqual({ pausedByStop: true });
+        .toEqual({ pausedByStop: true, fromLogin: false });
     }],
     ["liftBrowserStopPause", pageId, async () => expect(await db.transaction(async (tx) => liftBrowserStopPause(tx as unknown as Database, { pageId })))
-      .toBe(true)],
+      .toBe("lifted")],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 

@@ -7,6 +7,7 @@ import {
   insertPageBrowser,
   insertPageBrowserCommand,
   latchPageBrowserHalt,
+  setSyncPageManualLogin,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -14,6 +15,8 @@ import type { Command, State } from "../apps/runtime/src/services/egress/page-br
 import type { PageBrowserRpcClient } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { BrowserControl } from "../apps/runtime/src/sync/fansly/browser-control.ts";
+import { BrowserLoginDriver } from "../apps/runtime/src/sync/fansly/browser-login.ts";
+import { startPageBrowser, stopPageBrowsers } from "../apps/runtime/src/sync/browser-levers.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { quietLogger } from "./helpers/sync-engine-host.ts";
 import { harnessConfig, seedHarnessPage } from "./helpers/sync-engine.ts";
@@ -67,6 +70,7 @@ function link(initial: State): Link {
   const listeners = new Set<(state: State) => void>();
   const sent: Link["sent"] = [];
   const client = {
+    up: true,
     get state() {
       return state;
     },
@@ -132,6 +136,9 @@ const CONFLICTS: Array<[string, (page: { pageId: number; profileId: string }, l:
   }, /the page is paused/],
   ["a login of the page's browser open", async (_page, l) => {
     l.setState(stands({ mode: "manual_login" }));
+  }, /a login of the page's browser is open/],
+  ["a login of the page's browser open in Hub, its operator not in it yet", async (page) => {
+    await testDb!.pool.query("update sync_pages set manual_login = 'wanted' where page_id = $1", [page.pageId]);
   }, /a login of the page's browser is open/],
   ["the owner's stop", async (page) => {
     await testDb!.pool.query("update page_browsers set owner_stop_at = clock_timestamp(), owner_stop_by = 'cli' where profile_id = $1", [page.profileId]);
@@ -274,5 +281,91 @@ describe("the owner's stop is confirmed by its own request (Astra PR 17, P1-3)",
     } finally {
       await ctl.stop();
     }
+  });
+});
+
+describe("the login's own start goes under the same guard (PR 15's driver, PR 17)", () => {
+  async function seeded(transport: "node" | "browser") {
+    const page = await browserPage(transport);
+    const label = (await testDb!.pool.query<{ label: string }>("select label from pages where id = $1", [page.pageId])).rows[0]!.label;
+    return { ...page, label };
+  }
+
+  function driver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser"): BrowserLoginDriver {
+    const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
+    return new BrowserLoginDriver({
+      db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, transport, client: l.client,
+      bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
+      timing: { everyMs: 60_000, restartEveryMs: 0 },
+    });
+  }
+
+  const starts = (l: Link) => l.sent.filter((command) => command.kind === "restartBrowser").length;
+  const loginOpen = (pageId: number) => db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId, to: "wanted", by: "owner:test" }));
+
+  for (const transport of ["node", "browser"] as const) {
+    it(`a page on ${transport}: a merely stopped browser is started by the login; one the owner stopped is not, until his start`, async (context) => {
+      if (!testDb) return context.skip();
+      const page = await seeded(transport);
+      const l = link(stands({ mode: "manual_login" }));
+      const login = driver(page, l, transport);
+      await loginOpen(page.pageId);
+      await login.drive();
+      expect(starts(l)).toBe(1);
+      // The owner stops the browser during the login (his lever): the
+      // operator stands stopped by him — the login does not start it again.
+      await stopPageBrowsers(db(), { pageLabel: page.label, actor: "cli@test" });
+      l.setState(stands({ mode: "manual_login", stopReason: "owner_stop" }));
+      await login.drive();
+      await login.drive();
+      expect(starts(l)).toBe(1);
+      // His start lifts the stop: the login starts the browser it needs.
+      await startPageBrowser(db(), { pageLabel: page.label, actor: "cli@test" });
+      await login.drive();
+      expect(starts(l)).toBe(2);
+    });
+  }
+
+  it("a browser latched in Hub for another decision of the owner's is not started by the login, even when its operator stands with no reason", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded("browser");
+    await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "exit_ip_changed" });
+    const l = link(stands({ mode: "manual_login" }));
+    const login = driver(page, l, "browser");
+    await loginOpen(page.pageId);
+    await login.drive();
+    await login.drive();
+    expect(starts(l)).toBe(0);
+  });
+
+  it("a browser Fansly signed out (login_required) is the one halt the login starts — said by the operator or latched in Hub", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded("browser");
+    const l = link(stands({ mode: "manual_login", stopReason: "login_required" }));
+    const login = driver(page, l, "browser");
+    await loginOpen(page.pageId);
+    await login.drive();
+    expect(starts(l)).toBe(1);
+    await latchPageBrowserHalt(db(), { profileId: page.profileId, reason: "login_required" });
+    l.setState(stands({ mode: "manual_login" }));
+    await login.drive();
+    expect(starts(l)).toBe(2);
+  });
+
+  it("no start for a leave pending, a newer owner, or a login no longer wanted", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded("browser");
+    const l = link(stands({ mode: "manual_login" }));
+    const login = driver(page, l, "browser");
+    await loginOpen(page.pageId);
+    await testDb.pool.query("update sync_pages set owner_generation = 6 where page_id = $1", [page.pageId]);
+    await login.drive();
+    expect(starts(l)).toBe(0);
+    await testDb.pool.query("update sync_pages set owner_generation = 5, browser_leave_generation = 5, browser_leave_requested_at = clock_timestamp() where page_id = $1", [page.pageId]);
+    await login.drive();
+    expect(starts(l)).toBe(0);
+    await testDb.pool.query("update sync_pages set browser_leave_generation = null, browser_leave_requested_at = null where page_id = $1", [page.pageId]);
+    await login.drive();
+    expect(starts(l)).toBe(1);
   });
 });

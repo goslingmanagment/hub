@@ -1,4 +1,5 @@
 import {
+  clearPageBrowserLoginRequiredHalt,
   isOwnerDecisionHalt,
   latchPageBrowserHalt,
   recordPageBrowserAlarm,
@@ -26,7 +27,10 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //   by itself, `isOwnerDecisionHalt`), latched on the profile's row at once
 //   and again until it is written — whatever states follow: an operator that
 //   starts again stands with no reason, and only the owner's `sync browser
-//   start` lifts the latch;
+//   start` lifts the latch — or, for `login_required`, his successful login:
+//   the operator confirms the page's expected account under its live session
+//   (`session_confirmed`, in the automation) after a login that ended since
+//   the latch (`clearPageBrowserLoginRequiredHalt`);
 // - its link refused (`token`, `protocol_version`, spec §6.3 rule 6) or
 //   broken by a protocol error (`protocol_error`, rule 3) — cleared by the
 //   next state;
@@ -37,6 +41,12 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //
 // Nothing secret: the protocol's state and alarms carry none (spec §6.1), and
 // the session's fingerprint is a digest the row has kept since PR 12.
+
+/** The operator confirmed the page's expected account under its live
+ *  session, in the automation (its identity read; never in a login). */
+function sessionConfirmed(state: State): boolean {
+  return state.mode === "automation" && (state.step === "session_confirmed" || state.step === "ready");
+}
 
 export interface BrowserRecorderTiming {
   /** A state like the last one written is written again after this long. */
@@ -212,6 +222,17 @@ export class BrowserRecorder {
         this.#writtenKey = key;
         this.#writtenAt = now;
         this.#linkError = null;
+        if (sessionConfirmed(state)) {
+          // Tried again with the next state written (every stateRefreshMs).
+          await clearPageBrowserLoginRequiredHalt(db, { profileId }).then(
+            (cleared) => {
+              if (cleared) logger.info({ pageId }, "Fansly sync browser: logged in again — the login_required latch is lifted");
+            },
+            (error: unknown) => {
+              logger.warn({ pageId, err: errorName(error) }, "Fansly sync browser: the login_required latch could not be lifted yet");
+            },
+          );
+        }
       } catch (error) {
         // Written with the next state, or the next look.
         if (this.#latest === state) this.#unwritten = true;

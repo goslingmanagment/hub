@@ -1016,14 +1016,20 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   past their expiry — a stop's answer comes once Chrome is down and is the stop's confirmation (a snapshot waits for
   it, never for a state); the owner's stop (`page_browsers.owner_stop_*`) is kept by `stopPage`; a slot on the
   browser starts a browser that stands (never started, or stopped by a leave or a stop since lifted). Every start —
-  the slot's, the owner's, a self-test's `openExit` — passes one guard read fresh right before it goes
-  (`browserStartRefusal`: the page on its browser, no leave pending, this owner's generation, no owner stop, no
-  halt, no pause, no login). A halt for the owner's decision is latched in Hub when it is first heard
-  (`page_browsers.halt_reason`): an operator that starts again stands with no reason and lifts nothing; only the
-  owner's audited `sync browser start` does. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`)
-  until the owner changes the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start`
-  lifts only a pause still the stop's. A leave records and keeps the owner's stop, nothing more. The journals stay
-  on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
+  the slot's, the owner's, a self-test's `openExit`, and the one PR 15's login driver asks for — passes one guard
+  read fresh right before it goes (`browserStartRefusal`: no leave pending, this owner's generation, no owner stop,
+  no halt; for the slot's and the owner's also the page on its browser, no pause and no login — Hub's
+  `manual_login`, not only the operator's mode; the login's start, on Node or on the browser, only while its login
+  is `wanted`). A halt for the owner's decision is latched in Hub when it is first heard (`page_browsers.halt_reason`):
+  an operator that starts again stands with no reason and lifts nothing; the owner's audited `sync browser start`
+  does — and a `login_required` (Fansly signed the browser out) is the one halt the login starts the browser for, and
+  is lifted by a successful login: the operator confirms the expected account in the automation after a login that
+  ended since the latch. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
+  the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start` lifts only a pause still
+  the stop's. A stop during an open login takes over the login's pause (its end lifts nothing), and a `start` during
+  one gives the stop's pause back to the login; a drain is refused while a login is open. The link of a page on Node
+  for its login runs the owner's commands and keeps his stop too. A leave records and keeps the owner's stop, nothing
+  more. The journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
   and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the

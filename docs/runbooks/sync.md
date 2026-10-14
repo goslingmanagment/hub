@@ -309,11 +309,19 @@ to the operator; the CLI waits for what the operator says.
   owner runs the page, its operator cannot be reached, or Chrome did not go down; the page is paused all the same.
 - The pause a stop put is the stop's only while you leave it alone: `sync page pause --all` or `resume --all` makes
   it yours, and `start` lifts only a pause still the stop's (as the login does with its own, PR 15).
+- A stop while you log the page's browser in («Войти в браузер») takes over the login's pause: the browser stays
+  stopped and the page paused after the login closes, until `start`. A `start` during the login gives the pause
+  back to the login (the page stays paused until it closes) and the login starts the browser it needs. `drain` is
+  refused while a login is open.
 - `start` is your decision: it lifts your stop, the stop's pause and a halt for your decision (a changed exit IP, a
   guard that failed — latched in Hub when it is first heard: an operator whose container started again stands with
   no reason, and still nothing starts it but you), and starts the browser. A start — yours or the slot's own — is
   refused, with its reason, for a page not on its browser or leaving it, of a newer owner, paused by you, stopped
-  by you, or in a login.
+  by you, or in a login (the login starts the browser itself, never one you stopped or one halted for your
+  decision).
+- `login_required` (Fansly signed the browser out) is the halt your login decides: open «Войти в браузер» on the
+  page's «Браузер» block — the login starts the browser for its screen — and once you logged in and the operator
+  confirmed the page's account, the halt is lifted with no `start`.
 - A page on its browser starts it by itself when it stands — at the switch to `browser`, and back — under that same
   guard.
 - `selftest` closes the exit for the test and opens it again when it passes; a test that fails stops the page

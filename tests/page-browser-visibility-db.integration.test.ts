@@ -3,8 +3,13 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clearPageBrowserLoginRequiredHalt,
+  endSyncPageManualLogin,
+  getSyncPageManualLogin,
   isOwnerDecisionHalt,
   latchPageBrowserHalt,
+  setSyncPageManualLogin,
+  SyncPageManualLoginOpenError,
   liftBrowserStopPause,
   pausePageForBrowserStop,
   setPagePause,
@@ -176,29 +181,131 @@ describe("the owner's stop, the halt latched for his decision, and the pause the
     )).rows[0]!;
     const tx = <T>(body: (tx: Database) => Promise<T>) => db().transaction(async (raw) => body(raw as unknown as Database));
     // Stop → the owner's own pause → start: his pause stays.
-    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: true });
+    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: true, fromLogin: false });
     expect(await pauseOf()).toEqual({ pausedAll: true, mine: true, note: "stop" });
     await setPagePause(db(), { pageId, all: true, note: "maintenance" });
     expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
-    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(false);
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBeNull();
     expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
     // Stop of a page paused already: not the stop's.
-    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: false });
+    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: false, fromLogin: false });
     expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "maintenance" });
     // Resumed by the owner: nothing is the stop's any more; a later pause of his stays too.
     await setPagePause(db(), { pageId, all: false, note: null });
     await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
     await setPagePause(db(), { pageId, all: false, note: null });
     await setPagePause(db(), { pageId, all: true, note: "later" });
-    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(false);
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBeNull();
     expect(await pauseOf()).toEqual({ pausedAll: true, mine: false, note: "later" });
     // The stop's own pause, untouched: lifted.
     await setPagePause(db(), { pageId, all: false, note: null });
     await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
     // A pause of resources or of the requests keeps the whole pause the stop's.
     await setPagePause(db(), { pageId, requests: true });
-    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe(true);
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe("lifted");
     expect(await pauseOf()).toEqual({ pausedAll: false, mine: false, note: null });
+  });
+});
+
+describe("the owner's browser stop and the owner's login of the browser (PR 17 with PR 15)", () => {
+  const tx = <T>(body: (tx: Database) => Promise<T>) => db().transaction(async (raw) => body(raw as unknown as Database));
+  const pauseOf = async (pageId: number) => (await testDb!.pool.query<{ pausedAll: boolean; stop: boolean; login: boolean; manualLogin: string }>(
+    `select paused_all as "pausedAll", browser_stop_paused as stop, manual_login_paused as login, manual_login as "manualLogin" from sync_pages where page_id = $1`,
+    [pageId],
+  )).rows[0]!;
+  const loginTo = (pageId: number, to: "wanted" | "ending") => tx((t) => setSyncPageManualLogin(t, { pageId, to, by: "owner:test" }));
+  const loginEnds = (pageId: number) => tx((t) => endSyncPageManualLogin(t, { pageId, by: "engine" }));
+
+  it("a stop during an open login takes over the login's pause: the login's end does not lift it, the owner's start does", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await browserPage();
+    await loginTo(pageId, "wanted");
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: false, login: true, manualLogin: "wanted" });
+    expect(await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }))).toEqual({ pausedByStop: true, fromLogin: true });
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: true, login: false, manualLogin: "wanted" });
+    await loginTo(pageId, "ending");
+    expect(await loginEnds(pageId)).toBe(true);
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: true, login: false, manualLogin: "off" });
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe("lifted");
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: false, stop: false, login: false, manualLogin: "off" });
+  });
+
+  it("the owner's start during an open login gives the pause back to the login, which lifts it at its end; a login opened under the stop's pause leaves it the stop's", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await browserPage();
+    // Stopped first, then the login: the pause stays the stop's.
+    await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
+    await loginTo(pageId, "wanted");
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: true, login: false, manualLogin: "wanted" });
+    // Started while the login is open: still paused, the login's pause now.
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBe("to_login");
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: false, login: true, manualLogin: "wanted" });
+    await loginTo(pageId, "ending");
+    await loginEnds(pageId);
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: false, stop: false, login: false, manualLogin: "off" });
+  });
+
+  it("setPagePause: the owner's own pause during a login and a stop is his alone; his resume is refused while the login is open", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await browserPage();
+    await loginTo(pageId, "wanted");
+    await tx((t) => pausePageForBrowserStop(t, { pageId, note: "stop" }));
+    // A resume while the login is open: refused, nothing changed.
+    await expect(setPagePause(db(), { pageId, all: false, note: null })).rejects.toBeInstanceOf(SyncPageManualLoginOpenError);
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: true, login: false, manualLogin: "wanted" });
+    // His own pause: neither the stop's nor the login's any more.
+    await setPagePause(db(), { pageId, all: true, note: "mine" });
+    expect(await pauseOf(pageId)).toEqual({ pausedAll: true, stop: false, login: false, manualLogin: "wanted" });
+    expect(await tx((t) => liftBrowserStopPause(t, { pageId }))).toBeNull();
+    await loginTo(pageId, "ending");
+    await loginEnds(pageId);
+    expect(await pauseOf(pageId)).toMatchObject({ pausedAll: true, manualLogin: "off" });
+    // The login's pause alone, and the owner pauses during it: his.
+    await setPagePause(db(), { pageId, all: false, note: null });
+    await loginTo(pageId, "wanted");
+    expect(await pauseOf(pageId)).toMatchObject({ pausedAll: true, login: true });
+    await setPagePause(db(), { pageId, all: true, note: "mine again" });
+    expect(await pauseOf(pageId)).toMatchObject({ pausedAll: true, login: false, stop: false });
+  });
+
+  it("the control read names the login; a drain is refused while it is open", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, profileId } = await browserPage();
+    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({ manualLogin: "off" });
+    await loginTo(pageId, "wanted");
+    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({ manualLogin: "wanted" });
+    expect(await tx((t) => requestBrowserDrain(t, { pageId }))).toEqual({ kind: "login_open" });
+    await loginTo(pageId, "ending");
+    expect(await readPageBrowserControl(db(), { profileId })).toMatchObject({ manualLogin: "ending" });
+    expect(await tx((t) => requestBrowserDrain(t, { pageId }))).toEqual({ kind: "login_open" });
+    await loginEnds(pageId);
+    expect(await tx((t) => requestBrowserDrain(t, { pageId }))).toMatchObject({ kind: "requested" });
+  });
+
+  it("a latched login_required is lifted by a login that ended after it, not before; no other halt is", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, profileId } = await browserPage();
+    // A login that ended before the latch proves nothing of it.
+    await loginTo(pageId, "wanted");
+    await loginTo(pageId, "ending");
+    await loginEnds(pageId);
+    await latchPageBrowserHalt(db(), { profileId, reason: "login_required" });
+    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
+    // Open: not yet.
+    await loginTo(pageId, "wanted");
+    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
+    await loginTo(pageId, "ending");
+    await loginEnds(pageId);
+    expect((await getSyncPageManualLogin(db(), pageId))?.value).toBe("off");
+    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(true);
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltAt: null });
+    // Another halt stays for the owner's start.
+    await latchPageBrowserHalt(db(), { profileId, reason: "exit_ip_changed" });
+    await loginTo(pageId, "wanted");
+    await loginTo(pageId, "ending");
+    await loginEnds(pageId);
+    expect(await clearPageBrowserLoginRequiredHalt(db(), { profileId })).toBe(false);
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "exit_ip_changed" });
   });
 });
 

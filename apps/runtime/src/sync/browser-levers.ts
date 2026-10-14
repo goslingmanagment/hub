@@ -107,9 +107,12 @@ export interface BrowserStopResult {
   stoppedAt: string;
   /** The page was stopped by the owner already (its first stop kept). */
   already: boolean;
-  /** This stop put the page on its pause (`start` lifts it while it is
-   *  still the stop's). */
+  /** This stop put the page on its pause, or took over the one its open
+   *  login put (`start` lifts it while it is still the stop's). */
   pausedByStop: boolean;
+  /** The pause was the open login's: the stop's now, so the login's end does
+   *  not lift it. */
+  pauseFromLogin: boolean;
   /** The stop asked of the operator: its answer — once Chrome is down — is
    *  the stop's confirmation. */
   command: { id: number; kind: PageBrowserCommandKind; expiresAt: string };
@@ -142,6 +145,7 @@ export async function stopPageBrowsers(
         all: input.all === true,
         already: stop.already,
         pausedByStop: paused.pausedByStop,
+        pauseFromLogin: paused.fromLogin,
         profileId: stop.profileId,
         commandId: command.id,
       });
@@ -150,6 +154,7 @@ export async function stopPageBrowsers(
         stoppedAt: stop.stoppedAt.toISOString(),
         already: stop.already,
         pausedByStop: paused.pausedByStop,
+        pauseFromLogin: paused.fromLogin,
         command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
       };
     }));
@@ -164,16 +169,20 @@ export interface BrowserCommandAsked {
 
 /** `sync browser start <page>` — the owner's decision: his stop lifted, a
  *  halt latched for his decision lifted, the page's pause lifted only while
- *  it is still the one his stop put (a pause he changed since is his), and a
- *  start of the browser asked — run under the same guard as any start. */
+ *  it is still the one his stop put (a pause he changed since is his; while
+ *  a login of the browser is open the pause goes back to the login, which
+ *  lifts it at its end), and a start of the browser asked — run under the
+ *  same guard as any start (during a login, the login starts it). */
 export async function startPageBrowser(
   db: Database,
   input: { pageLabel: string; actor: string; note?: string | null },
-): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; haltLifted: { reason: string; at: string } | null }> {
+): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; pauseToLogin: boolean; haltLifted: { reason: string; at: string } | null }> {
   const page = await pageWithBrowser(db, input.pageLabel);
   return transaction(db, async (tx) => {
     // The page row first (the stop's order): its pause and its owner.
-    const resumed = await liftBrowserStopPause(tx, { pageId: page.pageId });
+    const lifted = await liftBrowserStopPause(tx, { pageId: page.pageId });
+    const resumed = lifted === "lifted";
+    const pauseToLogin = lifted === "to_login";
     const cleared = await clearPageBrowserOwnerStop(tx, { pageId: page.pageId });
     if (cleared === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
     const command = await insertPageBrowserCommand(tx, {
@@ -188,6 +197,7 @@ export async function startPageBrowser(
     await audit(tx, page, SYNC_BROWSER_AUDIT_EVENTS.start, input.actor, input.note, {
       wasStopped: cleared.wasStopped,
       resumed,
+      pauseToLogin,
       haltLifted,
       commandId: command.id,
     });
@@ -195,6 +205,7 @@ export async function startPageBrowser(
       page: page.label,
       wasStopped: cleared.wasStopped,
       resumed,
+      pauseToLogin,
       haltLifted,
       command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
     };
@@ -270,6 +281,7 @@ export async function drainPageBrowser(
     const drain = await requestBrowserDrain(tx, { pageId: page.pageId });
     if (drain.kind === "not_node") throw new SyncOwnerLeverError(`${page.label} runs on its browser: its own slot takes what it keeps`);
     if (drain.kind === "pending") throw new SyncOwnerLeverError(`${page.label}: a leave of its browser is pending already`);
+    if (drain.kind === "login_open") throw new SyncOwnerLeverError(`${page.label}: a login of its browser is open — close it first (the drain stops the browser)`);
     if (drain.kind !== "requested") throw new SyncOwnerLeverError(`${page.label}: no engine row`);
     await audit(tx, page, SYNC_BROWSER_AUDIT_EVENTS.drain, input.actor, input.note, {
       profileId: browser.profileId,

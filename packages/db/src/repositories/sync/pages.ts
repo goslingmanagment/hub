@@ -540,19 +540,23 @@ export async function assertBrowserLeft(tx: Database, input: { pageId: number })
  * kept outcomes and buffer taken, the mark cleared), and Node takes the page
  * again. Under the page's row lock, in the caller's transaction. Returns the
  * pending leave's generation; `not_node`: the page is on its browser (its
- * slot takes what it keeps); `pending`: a leave is pending already.
+ * slot takes what it keeps); `pending`: a leave is pending already;
+ * `login_open`: the owner's login of the browser is open (0279) — the leave
+ * would stop the browser a person is in.
  */
 export async function requestBrowserDrain(
   tx: Database,
   input: { pageId: number },
-): Promise<{ kind: "requested"; leave: bigint } | { kind: "not_node" | "pending" | "no_page" }> {
-  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null }>(sql`
-    select transport, browser_leave_generation::text as leave from sync_pages where page_id = ${input.pageId} for no key update
+): Promise<{ kind: "requested"; leave: bigint } | { kind: "not_node" | "pending" | "login_open" | "no_page" }> {
+  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null; manualLogin: SyncPageManualLogin }>(sql`
+    select transport, browser_leave_generation::text as leave, manual_login as "manualLogin"
+      from sync_pages where page_id = ${input.pageId} for no key update
   `);
   const row = current.rows[0];
   if (row === undefined) return { kind: "no_page" };
   if (row.transport !== "node") return { kind: "not_node" };
   if (row.leave !== null) return { kind: "pending" };
+  if (row.manualLogin !== "off") return { kind: "login_open" };
   const updated = await tx.execute<{ leave: string }>(sql`
     update sync_pages
        set browser_leave_generation = owner_generation, browser_leave_requested_at = clock_timestamp(), updated_at = clock_timestamp()
@@ -567,42 +571,60 @@ export async function requestBrowserDrain(
  * The owner's browser stop pauses the page (Project Browser PR 17; 0280):
  * under the page's row lock, in the caller's transaction. A page not paused
  * is paused with `note`, and the pause is the stop's (`browser_stop_paused`)
- * — `sync browser start` lifts it; a page paused already keeps its pause and
- * its owner. Wakes the page's actor. Null: no engine row.
+ * — `sync browser start` lifts it. A page on the pause its open login put on
+ * it (`manual_login_paused`, 0279) has that pause taken over by the stop: the
+ * login no longer counts it as its own, so its end does not lift it — the
+ * browser stays stopped and the page paused until `sync browser start`. A
+ * page paused by the owner already keeps its pause and its owner. Wakes the
+ * page's actor. Null: no engine row.
  */
-export async function pausePageForBrowserStop(tx: Database, input: { pageId: number; note: string }): Promise<{ pausedByStop: boolean } | null> {
-  const current = await tx.execute<{ pausedAll: boolean }>(sql`
-    select paused_all as "pausedAll" from sync_pages where page_id = ${input.pageId} for no key update
+export async function pausePageForBrowserStop(
+  tx: Database,
+  input: { pageId: number; note: string },
+): Promise<{ pausedByStop: boolean; fromLogin: boolean } | null> {
+  const current = await tx.execute<{ pausedAll: boolean; loginPaused: boolean }>(sql`
+    select paused_all as "pausedAll", manual_login_paused as "loginPaused"
+      from sync_pages where page_id = ${input.pageId} for no key update
   `);
   const row = current.rows[0];
   if (row === undefined) return null;
-  if (row.pausedAll !== true) {
+  const fromLogin = row.pausedAll === true && row.loginPaused === true;
+  if (row.pausedAll !== true || fromLogin) {
     await tx.execute(sql`
       update sync_pages
-         set paused_all = true, pause_note = ${input.note}, browser_stop_paused = true, updated_at = clock_timestamp()
+         set paused_all = true, pause_note = ${input.note}, browser_stop_paused = true, manual_login_paused = false,
+             updated_at = clock_timestamp()
        where page_id = ${input.pageId}
     `);
   }
   await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return { pausedByStop: row.pausedAll !== true };
+  return { pausedByStop: row.pausedAll !== true || fromLogin, fromLogin };
 }
 
 /**
  * The owner's `sync browser start` lifts the pause its stop put on the page,
  * and only that one (0280): a pause the owner changed since — paused or
- * resumed by his own lever — is his and stays. Under the page's row lock, in
- * the caller's transaction. True: lifted.
+ * resumed by his own lever — is his and stays. While a login of the page's
+ * browser is open the page stays paused: the pause goes back to the login
+ * (`manual_login_paused`), which lifts it at its end. Under the page's row
+ * lock, in the caller's transaction. `lifted`: the page is unpaused;
+ * `to_login`: the pause is the login's now; null: no pause of the stop's.
  */
-export async function liftBrowserStopPause(tx: Database, input: { pageId: number }): Promise<boolean> {
-  const result = await tx.execute(sql`
+export async function liftBrowserStopPause(tx: Database, input: { pageId: number }): Promise<"lifted" | "to_login" | null> {
+  const result = await tx.execute<{ toLogin: boolean }>(sql`
     update sync_pages
-       set paused_all = false, pause_note = null, browser_stop_paused = false, updated_at = clock_timestamp()
+       set paused_all = manual_login <> 'off',
+           manual_login_paused = case when manual_login <> 'off' then true else manual_login_paused end,
+           pause_note = null,
+           browser_stop_paused = false,
+           updated_at = clock_timestamp()
      where page_id = ${input.pageId} and browser_stop_paused and paused_all
-    returning page_id
+    returning manual_login <> 'off' as "toLogin"
   `);
-  if (result.rows.length === 0) return false;
+  const row = result.rows[0];
+  if (row === undefined) return null;
   await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return true;
+  return row.toLogin === true ? "to_login" : "lifted";
 }
 
 // ── mode ──────────────────────────────────────────────────────────────────────
