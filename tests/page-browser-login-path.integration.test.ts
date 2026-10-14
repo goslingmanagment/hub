@@ -251,7 +251,8 @@ async function rig(): Promise<Rig> {
   const ports = await operator.start();
   cleanups.push(() => operator.stop());
   model.proxyPort = ports.proxyPort;
-  await until(() => operator.cdp.linked, 3000, "the holder link");
+  // A hang guard, not a speed check (a loaded CI machine).
+  await until(() => operator.cdp.linked, 30_000, "the holder link");
 
   // The page on Node, with its browser's profile.
   const fansly = await FakeFanslyServer.start();
@@ -320,7 +321,7 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     // As the dashboard's own page asks: its cookie, its origin (item 7 of
     // Astra's review: a change from another origin is refused).
     const as = (cookie: string) => ({ cookie, host: "hub.test", origin: "https://hub.test" });
-    await eventually(async () => r.fansly.arrivals.length >= 1, 15_000, "the page running on Node");
+    await eventually(async () => r.fansly.arrivals.length >= 1, 60_000, "the page running on Node");
 
     // Only the owner: a lead is refused, nobody is refused.
     expect((await r.server.inject({ method: "GET", url: base, headers: as(r.leadCookie) })).statusCode).toBe(403);
@@ -332,7 +333,7 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
 
     // Open: the page paused, its browser into the manual login and started.
     expect((await r.server.inject({ method: "POST", url: `${base}/start`, headers: as(r.cookie) })).json()).toEqual({ state: "wanted", changed: true });
-    await until(() => r.operator.page.step === "site_loaded" && r.operator.state.mode === "manual_login", 20_000, "the login screen up");
+    await until(() => r.operator.page.step === "site_loaded" && r.operator.state.mode === "manual_login", 60_000, "the login screen up");
     r.site.setTab(r.operator.control.workTab!.sessionId);
     const shown = await r.server.inject({ method: "GET", url: base, headers: as(r.cookie) });
     expect(shown.json()).toMatchObject({ login: { state: "wanted" }, browser: { reachable: true }, screen: { screen: "login", fields: ["login", "password"] }, refused: null });
@@ -400,7 +401,7 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
 
     // Closed: the browser stopped, the automation back, the page unpaused.
     expect((await r.server.inject({ method: "POST", url: `${base}/finish`, headers: as(r.cookie) })).json()).toEqual({ state: "ending", changed: true });
-    await eventually(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 20_000, "the login closed");
+    await eventually(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 60_000, "the login closed");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ pausedAll: false });
     expect(r.operator.state).toMatchObject({ mode: "automation", step: "exit_closed", exitOpen: false, stopReason: "owner_stop" });
     // Closed: the screen is not the owner's any more.
@@ -428,5 +429,5 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     expect(audit).toEqual(["open:wanted", "submit:error", "submit:code", "code:success", "close:ending"]);
     expect(r.apiLines.length).toBeGreaterThan(0);
     expect(r.engineLines.join("")).toContain("Fansly sync browser login");
-  }, 120_000);
+  }, 240_000);
 });

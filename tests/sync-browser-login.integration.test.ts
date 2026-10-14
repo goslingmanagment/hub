@@ -59,6 +59,10 @@ const S = 300;
 const ENV = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } };
 const RPC_TIMING = { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 };
 const LOGIN_TIMING = { everyMs: 100, commandWaitMs: 2_000, unreachableEndMs: 1_000, restartEveryMs: 500 };
+/** Hang guards, not speed checks (a loaded CI machine): one awaited event,
+ *  and a test of several. */
+const WAIT_MS = 30_000;
+const LONG_TEST_MS = 120_000;
 
 let testDb: StartedTestDatabase | null = null;
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -142,6 +146,13 @@ async function login(r: Rig, to: "wanted" | "ending"): Promise<void> {
   await db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId: r.page.pageId, to, by: "owner:test" }));
 }
 
+/** The engine's own requests admitted after `since` (the login's pause):
+ *  none while the page is paused. What was admitted before may still go,
+ *  however late a loaded machine lets it. */
+async function engineAdmittedSince(pageId: number, since: Date): Promise<number> {
+  return (await testDb!.pool.query<{ n: number }>("select count(*)::int as n from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2", [pageId, since])).rows[0]!.n;
+}
+
 async function attemptsOf(pageId: number): Promise<Array<{ origin: string; outcome: string; operation: string | null }>> {
   return (await testDb!.pool.query<{ origin: string; outcome: string; operation: string | null }>(
     "select origin, outcome, request->>'path' as operation from sync_attempts where page_id = $1 and origin <> 'engine' order by id", [pageId],
@@ -151,7 +162,7 @@ async function attemptsOf(pageId: number): Promise<Array<{ origin: string; outco
 /** The operator's own login request asks the engine; the answer it got. */
 async function asked(r: Rig, input: Parameters<FakeOperator["siteAdmit"]>[0]): Promise<SiteAdmitResult> {
   const ask = r.operator.siteAdmit(input);
-  await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === ask.siteRequestId), 10_000, `the engine's answer to ${input.path}`);
+  await until(async () => r.operator.siteAnswers.some((answer) => answer.siteRequestId === ask.siteRequestId), WAIT_MS, `the engine's answer to ${input.path}`);
   return r.operator.siteAnswers.find((answer) => answer.siteRequestId === ask.siteRequestId)!;
 }
 
@@ -160,31 +171,32 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     if (!testDb) return context.skip();
     const r = await rig();
     const host = await startHost(r);
-    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 2, 15_000, "the page running on Node");
+    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 2, WAIT_MS, "the page running on Node");
     // No login: no link.
     await sleep(500);
     expect(r.operator.links).toEqual([]);
 
     await login(r, "wanted");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: true, pausedAll: true });
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the browser started");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started");
     const kinds = r.operator.commands.map((command) => command.command.kind === "setMode" ? `setMode:${command.command.mode}` : command.command.kind);
     expect(kinds.slice(0, 2)).toEqual(["setMode:manual_login", "restartBrowser"]);
     // Every command is of the slot's owner generation.
     const owner = host.state(r.page.pageId);
     expect(owner.kind).toBe("running");
     expect(r.operator.commands.every((command) => BigInt(command.ownerGeneration) === (owner.kind === "running" ? owner.generation : -1n))).toBe(true);
-    // Node stops: the page is paused.
-    await sleep(800);
-    const nodeArrivals = r.server.arrivals.length;
+    // Node stops: the page is paused — nothing of the engine's own admitted
+    // from the login's pause on (a negative check: the wait only gives a
+    // wrong engine the time to admit).
+    const pausedAt = (await getSyncPageManualLogin(db(), r.page.pageId))!.changedAt!;
     await sleep(1_500);
-    expect(r.server.arrivals.length).toBe(nodeArrivals);
+    expect(await engineAdmittedSince(r.page.pageId, pausedAt)).toBe(0);
 
     // The login's own request passes the pause, as a login operation.
     const admitted = await asked(r, { method: "POST", path: "/api/v1/login", route: "auth.login", operation: "login", sessionFingerprint: null });
     expect(admitted).toMatchObject({ admit: true });
     r.operator.siteDone(admitted as SiteAdmitResult & { admit: true }, { status: 200, body: "not_platform_data" });
-    await until(async () => r.operator.acks.includes((admitted as { attemptId: number }).attemptId), 10_000, "the end acknowledged");
+    await until(async () => r.operator.acks.includes((admitted as { attemptId: number }).attemptId), WAIT_MS, "the end acknowledged");
     // The reads its interface makes pass too (plan §4.8; PR 15), the login
     // screens' and the account's, and their answers go to `observations` as
     // any site answer; the socket is Node's: refused.
@@ -195,9 +207,9 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     expect(accountRead).toMatchObject({ admit: true });
     r.operator.siteDone(accountRead as SiteAdmitResult & { admit: true }, { status: 200 });
     const answer = r.operator.siteResponse({ route: "account.me", path: "/api/v1/account/me", body: JSON.stringify({ success: true, response: { account: { id: "300000000000000001" } } }) });
-    await until(async () => (await testDb!.pool.query("select 1 from observations where account_id = $1 and source = 'browser_site' and producer = 'fansly-site:account.me'", [r.page.pageId])).rowCount === 1, 10_000, `the account's answer (${answer.seq}) in observations`);
+    await until(async () => (await testDb!.pool.query("select 1 from observations where account_id = $1 and source = 'browser_site' and producer = 'fansly-site:account.me'", [r.page.pageId])).rowCount === 1, WAIT_MS, `the account's answer (${answer.seq}) in observations`);
     const socket = r.operator.wsAdmit({ sessionFingerprint: null });
-    await until(async () => r.operator.wsAnswers.some((answer) => answer.connectionId === socket.connectionId), 5_000, "the socket's answer");
+    await until(async () => r.operator.wsAnswers.some((answer) => answer.connectionId === socket.connectionId), WAIT_MS, "the socket's answer");
     expect(r.operator.wsAnswers.find((answer) => answer.connectionId === socket.connectionId)).toMatchObject({ admit: false, reason: "mode" });
     const journaled = await attemptsOf(r.page.pageId);
     expect(journaled.map((attempt) => `${attempt.origin} ${attempt.operation}`)).toEqual(["login /api/v1/login", "site /api/v1/versioning", "site /api/v1/account/me"]);
@@ -205,15 +217,15 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     // The owner closes the login: stopped first, then the automation, then off.
     const before = r.operator.commands.length;
     await login(r, "ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     const closing = r.operator.commands.slice(before).map((command) => command.command.kind === "setMode" ? `setMode:${command.command.mode}` : command.command.kind);
     expect(closing).toEqual(["stopPage", "setMode:automation"]);
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "off", paused: false, pausedAll: false, changedBy: "engine" });
     // Node sends again; the link is closed.
     const resumed = r.server.arrivals.length;
-    await until(async () => r.server.arrivals.length > resumed, 15_000, "Node sending again");
-    await until(async () => r.operator.links.at(-1) === false, 10_000, "the link closed");
-  }, 60_000);
+    await until(async () => r.server.arrivals.length > resumed, WAIT_MS, "Node sending again");
+    await until(async () => r.operator.links.at(-1) === false, WAIT_MS, "the link closed");
+  }, LONG_TEST_MS);
 
   it("a browser halted for the owner's decision (a changed exit IP) is not started by a login", async (context) => {
     if (!testDb) return context.skip();
@@ -221,10 +233,10 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     r.operator.state = { ...r.operator.state, stopReason: "exit_ip_changed" };
     await startHost(r);
     await login(r, "wanted");
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "setMode"), 10_000, "the manual login");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "setMode"), WAIT_MS, "the manual login");
     await sleep(1_500);
     expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
-  }, 30_000);
+  }, LONG_TEST_MS);
 
   it("a page the owner had paused before stays paused after its login", async (context) => {
     if (!testDb) return context.skip();
@@ -233,28 +245,28 @@ describe("a page on Node, logged in before its switch (stage 4, step 2)", () => 
     await startHost(r);
     await login(r, "wanted");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: false, pausedAll: true });
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the browser started");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started");
     await login(r, "ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "off", pausedAll: true });
-  }, 30_000);
+  }, LONG_TEST_MS);
 
   it("a page unpaused during its login is paused again; an operator out of reach while it closes: closed without it", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     await startHost(r);
     await login(r, "wanted");
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "setMode"), 10_000, "the manual login");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "setMode"), WAIT_MS, "the manual login");
     await testDb.pool.query("update sync_pages set paused_all = false where page_id = $1", [r.page.pageId]);
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.pausedAll === true, 5_000, "paused again");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.pausedAll === true, WAIT_MS, "paused again");
     // The operator goes; the owner closes the login.
     await r.operator.close();
     await login(r, "ending");
     await sleep(500);
     expect((await getSyncPageManualLogin(db(), r.page.pageId))?.value).toBe("ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "closed without the operator");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "closed without the operator");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ pausedAll: false });
-  }, 30_000);
+  }, LONG_TEST_MS);
 });
 
 describe("a page on its browser", () => {
@@ -266,27 +278,29 @@ describe("a page on its browser", () => {
     await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1",
       [r.page.pageId, await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)]);
     await startHost(r);
-    await until(async () => r.operator.physical.length >= 1, 20_000, "the page running on its browser");
+    await until(async () => r.operator.physical.length >= 1, WAIT_MS, "the page running on its browser");
 
     await login(r, "wanted");
-    await until(async () => r.operator.state.mode === "manual_login", 10_000, "the manual login");
-    // A page that is up is not started again.
-    await sleep(800);
-    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
-    const sends = r.operator.sends.length;
+    await until(async () => r.operator.state.mode === "manual_login", WAIT_MS, "the manual login");
+    // A page that is up is not started again, and nothing of the engine's
+    // own is admitted from the login's pause on (negative checks: the wait
+    // only gives a wrong engine the time).
+    const pausedAt = (await getSyncPageManualLogin(db(), r.page.pageId))!.changedAt!;
     await sleep(1_500);
-    expect(r.operator.sends.length).toBe(sends);
+    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
+    expect(await engineAdmittedSince(r.page.pageId, pausedAt)).toBe(0);
+    const sends = r.operator.sends.length;
     const admitted = await asked(r, { method: "POST", path: "/api/v1/login/twofa", route: "auth.twofa", operation: "login", sessionFingerprint: null });
     expect(admitted).toMatchObject({ admit: true });
     r.operator.siteDone(admitted as SiteAdmitResult & { admit: true }, { status: 200, body: "not_platform_data" });
 
     const before = r.operator.commands.length;
     await login(r, "ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     expect(r.operator.commands.slice(before).map((command) => command.command.kind)).toEqual(["setMode"]);
     expect(r.operator.state.mode).toBe("automation");
-    await until(async () => r.operator.sends.length > sends, 15_000, "Hub's requests through the browser again");
-  }, 60_000);
+    await until(async () => r.operator.sends.length > sends, WAIT_MS, "Hub's requests through the browser again");
+  }, LONG_TEST_MS);
 });
 
 describe("after a login: the account checked anew (Astra's review of PR 15, item 6)", () => {
@@ -298,21 +312,21 @@ describe("after a login: the account checked anew (Astra's review of PR 15, item
     const trusted = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
     await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [r.page.pageId, trusted]);
     await startHost(r);
-    await until(async () => r.operator.physical.length >= 1, 20_000, "the page running on its browser");
+    await until(async () => r.operator.physical.length >= 1, WAIT_MS, "the page running on its browser");
 
     await login(r, "wanted");
-    await until(async () => r.operator.state.mode === "manual_login", 10_000, "the manual login");
+    await until(async () => r.operator.state.mode === "manual_login", WAIT_MS, "the manual login");
     // The session is the same one throughout (SESSION_A): the digest the
     // engine trusted before the login is the one it would compute after it.
     await login(r, "ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     const ended = (await getSyncPageManualLogin(db(), r.page.pageId))!.changedAt!;
     // A proof sent before the end, applied late, writes nothing.
     await expect(testDb.pool.query("select identity_checked_at >= $2::timestamptz as fenced from sync_pages where page_id = $1", [r.page.pageId, ended])).resolves.toMatchObject({ rows: [{ fenced: true }] });
 
     // The first request of the engine after the end is the account's check;
     // the ordinary ones come only once its proof is recorded.
-    await until(async () => (await testDb!.pool.query("select 1 from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2 and resource <> 'account.verify'", [r.page.pageId, ended])).rowCount! > 0, 20_000, "ordinary work again");
+    await until(async () => (await testDb!.pool.query("select 1 from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2 and resource <> 'account.verify'", [r.page.pageId, ended])).rowCount! > 0, WAIT_MS, "ordinary work again");
     const after = (await testDb.pool.query<{ resource: string; admitted_at: Date; completed_at: Date | null }>(
       "select resource, admitted_at, completed_at from sync_attempts where page_id = $1 and origin = 'engine' and admitted_at > $2 order by id", [r.page.pageId, ended],
     )).rows;
@@ -322,7 +336,7 @@ describe("after a login: the account checked anew (Astra's review of PR 15, item
     expect(firstOrdinary.admitted_at.getTime()).toBeGreaterThanOrEqual(after[0]!.completed_at!.getTime());
     // Trusted again: the same digest, by the check sent after the login.
     expect((await testDb.pool.query("select credentials_generation from sync_pages where page_id = $1", [r.page.pageId])).rows[0]).toEqual({ credentials_generation: trusted });
-  }, 60_000);
+  }, LONG_TEST_MS);
 });
 
 describe("the owner's pause and the login (Astra's review of PR 15, item 5)", () => {
@@ -336,16 +350,16 @@ describe("the owner's pause and the login (Astra's review of PR 15, item 5)", ()
     // An unpaused page: the login puts it on its pause.
     await login(r, "wanted");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: true, pausedAll: true });
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the browser started");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), WAIT_MS, "the browser started");
     // The owner pauses the page meanwhile: the pause is the owner's now.
     expect(await lever(r, "pause", { all: true })).toMatchObject({ pausedAll: true });
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: false, pausedAll: true });
     // The login ends (the engine, after the automation is back): the
     // owner's pause stands.
     await login(r, "ending");
-    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "off", paused: false, pausedAll: true });
-  }, 30_000);
+  }, LONG_TEST_MS);
 
   it("a resume of the whole page is refused while a login is open, nothing changed; the other levers work; after it, the resume does", async (context) => {
     if (!testDb) return context.skip();
@@ -367,5 +381,5 @@ describe("the owner's pause and the login (Astra's review of PR 15, item 5)", ()
     // The login over (no engine here: as it ends it), the owner resumes.
     await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_paused = false where page_id = $1", [r.page.pageId]);
     expect(await lever(r, "resume", { all: true })).toMatchObject({ pausedAll: false });
-  }, 30_000);
+  }, LONG_TEST_MS);
 });

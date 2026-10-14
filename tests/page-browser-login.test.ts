@@ -392,13 +392,15 @@ describe("the desk (plan §4.8: input as a person's)", () => {
     chrome.react = (method, params) => {
       if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") over = "a new owner of the page";
     };
-    // The screen stays the login form: an acting call would wait 10 s for the next one.
+    // The screen stays the login form: an acting call would read it again
+    // every 10 ms for 10 s, waiting for the next one.
     const d = new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(chrome.world), session: () => null, discard: discarding(chrome), timings: { settleMs: 10_000, pollMs: 10 }, log: () => undefined });
-    const at = Date.now();
     const answer = d.submit(LOGIN_MARKER, PASSWORD_MARKER, () => over);
     await d.drain();
-    expect(Date.now() - at).toBeLessThan(2_000);
     expect(await answer).toMatchObject({ kind: "state", screen: "login" });
+    // After the release the screen was read once — the answer — and no more.
+    const released = chrome.commands.findIndex((command) => command.method === "Input.dispatchMouseEvent" && command.params.type === "mouseReleased");
+    expect(chrome.commands.slice(released + 1).filter((command) => command.method === "Runtime.evaluate" && String(command.params.expression).includes("pbLoginProbe"))).toHaveLength(1);
     expect(chrome.of("Input.dispatchMouseEvent").map((command) => command.params.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
     // Nothing under way: the drain is over at once.
     await d.drain();
@@ -521,12 +523,12 @@ async function setUp(options: { apiToken?: string | null } = {}): Promise<SetUp>
   const ports = await operator.start();
   cleanups.push(() => operator.stop());
   model.proxyPort = ports.proxyPort;
-  await until(() => operator.cdp.linked, 3000, "the holder link");
+  await until(() => operator.cdp.linked, WAIT_MS, "the holder link");
   const engine = new FakeEngine();
   await engine.connect(ports.rpcPort);
   cleanups.push(() => engine.close());
   engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
-  await engine.waitFor("helloResult");
+  await engine.waitFor("helloResult", undefined, WAIT_MS);
   return { dir: temp.dir, operator, engine, chrome, model, socks, site, logDir, lines, rpcPort: ports.rpcPort };
 }
 
@@ -534,7 +536,7 @@ let commandN = 0;
 function command(engine: FakeEngine, command: Record<string, unknown>, generation = engine.generation): Promise<Record<string, unknown>> {
   const commandId = `c-${++commandN}`;
   engine.send({ type: "command", ownerGeneration: generation, commandId, notAfterMono: monoMs() + 10_000, command });
-  return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
+  return engine.waitFor("commandResult", (message) => message.commandId === commandId, WAIT_MS);
 }
 
 /** The API's end of the login form: one WebSocket, calls by id. */
@@ -561,7 +563,7 @@ class Caller {
     return caller;
   }
 
-  async call(type: string, fields: Record<string, unknown> = {}, token = API_TOKEN, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+  async call(type: string, fields: Record<string, unknown> = {}, token = API_TOKEN, timeoutMs = WAIT_MS): Promise<Record<string, unknown>> {
     const callId = randomUUID();
     this.#ws!.send(JSON.stringify({ type, callId, token, ...fields }));
     let found: Record<string, unknown> | undefined;
@@ -583,7 +585,7 @@ async function started(s: SetUp, generation = 1): Promise<void> {
     if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: generation, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
   };
   expect(await command(s.engine, { kind: "restartBrowser" })).toMatchObject({ ok: true });
-  await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded");
+  await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded");
   s.site.setTab(s.operator.control.workTab!.sessionId);
 }
 
@@ -598,7 +600,7 @@ function filesUnder(dir: string): Buffer[] {
   return out;
 }
 
-describe("the login form through the operator (plan §4.8; PR 15)", () => {
+describe("the login form through the operator (plan §4.8; PR 15)", { timeout: LONG_TEST_MS }, () => {
   it("takes no call before the engine's manual login, and none with a wrong token", async () => {
     const s = await setUp();
     await started(s);
@@ -610,7 +612,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     // The engine's token is not the API's.
     const wrong = await Caller.open(s.rpcPort);
     expect(await wrong.call("login.state", {}, RPC_TOKEN)).toMatchObject({ type: "login.refused", reason: "token" });
-    await until(() => wrong.closed !== null, 3000, "the wrong token's connection to close");
+    await until(() => wrong.closed !== null, WAIT_MS, "the wrong token's connection to close");
     // An API connection is not the engine's: the engine's link stands.
     expect(s.operator.rpc.linkUp).toBe(true);
   });
@@ -632,16 +634,18 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     await newer.connect(s.rpcPort);
     cleanups.push(() => newer.close());
     newer.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
-    await newer.waitFor("quiesced");
+    await newer.waitFor("quiesced", undefined, WAIT_MS);
     // The old one's command never reaches the operator's mode.
     s.engine.send({ type: "command", ownerGeneration: 1, commandId: "old-1", notAfterMono: monoMs() + 10_000, command: { kind: "setMode", mode: "manual_login" } });
+    // A negative check (no event comes of a superseded connection's command):
+    // the wait only gives a wrong operator the time to take it.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(s.operator.state.mode).toBe("automation");
     expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
     // The current owner's does.
     expect(await command(newer, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
     expect(s.operator.state.mode).toBe("manual_login");
-    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     expect(await api.call("login.state")).toMatchObject({ type: "login.stateResult", screen: "login", screenVersion: SCREEN_VERSION, fields: ["login", "password"], siteError: null });
     // Generation 3 comes: the manual login was generation 2's.
     const third = new FakeEngine();
@@ -649,7 +653,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     await third.connect(s.rpcPort);
     cleanups.push(() => third.close());
     third.send(hello({ ownerGeneration: 3, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
-    await third.waitFor("quiesced");
+    await third.waitFor("quiesced", undefined, WAIT_MS);
     expect(s.operator.state.mode).toBe("automation");
     expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
   });
@@ -662,9 +666,9 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
     const loadsBefore = s.model.navigations.length;
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true, detail: expect.stringContaining("the manual login") });
-    await s.engine.waitFor("state", (state) => state.mode === "manual_login");
+    await s.engine.waitFor("state", (state) => state.mode === "manual_login", WAIT_MS);
     // The site is loaded anew for its login screen.
-    await until(() => s.model.navigations.length > loadsBefore && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await until(() => s.model.navigations.length > loadsBefore && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     s.site.setTab(s.operator.control.workTab!.sessionId);
 
     // The screen, and the screenshot: its bytes as frames before the JSON.
@@ -693,7 +697,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     expect(afterCode).toMatchObject({ type: "login.stateResult", screen: "success", fields: [], siteError: null });
     const codeAsk = s.engine.of("siteAdmit").find((ask) => ask.path === "/api/v1/login/twofa")!;
     expect(codeAsk).toMatchObject({ method: "POST", route: "auth.twofa", operation: "login" });
-    await until(() => s.engine.of("siteDone").filter((done) => [loginAsk.siteRequestId, codeAsk.siteRequestId].includes(done.siteRequestId)).length === 2, 5000, "both logins' ends");
+    await until(() => s.engine.of("siteDone").filter((done) => [loginAsk.siteRequestId, codeAsk.siteRequestId].includes(done.siteRequestId)).length === 2, WAIT_MS, "both logins' ends");
     for (const done of s.engine.of("siteDone").filter((end) => [loginAsk.siteRequestId, codeAsk.siteRequestId].includes(end.siteRequestId))) {
       // Its answer is not kept: a login's answer carries secrets.
       expect(done).toMatchObject({ sent: true, status: 200, body: "not_platform_data" });
@@ -703,12 +707,12 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     // session that is the page's now; its answer goes to the buffer as any
     // site answer.
     const fingerprint = sessionFingerprint(SITE_TOKEN, SITE_CLIENT);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint, WAIT_MS);
     const readAsk = s.engine.of("siteAdmit").find((ask) => ask.path === "/api/v1/account/me")!;
     expect(readAsk).toMatchObject({ method: "GET", route: "account.me", operation: "read", sessionFingerprint: fingerprint });
-    const readDone = await s.engine.waitFor("siteDone", (done) => done.siteRequestId === readAsk.siteRequestId, 5000);
+    const readDone = await s.engine.waitFor("siteDone", (done) => done.siteRequestId === readAsk.siteRequestId, WAIT_MS);
     expect(readDone).toMatchObject({ sent: true, status: 200 });
-    const answered = await s.engine.waitFor("events", (message) => (message.events as Array<{ kind: string; route?: string }>).some((event) => event.kind === "site.response" && event.route === "account.me"));
+    const answered = await s.engine.waitFor("events", (message) => (message.events as Array<{ kind: string; route?: string }>).some((event) => event.kind === "site.response" && event.route === "account.me"), WAIT_MS);
     expect((answered.events as Array<Record<string, unknown>>).find((event) => event.kind === "site.response")).toMatchObject({ route: "account.me", status: 200, sessionFingerprint: fingerprint });
     // The account loaded under the live session: a success sign of its own.
     expect(await api.call("login.state")).toMatchObject({ screen: "success" });
@@ -721,7 +725,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     expect(back).toMatchObject({ ok: true });
     expect(String(back.detail)).toContain("the exit IP 203.0.113.7 is the pinned one");
     expect(s.operator.state.mode).toBe("automation");
-    await until(() => s.model.navigations.length > loads, 10_000, "the site loaded anew under the automation");
+    await until(() => s.model.navigations.length > loads, WAIT_MS, "the site loaded anew under the automation");
     expect(await api.call("login.state")).toMatchObject({ reason: "not_manual_login" });
 
     // What was typed reached the browser — and nothing else.
@@ -745,7 +749,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     const s = await setUp();
     await started(s);
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     s.site.setTab(s.operator.control.workTab!.sessionId);
     const api = await Caller.open(s.rpcPort);
     cleanups.push(() => api.close());
@@ -779,42 +783,44 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     const token = "fansly-token-ReAdYbEfOrE0123456789";
     const fingerprint = sessionFingerprint(token, SITE_CLIENT);
     siteRead(s, token, SITE_CLIENT);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint, WAIT_MS);
     // The engine's identity read names the page's account: ready.
     s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
     const identity = (attemptId: number) => ({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
-    await s.engine.waitFor("siteDone", () => true, 10_000);
+    await s.engine.waitFor("siteDone", () => true, WAIT_MS);
     s.engine.send(identity(9501));
-    await until(() => s.operator.page.step === "ready", 10_000, "the page ready");
+    await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
     // The manual login: never ready while it lasts, though the session is
     // the one the identity named.
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
     expect(s.operator.page.step).not.toBe("ready");
-    await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+    await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     // The site's read again under that session: it passes (the interface's
     // read, PR 15), but the page is no readier for it.
+    const ends = s.engine.of("siteDone").length;
     siteRead(s, token, SITE_CLIENT);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await until(() => s.engine.of("siteDone").length > ends, WAIT_MS, "the site's read ended");
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.admissionsOpen()).toBe(true);
     // Hub's request under the live session does not go while a person is in
     // the page: answered, not sent.
     const issued = s.model.hubRequests.length;
     s.engine.send(identity(9502));
-    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9502, 10_000)).outcome).toMatchObject({ sent: false });
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9502, WAIT_MS)).outcome).toMatchObject({ sent: false });
     expect(s.model.hubRequests).toHaveLength(issued);
     // The automation: the site loaded anew — and not ready on the identity
     // read from before the login, though the session is the same (Astra's
     // review of PR 15, item 6): a person was in the page meanwhile.
     const loads = s.model.navigations.length;
     expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
-    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // (Ready, if at all, at the moment it loaded: the session is confirmed
+    // with the load's own step.)
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId).toBeNull();
     // A fresh identity read under the live session: ready again.
     s.engine.send(identity(9503));
-    await until(() => s.operator.page.step === "ready", 10_000, "the page ready again");
+    await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready again");
     expect(s.operator.state.accountId).toBe("123456789");
   });
 
@@ -875,10 +881,10 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     const s = await setUp();
     await started(s);
     siteRead(s, SITE_TOKEN, SITE_CLIENT);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT));
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT), WAIT_MS);
     // In the automation the socket's CONNECT is asked of the engine.
     const asked = proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
-    await s.engine.waitFor("wsAdmit");
+    await s.engine.waitFor("wsAdmit", undefined, WAIT_MS);
     const ask = s.engine.last("wsAdmit")!;
     s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: false, reason: "held", retryNotBeforeWall: null });
     (await asked).socket.destroy();
@@ -887,6 +893,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
     const refused = await proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
     refused.socket.destroy();
     expect(refused.status).not.toBe(200);
+    // A negative check: the wait only gives a wrong operator the time to ask.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(s.engine.of("wsAdmit")).toHaveLength(before);
   });
@@ -898,7 +905,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
       const s = await setUp();
       await started(s);
       expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-      await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+      await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
       s.site.setTab(s.operator.control.workTab!.sessionId);
       const api = await Caller.open(s.rpcPort);
       cleanups.push(() => api.close());
@@ -915,40 +922,52 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
         }
         return focus(cmd);
       });
-      const submitting = api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER }, API_TOKEN, 20_000);
-      await until(() => reached, 5000, "the password's focus at the page");
+      const submitting = api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER });
+      await until(() => reached, WAIT_MS, "the password's focus at the page");
       let next: Promise<unknown>;
+      const loads = s.model.navigations.length;
       if (what === "a new owner") {
         const newer = new FakeEngine();
         newer.generation = 2;
         await newer.connect(s.rpcPort);
         cleanups.push(() => newer.close());
         newer.send(hello({ ownerGeneration: 2, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
-        next = newer.waitFor("quiesced", () => true, 15_000);
+        next = newer.waitFor("quiesced", () => true, WAIT_MS);
       } else if (what === "the automation back") {
         // Another tab of the dashboard finished the login: the engine's setMode.
         next = command(s.engine, { kind: "setMode", mode: "automation" });
       } else {
         s.engine.close();
-        await until(() => !s.operator.rpc.linkUp, 5000, "the link lost");
+        await until(() => !s.operator.rpc.linkUp, WAIT_MS, "the link lost");
         next = Promise.resolve();
       }
-      // The hand-over's quiesced and the automation's answer wait for the step.
+      // The hand-over's quiesced and the automation's answer wait for the step
+      // (a negative check: nothing ends it but the release below — the wait
+      // only gives a wrong operator the time to answer early); and when
+      // they come, the step has ended (its log line is written before).
       let settled = false;
-      void next.then(() => (settled = true));
+      let stepEndedFirst: boolean | null = null;
+      void next.then(() => {
+        settled = true;
+        stepEndedFirst = s.lines.some((line) => line.includes('"e":"step.cancelled"'));
+      });
       await new Promise((resolve) => setTimeout(resolve, 300));
       if (what !== "the engine's link lost") expect(settled, what).toBe(false);
       release();
       expect(await submitting, what).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
       await next;
+      if (what !== "the engine's link lost") expect(stepEndedFirst, what).toBe(true);
       // The login went in before; the password never, and nothing was pressed.
       expect(s.site.inserted, what).toEqual([LOGIN_MARKER]);
       expect(s.site.presses, what).toBe(0);
       expect(s.chrome.sent("Input.dispatchMouseEvent"), what).toHaveLength(0);
       expect(s.site.posts, what).toHaveLength(0);
+      // The automation back loads the site anew: over before the operator goes
+      // (a load cut by the teardown is an error of its own).
+      if (what !== "the engine's link lost") await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded under the automation");
       for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
     }
-  }, 60_000);
+  }, LONG_TEST_MS);
 
   // Astra's review of PR 15, rounds 2 and 3: the press of a step cut
   // between the press and its release dies with its document before the
@@ -958,7 +977,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
       const s = await setUp();
       await started(s);
       expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-      await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+      await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
       s.site.setTab(s.operator.control.workTab!.sessionId);
       if (blank === "does not come") s.model.blankLoads = "error";
       const api = await Caller.open(s.rpcPort);
@@ -970,7 +989,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
         if (cmd.params.type === "mousePressed" && cut) {
           cut = false;
           s.engine.close();
-          await until(() => !s.operator.rpc.linkUp, 5000, "the link lost");
+          await until(() => !s.operator.rpc.linkUp, WAIT_MS, "the link lost");
         }
         return mouse(cmd);
       });
@@ -983,42 +1002,43 @@ describe("the login form through the operator (plan §4.8; PR 15)", () => {
       expect(s.site.down, blank).toBe(false);
       expect(s.lines.join("\n"), blank).toContain("login.document_discarded");
       // A release over the button later — a person's, say — clicks nothing.
+      // (The fake site clicks, and posts, within the release's own handling.)
       await mouse({ id: 0, method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: BUTTON_CENTRE.x, y: BUTTON_CENTRE.y, button: "left", clickCount: 1 } } as never);
-      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(s.site.presses, blank).toBe(0);
       expect(s.site.posts, blank).toHaveLength(0);
       if (blank === "comes") {
         // A blank document, then the site anew.
         expect(s.model.navigations.slice(loads)).toEqual(["about:blank", "https://fansly.com/"]);
-        await until(() => s.operator.page.step === "site_loaded", 10_000, "the site loaded anew");
+        await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
         // The engine comes back; the next step works on the fresh document.
         const again = new FakeEngine();
         await again.connect(s.rpcPort);
         cleanups.push(() => again.close());
         again.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
-        await again.waitFor("helloResult");
+        await again.waitFor("helloResult", undefined, WAIT_MS);
         again.onMessage = (message) => {
           if (message.type === "siteAdmit") again.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 8000 + Math.floor(Math.random() * 1000) });
         };
-        await until(() => s.operator.rpc.linkUp, 5000, "the link back");
+        await until(() => s.operator.rpc.linkUp, WAIT_MS, "the link back");
         s.site.setTab(s.operator.control.workTab!.sessionId);
         expect(await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER })).toMatchObject({ type: "login.stateResult", screen: "code" });
         expect(s.site.presses).toBe(1);
       } else {
         // No blank document: the page's Chrome goes, and the press with it.
-        await until(() => s.lines.some((line) => line.includes('"stopReason":"cdp_lost"') && line.includes("the browser goes with it")), 10_000, "the browser gone");
-        expect(s.lines.join("\n")).toContain("the browser goes with it");
+        await until(() => s.lines.some((line) => line.includes('"stopReason":"cdp_lost"') && line.includes("the browser goes with it")), WAIT_MS, "the browser gone");
+        // It starts again (a failure's retry): over before the operator goes.
+        await until(() => s.operator.page.step === "site_loaded", WAIT_MS, "the browser started again");
       }
       for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
     }
-  }, 60_000);
+  }, LONG_TEST_MS);
 
   it("the login operations are the manual login's only: in the automation the map closes them", async () => {
     const s = await setUp();
     await started(s);
     const tab = s.operator.control.workTab!.sessionId;
     const request = s.model.pause("https://apiv3.fansly.com/api/v1/login", "POST", tab, "XHR", { "content-type": "application/json" }, JSON.stringify({ username: LOGIN_MARKER, password: PASSWORD_MARKER }));
-    await until(() => request.outcome === "failed", 3000, "the login to be failed");
+    await until(() => request.outcome === "failed", WAIT_MS, "the login to be failed");
     expect(request.failReason).toBe("BlockedByClient");
     expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/login")).toBe(false);
   });

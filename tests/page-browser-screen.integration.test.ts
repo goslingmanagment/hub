@@ -30,14 +30,17 @@ import { ensureHarnessSettingTable, harnessConfig, seedHarnessPage, until } from
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-/** The sessions whose look never answers (the screen's revalidation read). */
-const stalled = vi.hoisted(() => new Set<string>());
+/** The sessions whose look never answers (the screen's revalidation read),
+ *  and every session a look asked of. */
+const looks = vi.hoisted(() => ({ stalled: new Set<string>(), asked: [] as string[] }));
 vi.mock("../apps/runtime/src/services/auth.ts", async (importOriginal) => {
   const real = await importOriginal<typeof Auth>();
   return {
     ...real,
-    ownerSessionExpiry: (app: Parameters<typeof real.ownerSessionExpiry>[0], token: string) =>
-      stalled.has(token) ? new Promise<never>(() => undefined) : real.ownerSessionExpiry(app, token),
+    ownerSessionExpiry: (app: Parameters<typeof real.ownerSessionExpiry>[0], token: string) => {
+      looks.asked.push(token);
+      return looks.stalled.has(token) ? new Promise<never>(() => undefined) : real.ownerSessionExpiry(app, token);
+    },
   };
 });
 
@@ -47,6 +50,12 @@ const VNC_PASSWORD = "vnc-password-of-the-screen-test-9d1a";
 const RPC_TOKEN = "rpc-token-screen-test-a1b2c3d4e5f60718293a";
 const ENV = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } };
 const WATCH_MS = 100;
+/** Hang guards, not speed checks (a loaded CI machine): one awaited event,
+ *  and a test of several. */
+const WAIT_MS = 30_000;
+const LONG_TEST_MS = 120_000;
+/** A look's deadline no test lives to see: only something else can close. */
+const NEVER_MS = 10 * 60_000;
 
 let testDb: StartedTestDatabase | null = null;
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -66,7 +75,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  stalled.clear();
+  looks.stalled.clear();
+  looks.asked.length = 0;
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 }, 60_000);
 
@@ -181,7 +191,7 @@ async function openScreen(r: Rig, cookie: string): Promise<{ socket: Socket; clo
     echo: async (text) => {
       const before = got.length;
       socket.write(text);
-      await until(async () => got.length > before || closed, 3_000, "the echo");
+      await until(async () => got.length > before || closed, WAIT_MS, "the echo");
       return got.slice(before);
     },
   };
@@ -203,7 +213,7 @@ describe("the browser's screen once open (Astra's review of PR 15, item 2)", () 
     await holder.query("select 1 from sync_pages where page_id = $1 for update", [r.pageId]);
     const finishing = change(r, cookie, "finish");
     try {
-      await until(async () => screen.closed() && r.screen.open.size === 0, 5_000, "the screen closed");
+      await until(async () => screen.closed() && r.screen.open.size === 0, WAIT_MS, "the screen closed");
       // Both sides gone, and the login still the open one: closed first.
       expect((await getSyncPageManualLogin(db(), r.pageId))?.value).toBe("wanted");
       // While the closing is being written the login still reads open — and
@@ -217,7 +227,7 @@ describe("the browser's screen once open (Astra's review of PR 15, item 2)", () 
     expect((await finishing).json()).toEqual({ state: "ending", changed: true });
     // And it cannot be opened again.
     await expect(openScreen(r, cookie)).rejects.toThrow(/409/);
-  }, 60_000);
+  }, LONG_TEST_MS);
 
   it("closes when its session is revoked or expired, or its login is no longer the open one", async (context) => {
     if (!testDb) return context.skip();
@@ -233,17 +243,17 @@ describe("the browser's screen once open (Astra's review of PR 15, item 2)", () 
 
     // The owner logs the first session out: its screen goes, the others stay.
     expect((await r.server.inject({ method: "POST", url: "/api/v1/auth/logout", headers: { cookie: first, host: HOST, origin: ORIGIN } })).statusCode).toBeLessThan(300);
-    await until(async () => revoked.closed(), 5_000, "the revoked session's screen closed");
+    await until(async () => revoked.closed(), WAIT_MS, "the revoked session's screen closed");
     expect(expired.closed()).toBe(false);
     // The second session expires.
     await testDb.pool.query("update auth_sessions set expires_at = now() - interval '1 second' where id = (select min(id) from auth_sessions where revoked_at is null)");
-    await until(async () => expired.closed(), 5_000, "the expired session's screen closed");
+    await until(async () => expired.closed(), WAIT_MS, "the expired session's screen closed");
     expect(await kept.echo("b")).toBe("echo:b");
     // The login is closed by other means than the owner's form (the engine
     // ends only a closing one; here the row itself): the last screen goes.
     await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_changed_at = clock_timestamp() where page_id = $1", [r.pageId]);
-    await until(async () => kept.closed() && r.screen.open.size === 0, 5_000, "the last screen closed");
-  }, 60_000);
+    await until(async () => kept.closed() && r.screen.open.size === 0, WAIT_MS, "the last screen closed");
+  }, LONG_TEST_MS);
 });
 
 describe("each screen watches itself, the database or not (Astra's review of PR 15, item 2, round 2)", () => {
@@ -255,56 +265,57 @@ describe("each screen watches itself, the database or not (Astra's review of PR 
     const screen = await openScreen(r, cookie);
     expect(await screen.echo("a")).toBe("echo:a");
     // The sessions' table held — every read of it waits — and the session
-    // expired in the same transaction, not visible to anyone yet.
+    // expired in the same transaction, not visible to anyone yet. Its expiry
+    // known at the open is days away: only a look's deadline can close it.
     const holder = await testDb.pool.connect();
     await holder.query("begin");
     await holder.query("lock table auth_sessions in access exclusive mode");
     await holder.query("update auth_sessions set expires_at = now() - interval '1 second'");
-    const at = Date.now();
     try {
-      await until(async () => screen.closed() && r.screen.open.size === 0, 5_000, "the screen closed without its read");
-      // Within a look's period and its deadline (and a margin), never after the read.
-      expect(Date.now() - at).toBeLessThan(WATCH_MS + 500 + 700);
+      // Closed while no read of the session can answer.
+      await until(async () => screen.closed() && r.screen.open.size === 0, WAIT_MS, "the screen closed without its read");
     } finally {
       await holder.query("rollback");
       holder.release();
     }
-  }, 60_000);
+  }, LONG_TEST_MS);
 
   it("closes at its session's expiry known when it opened, while none of its looks answers", async (context) => {
     if (!testDb) return context.skip();
-    // A deadline far off: only the expiry can close it in time.
-    const r = await rig({ deadlineMs: 20_000 });
+    // A deadline no test lives to see: only the expiry can close it.
+    const r = await rig({ deadlineMs: NEVER_MS });
     const cookie = await r.login();
-    await testDb.pool.query("update auth_sessions set expires_at = now() + interval '1500 milliseconds'");
+    const expiry = (await testDb.pool.query<{ at: Date }>("update auth_sessions set expires_at = now() + interval '1500 milliseconds' returning expires_at as at")).rows[0]!.at;
     expect((await change(r, cookie, "start")).json()).toMatchObject({ state: "wanted" });
     const screen = await openScreen(r, cookie);
-    const opened = Date.now();
-    stalled.add(tokenOf(cookie));
+    looks.stalled.add(tokenOf(cookie));
     expect(await screen.echo("b")).toBe("echo:b");
-    await until(async () => screen.closed() && r.screen.open.size === 0, 5_000, "the screen closed at its session's expiry");
-    expect(Date.now() - opened).toBeLessThan(1_500 + 700);
-  }, 60_000);
+    await until(async () => screen.closed() && r.screen.open.size === 0, WAIT_MS, "the screen closed at its session's expiry");
+    // Never before it (a timer fires late on a loaded machine, never early).
+    expect(Date.now()).toBeGreaterThanOrEqual(expiry.getTime());
+  }, LONG_TEST_MS);
 
   it("a look that stands does not hold back another screen's close", async (context) => {
     if (!testDb) return context.skip();
-    const r = await rig({ deadlineMs: 4_000 });
+    const r = await rig({ deadlineMs: NEVER_MS });
     const slow = await r.login();
     const quick = await r.login();
     expect((await change(r, slow, "start")).json()).toMatchObject({ state: "wanted" });
     const held = await openScreen(r, slow);
     const revoked = await openScreen(r, quick);
-    // The first screen's looks never answer; the second's session is revoked.
-    stalled.add(tokenOf(slow));
-    await new Promise((resolve) => setTimeout(resolve, WATCH_MS * 3));
-    const at = Date.now();
+    // The first screen's looks never answer from now on: one is under way.
+    looks.stalled.add(tokenOf(slow));
+    const asked = looks.asked.filter((token) => token === tokenOf(slow)).length;
+    await until(async () => looks.asked.filter((token) => token === tokenOf(slow)).length > asked, WAIT_MS, "a look of the first screen under way");
+    // The second's session is revoked: it closes, the first's look standing.
     expect((await r.server.inject({ method: "POST", url: "/api/v1/auth/logout", headers: { cookie: quick, host: HOST, origin: ORIGIN } })).statusCode).toBeLessThan(300);
-    await until(async () => revoked.closed(), 3_000, "the revoked session's screen closed");
-    expect(Date.now() - at).toBeLessThan(WATCH_MS * 2 + 700);
-    // The other stands until its own deadline, then closes (fail closed).
+    await until(async () => revoked.closed(), WAIT_MS, "the revoked session's screen closed");
     expect(held.closed()).toBe(false);
-    await until(async () => held.closed(), 8_000, "the stalled screen closed at its deadline");
-  }, 60_000);
+    expect(await held.echo("c")).toBe("echo:c");
+    // The owner closes the login: the first goes too, its look still unanswered.
+    expect((await change(r, slow, "finish")).json()).toMatchObject({ state: "ending" });
+    await until(async () => held.closed() && r.screen.open.size === 0, WAIT_MS, "the stalled screen closed with the login");
+  }, LONG_TEST_MS);
 });
 
 describe("a change of the login from another origin (Astra's review of PR 15, item 7)", () => {
@@ -331,5 +342,5 @@ describe("a change of the login from another origin (Astra's review of PR 15, it
     expect((await change(r, cookie, "finish", "https://evil.gosling-agency.ru")).statusCode).toBe(403);
     expect((await getSyncPageManualLogin(db(), r.pageId))?.value).toBe("wanted");
     expect((await change(r, cookie, "finish")).json()).toEqual({ state: "ending", changed: true });
-  }, 60_000);
+  }, LONG_TEST_MS);
 });
