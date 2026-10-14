@@ -12,7 +12,7 @@ import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
-import { HaltFileUnreadable, HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
+import { HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -755,19 +755,64 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
     expect(store.read().halt).toEqual(s.operator.heldHalt);
   });
 
-  it("a halt file that cannot be understood stops the operator before it starts", async () => {
+  it("a halt file not this store's, or spoilt in both slots: a halt being written — a strict halt_unreadable of its own, never no halt (Astra round 5)", () => {
     const temp = tempDir();
     cleanups.push(temp.remove);
     const stateDir = join(temp.dir, "state");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "halt.json"), "{ not json");
-    expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
+    expect(new HaltStore(join(stateDir, "halt.json")).read()).toMatchObject({ halt: { reason: "halt_unreadable" }, unreadable: true });
     // Its size, but neither slot this store's.
     writeFileSync(join(stateDir, "halt.json"), Buffer.alloc(2 * SLOT_BYTES, 0x41));
-    expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
+    const first = new HaltStore(join(stateDir, "halt.json")).read();
+    const again = new HaltStore(join(stateDir, "halt.json")).read();
+    expect(first.halt).toMatchObject({ reason: "halt_unreadable" });
+    // A new id each time it is read so (one only the owner's decision clears).
+    expect(again.halt!.id).not.toBe(first.halt!.id);
   });
 
-  it("is written in place into a preallocated file — never a write that needs new room — and a write cut midway keeps the record before it (Astra round 4)", () => {
+  it("a write is checked whole: a short one is a failed one, and the record before it stays (Astra round 5)", () => {
+    const temp = tempDir();
+    cleanups.push(temp.remove);
+    const path = join(temp.dir, "state", "halt.json");
+    let short = false;
+    const store = new HaltStore(path, { writeSync: (fd, buffer, offset, length, position) => writeSync(fd, buffer, offset, short ? 40 : length, position) });
+    store.read();
+    const h1 = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", reason: "header_mismatch" as const, atWall: 1_000 };
+    store.write({ halt: h1, lastClearedId: null });
+    short = true;
+    expect(() => store.write({ halt: null, lastClearedId: h1.id })).toThrow(/short write/);
+    // Its slot was being written (spoilt): the operator starts holding a halt.
+    expect(new HaltStore(path).read()).toMatchObject({ halt: { reason: "halt_unreadable" }, unreadable: true });
+  });
+
+  it("Astra's round 5 sequence: H1 cleared, the write of H2 cut, a restart — the operator holds halt_unreadable and refuses a start until the owner's clearHalt names it", async () => {
+    const h1 = { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", reason: "header_mismatch" as const, atWall: 1_000 };
+    let preparedPath = "";
+    const s = await setUp({
+      prepare: ({ stateDir }) => {
+        preparedPath = join(stateDir, "halt.json");
+        const store = new HaltStore(preparedPath);
+        store.read();
+        store.write({ halt: h1, lastClearedId: null });
+        store.write({ halt: null, lastClearedId: h1.id });
+        // The next write (H2) goes into the older slot (seq 1, slot 0): cut midway.
+        const fd = openSync(preparedPath, "r+");
+        writeSync(fd, Buffer.from('{"seq":3,"halt":{"id":'), 0, 22, 70);
+        closeSync(fd);
+      },
+    });
+    const held = s.operator.heldHalt!;
+    expect(held).toMatchObject({ reason: "halt_unreadable" });
+    expect(s.operator.page.snapshot).toMatchObject({ halted: true, stopReason: "halt_unreadable" });
+    // Written: the spoilt slot repaired with it, kept across the next restart.
+    expect(new HaltStore(preparedPath).read()).toMatchObject({ halt: { id: held.id, reason: "halt_unreadable" }, lastClearedId: h1.id });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false, detail: expect.stringContaining("clearHalt first") });
+    expect(await commandOf(s.engine, { kind: "clearHalt", haltId: held.id })).toMatchObject({ ok: true });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+  });
+
+  it("is written in place into a preallocated file — never a write that needs new room — and a write cut midway is a halt being written (Astra rounds 4 and 5)", () => {
     const temp = tempDir();
     cleanups.push(temp.remove);
     const path = join(temp.dir, "state", "halt.json");
@@ -784,11 +829,12 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
     // The same file (the same inode), the same size: written in place.
     expect(statSync(path)).toMatchObject({ ino: made.ino, size: 2 * SLOT_BYTES });
     expect(new HaltStore(path).read()).toEqual({ halt: { ...first, id: "77777777-7777-4777-8777-777777777777" }, lastClearedId: first.id });
-    // The next write is cut midway (its slot spoilt): the record before it holds.
+    // The next write is cut midway (its slot — the older one — spoilt): a
+    // halt was being written, so one is held; the last clear is kept.
     const fd = openSync(path, "r+");
-    writeSync(fd, Buffer.from("cut"), 0, 3, (4 % 2) * SLOT_BYTES + 10);
+    writeSync(fd, Buffer.from("cut"), 0, 3, 1 * SLOT_BYTES + 10);
     closeSync(fd);
-    expect(new HaltStore(path).read()).toEqual({ halt: { ...first, id: "77777777-7777-4777-8777-777777777777" }, lastClearedId: first.id });
+    expect(new HaltStore(path).read()).toMatchObject({ halt: { reason: "halt_unreadable" }, lastClearedId: first.id, unreadable: true });
   });
 
   it("says the last halt cleared, kept across a restart: the owner's clearHalt, and one for a halt it no longer holds", async () => {

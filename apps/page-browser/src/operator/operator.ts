@@ -407,12 +407,14 @@ export class Operator {
     this.#classify = deps.classify ?? classifyFanslyHost;
     registerSecret(this.config.rpcToken);
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
-    // The halt held from before this operator: read first — a file that
-    // cannot be read stops the operator here (HaltFileUnreadable).
+    // The halt held from before this operator, read first. A spoilt slot or
+    // a file that cannot be read is a halt being written: a strict one of its
+    // own (`halt_unreadable`) is held, and written, until the owner clears it.
     this.#haltStore = deps.haltStore ?? new HaltStore(join(this.config.stateDir, "halt.json"));
     const kept = this.#haltStore.read();
     this.#held = kept.halt;
     this.#lastClearedId = kept.lastClearedId;
+    if (kept.unreadable === true) this.#writeHeld();
 
     this.journals = new Journals({
       dir: this.config.logDir,

@@ -21,11 +21,20 @@
 // 4: a full disk dropped a halt written by a replace), and a write cut midway
 // spoils only the slot it wrote — the other keeps the record before it; each
 // slot carries its digest and a sequence, the valid one with the higher
-// sequence is what is held. A file that cannot be read or understood is no
-// halt to forget: the operator does not start (the owner looks at the
-// volume). A file that cannot be made (the disk full when the operator
-// starts) holds nothing: every halt is held in memory then, and Hub's mirror
-// of it refuses every start until the owner clears it.
+// sequence is what is held. A write is checked whole (its bytes, then its
+// sync): a short one is a failed one. A slot that is not empty and not
+// valid when the operator starts means a halt was being written (Astra round
+// 5): the operator starts holding a strict halt of its own (`halt_unreadable`,
+// a new id) that only the owner's decision clears — never "no halt"; so does
+// a file that cannot be read. A file that cannot be made (the disk full when
+// the operator starts) holds nothing: every halt is held in memory then, and
+// Hub's mirror of it refuses every start until the owner clears it.
+//
+// What is left (the accepted residual, plan §4.9): a write that fails with
+// both slots still valid — the volume refused it — leaves the record before
+// it, which may hold no halt; if the operator then restarts before Hub
+// received that halt in a state, it is gone. Hub's mirror holds it whenever
+// a state carried it.
 //
 // With the halt the store keeps the id of the last halt cleared — by the
 // owner's clearHalt or by the operator's own login_required clearing — which
@@ -67,14 +76,6 @@ export function newHalt(reason: StopReason, atWall = Date.now()): HeldHalt {
   return { id: randomUUID(), reason, atWall };
 }
 
-export class HaltFileUnreadable extends Error {
-  readonly path: string;
-  constructor(path: string, why: string) {
-    super(`the held halt in ${path} cannot be read (${why}): the operator does not start — look at the volume`);
-    this.name = "HaltFileUnreadable";
-    this.path = path;
-  }
-}
 
 const REASONS: ReadonlySet<string> = new Set(STOP_REASONS);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -83,7 +84,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export interface HaltRecord {
   halt: HeldHalt | null;
   lastClearedId: string | null;
+  /** Read back: a slot was spoilt or the file could not be read — the halt
+   *  is a new `halt_unreadable` the operator holds (and writes). */
+  unreadable?: true;
 }
+
+/** The halt the operator holds when its halt file is spoilt or unreadable. */
+export const HALT_UNREADABLE: StopReason = "halt_unreadable";
 
 /** One slot of the file: its record, its sequence and its digest. */
 export const SLOT_BYTES = 2048;
@@ -131,17 +138,22 @@ function parseSlot(bytes: Buffer): { seq: number; record: HaltRecord } | "empty"
   return { seq: value.seq, record: { halt: { id: halt.id, reason: halt.reason as StopReason, atWall: halt.atWall }, lastClearedId } };
 }
 
+type WriteSync = (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number;
+
 export class HaltStore {
   readonly #path: string | null;
+  readonly #writeSync: WriteSync;
   #memory: HaltRecord = { halt: null, lastClearedId: null };
-  /** The sequence of the slot written last (0: none yet). */
-  #seq = 0;
-  /** The file could be made: writes go to it (else they throw). */
+  /** Each slot's sequence (null: empty, spoilt, or written last and failed —
+   *  the next write goes there first). */
+  #slots: Array<number | null> = [null, null];
+  /** The file could be made: writes go to it (else they make it first). */
   #ready = false;
 
-  /** `path` null: in memory only (tests). */
-  constructor(path: string | null) {
+  /** `path` null: in memory only (tests). `writeSync`: tests' disk. */
+  constructor(path: string | null, options: { writeSync?: WriteSync } = {}) {
     this.#path = path;
+    this.#writeSync = options.writeSync ?? ((fd, buffer, offset, length, position) => writeSync(fd, buffer, offset, length, position));
   }
 
   get path(): string | null {
@@ -149,9 +161,8 @@ export class HaltStore {
   }
 
   /** What the volume holds, read when the operator starts — the file made
-   *  (both slots preallocated, synced) if it is not there yet. Throws
-   *  `HaltFileUnreadable` for a file that is there and cannot be read or
-   *  understood. */
+   *  (both slots preallocated, synced) if it is not there yet. A spoilt slot
+   *  or a file that cannot be read: a new strict halt (`halt_unreadable`). */
   read(): HaltRecord {
     if (this.#path === null) return this.#memory;
     const path = this.#path;
@@ -159,7 +170,7 @@ export class HaltStore {
     try {
       fd = openSync(path, "r");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new HaltFileUnreadable(path, (error as NodeJS.ErrnoException).code ?? "unreadable");
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return unreadable(null);
       try {
         this.#make();
       } catch {
@@ -176,48 +187,46 @@ export class HaltStore {
         read += n;
         if (read === bytes.length) break;
       }
-    } catch (error) {
-      throw new HaltFileUnreadable(path, (error as NodeJS.ErrnoException).code ?? "unreadable");
+    } catch {
+      return unreadable(null);
     } finally {
       closeSync(fd);
     }
-    if (read !== bytes.length) throw new HaltFileUnreadable(path, `${read} bytes, not ${bytes.length}`);
-    const slots = [parseSlot(bytes.subarray(0, SLOT_BYTES)), parseSlot(bytes.subarray(SLOT_BYTES))];
-    const valid = slots.filter((slot): slot is { seq: number; record: HaltRecord } => typeof slot === "object");
-    if (valid.length === 0) {
-      // Preallocated and never written: nothing held. Anything else: unknown.
-      if (slots.every((slot) => slot === "empty")) {
-        this.#ready = true;
-        return { halt: null, lastClearedId: null };
-      }
-      throw new HaltFileUnreadable(path, "no valid slot");
-    }
-    const latest = valid.reduce((a, b) => (b.seq > a.seq ? b : a));
-    this.#seq = latest.seq;
     this.#ready = true;
-    return latest.record;
+    // A file shorter than its two slots: what is missing was being written.
+    const slots = [0, 1].map((index) => (read < (index + 1) * SLOT_BYTES ? "invalid" as const : parseSlot(bytes.subarray(index * SLOT_BYTES, (index + 1) * SLOT_BYTES))));
+    this.#slots = slots.map((slot) => (typeof slot === "object" ? slot.seq : null));
+    const valid = slots.filter((slot): slot is { seq: number; record: HaltRecord } => typeof slot === "object");
+    const latest = valid.length === 0 ? null : valid.reduce((a, b) => (b.seq > a.seq ? b : a));
+    // A slot neither empty nor valid: a halt was being written — held.
+    if (slots.some((slot) => slot === "invalid")) return unreadable(latest?.record.lastClearedId ?? null);
+    return latest?.record ?? { halt: null, lastClearedId: null };
   }
 
-  /** What is held from now on, in place into the older slot, synced before
-   *  it returns. Throws when it could not be written: what the volume held
-   *  before stays (the other slot). */
+  /** What is held from now on, in place into a spoilt or empty slot, else
+   *  the older one; its bytes checked and synced before it returns. Throws
+   *  when it could not be written: what the other slot holds stays. */
   write(record: HaltRecord): void {
     if (this.#path === null) {
-      this.#memory = record;
+      this.#memory = { halt: record.halt, lastClearedId: record.lastClearedId };
       return;
     }
     if (!this.#ready) this.#make();
-    const seq = this.#seq + 1;
+    const a = this.#slots[0] ?? null;
+    const b = this.#slots[1] ?? null;
+    const target = a === null ? 0 : b === null ? 1 : a < b ? 0 : 1;
+    const seq = Math.max(a ?? 0, b ?? 0) + 1;
+    // Until it is written whole, that slot holds nothing known.
+    this.#slots[target] = null;
     const fd = openSync(this.#path, "r+");
     try {
-      // Sequences alternate between the slots: the one written is never the
-      // one that holds the newest record.
-      writeSync(fd, slotBytes(seq, record), 0, SLOT_BYTES, (seq % 2) * SLOT_BYTES);
+      const written = this.#writeSync(fd, slotBytes(seq, { halt: record.halt, lastClearedId: record.lastClearedId }), 0, SLOT_BYTES, target * SLOT_BYTES);
+      if (written !== SLOT_BYTES) throw new Error(`a short write of the halt file (${written} of ${SLOT_BYTES} bytes)`);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    this.#seq = seq;
+    this.#slots[target] = seq;
   }
 
   /** The file, both slots preallocated (zeros) and synced, its directory too. */
@@ -226,7 +235,8 @@ export class HaltStore {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const fd = openSync(path, "wx", 0o600);
     try {
-      writeSync(fd, Buffer.alloc(2 * SLOT_BYTES), 0, 2 * SLOT_BYTES, 0);
+      const written = writeSync(fd, Buffer.alloc(2 * SLOT_BYTES), 0, 2 * SLOT_BYTES, 0);
+      if (written !== 2 * SLOT_BYTES) throw new Error(`a short write of the halt file (${written} of ${2 * SLOT_BYTES} bytes)`);
       fsyncSync(fd);
     } catch (error) {
       // Not made (the disk full): no partial file is left to be taken for a
@@ -243,6 +253,11 @@ export class HaltStore {
       closeSync(dir);
     }
     this.#ready = true;
-    this.#seq = 0;
+    this.#slots = [null, null];
   }
+}
+
+/** A spoilt or unreadable halt file: a new strict halt only the owner clears. */
+function unreadable(lastClearedId: string | null): HaltRecord {
+  return { halt: newHalt(HALT_UNREADABLE), lastClearedId, unreadable: true };
 }

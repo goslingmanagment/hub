@@ -48,6 +48,7 @@ const STOP_WORDS: Record<string, string> = {
   ws_unaccounted: "сокет сайта без учёта",
   header_mismatch: "заголовки запросов расходятся с сайтом",
   login_required: "нужен вход",
+  halt_unreadable: "запись остановки не прочиталась — решение владельца",
   owner_stop: "остановлен",
 };
 
