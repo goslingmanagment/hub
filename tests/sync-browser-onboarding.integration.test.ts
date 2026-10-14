@@ -532,7 +532,7 @@ describe("an account read's grant leaves under the profile's lock (Astra's revie
         abandon = moveOnboarding(r.profileId, "closing").then(() => (committed = true));
         // Until the abandon committed, or waits for the profile's lock.
         await until(async () => committed || (await testDb!.pool.query(
-          "select 1 from pg_stat_activity where wait_event_type = 'Lock' and query ilike '%from page_browsers%for no key update%' and pid <> pg_backend_pid()",
+          "select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike '%from page_browsers%for no key update%' and pid <> pg_backend_pid()",
         )).rows.length > 0, 5_000, "the abandon committed or waiting");
         committedBeforeGrant = committed;
       },
