@@ -33,10 +33,10 @@ import { clientFeatureExistsOn } from "./client-features.ts";
  * WHERE THE CUSTODY EXISTS. A send of a purpose exists on a platform when the
  * platform has its rule AND every flag of the rule exists there
  * (CLIENT_FEATURE_REQUIREMENTS, client-features.ts). Fansly's greeting waits
- * for `newcomers`, which exists on OnlyFans only until HF-2 lists Fansly for
- * it: until then every Fansly action that starts something, the status read
- * and a registered native send answer `platform_unsupported`, as they did
- * before this table. HF-2 changes nothing here.
+ * for `newcomers`, which exists on Fansly since R20 HF-2: the custody exists
+ * on both platforms, and on a Fansly page the owner's switch is the page's own
+ * `newcomers` row (the `"*"` row never reaches a Fansly page). A reply from
+ * the preview has no Fansly rule and stays `platform_unsupported` there.
  */
 
 /** What a send's group names: an AI generation's parts, or a greeting the chatter wrote (`manual-greeting-v1`). */

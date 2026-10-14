@@ -447,8 +447,9 @@ describe("[R20 HF-4б] the narrow token's voice notes on Fansly", () => {
     const spentBefore = await spentChars();
     const callsBefore = tts.calls;
 
-    // The owner's rows as on prod: no Fansly page has a row. Then a row false.
-    for (const rows of [PROD_ROWS, { ...PROD_ROWS, "lora-1": { voice: false } }]) {
+    // The owner's rows as on prod: no Fansly page has a row. Then a row false. Then voice on for
+    // every page by the "*" row, which reaches no Fansly page (R20 HF-2).
+    for (const rows of [PROD_ROWS, { ...PROD_ROWS, "lora-1": { voice: false } }, { ...PROD_ROWS, "*": { voice: true } }]) {
       setSwitches(rows);
       expect((await voiceByPage())["lora-1"]).toEqual({ available: false, reason: "flag_off" });
       const fresh = newRender(await seedScript({ conversationRef: GROUP, fanRef: FAN }));

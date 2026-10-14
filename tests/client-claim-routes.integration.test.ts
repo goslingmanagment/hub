@@ -302,7 +302,10 @@ describe("chat-extension claim and custody routes", () => {
     ] as const) {
       pageIds[label] = (await create(app.db, { modelId: lora!.id, label }))!.id;
     }
-    for (const [label, account] of [["lora-of", "100000001"], ["mia-of", "100000003"]] as const) {
+    // Every page has its platform account id, as on prod (the Fansly page's is 18 digits).
+    for (const [label, account] of [
+      ["lora-of", "100000001"], ["mia-of", "100000003"], ["lora-fansly", "500000000000000001"],
+    ] as const) {
       await testDb.pool.query("update pages set external_page_id = $1 where id = $2", [account, pageIds[label]]);
     }
     for (const [userId, labels] of [
@@ -432,12 +435,18 @@ describe("chat-extension claim and custody routes", () => {
     expectRefused(await act(grishaToken, nextFan(), replyBody()), 409, "client_feature_disabled", "flag_off");
     await patchConfig([features({ newcomers: true, previewSend: true })]);
 
-    // The features exist on OnlyFans only, and so do the flag-less status and native record.
-    for (const body of [claimBody(I1), dispatchBody(), replyBody(), nativeBody()]) {
-      expectRefused(await act(grishaToken, fan, body, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    // R20 HF-2: the "*" row, with both flags on, reaches no Fansly page. A lease and a greeting
+    // there wait for the page's own `newcomers` row; a reply from the preview is no Fansly send.
+    for (const body of [claimBody(I1), { ...claimBody(I1), action: "renew" }, dispatchBody()]) {
+      expectRefused(await act(grishaToken, fan, body, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "flag_off");
     }
-    expectRefused(await status(grishaToken, fan, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
-    expect(await query("select 1 from client_send_custody where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
+    expectRefused(await act(grishaToken, fan, replyBody(), { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    // The flag-less status read exists where the custody does: on Fansly too, with nothing to show.
+    expect(ok(await status(grishaToken, fan, { pageLabel: "lora-fansly" }))).toMatchObject({
+      greeting: { state: "none" }, lease: { state: "none" }, group: null, custody: null,
+    });
+    expect(await query("select 1 from client_fan_leases where page_id = $1 and fan_ref = $2", [pageIds["lora-fansly"], fan])).toEqual([]);
+    expect(await query("select 1 from client_send_custody where page_id = $1 and fan_ref = $2", [pageIds["lora-fansly"], fan])).toEqual([]);
     // An old client's version, or none, is not the extension: refused, never passed.
     for (const clientVersion of ["chatgoose-extension/2.7.1", "0.1.64", null]) {
       for (const body of [claimBody(I1), replyBody()]) {
@@ -1067,10 +1076,18 @@ describe("chat-extension claim and custody routes", () => {
     expectRefused(await act(grishaToken, nextFan(), claimBody(I1)), 409, "client_feature_disabled", "disabled");
     expectRefused(await act(grishaToken, fan, replyBody()), 409, "client_feature_disabled", "disabled");
     expectRefused(await status(grishaToken, fan), 409, "client_feature_disabled", "disabled");
-    // The page grant and the platform still hold.
+    // The page grant and the platform's admission still hold: a reply from the preview is no Fansly send.
     expectRefused(await act(svetaToken, nextFan(), nativeBody()), 409, "client_feature_disabled", "not_granted");
-    expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    expectRefused(
+      await act(grishaToken, nextFan(), nativeBody({ purpose: "preview-reply", group: group({ partCount: 1 }) }), { pageLabel: "lora-fansly" }),
+      409,
+      "client_feature_disabled",
+      "platform_unsupported",
+    );
     expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "ghost-of" }), 409, "client_feature_disabled", "not_granted");
+    // A greeting sent by hand on a Fansly page is recorded the same way, with every switch off (R20 HF-2).
+    expect(ok(await act(grishaToken, nextFsFan(), nativeBody({ platformMessageId: "1234567890123456001" }), { pageLabel: "lora-fansly" })).greeting)
+      .toMatchObject({ state: "confirmed", source: "native-register" });
 
     // Switched back on: the colleague who takes the fans next finds them greeted.
     await patchConfig([{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionMinVersion", value: "1.4.2" }]);
@@ -1087,9 +1104,10 @@ describe("chat-extension claim and custody routes", () => {
   // ── R20 HF-3: a manual greeting and the custody's admission by platform ──
   //
   // On Fansly the custody admits a greeting only, under `newcomers` without `previewSend`, with
-  // an AI or a manual group. `newcomers` exists on OnlyFans only until HF-2, so here every Fansly
-  // action that starts something is refused by the platform, as before this PR; the rules over a
-  // manual group are tests/client-claim.integration.test.ts, the full Fansly run is HF-2's.
+  // an AI or a manual group. `newcomers` exists on Fansly since R20 HF-2, and a Fansly page takes
+  // it from its own row of the owner's switches alone: the two tests below are the page without
+  // its row and the full run with it. The rules over a manual group are
+  // tests/client-claim.integration.test.ts.
 
   /** The extension's SDK, generated from this hub, as the extension calls it (over inject: no socket leaves). */
   function sdkClient(token: string) {
@@ -1132,56 +1150,186 @@ describe("chat-extension claim and custody routes", () => {
     expect((apiError.body as { reason?: string }).reason).toBe(reason);
   }
 
-  it("Fansly until HF-2: every send, manual or AI, is refused by the platform through the real SDK, and no AI is asked", async () => {
-    // Every switch on, for every page and for the Fansly page itself: only the platform refuses.
-    const fanslyOn = { newcomers: true, previewSend: true };
-    await patchConfig([{ key: "chatExtensionEnabled", value: true }, features(fanslyOn, { "lora-fansly": fanslyOn })]);
+  /** The bootstrap's features of the Fansly page, as grisha's extension reads them. */
+  async function fanslyFeatures() {
+    const response = await server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) });
+    expect(response.statusCode, response.body).toBe(200);
+    const bootstrap = clientBootstrapResponseSchema.parse(response.json());
+    return { bootstrap, features: bootstrap.pages.find((page) => page.pageLabel === "lora-fansly")!.features };
+  }
+  /** What the hub holds of one fan of the Fansly page: its leases and its sends. */
+  const fanslyRows = (fanRef: string) => Promise.all([
+    query("select 1 from client_fan_leases where page_id = $1 and fan_ref = $2", [pageIds["lora-fansly"], fanRef]),
+    query("select 1 from client_send_custody where page_id = $1 and fan_ref = $2", [pageIds["lora-fansly"], fanRef]),
+  ]);
+
+  it("[R20 HF-2] a Fansly page without its own row is flag_off, whatever the \"*\" row says; a reply is never a Fansly send", async () => {
+    // Every switch on for every page by the "*" row, and OnlyFans pages' own rows: none reaches the Fansly page.
+    const on = { newcomers: true, previewSend: true };
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }, features(on, { "lora-of": on, "mia-of": on })]);
     const before = await aiRows();
     const client = sdkClient(grishaToken);
     const params = { pageLabel: "lora-fansly", fanRef: nextFsFan() };
     const text = "Привет! Спасибо за подписку 💛";
     const leaseToken = randomUUID();
-    const starting = [
+    const waitsForTheRow = [
       { action: "claim", leaseToken, instanceId: I1 },
       { action: "renew", leaseToken, instanceId: I1 },
       dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 }),
       dispatchBody({ leaseToken, group: group({ partCount: 1 }) }),
-      replyBody(),
-      nativeBody({ group: manualGroup(text), partIndex: 0, platformMessageId: "1234567890123456789" }),
-      nativeBody({ group: group({ partCount: 1 }), platformMessageId: "1234567890123456788" }),
-      nativeBody({ purpose: "preview-reply", group: group({ partCount: 1 }), platformMessageId: "1234567890123456787" }),
     ] as const;
-    for (const body of starting) {
-      // The body is one the SDK lets out: the refusal is the platform's, never a 400.
+    for (const body of waitsForTheRow) {
+      // The body is one the SDK lets out: the refusal is the owner's switch, never a 400.
       expect(sdk.routeSchemas.clientFanClaim.body.safeParse(body).success, JSON.stringify(body)).toBe(true);
-      await refusedBySdk(
-        client.clientFanClaim({ params, body: body as never }),
-        409,
-        "client_feature_disabled",
-        "platform_unsupported",
-      );
+      await refusedBySdk(client.clientFanClaim({ params, body: body as never }), 409, "client_feature_disabled", "flag_off");
     }
-    await refusedBySdk(client.clientFanClaimStatus({ params }), 409, "client_feature_disabled", "platform_unsupported");
-    // What only ends something is never the platform's to refuse: here there is nothing to end.
+    // A reply from the preview has no Fansly rule: the platform refuses it, as a send and as a record.
+    for (const body of [
+      replyBody(),
+      nativeBody({ purpose: "preview-reply", group: group({ partCount: 1 }), platformMessageId: "1234567890123456787" }),
+    ]) {
+      await refusedBySdk(client.clientFanClaim({ params, body: body as never }), 409, "client_feature_disabled", "platform_unsupported");
+    }
+    // What only ends something is never a switch's to refuse: here there is nothing to end.
     await refusedBySdk(client.clientFanClaim({ params, body: { action: "release", leaseToken, instanceId: I1 } }), 409, "claim_expired");
     await refusedBySdk(
       client.clientFanClaim({ params, body: { action: "failed", attemptId: randomUUID(), instanceId: I1, reason: "not_enqueued" } }),
       409,
       "custody_not_owned",
     );
-    expect(await query("select 1 from client_fan_leases where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
-    expect(await query("select 1 from client_send_custody where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
+    expect(await fanslyRows(params.fanRef)).toEqual([[], []]);
     expect(await aiRows()).toEqual(before);
-    // The bootstrap announces the capability and the greeting's rate; the page's features stay off.
-    const bootstrap = clientBootstrapResponseSchema.parse((await server!.inject({
-      method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken),
-    })).json());
-    expect(bootstrap.capabilities).toContain("manual-greeting-v1");
+
+    // The bootstrap says the same: «Новые» exist on the page and are off; sending from the preview does not exist there.
+    const { bootstrap, features: page } = await fanslyFeatures();
+    expect(bootstrap.capabilities).toEqual(expect.arrayContaining(["manual-greeting-v1", "preview-send-custody-v1"]));
     expect(bootstrap.limits).toMatchObject({ previewSendPerMinute: 6, greetingSendPerMinute: 30 });
-    expect(bootstrap.pages.find((page) => page.pageLabel === "lora-fansly")?.features).toMatchObject({
-      newcomers: { available: false, reason: "platform_unsupported" },
+    expect(page).toMatchObject({
+      newcomers: { available: false, reason: "flag_off" },
       previewSend: { available: false, reason: "platform_unsupported" },
     });
+    // The OnlyFans page reads the same rows as it always did.
+    expect(bootstrap.pages.find((entry) => entry.pageLabel === "lora-of")!.features).toMatchObject({
+      newcomers: { available: true }, previewSend: { available: true },
+    });
+    // The top-level flags are the "*" row: they are no Fansly page's.
+    expect(bootstrap.flags).toMatchObject({ newcomers: true, previewSend: true });
+
+    // The page's own row set to off under a "*" that says on: still off.
+    await patchConfig([features(on, { "lora-fansly": { newcomers: false } })]);
+    await refusedBySdk(
+      client.clientFanClaim({ params, body: { action: "claim", leaseToken, instanceId: I1 } }),
+      409,
+      "client_feature_disabled",
+      "flag_off",
+    );
+    expect(await fanslyRows(params.fanRef)).toEqual([[], []]);
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[R20 HF-2] Fansly, the page's own row: claim → dispatch → sent with previewSend off, through the regular admission and the real SDK", async () => {
+    // The owner's rows: `newcomers` on the Fansly page alone. `previewSend` is off everywhere it
+    // could be set ("*" and the page's own row): a Fansly greeting does not wait for it.
+    await patchConfig([
+      { key: "chatExtensionEnabled", value: true },
+      features({ previewSend: false }, { "lora-fansly": { newcomers: true, previewSend: false } }),
+    ]);
+    const { features: page } = await fanslyFeatures();
+    expect(page).toMatchObject({
+      newcomers: { available: true },
+      previewSend: { available: false, reason: "platform_unsupported" },
+    });
+    const before = await aiRows();
+    const client = sdkClient(grishaToken);
+    const fanRef = nextFsFan();
+    const params = { pageLabel: "lora-fansly", fanRef };
+    const text = "Привет! Спасибо за подписку 💛";
+    const manual = manualGroup(text);
+    const storedGroupRef = `manual:${fingerprintOf(text)}`;
+
+    // claim, then renew: the lease is grisha's.
+    const leaseToken = randomUUID();
+    const claimed = await client.clientFanClaim({ params, body: { action: "claim", leaseToken, instanceId: I1 } });
+    expect(claimed).toMatchObject({
+      greeting: { state: "none" }, lease: { state: "owned", leaseToken }, group: null, custody: null,
+    });
+    expect((await client.clientFanClaim({ params, body: { action: "renew", leaseToken, instanceId: I1 } })).lease)
+      .toMatchObject({ state: "owned", leaseToken });
+
+    // dispatch: the chatter's own greeting, no AI generation behind it. One ticket.
+    const attemptId = randomUUID();
+    const dispatch = {
+      action: "dispatch", attemptId, instanceId: I1, purpose: "greeting", group: manual, partIndex: 0,
+      textRevision: 1, flagRevision: 0, leaseToken,
+    } as const;
+    expect(sdk.routeSchemas.clientFanClaim.body.safeParse(dispatch).success).toBe(true);
+    const dispatched = await client.clientFanClaim({ params, body: dispatch });
+    expect(dispatched).toMatchObject({
+      greeting: { state: "none" },
+      group: { generationRef: storedGroupRef, variant: 0, partCount: 1, sentParts: [], heldParts: [] },
+      custody: { attemptId, state: "dispatching" },
+    });
+    expect(dispatched.custody?.ticket).toEqual(expect.any(String));
+    // The repeat of the same dispatch reads the attempt and hands out no second ticket.
+    const repeated = await client.clientFanClaim({ params, body: dispatch });
+    expect(repeated.custody).toMatchObject({ attemptId, state: "dispatching", ticket: null });
+    // The status read, for the colleague's extension too: in flight, held by somebody they are not told.
+    expect(await client.clientFanClaimStatus({ params })).toMatchObject({ custody: { attemptId, state: "dispatching" } });
+    // A reply from the preview is still no Fansly send, with the page's row on.
+    await refusedBySdk(client.clientFanClaim({ params, body: replyBody() as never }), 409, "client_feature_disabled", "platform_unsupported");
+
+    // sent: Fansly answered the extension's own request with the message's id (19 digits).
+    const messageId = "1234567890123456701";
+    const sent = await client.clientFanClaim({
+      params, body: { action: "sent", attemptId, instanceId: I1, platformMessageId: messageId, evidence: "receipt+echo" },
+    });
+    expect(sent).toMatchObject({
+      greeting: { state: "confirmed", source: "preview-send", messageRef: messageId },
+      group: { generationRef: storedGroupRef, variant: 0, partCount: 1, sentParts: [0], heldParts: [] },
+      custody: { attemptId, state: "sent" },
+    });
+    expect(await client.clientFanClaimStatus({ params })).toMatchObject({
+      greeting: { state: "confirmed", source: "preview-send", messageRef: messageId },
+      custody: { attemptId, state: "sent" },
+    });
+    // On record once, and no AI was asked for any of it.
+    expect(await custodyRows(fanRef)).toMatchObject([
+      { attempt_id: attemptId, state: "sent", origin: "preview-send", platform_message_id: messageId },
+    ]);
+    expect(await aiRows()).toEqual(before);
+
+    // An AI greeting goes the same way: its group is a generation's, and a greeting sent by hand is recorded.
+    const aiFan = { pageLabel: "lora-fansly", fanRef: nextFsFan() };
+    const aiLease = randomUUID();
+    await client.clientFanClaim({ params: aiFan, body: { action: "claim", leaseToken: aiLease, instanceId: I1 } });
+    const aiGroup = group({ partCount: 1 });
+    const aiAttempt = randomUUID();
+    expect((await client.clientFanClaim({
+      params: aiFan,
+      body: {
+        action: "dispatch", attemptId: aiAttempt, instanceId: I1, purpose: "greeting", group: aiGroup as never, partIndex: 0,
+        textRevision: 1, flagRevision: 0, leaseToken: aiLease,
+      },
+    })).custody).toMatchObject({ attemptId: aiAttempt, state: "dispatching" });
+    const nativeFan = { pageLabel: "lora-fansly", fanRef: nextFsFan() };
+    expect((await client.clientFanClaim({
+      params: nativeFan,
+      body: nativeBody({ group: manualGroup("Hello from the composer!"), partIndex: 0, platformMessageId: "1234567890123456702" }) as never,
+    })).greeting).toMatchObject({ state: "confirmed", source: "native-register" });
+
+    // The owner takes the row back: nothing new starts on the page, and the attempt in flight is still finished.
+    await patchConfig([features({ previewSend: false }, { "lora-fansly": { newcomers: false } })]);
+    await refusedBySdk(
+      client.clientFanClaim({ params: { pageLabel: "lora-fansly", fanRef: nextFsFan() }, body: { action: "claim", leaseToken: randomUUID(), instanceId: I1 } }),
+      409,
+      "client_feature_disabled",
+      "flag_off",
+    );
+    expect((await client.clientFanClaim({
+      params: aiFan,
+      body: { action: "sent", attemptId: aiAttempt, instanceId: I1, platformMessageId: "1234567890123456703", evidence: "receipt+echo" },
+    })).custody).toMatchObject({ attemptId: aiAttempt, state: "sent" });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -1247,8 +1395,13 @@ describe("chat-extension claim and custody routes", () => {
       .toMatchObject({ greeting: { state: "none" }, custody: { attemptId: failing.attemptId, state: "failed" } });
     expect(ok(await post(failedFan, { ...claimBody(I1, failing.leaseToken), action: "release" })).lease.state).toBe("released");
     expect((await custodyRows(failedFan)).map((row) => row.state)).toEqual(["failed"]);
-    // Until HF-2 the status read itself does not exist on Fansly.
-    expectRefused(await status(grishaToken, sentFan, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    // The status read exists on Fansly (R20 HF-2) and waits for the master switch, like on OnlyFans.
+    expectRefused(await status(grishaToken, sentFan, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "disabled");
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }]);
+    expect(ok(await status(grishaToken, sentFan, { pageLabel: "lora-fansly" }))).toMatchObject({
+      greeting: { state: "confirmed", source: "preview-send", messageRef: messageId },
+      custody: { attemptId: sending.attemptId, state: "sent" },
+    });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

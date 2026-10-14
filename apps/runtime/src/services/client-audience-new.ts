@@ -431,9 +431,10 @@ export async function getClientAudienceNew(
     throw new ClientFeatureDisabledError(NEWCOMERS_FLAG, "not_granted");
   }
   // The hub's own check, before anything is read: the page is granted to the
-  // caller, the feature exists on its platform, the owner's `newcomers` switch
-  // is on for it, and the extension is not outdated.
-  const page = await requireClientFeature(app, request, principal, { id: stored.id }, NEWCOMERS_FLAG);
+  // caller, the list is part of `newcomers` on its platform (OnlyFans: on
+  // Fansly the extension finds its new subscribers itself, R20 HF-2), the
+  // owner's `newcomers` switch is on for it, and the extension is not outdated.
+  const page = await requireClientFeature(app, request, principal, { id: stored.id }, NEWCOMERS_FLAG, "audience-new-v1");
 
   const ring = signedCursorKeyRing(app.config);
   const scope: SignedCursorScope = { pageId: page.id, userId: principal.user.id };

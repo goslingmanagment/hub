@@ -551,7 +551,7 @@ describe("fresh text switches", () => {
     expect(SERVED_CLIENT_CAPABILITIES).toContain("live-text-v1");
     // R20 HF-8б: on Fansly too, behind the same capability and each page's own flag.
     expect(CLIENT_FEATURE_REQUIREMENTS.freshText).toEqual({
-      platforms: ["onlyfans", "fansly"], capabilities: ["live-text-v1"],
+      onlyfans: { capabilities: ["live-text-v1"] }, fansly: { capabilities: ["live-text-v1"] },
     });
     expect(getDescriptor("aiLiveTextContextMode")).toMatchObject({
       default: "off", runtimeApply: "live", enumValues: ["off", "shadow", "serve"],

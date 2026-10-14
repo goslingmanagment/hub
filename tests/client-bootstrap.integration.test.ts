@@ -56,12 +56,16 @@ let leadId = 0;
 let ownerId = 0;
 const pageIds: Record<string, number> = {};
 
-/** The flags of Fansly's own AI generations (R20 HF-12): they exist on Fansly
- *  alone; fresh text (R20 HF-8б) on both; every other flag on OnlyFans alone. */
-const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill"];
-const BOTH_PLATFORM_FLAGS: readonly string[] = ["freshText"];
+/**
+ * Where a flag exists (R20 HF-2). Fansly's own flags (its AI generations', HF-12,
+ * and the extension's own panels there) exist on Fansly alone; sending from the
+ * preview, ChatSpace's navigation and socket tap and the Spenders statistics on
+ * OnlyFans alone; every other flag on both.
+ */
+const FANSLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill", "notes", "vault", "registration"];
+const ONLYFANS_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "stats"];
 const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
-  BOTH_PLATFORM_FLAGS.includes(flag) || (FANSLY_FLAGS.includes(flag) ? "fansly" : "onlyfans") === on
+  !(on === "onlyfans" ? FANSLY_FLAGS : ONLYFANS_FLAGS).includes(flag)
 );
 /** Every flag off on a page of platform `on`: for `reason` where the flag
  *  exists, `platform_unsupported` where it does not. */

@@ -28,13 +28,14 @@ import { CLIENT_FEATURE_REQUIREMENTS, clientFeatureExistsOn } from "../apps/runt
 const GROUPS: readonly ClientClaimGroupKind[] = ["generation", "manual"];
 
 /**
- * The flag table as HF-2 makes it for this route: `newcomers` exists on Fansly
- * too. Only the existence of a flag on a platform is read here; the switches,
- * the capabilities and the full positive run on Fansly are HF-2's.
+ * The flag table as it was before R20 HF-2: `newcomers` on OnlyFans only. Only
+ * the existence of a flag on a platform is read here; the switches, the
+ * capabilities and the full run on Fansly through the routes are
+ * tests/client-claim-routes.integration.test.ts.
  */
-const NEWCOMERS_AFTER_HF2: readonly Platform[] = ["onlyfans", "fansly"];
-const newcomersOnFansly: ClientFlagExistsOn = (flag, platform) =>
-  flag === "newcomers" ? NEWCOMERS_AFTER_HF2.includes(platform) : clientFeatureExistsOn(flag, platform);
+const NEWCOMERS_BEFORE_HF2: readonly Platform[] = ["onlyfans"];
+const newcomersOnOnlyFansOnly: ClientFlagExistsOn = (flag, platform) =>
+  flag === "newcomers" ? NEWCOMERS_BEFORE_HF2.includes(platform) : clientFeatureExistsOn(flag, platform);
 
 describe("the greeting custody's admission by platform", () => {
   it("is the matrix of architecture §11.1, and nothing else", () => {
@@ -76,31 +77,18 @@ describe("the greeting custody's admission by platform", () => {
         admitted: false, feature: "manual-greeting-v1", reason: "platform_unsupported",
       });
     }
-    // Before HF-3 the status read and a native record existed where `previewSend` does: the same set.
-    for (const platform of platforms) {
-      expect(clientCustodyExistsOn(platform), platform).toBe(clientFeatureExistsOn("previewSend", platform));
-    }
+    // The custody exists there as it did before HF-3, when it was `previewSend`'s platform.
+    expect(clientFeatureExistsOn("previewSend", "onlyfans")).toBe(true);
   });
 
-  it("Fansly until HF-2: nothing exists there, every send is platform_unsupported, as before HF-3", () => {
-    // The flag table this PR leaves as it was: `newcomers` and `previewSend` are OnlyFans only.
-    expect(CLIENT_FEATURE_REQUIREMENTS.newcomers.platforms).toEqual(["onlyfans"]);
-    expect(CLIENT_FEATURE_REQUIREMENTS.previewSend.platforms).toEqual(["onlyfans"]);
-    expect(clientCustodyExistsOn("fansly")).toBe(false);
+  it("[R20 HF-2] Fansly: a greeting under `newcomers` without `previewSend`, AI or manual, 30 a minute; a reply never", () => {
+    // The flag table as HF-2 makes it: `newcomers` on both, `previewSend` on OnlyFans only.
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.newcomers)).toEqual(["onlyfans", "fansly"]);
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.previewSend)).toEqual(["onlyfans"]);
+    // The custody exists on Fansly through the regular admission: no stand-in table.
+    expect(clientCustodyExistsOn("fansly")).toBe(true);
     for (const group of GROUPS) {
-      expect(admitClientSend({ platform: "fansly", purpose: "greeting", group }), group).toEqual({
-        admitted: false, feature: "newcomers", reason: "platform_unsupported",
-      });
-      expect(admitClientSend({ platform: "fansly", purpose: "preview-reply", group }), group).toEqual({
-        admitted: false, feature: "previewSend", reason: "platform_unsupported",
-      });
-    }
-  });
-
-  it("Fansly once `newcomers` exists there: a greeting under `newcomers` without `previewSend`, AI or manual, 30 a minute; a reply never", () => {
-    expect(clientCustodyExistsOn("fansly", newcomersOnFansly)).toBe(true);
-    for (const group of GROUPS) {
-      const admission = admitClientSend({ platform: "fansly", purpose: "greeting", group }, newcomersOnFansly);
+      const admission = admitClientSend({ platform: "fansly", purpose: "greeting", group });
       expect(admission, group).toEqual({
         admitted: true,
         rule: { flags: ["newcomers"], groups: ["generation", "manual"], rate: CLIENT_GREETING_SEND_RATE },
@@ -108,16 +96,30 @@ describe("the greeting custody's admission by platform", () => {
       expect(admission.admitted && admission.rule.flags).not.toContain("previewSend");
       // A reply from the preview is no Fansly send: 409, even if `previewSend` came to exist there.
       const everything: ClientFlagExistsOn = () => true;
-      for (const existsOn of [newcomersOnFansly, everything]) {
+      for (const existsOn of [clientFeatureExistsOn, everything]) {
         expect(admitClientSend({ platform: "fansly", purpose: "preview-reply", group }, existsOn), group).toEqual({
           admitted: false, feature: "previewSend", reason: "platform_unsupported",
         });
       }
     }
     // OnlyFans reads the same under that table.
-    expect(clientCustodyExistsOn("onlyfans", newcomersOnFansly)).toBe(true);
-    expect(admitClientSend({ platform: "onlyfans", purpose: "greeting", group: "manual" }, newcomersOnFansly))
+    expect(clientCustodyExistsOn("onlyfans")).toBe(true);
+    expect(admitClientSend({ platform: "onlyfans", purpose: "greeting", group: "manual" }))
       .toMatchObject({ admitted: false, reason: "platform_unsupported" });
+  });
+
+  it("the custody follows the flag table: where `newcomers` did not exist, nothing on Fansly was admitted", () => {
+    // The table before HF-2, read through the same admission: every Fansly send names the flag it waited for.
+    expect(clientCustodyExistsOn("fansly", newcomersOnOnlyFansOnly)).toBe(false);
+    expect(clientCustodyExistsOn("onlyfans", newcomersOnOnlyFansOnly)).toBe(true);
+    for (const group of GROUPS) {
+      expect(admitClientSend({ platform: "fansly", purpose: "greeting", group }, newcomersOnOnlyFansOnly), group).toEqual({
+        admitted: false, feature: "newcomers", reason: "platform_unsupported",
+      });
+      expect(admitClientSend({ platform: "fansly", purpose: "preview-reply", group }, newcomersOnOnlyFansOnly), group).toEqual({
+        admitted: false, feature: "previewSend", reason: "platform_unsupported",
+      });
+    }
   });
 
   it("a platform with no rule has no custody, and a refusal always names a flag or the manual group's capability", () => {

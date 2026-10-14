@@ -648,9 +648,10 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       expectRefused(refused, 409, "client_feature_disabled", "disabled");
       expect(refused.body).not.toContain(fan);
     }
+    // `newcomers` exists on Fansly too (R20 HF-2): off with the master switch like everywhere.
     expect(await newcomers()).toEqual({
       "lora-of": { available: false, reason: "disabled" },
-      "lora-fansly": { available: false, reason: "platform_unsupported" },
+      "lora-fansly": { available: false, reason: "disabled" },
     });
 
     // The master switch alone is not the list's flag.
@@ -661,13 +662,23 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     expectRefused(await list(grishaToken), 409, "client_feature_disabled", "flag_off");
 
     await patchConfig([features({ newcomers: true })]);
+    // The "*" row reaches the OnlyFans page and no Fansly page (R20 HF-2).
     expect(await newcomers()).toEqual({
       "lora-of": { available: true },
-      "lora-fansly": { available: false, reason: "platform_unsupported" },
+      "lora-fansly": { available: false, reason: "flag_off" },
     });
     expect(refs(await listOk(grishaToken))).toHaveLength(1);
-    // The list exists on OnlyFans only.
+    // The list exists on OnlyFans only: on Fansly the extension finds its new subscribers itself,
+    // so the hub's list is no part of `newcomers` there, whatever the page's switches say.
     expectRefused(await list(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageIds["lora-fansly"], "500000000000000001"]);
+    await patchConfig([features({ newcomers: true }, { "lora-fansly": { newcomers: true } })]);
+    expect(await newcomers()).toEqual({ "lora-of": { available: true }, "lora-fansly": { available: true } });
+    const fanslyList = await list(grishaToken, { pageLabel: "lora-fansly" });
+    expectRefused(fanslyList, 409, "client_feature_disabled", "platform_unsupported");
+    expect(fanslyList.body).not.toContain(fan);
+    await testDb!.pool.query("update pages set external_page_id = null where id = $1", [pageIds["lora-fansly"]]);
+    await patchConfig([features({ newcomers: true })]);
     // An old client's version, or none, is not the extension: refused, never passed.
     for (const clientVersion of ["chatgoose-extension/2.7.1", "0.1.64", null]) {
       expectRefused(await list(grishaFullToken, { clientVersion }), 409, "client_feature_disabled", "client_outdated");

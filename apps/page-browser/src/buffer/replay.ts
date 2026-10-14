@@ -42,10 +42,9 @@
 // cap of attempt ids, one part of a body, and the socket's queue up to its
 // mark.
 
-import { BODY_PART_BYTES, encodeBodyAbandon, encodeBodyFrame } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
-import type { BodyReader } from "./bodies.ts";
 import type { EventBuffer } from "./buffer.ts";
+import { sendBody } from "./send-body.ts";
 
 /** The engine's connection, as the RPC server shows it. */
 export interface ReplayLink {
@@ -293,33 +292,10 @@ export class OutcomeReplay {
   /** A body in frames of up to 1 MiB through one open descriptor, the last
    *  one flagged (a body of 0 bytes is one empty last frame), waiting for
    *  the socket between them. A part that cannot be read abandons the parts
-   *  sent before it. */
-  async #sendBody(bodyId: string, epoch: number): Promise<"sent" | "gone" | "missing" | "unreadable"> {
+   *  sent before it (send-body.ts). */
+  #sendBody(bodyId: string, epoch: number): Promise<"sent" | "gone" | "missing" | "unreadable"> {
     const sendBinary = this.#link.sendBinary ?? (() => false);
-    let reader: BodyReader | null;
-    try {
-      reader = this.#buffer.openBody(bodyId);
-    } catch (error) {
-      this.#log("body.unreadable", { bodyId, part: 0, error: errorMessage(error) });
-      return "unreadable";
-    }
-    if (reader === null) return "missing";
-    let part = 0;
-    try {
-      const parts = Math.max(1, Math.ceil(reader.size / BODY_PART_BYTES));
-      for (; part < parts; part++) {
-        if (!(await this.#room(epoch))) return "gone";
-        const data = reader.read(part, BODY_PART_BYTES);
-        if (!sendBinary(encodeBodyFrame(bodyId, part, part === parts - 1, data))) return "gone";
-      }
-      return "sent";
-    } catch (error) {
-      this.#log("body.unreadable", { bodyId, part, error: errorMessage(error) });
-      if (part > 0 && this.#link.epoch() === epoch) sendBinary(encodeBodyAbandon(bodyId, part));
-      return "unreadable";
-    } finally {
-      reader.close();
-    }
+    return sendBody(bodyId, epoch, { epoch: () => this.#link.epoch(), sendBinary }, (id) => this.#buffer.openBody(id), (at) => this.#room(at), this.#log);
   }
 }
 

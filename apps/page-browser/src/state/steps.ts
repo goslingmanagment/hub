@@ -1,7 +1,9 @@
 // The steps of a page's start (plan §4.1) and why a page stands (spec §6.1).
 // The operator goes through the steps strictly in order; any failure sends
-// it back to the first. Steps 8–10 (site loaded, session confirmed, ready)
-// belong to later PRs: this operator stops at step 7, the exit open.
+// it back to the first. After step 7, the exit open, the operator loads the
+// site (8, `site_loaded`); the engine's identity read through the browser
+// naming the expected account confirms the session (9), and the page is
+// ready (10) — PR 7. A changed session goes back to step 8.
 
 export const STEPS = [
   "exit_closed",

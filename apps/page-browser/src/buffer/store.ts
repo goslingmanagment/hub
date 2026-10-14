@@ -38,7 +38,10 @@ export interface StoredEvent {
   seq: number;
   /** The event as the protocol sends it. */
   json: string;
+  /** Its JSON's bytes and its body's (schema.ts, v5). */
   bytes: number;
+  /** The body a `site.response` names (bodies.ts), or null (v5). */
+  bodyId?: string | null;
 }
 
 export interface StoredOutcome {
@@ -58,11 +61,29 @@ export interface NewEventRow {
   atWall: number;
   kind: string;
   json: string;
+  /** Its JSON's bytes and its body's: the caps count both. */
   bytes: number;
+  /** The body it names (a `site.response`, v5), or null. */
+  bodyId?: string | null;
 }
 
 /** A change of a site socket's connection (schema.ts, v3). */
 export type ConnectionChange = { connectionId: string; admitted: { attemptId: number } } | { connectionId: string; opened: true } | { connectionId: string; gone: true };
+
+/** A change of a site request the engine was asked about (schema.ts, v5):
+ *  asked (before its `siteAdmit`), admitted and released under an attempt
+ *  (before it goes on), gone (in the commit of its `siteDone`, or when it
+ *  ended without an admission). */
+export type SiteRequestChange = { siteRequestId: string; asked: true } | { siteRequestId: string; released: { attemptId: number } } | { siteRequestId: string; gone: true };
+
+/** A site request as the buffer has it (v5). */
+export interface StoredSiteRequest {
+  siteRequestId: string;
+  /** Its admission's attempt; null: never admitted. */
+  attemptId: number | null;
+  /** It may have gone on to the network. */
+  released: boolean;
+}
 
 /** A site socket's connection as the buffer has it (v3). */
 export interface StoredConnection {
@@ -107,6 +128,8 @@ export interface Commit {
   marks?: AttemptMark[];
   /** Changes of the site socket's connections, in order (v3). */
   connections?: Array<ConnectionChange & { atWall: number }>;
+  /** Changes of the site requests asked about, in order (v5). */
+  siteRequests?: Array<SiteRequestChange & { atWall: number }>;
   /** Delete the events up to this number (acknowledged), or nothing. */
   deleteEventsUpTo: number | null;
   /** Delete these outcomes (their resultAck came). */
@@ -123,7 +146,7 @@ export interface Committed {
   deletedBytes: number;
   deletedEvents: number;
   deletedOutcomes: number;
-  /** The bodies of the deleted outcomes: their files go now. */
+  /** The bodies of the deleted outcomes and events: their files go now. */
   deletedBodies: string[];
 }
 
@@ -218,6 +241,12 @@ export class BufferStore {
   readonly #openConnection: StatementSync;
   readonly #dropConnection: StatementSync;
   readonly #allConnections: StatementSync;
+  readonly #askSiteRequest: StatementSync;
+  readonly #releaseSiteRequest: StatementSync;
+  readonly #dropSiteRequest: StatementSync;
+  readonly #allSiteRequests: StatementSync;
+  readonly #eventBodiesUpTo: StatementSync;
+  readonly #eventBodyIds: StatementSync;
   readonly #commitFault: StoreOptions["commitFault"];
   readonly #totalsFault: StoreOptions["totalsFault"];
   readonly #markFault: StoreOptions["markFault"];
@@ -269,18 +298,26 @@ export class BufferStore {
       this.#lastWall = lastWall === "" ? null : Number(lastWall);
       this.#lastOutcomeSeq = Number(meta("last_outcome_seq") || "0");
       this.#sentMax = Number(meta("sent_max") || "0");
-      this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?)`);
+      this.#insertEvent = db.prepare(`INSERT INTO events (seq, at_wall, kind, format, bytes, json, body_id) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?)`);
       this.#admitConnection = db.prepare("INSERT OR REPLACE INTO ws_connections (connection_id, attempt_id, opened, at_wall) VALUES (?, ?, 0, ?)");
       this.#openConnection = db.prepare("UPDATE ws_connections SET opened = 1 WHERE connection_id = ?");
       this.#dropConnection = db.prepare("DELETE FROM ws_connections WHERE connection_id = ?");
       this.#allConnections = db.prepare("SELECT connection_id, attempt_id, opened FROM ws_connections ORDER BY at_wall, connection_id");
+      this.#askSiteRequest = db.prepare("INSERT OR IGNORE INTO site_requests (site_request_id, attempt_id, released, at_wall) VALUES (?, NULL, 0, ?)");
+      this.#releaseSiteRequest = db.prepare(
+        "INSERT INTO site_requests (site_request_id, attempt_id, released, at_wall) VALUES (?, ?, 1, ?) ON CONFLICT (site_request_id) DO UPDATE SET attempt_id = excluded.attempt_id, released = 1",
+      );
+      this.#dropSiteRequest = db.prepare("DELETE FROM site_requests WHERE site_request_id = ?");
+      this.#allSiteRequests = db.prepare("SELECT site_request_id, attempt_id, released FROM site_requests ORDER BY at_wall, site_request_id");
+      this.#eventBodiesUpTo = db.prepare("SELECT body_id FROM events WHERE seq <= ? AND body_id IS NOT NULL");
+      this.#eventBodyIds = db.prepare("SELECT body_id FROM events WHERE body_id IS NOT NULL");
       this.#insertOutcome = db.prepare(`INSERT OR IGNORE INTO outcomes (attempt_id, at_wall, type, format, bytes, json, body_id, body_bytes, seq) VALUES (?, ?, ?, ${ROW_FORMAT}, ?, ?, ?, ?, ?)`);
       this.#setMeta = db.prepare("UPDATE meta SET value = ? WHERE key = ?");
       this.#sumUpTo = db.prepare("SELECT coalesce(sum(bytes), 0) AS bytes, count(*) AS n FROM events WHERE seq <= ?");
       this.#deleteUpTo = db.prepare("DELETE FROM events WHERE seq <= ?");
       this.#deleteOutcome = db.prepare("DELETE FROM outcomes WHERE attempt_id = ? RETURNING bytes, body_id");
       this.#sizesAfter = db.prepare("SELECT seq, bytes FROM events WHERE seq > ? ORDER BY seq LIMIT ?");
-      this.#readRange = db.prepare("SELECT seq, bytes, json FROM events WHERE seq > ? AND seq <= ? ORDER BY seq");
+      this.#readRange = db.prepare("SELECT seq, bytes, json, body_id FROM events WHERE seq > ? AND seq <= ? ORDER BY seq");
       this.#first = db.prepare("SELECT seq, at_wall FROM events ORDER BY seq LIMIT 1");
       this.#oldestOutcome = db.prepare("SELECT min(at_wall) AS at_wall FROM outcomes");
       this.#outcome = db.prepare("SELECT attempt_id, json, bytes, body_id, body_bytes, seq FROM outcomes WHERE attempt_id = ?");
@@ -368,7 +405,7 @@ export class BufferStore {
       let lastOutcomeSeq = this.#lastOutcomeSeq;
       for (const event of batch.events) {
         if (event.seq !== lastSeq + 1) throw new Error(`event ${event.seq} does not follow ${lastSeq}`);
-        this.#insertEvent.run(event.seq, event.atWall, event.kind, event.bytes, event.json);
+        this.#insertEvent.run(event.seq, event.atWall, event.kind, event.bytes, event.json, event.bodyId ?? null);
         lastSeq = event.seq;
         lastWall = event.atWall;
         result.addedBytes += event.bytes;
@@ -388,11 +425,19 @@ export class BufferStore {
         else if ("opened" in change) this.#openConnection.run(change.connectionId);
         else this.#dropConnection.run(change.connectionId);
       }
+      for (const change of batch.siteRequests ?? []) {
+        if ("asked" in change) this.#askSiteRequest.run(change.siteRequestId, change.atWall);
+        else if ("released" in change) this.#releaseSiteRequest.run(change.siteRequestId, change.released.attemptId, change.atWall);
+        else this.#dropSiteRequest.run(change.siteRequestId);
+      }
       if (batch.deleteEventsUpTo !== null) {
         const gone = row(this.#sumUpTo, batch.deleteEventsUpTo);
         result.deletedBytes += Number(gone?.bytes ?? 0);
         result.deletedEvents = Number(gone?.n ?? 0);
-        if (result.deletedEvents > 0) this.#deleteUpTo.run(batch.deleteEventsUpTo);
+        if (result.deletedEvents > 0) {
+          for (const found of this.#eventBodiesUpTo.all(batch.deleteEventsUpTo) as Array<{ body_id: string }>) result.deletedBodies.push(found.body_id);
+          this.#deleteUpTo.run(batch.deleteEventsUpTo);
+        }
       }
       for (const attemptId of batch.deleteOutcomes) {
         const gone = row(this.#deleteOutcome, attemptId);
@@ -446,7 +491,12 @@ export class BufferStore {
       if (bytes > maxBytes) break;
       upto = size.seq;
     }
-    return (this.#readRange.all(afterSeq, upto) as Array<{ seq: number; bytes: number; json: string }>).map((event) => ({ seq: Number(event.seq), json: event.json, bytes: Number(event.bytes) }));
+    return (this.#readRange.all(afterSeq, upto) as Array<{ seq: number; bytes: number; json: string; body_id: string | null }>).map((event) => ({
+      seq: Number(event.seq),
+      json: event.json,
+      bytes: Number(event.bytes),
+      bodyId: typeof event.body_id === "string" ? event.body_id : null,
+    }));
   }
 
   /** The stored outcomes of these attempts. */
@@ -494,9 +544,19 @@ export class BufferStore {
     return found === undefined ? null : { issued: Number(found.issued) === 1, released: Number(found.released) === 1, acked: Number(found.acked) === 1 };
   }
 
-  /** Every body a stored outcome names (the rest of bodies/ goes). */
+  /** Every body a stored outcome or event names (the rest of bodies/
+   *  goes). */
   bodyIds(): string[] {
-    return (this.#bodyIds.all() as Array<{ body_id: string }>).map((found) => found.body_id);
+    return [...(this.#bodyIds.all() as Array<{ body_id: string }>), ...(this.#eventBodyIds.all() as Array<{ body_id: string }>)].map((found) => found.body_id);
+  }
+
+  /** Every site request kept (v5), oldest first. */
+  siteRequests(): StoredSiteRequest[] {
+    return (this.#allSiteRequests.all() as Array<Record<string, unknown>>).map((found) => ({
+      siteRequestId: String(found.site_request_id),
+      attemptId: found.attempt_id === null || found.attempt_id === undefined ? null : Number(found.attempt_id),
+      released: Number(found.released) === 1,
+    }));
   }
 
   /** Every connection kept, oldest first. */

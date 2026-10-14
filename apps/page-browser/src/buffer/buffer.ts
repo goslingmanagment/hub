@@ -44,10 +44,18 @@
 //
 // Bodies (BodyRef in `result`, and in `site.response` with PR 7) are files
 // of the buffer volume (bodies.ts): written as they arrive, sealed only
-// whole, and named by the outcome stored after the seal; the outcome's
-// bytes count its body's, so the caps do too. They go to the engine as
-// binary frames before the JSON that names them (replay.ts), and their file
-// goes with the outcome's resultAck.
+// whole, and named by the outcome or the event stored after the seal; its
+// bytes count its body's, so the caps do too. While a body grows its bytes
+// count already (`beginBody`): each chunk reserves its room first, and one
+// the caps have no room for is not written — the buffer is full, and the
+// body is not whole (bodies.ts). They go to the engine as
+// binary frames before the JSON that names them (replay.ts, stream.ts), and
+// their file goes with the outcome's resultAck or the event's ack.
+//
+// The site's own requests (PR 7) are kept here too while the engine is
+// asked about them (`changeSiteRequest`, or in a group: schema.ts v5) —
+// asked, released under an attempt, gone — so an operator that starts again
+// ends what the previous one admitted.
 //
 // The site's socket (PR 10) keeps its connections here too
 // (`changeConnection`, or in the commit of an event: schema.ts v3) —
@@ -78,11 +86,13 @@ import {
   type StoredConnection,
   type NewOutcomeRow,
   type OpenCause,
+  type SiteRequestChange,
   type StoredEvent,
   type StoredOutcome,
+  type StoredSiteRequest,
 } from "./store.ts";
 
-export type { AttemptRecord, AttemptStep, ConnectionChange, StoredConnection };
+export type { AttemptRecord, AttemptStep, ConnectionChange, SiteRequestChange, StoredConnection, StoredSiteRequest };
 
 /** Why a write is refused: a cap (`buffer_full`), the disk (`disk_full`),
  *  or a buffer that could not be opened (`buffer_unavailable`). */
@@ -232,19 +242,26 @@ interface PendingEvent {
   /** A gap mark: its "from" is the event before it, unless given. */
   gap?: { reason: GapReason; from: { seq: number | null; wall: number | null } | null };
   connection?: ConnectionChange;
+  /** The sealed body a `site.response` names (bodies.ts). */
+  file?: OutcomeBody;
 }
 
 /** One write of a group (`appendGroup`, PR 10). */
 export type GroupItem =
-  | { event: EventBody; at?: { mono: number; wall: number }; connection?: ConnectionChange }
+  | { event: EventBody; at?: { mono: number; wall: number }; connection?: ConnectionChange; body?: OutcomeBody }
   | { gap: GapReason; from: { seq: number | null; wall: number | null } }
   | { outcome: Outcome }
-  | { connection: ConnectionChange };
+  | { connection: ConnectionChange }
+  | { siteRequest: SiteRequestChange };
 
 /** What a producer says of an event besides the event itself (PR 10). */
 export interface AppendOptions {
   /** A change of the site socket's connection, in the same commit. */
   connection?: ConnectionChange;
+  /** The sealed body the event names (a `site.response`, PR 7): its bytes
+   *  count in the caps; the caller removes its file when the event is not
+   *  stored. */
+  body?: OutcomeBody;
 }
 
 interface PendingOutcome {
@@ -273,7 +290,15 @@ interface PendingConnection {
   resolve: (durable: Durable) => void;
 }
 
-type Pending = PendingEvent | PendingOutcome | PendingMark | PendingConnection;
+interface PendingSiteRequest {
+  type: "site";
+  change: SiteRequestChange;
+  atWall: number;
+  bytes: number;
+  resolve: (durable: Durable) => void;
+}
+
+type Pending = PendingEvent | PendingOutcome | PendingMark | PendingConnection | PendingSiteRequest;
 
 function defaultDiskFree(dir: string): number {
   const stats = statfsSync(dir);
@@ -350,6 +375,8 @@ export class EventBuffer {
   #walDirty = false;
   /** Stored, unacknowledged bytes and counts (the file may be larger). */
   #bytes = 0;
+  /** Bytes of bodies that still grow (not sealed, not gone). */
+  #growing = 0;
   #events = 0;
   #outcomes = 0;
   #firstSeq: number | null = null;
@@ -485,7 +512,7 @@ export class EventBuffer {
   /** What `state.buffer` says (spec §6.1), and more for tools and tests. */
   stats(): { bytes: number; oldestAgeMs: number; events: number; outcomes: number; pending: number; lastSeq: number; commits: number; full: FullReason | null; unavailable: OpenCause | null; freeDiskBytes: number } {
     return {
-      bytes: this.#bytes,
+      bytes: this.#bytes + this.#growing,
       oldestAgeMs: this.#oldestAgeMs(),
       events: this.#events,
       outcomes: this.#outcomes,
@@ -581,8 +608,9 @@ export class EventBuffer {
   append(event: EventBody, at?: { mono: number; wall: number }, options: AppendOptions = {}): Appended {
     if (!EVENT_KINDS.has(event.kind)) throw new Error(`not an event a producer appends: ${String(event.kind)}`);
     const body = JSON.stringify(event);
-    const item: PendingEvent = { type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+    const item: PendingEvent = { type: "event", kind: event.kind, body, atMono: at?.mono ?? monoMs(), atWall: at?.wall ?? this.#now(), bytes: stampedBytes(body) + (options.body?.bytes ?? 0), resolve: () => undefined };
     if (options.connection !== undefined) item.connection = options.connection;
+    if (options.body !== undefined) item.file = options.body;
     return this.#accept(item);
   }
 
@@ -599,8 +627,9 @@ export class EventBuffer {
       if ("event" in item) {
         if (!EVENT_KINDS.has(item.event.kind)) throw new Error(`not an event a producer appends: ${String(item.event.kind)}`);
         const body = JSON.stringify(item.event);
-        const pending: PendingEvent = { type: "event", kind: item.event.kind, body, atMono: item.at?.mono ?? monoMs(), atWall: item.at?.wall ?? this.#now(), bytes: stampedBytes(body), resolve: () => undefined };
+        const pending: PendingEvent = { type: "event", kind: item.event.kind, body, atMono: item.at?.mono ?? monoMs(), atWall: item.at?.wall ?? this.#now(), bytes: stampedBytes(body) + (item.body?.bytes ?? 0), resolve: () => undefined };
         if (item.connection !== undefined) pending.connection = item.connection;
+        if (item.body !== undefined) pending.file = item.body;
         group.push(pending);
       } else if ("gap" in item) {
         const body = JSON.stringify({ kind: "gap", fromSeq: item.from.seq, fromWall: item.from.wall, reason: item.gap });
@@ -617,12 +646,14 @@ export class EventBuffer {
         }
         const json = JSON.stringify(outcome);
         group.push({ type: "outcome", attemptId: outcome.attemptId, outcomeType: outcome.type, json, atWall: this.#now(), bytes: utf8Bytes(json), body: null, resolve: () => undefined });
+      } else if ("siteRequest" in item) {
+        group.push({ type: "site", change: item.siteRequest, atWall: this.#now(), bytes: 0, resolve: () => undefined });
       } else {
         group.push({ type: "connection", change: item.connection, atWall: this.#now(), bytes: 0, resolve: () => undefined });
       }
     }
     const bytes = group.reduce((sum, item) => sum + item.bytes, 0);
-    if (this.#bytes + this.#pendingBytes + bytes > this.#caps.bytes) {
+    if (this.#bytes + this.#pendingBytes + this.#growing + bytes > this.#caps.bytes) {
       this.#enterFull("buffer_full", "bytes", `${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
       return { ok: false, reason: "buffer_full" };
     }
@@ -641,6 +672,24 @@ export class EventBuffer {
    *  gone), durable when its promise says so. */
   changeConnection(change: ConnectionChange): Appended {
     return this.#accept({ type: "connection", change, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+  }
+
+  /** A change of a site request the engine is asked about (PR 7) on its
+   *  own, durable when its promise says so. */
+  changeSiteRequest(change: SiteRequestChange): Appended {
+    return this.#accept({ type: "site", change, atWall: this.#now(), bytes: 0, resolve: () => undefined });
+  }
+
+  /** Every site request kept (committed), oldest first. */
+  siteRequests(): StoredSiteRequest[] {
+    const store = this.#store;
+    if (this.#closed || store === null) return [];
+    try {
+      return store.siteRequests();
+    } catch (error) {
+      this.#storageFailed(error, "read");
+      return [];
+    }
   }
 
   /** Every connection kept (committed), oldest first. */
@@ -722,7 +771,7 @@ export class EventBuffer {
     const bodies = this.#bodies;
     if (this.#closed || bodies === null) return null;
     try {
-      return bodies.begin();
+      return bodies.begin({ reserve: (bytes) => this.#reserveBody(bytes), release: (bytes) => (this.#growing = Math.max(0, this.#growing - bytes)) });
     } catch (error) {
       this.#log("body.unwritable", { error: errorMessage(error) });
       return null;
@@ -773,10 +822,22 @@ export class EventBuffer {
     }
   }
 
+  /** Room for a growing body's next chunk: none while the buffer takes no
+   *  writes, and none past the cap — the buffer is full then. */
+  #reserveBody(bytes: number): boolean {
+    if (this.refusal() !== null) return false;
+    if (this.#bytes + this.#pendingBytes + this.#growing + bytes > this.#caps.bytes) {
+      this.#enterFull("buffer_full", "bytes", `a body's ${bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
+      return false;
+    }
+    this.#growing += bytes;
+    return true;
+  }
+
   #accept(item: Pending): Appended {
     const refused = this.refusal();
     if (refused) return { ok: false, reason: refused };
-    if (this.#bytes + this.#pendingBytes + item.bytes > this.#caps.bytes) {
+    if (this.#bytes + this.#pendingBytes + this.#growing + item.bytes > this.#caps.bytes) {
       this.#enterFull("buffer_full", "bytes", `${item.bytes} more bytes would pass the cap of ${this.#caps.bytes}`);
       return { ok: false, reason: "buffer_full" };
     }
@@ -912,7 +973,7 @@ export class EventBuffer {
   }
 
   #level(): { percent: number; by: "bytes" | "age"; bytes: number; ageMs: number } {
-    const bytes = this.#bytes + this.#pendingBytes;
+    const bytes = this.#bytes + this.#pendingBytes + this.#growing;
     const ageMs = this.#oldestAgeMs();
     const byBytes = (bytes / this.#caps.bytes) * 100;
     const byAge = (ageMs / this.#caps.ageMs) * 100;
@@ -920,7 +981,7 @@ export class EventBuffer {
   }
 
   #alarmOf(percent: number, by: BufferAlarm["by"]): BufferAlarm {
-    return { percent, by, bytes: this.#bytes + this.#pendingBytes, capBytes: this.#caps.bytes, oldestAgeMs: this.#oldestAgeMs(), capAgeMs: this.#caps.ageMs, freeDiskBytes: Number.isFinite(this.#freeDisk) ? this.#freeDisk : -1 };
+    return { percent, by, bytes: this.#bytes + this.#pendingBytes + this.#growing, capBytes: this.#caps.bytes, oldestAgeMs: this.#oldestAgeMs(), capAgeMs: this.#caps.ageMs, freeDiskBytes: Number.isFinite(this.#freeDisk) ? this.#freeDisk : -1 };
   }
 
   #raiseAlarms(level: { percent: number; by: "bytes" | "age" }): void {
@@ -939,9 +1000,9 @@ export class EventBuffer {
 
   #oldestAgeMs(): number {
     const walls = [this.#oldestEventWall, this.#oldestOutcomeWall].filter((wall): wall is number => wall !== null);
-    // Marks of Hub attempts and connection changes are no record of their
-    // own: they do not age.
-    for (const item of this.#pending) if (item.type !== "mark" && item.type !== "connection") walls.push(item.atWall);
+    // Marks of Hub attempts, connection and site request changes are no
+    // record of their own: they do not age.
+    for (const item of this.#pending) if (item.type !== "mark" && item.type !== "connection" && item.type !== "site") walls.push(item.atWall);
     if (walls.length === 0) return 0;
     return Math.max(0, this.#now() - Math.min(...walls));
   }
@@ -1069,6 +1130,7 @@ export class EventBuffer {
     const outcomes: NewOutcomeRow[] = [];
     const marks: AttemptMark[] = [];
     const connections: NonNullable<Commit["connections"]> = [];
+    const siteRequests: NonNullable<Commit["siteRequests"]> = [];
     const settled: Array<{ item: Pending; seq: number | null }> = [];
     let seq = store.lastSeq;
     let previousWall = store.lastWall;
@@ -1088,13 +1150,18 @@ export class EventBuffer {
         settled.push({ item, seq: null });
         continue;
       }
+      if (item.type === "site") {
+        siteRequests.push({ ...item.change, atWall: item.atWall });
+        settled.push({ item, seq: null });
+        continue;
+      }
       let body = item.body;
       if (item.gap && item.gap.from === null) {
         body = JSON.stringify({ kind: "gap", fromSeq: seq === 0 ? null : seq, fromWall: seq === 0 ? null : previousWall, reason: item.gap.reason });
       }
       seq += 1;
       const json = `{"seq":${seq},"atMono":${item.atMono},"atWall":${item.atWall},${body.slice(1)}`;
-      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json) });
+      events.push({ seq, atWall: item.atWall, kind: item.kind, json, bytes: utf8Bytes(json) + (item.file?.bytes ?? 0), bodyId: item.file?.bodyId ?? null });
       if (item.connection) connections.push({ ...item.connection, atWall: item.atWall });
       settled.push({ item, seq });
       previousWall = item.atWall;
@@ -1102,7 +1169,7 @@ export class EventBuffer {
 
     let committed;
     try {
-      committed = store.commit({ events, outcomes, marks, connections, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
+      committed = store.commit({ events, outcomes, marks, connections, siteRequests, deleteEventsUpTo: deleteTo, deleteOutcomes, purgeAttempts: purge });
     } catch (error) {
       for (const attemptId of deleteOutcomes) this.#outcomeAcks.add(attemptId);
       if (purge !== null) this.#purgeDue = true;
@@ -1112,8 +1179,9 @@ export class EventBuffer {
       return false;
     }
     if (purge !== null) this.#lastPurge = this.#now();
-    // The bodies of acknowledged outcomes: their rows are gone, their files
-    // go now (a crash in between leaves them to the next open's sweep).
+    // The bodies of acknowledged outcomes and events: their rows are gone,
+    // their files go now (a crash in between leaves them to the next open's
+    // sweep).
     for (const bodyId of committed.deletedBodies) this.removeBody(bodyId);
     this.#commits += 1;
     this.#retries = 0;

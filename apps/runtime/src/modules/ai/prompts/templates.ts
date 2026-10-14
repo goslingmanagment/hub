@@ -666,8 +666,9 @@ Rewrite the current draft into a natural spoken script in the model's voice, kee
 // modes (builder.ts, NOTE_FILL_LEGACY_TEXTS and NOTE_FILL_MERGE_TEXTS):
 // without the request's `noteValues` they render the template's original
 // wording or nothing, so the released clients' prompt keeps its bytes; with
-// them, the merge mode's rules. Held byte-identical to
-// templates/fan-notes-fill.md by templates-sync.test.ts.
+// them, the merge mode's rules. The «Характеристика» and «Медиа» definitions
+// are slots too: the merge mode defines those two fields differently. Held
+// byte-identical to templates/fan-notes-fill.md by templates-sync.test.ts.
 export const FAN_NOTES_FILL_TEMPLATE = `You are filling in a questionnaire note about one fan for a OnlyFans agency chatter. The chatter keeps the note beside the chat and rereads it before writing to the fan, {noteFillFactSource} Read the whole conversation, the spending and subscription data and the fan's bio below, then fill in the fields listed in the task.{noteFillIntro}
 
 ## Rules
@@ -680,8 +681,8 @@ export const FAN_NOTES_FILL_TEMPLATE = `You are filling in a questionnaire note 
 
 ## Fields
 
-- Характеристика: what the fan likes and what he pays for, in one line. You may combine the preferences he stated with what the spending data shows he pays for.
-- Медиа: what content he bought and what content he likes (types and themes), from the transcript and the spending data.
+- Характеристика: {noteFillCharacterField}
+- Медиа: {noteFillMediaField}
 - Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.{noteFillMergeFields}
 - Any other field: {noteFillOtherField}
 

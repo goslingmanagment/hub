@@ -343,10 +343,9 @@ describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () =>
     expect(await isSplitAllOnForPage(app, pageIds["nova-of"]!)).toBe(false);
     await expectSplit(EXTENSION, false, "binding missing", { label: "nova-of", platform: "onlyfans" });
 
-    // Fansly is outside the pilot: its extension already sends replyMode on
-    // every feature, and advertising the capability changes nothing there.
-    expect(await isSplitAllOnForPage(app, pageIds["lora-fansly"]!)).toBe(false);
-    await expectSplit(FULL_ADVERTISING, false, "fansly page", {
+    // The "*" row reaches no Fansly page (R20 HF-2): its released extension already sends
+    // replyMode on every feature, and advertising the capability changes nothing there.
+    const fanslyPing = {
       label: "lora-fansly",
       platform: "fansly",
       body: {
@@ -355,7 +354,30 @@ describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () =>
           fanSpendingData: "", fanSubscriptionData: "", pingSegment: "segment-a", fanSilenceDays: 9,
         },
       },
-    });
+    } as const;
+    expect(await isSplitAllOnForPage(app, pageIds["lora-fansly"]!)).toBe(false);
+    await expectSplit(FULL_ADVERTISING, false, "fansly page", fanslyPing);
+    // R20 HF-2: the flag exists on Fansly, where a page takes it from its own row alone. With
+    // the row and the page's account id the advertised request splits; the released Fansly
+    // extension, which names no capability, keeps its prompt whatever the row says.
+    const fanslyExtension: Caller = {
+      name: "the Fansly extension 2.10.1", token: () => fullToken, clientVersion: "chatgoose-extension/2.10.1",
+    };
+    await testDb!.pool.query("update pages set external_page_id = '500000000000000001' where id = $1", [pageIds["lora-fansly"]]);
+    try {
+      // Bound now, and still off: only the "*" row is set.
+      expect(await isSplitAllOnForPage(app, pageIds["lora-fansly"]!)).toBe(false);
+      await expectSplit(FULL_ADVERTISING, false, "fansly page, bound, under the \"*\" row alone", fanslyPing);
+      setSwitches({ "*": { splitAll: true }, "lora-fansly": { splitAll: true } });
+      expect(await isSplitAllOnForPage(app, pageIds["lora-fansly"]!)).toBe(true);
+      await expectSplit(FULL_ADVERTISING, true, "fansly page with its own row", fanslyPing);
+      await expectSplit(fanslyExtension, false, "the released Fansly extension under the page's row", fanslyPing);
+      setSwitches({ "*": { splitAll: true }, "lora-fansly": { splitAll: false } });
+      await expectSplit(FULL_ADVERTISING, false, "the Fansly page's own row off", fanslyPing);
+    } finally {
+      await testDb!.pool.query("update pages set external_page_id = null where id = $1", [pageIds["lora-fansly"]]);
+      setSwitches({ "*": { splitAll: true } });
+    }
     // Coach is the feature the Fansly extension has and the desktop does not:
     // its drafts stay unsplit there too, capability or not.
     const coach = callNamed("Coach");
