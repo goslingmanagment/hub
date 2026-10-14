@@ -3729,8 +3729,18 @@ const onlyfansCredentialsSchema = z.object({
   username: z.string().min(1),
 });
 
-export const verifyCredentialsBodySchema = z.discriminatedUnion("platform", [
+// Project Browser PR 16: a Fansly page connected through its own server
+// browser — no session or proxy pasted: the browser of the profile named is
+// logged in by the owner, its account read through it, its proxy the one
+// given for it (`/api/v1/page-browser/profiles/{profileId}`).
+const fanslyBrowserCredentialsSchema = z.object({
+  platform: z.literal("fansly"),
+  browserProfileId: z.string().uuid(),
+}).strict();
+
+export const verifyCredentialsBodySchema = z.union([
   fanslyCredentialsSchema,
+  fanslyBrowserCredentialsSchema,
   onlyfansCredentialsSchema,
 ]);
 
@@ -3741,8 +3751,12 @@ export const verifyCredentialsResponseSchema = z.object({
   displayName: z.string().nullable(),
 });
 
-export const createPageBodySchema = z.discriminatedUnion("platform", [
+export const createPageBodySchema = z.union([
   fanslyCredentialsSchema.extend({
+    modelSlug: z.string().min(1),
+    label: z.string().min(1),
+  }),
+  fanslyBrowserCredentialsSchema.extend({
     modelSlug: z.string().min(1),
     label: z.string().min(1),
   }),
