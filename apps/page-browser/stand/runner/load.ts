@@ -23,10 +23,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atLeast } from "../../src/state/steps.ts";
+import { siteVariant } from "../fansly/front.ts";
 import { mono, sleep } from "../shared.ts";
 import { captureCovers, pastTheProxy, readCapture, sendSentinel } from "./capture.ts";
 import { waitFor, type Page } from "./context.ts";
-import { closedWrites, directArrivals, eventsComplete, fanslyMade, forbiddenSocketMessages, frameRates, outageBacklog, unadmittedArrivals, type BufferBounds, type RatePhase } from "./criteria.ts";
+import { closedWrites, directArrivals, eventsComplete, fanslyMade, forbiddenSocketMessages, frameRates, outageBacklog, unadmittedArrivals, variantLoaded, type BufferBounds, type RatePhase } from "./criteria.ts";
 import type { ContainerSample } from "./docker.ts";
 import { keptOfMade, openStand, pagesByAddress, proveCaptureLive, startPage, type Stand } from "./series.ts";
 
@@ -117,6 +118,11 @@ async function main(): Promise<void> {
     page.enginesOfRun = [page.engine];
   }
   log("load.start", { name, profiles, minutes, outageMinutes, framesPerMinute, burstPerMinute, bursts, burstMinutes });
+  // The site's traffic, set before the pages start: a setting changes only
+  // what the next load gets (series.ts), and every page is started anew
+  // below. An operator that loads no site (before PR 7) leaves it unused.
+  const siteTraffic = { readEveryMs: 30_000, writeEveryMs: 0, socket: true, forbiddenWs: false };
+  await s.stand.config({ site: siteTraffic });
 
   // Every page started at once: how long each took to open its exit.
   const startMs: Record<string, number> = {};
@@ -171,9 +177,12 @@ async function main(): Promise<void> {
     }
   })();
 
-  // The site: loaded by the operator (PR 7), or not.
-  const siteLoaded = await waitFor(async () => (await s.stand.journal(journalSince)).some((event) => event.type === "req" && event.role === "site" && event.pathname === "/"), 10_000, 1000);
-  if (siteLoaded) await s.stand.config({ site: { readEveryMs: 30_000, writeEveryMs: 0, socket: true, forbiddenWs: false } });
+  // The site: loaded by the operator (PR 7) — each page running the variant
+  // set above, by its own word —, or not.
+  const siteLoaded = await waitFor(async () => {
+    const journal = await s.stand.journal(journalSince);
+    return pages.every((page) => variantLoaded(journal, page.info.egressIp, siteVariant(siteTraffic), 0).length === 0);
+  }, 20_000, 1000);
 
   // The ceiling, with frames: background, then the bursts.
   const ceilingStart = mono();
