@@ -286,7 +286,18 @@ describe("I17: source pins", () => {
       }
     };
     walk(root);
-    expect(builders.sort()).toEqual([path.join("sync", "fansly", "browser-page.ts"), path.join("sync", "fansly", "browser-transport.ts")]);
+    expect(builders.sort()).toEqual([
+      // PR 16: the link to a profile no page has yet (its onboarding: the
+      // site's login requests, the account read) — no page's transport.
+      path.join("sync", "fansly", "browser-onboarding.ts"),
+      path.join("sync", "fansly", "browser-page.ts"),
+      path.join("sync", "fansly", "browser-transport.ts"),
+    ]);
+    // It builds no page's transport nor its socket source, and links only to
+    // a profile no page has (its hello names page 0).
+    const onboarding = read("apps/runtime/src/sync/fansly/browser-onboarding.ts");
+    expect(onboarding).not.toMatch(/\bcreateBrowserPageTransport\(|\bnew BrowserWsSource\(|\bcreatePageTransport\(/);
+    expect(read("apps/runtime/src/services/egress/page-browser-link.ts")).toContain("pageId: ONBOARDING_PAGE_ID,");
     const host = read("apps/runtime/src/sync/engine/host.ts");
     expect(host).not.toMatch(/browser-transport|browser-source|page-browser-rpc/);
     // Two calls: the browser branch of the acquisition, and the leave of a

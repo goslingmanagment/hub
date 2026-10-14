@@ -733,14 +733,17 @@ export async function createLiveSyncPage(
   if (footprint.sendLog) reasons.push("legacy_send_log");
   if (reasons.length > 0) throw new LiveSyncPageRefusedError(input.pageId, reasons);
 
+  // A page born on its own browser names its transport; any other birth is
+  // the statement it always was (the column's default, `node`), which an
+  // image that does not know the column runs too.
+  const onBrowser = input.transport !== undefined && input.transport !== "node";
   const row = await tx.execute(sql`
     insert into sync_pages (
       page_id, mode, mode_changed_at, mode_changed_by, legacy_imported_at, requests_enabled_at,
-      identity_account_id, identity_checked_at, credentials_generation, transport
+      identity_account_id, identity_checked_at, credentials_generation${onBrowser ? sql`, transport` : sql``}
     ) values (
       ${input.pageId}, 'live', clock_timestamp(), ${input.by}, clock_timestamp(), clock_timestamp(),
-      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration},
-      ${input.transport ?? "node"}
+      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration}${onBrowser ? sql`, ${input.transport}` : sql``}
     )
     on conflict (page_id) do nothing
   `);
