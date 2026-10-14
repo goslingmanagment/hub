@@ -7,7 +7,7 @@ import type { FanslySendHolderIdentity } from "./fansly-send-guard.ts";
 import { SYNC_ROUTE_JOURNAL_SLACK_MS, SYNC_SEND_WINDOW_MS } from "./sync/attempts.ts";
 
 // Project Browser (plan §3.2 «Подключение новой страницы через браузер», §3.4,
-// §4.8; 0281; stage 3 PR 16): a new Fansly page connected through its own
+// §4.8; 0280; stage 3 PR 16): a new Fansly page connected through its own
 // browser. `scripts/deploy-page-browser.sh add-profile` makes the profile's
 // container and registers its row here — its page empty (or an existing
 // page's, for a page that moves to a browser: plan §5, stage 4 step 1). The

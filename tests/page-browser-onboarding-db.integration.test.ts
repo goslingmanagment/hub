@@ -33,7 +33,7 @@ import { bindProvenProfile, proveOnboardingAccount, type OnboardingProof } from 
 import { harnessConfig } from "./helpers/sync-engine.ts";
 
 // The data of a new page's onboarding through its browser (Project Browser
-// plan §3.2, §3.4; 0281; stage 3 PR 16): a profile registered with its page
+// plan §3.2, §3.4; 0280; stage 3 PR 16): a profile registered with its page
 // empty, the owner's moves of its onboarding, the identity request and its
 // answer, the link's fence, the binding — and the database's own word that a
 // profile serves one page at most, a page has one profile at most, and a
@@ -76,7 +76,7 @@ async function move(profileId: string, to: "login" | "open" | "closing") {
   return db().transaction((tx) => setPageBrowserOnboarding(tx as unknown as Database, { profileId, to, by: "owner:1" }));
 }
 
-describe("a page browser profile's onboarding in the database (0281; PR 16)", () => {
+describe("a page browser profile's onboarding in the database (0280; PR 16)", () => {
   it("registers a profile with its page empty, refuses a second one of the same container or page", async (context) => {
     if (!testDb) return context.skip();
     const profileId = await profile({ container: "page-browser-ari-2" });

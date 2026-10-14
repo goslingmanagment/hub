@@ -968,13 +968,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0279_sync_pages_manual_login.sql"
   # Project Browser PR 16: page_browsers gains a new page's onboarding (its
   # state with a constant default 'off', the proxy given for the page to be,
-  # the container's SOCKS5, the link generation with a constant default 0,
-  # the identity request and its answer: catalog only, the checks read the
-  # few rows once) and fansly_send_log two nullable columns without a default
-  # (the profile and the attempt of a send through a profile's browser),
-  # under a 5 s lock_timeout. The previous image never names them and never
-  # inserts a profile's row; a profile left unbound stays unbound under it.
-  "0281_page_browser_onboarding.sql"
+  # the container's SOCKS5, the link and onboarding generations with a
+  # constant default 0, the identity request, its read's attempt and its
+  # answer: catalog only, the checks read the few rows once), a new empty
+  # table of the profiles Hub forgot, and fansly_send_log two nullable
+  # columns without a default (the profile and the attempt of a send through
+  # a profile's browser), under a 5 s lock_timeout. The previous image never
+  # names them and never inserts a profile's row; a profile left unbound
+  # stays unbound under it.
+  "0280_page_browser_onboarding.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

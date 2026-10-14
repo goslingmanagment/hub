@@ -1,4 +1,4 @@
--- 0281_page_browser_onboarding.sql
+-- 0280_page_browser_onboarding.sql
 --
 -- Project Browser (docs/plans/project-browser/plan.md §3.2 «Подключение новой
 -- страницы через браузер», §3.4, §4.8; stage 3 PR 16): a new Fansly page is
@@ -135,17 +135,17 @@ alter table page_browsers
   add constraint page_browsers_identity_attempt_check check (identity_attempt_id is null or identity_request_id is not null);
 
 comment on column page_browsers.onboarding is
-  'Project Browser (0281): the owner''s onboarding of a profile no page has yet — off, login (his login through the form, the operator in the manual login), open (the automation back, the account checked through the browser on request), closing (given up: the browser stopped, then off). Off once bound.';
+  'Project Browser (0280): the owner''s onboarding of a profile no page has yet — off, login (his login through the form, the operator in the manual login), open (the automation back, the account checked through the browser on request), closing (given up: the browser stopped, then off). Off once bound.';
 comment on column page_browsers.socks_endpoint is
-  'Project Browser (0281): ip:port of the SOCKS5 the profile''s container was made for (add-profile); its rules admit that address alone.';
+  'Project Browser (0280): ip:port of the SOCKS5 the profile''s container was made for (add-profile); its rules admit that address alone.';
 comment on column page_browsers.onboarding_proxy_auth is
-  'Project Browser (0281): the username and password of the proxy the owner gave for the page to be, one encrypted JSON envelope (onboarding_proxy_key_version names the key); the page takes it at the binding.';
+  'Project Browser (0280): the username and password of the proxy the owner gave for the page to be, one encrypted JSON envelope (onboarding_proxy_key_version names the key); the page takes it at the binding.';
 comment on column page_browsers.link_generation is
-  'Project Browser (0281): raised every time an engine takes the link to a profile no page has (the hello''s owner generation) and at the binding: an earlier link''s writes are fenced off by it.';
+  'Project Browser (0280): raised every time an engine takes the link to a profile no page has (the hello''s owner generation) and at the binding: an earlier link''s writes are fenced off by it.';
 comment on column page_browsers.onboarding_generation is
-  'Project Browser (0281): raised at every change of onboarding (and at the binding), voiding the identity request and its answer: an account read under an earlier one proves nothing.';
+  'Project Browser (0280): raised at every change of onboarding (and at the binding), voiding the identity request and its answer: an account read under an earlier one proves nothing.';
 comment on column page_browsers.identity_result is
-  'Project Browser (0281): the engine''s answer to identity_request_id — the account the browser''s live session belongs to, read by one GET /account/me through the browser and journaled in observations — or why there is none.';
+  'Project Browser (0280): the engine''s answer to identity_request_id — the account the browser''s live session belongs to, read by one GET /account/me through the browser and journaled in observations — or why there is none.';
 
 create table if not exists page_browser_forgotten_profiles (
   profile_id uuid primary key,
@@ -155,16 +155,16 @@ create table if not exists page_browser_forgotten_profiles (
 );
 
 comment on table page_browser_forgotten_profiles is
-  'Project Browser (0281): page browser profiles Hub forgot or said it never had — never registered again (a late add is refused).';
+  'Project Browser (0280): page browser profiles Hub forgot or said it never had — never registered again (a late add is refused).';
 
 alter table fansly_send_log
   add column if not exists browser_profile_id uuid,
   add column if not exists browser_attempt_id bigint;
 
 comment on column fansly_send_log.browser_profile_id is
-  'Project Browser (0281): a send through the browser of a profile no page has yet (its onboarding: the site''s login requests, the account check), page_id null.';
+  'Project Browser (0280): a send through the browser of a profile no page has yet (its onboarding: the site''s login requests, the account check), page_id null.';
 comment on column fansly_send_log.browser_attempt_id is
-  'Project Browser (0281): the attempt id the profile''s operator knows that send by.';
+  'Project Browser (0280): the attempt id the profile''s operator knows that send by.';
 
 do $$
 begin

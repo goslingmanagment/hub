@@ -1084,7 +1084,7 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   one that cannot be taken now is asked for again (`recover`), and more than the transport keeps are redelivered.
   Nothing is ever sent again from what the operator kept. An undici page has no `held`, and its recovery is as it
   always was.
-- **A new page's browser** (PR 16, `fansly/browser-onboarding.ts`; 0281; plan §3.2 «Подключение новой страницы через
+- **A new page's browser** (PR 16, `fansly/browser-onboarding.ts`; 0280; plan §3.2 «Подключение новой страницы через
   браузер»): a profile `scripts/deploy-page-browser.sh add-profile` made serves no page yet. While the owner's
   onboarding of it is under way (`page_browsers.onboarding`) or an identity request waits, the `sync` process that
   holds the onboarding lock (`(58216, 2)`) links to its operator by the profile alone — the hello names page 0 and no
