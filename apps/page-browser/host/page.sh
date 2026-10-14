@@ -26,6 +26,12 @@
 # A new container replaces the old one only when it is healthy: until then
 # page.env keeps the old state, and a failed `up` or `rollback` brings the
 # old container back.
+#
+# Chrome upgrades a profile in place and never opens one a newer Chrome
+# wrote (stage 1; plan §4.10): `up` and `rollback` refuse an image whose
+# Chrome is older than the one that last opened the page's profile. The way
+# back to an older Chrome is the profile's snapshot with it:
+# page-browser-update.sh rollback (PR 18).
 set -euo pipefail
 
 PB_BASE="${PB_BASE:-/opt/agency-hub/page-browser}"
@@ -133,6 +139,45 @@ profile_owner() {
   docker ps -a --filter "volume=pb-profile-$profile" --format '{{.Names}}' | grep -vx "page-browser-$PAGE" | head -n 1 || true
 }
 
+# A Chrome version out of anything that names it; ver_gt a b: a is later.
+chrome_of() {
+  [[ "$1" =~ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+ver_gt() {
+  local IFS=. i
+  local -a a b
+  read -r -a a <<<"$(chrome_of "$1")"
+  read -r -a b <<<"$(chrome_of "$2")"
+  for i in 0 1 2 3; do
+    ((10#${a[i]:-0} > 10#${b[i]:-0})) && return 0
+    ((10#${a[i]:-0} < 10#${b[i]:-0})) && return 1
+  done
+  return 1
+}
+
+# Refuses <image> on <profile> when the profile was last opened by a newer
+# Chrome than the image's. Read through a container of the image itself,
+# with no network: the profile is Chrome's user's alone.
+refuse_downgrade() {
+  local image="$1" profile="$2" label image_chrome profile_chrome
+  label="$(docker image inspect --format '{{ index .Config.Labels "agency-hub.page-browser.chrome-version" }}' "$image" 2>/dev/null)" \
+    || fail "the image $image cannot be read"
+  image_chrome="$(chrome_of "$label" || true)"
+  if [[ -z "$image_chrome" ]]; then
+    image_chrome="$(chrome_of "$(docker run --rm --network none --entrypoint /usr/bin/google-chrome-stable "$image" --version 2>/dev/null)" || true)"
+  fi
+  [[ -n "$image_chrome" ]] || fail "the Chrome of $image cannot be read"
+  profile_chrome="$(docker run --rm --network none --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --user 0 \
+    --entrypoint sh -v "pb-profile-$profile:/profile:ro" "$image" -c '
+      if [ -f "/profile/Last Version" ]; then head -c 64 "/profile/Last Version"
+      elif [ -f /profile/Default/Preferences ]; then grep -o "\"last_chrome_version\":\"[0-9.]*\"" /profile/Default/Preferences | head -n 1
+      fi' pb-helper version)" || fail "the profile $profile cannot be read"
+  profile_chrome="$(chrome_of "$profile_chrome" || true)"
+  if [[ -n "$profile_chrome" ]] && ver_gt "$profile_chrome" "$image_chrome"; then
+    fail "$image has Chrome $image_chrome, but the profile $profile was last opened by Chrome $profile_chrome: Chrome never opens a profile a newer one wrote (page-browser-update.sh rollback restores its snapshot)"
+  fi
+}
+
 free_octet() {
   local used octet
   used="$(cat "$PB_BASE"/pages/*/page.env 2>/dev/null | sed -n "s/^PB_EGRESS_IP=$EGRESS_PREFIX\.//p" | sort -n)"
@@ -184,6 +229,8 @@ up() {
   if [[ "$NEW_PROFILE" == 1 ]]; then
     docker volume create "pb-profile-$profile" >/dev/null
     docker volume create "pb-buffer-$profile" >/dev/null
+  else
+    refuse_downgrade "$IMAGE" "$profile"
   fi
   install -d -m 700 "$dir" "$dir/secrets"
   if [[ ! -s "$dir/secrets/vnc_password" ]]; then
@@ -227,6 +274,7 @@ rollback() {
   previous="$(value PB_PREVIOUS_IMAGE "$(env_file)")"
   [[ -n "$previous" ]] || fail "$PAGE has no previous image"
   docker image inspect "$previous" >/dev/null 2>&1 || fail "the previous image $previous is gone"
+  refuse_downgrade "$previous" "$(value PB_PROFILE_ID "$(env_file)")"
   local next
   next="$(next_file)"
   (umask 077; sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next")
