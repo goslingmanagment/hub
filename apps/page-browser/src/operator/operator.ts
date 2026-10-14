@@ -318,6 +318,11 @@ export class Operator {
   /** An authorized GET of the automation whose document Chrome had not named
    *  when it paused: judged once Chrome does. */
   #sessionNoteWaiting: { networkId: string; fingerprint: string } | null = null;
+  /** The session each document's authorized GETs of this mode showed (the
+   *  latest; a few documents): a GET can come before the answer to its
+   *  document's navigation is taken (one batch of Chrome's messages — Astra's
+   *  review of PR 16, round 4), and counts once that answer names it. */
+  readonly #sessionsShown = new Map<string, string>();
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -639,7 +644,7 @@ export class Operator {
       const waiting = this.#sessionNoteWaiting;
       if (waiting === null || waiting.networkId !== networkId) return;
       this.#sessionNoteWaiting = null;
-      this.#documentShowedSession(loaderId, waiting.fingerprint);
+      this.#sessionShownBy(loaderId, waiting.fingerprint);
     };
     this.login = new LoginDesk({
       cdp: this.cdp,
@@ -987,7 +992,12 @@ export class Operator {
       if (stale()) return;
       if (typeof reply.errorText === "string" && reply.errorText !== "") throw new StartFailure("proxy_unavailable", `the site did not load: ${reply.errorText}`);
       // The document of a navigation started in this mode, as Chrome names it.
-      if (mode === this.#modeChanges && typeof reply.loaderId === "string" && reply.loaderId !== "") this.#modeDocument = { mode, loaderId: reply.loaderId };
+      if (mode === this.#modeChanges && typeof reply.loaderId === "string" && reply.loaderId !== "") {
+        this.#modeDocument = { mode, loaderId: reply.loaderId };
+        // Its GET may have come before this answer was taken.
+        const shown = this.#sessionsShown.get(reply.loaderId);
+        if (shown !== undefined) this.#documentShowedSession(reply.loaderId, shown);
+      }
       // Its document, not the one the tab had: a new one committed.
       const atSite = await this.#waitUntil(() => stale() || (this.#workTabAtSite() && documents() > before), this.#timings.siteLoadMs);
       if (stale()) return;
@@ -1074,7 +1084,18 @@ export class Operator {
       this.#sessionNoteWaiting = { networkId: request.networkId, fingerprint };
       return;
     }
-    this.#documentShowedSession(loader, fingerprint);
+    this.#sessionShownBy(loader, fingerprint);
+  }
+
+  /** A GET of the document `loaderId` showed `fingerprint` in this mode:
+   *  kept for that document (its navigation's answer may still be on the
+   *  way), and judged now. */
+  #sessionShownBy(loaderId: string, fingerprint: string): void {
+    if (this.#mode !== "automation") return;
+    this.#sessionsShown.delete(loaderId);
+    this.#sessionsShown.set(loaderId, fingerprint);
+    if (this.#sessionsShown.size > 8) this.#sessionsShown.delete(this.#sessionsShown.keys().next().value!);
+    this.#documentShowedSession(loaderId, fingerprint);
   }
 
   #documentShowedSession(loaderId: string, fingerprint: string): void {
@@ -1662,6 +1683,7 @@ export class Operator {
     this.#modeChanges += 1;
     this.#sessionShownInMode = null;
     this.#sessionNoteWaiting = null;
+    this.#sessionsShown.clear();
     this.#mode = mode;
     this.#modeGeneration = generation;
     this.#log("mode", { mode, generation, why });

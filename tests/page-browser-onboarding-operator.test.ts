@@ -61,6 +61,9 @@ interface SetUp {
   loaders: string[];
   /** Runs before each navigation goes on (a test holds it, or acts there). */
   beforeNavigate: (() => Promise<void>) | null;
+  /** Runs once a navigation's document committed, before its answer goes
+   *  (what the test sends there reaches the operator before the answer). */
+  afterNavigate: ((loaderId: string) => void) | null;
 }
 
 async function setUp(): Promise<SetUp> {
@@ -74,11 +77,14 @@ async function setUp(): Promise<SetUp> {
   cleanups.push(() => chrome.shutdown());
   const model = new BrowserModel(chrome);
   const navigate = chrome.handlers.get("Page.navigate")!;
-  const s: Partial<SetUp> & { loaders: string[]; beforeNavigate: SetUp["beforeNavigate"] } = { loaders: [], beforeNavigate: null };
+  const s: Partial<SetUp> & { loaders: string[]; beforeNavigate: SetUp["beforeNavigate"]; afterNavigate: SetUp["afterNavigate"] } = { loaders: [], beforeNavigate: null, afterNavigate: null };
   chrome.handlers.set("Page.navigate", async (command) => {
     if (s.beforeNavigate !== null) await s.beforeNavigate();
     const reply = (await navigate(command)) as { loaderId?: unknown; errorText?: unknown };
-    if (typeof reply.loaderId === "string" && typeof reply.errorText !== "string" && command.params.url !== "about:blank") s.loaders.push(reply.loaderId);
+    if (typeof reply.loaderId === "string" && typeof reply.errorText !== "string" && command.params.url !== "about:blank") {
+      s.loaders.push(reply.loaderId);
+      s.afterNavigate?.(reply.loaderId);
+    }
     return reply as Record<string, unknown>;
   });
   const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
@@ -366,6 +372,29 @@ describe("a profile no page has yet: its account read confirms only the session 
     release();
     await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "loaded anew for the automation");
     await confirmedUnder(s, TOKEN_B, b, ACCOUNT_B);
+  });
+
+  it("the new document's GET that comes before the operator took its navigation's answer still confirms (one batch of Chrome's messages; Astra's review of PR 16, round 4)", async () => {
+    const s = await setUp();
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    await siteReadDone(s, TOKEN_A);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the login screen loaded");
+    // The automation's load: its document commits, and its GET under B goes
+    // out before the answer to the navigation — the only GET of the site.
+    let sent = 0;
+    s.afterNavigate = (loaderId) => {
+      s.afterNavigate = null;
+      siteRead(s, TOKEN_B, loaderId);
+      sent += 1;
+    };
+    const ended = s.engine.of("siteDone").length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    await until(() => sent === 1 && s.operator.page.step === "site_loaded" && s.engine.of("siteDone").length > ended, 10_000, "the new document and its GET");
+    expect(s.operator.state.sessionFingerprint).toBe(b);
+    await accountRead(s, b, ACCOUNT_B);
+    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
+    expect(s.operator.state.accountId).toBe(ACCOUNT_B);
   });
 });
 
