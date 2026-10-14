@@ -269,7 +269,9 @@ describe("client awaiting-reply contract (H-8c)", () => {
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("awaiting-reply-v1");
     expect(SERVED_CLIENT_CAPABILITIES).toContain("awaiting-reply-v1");
     // Everything the `stats` flag needs is served: the owner's switches decide from here on.
-    for (const capability of CLIENT_FEATURE_REQUIREMENTS.stats.capabilities) {
+    // The statistics exist on OnlyFans only: the reads take OnlyFans' stores (R20 HF-2 leaves them there).
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.stats)).toEqual(["onlyfans"]);
+    for (const capability of CLIENT_FEATURE_REQUIREMENTS.stats.onlyfans!.capabilities) {
       expect(SERVED_CLIENT_CAPABILITIES, capability).toContain(capability);
     }
 

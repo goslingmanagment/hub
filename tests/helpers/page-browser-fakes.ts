@@ -583,6 +583,11 @@ export interface ModelRequest {
   /** The proxy's answer to the request's CONNECT, when it was continued. */
   proxyStatus?: number;
   failReason?: string;
+  /** The headers the page's script set on it. */
+  siteHeaders?: Record<string, string>;
+  /** Released with its answer to stop at its headers (an admitted request
+   *  of the site): what became of it. */
+  api?: { headers: Record<string, string>; streamed: boolean; answered: boolean; ended: boolean };
 }
 
 /** A tab or frame of the model: where it is, and whether its document came. */
@@ -745,18 +750,25 @@ export class BrowserModel {
         return {};
       }
       const request = this.#byInterception(String(command.params.requestId));
-      if (request) void this.#continue(request);
+      if (request) void (command.params.interceptResponse === true ? this.#siteContinue(request) : this.#continue(request));
       return {};
     });
     chrome.handlers.set("Network.streamResourceContent", (command) => {
       const hub = this.hubRequests.find((request) => request.networkId === command.params.requestId);
       if (hub) hub.streamed = true;
+      const site = this.requests.find((request) => request.networkId === command.params.requestId);
+      if (site) this.streamed.add(site.networkId);
       return { bufferedData: "" };
     });
     chrome.handlers.set("Fetch.continueResponse", (command) => {
       const hub = this.hubRequests.find((request) => request.interceptionId === command.params.requestId);
-      if (!hub) return { error: { code: -32602, message: "Invalid InterceptionId." } };
-      setTimeout(() => this.#hubBodyGoes(hub), 0);
+      if (hub) {
+        setTimeout(() => this.#hubBodyGoes(hub), 0);
+        return {};
+      }
+      const site = this.requests.find((request) => request.interceptionId === command.params.requestId && request.api?.answered === true && !request.api.ended);
+      if (!site) return { error: { code: -32602, message: "Invalid InterceptionId." } };
+      setTimeout(() => this.#siteBodyGoes(site), 0);
       return {};
     });
     chrome.handlers.set("Fetch.fulfillRequest", (command) => {
@@ -780,7 +792,36 @@ export class BrowserModel {
       setTimeout(() => void chrome.shutdown(), 10);
       return {};
     });
+    // A navigation: its document's request stops in Fetch; continued, the
+    // document commits (Page.frameNavigated) and the command is answered;
+    // failed, the command answers its error.
+    chrome.handlers.set("Page.navigate", async (command) => {
+      const sessionId = command.sessionId ?? "S1";
+      const url = String(command.params.url ?? "");
+      this.navigations.push(url);
+      if (this.siteLoads === "error") return { frameId: `F-${sessionId}`, loaderId: "L-error", errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" };
+      const request = this.pause(url, "GET", sessionId, "Document");
+      const deadline = Date.now() + 5000;
+      while (request.outcome === "paused" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (request.outcome !== "continued") return { frameId: `F-${sessionId}`, loaderId: "L-failed", errorText: request.failReason === "BlockedByClient" ? "net::ERR_BLOCKED_BY_CLIENT" : "net::ERR_FAILED" };
+      const loaderId = `L${++this.#requests}`;
+      if (this.siteLoads === "commit") {
+        const tab = this.#tabs.get(sessionId);
+        if (tab) {
+          tab.url = url;
+          tab.loaded = true;
+        }
+        this.chrome.event("Page.frameNavigated", { frame: { id: `F-${sessionId}`, url, loaderId } }, sessionId);
+      }
+      return { frameId: `F-${sessionId}`, loaderId };
+    });
   }
+
+  /** What the site's navigations do: the document commits (`commit`), never
+   *  comes (`never`), or the navigation fails (`error`). */
+  siteLoads: "commit" | "never" | "error" = "commit";
+  /** The URLs the operator navigated to. */
+  readonly navigations: string[] = [];
 
   /** Chrome starts, as its run script starts it: with the time zone and
    *  languages of the hand-over at `path`, if there is one. */
@@ -840,7 +881,7 @@ export class BrowserModel {
   pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
-    const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused" };
+    const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused", siteHeaders: headers };
     this.requests.push(request);
     this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method } }, sessionId);
     this.chrome.event("Fetch.requestPaused", {
@@ -959,6 +1000,65 @@ export class BrowserModel {
 
   #byInterception(id: string): ModelRequest | undefined {
     return this.requests.find((request) => request.interceptionId === id && request.outcome === "paused");
+  }
+
+  /** How much later than usual an admitted request's answer comes. */
+  siteAnswerDelayMs = 0;
+  /** The body an admitted request of the site gets. */
+  siteBody: Buffer = Buffer.from('{"success":true,"response":{"account":{"id":"300000000000000001"}}}');
+  /** Network ids whose body's stream was armed. */
+  readonly streamed = new Set<string>();
+
+  /** An admitted request of the site, released with its answer to stop at
+   *  its headers: a tunnel through the operator's proxy to its host, a TLS
+   *  1.3 connection's records and the request's HEADERS — what the gate
+   *  decides on — then the answer at the response stage. */
+  async #siteContinue(request: ModelRequest): Promise<void> {
+    request.outcome = "continued";
+    request.api = { headers: {}, streamed: false, answered: false, ended: false };
+    const { status, socket } = await proxyConnect(this.proxyPort, `${new URL(request.url).hostname}:443`);
+    request.proxyStatus = status;
+    if (status !== 200) {
+      socket.destroy();
+      request.api.ended = true;
+      this.chrome.event("Network.loadingFailed", { requestId: request.networkId, errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" }, request.sessionId);
+      return;
+    }
+    socket.on("error", () => undefined);
+    await new Promise<void>((resolve) => {
+      socket.once("data", () => resolve());
+      socket.resume();
+    });
+    const record = (type: number, size: number) => Buffer.concat([Buffer.from([type, 0x03, 0x03, (size - 5) >> 8, (size - 5) & 0xff]), Buffer.alloc(size - 5, 0xab)]);
+    socket.write(Buffer.concat([record(22, 300), record(23, 58), record(23, 70), record(23, 90)]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // As it went: the names the page's script set, in their order.
+    this.chrome.event("Network.requestWillBeSentExtraInfo", { requestId: request.networkId, headers: Object.fromEntries(Object.entries(request.siteHeaders ?? {}).map(([name, value]) => [name.toLowerCase(), value])) }, request.sessionId);
+    if (this.siteAnswerDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.siteAnswerDelayMs));
+    request.api.answered = true;
+    this.chrome.event("Fetch.requestPaused", {
+      requestId: request.interceptionId,
+      networkId: request.networkId,
+      request: { url: request.url, method: request.method, headers: {} },
+      resourceType: "XHR",
+      responseStatusCode: 200,
+      responseStatusText: "OK",
+      responseHeaders: [
+        { name: "content-type", value: "application/json" },
+        { name: "content-length", value: String(this.siteBody.length) },
+        { name: "set-cookie", value: "sid=model-cookie-secret" },
+      ],
+    });
+  }
+
+  #siteBodyGoes(request: ModelRequest): void {
+    const session = request.sessionId;
+    const streamed = this.streamed.has(request.networkId);
+    this.chrome.event("Network.responseReceived", { requestId: request.networkId, response: { status: 200, timing: { requestTime: 888.25, sendStart: 2.5 }, connectionReused: false } }, session);
+    this.chrome.event("Network.responseReceivedExtraInfo", { requestId: request.networkId, statusCode: 200 }, session);
+    this.chrome.event("Network.dataReceived", { requestId: request.networkId, dataLength: this.siteBody.length, encodedDataLength: this.siteBody.length, ...(streamed ? { data: this.siteBody.toString("base64") } : {}) }, session);
+    this.chrome.event("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: this.siteBody.length + 100 }, session);
+    if (request.api) request.api.ended = true;
   }
 
   #fetch(url: string, method: string, sessionId: string | undefined): void {

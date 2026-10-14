@@ -296,7 +296,11 @@ describe("archive feed contract (H-9c)", () => {
     expect(CLIENT_TOKEN_PROFILES["chat-extension"].operations).toContain("clientConversationFeed");
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("archive-feed-v1");
     expect(SERVED_CLIENT_CAPABILITIES).toContain("archive-feed-v1");
-    expect(CLIENT_FEATURE_REQUIREMENTS.preview).toEqual({ platforms: ["onlyfans"], capabilities: ["archive-feed-v1"] });
+    // R20 HF-2: on Fansly the feed is a read by conversation (HF-10), so the preview needs that too.
+    expect(CLIENT_FEATURE_REQUIREMENTS.preview).toEqual({
+      onlyfans: { capabilities: ["archive-feed-v1"] },
+      fansly: { capabilities: ["archive-feed-v1", "conversation-recaps-v1"] },
+    });
     const preview = (served: readonly string[]) => evaluateClientFeature({
       settings: { enabled: true, features: { "*": { preview: true } }, hostBindings: {} },
       page: { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },

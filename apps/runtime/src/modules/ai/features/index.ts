@@ -65,6 +65,7 @@ import {
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  loadFanslyAutomationInput,
   loadFanslySpendingContext,
   loadFanslySubscriptionContext,
   loadSpendingContext,
@@ -72,11 +73,15 @@ import {
   loadTranscriptContext,
   loadFanslyFanIdentity,
   readAiChatAccess,
+  readsTranscriptCoverage,
+  resolveFanslyTranscriptCoverage,
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
   type AppliedLiveText,
   type FanProfilePromptContext,
+  type FanslyTranscriptCoverageManifest,
+  type HubTranscriptCoverage,
   type TranscriptContext,
 } from "../context/index.ts";
 import {
@@ -640,6 +645,11 @@ export async function prepareAiFeatureStream(
   // The kernel lane's labelled socket messages; null on the client-context
   // lane, whose transcript the hub keeps exactly as the client sent it.
   let unconfirmedSocketMessages: number | null = null;
+  // chat-extension R20 HF-7д: the coverage of a Fansly transcript the hub
+  // loaded itself, for the features whose released client sends it
+  // (fansly-coverage.ts). Unset everywhere else: the client's value, or none.
+  let hubTranscriptCoverage: HubTranscriptCoverage | undefined;
+  let hubTranscriptCoverageManifest: FanslyTranscriptCoverageManifest | undefined;
   if (body.clientContext) {
     // Client-loaded context path (Stage 32). The product gates run on the
     // client-reported counts/segment — the same values the client's own
@@ -744,6 +754,13 @@ export async function prepareAiFeatureStream(
       summaryMode: body.summaryMode,
       capabilities: options?.capabilities,
     });
+    // chat-extension R20 HF-7д: Hi on Fansly marks the model's welcome and
+    // mass messages in its transcript as the released Fansly extension's Hi
+    // does (fansly-automation.ts); the page's welcome texts are one indexed
+    // read of what the catalog captured. Every other load classifies nothing.
+    const fanslyAutomation = isFanslyRequest && feature === "hi-greeting"
+      ? await loadFanslyAutomationInput(app, { pageId })
+      : undefined;
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
@@ -755,6 +772,7 @@ export async function prepareAiFeatureStream(
       liveOverlay,
       ...(maxRows !== undefined ? { maxRows } : {}),
       chatUnavailable: chatAccess.unavailable,
+      ...(fanslyAutomation !== undefined ? { fanslyAutomation } : {}),
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
     // returns, never inside it. Without fresh text (or with the owner's switch
@@ -772,6 +790,19 @@ export async function prepareAiFeatureStream(
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
+    // chat-extension R20 HF-7д: on Fansly the coverage comes from the hub's
+    // chain and the window it served, not from the client. OnlyFans keeps
+    // what it had: no coverage on this lane.
+    if (isFanslyRequest && readsTranscriptCoverage(feature)) {
+      const coverage = await resolveFanslyTranscriptCoverage(app, {
+        pageId,
+        conversationRef: body.conversationRef,
+        messages: transcript.messages,
+        liveOverlay: transcript.served.source === "live_union",
+      });
+      hubTranscriptCoverage = coverage.value;
+      hubTranscriptCoverageManifest = coverage.manifest;
+    }
     // chat-extension R20 HF-7г: on Fansly the two blocks are the released
     // extension's own shape, from the ledger and the captured subscriptions
     // (context/fansly-money.ts); a deep feature also reads its months by type.
@@ -1045,7 +1076,7 @@ export async function prepareAiFeatureStream(
     && await isSplitAllOnForPage(app, pageId);
   const greetingVariantCount = feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined;
 
-  const prompt = buildPrompt({
+  const buildFeaturePrompt = (transcriptCoverage: HubTranscriptCoverage | undefined) => buildPrompt({
     feature,
     personality: persona.personality,
     platform: body.platform,
@@ -1072,12 +1103,24 @@ export async function prepareAiFeatureStream(
     recapAttach,
     transcriptCoverage:
       feature === "coach-chat" || feature === "fan-summary" || feature === "fan-notes-fill"
-        ? body.clientContext?.transcriptCoverage
+        ? body.clientContext?.transcriptCoverage ?? transcriptCoverage
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
   });
+  let prompt = buildFeaturePrompt(hubTranscriptCoverage);
+  if (hubTranscriptCoverageManifest !== undefined) {
+    // chat-extension R20 HF-7д: the Coach budget cut the oldest lines of the
+    // hub's transcript, so the model reads less than the hub holds: the note
+    // says `window`, as the released client's does after its own cut.
+    if (hubTranscriptCoverage !== "window" && (prompt.coachTranscriptOmittedChars ?? 0) > 0) {
+      hubTranscriptCoverage = "window";
+      prompt = buildFeaturePrompt(hubTranscriptCoverage);
+      hubTranscriptCoverageManifest = { ...hubTranscriptCoverageManifest, value: "window", promptBudgetCut: true };
+    }
+    contextManifest = { ...(contextManifest ?? {}), transcriptCoverage: hubTranscriptCoverageManifest };
+  }
 
   // The whole-Coach prompt budget may shed a recap after repository selection.
   // Metadata must describe what the provider actually receives, not the
@@ -1214,7 +1257,8 @@ export async function prepareAiFeatureStream(
           // definition (not merely the caller-supplied key) so a later coach
           // turn cannot attach a recap generated under another revision.
           personaDefinitionId: persona.definitionId,
-          transcriptCoverage: body.clientContext?.transcriptCoverage ?? null,
+          // R20 HF-7д: on the Fansly lane without clientContext, the hub's own.
+          transcriptCoverage: body.clientContext?.transcriptCoverage ?? hubTranscriptCoverage ?? null,
           // P2-5: provenance from the RESOLVED request window (after the short
           // clamp) and the ACTUAL kept count — populated on BOTH lanes so an
           // archive-generated recap no longer reports null through recap-status.

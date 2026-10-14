@@ -976,6 +976,45 @@ export function fanslyMessageMarkers(input: {
   };
 }
 
+/**
+ * R20 HF-7д: the socket overlay's markers of messages a reader served from
+ * its REST store, by message id, for the ones the overlay saw with at least
+ * one of the two markers. The union serves a message both stores hold from
+ * REST (with REST's markers); an archive row written before HF-7д0 has none,
+ * while the socket may have seen the same message with them. Deleted overlay
+ * rows count too: a deletion does not change what the message was. One range
+ * of the overlay's primary key.
+ */
+export async function listDmLiveMessageMarkers(
+  db: Database,
+  input: { pageId: number; messageIds: readonly string[] },
+): Promise<Map<string, FanslyMessageMarkers>> {
+  const markers = new Map<string, FanslyMessageMarkers>();
+  if (input.messageIds.length === 0) {
+    return markers;
+  }
+  const result = await db.execute<{
+    platform_message_id: string;
+    message_type: number | null;
+    correlation_id: string | null;
+    field_mask: number;
+  }>(sql`
+    select platform_message_id, message_type, correlation_id, field_mask
+      from dm_live_messages
+     where page_id = ${input.pageId}
+       and platform_message_id = any(${sql`${sql.param([...input.messageIds])}::text[]`})
+       and field_mask & ${FANSLY_WS_LIVE_FIELD.type | FANSLY_WS_LIVE_FIELD.correlationId} <> 0
+  `);
+  for (const row of result.rows) {
+    markers.set(String(row.platform_message_id), fanslyMessageMarkers({
+      type: row.message_type == null ? null : Number(row.message_type),
+      correlationId: row.correlation_id ?? null,
+      fieldMask: Number(row.field_mask),
+    }));
+  }
+  return markers;
+}
+
 /** A provisional message as a reader shows it: socket fields only. */
 export interface DmLiveReaderMessage {
   platformMessageId: string;

@@ -254,6 +254,8 @@ describe("fan-notes-fill legacy mode (no noteValues)", () => {
       "One fact, one field", "Never state the same fact in two fields", "is not new: do not add it again",
       "what kind of fan he is", "are recorded here and nowhere else",
       "What To Record",
+      // Nor the merge mode's ruling on the subscription.
+      "record it in no field", "is not content", "never his subscription", "His subscription",
     ]) {
       expect(user, text).not.toContain(text);
     }
@@ -416,8 +418,8 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
     expect(user).toContain([
       "## Fields",
       "",
-      "- Характеристика: what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices, subscription or content tastes (those are «Медиа») and never his fetishes (those are «Фетиши»).",
-      "- Медиа: what content he bought, as the transcript's `purchased` tags and the spending and subscription data show it, and what content he says he likes (types and themes). Purchases, prices and his subscription are recorded here and nowhere else.",
+      "- Характеристика: what kind of fan he is and how to talk to him, in his own stated terms: what he says he wants from the model or from the conversation (attention, a girlfriend feeling, humour, to lead or to be led) and how he describes his own character. Never his purchases, prices or content tastes (those are «Медиа»), never his fetishes (those are «Фетиши») and never his subscription.",
+      "- Медиа: what content he bought, as the transcript's `purchased` tags and the spending data show it, and what content he says he likes (types and themes). Purchases and prices are recorded here and nowhere else. His subscription (its tier, price, dates and renewal) is not content: record it in no field.",
       "- Фетиши: only fetishes and kinks the fan named himself. Never derive them from his purchases or from the model's messages.",
       "- Локация:",
     ].join("\n"));
@@ -485,6 +487,42 @@ describe("fan-notes-fill merge mode (noteValues present)", () => {
     // definitions.
     const other = buildPrompt(merge({ noteFields: ["Медиа", "Характеристика"], noteValues: ["PPV $44", ""], transcript: "[10:00] Fan: hi" }));
     expect(other.userBlocks[0]!.text).toBe(result.userBlocks[0]!.text);
+  });
+
+  // 2026-10-14: the owner saw the released prompt write the fan's subscription
+  // into «Медиа» and called it useless. The subscription goes into no field.
+  it("records the subscription in no field", () => {
+    const result = buildPrompt(merge());
+    const rules = result.userBlocks[0]!.text;
+    expect(rules).toContain("His subscription (its tier, price, dates and renewal) is not content: record it in no field.");
+    expect(rules).toContain("Never his purchases, prices or content tastes (those are «Медиа»), never his fetishes (those are «Фетиши») and never his subscription.");
+    expect(rules).toContain("Purchases and prices are recorded here and nowhere else.");
+    // The wording that sent it into «Медиа» is gone.
+    for (const gone of [
+      "Purchases, prices and his subscription are recorded here",
+      "the spending and subscription data show it",
+      "prices, subscription or content tastes",
+    ]) {
+      expect(result.user, gone).not.toContain(gone);
+    }
+    // Before the conversation the subscription is named three times: the
+    // intro's data to read, and the two definitions that keep it out. No other
+    // sentence sends it into a field.
+    expect(rules.match(/subscription/gi)).toHaveLength(3);
+    expect(rules).toContain("Read the whole conversation, the spending and subscription data and the fan's bio below");
+    // The data itself still reaches the model, after the conversation.
+    expect(result.user).toContain("## Fan Subscription Data\n\n<fan_subscription_data>\n");
+
+    // Legacy mode says nothing of the kind: its prompt is the released one.
+    const legacy = buildPrompt({ ...merge(), noteValues: undefined }).user;
+    for (const text of ["record it in no field", "is not content", "never his subscription"]) {
+      expect(legacy, text).not.toContain(text);
+    }
+
+    // The house ban on long dashes, on everything the provider receives.
+    for (const block of [...result.systemBlocks, ...result.userBlocks]) {
+      expect(block.text).not.toMatch(/[\u2013\u2014]/);
+    }
   });
 
   it("keeps one fan-agnostic text before the conversation for every merge request", () => {

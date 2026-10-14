@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferRefusal, type BufferUnavailable, type CommittedOutcome, type Durable } from "../apps/page-browser/src/buffer/buffer.ts";
 import { OutcomeReplay } from "../apps/page-browser/src/buffer/replay.ts";
-import { BufferVersionError, MIGRATIONS, type Migration } from "../apps/page-browser/src/buffer/schema.ts";
+import { BufferVersionError, migrate, MIGRATIONS, type Migration } from "../apps/page-browser/src/buffer/schema.ts";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { EventStream } from "../apps/page-browser/src/buffer/stream.ts";
 import { decodeBodyFrame, type EventsRefused, type Result } from "../apps/page-browser/src/rpc/protocol.ts";
@@ -994,10 +994,40 @@ describe("bodies and Hub attempts (PR 9)", () => {
   it("are refused, with their outcome, past the cap", async () => {
     const root = dir();
     const buffer = open(root, { caps: { bytes: 4096 } });
-    const writer = buffer.beginBody()!;
-    writer.write(Buffer.alloc(5000, 1));
-    const sealed = writer.seal()!;
+    const first = buffer.beginBody()!;
+    expect(first.write(Buffer.alloc(2500, 1))).toBe(true);
+    const kept = first.seal()!;
+    expect(buffer.putOutcome(withBody(50, kept), { bodyId: kept.bodyId, bytes: kept.bytes }).ok).toBe(true);
+    const second = buffer.beginBody()!;
+    expect(second.write(Buffer.alloc(1000, 1))).toBe(true);
+    const sealed = second.seal()!;
     expect(buffer.putOutcome(withBody(51, sealed), { bodyId: sealed.bodyId, bytes: sealed.bytes })).toEqual({ ok: false, reason: "buffer_full" });
+  });
+
+  it("count while they grow: a chunk the cap has no room for is not written, the buffer is full, and what the body held is given back when it goes (Astra's review of PR 7)", async () => {
+    const root = dir();
+    const full: string[] = [];
+    const buffer = open(root, { caps: { bytes: 1024 }, resumePercent: 90, onFull: (reason) => full.push(reason) });
+    const writer = buffer.beginBody()!;
+    const written = Array.from({ length: 8 }, () => writer.write(Buffer.alloc(256, 7)));
+    // Four chunks fit the cap of 1 KB; the fifth would pass it.
+    expect(written).toEqual([true, true, true, true, false, false, false, false]);
+    expect(writer.error).toContain("cap");
+    expect(statSync(join(root, "store", "bodies", `${writer.bodyId}.part`)).size).toBe(1024);
+    expect(buffer.stats().bytes).toBe(1024);
+    expect(buffer.refusal()).toBe("buffer_full");
+    expect(full).toEqual(["buffer_full"]);
+    // Nothing else is taken meanwhile: neither another body's chunk nor a record.
+    const other = buffer.beginBody()!;
+    expect(other.write(Buffer.from("x"))).toBe(false);
+    expect(buffer.append(wsFrame(1)).ok).toBe(false);
+    // The body goes (not whole): its bytes are given back, and there is room again.
+    writer.abandon();
+    other.abandon();
+    expect(buffer.stats().bytes).toBe(0);
+    expect(bodiesOf(root)).toEqual([]);
+    buffer.check();
+    await until(() => buffer.refusal() === null, 3000, "room again");
   });
 
   it("an attempt's steps are durable, seen before their commit, never undone, and kept a day past the resultAck", async () => {
@@ -1236,5 +1266,256 @@ describe("the replay under pressure (Astra's review of PR 9)", () => {
     expect(first).toMatchObject({ bodyId: failing, part: 0, last: false, abandoned: false });
     expect(abandon).toMatchObject({ bodyId: failing, part: 1, last: false, abandoned: true });
     expect(abandon!.data.length).toBe(0);
+  });
+});
+
+describe("the site's answers and requests (PR 7; schema v5)", () => {
+  const FP = "f".repeat(64);
+
+  /** A sealed body and the `site.response` that names it. */
+  function siteResponse(buffer: EventBuffer, data: Buffer, complete = true) {
+    const writer = buffer.beginBody()!;
+    writer.write(data);
+    const sealed = writer.seal()!;
+    const event = {
+      kind: "site.response" as const,
+      siteRequestId: "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+      attemptId: 7,
+      route: "account.me",
+      method: "GET",
+      path: "/api/v1/account/me",
+      query: "",
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: { bodyId: sealed.bodyId, decodedBytes: sealed.bytes, sha256: sealed.sha256 },
+      complete,
+      source: "network" as const,
+      sessionFingerprint: FP,
+    };
+    return { sealed, event };
+  }
+
+  /** A link that records what goes, in order; `stallAt`: its queue is full
+   *  once that many frames went, until `release`. */
+  function recordingLink(stallAt = Number.MAX_SAFE_INTEGER) {
+    const order: string[] = [];
+    const frames: Buffer[] = [];
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    let backlog = 0;
+    let wake: () => void = () => undefined;
+    let epoch = 1;
+    return {
+      order,
+      frames,
+      batches,
+      send: (json: string) => {
+        batches.push(JSON.parse(json) as { events: Array<Record<string, unknown>> });
+        order.push("events");
+        return true;
+      },
+      link: {
+        epoch: () => epoch,
+        sendBinary: (frame: Buffer) => {
+          frames.push(frame);
+          order.push("binary");
+          if (frames.length === stallAt) backlog = 10 * 1024 * 1024;
+          return true;
+        },
+        backlog: () => backlog,
+        drained: () => new Promise<void>((resolve) => (wake = resolve)),
+      },
+      release: () => {
+        backlog = 0;
+        wake();
+      },
+      newConnection: () => {
+        epoch += 1;
+        backlog = 0;
+        wake();
+      },
+    };
+  }
+
+  it("an event's body counts in its bytes, is kept over a restart's sweep, and goes with the engine's ack of the event", async () => {
+    const root = dir();
+    let buffer = open(root);
+    const data = Buffer.alloc(5000, 7);
+    const { sealed, event } = siteResponse(buffer, data);
+    const before = buffer.stats().bytes;
+    const seq = await seqOf(buffer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } }));
+    expect(buffer.stats().bytes - before).toBeGreaterThanOrEqual(5000);
+    expect(buffer.readEvents(0, 10, Number.MAX_SAFE_INTEGER)).toEqual([expect.objectContaining({ seq, bodyId: sealed.bodyId, bytes: expect.any(Number) })]);
+    // A body nothing names goes at the next open; the event's stays.
+    const orphan = buffer.beginBody()!;
+    orphan.write(Buffer.from("orphan"));
+    const orphaned = orphan.seal()!;
+    buffer = await reopen(buffer, root);
+    expect(readdirSync(join(root, "store", "bodies"))).toEqual([sealed.bodyId]);
+    expect(buffer.bodySize(orphaned.bodyId)).toBeNull();
+    expect(buffer.readBody(sealed.bodyId, 0, 1 << 20)?.equals(data)).toBe(true);
+    buffer.acknowledge(seq);
+    await buffer.flush();
+    expect(all(buffer)).toEqual([]);
+    expect(readdirSync(join(root, "store", "bodies"))).toEqual([]);
+    expect(buffer.stats().bytes).toBe(before);
+  });
+
+  it("a batch is cut by its bodies' bytes, and the first event goes however big its body is", async () => {
+    const root = dir();
+    const buffer = open(root);
+    for (let n = 0; n < 3; n++) {
+      const { sealed, event } = siteResponse(buffer, Buffer.alloc(40_000, n));
+      buffer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } });
+    }
+    await buffer.flush();
+    expect(buffer.readEvents(0, 10, 100_000).map((event) => event.seq)).toEqual([1, 2]);
+    expect(buffer.readEvents(0, 10, 1000).map((event) => event.seq)).toEqual([1]);
+  });
+
+  it("the stream sends a site.response's body before the batch that names it, waiting for the socket between its parts", async () => {
+    const root = dir();
+    let pump = () => undefined as void;
+    const buffer = open(root, { onCommitted: () => pump() });
+    const recording = recordingLink(1);
+    const stream = new EventStream(buffer, recording.send, { log: quiet, link: recording.link, maxBytes: 64 * 1024 * 1024 });
+    pump = () => stream.pump();
+    const data = Buffer.concat([Buffer.alloc(1024 * 1024, 1), Buffer.alloc(1024 * 1024, 2), Buffer.alloc(100, 3)]);
+    const { sealed, event } = siteResponse(buffer, data);
+    buffer.append(wsFrame(1));
+    buffer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } });
+    buffer.append(wsFrame(2));
+    await buffer.flush();
+    stream.subscribe(subscribe(buffer.id, 0));
+    // The first part went; the socket's queue is full: nothing more goes.
+    await until(() => recording.frames.length === 1, 3000, "the first part");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(recording.order).toEqual(["binary"]);
+    expect(stream.position).toMatchObject({ sentSeq: 0, inFlight: 0 });
+    recording.release();
+    await until(() => recording.batches.length === 1, 3000, "the batch");
+    expect(recording.order).toEqual(["binary", "binary", "binary", "events"]);
+    const parts = recording.frames.map((frame) => decodeBodyFrame(frame));
+    expect(parts.map((part) => [part.bodyId, part.part, part.last])).toEqual([
+      [sealed.bodyId, 0, false],
+      [sealed.bodyId, 1, false],
+      [sealed.bodyId, 2, true],
+    ]);
+    expect(Buffer.concat(parts.map((part) => part.data)).equals(data)).toBe(true);
+    expect(recording.batches[0]!.events.map((entry) => [entry.seq, entry.kind, entry.complete])).toEqual([
+      [1, "ws.in", undefined],
+      [2, "site.response", true],
+      [3, "ws.in", undefined],
+    ]);
+    expect(stream.position).toMatchObject({ sentSeq: 3, inFlight: 1 });
+    // What comes meanwhile goes after it.
+    buffer.append(wsFrame(4));
+    await until(() => recording.batches.length === 2, 3000, "the next batch");
+    expect(recording.batches[1]!.events.map((entry) => entry.seq)).toEqual([4]);
+  });
+
+  it("a body that is gone or cannot be read is never sent as its event's: the event goes as an answer not taken whole, and the stream goes on", async () => {
+    const root = dir();
+    let unreadable = "";
+    let pump = () => undefined as void;
+    const buffer = open(root, { onCommitted: () => pump(), bodyReadFault: (bodyId, part) => (bodyId === unreadable && part === 1 ? new Error("EIO: i/o error, read") : null) });
+    const recording = recordingLink();
+    const stream = new EventStream(buffer, recording.send, { log: quiet, link: recording.link, maxBytes: 64 * 1024 * 1024 });
+    pump = () => stream.pump();
+    const lost = siteResponse(buffer, Buffer.from('{"lost":true}'));
+    const broken = siteResponse(buffer, Buffer.alloc(1024 * 1024 + 10, 4));
+    const fine = siteResponse(buffer, Buffer.from('{"fine":true}'));
+    unreadable = broken.sealed.bodyId;
+    for (const { sealed, event } of [lost, broken, fine]) buffer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } });
+    await buffer.flush();
+    rmSync(join(root, "store", "bodies", lost.sealed.bodyId));
+    stream.subscribe(subscribe(buffer.id, 0));
+    await until(() => recording.batches.length === 1, 3000, "the batch");
+    expect(recording.batches[0]!.events.map((entry) => [entry.seq, entry.complete])).toEqual([
+      [1, false],
+      [2, false],
+      [3, true],
+    ]);
+    const frames = recording.frames.map((frame) => decodeBodyFrame(frame));
+    // The broken one's first part is voided; only the fine one is whole.
+    expect(frames.map((frame) => [frame.bodyId, frame.part, frame.last, frame.abandoned])).toEqual([
+      [broken.sealed.bodyId, 0, false, false],
+      [broken.sealed.bodyId, 1, false, true],
+      [fine.sealed.bodyId, 0, true, false],
+    ]);
+  });
+
+  it("a connection that changes while a body goes ends the batch there: the next subscription sends it again, its body first", async () => {
+    const root = dir();
+    let pump = () => undefined as void;
+    const buffer = open(root, { onCommitted: () => pump() });
+    const recording = recordingLink(1);
+    const stream = new EventStream(buffer, recording.send, { log: quiet, link: recording.link, maxBytes: 64 * 1024 * 1024 });
+    pump = () => stream.pump();
+    const { sealed, event } = siteResponse(buffer, Buffer.alloc(1024 * 1024 + 5, 9));
+    buffer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } });
+    await buffer.flush();
+    stream.subscribe(subscribe(buffer.id, 0));
+    await until(() => recording.frames.length === 1, 3000, "the first part");
+    stream.reset();
+    recording.newConnection();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(recording.batches).toEqual([]);
+    stream.subscribe(subscribe(buffer.id, 0));
+    await until(() => recording.batches.length === 1, 3000, "the batch on the new connection");
+    expect(recording.order).toEqual(["binary", "binary", "binary", "events"]);
+    expect(recording.frames.slice(1).map((frame) => decodeBodyFrame(frame).part)).toEqual([0, 1]);
+  });
+
+  it("keeps the site requests asked about until their end, over a restart: asked, released under an attempt, gone", async () => {
+    const root = dir();
+    let buffer = open(root);
+    const A = "11111111-1111-4111-8111-111111111111";
+    const B = "22222222-2222-4222-8222-222222222222";
+    await written(buffer.changeSiteRequest({ siteRequestId: A, asked: true }));
+    await written(buffer.changeSiteRequest({ siteRequestId: B, asked: true }));
+    await written(buffer.changeSiteRequest({ siteRequestId: B, released: { attemptId: 12 } }));
+    buffer = await reopen(buffer, root);
+    expect(buffer.siteRequests()).toEqual([
+      { siteRequestId: A, attemptId: null, released: false },
+      { siteRequestId: B, attemptId: 12, released: true },
+    ]);
+    // Its end: the answer, the siteDone and the request's going, one commit.
+    const { sealed, event } = siteResponse(buffer, Buffer.from("{}"));
+    const done = { type: "siteDone" as const, siteRequestId: B, attemptId: 12, sent: true, sentMono: 1, sentWall: 2, connectionReused: true, status: 200, retryAfter: null, error: null, body: "buffered" as const };
+    const commits = buffer.stats().commits;
+    await written(buffer.appendGroup([{ event, body: { bodyId: sealed.bodyId, bytes: sealed.bytes } }, { outcome: done }, { siteRequest: { siteRequestId: B, gone: true } }]));
+    expect(buffer.stats().commits).toBe(commits + 1);
+    expect(buffer.siteRequests()).toEqual([{ siteRequestId: A, attemptId: null, released: false }]);
+    expect(buffer.outcomes([12]).map((outcome) => JSON.parse(outcome.json) as unknown)).toEqual([done]);
+    expect(buffer.readEvents(0, 10, Number.MAX_SAFE_INTEGER)[0]).toMatchObject({ bodyId: sealed.bodyId });
+    // A site request's change does not age the buffer (it is no record).
+    expect(buffer.stats().outcomes).toBe(1);
+  });
+
+  it("a buffer of version 4 migrates and keeps its events; an older operator (the image rolled back) refuses this version: it would sweep the events' bodies", async () => {
+    const root = dir();
+    // Version 4 as PR 13 left it: the first four migrations, one event kept.
+    mkdirSync(join(root, "store"), { recursive: true });
+    const db = new DatabaseSync(join(root, "store", DB_FILE));
+    db.exec("PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL;");
+    migrate(db, MIGRATIONS.slice(0, 4), "pr-13", () => 1791800000000);
+    db.exec("INSERT OR REPLACE INTO meta VALUES ('buffer_id', '44444444-4444-4444-8444-444444444444'), ('created_wall', '1791800000000'), ('last_seq', '1'), ('last_wall', '1791800000100'), ('opened_wall', '1791800000000'), ('sent_max', '1')");
+    const json = '{"seq":1,"atMono":1.5,"atWall":1791800000100,"kind":"ws.in","connectionId":"c","frame":"one"}';
+    db.prepare("INSERT INTO events VALUES (1, 1791800000100, 'ws.in', 1, ?, ?)").run(Buffer.byteLength(json), json);
+    db.close();
+    const newer = open(root);
+    expect(newer.id).toBe("44444444-4444-4444-8444-444444444444");
+    expect(newer.readEvents(0, 10, Number.MAX_SAFE_INTEGER)).toEqual([{ seq: 1, json, bytes: Buffer.byteLength(json), bodyId: null }]);
+    expect(newer.siteRequests()).toEqual([]);
+    const { sealed, event } = siteResponse(newer, Buffer.from("{}"));
+    expect(await seqOf(newer.append(event, undefined, { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } }))).toBe(2);
+    expect(newer.integrity()).toBe("ok");
+    await newer.close();
+    const unavailable: BufferUnavailable[] = [];
+    const back = open(root, { migrations: MIGRATIONS.slice(0, 4), openRetryMs: [10], onUnavailable: (reason) => unavailable.push(reason) });
+    back.start();
+    expect(unavailable).toEqual([expect.objectContaining({ cause: "too_new", recoverable: false })]);
+    // Nothing of the file or its bodies was touched.
+    expect(readdirSync(join(root, "store", "bodies"))).toEqual([sealed.bodyId]);
   });
 });

@@ -130,11 +130,36 @@ const V4 = `
 INSERT OR IGNORE INTO meta (key, value) SELECT 'sent_max', value FROM meta WHERE key = 'last_seq';
 `;
 
+/** Version 5 (PR 7): the site's own requests.
+ *  - events.body_id: the body a `site.response` names (BodyRef), a file of
+ *    the bodies/ directory like a result's; its bytes count in the event's
+ *    `bytes`, so in the caps and in a batch's size. It goes with the event:
+ *    deleted by the engine's ack, never swept while the event is kept.
+ *  - site_requests: every site request the operator asks the engine about —
+ *    written before its `siteAdmit` (spec §6.1), its attempt and "released"
+ *    written before the request goes on, deleted in the commit of its
+ *    `siteDone`. An operator that starts again ends what the previous one
+ *    left: a `siteDone` for each admitted one (it may have gone if it was
+ *    released), nothing for one never admitted.
+ *  Readable from 5: an older operator would sweep the events' bodies and
+ *  send `site.response` naming bodies it no longer has. */
+const V5 = `
+ALTER TABLE events ADD COLUMN body_id TEXT;
+CREATE INDEX events_with_body ON events (seq) WHERE body_id IS NOT NULL;
+CREATE TABLE site_requests (
+  site_request_id TEXT PRIMARY KEY,
+  attempt_id INTEGER,
+  released INTEGER NOT NULL,
+  at_wall INTEGER NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, readableFrom: 1, up: (db) => db.exec(V1) },
   { version: 2, readableFrom: 2, up: (db) => db.exec(V2) },
   { version: 3, readableFrom: 2, up: (db) => db.exec(V3) },
   { version: 4, readableFrom: 4, up: (db) => db.exec(V4) },
+  { version: 5, readableFrom: 5, up: (db) => db.exec(V5) },
 ];
 
 /** The format of a row's `json` this operator writes. */

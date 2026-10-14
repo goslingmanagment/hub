@@ -546,8 +546,8 @@ describe("the claim GET", () => {
 });
 
 describe("a manual greeting on a Fansly page (R20 HF-3)", () => {
-  // The route refuses every Fansly action that starts something until HF-2 lists Fansly for
-  // `newcomers` (tests/client-claim-routes.integration.test.ts). Under it the rules are these: each
+  // The route admits a Fansly greeting under the page's own `newcomers` row (R20 HF-2: the full run
+  // through the routes is tests/client-claim-routes.integration.test.ts). Under it the rules are these: each
   // body is what the extension's SDK lets out (its own schema), handed to the repository exactly as
   // the route hands it (clientClaimActionInput), with the rate the platform's admission names.
   // Fansly fan and message ids are 18 to 19 digits: past a double's exact integers.

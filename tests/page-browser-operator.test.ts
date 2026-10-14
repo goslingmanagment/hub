@@ -48,8 +48,8 @@ import {
 // end to end, without Docker: the real holder and operator, a scripted fake
 // Chrome behind them, a fake SOCKS5 and exit-IP service, and the engine's
 // side of the RPC. What must hold: the start goes step by step to the open
-// exit and no further; nothing leaves without an admission (none exists
-// yet); a planned stop closes the exit before CDP goes; a lost control
+// exit, then loads the site (PR 7); no API request leaves without the
+// engine's admission; a planned stop closes the exit before CDP goes; a lost control
 // closes it at once; a changed exit IP keeps it closed; a restarted operator
 // fails what was left paused; no secret reaches a log.
 
@@ -92,6 +92,9 @@ async function setUp(
     params?: Record<string, unknown>;
     buffer?: OperatorDeps["buffer"];
     socketTimings?: OperatorDeps["socketTimings"];
+    siteTimings?: OperatorDeps["siteTimings"];
+    /** How long the site's document may take (30 s in the operator). */
+    siteLoadMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -150,7 +153,8 @@ async function setUp(
       ...(options.extension ? { extension: options.extension } : {}),
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
+      ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -178,7 +182,7 @@ function command(engine: FakeEngine, kind: string): Promise<Record<string, unkno
 
 async function started(s: SetUp): Promise<void> {
   expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
-  await until(() => s.operator.page.step === "exit_open", 10_000, "the open exit");
+  await until(() => s.operator.page.step === "site_loaded", 10_000, "the open exit");
 }
 
 function journal(logDir: string, kind: string): Array<Record<string, unknown>> {
@@ -198,12 +202,12 @@ describe("the start (plan §4.1)", () => {
     expect(s.engine.last("state")).toMatchObject({ step: "exit_closed", exitOpen: false });
   });
 
-  it("goes step by step to the open exit, with the self-test passed and the exit IP verified, and stops there", async () => {
+  it("goes step by step to the open exit, with the self-test passed and the exit IP verified, then loads the site (step 8) and stops there", async () => {
     const s = await setUp();
     await started(s);
-    await until(() => s.engine.of("state").some((state) => state.step === "exit_open"));
+    await until(() => s.engine.of("state").some((state) => state.step === "site_loaded"));
     const steps = s.engine.of("state").map((state) => state.step).filter((step, index, all) => step !== all[index - 1]);
-    expect(steps.slice(steps.lastIndexOf("exit_closed"))).toEqual(["exit_closed", "env_applied", "chrome_started", "control_attached", "selftest_passed", "exit_ip_verified", "exit_open"]);
+    expect(steps.slice(steps.lastIndexOf("exit_closed"))).toEqual(["exit_closed", "env_applied", "chrome_started", "control_attached", "selftest_passed", "exit_ip_verified", "exit_open", "site_loaded"]);
     const state = s.engine.last("state")!;
     expect(state).toMatchObject({ exitOpen: true, exitIp: "203.0.113.7", chromeVersion: "Chrome/155.0.8059.39", operatorVersion: "test", stopReason: null });
     // Every mechanism, the rules extension's two among them: nothing "not installed".
@@ -219,25 +223,82 @@ describe("the start (plan §4.1)", () => {
     // The exit IP through the page's SOCKS5, with its password.
     expect(s.socks.connects).toContain("api.ipify.org:443");
     expect(s.socks.logins.every((login) => login.ok && login.password === SOCKS_PASSWORD)).toBe(true);
-    // No navigation: steps 8–10 are later PRs'.
-    expect(s.chrome.sent("Page.navigate")).toEqual([]);
+    // Step 8: the work tab, and only it, goes to the site once the exit is
+    // open; its document passes unpaced, journaled.
+    expect(s.chrome.sent("Page.navigate").map((command) => [command.sessionId, command.params.url])).toEqual([[s.operator.control.workTab!.sessionId, "https://fansly.com/"]]);
+    expect(s.operator.control.workTab!.url).toBe("https://fansly.com/");
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "fansly.com", path: "/", resourceType: "Document", decision: "continued", admission: null, result: "passed unpaced" }));
+    // No session confirmed without the engine's identity read (step 9).
+    expect(s.operator.page.step).toBe("site_loaded");
+    expect(s.operator.state.accountId).toBeNull();
     expect(s.operator.admissionsOpen()).toBe(true);
     // The states journal has every transition.
-    expect(journal(s.logDir, "states").map((line) => line.to)).toContain("exit_open");
+    expect(journal(s.logDir, "states").map((line) => line.to)).toEqual(expect.arrayContaining(["exit_open", "site_loaded"]));
   });
 
-  it("fails every paused request that is not a self-test probe: nothing leaves without an admission", async () => {
+  it("a site whose document never comes fails the start too: the page is not taken for loaded", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [5000] }, siteLoadMs: 300 });
+    s.model.siteLoads = "never";
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 10_000, "the failure");
+    expect(s.engine.of("state").some((state) => state.step === "site_loaded")).toBe(false);
+    expect(s.operator.egress.exitOpen).toBe(false);
+  });
+
+  it("a site that does not load fails the start (proxy_unavailable) and is tried again after the backoff", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [300] } });
+    s.model.siteLoads = "error";
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 10_000, "the failure");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.operator.page.snapshot.retryAtWall).not.toBeNull();
+    s.model.siteLoads = "commit";
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the page up again");
+    expect(s.control.calls.filter((call) => call === "start").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("decides every paused request of the site by the map: the page and other hosts pass, the API waits for the engine, a closed write, a local address and a probe's marker are failed", async () => {
     const s = await setUp();
     await started(s);
-    const site = s.model.pause("https://fansly.com/", "GET");
-    const api = s.model.pause("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", "GET");
-    const write = s.model.pause("https://apiv3.fansly.com/api/v1/message/ack", "POST");
+    const tab = s.operator.control.workTab!.sessionId;
+    const script = s.model.pause("https://fansly.com/main.4f2a.js", "GET", tab, "Script");
+    const third = s.model.pause("https://widget.intercom.io/widget/abc", "GET", tab, "Script");
+    const api = s.model.pause("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", "GET", tab, "XHR");
+    const write = s.model.pause("https://apiv3.fansly.com/api/v1/message/ack", "POST", tab, "XHR");
+    const local = s.model.pause("http://127.0.0.1:9222/json", "GET", tab, "Fetch");
     // A request carrying a probe's marker outside the self-test.
     const fakeProbe = s.model.pause("https://apiv3.fansly.com/api/v1/pb-selftest?pbst=x#pb-selftest-x", "GET");
-    await until(() => [site, api, write, fakeProbe].every((request) => request.outcome === "failed"));
-    expect([site, api, write, fakeProbe].map((request) => request.failReason)).toEqual(["BlockedByClient", "BlockedByClient", "BlockedByClient", "BlockedByClient"]);
-    expect(s.chrome.sent("Fetch.continueRequest")).toHaveLength(1); // the self-test's own probe only
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "failed", admission: null }));
+    await until(() => [script, third].every((request) => request.outcome === "continued") && [write, local, fakeProbe].every((request) => request.outcome === "failed"));
+    expect([write, local, fakeProbe].map((request) => request.failReason)).toEqual(["BlockedByClient", "BlockedByClient", "BlockedByClient"]);
+    // The API read waits, paused, for the engine: asked with its route.
+    const ask = await s.engine.waitFor("siteAdmit");
+    expect(ask).toEqual({
+      type: "siteAdmit",
+      siteRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      method: "GET",
+      host: "apiv3.fansly.com",
+      path: "/api/v1/account/me",
+      query: "?ngsw-bypass=true",
+      resourceType: "XHR",
+      route: "account.me",
+      operation: "read",
+      sessionFingerprint: null,
+      pausedMono: expect.any(Number),
+      waitDeadlineMono: (ask.pausedMono as number) + 60_000,
+    });
+    expect(api.outcome).toBe("paused");
+    // Its id was in the buffer before it was asked.
+    expect(s.operator.buffer.siteRequests().map((kept) => kept.siteRequestId)).toEqual([ask.siteRequestId]);
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: ask.siteRequestId, admit: false, reason: "paused" });
+    await until(() => api.outcome === "failed", 3000, "the refused request to fail");
+    expect(api.failReason).toBe("Failed");
+    await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "its id to go");
+    // Not admitted: no end of it goes to the engine.
+    expect(s.engine.of("siteDone")).toEqual([]);
+    const requests = journal(s.logDir, "requests");
+    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/message/ack", decision: "failed", result: "BlockedByClient: a read mark: closed until the owner opens it (closed: POST|PUT|PATCH|DELETE /message/ack)" }));
+    expect(requests).toContainEqual(expect.objectContaining({ host: "widget.intercom.io", decision: "continued", result: "passed unpaced" }));
+    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "failed", admission: expect.stringMatching(/^site request /), result: "Failed: refused by the engine: paused" }));
     // The gate opened no window: a CONNECT to the API host is refused even with the exit open.
     expect(s.operator.egress.gate.state.phase).toBe("closed");
   });
@@ -333,7 +394,9 @@ describe("the exit IP", () => {
     expect(s.operator.page.step).toBe("exit_ip_verified");
     expect(await command(s.engine, "openExit")).toMatchObject({ ok: true, detail: "the exit is open" });
     expect(s.socks.connects.filter((target) => target === "api.ipify.org:443").length).toBe(checks + 1);
-    expect(s.operator.page.step).toBe("exit_open");
+    // The site loads again with the exit open.
+    await until(() => s.operator.page.step === "site_loaded", 5000, "the site loaded again");
+    expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
   });
 });
 
@@ -346,7 +409,7 @@ describe("the engine's link", () => {
     await until(() => !s.operator.admissionsOpen(), 3000, "admissions to close");
     expect(s.operator.rpc.linkUp).toBe(false);
     expect(s.operator.egress.exitOpen).toBe(true);
-    expect(s.operator.page.step).toBe("exit_open");
+    expect(s.operator.page.step).toBe("site_loaded");
   });
 });
 
@@ -374,7 +437,7 @@ describe("commands", () => {
     await started(s);
     const before = s.engine.of("state").length;
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
-    await until(() => s.control.calls.filter((call) => call === "start").length === 2 && s.operator.page.step === "exit_open", 5000, "the page up again");
+    await until(() => s.control.calls.filter((call) => call === "start").length === 2 && s.operator.page.step === "site_loaded", 5000, "the page up again");
     expect(s.engine.of("state").slice(before).every((state) => state.stopReason === null)).toBe(true);
     expect(s.holder.exits.length).toBeGreaterThanOrEqual(1);
   });
@@ -398,7 +461,7 @@ describe("commands", () => {
     s.engine.send({ type: "command", ownerGeneration: 1, commandId: "same", notAfterMono: monoMs() + 10_000, command: { kind: "restartBrowser" } });
     s.engine.send({ type: "command", ownerGeneration: 1, commandId: "same", notAfterMono: monoMs() + 10_000, command: { kind: "restartBrowser" } });
     await until(() => s.engine.of("commandResult").filter((message) => message.commandId === "same").length === 2);
-    await until(() => s.operator.page.step === "exit_open", 10_000);
+    await until(() => s.operator.page.step === "site_loaded", 10_000);
     expect(s.control.calls.filter((call) => call === "start")).toHaveLength(1);
   });
 });
@@ -469,10 +532,10 @@ describe("a new owner, a start under way", () => {
     await third.waitFor("quiesced", undefined, 10_000);
     hold = false;
     expect(await command(third, "restartBrowser")).toMatchObject({ ok: true });
-    await until(() => s.operator.page.step === "exit_open", 10_000, "the third owner's page up");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the third owner's page up");
     for (const release of releases.splice(0)) release();
     await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(s.operator.page.step).toBe("exit_open");
+    expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.egress.exitOpen).toBe(true);
     expect(s.chrome.running).toBe(true);
   });
@@ -537,7 +600,7 @@ describe("a lost control (plan §4.9)", () => {
     await until(() => s.operator.page.snapshot.stopReason === "cdp_lost");
     expect(s.control.calls).toContain("kill");
     // The retry after the backoff (150 ms here) starts the page again.
-    await until(() => s.operator.page.step === "exit_open", 10_000, "the page back");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the page back");
   });
 
   it("Chrome crashed: the reason says so", async () => {
@@ -601,7 +664,8 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.model.grants[1]).toEqual({ origin: "http://127.0.0.1", context: "C1", permissions: ["geolocation"] });
     expect(s.model.requests.filter((request) => request.url === "http://127.0.0.1/pb-env-check").map((request) => request.outcome)).toEqual(["fulfilled"]);
     expect(s.model.disposed).toEqual(["C1"]);
-    expect(s.chrome.sent("Fetch.continueRequest")).toHaveLength(1); // the self-test's probe only
+    // The self-test's probe, and the site's document once the exit opened.
+    expect(s.chrome.sent("Fetch.continueRequest").map((command) => s.model.requests.find((request) => request.interceptionId === command.params.requestId)?.url)).toEqual([expect.stringMatching(/^https:\/\/apiv3\.fansly\.com\/api\/v1\/pb-selftest\?pbst=/), "https://fansly.com/"]);
     expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "127.0.0.1", path: "/pb-env-check", decision: "fulfilled" }));
     // What the browser showed, in the log.
     const verified = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "env.verified");
@@ -647,7 +711,7 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(evaluations(s, "pbEnvShown")).toHaveLength(1);
     await s.chrome.shutdown();
     await until(() => s.operator.page.snapshot.stopReason === "chrome_crashed", 3000);
-    await until(() => s.operator.page.step === "exit_open", 10_000, "the page back");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the page back");
     expect(evaluations(s, "pbEnvShown")).toHaveLength(2);
     expect(s.model.handovers).toHaveLength(2);
     // The same profile, a Chrome that now shows another zone.
@@ -669,7 +733,7 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     again.send(hello({ env, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
     await again.waitFor("helloResult");
     const kyiv = "TZ=Europe/Kyiv\nLANGUAGES=uk-UA,uk,en-US,en\n";
-    await until(() => s.model.handovers.at(-1) === kyiv && s.operator.page.step === "exit_open", 5000, "the page up again");
+    await until(() => s.model.handovers.at(-1) === kyiv && s.operator.page.step === "site_loaded", 5000, "the page up again");
     expect(readFileSync(s.chromeEnv, "utf8")).toBe(kyiv);
     // One restart, nothing failed on the way.
     expect(s.model.handovers).toHaveLength(2);
@@ -692,7 +756,7 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     await until(() => bad.closed !== null, 3000, "the connection to close");
     expect(bad.of("helloResult")).toEqual([]);
     expect(readFileSync(s.chromeEnv, "utf8")).toBe("TZ=Europe/Berlin\nLANGUAGES=en-US,en\n");
-    expect(s.operator.page.step).toBe("exit_open");
+    expect(s.operator.page.step).toBe("site_loaded");
   });
 });
 
@@ -836,7 +900,7 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     s.engine.send({ type: "ack", ownerGeneration: 1, bufferId: s.operator.buffer.id, uptoSeq: last });
     await until(() => eventsOf(s.engine).some((event) => event.kind === "gap" && event.reason === "buffer_full"), 5000, "the gap");
     expect(eventsOf(s.engine).find((event) => event.kind === "gap" && event.reason === "buffer_full")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
-    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start again");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the page to start again");
     expect(s.operator.admissionsOpen()).toBe(true);
   });
 
@@ -848,7 +912,7 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     expect(s.control.calls).not.toContain("start");
     expect(s.engine.of("alarm")).toContainEqual(expect.objectContaining({ kind: "buffer", detail: expect.objectContaining({ full: true, reason: "disk_full" }) }));
     free = 10_000;
-    await until(() => s.operator.page.step === "exit_open", 10_000, "the page to start");
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the page to start");
     // The buffer's own gap, then the start's — refused while the disk was
     // full, written once there was room, from its first boundary.
     await until(() => s.operator.buffer.lastSeq === 2, 3000, "the start's gap");
@@ -1061,7 +1125,10 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
 
   it("before the site is loaded: answered, never started; kept until its resultAck; a repeated id does nothing twice", async () => {
     const s = await setUp();
-    await started(s);
+    // The site's document never comes: the page stays at the open exit.
+    s.model.siteLoads = "never";
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "exit_open", 10_000, "the open exit");
     const send = sendOf(s.engine, 9001);
     s.engine.send(send);
     const result = await s.engine.waitFor("result", (message) => message.attemptId === 9001);
@@ -1086,9 +1153,10 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     s.socks.routes.set("apiv3.fansly.com:443", server.port);
     await started(s);
     const tab = s.operator.control.workTab!;
-    s.model.navigate(tab.sessionId, "https://fansly.com/");
-    await until(() => s.operator.control.workTab?.url === "https://fansly.com/", 3000, "the tab at the site");
-    // The site's own API request: failed (no admitting path for it yet), its session learned.
+    // The operator loaded the site in the work tab (step 8).
+    expect(s.operator.control.workTab?.url).toBe("https://fansly.com/");
+    // The site's own API request: its session learned as it stops; it waits
+    // for the engine, which refuses it here.
     const siteHeaders = {
       Accept: "application/json, text/plain, */*",
       authorization: TOKEN,
@@ -1100,6 +1168,9 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     };
     const site = s.model.pause(`https://apiv3.fansly.com${ME}?ngsw-bypass=true`, "GET", tab.sessionId, "XHR", siteHeaders);
     await s.engine.waitFor("state", (state) => state.sessionFingerprint === FINGERPRINT);
+    const ask = await s.engine.waitFor("siteAdmit");
+    expect(ask).toMatchObject({ route: "account.me", sessionFingerprint: FINGERPRINT });
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: ask.siteRequestId, admit: false, reason: "route_hold" });
     await until(() => site.outcome === "failed", 3000, "the site's request to fail");
     s.engine.onMessage = (message) => {
       if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
@@ -1170,6 +1241,399 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     const s = await setUp();
     s.engine.send({ ...sendOf(s.engine, 1), kind: "document" });
     await until(() => s.engine.closed !== null, 3000, "the connection to close");
+  });
+});
+
+describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)", () => {
+  const TOKEN = "fansly-token-SiTeOpEr0123456789xyz";
+  const CLIENT_ID = "720167541418230021";
+  const FINGERPRINT = sessionFingerprint(TOKEN, CLIENT_ID);
+  const ME = "/api/v1/account/me";
+
+  function headersOf(token = TOKEN, path = ME): Record<string, string> {
+    return { Accept: "application/json, text/plain, */*", authorization: token, "fansly-client-check": fanslyClientCheck(path, CLIENT_ID), "fansly-client-id": CLIENT_ID, "fansly-client-ts": String(Date.now()), "fansly-session-id": "720167541418230022" };
+  }
+
+  it("end to end: asked of the engine, admitted, through the real proxy and gate; its answer's body in frames before the batch that names it; siteDone until its resultAck; no secret anywhere", async () => {
+    const s = await setUp();
+    const server = await tlsLikeServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("apiv3.fansly.com:443", server.port);
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 8100 });
+    };
+    s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
+    const request = s.model.pause(`https://apiv3.fansly.com${ME}?ngsw-bypass=true`, "GET", tab, "XHR", headersOf());
+    const done = await s.engine.waitFor("siteDone", () => true, 10_000);
+    const ask = s.engine.of("siteAdmit")[0]!;
+    expect(ask).toMatchObject({ method: "GET", host: "apiv3.fansly.com", path: ME, query: "?ngsw-bypass=true", route: "account.me", operation: "read", sessionFingerprint: FINGERPRINT });
+    expect(done).toEqual({
+      type: "siteDone",
+      siteRequestId: ask.siteRequestId,
+      attemptId: 8100,
+      sent: true,
+      // Chrome's moment of the send, never earlier than the gate's.
+      sentMono: Math.max(888_250 + 2.5, s.operator.egress.gate.lastSend!.mono),
+      sentWall: expect.any(Number),
+      connectionReused: false,
+      status: 200,
+      retryAfter: null,
+      error: null,
+      body: "buffered",
+    });
+    expect(request.outcome).toBe("continued");
+    // What reached the server: the connection's records and the request, once.
+    expect(server.received().length).toBe(300 + 58 + 70 + 90);
+    // The answer in the stream: its body's frame first, then the batch.
+    const batch = await s.engine.waitFor("events", (message) => (message.events as Array<{ kind: string }>).some((event) => event.kind === "site.response"));
+    const response = (batch.events as Array<Record<string, unknown>>).find((event) => event.kind === "site.response")!;
+    expect(response).toMatchObject({
+      siteRequestId: ask.siteRequestId,
+      attemptId: 8100,
+      route: "account.me",
+      method: "GET",
+      path: ME,
+      query: "?ngsw-bypass=true",
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": String(s.model.siteBody.length) },
+      complete: true,
+      source: "network",
+      sessionFingerprint: FINGERPRINT,
+      body: { decodedBytes: s.model.siteBody.length, sha256: createHash("sha256").update(s.model.siteBody).digest("hex") },
+    });
+    expect(response.headers).not.toHaveProperty("set-cookie");
+    expect(s.engine.frames).toHaveLength(1);
+    const frame = decodeBodyFrame(s.engine.frames[0]!);
+    expect(frame).toMatchObject({ bodyId: (response.body as { bodyId: string }).bodyId, part: 0, last: true });
+    expect(frame.data.equals(s.model.siteBody)).toBe(true);
+    expect(s.engine.order.indexOf("binary")).toBeLessThan(s.engine.order.lastIndexOf("events"));
+    // The journal: released under its admission, and its end.
+    const requests = journal(s.logDir, "requests");
+    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: `site request ${String(ask.siteRequestId)} (attempt 8100)`, decision: "continued", result: "released under its admission" }));
+    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, decision: "ended", status: 200, result: "200, body buffered" }));
+    // A new connection gets the end again, until its resultAck.
+    const next = new FakeEngine();
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("helloResult");
+    expect(await next.waitFor("siteDone")).toMatchObject({ attemptId: 8100, status: 200 });
+    next.send({ type: "resultAck", ownerGeneration: 1, attemptId: 8100 });
+    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the end to go");
+    // The engine's ack of the event: the body's file goes with it.
+    next.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: response.seq as number });
+    await until(() => readdirSync(join(s.dir, "buffer", "bodies")).length === 0, 3000, "the body's file to go");
+    // No secret in any log line or journal.
+    await s.operator.journals.flushed();
+    const journals = readdirSync(s.logDir).map((name) => readFileSync(join(s.logDir, name), "utf8")).join("\n");
+    for (const secret of [TOKEN, CLIENT_ID, fanslyClientCheck(ME, CLIENT_ID), "model-cookie-secret", "300000000000000001"]) {
+      expect(s.lines.join("\n"), secret).not.toContain(secret);
+      expect(journals, secret).not.toContain(secret);
+    }
+  });
+
+  /** The engine's identity read through the browser (a Hub request). */
+  const identity = (attemptId: number, fingerprint: string) => ({
+    type: "send",
+    ownerGeneration: 1,
+    attemptId,
+    route: "account.me",
+    credentialsGeneration: "c".repeat(64),
+    sessionFingerprint: fingerprint,
+    method: "GET",
+    url: `https://apiv3.fansly.com${ME}?ngsw-bypass=true`,
+    headers: {},
+    kind: "api",
+    maxBodyBytes: 32 * 1024 * 1024,
+    sendDeadlineMono: monoMs() + 15_000,
+    requestDeadlineMono: monoMs() + 20_000,
+  });
+  const account = (id: string) => Buffer.from(JSON.stringify({ success: true, response: { account: { id, email: "owner@example.test" } } }));
+  /** A read of the site's own, paused in Fetch with the session's headers. */
+  const read = (s: SetUp & { tab: string }, path: string, token = TOKEN) => s.model.pause(`https://apiv3.fansly.com${path}`, "GET", s.tab, "XHR", headersOf(token, path.split("?")[0]!));
+
+  /** A started page whose engine answers checks, and each `siteAdmit` as
+   *  `site` says: an admission (by attempt id), a refusal, or nothing. */
+  async function siteSetUp(site: (ask: Record<string, unknown>) => { admit: number } | { refuse: string } | null, options: Parameters<typeof setUp>[0] = {}): Promise<SetUp & { tab: string }> {
+    const s = await setUp(options);
+    const server = await tlsLikeServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("apiv3.fansly.com:443", server.port);
+    await started(s);
+    s.engine.onMessage = (message) => {
+      if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+      if (message.type !== "siteAdmit") return;
+      const answer = site(message);
+      if (answer === null) return;
+      if ("admit" in answer) s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: answer.admit });
+      else s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: false, reason: answer.refuse });
+    };
+    return { ...s, tab: s.operator.control.workTab!.sessionId };
+  }
+
+  const stateNotes = (s: SetUp) => journal(s.logDir, "states").map((line) => `${String(line.from)}>${String(line.to)}: ${String(line.note)}`);
+
+  it("steps 9–10: the engine's identity read naming the expected account confirms the session, and the page is ready; another account does not; a changed session goes back to step 8; nothing of the site failed — the tab is not loaded anew", async () => {
+    let attempt = 9200;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // The live session, from the site's own request — admitted, and answered.
+    read(s, ME);
+    await s.engine.waitFor("state", (state) => state.sessionFingerprint === FINGERPRINT);
+    expect(await s.engine.waitFor("siteDone", () => true, 10_000)).toMatchObject({ attemptId: 9201, sent: true, status: 200 });
+    // Another account than the page's: reported, not confirmed.
+    s.model.hubBody = account("999");
+    s.engine.send(identity(9301, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9301, 10_000);
+    await s.engine.waitFor("state", (state) => state.accountId === "999");
+    expect(s.operator.page.step).toBe("site_loaded");
+    // The expected one: confirmed, ready.
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9302, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9302, 10_000);
+    await until(() => s.operator.page.step === "ready", 3000, "the page ready");
+    expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789", sessionFingerprint: FINGERPRINT });
+    const steps = journal(s.logDir, "states").map((line) => line.to);
+    expect(steps.slice(steps.lastIndexOf("exit_open"))).toEqual(["exit_open", "site_loaded", "session_confirmed", "ready"]);
+    expect(s.operator.admissionsOpen()).toBe(true);
+    // Nothing of the site failed before the confirmation: no reload.
+    expect(s.model.navigations).toEqual(["https://fansly.com/"]);
+    // The site logs in anew: another session is not the confirmed one.
+    read(s, ME, "fansly-token-AnotherLogin0123456789");
+    await until(() => s.operator.page.step === "site_loaded", 3000, "back to the loaded site");
+    expect(s.engine.last("state")).toMatchObject({ step: "site_loaded", accountId: null });
+    // Nothing of the answer but the account id was kept or logged.
+    expect(s.lines.join("\n")).not.toContain("owner@example.test");
+  });
+
+  it("the site's API requests failed before the session was confirmed (the engine admits nothing in checks-only): the work tab is loaded anew at the confirmation — once a start, journaled with their count", async () => {
+    let admitting = false;
+    let attempt = 9400;
+    const s = await siteSetUp(() => (admitting ? { admit: ++attempt } : { refuse: "held" }));
+    // The site's first load: its reads are refused, in the interception.
+    const refused = [read(s, ME), read(s, "/api/v1/messaging/groups?limit=25")];
+    await until(() => refused.every((request) => request.outcome === "failed"), 3000, "the refusals");
+    expect(s.operator.site.failures).toBe(2);
+    // What the map closes does not count: it stays closed after any reload.
+    const closed = s.model.pause("https://apiv3.fansly.com/api/v1/message/ack", "POST", s.tab, "XHR", headersOf(TOKEN, "/api/v1/message/ack"));
+    await until(() => closed.outcome === "failed", 3000, "the closed write");
+    expect(s.operator.site.failures).toBe(2);
+    // The engine's identity read: the session is confirmed, the engine admits.
+    admitting = true;
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9501, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9501, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "the page ready");
+    // Loaded anew, once: the navigation of step 8, and this one.
+    expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
+    const notes = stateNotes(s);
+    expect(notes).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
+    expect(notes.slice(-4).map((note) => note.split(":")[0])).toEqual(["site_loaded>exit_open", "exit_open>site_loaded", "site_loaded>session_confirmed", "session_confirmed>ready"]);
+    expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789" });
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    // The new document's request goes under the engine that admits now.
+    const fresh = read(s, ME);
+    expect(await s.engine.waitFor("siteDone", () => true, 10_000)).toMatchObject({ attemptId: 9401, sent: true, status: 200 });
+    expect(fresh.outcome).toBe("continued");
+    // No loop: more failures and another confirmation in the same start —
+    // a new session, refused again, read again — reload nothing.
+    admitting = false;
+    const other = "fansly-token-SecondLogin000111222333";
+    const again = read(s, ME, other);
+    await until(() => again.outcome === "failed" && s.operator.page.step === "site_loaded", 3000, "the new session, its request refused");
+    expect(s.operator.site.failures).toBeGreaterThan(0);
+    s.engine.send(identity(9502, sessionFingerprint(other, CLIENT_ID)));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9502, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready again");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(s.chrome.sent("Page.navigate")).toHaveLength(2);
+    // A new start counts its own: nothing of the site failed in it — the
+    // failures of the start before do not reload it.
+    admitting = true;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length === 3 && s.operator.page.step === "site_loaded", 10_000, "the new start's site");
+    const admitted = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
+    await until(() => admitted.outcome === "continued", 3000, "its admission");
+    s.engine.send(identity(9503, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9503, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready in the new start");
+    expect(s.model.navigations).toHaveLength(3);
+    // And one where the site's request fails has its own once.
+    admitting = false;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length === 4 && s.operator.page.step === "site_loaded", 10_000, "the third start's site");
+    const next = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
+    await until(() => next.outcome === "failed", 3000, "its refusal");
+    s.engine.send(identity(9504, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9504, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready in the third start");
+    expect(s.model.navigations).toHaveLength(5);
+    expect(stateNotes(s).filter((note) => note.includes("the work tab is loaded anew, once"))).toHaveLength(2);
+  });
+
+  it("the reload's own document must come: a reload whose document never commits fails the start, the page not taken for loaded", async () => {
+    const s = await siteSetUp(() => ({ refuse: "held" }), { params: { restartBackoffMs: [5000] }, siteLoadMs: 300 });
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    s.model.siteLoads = "never";
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9951, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9951, 10_000);
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 5000, "the failure");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(s.engine.of("state").some((state) => state.step === "session_confirmed" || state.step === "ready")).toBe(false);
+  });
+
+  it("what of the site still waits at that reload is closed first: failed in Chrome, its late admission not used, nothing of it released into the new document", async () => {
+    let attempt = 9600;
+    const answers: Array<{ admit: number } | { refuse: string } | null> = [{ refuse: "held" }, null, null];
+    const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    // Two more wait for the engine's word when the session is confirmed.
+    const waiting = [read(s, "/api/v1/notifications"), read(s, "/api/v1/subscribers")];
+    await until(() => s.engine.of("siteAdmit").length === 3, 3000, "all asked");
+    expect(s.operator.site.live).toBe(2);
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9701, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9701, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "the page ready");
+    expect(s.model.navigations).toHaveLength(2);
+    // Closed before the tab navigated: failed in Chrome, gone here, never released.
+    expect(waiting.map((request) => request.outcome)).toEqual(["failed", "failed"]);
+    expect(s.operator.site.live).toBe(0);
+    const failCommands = s.chrome.commands.map((command, index) => ({ command, index })).filter(({ command }) => command.method === "Fetch.failRequest" && waiting.some((request) => request.interceptionId === command.params.requestId));
+    const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
+    expect(failCommands).toHaveLength(2);
+    expect(failCommands.every(({ index }) => index < reload)).toBe(true);
+    expect(journal(s.logDir, "requests").filter((line) => line.decision === "ended" && line.result === "the work tab is loaded anew")).toHaveLength(2);
+    // They were not failures of the new document: only the refused one counted.
+    expect(stateNotes(s).some((note) => note.includes("1 API request of the site failed before it"))).toBe(true);
+    // The engine's admission of one of them, coming after the reload: not used.
+    const late = s.engine.of("siteAdmit")[1]!;
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: late.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9650 });
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9650)).toMatchObject({ sent: false, status: null });
+    expect(s.chrome.sent("Fetch.continueRequest").some((command) => waiting.some((request) => request.interceptionId === command.params.requestId))).toBe(false);
+    await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "their ids to go");
+  });
+
+  it("a request of the site in flight at the confirmation is waited out before that reload: the reload cancels nothing, and nothing stops the page", async () => {
+    let attempt = 9800;
+    const answers: Array<{ admit: number } | { refuse: string }> = [{ refuse: "held" }];
+    const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    // A request of the site goes out and its answer is slow.
+    s.model.siteAnswerDelayMs = 700;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => s.operator.site.released === 1, 3000, "the request in flight");
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9901, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000);
+    // Confirmed by the read, but the tab does not navigate while it flies.
+    expect(s.model.navigations).toHaveLength(1);
+    expect(s.operator.site.released).toBe(1);
+    await until(() => s.operator.page.step === "ready", 8000, "the page ready");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801)).toMatchObject({ sent: true, status: 200 });
+    const answered = s.chrome.commands.findIndex((command) => command.method === "Fetch.continueResponse" && command.params.requestId === flying.interceptionId);
+    const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
+    expect(answered).toBeGreaterThan(-1);
+    expect(answered).toBeLessThan(reload);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.engine.of("state").every((state) => state.stopReason === null)).toBe(true);
+  });
+
+  it("waits for the engine: a new connection is asked again by the same id; the wait is the engine's parameter, and past it the request fails (Failed)", async () => {
+    const s = await setUp({ params: { siteAdmitWaitMs: 1500 } });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const waiting = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    const first = await s.engine.waitFor("siteAdmit");
+    expect((first.waitDeadlineMono as number) - (first.pausedMono as number)).toBe(1500);
+    // The engine's connection goes (a deploy of sync) and comes back.
+    const next = new FakeEngine();
+    s.engine.close();
+    await until(() => !s.operator.rpc.linkUp, 3000, "the old link to go");
+    expect(waiting.outcome).toBe("paused");
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, { siteAdmitWaitMs: 1500 }));
+    await next.waitFor("helloResult");
+    const again = await next.waitFor("siteAdmit");
+    expect(again).toEqual(first);
+    // Nobody admits it: failed once its wait is over.
+    await until(() => waiting.outcome === "failed", 5000, "the wait to end");
+    expect(waiting.failReason).toBe("Failed");
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: "no admission within 1500 ms" }));
+  });
+
+  it("the engine's closeExit cancels what the site has waiting: nothing of it goes when the exit opens again", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const waiting = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    const ask = await s.engine.waitFor("siteAdmit");
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    await until(() => waiting.outcome === "failed", 3000, "the waiting request to fail");
+    expect(waiting.failReason).toBe("Failed");
+    expect(s.operator.site.live).toBe(0);
+    // A request that comes with the exit closed is failed at once, not kept.
+    const closed = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    await until(() => closed.outcome === "failed", 3000, "the request to fail");
+    expect(await command(s.engine, "openExit")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 5000, "the site loaded again");
+    // The admission of the cancelled one, coming now, is not used.
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: ask.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 8200 });
+    expect(await s.engine.waitFor("siteDone")).toMatchObject({ attemptId: 8200, sent: false });
+    expect(s.engine.of("siteAdmit")).toHaveLength(1);
+    expect(s.chrome.sent("Fetch.continueRequest").some((sent) => sent.params.requestId === waiting.interceptionId || sent.params.requestId === closed.interceptionId)).toBe(false);
+  });
+
+  it("the page's proxy fails: what waited for an admission is failed, nothing is asked again, the page fails and starts again", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [300] } });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const waiting = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    await s.engine.waitFor("siteAdmit");
+    expect(s.operator.site.live).toBe(1);
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    // The page's SOCKS5 is gone: the next tunnel fails.
+    await s.socks.stop();
+    void proxyConnect(s.model.proxyPort, "fansly.com:443").then(({ socket }) => socket.destroy()).catch(() => undefined);
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 5000, "the page to fail");
+    // Cancelled, not kept for the next exit: failed in Chrome, and gone here.
+    await until(() => s.operator.site.live === 0, 3000, "nothing left waiting");
+    // Failed in Chrome — or dead with the Chrome that held it, killed at once.
+    expect(waiting.outcome === "failed" || s.control.calls.includes("kill")).toBe(true);
+    expect(s.chrome.sent("Fetch.continueRequest").some((command) => command.params.requestId === waiting.interceptionId)).toBe(false);
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: expect.stringContaining("the page stopped: the page's SOCKS5 failed a tunnel") }));
+    await until(() => s.control.calls.filter((call) => call === "start").length > starts, 5000, "the page starting again");
+    // Nothing of it is asked again.
+    expect(s.engine.of("siteAdmit")).toHaveLength(1);
+  });
+
+  it("an operator that starts again ends what the previous one admitted: siteDone for the kept request, the paused one failed on the holder's replay", async () => {
+    const s = await setUp({
+      prepare: ({ bufferDir, stateDir }) => {
+        mkdirSync(stateDir, { recursive: true });
+        const buffer = new EventBuffer({ dir: bufferDir, idFile: join(stateDir, "buffer-id"), minFreeBytes: 0, log: quiet });
+        buffer.changeSiteRequest({ siteRequestId: "33333333-3333-4333-8333-333333333333", asked: true });
+        buffer.changeSiteRequest({ siteRequestId: "33333333-3333-4333-8333-333333333333", released: { attemptId: 6100 } });
+        buffer.changeSiteRequest({ siteRequestId: "44444444-4444-4444-8444-444444444444", asked: true });
+        void buffer.flush();
+        void buffer.close();
+      },
+    });
+    expect(await s.engine.waitFor("siteDone")).toMatchObject({ siteRequestId: "33333333-3333-4333-8333-333333333333", attemptId: 6100, sent: true, status: null, error: { afterSendStart: true } });
+    await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "the kept ids to go");
+    expect(s.engine.of("siteDone")).toHaveLength(1);
+    s.engine.send({ type: "recover", ownerGeneration: 1, attemptIds: [6100] });
+    expect((await s.engine.waitFor("recoverResult")).attempts).toEqual([{ attemptId: 6100, state: "outcome_resent" }]);
   });
 });
 
@@ -1369,7 +1833,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     await until(() => request.outcome === "failed", 3000, "the request to fail");
     expect(request.failReason).toBe("BlockedByClient");
     await s.operator.journals.close();
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", decision: "failed", result: "BlockedByClient: the socket host serves sockets only" }));
+    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", decision: "failed", result: "BlockedByClient: the socket host serves the site's socket only (socket_host)" }));
   });
 
   it("a socket that cannot be accounted for — a handshake on its tunnel CDP never shows — fails the page: the exit closed, Chrome started again, nothing reassigned", async () => {
@@ -1393,7 +1857,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     expect(s.operator.egress.exitOpen).toBe(false);
     expect(s.control.calls).toContain("kill");
     expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
-    await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "exit_open", 10_000, "Chrome started again");
+    await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "site_loaded", 10_000, "Chrome started again");
     client.destroy();
   });
 

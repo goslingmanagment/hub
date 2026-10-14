@@ -32,12 +32,30 @@
 //   commits pace the stream, and the rest waits in the buffer (a Hub deploy,
 //   a database outage: the socket is not broken, plan §4.4, step 7).
 //
-// Bodies are not sent yet (buffer.ts): when they are, their binary parts go
-// before the batch that names them, and count in its bytes.
+// - The body a `site.response` names (PR 7) goes before the batch that
+//   names it, in binary frames of up to 1 MiB (send-body.ts), waiting for
+//   the socket between them; its bytes count in the batch's (an event's
+//   `bytes` are its JSON's and its body's). A batch without a body goes at
+//   once, in the turn it was read. A body that is gone or cannot be read is
+//   no fact the engine could take: its event goes as an answer not taken
+//   whole (`complete: false` — a mark in Hub and a backfill), never with a
+//   body that is not the one it names, and the stream does not stop on it.
+//   A connection that changes while a body goes ends the batch there: the
+//   next subscription sends it again, its bodies first.
 
 import type { Ack, EventsRefused, EventsSubscribe } from "../rpc/protocol.ts";
-import { makeLog, type Logger } from "../shared/util.ts";
+import { makeLog, sleep, type Logger } from "../shared/util.ts";
 import type { EventBuffer } from "./buffer.ts";
+import { sendBody, type BodyLink } from "./send-body.ts";
+import type { StoredEvent } from "./store.ts";
+
+/** The engine's connection for bodies, as the RPC server shows it. */
+export interface StreamLink extends BodyLink {
+  /** Bytes queued and not yet handed to the socket. */
+  backlog: () => number;
+  /** Settles once the queue drained, or the connection is gone. */
+  drained: () => Promise<void>;
+}
 
 export interface StreamOptions {
   maxEvents?: number;
@@ -47,6 +65,11 @@ export interface StreamOptions {
   /** The pauses before a sent mark that could not be written is tried
    *  again (the last one repeats). */
   markRetryMs?: readonly number[];
+  /** Where the bodies of `site.response` go (PR 7); without it, events go
+   *  as they are stored. */
+  link?: StreamLink;
+  /** The socket's queue mark: above it, a body waits. */
+  highWaterBytes?: number;
   log?: Logger;
 }
 
@@ -62,6 +85,18 @@ interface Subscription {
 export const STREAM_IN_FLIGHT = 4;
 /** The pauses before an unwritten sent mark is tried again. */
 export const STREAM_MARK_RETRY_MS: readonly number[] = [250, 500, 1000, 2000, 5000];
+export const STREAM_HIGH_WATER = 256 * 1024;
+
+/** An event whose body cannot be sent, as the engine can still take it: an
+ *  answer not taken whole. */
+function notWhole(json: string): string {
+  try {
+    const event = JSON.parse(json) as Record<string, unknown>;
+    return JSON.stringify({ ...event, complete: false });
+  } catch {
+    return json;
+  }
+}
 
 export class EventStream {
   readonly #buffer: EventBuffer;
@@ -77,6 +112,8 @@ export class EventStream {
   /** Writes of the sent mark that failed in a row. */
   #markFailures = 0;
   #markTimer: NodeJS.Timeout | null = null;
+  readonly #link: StreamLink | null;
+  readonly #highWater: number;
 
   constructor(buffer: EventBuffer, send: (json: string) => boolean, options: StreamOptions = {}) {
     this.#buffer = buffer;
@@ -86,6 +123,8 @@ export class EventStream {
     this.#maxBytes = options.maxBytes ?? 1024 * 1024;
     this.#inFlightBatches = options.inFlightBatches ?? STREAM_IN_FLIGHT;
     this.#markRetryMs = options.markRetryMs ?? STREAM_MARK_RETRY_MS;
+    this.#link = options.link ?? null;
+    this.#highWater = options.highWaterBytes ?? STREAM_HIGH_WATER;
   }
 
   /** The engine's batch size (plan §4.14), within sane bounds. */
@@ -148,10 +187,13 @@ export class EventStream {
     return null;
   }
 
-  /** Sends what is durable and not sent, while the window allows. */
+  /** Sends what is durable and not sent, while the window allows. A batch
+   *  with bodies goes on after this returns; the stream pumps again after
+   *  it. */
   pump(): void {
     if (this.#pumping) return;
     this.#pumping = true;
+    let handedOver = false;
     try {
       for (;;) {
         const sub = this.#sub;
@@ -170,6 +212,14 @@ export class EventStream {
           }
           this.#markFailures = 0;
         }
+        if (this.#link !== null && events.some((event) => typeof event.bodyId === "string")) {
+          handedOver = true;
+          void this.#withBodies(sub, envelope, events, this.#link).finally(() => {
+            this.#pumping = false;
+            this.pump();
+          });
+          return;
+        }
         if (!this.#send(`${envelope}${events.map((event) => event.json).join(",")}]}`)) {
           this.reset();
           return;
@@ -178,8 +228,39 @@ export class EventStream {
         sub.inFlight.push(sub.sentSeq);
       }
     } finally {
-      this.#pumping = false;
+      if (!handedOver) this.#pumping = false;
     }
+  }
+
+  /** One batch whose events name bodies: each body's frames, then the
+   *  batch. Ends quietly when the subscription or the connection changes. */
+  async #withBodies(sub: Subscription, envelope: string, events: StoredEvent[], link: StreamLink): Promise<void> {
+    const epoch = link.epoch();
+    const room = async (at: number): Promise<boolean> => {
+      while (link.epoch() === at && this.#sub === sub && link.backlog() > this.#highWater) {
+        await link.drained();
+        if (link.backlog() > this.#highWater) await sleep(5);
+      }
+      return link.epoch() === at && this.#sub === sub;
+    };
+    const out: string[] = [];
+    for (const event of events) {
+      if (typeof event.bodyId !== "string") {
+        out.push(event.json);
+        continue;
+      }
+      const sent = await sendBody(event.bodyId, epoch, link, (bodyId) => this.#buffer.openBody(bodyId), room, this.#log);
+      if (sent === "gone" || this.#sub !== sub) return;
+      if (sent !== "sent") this.#log("stream.body_not_sent", { seq: event.seq, bodyId: event.bodyId, why: sent, as: "an answer not taken whole" });
+      out.push(sent === "sent" ? event.json : notWhole(event.json));
+    }
+    if (!(await room(epoch))) return;
+    if (!this.#send(`${envelope}${out.join(",")}]}`)) {
+      this.reset();
+      return;
+    }
+    sub.sentSeq = events.at(-1)!.seq;
+    sub.inFlight.push(sub.sentSeq);
   }
 
   /** The sent mark could not be written: pump again after a pause, once. */

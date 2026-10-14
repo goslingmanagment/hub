@@ -422,7 +422,9 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
     await switchRecapOn();
     expect(await recapFeature()).toEqual({ available: true });
     expect((await recapsOk(grishaToken)).body.full?.text).toBe("FULL RECAP");
-    expectRefused(await recaps(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    // Recap exists on Fansly too (R20 HF-2), where a page takes it from its own row alone:
+    // the owner's rows above name no Fansly page.
+    expectRefused(await recaps(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "flag_off");
     // An old client's version, or none, is not the extension: refused, never passed.
     for (const clientVersion of ["chatgoose-extension/2.7.1", "0.1.64", null]) {
       expectRefused(await recaps(grishaFullToken, { clientVersion }), 409, "client_feature_disabled", "client_outdated");

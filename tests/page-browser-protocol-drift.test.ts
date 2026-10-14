@@ -166,7 +166,8 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "alarm", atWall: 1, kind: "buffer", detail: { percent: 80, full: false, what: "bytes" } },
 ];
 
-/** One of every message the engine sends now (PR 12), as its types build them. */
+/** One of every message the engine sends now (PR 12; the site path's
+ *  answers and the commands, PR 14), as its types build them. */
 const FROM_ENGINE: Engine.EngineToOperator[] = [
   {
     type: "hello",
@@ -187,6 +188,11 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   { type: "checkResult", ownerGeneration: 2, attemptId: 9, admit: false, reason: "pace" },
   { type: "resultAck", ownerGeneration: 2, attemptId: 9 },
   { type: "recover", ownerGeneration: 2, attemptIds: [9, 10] },
+  { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: true, deadlineMono: 10, attemptId: 12 },
+  { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: false, reason: "site_hour_cap" },
+  { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: true, deadlineMono: 10, attemptId: 13 },
+  { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: false, reason: "mode", retryNotBeforeWall: null },
+  { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "stopPage" } },
 ];
 
 describe("the engine's mirror of the operator protocol", () => {

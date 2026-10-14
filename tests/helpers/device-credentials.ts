@@ -1,3 +1,4 @@
+import type { ClientTokenProfile } from "@agency_hub_core/contracts";
 import { createDeviceToken, findUserByUsername } from "@agency_hub_core/db";
 import { randomToken, sha256Hex } from "@agency_hub_core/shared";
 
@@ -47,7 +48,8 @@ export interface IssuedTestDeviceToken {
  * the suites call when they already hold one. */
 export async function issueDeviceTokenForUserId(
   app: AppContext,
-  input: { userId: number; label: string; expiresAt?: Date },
+  /** `clientProfile`: a narrow token of that profile (H-3), as the password sign-in stores it. */
+  input: { userId: number; label: string; expiresAt?: Date; clientProfile?: ClientTokenProfile },
   /** Ignored: see the note above — this path journals nothing. */
   _audit?: AuditContext,
 ): Promise<IssuedTestDeviceToken> {
@@ -61,13 +63,14 @@ export async function issueDeviceTokenForUserId(
     tokenDigest: sha256Hex(token),
     keyPrefix,
     expiresAt,
+    ...(input.clientProfile ? { clientProfile: input.clientProfile } : {}),
   });
   return { token, id: created.id, label: created.label, keyPrefix, expiresAt };
 }
 
 export async function issueDeviceTokenForUsername(
   app: AppContext,
-  input: { username: string; label: string; expiresAt?: Date },
+  input: { username: string; label: string; expiresAt?: Date; clientProfile?: ClientTokenProfile },
   /** Ignored: see the note above — this path journals nothing. */
   audit?: AuditContext,
 ): Promise<IssuedTestDeviceToken> {
@@ -77,7 +80,12 @@ export async function issueDeviceTokenForUsername(
   }
   return issueDeviceTokenForUserId(
     app,
-    { userId: user.id, label: input.label, ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}) },
+    {
+      userId: user.id,
+      label: input.label,
+      ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      ...(input.clientProfile ? { clientProfile: input.clientProfile } : {}),
+    },
     audit,
   );
 }

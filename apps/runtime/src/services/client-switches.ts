@@ -1,4 +1,4 @@
-import type { ClientFeatureFlagName, ClientReceiptProfile } from "@agency_hub_core/contracts";
+import type { ClientFeatureFlagName, ClientHubCapabilityName, ClientReceiptProfile } from "@agency_hub_core/contracts";
 import {
   findPageSummaryByLabel,
   getConfigOverrides,
@@ -24,6 +24,7 @@ import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   CLIENT_FEATURE_CODE_DEFAULTS,
   clientFeatureExistsOn,
+  clientFeatureNeedsOn,
   clientVersionRefusal,
   evaluateClientFeature,
   type ClientFeatureSettings,
@@ -336,6 +337,10 @@ async function requireClientPageRow(
  * Refuses with 409 `client_feature_disabled` and the reason, in this order:
  * - `not_granted`: the page is not an active page granted to the caller (a
  *   missing page answers the same, so the refusal reveals nothing);
+ * - `platform_unsupported` when the route serves one part of the feature
+ *   (`part`, its capability) and the feature needs no such part on the page's
+ *   platform (clientFeatureNeedsOn: the list of new subscribers on Fansly,
+ *   R20 HF-2);
  * - the feature evaluation (`platform_unsupported`, `disabled`, `flag_off`,
  *   `binding_missing`, `hub_not_ready`);
  * - `client_outdated`: the caller's `x-client-version` is below the owner's
@@ -349,9 +354,12 @@ export async function requireClientFeature(
   principal: HumanAuthPrincipal,
   page: { id: number },
   flag: ClientFeatureFlagName,
+  part?: ClientHubCapabilityName,
 ): Promise<ClientBootstrapPageRow> {
   return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
-    clientFeatureRefusal(switches, row, flag)
+    part !== undefined && !clientFeatureNeedsOn(flag, part, row.platform)
+      ? "platform_unsupported"
+      : clientFeatureRefusal(switches, row, flag)
   ));
 }
 

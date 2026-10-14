@@ -518,7 +518,9 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     await switchPreviewOn();
     expect(await previewFeature()).toEqual({ available: true });
     expect((await feedOk(grishaToken)).items.map((item) => item.text)).toEqual(["ARCHIVED TEXT"]);
-    expectRefused(await feed(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    // The preview exists on Fansly too (R20 HF-2), where a page takes it from its own row alone:
+    // the owner's rows above name no Fansly page.
+    expectRefused(await feed(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "flag_off");
     // An old client's version, or none, is not the extension: refused, never passed.
     for (const clientVersion of ["chatgoose-extension/2.7.1", "0.1.64", null]) {
       expectRefused(await feed(grishaFullToken, { clientVersion }), 409, "client_feature_disabled", "client_outdated");
