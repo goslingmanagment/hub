@@ -51,6 +51,7 @@ import {
   type SettleWorkResult,
   type SyncAttemptRow,
   type SyncPageRow,
+  type SyncPageTransport,
   type SyncUnknownAttemptStreak,
   type SyncWorkRow,
   type UpsertDemandInput,
@@ -284,6 +285,10 @@ export interface CommitDeps {
   /** The box of the works' secret parameters (the host's; absent where a
    *  test reads and writes none). */
   secrets?: SecretBox;
+  /** The page's transport this owner's sender is (Project Browser, 0277; the
+   *  host's actors carry their slot's): an admission commits only while the
+   *  page's transport is still it. Absent: not checked. */
+  pageTransport?: SyncPageTransport;
   faults?: SyncFaultHook;
 }
 
@@ -532,7 +537,13 @@ export async function admit(
   const spec = d.registry.spec(picked.work.resource);
   if (spec === null) throw new Error(`No registry entry for ${picked.work.resource}`);
   return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update", live: true });
+    await lockOwnedPage(tx, {
+      pageId: d.pageId,
+      generation: d.generation,
+      lock: "no_key_update",
+      live: true,
+      ...(d.pageTransport === undefined ? {} : { transport: d.pageTransport }),
+    });
     // The final word of the page holds, under the row lock (ruling 5): the
     // gate and the pick judged a snapshot; a hold written since refuses
     // here, before anything is counted. The work stays open.

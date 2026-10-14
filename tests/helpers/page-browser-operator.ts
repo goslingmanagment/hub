@@ -10,13 +10,18 @@ import {
   type Ack,
   type BufferEvent,
   type CheckResult,
+  type Command,
   type EventsRefused,
   type EventsSubscribe,
   type Hello,
   type Result,
   type Send,
+  type SiteAdmit,
+  type SiteAdmitResult,
   type SiteDone,
   type State,
+  type WsAdmit,
+  type WsAdmitResult,
   type WsDone,
 } from "../../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer } from "../../apps/page-browser/src/rpc/server.ts";
@@ -41,6 +46,13 @@ import type { PageBrowserLinkSettings } from "../../apps/runtime/src/services/eg
 // the way (`dropAcks`). A site response's body goes as binary frames before
 // the batch that names it. The ends of the site path (`siteDone`,
 // `wsDone`) are kept like results (`holdEnd`).
+//
+// The site path (PR 14): a test asks the engine for a site request
+// (`siteAdmit`) or a site socket (`wsAdmit`), reads its answers
+// (`siteAnswers`, `wsAnswers`) and reports its end (`siteDone`, `wsDone`,
+// kept until `resultAck`). The engine's commands are recorded (`commands`);
+// `stopPage` stops the page (the state says so). `quiesced` can be held back
+// (`holdQuiesce`) and can name a last send (`lastSendMono`).
 
 /** An event as a test appends it: the buffer numbers and stamps it. */
 export type AppendedEvent = BufferEvent extends infer E ? (E extends unknown ? Omit<E, "seq" | "atMono" | "atWall"> : never) : never;
@@ -208,6 +220,44 @@ export class FakeOperator {
   /** The session a result reports (null: the one its send named) — another
    *  session's answer. */
   resultSession: string | null = null;
+  /** The engine's answers to the site path (PR 14). */
+  readonly siteAnswers: SiteAdmitResult[] = [];
+  readonly wsAnswers: WsAdmitResult[] = [];
+  /** The engine's commands, in order. */
+  readonly commands: Command[] = [];
+  /** `quiesced` waits for this (null: at once). */
+  holdQuiesce: Promise<void> | null = null;
+  /** The last send `quiesced` names (null: the last physical one, if any). */
+  lastSendMono: number | null = null;
+  #statePushes: ReturnType<typeof setInterval> | null = null;
+  /** After a stopPage: what the operator had written but not yet committed
+   *  when it said its state (its buffer's batch), `afterMs` later. Until
+   *  then its state counts it as pending. */
+  lateAfterStop: { afterMs: number; run: () => void } | null = null;
+  /** Written and not yet committed (`state.buffer.open.pending`). */
+  pending = 0;
+  /** The bodies of the outcomes kept cannot be read now (a failing disk):
+   *  such an outcome is kept, not delivered, and a recover says `unknown`
+   *  of it — until they read again and it is asked for (buffer/replay.ts). */
+  bodiesUnreadable = false;
+  /** A slow delivery of the outcomes kept (on a new connection, on a
+   *  recover): this long before each part of a body. With it (or a stall),
+   *  deliveries run one at a time and a recover is answered after the ones
+   *  ahead of it, as buffer/replay.ts does; a delivery ends with its link. */
+  bodyPartDelayMs = 0;
+  /** A delivery that stalls: after this many parts of a body nothing more
+   *  goes until it is cleared (or the link goes). */
+  stallAfterParts: number | null = null;
+  /** Every body part of an outcome the operator sent, on any delivery path,
+   *  and on which link. */
+  readonly partsSent: Array<{ bodyId: string; part: number; link: number }> = [];
+  #link = 0;
+  #jobs: Promise<void> = Promise.resolve();
+
+  /** The link now: grows when a connection comes or goes. */
+  get link(): number {
+    return this.#link;
+  }
   /** What `recover` says of an attempt it holds no outcome of. */
   recoverState: (attemptId: number) => "not_sent" | "unknown" = () => "unknown";
   respond: (send: Send) => FakeAnswer;
@@ -243,10 +293,34 @@ export class FakeOperator {
       handlers: {
         onHello: (hello) => {
           this.hellos.push(hello);
-          return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.state };
+          return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.#current() };
         },
-        quiesce: async () => ({ lastSendMono: this.physical.at(-1)?.sentMono ?? null, lastSendWall: null }),
-        onCommand: async () => ({ ok: false, detail: "not in this fake" }),
+        quiesce: async () => {
+          if (this.holdQuiesce !== null) await this.holdQuiesce;
+          return { lastSendMono: this.lastSendMono ?? this.physical.at(-1)?.sentMono ?? null, lastSendWall: null };
+        },
+        onCommand: async (command) => {
+          this.commands.push(command);
+          if (command.command.kind !== "stopPage") return { ok: false, detail: "not in this fake" };
+          if (this.lateAfterStop !== null) {
+            const late = this.lateAfterStop;
+            this.pending += 1;
+            setTimeout(() => {
+              late.run();
+              this.pending -= 1;
+            }, late.afterMs).unref?.();
+          }
+          // As the real operator: a stop replaces whatever the page stood for
+          // (a buffer that cannot be opened too).
+          this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
+          return { ok: true, detail: "the page is stopped" };
+        },
+        onSite: (message) => {
+          this.siteAnswers.push(message);
+        },
+        onSocket: (message) => {
+          this.wsAnswers.push(message);
+        },
         onBuffer: (message) => {
           if (message.type === "events.subscribe") {
             this.subscriptions.push(message);
@@ -274,12 +348,12 @@ export class FakeOperator {
           else void this.#onCheckResult(message);
         },
         onLink: (up) => {
+          this.#link += 1;
           this.links.push(up);
           this.stream.reset();
           if (up) {
             this.pushState();
-            for (const [, kept] of this.held) this.#deliver(kept.result, kept.body);
-            for (const [, end] of this.heldEnds) this.server.send(end);
+            this.#deliverKept();
           } else {
             // No check is answered any more (hub.ts linkLost).
             for (const [attemptId, waiting] of [...this.#waiting]) {
@@ -362,6 +436,81 @@ export class FakeOperator {
     this.heldEnds.set(end.attemptId, end);
   }
 
+  /** A request of the site, held paused, asks the engine (`siteAdmit`). */
+  siteAdmit(input: Partial<Omit<SiteAdmit, "type">> & { path: string }): SiteAdmit {
+    const now = monoMs();
+    const message: SiteAdmit = {
+      type: "siteAdmit",
+      siteRequestId: input.siteRequestId ?? randomUUID(),
+      method: input.method ?? "GET",
+      host: input.host ?? "apiv3.fansly.com",
+      path: input.path,
+      query: input.query ?? "",
+      resourceType: input.resourceType ?? "XHR",
+      route: input.route ?? "site.other",
+      operation: input.operation ?? "read",
+      sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
+      pausedMono: input.pausedMono ?? now,
+      waitDeadlineMono: input.waitDeadlineMono ?? now + 60_000,
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** The site socket's CONNECT asks the engine (`wsAdmit`). */
+  wsAdmit(input: Partial<Omit<WsAdmit, "type">> = {}): WsAdmit {
+    const now = monoMs();
+    const message: WsAdmit = {
+      type: "wsAdmit",
+      connectionId: input.connectionId ?? randomUUID(),
+      url: input.url ?? "wss://wsv3.fansly.com/?v=3",
+      context: input.context ?? "page",
+      sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
+      requestedMono: input.requestedMono ?? now,
+      waitDeadlineMono: input.waitDeadlineMono ?? now + 60_000,
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** The end of an admitted site request, kept until its resultAck. */
+  siteDone(answer: SiteAdmitResult & { admit: true }, end: Partial<Omit<SiteDone, "type" | "siteRequestId" | "attemptId">> = {}): SiteDone {
+    const sentMono = end.sentMono === undefined ? monoMs() : end.sentMono;
+    const done: SiteDone = {
+      type: "siteDone",
+      siteRequestId: answer.siteRequestId,
+      attemptId: answer.attemptId,
+      sent: end.sent ?? true,
+      sentMono,
+      sentWall: end.sentWall ?? Date.now(),
+      connectionReused: end.connectionReused ?? false,
+      status: end.status === undefined ? 200 : end.status,
+      retryAfter: end.retryAfter ?? null,
+      error: end.error ?? null,
+      body: end.body ?? "buffered",
+    };
+    this.holdEnd(done);
+    this.server.send(done);
+    return done;
+  }
+
+  /** The end of an admitted site socket's handshake, kept until its resultAck. */
+  wsDone(answer: WsAdmitResult & { admit: true }, end: Partial<Omit<WsDone, "type" | "connectionId" | "attemptId">> = {}): WsDone {
+    const done: WsDone = {
+      type: "wsDone",
+      connectionId: answer.connectionId,
+      attemptId: answer.attemptId,
+      sent: end.sent ?? true,
+      sentMono: end.sentMono === undefined ? monoMs() : end.sentMono,
+      status: end.status === undefined ? 101 : end.status,
+      error: end.error ?? null,
+      ...(end.fate === undefined ? {} : { fate: end.fate }),
+    };
+    this.holdEnd(done);
+    this.server.send(done);
+    return done;
+  }
+
   static async start(options: FakeOperatorOptions = {}): Promise<FakeOperator> {
     const operator = new FakeOperator(options);
     operator.port = await operator.server.listen(0, "127.0.0.1");
@@ -381,10 +530,91 @@ export class FakeOperator {
 
   pushState(patch: Partial<State> = {}): void {
     this.state = { ...this.state, ...patch };
-    this.server.send(this.state);
+    this.server.send(this.#current());
+  }
+
+  /** The state as the operator says it: its buffer counts what it keeps —
+   *  outcomes until their resultAck, events until their ack — as the real
+   *  buffer's bytes do (nothing kept: 0), and `open` says what the open
+   *  buffer holds. A buffer that cannot be opened counts nothing: 0 bytes,
+   *  `open: null`. */
+  #current(): State {
+    if (this.buffer.unavailable !== null) return { ...this.state, buffer: { bytes: 0, oldestAgeMs: 0, open: null } };
+    const outcomes = this.held.size + this.heldEnds.size;
+    const kept = outcomes + this.buffer.kept.length;
+    return {
+      ...this.state,
+      buffer: { bytes: kept * 100, oldestAgeMs: kept === 0 ? 0 : 1, open: { id: this.buffer.id, lastSeq: this.buffer.lastSeq, outcomes, pending: this.pending } },
+    };
+  }
+
+  /** The buffer cannot be opened (`cause`), or opens again (null). While it
+   *  cannot, nothing of it is read: a recover answers `unknown`, a new
+   *  connection gets no outcome, a subscription is refused. Once it opens,
+   *  every outcome it keeps goes to the engine (as on a new connection). */
+  setBufferUnavailable(cause: string | null): void {
+    const was = this.buffer.unavailable;
+    this.buffer.unavailable = cause === null ? null : { cause };
+    this.pushState();
+    if (was !== null && cause === null) this.#deliverKept();
+  }
+
+  get #slow(): boolean {
+    return this.bodyPartDelayMs > 0 || this.stallAfterParts !== null;
+  }
+
+  /** A delivery of this link, after the ones ahead of it. */
+  #enqueue(job: (link: number) => Promise<void>): void {
+    const link = this.#link;
+    this.#jobs = this.#jobs.then(() => (this.#link === link ? job(link) : undefined)).catch(() => undefined);
+  }
+
+  /** One outcome, its body's parts slowly (or stalled); false: the link went. */
+  async #deliverSlowly(result: Result, body: Buffer | null, link: number): Promise<boolean> {
+    if (body !== null && result.outcome.kind === "response") {
+      const bodyId = result.outcome.body.bodyId;
+      const parts = Math.max(1, Math.ceil(body.length / BODY_PART_BYTES));
+      for (let part = 0; part < parts; part++) {
+        while (this.stallAfterParts !== null && part >= this.stallAfterParts && this.#link === link) await sleep(50);
+        if (this.bodyPartDelayMs > 0) await sleep(this.bodyPartDelayMs);
+        if (this.#link !== link) return false;
+        this.partsSent.push({ bodyId, part, link });
+        this.server.sendBinary(encodeBodyFrame(bodyId, part, part === parts - 1, body.subarray(part * BODY_PART_BYTES, (part + 1) * BODY_PART_BYTES)));
+      }
+    }
+    if (this.#link !== link) return false;
+    this.server.send(result);
+    return true;
+  }
+
+  /** Every outcome kept, to the engine: those that can be read. */
+  #deliverKept(): void {
+    if (this.buffer.unavailable !== null) return;
+    if (this.#slow) {
+      this.#enqueue(async (link) => {
+        for (const [, kept] of [...this.held]) {
+          if (kept.body !== null && this.bodiesUnreadable) continue;
+          if (!(await this.#deliverSlowly(kept.result, kept.body, link))) return;
+        }
+        for (const [, end] of this.heldEnds) this.server.send(end);
+      });
+      return;
+    }
+    for (const [, kept] of this.held) {
+      if (kept.body === null || !this.bodiesUnreadable) this.#deliver(kept.result, kept.body);
+    }
+    for (const [, end] of this.heldEnds) this.server.send(end);
+  }
+
+  /** The state every `everyMs`, as the real operator sends it every 5 s. */
+  startStatePushes(everyMs: number): void {
+    this.#statePushes ??= setInterval(() => this.server.send(this.#current()), everyMs);
+    this.#statePushes.unref?.();
   }
 
   async close(): Promise<void> {
+    if (this.#statePushes !== null) clearInterval(this.#statePushes);
+    this.#statePushes = null;
     await this.server.close();
   }
 
@@ -440,15 +670,40 @@ export class FakeOperator {
   }
 
   #deliver(result: Result, body: Buffer | null): void {
-    if (body !== null && result.outcome.kind === "response") sendBody(this.server, result.outcome.body.bodyId, body);
+    if (body !== null && result.outcome.kind === "response") {
+      const bodyId = result.outcome.body.bodyId;
+      const parts = Math.max(1, Math.ceil(body.length / BODY_PART_BYTES));
+      for (let part = 0; part < parts; part++) this.partsSent.push({ bodyId, part, link: this.#link });
+      sendBody(this.server, bodyId, body);
+    }
     this.server.send(result);
   }
 
   async #recover(attemptIds: number[]): Promise<void> {
+    if (this.#slow) {
+      this.#enqueue(async (link) => {
+        const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
+        for (const attemptId of attemptIds) {
+          const stored = this.buffer.unavailable === null ? this.held.get(attemptId) : undefined;
+          if (stored !== undefined && !(stored.body !== null && this.bodiesUnreadable)) {
+            if (!(await this.#deliverSlowly(stored.result, stored.body, link))) return;
+            attempts.push({ attemptId, state: "outcome_resent" });
+          } else {
+            attempts.push({ attemptId, state: this.recoverState(attemptId) });
+          }
+        }
+        if (this.#link === link) this.server.send({ type: "recoverResult", attempts });
+      });
+      return;
+    }
     const attempts: Array<{ attemptId: number; state: "outcome_resent" | "not_sent" | "unknown" }> = [];
     for (const attemptId of attemptIds) {
-      const kept = this.held.get(attemptId);
-      const end = this.heldEnds.get(attemptId);
+      // Nothing of a buffer that cannot be opened is read; an outcome whose
+      // body cannot be read stays for the next delivery (buffer/replay.ts).
+      const readable = this.buffer.unavailable === null;
+      const stored = readable ? this.held.get(attemptId) : undefined;
+      const kept = stored !== undefined && stored.body !== null && this.bodiesUnreadable ? undefined : stored;
+      const end = readable ? this.heldEnds.get(attemptId) : undefined;
       if (kept !== undefined) {
         this.#deliver(kept.result, kept.body);
         attempts.push({ attemptId, state: "outcome_resent" });

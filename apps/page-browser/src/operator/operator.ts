@@ -1476,9 +1476,17 @@ export class Operator {
     void this.#launch(false, `the buffer has room again (${reason})`);
   }
 
+  /** `open`: what the buffer holds, said only while its file is open — a
+   *  buffer that cannot be opened counts nothing, and its zero is no word
+   *  that it is empty (the engine takes a buffer for drained by `open`
+   *  alone). */
   #bufferState(): State["buffer"] {
     const stats = this.buffer.stats();
-    return { bytes: stats.bytes, oldestAgeMs: stats.oldestAgeMs };
+    return {
+      bytes: stats.bytes,
+      oldestAgeMs: stats.oldestAgeMs,
+      open: this.buffer.isOpen ? { id: this.buffer.id, lastSeq: stats.lastSeq, outcomes: stats.outcomes, pending: stats.pending } : null,
+    };
   }
 
   #alarm(kind: AlarmKind, detail: Record<string, string | number | boolean>): void {

@@ -189,6 +189,45 @@ A poll takes `--period-ms`; `catalog.vault` takes `--period-ms` and `--full-peri
 registry. The economical keys of owner decision №6 (`catalog.fixed`, `catalog.vault`, `media-stats.walk`) refuse a
 change without `--owner-approved`: their frequency is the owner's alone.
 
+## A page's transport: Node or its browser (Project Browser)
+
+Every page sends through Node (undici from `sync`) until the owner switches it. The lever, audited
+(`admin.sync_page_transport`):
+
+```sh
+pnpm cli sync page transport lilly-1 browser --note 'pilot'
+pnpm cli sync page transport lilly-1 node
+pnpm cli sync page transport lilly-1 node --prepare
+```
+
+The second goes back to Node with the page's stored session; the third goes back without one, and the owner's
+session follows (below).
+
+- The host follows within 2 s: the request in flight finishes, the page is taken again with the other sender, and its
+  first request goes ≥ 1.2 × S after the last one of the old sender. That first request is the identity check of the
+  new sender's session; nothing else goes before it passes.
+- `browser` is refused until the page's browser is ready: a profile bound to the page, its pinned exit IP and its
+  environment. A page left on `browser` whose browser is not ready waits (`browser_not_ready`) and sends nothing.
+- `node` is refused for a page with no stored Node session (one connected through its browser): use `--prepare`. The
+  page then waits under a credentials hold (`auth`, `transport_prepare`, alert 1) that lets through only the check of
+  a new session: send the session of your own browser through the credentials change (Settings → the page's
+  connection). Only a session of the page's own account is stored, and the page starts working on Node after the
+  engine verified it.
+- Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
+  after the browser confirmed it stopped, with no socket open and everything it kept taken. A browser whose buffer
+  cannot be opened, or whose kept answers do not read, holds the leave until they can be taken. Until then the page waits
+  (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser does not start it again.
+- The browser cannot confirm (its container is down or does not answer): take it off for good with
+  `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
+  gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and
+  the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained.
+- A rollback of the Hub to an image from before the page transport (one without the label
+  `agency-hub.sync-page-transport`) is refused by the deploy while a page is on its browser or leaving it: move such
+  pages to Node first.
+- A deploy's `sync ownership confirm-stopped` waits, for a page on its browser, until the browser confirms the new
+  owner took over (`browser_page … quiesced true`); `false` after a minute means the new owner still sends nothing
+  through it — look at the page's browser.
+
 ## Holds, breakers and quarantine
 
 `sync page status` shows a page hold under `holds.page`, a file's breaker under `holds.resources`, and a route's

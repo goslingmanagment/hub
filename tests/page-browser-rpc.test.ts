@@ -36,7 +36,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setUp(options: { storePath?: string; execute?: (command: Command) => Promise<CommandOutcome> } = {}) {
+async function setUp(options: { storePath?: string; execute?: (command: Command) => Promise<CommandOutcome>; quiesceGate?: Promise<void> } = {}) {
   const hellos: Hello[] = [];
   const links: Array<[boolean, string]> = [];
   const executed: Command[] = [];
@@ -59,6 +59,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
       },
       quiesce: async (previous) => {
         quiesced.push(previous);
+        if (options.quiesceGate !== undefined) await options.quiesceGate;
         return { lastSendMono: null, lastSendWall: null };
       },
       onCommand: async (command) => {
@@ -191,18 +192,53 @@ describe("the owner generation", () => {
     expect(executed).toEqual([]);
   });
 
-  it("lets the same owner reconnect without a quiesced", async () => {
+  it("tells the same owner's every connection its hand-over again, without ending anything twice", async () => {
     const { engine, quiesced } = await setUp();
     const first = await engine(3);
     first.send(hello({ ownerGeneration: 3 }));
     await first.waitFor("helloResult");
+    expect(await first.waitFor("quiesced")).toEqual({ type: "quiesced", previousGeneration: 0, lastSendMono: null, lastSendWall: null });
     const again = await engine(3);
     again.send(hello({ ownerGeneration: 3 }));
     await again.waitFor("helloResult");
     await until(() => first.closed !== null);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await again.waitFor("quiesced")).toEqual({ type: "quiesced", previousGeneration: 0, lastSendMono: null, lastSendWall: null });
     expect(quiesced).toEqual([0]);
-    expect(again.of("quiesced")).toEqual([]);
+  });
+
+  it("a connection that goes before its quiesced loses nothing: the owner's next connection gets it (Astra PR 14, P1)", async () => {
+    let release!: () => void;
+    const { engine, quiesced } = await setUp({ quiesceGate: new Promise<void>((resolve) => (release = resolve)) });
+    const first = await engine(4);
+    first.send(hello({ ownerGeneration: 4 }));
+    await first.waitFor("helloResult");
+    // The link goes while the previous owner's work is still ending.
+    first.close();
+    await until(() => first.closed !== null);
+    const again = await engine(4);
+    again.send(hello({ ownerGeneration: 4 }));
+    await again.waitFor("helloResult", (message) => message.ok === true);
+    release();
+    expect(await again.waitFor("quiesced")).toEqual({ type: "quiesced", previousGeneration: 0, lastSendMono: null, lastSendWall: null });
+    expect(quiesced).toEqual([0]);
+  });
+
+  it("an operator that started again ends what came before for the generation it remembers, and says so", async () => {
+    const temp = tempDir();
+    cleanups.push(temp.remove);
+    const storePath = join(temp.dir, "owner-generation");
+    const before = await setUp({ storePath });
+    const first = await before.engine(5);
+    first.send(hello({ ownerGeneration: 5 }));
+    await first.waitFor("quiesced");
+    await before.server.close();
+    // The same store, a new process: no hand-over known for generation 5.
+    const after = await setUp({ storePath });
+    const back = await after.engine(5);
+    back.send(hello({ ownerGeneration: 5 }));
+    await back.waitFor("helloResult", (message) => message.ok === true);
+    expect(await back.waitFor("quiesced")).toEqual({ type: "quiesced", previousGeneration: 5, lastSendMono: null, lastSendWall: null });
+    expect(after.quiesced).toEqual([5]);
   });
 
   it("refuses a command of a lower generation and closes on a higher one without hello", async () => {

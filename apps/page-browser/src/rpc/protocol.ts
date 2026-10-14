@@ -21,6 +21,12 @@
 //   ("" if none is known), and the engine subscribes again once `state` no
 //   longer says `buffer_unavailable`.
 //
+// - PR 14: `state.buffer.open` — what the open buffer holds (its id, its last
+//   event number, the outcomes it keeps, what is not committed yet), `null`
+//   while it cannot be opened. `bytes` alone never said which: a buffer that
+//   cannot be opened counts 0 bytes, and a `stopPage` replaces the stop reason
+//   `buffer_unavailable`. An engine takes a buffer for empty only by `open`.
+//
 // - PR 9: `result.outcome.preflight` (response only, optional): the answer
 //   is the CORS preflight's — the request itself never left (a 429 to the
 //   preflight is a 429 of its operation, owner decision №1). The stop
@@ -74,8 +80,8 @@
 // Hub request's (PR 9): `send`, `checkResult`, the site socket's (PR 10):
 // `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
 // `onSite` — `siteAdmitResult` (the engine answers a `siteAdmit` with it,
-// PR 14; this operator asks none before PR 7, and drops an answer it never
-// asked for). The other kinds of command are refused as not supported yet.
+// PR 14; the site path, PR 7, asks them, and an answer it never asked for
+// is dropped). The other kinds of command are refused as not supported yet.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
@@ -202,7 +208,14 @@ export interface State {
   exitIp: string | null;
   chromeVersion: string;
   operatorVersion: string;
-  buffer: { bytes: number; oldestAgeMs: number };
+  /** `open` (an addition, PR 14): what the buffer holds, said only while it
+   *  is open — its id, the last event number it gave, the outcomes kept for
+   *  their resultAck, and what is written and not yet committed (a batch).
+   *  `null`: the buffer cannot be opened — nothing of it is known, and the
+   *  zero of `bytes` says nothing. Absent: an operator from before the
+   *  addition — unknown. Only `open` with nothing kept is the word that the
+   *  buffer is empty. */
+  buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
   /** `notInstalled` (an addition to spec §6.1): mechanisms the image does
    *  not have yet — reported, never counted as passed. */
   selfTest: { ok: boolean; atWall: WallMs; failed: SelfTestMechanism | null; notInstalled?: SelfTestMechanism[] } | null;

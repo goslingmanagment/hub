@@ -106,15 +106,28 @@ export async function reconcileHeldOutcomes(
   held: HeldOutcomeSource,
   waitMs: number = HELD_RECOVER_WAIT_MS,
 ): Promise<HeldTaken[]> {
+  return (await reconcileHeldOutcomesOf(d, held, waitMs)).taken;
+}
+
+/** `reconcileHeldOutcomes`, saying whether the sender was asked at all
+ *  (`reached`: nothing to ask, or an answer came) and about how many
+ *  attempts (`asked`) — a page leaving its browser hands it to Node only once
+ *  it was, and asks again while the browser still keeps outcomes (Project
+ *  Browser PR 14). */
+export async function reconcileHeldOutcomesOf(
+  d: CommitDeps,
+  held: HeldOutcomeSource,
+  waitMs: number = HELD_RECOVER_WAIT_MS,
+): Promise<{ taken: HeldTaken[]; reached: boolean; asked: number }> {
   const unfinished = await listUnfinishedAttempts(d.db, { pageId: d.pageId, phase: "any", limit: 10_000 });
   const asked = unfinished.filter((attempt) => isUnfinished(attempt) || awaitsInMemoryApply(attempt));
-  if (asked.length === 0) return [];
+  if (asked.length === 0) return { taken: [], reached: true, asked: 0 };
   const answers = await held.recover(asked.map((attempt) => attempt.id), waitMs);
   if (answers === null) {
     d.metrics.increment("sync_held_recover_unreachable", { pageId: d.pageId });
     d.logger.warn({ pageId: d.pageId, attempts: asked.length },
       "Fansly sync: the page's browser could not be asked about its unfinished attempts; they are unknown");
-    return [];
+    return { taken: [], reached: false, asked: asked.length };
   }
   const taken: HeldTaken[] = [];
   for (const attempt of asked) {
@@ -128,7 +141,7 @@ export async function reconcileHeldOutcomes(
     d.logger.info({ pageId: d.pageId, taken: taken.map((one) => `${one.attemptId}:${one.how}`) },
       "Fansly sync: the unfinished attempts were settled by what the page's browser kept");
   }
-  return taken;
+  return { taken, reached: true, asked: asked.length };
 }
 
 /** Between steps: the outcomes the sender delivered that nothing waited for
