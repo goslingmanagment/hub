@@ -95,6 +95,16 @@ export async function beginBrowserWsConnection(db: Database, input: {
   });
 }
 
+/** The end of the page's latest socket connection, of any origin — closed,
+ * or its last proof of life — as `beginBrowserWsConnection` takes the
+ * previous row's; null: the page has none. */
+export async function lastFanslyWsConnectionEnd(db: Database, pageId: number): Promise<Date | null> {
+  const result = await db.execute<{ at: Date | string | null }>(sql`select coalesce(c.closed_at, c.last_guard_at) as at
+    from fansly_ws_connections c where c.page_id=${pageId} order by c.started_at desc limit 1`);
+  const at = result.rows[0]?.at ?? null;
+  return at === null ? null : at instanceof Date ? at : new Date(at);
+}
+
 /** How one frame of a site socket was taken (`captureBrowserWsFrame`). */
 export type BrowserWsFrameCapture =
   | { kind: "captured"; observationId: number; receivedAt: Date; inserted: boolean }

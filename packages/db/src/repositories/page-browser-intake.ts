@@ -18,10 +18,17 @@ export interface PageBrowserIntake {
   bufferId: string | null;
   /** The last number of `bufferId` whose event is committed. */
   ackedSeq: number;
-  /** The operator's instant of the last event committed, of any buffer. */
+  /** The loss boundary (`events_last_wall`): the latest instant of a socket
+   *  open or frame committed (`ws.open`, `ws.in`), of any buffer — where a
+   *  loss whose start nothing names reads back from. A site's answer, a gap
+   *  and a close are stamped at the operator's take and never move it
+   *  (`browser-intake.ts`). */
   lastWall: Date | null;
   /** A gap marked and not yet taken by a connection of the site's socket. */
   gapSince: Date | null;
+  /** When the profile's row was made (never changed): before any socket its
+   *  browser could open — the loss boundary of last resort. */
+  createdAt: Date;
   /** A buffer nothing is taken of (its history contradicts the engine's),
    *  and why; null: none. */
   halted: { bufferId: string; reason: string; at: Date } | null;
@@ -33,6 +40,7 @@ type IntakeSqlRow = {
   ackedSeq: string;
   lastWall: Date | string | null;
   gapSince: Date | string | null;
+  createdAt: Date | string;
   haltedBufferId: string | null;
   haltedReason: string | null;
   haltedAt: Date | string | null;
@@ -49,6 +57,7 @@ function intakeOf(row: IntakeSqlRow): PageBrowserIntake {
     ackedSeq: Number(row.ackedSeq),
     lastWall: dateOf(row.lastWall),
     gapSince: dateOf(row.gapSince),
+    createdAt: dateOf(row.createdAt) ?? new Date(0),
     halted: row.haltedBufferId === null || row.haltedReason === null
       ? null
       : { bufferId: row.haltedBufferId, reason: row.haltedReason, at: dateOf(row.haltedAt) ?? new Date(0) },
@@ -61,6 +70,7 @@ const columns = sql`
   b.events_acked_seq::text as "ackedSeq",
   b.events_last_wall as "lastWall",
   b.events_gap_since as "gapSince",
+  b.created_at as "createdAt",
   b.events_halted_buffer_id::text as "haltedBufferId",
   b.events_halted_reason as "haltedReason",
   b.events_halted_at as "haltedAt"

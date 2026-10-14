@@ -7,6 +7,7 @@ import {
   getSyncPage,
   haltPageBrowserIntake,
   insertObservation,
+  lastFanslyWsConnectionEnd,
   lockOwnedPage,
   lockPageBrowserIntake,
   markBrowserWsLoss,
@@ -55,11 +56,11 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   asked for again; a subscription whose FIRST batch already starts past
 //   the event expected names events the operator no longer has (a position
 //   older than its acknowledgements: a database restored from before) — they
-//   are a loss since the last event committed, taken as a gap, and the
+//   are a loss since the loss boundary (below), taken as a gap, and the
 //   stream goes on from what there is.
 // - `events.refused`: another buffer (the volume was made anew) — the intake
 //   starts over with the operator's buffer from its first event, and the
-//   old buffer's untaken tail is a loss since the last event committed; a
+//   old buffer's untaken tail is a loss since the loss boundary; a
 //   buffer that cannot be opened — again once the operator's state says it
 //   opened; a subscription ahead of the buffer (a file restored from before)
 //   — that buffer is halted for good (`page_browsers.events_halted_*`, alert
@@ -71,6 +72,28 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   position.
 // - Every batch commits under the page's owner generation (`lockOwnedPage`):
 //   an intake of an earlier owner commits nothing and stops.
+//
+// The loss boundary (`page_browsers.events_last_wall`): where a loss whose
+// start nothing names reads back from — the latest instant of a `ws.open` or
+// a `ws.in` the engine committed, of any buffer. Only those bound a socket
+// message missed after them: the operator stamps them by Chrome's own time of
+// the event (`cdp/chrome-clock.ts`: never later than Chrome saw it), and CDP
+// tells a session's socket events in their order, so whatever came after the
+// last one taken is no older than it. Nothing else moves the boundary: a
+// `site.response` or a `gap` is stamped when the operator took it, and a
+// frame CDP tells late can follow either in the stream with an older stamp —
+// a boundary at the take would start the repair late by that delay, outside
+// its 60 s margin once the delay is longer (`repositories/sync/ws-gap.ts`);
+// a `ws.close` the operator writes itself (its browser gone, its start) is
+// stamped at its take too, while what CDP still had of that socket is
+// dropped — a close moves no boundary later, as on the operator's side
+// (`ws/sockets.ts`). Before any is taken, what still bounds a loss is the
+// previous connection's end (as for the engine's own socket) — and, the page
+// with none, when its browser profile was made (`page_browsers.created_at`,
+// never changed: before any socket that browser could open). Never the next
+// connection's own opening: a first connection whose open and frames were
+// all lost (a late first 101 after its tunnel ended — the operator drops its
+// frames and marks a gap it cannot name) would be left out of the repair.
 //
 // What each event is:
 // - `ws.open`/`ws.close`: the site socket's connection rows
@@ -95,15 +118,18 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   §4.4, step 6). The engine's own machinery backfills a socket's gap: the
 //   next connection's `gap_since` (0196) is where its `repair.ws-gap` reads
 //   back from. So the gap lowers the next connection's `gap_since` to its
-//   boundary (kept in `events_gap_since` until a connection takes it); a
-//   boundary the operator cannot name (`fromSeq`/`fromWall` null: nothing
-//   before it in its buffer) is the last event the engine committed of any
-//   buffer (`events_last_wall`) — and with none, the previous connection's
-//   end, as for the engine's own socket. Every reason is taken alike
-//   (`ws_reconnect`, `operator_start`, `chrome_restart`, `buffer_full`,
-//   `disk_full`). A loss the intake finds itself — events the operator no
-//   longer has, a new buffer's predecessor's untaken tail — also opens the
-//   gap of the connection still open (it may never close in the stream):
+//   boundary (kept in `events_gap_since` until a connection takes it), never
+//   later than the loss boundary then (with none taken yet, what still
+//   bounds a loss, above): the operator names its start's and a full
+//   buffer's from the last event it saved, of any kind — a site's answer at
+//   its take, while a frame CDP was still telling may be older; a boundary
+//   the operator cannot name (`fromSeq`/`fromWall` null: nothing before it
+//   in its buffer) is the loss boundary itself. Every reason
+//   is taken alike (`ws_reconnect`, `operator_start`, `chrome_restart`,
+//   `buffer_full`, `disk_full`). A loss the intake finds itself — events the
+//   operator no longer has, a new buffer's predecessor's untaken tail — also
+//   opens the gap of the connection still open from the loss boundary, or
+//   what bounds it with none taken yet (it may never close in the stream):
 //   verified, its repair is asked for at once.
 // - `site.response`: the site's answer, journaled in `observations`
 //   (`browser_site`) by `browser-site-capture.ts`; a body the operator could
@@ -197,7 +223,7 @@ interface Subscription {
    *  expected (events the operator no longer has — a gap). */
   first: boolean;
   /** The buffer the position named before this one (a volume made anew):
-   *  its untaken tail is a loss since the last event committed. */
+   *  its untaken tail is a loss since the loss boundary. */
   switchedFrom: string | null;
 }
 
@@ -222,6 +248,14 @@ function maxDate(a: Date | null, b: Date | null): Date | null {
 /** An event's instant as the database may take it (never in the future). */
 function wallOf(event: BufferEvent, now: Date): Date {
   return new Date(Math.min(event.atWall, now.getTime()));
+}
+
+/** Does the event's instant bound a socket message missed after it (the
+ *  loss boundary, above)? Only a socket's open and its frames: stamped by
+ *  Chrome's own time of them, and told in their order. A close may be the
+ *  operator's own, stamped at its take; a site's answer and a gap are. */
+function boundsSocketLoss(event: BufferEvent): boolean {
+  return event.kind === "ws.open" || event.kind === "ws.in";
 }
 
 export class BrowserBufferIntake {
@@ -557,7 +591,7 @@ export class BrowserBufferIntake {
 
   /** One batch in one transaction, then its ack. False: nothing committed
    *  (subscribed again later). `missing`: events before the batch's first
-   *  are gone at the operator — a loss since the last event committed. */
+   *  are gone at the operator — a loss since the loss boundary. */
   async #commit(sub: Subscription, events: readonly BufferEvent[], delivered: DeliveredEvents, missing: boolean): Promise<boolean> {
     const d = this.#d;
     const { pageId, metrics, logger } = d;
@@ -591,21 +625,26 @@ export class BrowserBufferIntake {
         // The position under its row lock is the authority: what it has is
         // not taken twice.
         const storedSeq = stored.bufferId === sub.bufferId ? stored.ackedSeq : 0;
-        let lastWall = stored.lastWall;
+        /** The loss boundary: the latest socket open or frame taken. */
+        let lossBoundary = stored.lastWall;
+        /** A loss whose start nothing names starts no later than this: the
+         *  loss boundary — with none taken yet, the previous connection's
+         *  end, else when the browser profile was made. */
+        const lossSince = async (): Promise<Date> => lossBoundary ?? (await lastFanslyWsConnectionEnd(tx, pageId)) ?? stored.createdAt;
         let gapSince = stored.gapSince;
         const signals: DemandSignal[] = [];
         // The session the engine trusts: frames of another are kept, not applied.
         const trustedGeneration = (await getSyncPage(tx, pageId))?.credentialsGeneration ?? null;
         if ((sub.switchedFrom !== null && stored.bufferId === sub.switchedFrom) || (missing && events[0]!.seq > storedSeq + 1)) {
           // The old buffer's untaken tail, or events the operator no longer
-          // has: lost since the last event taken. The next connection's gap
-          // starts there; the connection still open (its close may be among
-          // them) has its gap open again — verified, repaired now.
-          gapSince = minDate(gapSince, lastWall);
-          if (lastWall !== null) {
-            const open = await markBrowserWsLoss(tx, { pageId, browserConnectionId: null, since: lastWall });
-            if (open?.verified === true) signals.push({ resource: "repair.ws-gap", demand: { reason: "browser_events_lost" } });
-          }
+          // has: lost since the last socket event taken (with none, what
+          // bounds a loss then). The next connection's gap starts there; the
+          // connection still open (its close may be among them) has its gap
+          // open again — verified, repaired now.
+          const since = await lossSince();
+          gapSince = minDate(gapSince, since);
+          const open = await markBrowserWsLoss(tx, { pageId, browserConnectionId: null, since });
+          if (open?.verified === true) signals.push({ resource: "repair.ws-gap", demand: { reason: "browser_events_lost" } });
         }
         /** The latest event of each connection in this batch: its proof of life. */
         const alive = new Map<string, Date>();
@@ -700,10 +739,14 @@ export class BrowserBufferIntake {
             }
             case "gap": {
               batch.gaps += 1;
-              const boundary = event.fromWall === null ? lastWall : new Date(Math.min(event.fromWall, now.getTime()));
+              // The operator's boundary, never later than the last socket
+              // event taken before it (all before it in its buffer are) —
+              // or, with none, than what bounds a loss then.
+              const named = event.fromWall === null ? null : new Date(Math.min(event.fromWall, now.getTime()));
+              const boundary = minDate(named, await lossSince())!;
               gapSince = minDate(gapSince, boundary);
               metrics.increment("sync_browser_gaps", { pageId, reason: event.reason, boundary: event.fromWall === null ? "unknown" : "known" });
-              logger.info({ pageId, reason: event.reason, fromSeq: event.fromSeq, boundary: boundary?.toISOString() ?? null },
+              logger.info({ pageId, reason: event.reason, fromSeq: event.fromSeq, boundary: boundary.toISOString() },
                 "Fansly sync browser intake: the operator marked a gap; the socket's next connection reads it back");
               break;
             }
@@ -744,7 +787,7 @@ export class BrowserBufferIntake {
               break;
             }
           }
-          lastWall = maxDate(lastWall, at);
+          if (boundsSocketLoss(event)) lossBoundary = maxDate(lossBoundary, at);
           uptoSeq = event.seq;
         }
         // All of it committed before (an ack that was lost): acknowledged
@@ -752,7 +795,7 @@ export class BrowserBufferIntake {
         if (uptoSeq === storedSeq) return { uptoSeq: Math.min(storedSeq, events.at(-1)!.seq) };
         for (const [browserConnectionId, at] of alive) await touchBrowserWsConnection(tx, { pageId, browserConnectionId, at });
         if (signals.length > 0) await this.#upsertDemands(tx, signals, now);
-        await writePageBrowserIntake(tx, { profileId: stored.profileId, bufferId: sub.bufferId, ackedSeq: uptoSeq, lastWall, gapSince });
+        await writePageBrowserIntake(tx, { profileId: stored.profileId, bufferId: sub.bufferId, ackedSeq: uptoSeq, lastWall: lossBoundary, gapSince });
         if (d.faults !== undefined) await d.faults("in_batch");
         return { uptoSeq };
       });

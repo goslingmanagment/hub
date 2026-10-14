@@ -1054,9 +1054,20 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   applied; one the journal cannot keep (not JSON, past the traversal's limit) is a loss on its connection. The
   session's confirmation verifies the row and asks for `repair.ws-gap`; the socket's refusal asks for
   `account.verify`. A `gap` of any reason lowers the next connection's `gap_since` (where the repair reads back
-  from) to its boundary — one the operator cannot name is the last event the engine took, of any buffer; a loss the
-  intake finds itself also reopens the connection still open (`loss_since`, read back from the loss's own time),
-  repaired at once when verified, and the repair reads a browser connection's gap back a week
+  from) to its boundary, never later than the loss boundary at it (the operator names its start's and a full
+  buffer's from the last event it saved, of any kind) — one the operator cannot name is the loss boundary
+  (`events_last_wall`): the latest socket open or frame the engine took, of any buffer, stamped by Chrome's own time
+  of it (never later than Chrome saw it; CDP tells them in order), so a message missed after it is no older. A
+  site's answer and a gap are stamped at the operator's take, and a frame CDP tells late can follow them with an
+  older stamp; a close of the operator's own (its browser gone, its start) is stamped at its take while what CDP
+  still had is dropped — none of them moves the boundary (a boundary at the take would start the repair late by the
+  delivery delay, outside its 60 s margin once that is longer). With none taken yet a loss is bounded by the
+  previous connection's end, or, the page with none, by when its browser profile was made
+  (`page_browsers.created_at`, before any socket that browser could open) — never the next connection's opening,
+  which would leave out a first connection lost whole (a late first 101 after its tunnel ended: the operator drops
+  its frames and marks a gap it cannot name). A loss the intake finds itself (events the operator no longer has, a
+  new volume's untaken tail) also reopens the connection still open (`loss_since`, read back from the loss boundary
+  or that bound), repaired at once when verified, and the repair reads a browser connection's gap back a week
   (`SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS`). The site's answers go
   to `observations` (`browser_site`, `fansly-site:<route>`, key `fansly-site:<page>:<buffer id>:<number>`) through
   the codec (`browser-site-capture.ts`), complete; one the operator could not keep whole leaves a mark and — of the
