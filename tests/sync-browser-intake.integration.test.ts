@@ -52,6 +52,8 @@ const PROXY = "socks5://127.0.0.1:1080";
 const TIMING: Partial<PageBrowserRpcTiming> = { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 };
 const INTAKE_TIMING = { retryMs: [50, 100], bodyRetryMs: 50 };
 const POLL_KEY = "browser.polls";
+/** A hang guard for a test of several awaited events (a loaded CI machine). */
+const LONG_TEST_MS = 120_000;
 
 let testDb: StartedTestDatabase | null = null;
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -643,6 +645,40 @@ describe("gaps", () => {
     expect(pass.since!.getTime()).toBe(expected[0]!.boundary - 60_000);
     expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
   }, 60_000);
+
+  // Astra's review of PR 15, round 6: CDP told the last frame (five minutes
+  // old) and the close only now. The operator stamps the frame when Chrome
+  // saw it and starts the gap at it (page-browser-ws.test.ts); here, the
+  // database's side of it: a message missed four minutes ago is inside the
+  // window the repair reads back — where a boundary of "now" (the take)
+  // left it out by 180 s.
+  it("a late-told last frame and close: the gap from the frame as Chrome saw it — a message missed four minutes ago is inside the repair's window", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await r.start();
+    const now = Date.now();
+    const before = randomUUID();
+    open(r.operator, before, now - 600_000);
+    frame(r.operator, before, WS_SESSION_FRAME, now - 590_000);
+    const last = frame(r.operator, before, WS_NOOP_FRAME, now - 300_000);
+    // The close as the operator now writes it: its own stamp, no earlier
+    // than the frame; the boundary the frame's.
+    close(r.operator, before, now - 1_000);
+    r.operator.gap("ws_reconnect", last, now - 500);
+    const after = randomUUID();
+    open(r.operator, after, now - 400);
+    const verified = frame(r.operator, after, WS_SESSION_FRAME, now - 300);
+    await committedUpTo(r.page.pageId, verified.seq);
+    const rows = await connections(r.page.pageId);
+    expect(rows[1]!.gapSince.getTime()).toBe(last.atWall);
+    const missed = now - 240_000;
+    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
+    expect(pass.targets).toHaveLength(2);
+    expect(pass.since!.getTime()).toBeLessThanOrEqual(missed);
+    // A boundary at the take ("now") would read back to now − 60 s: the
+    // missed message 180 s outside.
+    expect(missed - (now - 500 - 60_000)).toBe(-179_500);
+  }, LONG_TEST_MS);
 
   it("every reason with no boundary (nothing before it in its buffer): the gap starts at the last event the engine took, kept until a connection takes it", async (context) => {
     if (!testDb) return context.skip();

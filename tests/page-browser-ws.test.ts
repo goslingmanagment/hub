@@ -183,7 +183,8 @@ function siteOpens(w: World, requestId = "WS1", sessionId = "S1"): Promise<Socke
 
 /** An admitted socket to the 101: the TLS handshake, the handshake request
  *  as CDP and the proxy see it, the answer. */
-async function opened(w: World, requestId = "WS1", attemptId = 41, sessionId = "S1"): Promise<SocketTunnelClient> {
+/** `chrome`: Chrome's clock of an instant of this process's (its own base). */
+async function opened(w: World, requestId = "WS1", attemptId = 41, sessionId = "S1", chrome: (mono: number) => number = (mono) => mono): Promise<SocketTunnelClient> {
   const connecting = siteOpens(w, requestId, sessionId);
   const asked = w.link.of("wsAdmit").length;
   await until(() => w.link.of("wsAdmit").length > asked, 3000, "the admission asked");
@@ -191,11 +192,11 @@ async function opened(w: World, requestId = "WS1", attemptId = 41, sessionId = "
   const client = await connecting;
   expect(client.status).toBe(200);
   await client.tls();
-  w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId, timestamp: monoMs() / 1000 }, sessionId);
+  w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId, timestamp: chrome(monoMs()) / 1000 }, sessionId);
   const before = w.server.received().length;
   client.request();
   await until(() => w.server.received().subarray(before).includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
-  w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId, timestamp: monoMs() / 1000, response: { status: 101 } }, sessionId);
+  w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId, timestamp: chrome(monoMs()) / 1000, response: { status: 101 } }, sessionId);
   return client;
 }
 
@@ -708,24 +709,48 @@ describe("the handshake's outcome (wsDone)", () => {
 });
 
 describe("frames (plan §4.4)", () => {
-  // Astra's review of PR 15, round 5: an event's stamp is the operator's own
-  // clock, whatever Chrome's timestamp says (another clock's: behind, ahead).
-  it("are stamped by the operator's own clock, never Chrome's timestamp", async () => {
+  // Astra's review of PR 15, rounds 5 and 6: an event's stamp is on the
+  // operator's clock — Chrome's timestamp mapped by the smallest (take −
+  // Chrome) offset seen, so a delivery delay never makes it late and
+  // Chrome's own base never crosses; a gap's boundary is the last event
+  // received before the loss, never a late close.
+  it.for([
+    { chrome: "on the operator's clock", shift: 0 },
+    { chrome: "an hour ahead", shift: 3_600_000 },
+    { chrome: "an hour behind", shift: -3_600_000 },
+  ])("are stamped when Chrome saw them, on the operator's clock (Chrome's clock $chrome): a frame delivered five minutes late is five minutes old; the next connection's gap starts at it, not at the late close", async ({ shift }) => {
     const w = await world();
-    const client = await opened(w, "WS1", 43);
-    const before = monoMs();
-    for (const offset of [-1_800_000, 500, 3_600_000]) {
-      w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (monoMs() + offset) / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: String(offset) }) } }, "S1");
-    }
-    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1", timestamp: (monoMs() - 1_800_000) / 1000 }, "S1");
+    const chrome = (mono: number) => mono + shift;
+    // Opened: its events delivered at once — the offset learned.
+    const first = await opened(w, "WS1", 43, "S1", chrome);
+    // The last frame Chrome saw five minutes ago, and the close; CDP tells
+    // both only now.
+    const take = monoMs();
+    const lateFrame = take - 300_000;
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: chrome(lateFrame) / 1000, response: { opcode: 1, mask: false, payloadData: JSON.stringify({ t: 2, d: "late" }) } }, "S1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1", timestamp: chrome(take - 1_000) / 1000 }, "S1");
     await w.buffer.flush();
-    await until(() => w.events().filter((event) => event.kind === "ws.in" || event.kind === "ws.close").length === 4, 3000, "the frames and the close durable");
-    const after = monoMs();
-    for (const event of w.events().filter((one) => one.kind === "ws.in" || one.kind === "ws.close")) {
-      expect(event.atMono as number, String(event.kind)).toBeGreaterThanOrEqual(before);
-      expect(event.atMono as number, String(event.kind)).toBeLessThanOrEqual(after);
-    }
-    client.destroy();
+    await until(() => w.events().some((event) => event.kind === "ws.close"), 3000, "the close durable");
+    first.destroy();
+    // The next connection: its gap from the late frame, as Chrome saw it.
+    const second = await opened(w, "WS2", 44, "S1", chrome);
+    await w.buffer.flush();
+    await until(() => w.events().some((event) => event.kind === "gap"), 3000, "the reconnect's gap durable");
+    const events = w.events();
+    const frame = events.find((event) => event.kind === "ws.in")!;
+    const close = events.find((event) => event.kind === "ws.close")!;
+    const gap = events.find((event) => event.kind === "gap")!;
+    // Five minutes old (plus the smallest delivery delay seen: well under
+    // a second here), never the take.
+    expect(frame.atMono as number).toBeGreaterThanOrEqual(lateFrame);
+    expect(frame.atMono as number).toBeLessThan(lateFrame + 1_000);
+    expect(take - (frame.atMono as number)).toBeGreaterThan(299_000);
+    // Every stamp at most its take.
+    for (const event of events) expect(event.atMono as number, String(event.kind)).toBeLessThanOrEqual(monoMs());
+    // The gap starts at the last frame received — not the close, not now.
+    expect(gap).toMatchObject({ reason: "ws_reconnect", fromSeq: frame.seq, fromWall: frame.atWall });
+    expect(close.atWall as number).toBeGreaterThan(gap.fromWall as number);
+    second.destroy();
   });
 
   it("go from CDP into the buffer, durable and in order: ws.open with the attempt and the session, every text frame as it is, ws.close", async () => {

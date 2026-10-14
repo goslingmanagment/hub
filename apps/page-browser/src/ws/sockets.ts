@@ -418,6 +418,10 @@ export class SiteSockets {
    *  from its last event. */
   #uncovered: Mark | null = null;
   #lastHandshake: { mono: number; wall: number } | null = null;
+  /** The smallest (take − Chrome's timestamp) seen, ms: Chrome's clock onto
+   *  this process's (`#at`). A delivery delay only ever adds to it, so a
+   *  mapping by the smallest errs early of the take, never late. */
+  #chromeOffset: number | null = null;
   #binaryFrames = 0;
   /** Events dropped: delivered again from before this operator, or of no
    *  socket bound here (one closed, refused, of another Chrome). */
@@ -880,11 +884,23 @@ export class SiteSockets {
     return typeof requestId === "string" ? `${event.sessionId ?? ""}|${requestId}` : null;
   }
 
-  /** An event's stamp: when this process took it, on its own clock. Chrome's
-   *  own timestamp (Network.MonotonicTime) runs on a clock of its own and
-   *  never crosses the protocol (Astra's review of PR 15, round 5). */
-  #at(_event: CdpEvent): { mono: number; wall: number } {
-    return { mono: monoMs(), wall: wallMs() };
+  /** An event's stamp, on this process's clock: when Chrome saw it, mapped
+   *  by the smallest (take − Chrome) offset seen so far (Astra's review of
+   *  PR 15, rounds 5 and 6). Chrome's own clock never crosses the protocol
+   *  as it is; and the take alone would be late by however long CDP took to
+   *  deliver it (a gap's boundary then later than what may have been
+   *  missed). The mapping is the event's true moment plus the smallest
+   *  delivery delay ever seen — never later than its take; an offset Chrome
+   *  shifted makes it only earlier. No timestamp: the take. */
+  #at(event: CdpEvent): { mono: number; wall: number } {
+    const take = monoMs();
+    const wall = wallMs();
+    const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
+    if (!Number.isFinite(seen) || seen <= 0) return { mono: take, wall };
+    const offset = take - seen;
+    if (this.#chromeOffset === null || offset < this.#chromeOffset) this.#chromeOffset = offset;
+    const mono = Math.min(take, seen + this.#chromeOffset);
+    return { mono, wall: Math.round(wall - (take - mono)) };
   }
 
   /** The socket an event is of — one of this Chrome to the socket host — or
@@ -1189,8 +1205,11 @@ export class SiteSockets {
     // event of the socket before this close — a moment saved before the
     // loss, not the close's (CDP may tell it late; a close of ours is now).
     this.#uncovered ??= this.#last ?? unknownBoundary();
-    // The connection's last event: its number once the close is durable.
-    const mark: Mark = { seq: null, wall: stamp.wall };
+    // The connection's last event: its number once the close is durable —
+    // and, as a boundary, the moment of the last event received before it
+    // (the open or a frame): a close moves no boundary later (Astra's
+    // review of PR 15, round 6).
+    const mark: Mark = { seq: null, wall: Math.min(stamp.wall, this.#last?.wall ?? stamp.wall) };
     this.#last = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
