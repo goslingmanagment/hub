@@ -80,8 +80,8 @@
 // Hub request's (PR 9): `send`, `checkResult`, the site socket's (PR 10):
 // `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
 // `onSite` — `siteAdmitResult` (the engine answers a `siteAdmit` with it,
-// PR 14; this operator asks none before PR 7, and drops an answer it never
-// asked for). The other kinds of command are refused as not supported yet.
+// PR 14; the site path, PR 7, asks them, and an answer it never asked for
+// is dropped). The other kinds of command are refused as not supported yet.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,

@@ -65,8 +65,8 @@ export interface RpcHandlers {
    *  connection's generation. */
   onSocket?: (message: WsAdmitResult) => void;
   /** The engine's answer to a site request's admission (PR 14), of this
-   *  connection's generation. Without a handler it is dropped: this
-   *  operator asks for none before PR 7. */
+   *  connection's generation, for the site path (PR 7). Without a handler
+   *  it is dropped. */
   onSite?: (message: SiteAdmitResult) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
