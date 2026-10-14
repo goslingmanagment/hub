@@ -18,7 +18,11 @@ export interface PageBrowserIntake {
   bufferId: string | null;
   /** The last number of `bufferId` whose event is committed. */
   ackedSeq: number;
-  /** The operator's instant of the last event committed, of any buffer. */
+  /** The loss boundary (`events_last_wall`): the latest instant of a socket
+   *  open or frame committed (`ws.open`, `ws.in`), of any buffer — where a
+   *  loss whose start nothing names reads back from. A site's answer, a gap
+   *  and a close are stamped at the operator's take and never move it
+   *  (`browser-intake.ts`). */
   lastWall: Date | null;
   /** A gap marked and not yet taken by a connection of the site's socket. */
   gapSince: Date | null;
