@@ -726,6 +726,15 @@ describe("the «Браузер» block: only a page with a browser has one (Proj
     expect(detail.indexOf('aria-label="Состояние движка"')).toBeLessThan(detail.indexOf('aria-label="Браузер"'));
     expect(detail.indexOf('aria-label="Браузер"')).toBeLessThan(detail.indexOf("Заявки на историю"));
   });
+
+  it("the «Вход» line of the block leads to PR 15's login of the page's browser; the card has no such link", () => {
+    queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [status({ browser: browserStatus() })] }));
+    const detail = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
+    const loginRow = detail.slice(detail.indexOf('data-browser-row="login"'), detail.indexOf('data-browser-row="exit-ip"'));
+    expect(loginRow).toMatch(/<a [^>]*data-browser-login-link="true" href="\/pages\/lilly-1\/browser-login"[^>]*>Войти в браузер →<\/a>/);
+    const card = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
+    expect(card).not.toContain("data-browser-login-link");
+  });
 });
 
 describe("«Синхронизация» keeps the pages of the legacy executor only", () => {

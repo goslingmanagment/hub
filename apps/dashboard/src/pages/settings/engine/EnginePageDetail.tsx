@@ -87,10 +87,18 @@ export function EnginePageDetail({ pageLabel, onBack }: { pageLabel: string; onB
             )}
           </EnginePageStatusBody>
         </section>
-        {/* Only a page with a browser (Project Browser PR 17); PR 15's
-            «Войти в браузер» goes in its `loginAction`. */}
+        {/* Only a page with a browser (Project Browser PR 17), PR 15's
+            login beside its «Вход» line. */}
         {state.kind === "ready" && state.status.browser !== undefined && (
-          <EngineBrowserBlock browser={state.status.browser} pageLabel={pageLabel} />
+          <EngineBrowserBlock
+            browser={state.status.browser}
+            pageLabel={pageLabel}
+            loginAction={
+              <Link to={buildPageSectionRoute(pageLabel, "browser-login")} className="whitespace-nowrap font-medium text-accent hover:underline" data-browser-login-link="true">
+                Войти в браузер&nbsp;&rarr;
+              </Link>
+            }
+          />
         )}
         <div className="rounded-xl border border-border bg-card px-5 py-4">
           <HistoryRequestsBlock

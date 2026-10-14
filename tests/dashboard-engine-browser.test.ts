@@ -109,6 +109,16 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: заголовки запросов расходятся с сайтом \(с [^)]+\) · pnpm cli sync browser start lilly-1/);
   });
 
+  it("a browser Fansly signed out waits for the owner's login, not for a start (PR 17 with PR 15)", () => {
+    const html = render(browserStatus({
+      state: { step: "exit_closed", stopReason: "login_required", retryAt: null, exitOpen: false, mode: "automation", downSince: ago(180_000), stopSince: ago(180_000) },
+      halt: { reason: "login_required", at: "2026-10-14T11:57:00.000Z" },
+      login: { needed: true, why: "login_required" },
+    }));
+    expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: нужен вход \(с [^)]+\) · решается входом в браузер</);
+    expect(html).not.toContain("sync browser start lilly-1<");
+  });
+
   it("a number and its percent sign stay on one line", () => {
     const raw = renderToStaticMarkup(createElement(EngineBrowserBlock, {
       browser: browserStatus({ alerts: [{ kind: "buffer", detail: "buffer_80", since: null }] }), pageLabel: "lilly-1", now: NOW_MS,
@@ -125,7 +135,7 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
       now: NOW_MS,
       loginAction: createElement("a", { href: "/pages/lilly-1/browser-login" }, "Войти в браузер"),
     })));
-    expect(html).toMatch(/data-browser-row="login"[^>]*><span>нужен вход: Fansly вышел из аккаунта в браузере<\/span><span class="ml-2"><a href="\/pages\/lilly-1\/browser-login">Войти в браузер<\/a>/);
+    expect(html).toMatch(/data-browser-row="login"[^>]*><span class="flex flex-wrap items-baseline gap-x-2"><span>нужен вход: Fansly вышел из аккаунта в браузере<\/span><a href="\/pages\/lilly-1\/browser-login">Войти в браузер<\/a>/);
   });
 
   it("on the page's card: one line — the headline, the operator's word, the alerts", () => {

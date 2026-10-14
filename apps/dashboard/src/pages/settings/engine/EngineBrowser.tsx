@@ -61,9 +61,9 @@ function Row({ label, children, warn = false, testId }: { label: string; childre
 
 /**
  * A page's browser. `compact`: the card of the list — the headline, the
- * alerts and the one line that matters most. `loginAction`: where the
- * dashboard's login of the page's browser (PR 15, «Войти в браузер») puts its
- * link — beside the login line.
+ * alerts and the one line that matters most. `loginAction`: the link to the
+ * dashboard's login of the page's browser (PR 15, «Войти в браузер»), beside
+ * the login line.
  */
 export function EngineBrowserBlock({
   browser,
@@ -125,13 +125,17 @@ export function EngineBrowserBlock({
         )}
         {halt !== null && (
           <Row label="Решение" warn testId="halt">
-            {halt} · pnpm cli sync browser start {pageLabel}
+            {/* Fansly signed the browser out: the owner's login decides it (PR 15). */}
+            {browser.halt?.reason === "login_required" ? `${halt} · решается входом в браузер` : `${halt} · pnpm cli sync browser start ${pageLabel}`}
           </Row>
         )}
         <Row label="Вход" warn={browser.login.needed} testId="login">
-          <span>{browserLoginText(browser)}</span>
-          {/* Project Browser PR 15 puts «Войти в браузер» here. */}
-          {loginAction !== undefined && <span className="ml-2">{loginAction}</span>}
+          {/* PR 15's «Войти в браузер» (the page's detail passes it): beside
+              the line, or under it from its start when it does not fit. */}
+          <span className="flex flex-wrap items-baseline gap-x-2">
+            <span>{browserLoginText(browser)}</span>
+            {loginAction}
+          </span>
         </Row>
         <Row label="Выходной IP" warn={browser.proxy.problem !== null || browser.proxy.matches === false || browser.proxy.pinnedExitIp === null} testId="exit-ip">
           {browserExitIpText(browser)}
