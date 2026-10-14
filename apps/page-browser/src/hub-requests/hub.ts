@@ -700,9 +700,14 @@ export class HubRequests {
     if (phys.window !== null) {
       // The window right before the release: the request's records go up
       // only in it, and only before the deadline (spec §9).
-      const opened = this.#deps.gate.open(phys.window, deadline!, 0);
+      const opened = this.#deps.gate.open(phys.window, deadline!, 0, request.networkId);
       if (!opened.ok) {
-        return this.#refuseAt(attempt, request, this.#sent(attempt) ? { kind: "transport_error", sent: true, message: `the gate refused the request: ${opened.reason}` } : { kind: "aborted_before_send", refusal: "send_deadline_passed" });
+        // Another admitted request of the page unfinished (egress/gate.ts):
+        // not released, not sent — the engine's not-sent outcome, as its
+        // pacer's one place in flight says ("pace").
+        const why = `the gate refused the request: ${opened.reason}`;
+        const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
+        return this.#refuseAt(attempt, request, outcome, why);
       }
     }
     if (role === "preflight") attempt.preflight = phys;
@@ -712,7 +717,7 @@ export class HubRequests {
     if (attempt.limitTimer === null) this.#restartLimit(attempt);
     this.#armRequestDeadline(attempt);
     attempt.held.delete(request);
-    const resolution = await this.#deps.resolve(request, { action: "continue", params: { url: realUrl(request.url, attempt.real.hostname), interceptResponse: true } });
+    const resolution = await this.#resolve(request, { action: "continue", params: { url: realUrl(request.url, attempt.real.hostname), interceptResponse: true } });
     if (resolution === "refused" && !attempt.done) {
       // The pause was gone (the page dropped the request): it never left.
       phys.released = false;
@@ -735,7 +740,7 @@ export class HubRequests {
     if (phys.role === "preflight") {
       // Handed on by fulfillRequest: Chrome 155 kills its network service
       // when a preflight's interception job is continued (amendment 3).
-      await this.#deps.resolve(request, { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a Hub request's preflight answer, handed on", ...(response.statusText ? { phrase: response.statusText } : {}) });
+      await this.#resolve(request, { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a Hub request's preflight answer, handed on", ...(response.statusText ? { phrase: response.statusText } : {}) });
       return;
     }
     const status = response.status;
@@ -744,7 +749,7 @@ export class HubRequests {
       // Never followed (amendment 16): the page gets it as final, without
       // its Location; the engine gets it with it. Decided first (19).
       this.#respond(attempt, { empty: true });
-      await this.#deps.resolve(request, {
+      await this.#resolve(request, {
         action: "fulfill",
         status,
         headers: response.headers.filter((header) => header.name.toLowerCase() !== "location"),
@@ -758,13 +763,13 @@ export class HubRequests {
     const length = declared !== null && /^\d+$/.test(declared.trim()) ? Number(declared.trim()) : null;
     if (length !== null && length > attempt.limit) {
       this.#overflow(attempt, `declared ${length} bytes`, false);
-      await this.#deps.resolve(request, { action: "fail", reason: "Aborted", why: "a Hub response over its limit, before its body" });
+      await this.#resolve(request, { action: "fail", reason: "Aborted", why: "a Hub response over its limit, before its body" });
       return;
     }
     const writer = this.#deps.buffer.beginBody();
     if (writer === null) {
       this.#finish(attempt, { kind: "transport_error", sent: true, message: "the buffer cannot keep the body" });
-      await this.#deps.resolve(request, { action: "fail", reason: "Aborted", why: "the body could not be kept" });
+      await this.#resolve(request, { action: "fail", reason: "Aborted", why: "the body could not be kept" });
       return;
     }
     const capture: Capture = { writer, armed: false, decoded: 0, encoded: 0, broken: null };
@@ -780,14 +785,14 @@ export class HubRequests {
       if (typeof armed.bufferedData === "string" && armed.bufferedData !== "") this.#append(attempt, Buffer.from(armed.bufferedData, "base64"), null, 0);
     } catch (error) {
       if (!attempt.done) this.#finish(attempt, { kind: "transport_error", sent: true, message: `the body's stream could not be armed: ${errorMessage(error)}` });
-      await this.#deps.resolve(request, { action: "fail", reason: "Aborted", why: "the body could not be captured" });
+      await this.#resolve(request, { action: "fail", reason: "Aborted", why: "the body could not be captured" });
       return;
     }
     if (attempt.done) {
-      await this.#deps.resolve(request, { action: "fail", reason: "Aborted", why: "its attempt ended" });
+      await this.#resolve(request, { action: "fail", reason: "Aborted", why: "its attempt ended" });
       return;
     }
-    await this.#deps.resolve(request, { action: "continueResponse" });
+    await this.#resolve(request, { action: "continueResponse" });
   }
 
   // ── the network's events ───────────────────────────────────────────────
@@ -899,6 +904,9 @@ export class HubRequests {
   #onFinished(event: CdpEvent): void {
     const params = event.params as { requestId?: string; encodedDataLength?: number };
     if (typeof params.requestId !== "string") return;
+    // Chrome's end of this very request, for the page's slot (gate.ts) —
+    // whatever became of its attempt.
+    this.#deps.gate.requestEnded(params.requestId);
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { attempt, phys } = found;
@@ -923,6 +931,7 @@ export class HubRequests {
   #onFailed(event: CdpEvent): void {
     const params = event.params as { requestId?: string; errorText?: string; canceled?: boolean };
     if (typeof params.requestId !== "string") return;
+    this.#deps.gate.requestEnded(params.requestId);
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { attempt, phys } = found;
@@ -1062,14 +1071,29 @@ export class HubRequests {
 
   /** Refused at a pause: the outcome first, then the request fails (with
    *  every pause of the attempt still held, #finish). */
-  #refuseAt(attempt: Attempt, request: PausedRequest, outcome: Outcome): void {
-    attempt.held.add(request);
+  /** `why`: the pause is failed with it, for the journal; else as the
+   *  attempt's end fails what it holds. */
+  #refuseAt(attempt: Attempt, request: PausedRequest, outcome: Outcome, why: string | null = null): void {
+    if (why !== null) void this.#failHeld(attempt, request, "Failed", why);
+    else attempt.held.add(request);
     this.#finish(attempt, outcome);
+  }
+
+  /** The paths' resolution of a pause, and the request's end for the page's
+   *  slot (egress/gate.ts): an answer resolved at the response stage (a
+   *  preflight handed on by fulfill has no other end) — once Chrome has
+   *  answered the resolution, never as it is decided. Unanswered, or
+   *  refused (Chrome no longer knows the pause), it says nothing: the
+   *  request stays pending until Chrome's own end or the slot's bound. */
+  async #resolve(request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>): Promise<Resolution> {
+    const resolution = await this.#deps.resolve(request, decision);
+    if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.#deps.gate.requestEnded(request.networkId);
+    return resolution;
   }
 
   async #failHeld(attempt: Attempt, request: PausedRequest, reason: "Aborted" | "Failed", why: string): Promise<void> {
     attempt.held.delete(request);
-    await this.#deps.resolve(request, { action: "fail", reason, why });
+    await this.#resolve(request, { action: "fail", reason, why });
   }
 
   /** The attempt's end: final, stored, and sent once durable (with its
@@ -1086,6 +1110,8 @@ export class HubRequests {
     if (attempt.limitTimer) clearTimeout(attempt.limitTimer);
     attempt.limitTimer = null;
     for (const phys of [attempt.preflight, attempt.main]) if (phys?.window) this.#deps.gate.close(phys.window);
+    // The slot is free once every request it released has its end (gate.ts).
+    this.#deps.gate.operationEnded(`hub:${attempt.id}`);
     attempt.capture?.writer.abandon();
     attempt.capture = null;
     // A pause still held is failed: nothing of an ended attempt goes.
