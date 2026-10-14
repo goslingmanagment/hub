@@ -302,6 +302,7 @@ export class FakeOperator {
       buffer: { bytes: 0, oldestAgeMs: 0 },
       selfTest: { ok: true, atWall: Date.now(), failed: null },
       halt: null,
+      lastClearedHaltId: null,
     };
     this.server = new RpcServer({
       token: options.token ?? OPERATOR_TOKEN,
@@ -332,7 +333,7 @@ export class FakeOperator {
           if (command.command.kind === "clearHalt") {
             const halt = this.state.halt ?? null;
             if (halt !== null && halt.id !== command.command.haltId) return { ok: false, detail: `the halt held is ${halt.id}: nothing cleared` };
-            this.pushState({ halt: null, ...(halt !== null && this.state.stopReason === halt.reason ? { stopReason: null } : {}) });
+            this.pushState({ halt: null, lastClearedHaltId: command.command.haltId, ...(halt !== null && this.state.stopReason === halt.reason ? { stopReason: null } : {}) });
             return { ok: true, detail: halt === null ? "no halt is held" : `halt ${halt.id} cleared` };
           }
           const held = this.state.halt ?? null;

@@ -1,4 +1,5 @@
 import {
+  clearPageBrowserHaltMirror,
   finishPageBrowserCommand,
   isOwnerDecisionHalt,
   markPageBrowserCommandSent,
@@ -150,6 +151,13 @@ export function browserStartRefusal(input: {
   if (control.ownerStopAt !== null) return "the owner stopped the page's browser (sync browser start lifts the stop)";
   const halt = who === "owner" ? null : operatorHalt(state);
   if (halt !== null && !(who === "login" && halt === LOGIN_DECIDES)) return `the operator holds a halt for the owner's decision (${halt}): sync browser start`;
+  // Hub's mirror (Astra round 4): a halt the operator said, kept until it
+  // says it cleared that very one — one it lost (a restart, a full disk)
+  // refuses here.
+  const mirrored = who === "owner" ? null : control.haltReason;
+  if (mirrored !== null && !(who === "login" && mirrored === LOGIN_DECIDES)) {
+    return `Hub holds the halt the operator said (${mirrored}, ${control.haltId ?? "no id"}) until it is cleared: sync browser start`;
+  }
   if (who === "login") return null;
   if (control.pausedAll) return "the page is paused (sync page resume --all)";
   if (control.manualLogin !== "off" || state.mode === "manual_login") return "a login of the page's browser is open: the login brings up the browser it needs";
@@ -157,6 +165,12 @@ export function browserStartRefusal(input: {
 }
 
 type CommandEnd = { outcome: "ok" | "failed" | "unknown"; detail: string | null };
+
+/** A self-test's exit (the owner's command, PR 17) neither closed nor opened
+ *  again while Hub mirrors a halt (Astra round 4). */
+function mirroredHalt(control: PageBrowserControlRead | null): string | null {
+  return control?.haltReason == null ? null : `Hub holds the halt the operator said (${control.haltReason}, ${control.haltId ?? "no id"}) until it is cleared: sync browser start`;
+}
 
 /** A command taken by this owner is not its own any more (a newer owner took
  *  it, or it ended): nothing more of it goes. */
@@ -298,6 +312,9 @@ export class BrowserControl {
       }
       case "restartBrowser":
         return this.#ownersStart(command, sent, current!);
+      case "clearHalt":
+        // A profile no page has: its onboarding link's (never a page's slot).
+        return { outcome: "failed", detail: "not run: a profile's clearHalt is its onboarding link's" };
       case "selfTest": {
         const state = this.#d.client.state;
         if (state === null) return { outcome: "failed", detail: "not run: the operator cannot be reached" };
@@ -309,7 +326,8 @@ export class BrowserControl {
         // An exit closed for the test is one the guard would let open again:
         // never closed for a page that could not have it back.
         if (wasOpen) {
-          const refusal = browserStartRefusal({ control: await readPageBrowserControl(db, { profileId }), state, generation, who: "owner" });
+          const fresh = await readPageBrowserControl(db, { profileId });
+          const refusal = browserStartRefusal({ control: fresh, state, generation, who: "owner" }) ?? mirroredHalt(fresh);
           if (refusal !== null) return { outcome: "failed", detail: `not run: ${refusal}` };
           const closed = await this.#send(command, sent, "closeExit", "the owner's self-test", `${command.commandId}:closeExit`);
           steps.push(`closeExit: ${closed === null ? "no answer" : closed.detail ?? String(closed.ok)}`);
@@ -320,9 +338,8 @@ export class BrowserControl {
         steps.push(`selfTest: ${tested === null ? "no answer" : tested.detail ?? String(tested.ok)}`);
         if (tested === null) return { outcome: "unknown", detail: steps.join("; ") };
         if (!tested.ok || !wasOpen) return { outcome: tested.ok ? "ok" : "failed", detail: steps.join("; ") };
-        const refusal = browserStartRefusal({
-          control: await readPageBrowserControl(db, { profileId }), state: this.#d.client.state, generation, who: "owner",
-        });
+        const fresh = await readPageBrowserControl(db, { profileId });
+        const refusal = browserStartRefusal({ control: fresh, state: this.#d.client.state, generation, who: "owner" }) ?? mirroredHalt(fresh);
         if (refusal !== null) {
           steps.push(`openExit: not run: ${refusal}`);
           return { outcome: "failed", detail: steps.join("; ") };
@@ -352,6 +369,9 @@ export class BrowserControl {
         if (cleared === null) return { outcome: "unknown", detail: steps.join("; ") };
         if (!cleared.ok) return { outcome: "failed", detail: steps.join("; ") };
       }
+      // The owner's decision on that halt: Hub's mirror of it goes with it, in
+      // the same flow (Astra round 4: it refuses starts until then).
+      if (await clearPageBrowserHaltMirror(db, { profileId, haltId: command.haltId })) steps.push(`Hub's mirror of halt ${command.haltId} cleared`);
     }
     if (current.manualLogin === "wanted") {
       steps.push("restartBrowser: not here — the open login of the page's browser brings it up");

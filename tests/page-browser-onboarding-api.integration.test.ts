@@ -174,6 +174,31 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     expect((await r.server.inject({ method: "GET", url: "/api/v1/page-browser/profiles", headers: { cookie: r.cookie } })).json()).toEqual({ profiles: [] });
   });
 
+  it("a pin commits with its audit row or not at all — the onboarding trusts a pin as the owner's decision on a changed exit IP (Astra's review of PR 17, round 4)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    // The audit's write fails (its INSERT refused for the pin's step).
+    await testDb.pool.query(`
+      create or replace function pr17_refuse_pin_audit() returns trigger language plpgsql as $$
+      begin
+        if new.event_type = 'admin.page_browser_onboarding' and new.metadata->>'step' = 'pin' then raise exception 'the audit is down'; end if;
+        return new;
+      end $$`);
+    await testDb.pool.query("create trigger pr17_refuse_pin_audit before insert on audit_events for each row execute function pr17_refuse_pin_audit()");
+    try {
+      const failed = await post(r, "/pin", { ip: "203.0.113.9" });
+      expect(failed.statusCode).toBe(500);
+      // No pin without its audit row.
+      expect(await findOnboardingProfile(db(), r.profileId)).toMatchObject({ pinnedExitIp: null, pinnedExitIpAt: null });
+    } finally {
+      await testDb.pool.query("drop trigger pr17_refuse_pin_audit on audit_events");
+      await testDb.pool.query("drop function pr17_refuse_pin_audit()");
+    }
+    expect((await post(r, "/pin", { ip: "203.0.113.9" })).json()).toEqual({ pinnedExitIp: "203.0.113.9" });
+    const audited = await testDb.pool.query("select 1 from audit_events where event_type = 'admin.page_browser_onboarding' and metadata->>'step' = 'pin' and metadata->>'profileId' = $1", [r.profileId]);
+    expect(audited.rowCount).toBe(1);
+  });
+
   it("opens the browser's screen only while its login is open, and closes it before the login's closing is written, and once bound", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

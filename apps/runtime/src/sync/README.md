@@ -1024,14 +1024,19 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   also the page on its browser, no pause and no login — Hub's `manual_login`, not only the operator's mode; the
   login's start, on Node or on the browser, only while its login is `wanted`; a slot and the login do not ask a
   browser whose operator holds a halt). A halt for the owner's decision is the operator's (Astra round 3): it holds
-  it on its volume (`halt.json`, written before the browser stops, kept across restarts of the operator and its
-  container) and refuses every start and the exit's opening until it is cleared — by a `clearHalt` naming its id,
-  sent only for the owner's audited `sync browser start` (the halt Hub mirrored when he asked; also during a login,
-  on Node or on the browser), or, for `login_required` (Fansly signed the browser out — the one halt the owner's
-  login may start the browser for), by the operator itself once it confirms the expected account after that login.
-  A stricter halt replaces a held `login_required`, never the reverse. Hub keeps a mirror of it with the operator's
-  state (`page_browsers.halt_*`) for the status, the alerts and the id the owner's start names — never the
-  enforcement. A control speaks for the page only while it is its owner's (Hub's `owner_generation`) and, on a
+  it on its volume (`halt.json`: two preallocated slots written in place, so a full disk never drops it; kept across
+  restarts of the operator and its container) and refuses every start and the exit's opening until it is cleared —
+  by a `clearHalt` naming its id, sent only for the owner's audited decision: `sync browser start` (the halt Hub
+  mirrored when he asked; also during a login, on Node or on the browser), for a profile no page has `sync
+  browser-profile clear-halt` or — a changed exit IP only — a newer pin committed with its audit row; or, for
+  `login_required` (Fansly signed the browser out — the one halt the owner's login may start the browser for), by
+  the operator itself once it confirms the expected account after that login. A stricter halt replaces a held
+  `login_required`, never the reverse. An operator before protocol minor 1 (no halt on its volume) is refused at
+  its hello. Hub keeps a mirror of the halt with the operator's state (`page_browsers.halt_*`) for the status, the
+  alerts and the id the owner's decision names — and as a backstop that only refuses (Astra round 4): a halt goes
+  from it only when the operator says it cleared that very one (`state.lastClearedHaltId`) or with the owner's
+  decision; one the operator merely stops saying (lost by a restart) refuses a slot's start, the login's (but its
+  `login_required`) and a self-test's exit until then. A control speaks for the page only while it is its owner's (Hub's `owner_generation`) and, on a
   login link, while the login is open — read fresh before every command, the stops too. The link of a page on Node
   for its login records what its operator says as a slot does and runs the owner's commands. The page's pause, its
   login's pause and the owner's stop are written only under the page row lock (`sync_pages`, FOR NO KEY UPDATE),

@@ -22,8 +22,11 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 //   runs), the «Браузер» block shows it;
 // - the halt it holds for the owner's decision on its volume (`state.halt`,
 //   Astra round 3), mirrored with the state for the owner's view and the id
-//   his start clears — the operator enforces it, never this mirror: a failed
-//   write loses nothing, the next state brings it again;
+//   his start clears. The operator enforces it; the mirror only refuses
+//   besides (Astra round 4): it keeps a halt until the operator says it
+//   cleared that very one (`state.lastClearedHaltId`) — a halt the operator
+//   merely stops saying (lost by a restart) stays. A failed write loses
+//   nothing: the next state brings it again;
 // - its link refused (`token`, `protocol_version`, spec §6.3 rule 6) or
 //   broken by a protocol error (`protocol_error`, rule 3) — cleared by the
 //   next state;
@@ -64,7 +67,7 @@ export interface BrowserRecorderDeps {
  *  which move with every event). */
 function stateKey(state: State): string {
   return JSON.stringify([state.step, state.stopReason, state.retryAtWall, state.exitOpen, state.mode, state.sessionFingerprint,
-    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null]);
+    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null, state.lastClearedHaltId ?? null]);
 }
 
 function quantile(sorted: readonly number[], q: number): number {
@@ -180,6 +183,7 @@ export class BrowserRecorder {
           buffer: { bytes: state.buffer.bytes, oldestAgeMs: state.buffer.oldestAgeMs },
           retryAt: state.retryAtWall === null ? null : new Date(state.retryAtWall),
           halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
+          lastClearedHaltId: state.lastClearedHaltId ?? null,
         });
         this.#writtenKey = key;
         this.#writtenAt = now;
@@ -210,7 +214,7 @@ export class BrowserRecorder {
   #onLink(status: LinkStatus): void {
     if (this.#stopped) return;
     const linkError = status.kind === "refused"
-      ? (status.reason === "protocol_major" ? "protocol_version" : status.reason)
+      ? (status.reason === "protocol_major" || status.reason === "protocol_minor" ? "protocol_version" : status.reason)
       : status.kind === "down" && status.reason.startsWith("protocol error") ? "protocol_error" : null;
     if (linkError === null || linkError === this.#linkError) return;
     this.#linkError = linkError;

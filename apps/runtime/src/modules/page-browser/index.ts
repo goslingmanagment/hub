@@ -622,8 +622,8 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     }
   }
 
-  async function audit(principal: Awaited<ReturnType<typeof requirePrincipal>>, metadata: Record<string, unknown>): Promise<void> {
-    await recordAudit({ db: appContext.db }, { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata });
+  async function audit(principal: Awaited<ReturnType<typeof requirePrincipal>>, metadata: Record<string, unknown>, db: Database = appContext.db): Promise<void> {
+    await recordAudit({ db }, { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata });
   }
 
   server.post("/api/v1/page-browser/profiles/:profileId/proxy", {
@@ -683,18 +683,21 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const ip = request.body.ip.trim();
     if (isIP(ip) === 0) throw new BadRequestError(`Not an IP address: ${ip}`);
     // Only a profile no page has (a page's pin is PR 17's `sync browser
-    // pin-ip`), locked with its row; the same write that lever makes.
+    // pin-ip`), locked with its row; the same write that lever makes — and
+    // its audit row in the same transaction: a pin is the owner's decision on
+    // a halt for a changed exit IP (the onboarding clears it on a newer pin),
+    // so none commits without its audit (Astra's review of PR 17, round 4).
     const pinned = await appContext.db.transaction(async (raw): Promise<"pinned" | "bound" | "no_profile"> => {
       const tx = raw as unknown as Database;
       const locked = await lockPageBrowserProfile(tx, request.params.profileId);
       if (locked === null) return "no_profile";
       if (locked.pageId !== null) return "bound";
       await setPageBrowserSettings(tx, { profileId: request.params.profileId, pinnedExitIp: ip });
+      await audit(principal, { profileId: request.params.profileId, step: "pin", pinnedExitIp: ip }, tx);
       return "pinned";
     });
     if (pinned === "no_profile") throw new NotFoundError(`No page browser profile ${request.params.profileId}`);
     if (pinned === "bound") throw new AppError(`Profile ${request.params.profileId} serves a page now: its pin is sync browser pin-ip`, 409, "profile_bound");
-    await audit(principal, { profileId: request.params.profileId, step: "pin", pinnedExitIp: ip });
     return { pinnedExitIp: ip };
   });
 

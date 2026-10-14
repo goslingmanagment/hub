@@ -545,7 +545,9 @@ describe("database migration invariants", () => {
     // The owner's commands: a profile's (they go with it), one run per id, never past their expiry.
     expect(visibility).toContain("profile_id uuid not null references page_browsers(profile_id) on delete cascade");
     expect(visibility).toContain("constraint page_browser_commands_command_id_key unique (command_id)");
-    expect(visibility).toContain("check (kind in ('restartBrowser', 'stopPage', 'selfTest'))");
+    expect(visibility).toContain("check (kind in ('restartBrowser', 'stopPage', 'selfTest', 'clearHalt'))");
+    // A page's commands, or a profile's clearHalt (a profile no page has, Astra round 4).
+    expect(visibility).toContain("check ((page_id is not null) <> (kind = 'clearHalt') and (kind <> 'clearHalt' or halt_id is not null))");
     // Every command ends: ok, failed, expired, unknown (Astra round 3).
     expect(visibility).toContain("check (outcome in ('ok', 'failed', 'unknown', 'expired'))");
     // No direct child of pages (the page erasure's inventory is unchanged).

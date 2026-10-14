@@ -574,7 +574,7 @@ describe("a browser Fansly signed out, and the owner's login of it (PR 17 with P
     await login(r, "ending");
     await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", WAIT_MS, "the login closed");
     // The operator confirms the account and clears its halt: Hub's mirror follows.
-    r.operator.pushState({ step: "ready", mode: "automation", exitOpen: true, stopReason: null, halt: null });
+    r.operator.pushState({ step: "ready", mode: "automation", exitOpen: true, stopReason: null, halt: null, lastClearedHaltId: halt.id });
     await until(async () => (await findPageBrowser(db(), r.profileId))?.haltReason === null, WAIT_MS, "the mirror cleared");
   }, LONG_TEST_MS);
 });

@@ -277,9 +277,11 @@ export interface PageBrowserStateInput {
    *  Absent: not said (kept as it is). */
   retryAt?: Date | null;
   /** The halt the operator holds for the owner's decision (`state.halt`,
-   *  minor 1): mirrored. Null or absent: none held (an operator from before
-   *  the addition holds none). */
+   *  minor 1): mirrored. Null or absent: none said. */
   halt?: { id: string; reason: string; at: Date } | null;
+  /** The id of the last halt the operator cleared (`state.lastClearedHaltId`):
+   *  the mirror lets a halt go only on it (Astra round 4). */
+  lastClearedHaltId?: string | null;
 }
 
 /** The operator's last `state`, at the database's clock. The link works:
@@ -309,9 +311,19 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            selftest_failed = ${input.selfTest?.failed ?? null},
            buffer_bytes = ${Math.max(0, Math.round(input.buffer.bytes))}::bigint,
            buffer_oldest_age_ms = ${Math.max(0, Math.round(input.buffer.oldestAgeMs))}::bigint,
-           halt_reason = ${input.halt?.reason ?? null}::text,
-           halt_at = ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz,
-           halt_id = ${input.halt?.id ?? null}::text,
+           -- The mirror (Astra round 4): a halt said replaces it; one no longer
+           -- said goes only when the operator says it cleared that very halt
+           -- (a halt lost by a restart, or a file that could not be written,
+           -- stays — and refuses starts — until the owner's start clears it).
+           halt_reason = case when ${input.halt?.id ?? null}::text is not null then ${input.halt?.reason ?? null}::text
+                              when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
+                              else halt_reason end,
+           halt_at = case when ${input.halt?.id ?? null}::text is not null then ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz
+                          when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
+                          else halt_at end,
+           halt_id = case when ${input.halt?.id ?? null}::text is not null then ${input.halt?.id ?? null}::text
+                          when halt_id is not null and halt_id = ${input.lastClearedHaltId ?? null}::text then null
+                          else halt_id end,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()
@@ -585,6 +597,23 @@ export async function clearPageBrowserOwnerStop(
   });
 }
 
+/**
+ * The owner's decision on a halt (his audited `sync browser start`, or `sync
+ * browser-profile clear-halt` for a profile no page has), once its
+ * `clearHalt` was taken by the operator: Hub's mirror of that very halt goes
+ * with it (Astra round 4: the mirror refuses starts until then). True: it
+ * held that halt.
+ */
+export async function clearPageBrowserHaltMirror(db: Database, input: { profileId: string; haltId: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update page_browsers
+       set halt_reason = null, halt_at = null, halt_id = null, updated_at = clock_timestamp()
+     where profile_id = ${input.profileId}::uuid and halt_id = ${input.haltId}
+    returning profile_id
+  `);
+  return result.rows.length === 1;
+}
+
 /** The operator's stop reasons that are no halt for the owner's decision:
  *  the owner's own stop, and a buffer that does not open (the operator
  *  stands again by itself once it opens). */
@@ -679,6 +708,11 @@ export interface PageBrowserControlRead {
   /** The owner's login of the page's browser (0279; null: no engine row). */
   manualLogin: "off" | "wanted" | "ending" | null;
   ownerStopAt: Date | null;
+  /** Hub's mirror of the halt the operator holds (Astra round 4): kept until
+   *  the operator says it cleared it, it refuses starts besides the
+   *  operator's own refusal. */
+  haltReason: string | null;
+  haltId: string | null;
 }
 
 /** The control read of a profile (null: no such profile, or it serves no
@@ -687,10 +721,11 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
   const result = await db.execute<{
     pageId: string; transport: string | null; leaveGeneration: string | null; ownerGeneration: string | null;
     pausedAll: boolean | null; browserStopPaused: boolean | null; manualLogin: string | null; ownerStopAt: Date | string | null;
+    haltReason: string | null; haltId: string | null;
   }>(sql`
     select b.page_id::text as "pageId", sp.transport, sp.browser_leave_generation::text as "leaveGeneration",
            sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
-           sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt"
+           sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason", b.halt_id as "haltId"
       from page_browsers b
       left join sync_pages sp on sp.page_id = b.page_id
      where b.profile_id = ${input.profileId}::uuid and b.page_id is not null
@@ -706,5 +741,7 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
     browserStopPaused: row.browserStopPaused === true,
     manualLogin: row.manualLogin === "off" || row.manualLogin === "wanted" || row.manualLogin === "ending" ? row.manualLogin : null,
     ownerStopAt: dateOf(row.ownerStopAt),
+    haltReason: row.haltReason,
+    haltId: row.haltId,
   };
 }

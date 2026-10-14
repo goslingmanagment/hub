@@ -320,7 +320,14 @@ to the operator; the CLI waits for what the operator says.
   or leaving it, of a newer owner, paused by you, stopped by you, or in a login (the login starts the browser
   itself, never one you stopped or one halted for another decision of yours). The command's `outcome`: `ok`,
   `failed`, `expired` (never sent: no owner ran it in time) or `unknown` (sent, no answer — never sent again: look
-  at the block, and run `start` again if it still stands).
+  at the block, and run `start` again if it still stands). Hub keeps a halt it was told of until it sees it cleared:
+  a browser whose operator restarted and no longer says it still waits for your `start`.
+- A profile no page has yet (a new page's onboarding): a halt for a changed exit IP is decided by pinning the IP
+  again (the onboarding page; the pin and its audit commit together). Any other halt: `pnpm cli sync
+  browser-profile show --profile <uuid>` names it (`halt.id`), then `pnpm cli sync browser-profile clear-halt
+  --profile <uuid> --halt <id> --note 'why'` (audited; run by the profile's link, the CLI waits for its outcome).
+- An operator image from before protocol minor 1 (no halt kept on its volume) is refused: `link_error`
+  `protocol_version` — update the image (`scripts/deploy-page-browser.sh build`, then `up`).
 - `login_required` (Fansly signed the browser out) is the halt your login decides: open «Войти в браузер» on the
   page's «Браузер» block — the login starts the browser for its screen — and once you logged in and the operator
   confirmed the page's account, the halt is lifted with no `start`. Any other halt that comes meanwhile (a guard

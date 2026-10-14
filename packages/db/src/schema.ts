@@ -505,8 +505,9 @@ export const pageBrowserCommands = pgTable("page_browser_commands", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   commandId: uuid("command_id").notNull().unique().default(sql`gen_random_uuid()`),
   profileId: uuid("profile_id").notNull().references(() => pageBrowsers.profileId, { onDelete: "cascade" }),
-  pageId: bigint("page_id", { mode: "number" }).notNull(),
-  kind: text("kind").$type<"restartBrowser" | "stopPage" | "selfTest">().notNull(),
+  // Null: a profile no page has (its owner's clearHalt, Astra round 4).
+  pageId: bigint("page_id", { mode: "number" }),
+  kind: text("kind").$type<"restartBrowser" | "stopPage" | "selfTest" | "clearHalt">().notNull(),
   requestedBy: text("requested_by").notNull(),
   note: text("note"),
   requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),

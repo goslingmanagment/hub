@@ -98,8 +98,8 @@ function link(initial: State): Link {
       const halt = state.halt ?? null;
       if (kind === "clearHalt") {
         if (halt !== null && halt.id !== haltId) return { type: "commandResult", commandId, ok: false, detail: `the halt held is ${halt.id}: nothing cleared` };
-        state = { ...state, halt: null, stopReason: halt !== null && state.stopReason === halt.reason ? null : state.stopReason };
-        return { type: "commandResult", commandId, ok: true, detail: "cleared" };
+        state = { ...state, halt: null, lastClearedHaltId: haltId ?? null, stopReason: halt !== null && state.stopReason === halt.reason ? null : state.stopReason };
+        return { type: "commandResult", commandId, ok: true, detail: halt === null ? "no halt is held" : "cleared" };
       }
       if ((kind === "restartBrowser" || kind === "openExit") && halt !== null && !(halt.reason === "login_required" && state.mode === "manual_login")) {
         return { type: "commandResult", commandId, ok: false, detail: "halted for the owner's decision: clearHalt first" };
@@ -251,11 +251,12 @@ describe("the self-test closes an exit only the guard would open again", () => {
 });
 
 describe("a halt for the owner's decision is the operator's (Astra PR 17, round 3)", () => {
-  const mirrored = (page: { profileId: string }, halt: NonNullable<State["halt"]> | null) =>
+  const mirrored = (page: { profileId: string }, halt: NonNullable<State["halt"]> | null, lastClearedHaltId: string | null = null) =>
     recordPageBrowserState(db(), {
       profileId: page.profileId, step: "exit_closed", stopReason: null, mode: "automation", exitOpen: false, sessionFingerprint: null, accountId: null,
       exitIp: null, chromeVersion: "155", operatorVersion: "op", selfTest: null, buffer: { bytes: 0, oldestAgeMs: 0 },
       halt: halt === null ? null : { id: halt.id, reason: halt.reason, at: new Date(halt.atWall) },
+      lastClearedHaltId,
     });
   const label = async (pageId: number) => (await testDb!.pool.query<{ label: string }>("select label from pages where id = $1", [pageId])).rows[0]!.label;
 
@@ -279,6 +280,58 @@ describe("a halt for the owner's decision is the operator's (Astra PR 17, round 
     } finally {
       await ctl.stop();
     }
+  });
+
+  it("a halt the operator stops saying without its clear (Astra round 4: a full disk, then a restart) stays in Hub's mirror: no slot's start, no login's, no self-test's exit; the owner's start clears it at the operator and in the mirror, then starts", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage();
+    // Said before; then the operator restarted without it, and says no clear.
+    await mirrored(page, held());
+    await mirrored(page, null);
+    expect((await findPageBrowser(db(), page.profileId))!.haltId).toBe(HALT);
+    const l = link(stands({ halt: null, lastClearedHaltId: null }));
+    const ctl = control(page, l);
+    const login = loginDriver(page, l, "browser");
+    try {
+      await ctl.tick();
+      await ctl.tick();
+      expect(l.sent).toEqual([]);
+      // The login (but for login_required): none either.
+      await db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId: page.pageId, to: "wanted", by: "owner:test" }));
+      l.setState(stands({ mode: "manual_login", halt: null, lastClearedHaltId: null }));
+      await login.drive();
+      expect(l.sent.filter((command) => command.kind === "restartBrowser")).toEqual([]);
+      await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_paused = false, paused_all = false where page_id = $1", [page.pageId]);
+      // A self-test of an open exit: not closed, for it could not be opened again.
+      l.setState(stands({ step: "ready", exitOpen: true, halt: null, lastClearedHaltId: null }));
+      const test = (await insertPageBrowserCommand(db(), { pageId: page.pageId, kind: "selfTest", requestedBy: "cli", ttlMs: 60_000 }))!;
+      await ctl.tick();
+      expect(await getPageBrowserCommand(db(), test.id)).toMatchObject({ outcome: "failed", detail: expect.stringContaining("Hub holds the halt") });
+      expect(l.sent).toEqual([]);
+      // The owner's start: the halt he saw cleared at the operator (it holds
+      // none: said as cleared) and in Hub's mirror, then the start.
+      l.setState(stands({ halt: null, lastClearedHaltId: null }));
+      const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+      expect(asked.halt).toMatchObject({ id: HALT });
+      await ctl.tick();
+      expect(l.sent.map((command) => [command.kind, command.haltId ?? null])).toEqual([["clearHalt", HALT], ["restartBrowser", null]]);
+      expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "ok", detail: expect.stringContaining("mirror of halt") });
+      expect((await findPageBrowser(db(), page.profileId))!.haltId).toBeNull();
+    } finally {
+      await ctl.stop();
+    }
+  });
+
+  it("a login_required Hub still mirrors does not hold the login's own start", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage("node");
+    await mirrored(page, held("login_required"));
+    await mirrored(page, null);
+    const l = link(stands({ mode: "manual_login", halt: null, lastClearedHaltId: null }));
+    const login = loginDriver(page, l, "node");
+    await db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId: page.pageId, to: "wanted", by: "owner:test" }));
+    await login.drive();
+    expect(l.sent.map((command) => command.kind)).toEqual(["restartBrowser"]);
   });
 
   it("the owner's start names the halt he saw: a newer halt held since is not cleared, and nothing starts", async (context) => {
@@ -591,8 +644,11 @@ describe("the recorder's mirror of the operator's halt (Astra round 3)", () => {
       l.setState(stands({ stopReason: "header_mismatch", halt: held() }));
       await recorder.flushed();
       expect(await findPageBrowser(db(), page.profileId)).toMatchObject({ haltReason: "header_mismatch", haltId: HALT });
-      // Cleared at the operator: gone from the mirror with its next state.
+      // No longer said: kept (Astra round 4) — until the operator says it cleared it.
       l.setState(stands({ halt: null }));
+      await recorder.flushed();
+      expect(await findPageBrowser(db(), page.profileId)).toMatchObject({ haltId: HALT });
+      l.setState(stands({ halt: null, lastClearedHaltId: HALT }));
       await recorder.flushed();
       expect(await findPageBrowser(db(), page.profileId)).toMatchObject({ haltReason: null, haltId: null });
     } finally {

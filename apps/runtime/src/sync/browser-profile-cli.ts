@@ -5,6 +5,8 @@ import { Command, InvalidArgumentError } from "commander";
 import {
   findOnboardingProfile,
   findPageByLabel,
+  insertProfileClearHaltCommand,
+  lockPageBrowserProfile,
   forgetPageBrowserProfile,
   insertAuditEvent,
   isPageBrowserProfileForgotten,
@@ -18,6 +20,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { sealPageBrowserSecrets } from "../services/egress/page-browser-link.ts";
+import { awaitPageBrowserCommand, SYNC_BROWSER_COMMAND_TTL_MS } from "./browser-levers.ts";
 import type { SyncContext } from "./context.ts";
 import { SyncOwnerLeverError } from "./inspect.ts";
 
@@ -41,6 +44,11 @@ import { SyncOwnerLeverError } from "./inspect.ts";
 //   lost and that commits late is refused, so «absent» is final.
 // - `show`: one profile, bound or not, or whether Hub forgot it.
 // - `list`: the profiles no page has yet.
+// - `clear-halt`: the owner's decision on a halt the operator of a profile no
+//   page has holds for him (PR 17, Astra round 4: a re-pin decides only a
+//   changed exit IP, and `sync browser start` needs a page): a clearHalt
+//   naming that halt, run by the profile's onboarding link — at the operator,
+//   then Hub's mirror of it; the CLI waits for its outcome.
 // A refusal of `add` (nothing written) prints `"outcome": "refused"` before
 // it fails: the deploy script removes what it made on that word only — any
 // other failure leaves the outcome unknown (Astra's review of PR 16, round
@@ -121,6 +129,9 @@ export function profileView(profile: OnboardingProfile) {
     mode: profile.mode,
     exitIp: profile.exitIp,
     lastStateAt: profile.lastStateAt?.toISOString() ?? null,
+    // The halt the operator holds for the owner, as Hub mirrors it (its id
+    // is what `clear-halt --halt` names).
+    halt: profile.halt === null ? null : { id: profile.halt.id, reason: profile.halt.reason, at: profile.halt.at?.toISOString() ?? null },
     identity: profile.identityResult?.ok === true
       ? { accountId: profile.identityResult.accountId, username: profile.identityResult.username, at: profile.identityResult.sentAt }
       : null,
@@ -201,6 +212,39 @@ export async function removeBrowserProfile(
   });
 }
 
+/** `clear-halt`: the owner's audited clearHalt of a halt the operator of a
+ *  profile no page has holds — the command and its audit row in one
+ *  transaction; a bound profile's halt is its page's start's. */
+export async function clearBrowserProfileHalt(db: Database, input: { profileId: string; haltId: string; actor: string; note?: string | null }) {
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const locked = await lockPageBrowserProfile(tx, input.profileId);
+    if (locked === null) throw new SyncOwnerLeverError(`no page browser profile ${input.profileId}`);
+    if (locked.pageId !== null) throw new SyncOwnerLeverError(`profile ${input.profileId} serves a page: its halt is cleared by sync browser start <page>`);
+    const profile = await findOnboardingProfile(tx, input.profileId);
+    const command = await insertProfileClearHaltCommand(tx, {
+      profileId: input.profileId, haltId: input.haltId, requestedBy: input.actor, note: input.note ?? null, ttlMs: SYNC_BROWSER_COMMAND_TTL_MS,
+    });
+    if (command === null) throw new SyncOwnerLeverError(`profile ${input.profileId} serves a page: its halt is cleared by sync browser start <page>`);
+    const mirrored = profile?.halt ?? null;
+    await insertAuditEvent(tx, {
+      platformAccountId: null,
+      source: "cli",
+      eventType: PAGE_BROWSER_PROFILE_AUDIT_EVENT,
+      metadata: {
+        actor: input.actor, action: "clear_halt", profileId: input.profileId, haltId: input.haltId, commandId: command.id,
+        mirrored: mirrored === null ? null : { id: mirrored.id, reason: mirrored.reason }, ...(input.note == null ? {} : { note: input.note }),
+      },
+    });
+    return {
+      profileId: input.profileId,
+      haltId: input.haltId,
+      mirrored: mirrored === null ? null : { id: mirrored.id, reason: mirrored.reason, at: mirrored.at?.toISOString() ?? null },
+      command: { id: command.id, kind: command.kind, expiresAt: command.expiresAt.toISOString() },
+    };
+  });
+}
+
 /** `show`: one profile as Hub holds it (bound or not), or that it has none
  *  — and whether it forgot it. */
 export async function showBrowserProfile(db: Database, profileId: string) {
@@ -271,6 +315,25 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     .requiredOption("--profile <uuid>", "the profile", parseUuid)
     .action(async (options: { profile: string }) => {
       await withContext(async ({ db }) => print(await showBrowserProfile(db, options.profile)));
+    });
+
+  group
+    .command("clear-halt")
+    .description("clear a halt the operator of a profile no page has holds for the owner, by its id (`show` names it): run by the profile's onboarding link (audited)")
+    .requiredOption("--profile <uuid>", "the profile", parseUuid)
+    .requiredOption("--halt <id>", "the halt's id (`show`: halt.id)", parseUuid)
+    .option("--note <text>", "why (audited)")
+    .option("--wait-ms <ms>", `how long to wait for its outcome (default ${SYNC_BROWSER_COMMAND_TTL_MS + 30_000})`, (value: string) => {
+      const ms = Number(value);
+      if (!Number.isSafeInteger(ms) || ms < 0) throw new InvalidArgumentError(`Expected milliseconds, received "${value}"`);
+      return ms;
+    })
+    .action(async (options: { profile: string; halt: string; note?: string; waitMs?: number }) => {
+      await withContext(async ({ db }) => {
+        const asked = await clearBrowserProfileHalt(db, { profileId: options.profile, haltId: options.halt, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
+        const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 30_000 });
+        print({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } });
+      });
     });
 
   group

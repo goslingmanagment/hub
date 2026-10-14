@@ -12,6 +12,7 @@ import {
   pausePageForBrowserStop,
   setPagePause,
   listSyncPages,
+  clearPageBrowserHaltMirror,
   clearPageBrowserOwnerStop,
   expirePageBrowserCommands,
   markPageBrowserCommandSent,
@@ -155,9 +156,21 @@ describe("the owner's stop, the halt the operator holds as Hub mirrors it, and t
     expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: true, halt: { id: halt.id, reason: "header_mismatch", at } });
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltId: halt.id });
     expect(await clearPageBrowserOwnerStop(db(), { pageId })).toEqual({ profileId, wasStopped: false, halt: { id: halt.id, reason: "header_mismatch", at } });
-    // The operator's next state without it: gone from the mirror.
+    // A state without it (an operator that restarted after a full disk lost
+    // it): the mirror keeps it (Astra round 4) — and when it names another
+    // halt cleared.
     await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: "header_mismatch", haltId: halt.id });
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null, lastClearedHaltId: "99999999-9999-4999-8999-999999999999" }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltId: halt.id });
+    // The operator says it cleared that very halt: gone from the mirror.
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: null, halt: null, lastClearedHaltId: halt.id }));
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltAt: null, haltId: null });
+    // Said again, then cleared by the owner's decision in Hub.
+    await recordPageBrowserState(db(), state(profileId, { step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt }));
+    expect(await clearPageBrowserHaltMirror(db(), { profileId, haltId: "99999999-9999-4999-8999-999999999999" })).toBe(false);
+    expect(await clearPageBrowserHaltMirror(db(), { profileId, haltId: halt.id })).toBe(true);
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ haltReason: null, haltId: null });
     const { pageId: bare } = await seedHarnessPage({ db: db(), pool: testDb.pool }, { mode: "live", proxyUrl: null, label: "no-browser", ownRef: "300000000000000777" });
     expect(await setPageBrowserOwnerStop(db(), { pageId: bare, by: "cli" })).toBeNull();
   });

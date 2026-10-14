@@ -21,14 +21,18 @@ import type { Database } from "../client.ts";
 // marks it sent before anything of it goes to the operator; one superseded
 // before that gives it back (released) to the newer owner.
 
-export const PAGE_BROWSER_COMMAND_KINDS = ["restartBrowser", "stopPage", "selfTest"] as const;
+// A profile no page has takes one command (Astra round 4): the owner's
+// `clearHalt` of the halt its operator holds (`sync browser-profile
+// clear-halt`), run by its onboarding link — `page_id` null.
+export const PAGE_BROWSER_COMMAND_KINDS = ["restartBrowser", "stopPage", "selfTest", "clearHalt"] as const;
 export type PageBrowserCommandKind = (typeof PAGE_BROWSER_COMMAND_KINDS)[number];
 
 export interface PageBrowserCommandRow {
   id: number;
   commandId: string;
   profileId: string;
-  pageId: number;
+  /** Null: a profile no page has (its `clearHalt`). */
+  pageId: number | null;
   kind: PageBrowserCommandKind;
   requestedBy: string;
   note: string | null;
@@ -56,7 +60,7 @@ export const PAGE_BROWSER_COMMAND_ANSWER_GRACE_MS = 60_000;
 
 type SqlRow = Omit<PageBrowserCommandRow, "id" | "pageId" | "requestedAt" | "expiresAt" | "takenGeneration" | "takenAt" | "sentAt" | "doneAt"> & {
   id: string;
-  pageId: string;
+  pageId: string | null;
   requestedAt: Date | string;
   expiresAt: Date | string;
   takenGeneration: string | null;
@@ -80,7 +84,7 @@ function rowOf(row: SqlRow): PageBrowserCommandRow {
   return {
     ...row,
     id: Number(row.id),
-    pageId: Number(row.pageId),
+    pageId: row.pageId === null ? null : Number(row.pageId),
     requestedAt: dateOf(row.requestedAt)!,
     expiresAt: dateOf(row.expiresAt)!,
     takenGeneration: row.takenGeneration === null ? null : BigInt(row.takenGeneration),
@@ -107,6 +111,58 @@ export async function insertPageBrowserCommand(
       returning c.*
     )
     select ${columns} from inserted c
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : rowOf(row);
+}
+
+/** The owner's `clearHalt` of a profile no page has (its onboarding link runs
+ *  it), naming the halt its operator holds. Null: no such profile, or one a
+ *  page has (its page's start clears it). */
+export async function insertProfileClearHaltCommand(
+  db: Database,
+  input: { profileId: string; haltId: string; requestedBy: string; note?: string | null; ttlMs: number },
+): Promise<PageBrowserCommandRow | null> {
+  const result = await db.execute<SqlRow>(sql`
+    with inserted as (
+      insert into page_browser_commands as c (profile_id, page_id, kind, requested_by, note, halt_id, expires_at)
+      select b.profile_id, null, 'clearHalt', ${input.requestedBy}, ${input.note ?? null}, ${input.haltId}::text,
+             clock_timestamp() + ${Math.max(1, Math.round(input.ttlMs))}::double precision * interval '1 millisecond'
+        from page_browsers b
+       where b.profile_id = ${input.profileId}::uuid and b.page_id is null
+      returning c.*
+    )
+    select ${columns} from inserted c
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : rowOf(row);
+}
+
+/** The oldest command of a profile no page has that waits (as
+ *  `takePageBrowserCommand`), taken by its onboarding link of `generation`
+ *  (the profile's link generation). */
+export async function takeProfileCommand(
+  db: Database,
+  input: { profileId: string; generation: bigint },
+): Promise<PageBrowserCommandRow | null> {
+  await expirePageBrowserCommands(db, { profileId: input.profileId });
+  const result = await db.execute<SqlRow>(sql`
+    with next as (
+      select id from page_browser_commands
+       where page_id is null and profile_id = ${input.profileId}::uuid
+         and done_at is null and expires_at > clock_timestamp() and sent_at is null
+         and (taken_generation is null or taken_generation < ${input.generation.toString()}::bigint)
+       order by id
+       limit 1
+       for update skip locked
+    ), taken as (
+      update page_browser_commands c
+         set taken_generation = ${input.generation.toString()}::bigint, taken_at = clock_timestamp()
+        from next
+       where c.id = next.id
+      returning c.*
+    )
+    select ${columns} from taken c
   `);
   const row = result.rows[0];
   return row === undefined ? null : rowOf(row);
@@ -203,8 +259,10 @@ export async function finishPageBrowserCommand(
  * operator's answer can no longer come (`PAGE_BROWSER_COMMAND_ANSWER_GRACE_MS`
  * after its expiry). Returns how many it closed.
  */
-export async function expirePageBrowserCommands(db: Database, input: { id: number } | { pageId: number }): Promise<number> {
-  const which = "id" in input ? sql`id = ${input.id}::bigint` : sql`page_id = ${input.pageId}::bigint`;
+export async function expirePageBrowserCommands(db: Database, input: { id: number } | { pageId: number } | { profileId: string }): Promise<number> {
+  const which = "id" in input ? sql`id = ${input.id}::bigint`
+    : "pageId" in input ? sql`page_id = ${input.pageId}::bigint`
+    : sql`page_id is null and profile_id = ${input.profileId}::uuid`;
   const result = await db.execute(sql`
     update page_browser_commands
        set done_at = clock_timestamp(),
