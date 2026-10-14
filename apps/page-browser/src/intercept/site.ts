@@ -281,6 +281,9 @@ interface End {
   preflightAnswer: boolean;
   /** The body is whole (null: no body to keep). */
   whole: boolean | null;
+  /** Ended by the operator's own reload of the work tab: not a failure the
+   *  site's document saw. */
+  reload?: boolean;
   /** The answer has no body (a redirect answered as final): an empty one is
    *  kept, whole. */
   empty?: boolean;
@@ -339,6 +342,9 @@ export class SiteRequests {
   readonly #passed = new Map<string, { line: Omit<RequestLine, "decision" | "result" | "admission">; startMono: number }>();
   /** Ids of operations that ended, for the late answers. */
   readonly #gone = new Map<string, string>();
+  /** API requests of the site that ended without anything of them sent —
+   *  refused, failed, cancelled — since the count was last reset. */
+  #failures = 0;
   /** Writes refused, tried again. */
   readonly #retries = new Map<string, { make: () => GroupItem[]; tries: number; timer: NodeJS.Timeout | null }>();
   #closed = false;
@@ -369,6 +375,43 @@ export class SiteRequests {
   /** Operations in flight (tests, diagnostics). */
   get live(): number {
     return this.#ops.size;
+  }
+
+  /** Operations whose request went on to the network and has not ended. */
+  get released(): number {
+    let released = 0;
+    for (const op of this.#ops.values()) if (!op.done && op.stage === "released") released += 1;
+    return released;
+  }
+
+  /** How many API requests of the site ended since `resetFailures` with
+   *  nothing of them sent: refused at once or by the engine, their wait
+   *  over, their admission not used, cancelled, dropped by the page while
+   *  they waited. They never left the machine. Not counted: what the map
+   *  closes (it stays closed), and requests of a document that was replaced
+   *  (nobody is left to have seen them fail). */
+  get failures(): number {
+    return this.#failures;
+  }
+
+  /** The count starts again (the work tab navigates, plan §4.1 step 8). */
+  resetFailures(): void {
+    this.#failures = 0;
+  }
+
+  /** The operator loads the work tab anew: whatever still waits — asked,
+   *  or admitted and not released — is closed now, and the frame's document
+   *  counts as replaced from this moment, so nothing admitted before the
+   *  reload is released into it or after it. Released requests are the
+   *  caller's to wait out first (`released`). */
+  reloading(frameId: string | null): void {
+    // These first, under their own reason; retiring the frame would end them
+    // as of a replaced document.
+    for (const op of [...this.#ops.values()]) {
+      if (op.done || op.stage === "released") continue;
+      this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, reload: true, error: op.attemptId === null ? "the work tab is loaded anew" : "not used: the work tab is loaded anew" });
+    }
+    if (frameId !== null) this.documents.retire(frameId);
   }
 
   /** The wait for an admission (the engine's params, spec §8.2). */
@@ -422,9 +465,15 @@ export class SiteRequests {
       }
     }
     const notUp = this.#notAdmitting();
-    if (notUp !== null) return { action: "fail", reason: "Failed", why: `no admission: ${notUp}` };
+    if (notUp !== null) {
+      this.#failures += 1;
+      return { action: "fail", reason: "Failed", why: `no admission: ${notUp}` };
+    }
     // Its answer and its end are Chrome's to report by this id.
-    if (request.networkId === null) return { action: "fail", reason: "Failed", why: "no admission: Chrome gave the request no network id to follow it by" };
+    if (request.networkId === null) {
+      this.#failures += 1;
+      return { action: "fail", reason: "Failed", why: "no admission: Chrome gave the request no network id to follow it by" };
+    }
     this.#begin(request, preflight ? "preflight" : "main", method, verdict);
     return { action: "hold" };
   }
@@ -1180,6 +1229,9 @@ export class SiteRequests {
     this.#ops.delete(op.id);
     this.#dropAwaiting(op);
     remember(this.#gone, op.id, end.error ?? "it ended");
+    // Ended with nothing of it sent and no answer: a failure the site saw,
+    // unless its document is gone (replaced, or loaded anew by the operator).
+    if (end.status === null && !end.reload && !this.#sent(op) && !this.documents.replaced(op.document)) this.#failures += 1;
     op.end();
     // The body: whole and sealed, a mark, or none to keep.
     const capture = op.capture;

@@ -583,6 +583,8 @@ export interface ModelRequest {
   /** The proxy's answer to the request's CONNECT, when it was continued. */
   proxyStatus?: number;
   failReason?: string;
+  /** The headers the page's script set on it. */
+  siteHeaders?: Record<string, string>;
   /** Released with its answer to stop at its headers (an admitted request
    *  of the site): what became of it. */
   api?: { headers: Record<string, string>; streamed: boolean; answered: boolean; ended: boolean };
@@ -879,7 +881,7 @@ export class BrowserModel {
   pause(url: string, method = "GET", sessionId = "S1", resourceType = "Fetch", headers: Record<string, string> = {}): ModelRequest {
     const n = ++this.#requests;
     const [bare, fragment = ""] = url.split("#");
-    const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused" };
+    const request: ModelRequest = { interceptionId: `I${n}`, networkId: `R${n}`, url: bare!, fragment: fragment ? `#${fragment}` : "", method, sessionId, outcome: "paused", siteHeaders: headers };
     this.requests.push(request);
     this.chrome.event("Network.requestWillBeSent", { requestId: request.networkId, request: { url: request.url, urlFragment: request.fragment, method } }, sessionId);
     this.chrome.event("Fetch.requestPaused", {
@@ -1000,6 +1002,8 @@ export class BrowserModel {
     return this.requests.find((request) => request.interceptionId === id && request.outcome === "paused");
   }
 
+  /** How much later than usual an admitted request's answer comes. */
+  siteAnswerDelayMs = 0;
   /** The body an admitted request of the site gets. */
   siteBody: Buffer = Buffer.from('{"success":true,"response":{"account":{"id":"300000000000000001"}}}');
   /** Network ids whose body's stream was armed. */
@@ -1028,7 +1032,9 @@ export class BrowserModel {
     const record = (type: number, size: number) => Buffer.concat([Buffer.from([type, 0x03, 0x03, (size - 5) >> 8, (size - 5) & 0xff]), Buffer.alloc(size - 5, 0xab)]);
     socket.write(Buffer.concat([record(22, 300), record(23, 58), record(23, 70), record(23, 90)]));
     await new Promise((resolve) => setTimeout(resolve, 50));
-    this.chrome.event("Network.requestWillBeSentExtraInfo", { requestId: request.networkId, headers: {} }, request.sessionId);
+    // As it went: the names the page's script set, in their order.
+    this.chrome.event("Network.requestWillBeSentExtraInfo", { requestId: request.networkId, headers: Object.fromEntries(Object.entries(request.siteHeaders ?? {}).map(([name, value]) => [name.toLowerCase(), value])) }, request.sessionId);
+    if (this.siteAnswerDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.siteAnswerDelayMs));
     request.api.answered = true;
     this.chrome.event("Fetch.requestPaused", {
       requestId: request.interceptionId,

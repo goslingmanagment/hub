@@ -22,6 +22,12 @@
 // page is ready (10). A session that changes goes back to step 8; a site
 // that does not load fails the start (`proxy_unavailable`: the network
 // between the page and Fansly) and it is tried again after the backoff.
+// Until the engine has that identity read it admits nothing of the site
+// (checks-only), so the site's first load may see its API requests fail —
+// in the interception: none of them left. When the session is confirmed and
+// any did, the work tab is loaded anew, once a start, so the site starts
+// under an engine that admits; what still waited is closed first, and
+// nothing admitted before the reload is released into it.
 //
 // Hub's requests (hub-requests/, PR 9; plan §4.2): the engine's `send` runs
 // in the site's tab under the engine's admission (`check`), the gate's
@@ -139,6 +145,9 @@ export interface OperatorTimings {
   quitWaitMs: number;
   /** The site's document in the work tab (plan §4.1, step 8). */
   siteLoadMs: number;
+  /** Before the work tab is loaded anew, how long a request of the site
+   *  that is in flight is waited out. */
+  reloadWaitMs: number;
 }
 
 const DEFAULT_TIMINGS: OperatorTimings = {
@@ -155,6 +164,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   exitIpTimeoutMs: 15_000,
   quitWaitMs: 5000,
   siteLoadMs: 30_000,
+  reloadWaitMs: 30_000,
 };
 
 /** The site the work tab loads (plan §4.1, step 8). */
@@ -247,6 +257,10 @@ export class Operator {
   /** The account the engine's identity read named, and under which
    *  session (plan §4.1, step 9). */
   #identity: { accountId: string; fingerprint: string } | null = null;
+  /** The work tab was loaded anew at a confirmation of this start: once. */
+  #siteReloaded = false;
+  /** That reload is under way (it waits out what is in flight first). */
+  #reloadPending = false;
   #settings: EngineSettings | null = null;
   /** The current start; a newer one, a stop or a failure supersedes it. */
   #run = 0;
@@ -747,6 +761,7 @@ export class Operator {
     };
     this.egress.closeExit("a start");
     this.#endWork("a new start of the page");
+    this.#siteReloaded = false;
     this.#health.stop();
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
@@ -850,10 +865,16 @@ export class Operator {
     try {
       const tab = this.control.workTab;
       if (tab === null) throw new StartFailure("cdp_lost", "no work tab to load the site in");
+      // What fails of the site from here to the session's confirmation
+      // decides whether the tab is loaded anew then.
+      this.site.resetFailures();
+      const documents = () => this.site.documents.commits(this.control.workTab?.mainFrameId ?? null);
+      const before = documents();
       const reply = await this.cdp.send<{ errorText?: string }>("Page.navigate", { url: SITE_URL }, tab.sessionId, this.#timings.siteLoadMs);
       if (stale()) return;
       if (typeof reply.errorText === "string" && reply.errorText !== "") throw new StartFailure("proxy_unavailable", `the site did not load: ${reply.errorText}`);
-      const atSite = await this.#waitUntil(() => stale() || this.#workTabAtSite(), this.#timings.siteLoadMs);
+      // Its document, not the one the tab had: a new one committed.
+      const atSite = await this.#waitUntil(() => stale() || (this.#workTabAtSite() && documents() > before), this.#timings.siteLoadMs);
       if (stale()) return;
       if (!atSite) throw new StartFailure("proxy_unavailable", `the site's document did not come within ${this.#timings.siteLoadMs} ms`);
       this.page.advance("site_loaded", SITE_URL);
@@ -882,8 +903,46 @@ export class Operator {
     const live = this.hub.session.fingerprint;
     if (this.page.step !== "site_loaded" || identity === null || live === null || identity.fingerprint !== live) return;
     if (identity.accountId !== this.#settings?.expectedAccountId) return;
+    if (this.#reloadPending) return;
+    const failed = this.site.failures;
+    if (failed > 0 && !this.#siteReloaded) {
+      // The site's document saw its API requests fail before the engine
+      // admitted any: it starts again under the confirmed session.
+      this.#reloadPending = true;
+      void this.#reloadSite(this.#run, failed);
+      return;
+    }
     this.page.advance("session_confirmed", "the engine's identity read named the expected account");
     this.page.advance("ready");
+  }
+
+  /** The work tab loaded anew at the session's confirmation, once a start:
+   *  what of the site is in flight is waited out (a request cancelled by
+   *  the reload would stop the page), what still waits is closed, then the
+   *  tab navigates as at step 8 — and is confirmed and ready with its new
+   *  document. */
+  async #reloadSite(run: number, failed: number): Promise<void> {
+    const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.page.step !== "site_loaded" || !this.egress.exitOpen;
+    try {
+      const idle = await this.#waitUntil(() => stale() || this.site.released === 0, this.#timings.reloadWaitMs);
+      if (stale()) return;
+      if (!idle) {
+        // Never while a request of the site is in flight: confirmed as it is.
+        this.#log("site.reload_skipped", { failed, released: this.site.released });
+        this.page.advance("session_confirmed", "the engine's identity read named the expected account; not loaded anew: a request of the site stayed in flight");
+        this.page.advance("ready");
+        return;
+      }
+      this.#siteReloaded = true;
+      this.site.reloading(this.control.workTab?.mainFrameId ?? null);
+      this.#log("site.reload", { failed });
+      this.page.back("exit_open", `the session is confirmed; ${failed} API request${failed === 1 ? "" : "s"} of the site failed before it, none sent: the work tab is loaded anew, once`);
+      // From here it is a load like step 8's: confirmed again when it is in.
+      this.#reloadPending = false;
+      await this.#loadSite(run);
+    } finally {
+      this.#reloadPending = false;
+    }
   }
 
   /** A whole answer of the engine's identity read (hub-requests/): its

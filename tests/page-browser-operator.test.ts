@@ -1250,8 +1250,8 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
   const FINGERPRINT = sessionFingerprint(TOKEN, CLIENT_ID);
   const ME = "/api/v1/account/me";
 
-  function headersOf(token = TOKEN): Record<string, string> {
-    return { Accept: "application/json, text/plain, */*", authorization: token, "fansly-client-check": fanslyClientCheck(ME, CLIENT_ID), "fansly-client-id": CLIENT_ID, "fansly-client-ts": String(Date.now()), "fansly-session-id": "720167541418230022" };
+  function headersOf(token = TOKEN, path = ME): Record<string, string> {
+    return { Accept: "application/json, text/plain, */*", authorization: token, "fansly-client-check": fanslyClientCheck(path, CLIENT_ID), "fansly-client-id": CLIENT_ID, "fansly-client-ts": String(Date.now()), "fansly-session-id": "720167541418230022" };
   }
 
   it("end to end: asked of the engine, admitted, through the real proxy and gate; its answer's body in frames before the batch that names it; siteDone until its resultAck; no secret anywhere", async () => {
@@ -1336,56 +1336,215 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     }
   });
 
-  it("steps 9–10: the engine's identity read naming the expected account confirms the session, and the page is ready; another account does not; a changed session goes back to step 8", async () => {
-    const s = await setUp();
+  /** The engine's identity read through the browser (a Hub request). */
+  const identity = (attemptId: number, fingerprint: string) => ({
+    type: "send",
+    ownerGeneration: 1,
+    attemptId,
+    route: "account.me",
+    credentialsGeneration: "c".repeat(64),
+    sessionFingerprint: fingerprint,
+    method: "GET",
+    url: `https://apiv3.fansly.com${ME}?ngsw-bypass=true`,
+    headers: {},
+    kind: "api",
+    maxBodyBytes: 32 * 1024 * 1024,
+    sendDeadlineMono: monoMs() + 15_000,
+    requestDeadlineMono: monoMs() + 20_000,
+  });
+  const account = (id: string) => Buffer.from(JSON.stringify({ success: true, response: { account: { id, email: "owner@example.test" } } }));
+  /** A read of the site's own, paused in Fetch with the session's headers. */
+  const read = (s: SetUp & { tab: string }, path: string, token = TOKEN) => s.model.pause(`https://apiv3.fansly.com${path}`, "GET", s.tab, "XHR", headersOf(token, path.split("?")[0]!));
+
+  /** A started page whose engine answers checks, and each `siteAdmit` as
+   *  `site` says: an admission (by attempt id), a refusal, or nothing. */
+  async function siteSetUp(site: (ask: Record<string, unknown>) => { admit: number } | { refuse: string } | null, options: Parameters<typeof setUp>[0] = {}): Promise<SetUp & { tab: string }> {
+    const s = await setUp(options);
     const server = await tlsLikeServer();
     cleanups.push(server.close);
     s.socks.routes.set("apiv3.fansly.com:443", server.port);
     await started(s);
-    const tab = s.operator.control.workTab!.sessionId;
     s.engine.onMessage = (message) => {
-      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: false, reason: "paused" });
       if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+      if (message.type !== "siteAdmit") return;
+      const answer = site(message);
+      if (answer === null) return;
+      if ("admit" in answer) s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: answer.admit });
+      else s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: false, reason: answer.refuse });
     };
-    const identity = (attemptId: number, fingerprint: string) => ({
-      type: "send",
-      ownerGeneration: 1,
-      attemptId,
-      route: "account.me",
-      credentialsGeneration: "c".repeat(64),
-      sessionFingerprint: fingerprint,
-      method: "GET",
-      url: `https://apiv3.fansly.com${ME}?ngsw-bypass=true`,
-      headers: {},
-      kind: "api",
-      maxBodyBytes: 32 * 1024 * 1024,
-      sendDeadlineMono: monoMs() + 15_000,
-      requestDeadlineMono: monoMs() + 20_000,
-    });
-    // The live session, from the site's own request.
-    s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf());
+    return { ...s, tab: s.operator.control.workTab!.sessionId };
+  }
+
+  const stateNotes = (s: SetUp) => journal(s.logDir, "states").map((line) => `${String(line.from)}>${String(line.to)}: ${String(line.note)}`);
+
+  it("steps 9–10: the engine's identity read naming the expected account confirms the session, and the page is ready; another account does not; a changed session goes back to step 8; nothing of the site failed — the tab is not loaded anew", async () => {
+    let attempt = 9200;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // The live session, from the site's own request — admitted, and answered.
+    read(s, ME);
     await s.engine.waitFor("state", (state) => state.sessionFingerprint === FINGERPRINT);
+    expect(await s.engine.waitFor("siteDone", () => true, 10_000)).toMatchObject({ attemptId: 9201, sent: true, status: 200 });
     // Another account than the page's: reported, not confirmed.
-    s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "999", email: "owner@example.test" } } }));
+    s.model.hubBody = account("999");
     s.engine.send(identity(9301, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9301, 10_000);
     await s.engine.waitFor("state", (state) => state.accountId === "999");
     expect(s.operator.page.step).toBe("site_loaded");
     // The expected one: confirmed, ready.
-    s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789", email: "owner@example.test" } } }));
+    s.model.hubBody = account("123456789");
     s.engine.send(identity(9302, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9302, 10_000);
     await until(() => s.operator.page.step === "ready", 3000, "the page ready");
     expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789", sessionFingerprint: FINGERPRINT });
     const steps = journal(s.logDir, "states").map((line) => line.to);
-    expect(steps.slice(steps.lastIndexOf("site_loaded"))).toEqual(["site_loaded", "session_confirmed", "ready"]);
+    expect(steps.slice(steps.lastIndexOf("exit_open"))).toEqual(["exit_open", "site_loaded", "session_confirmed", "ready"]);
     expect(s.operator.admissionsOpen()).toBe(true);
+    // Nothing of the site failed before the confirmation: no reload.
+    expect(s.model.navigations).toEqual(["https://fansly.com/"]);
     // The site logs in anew: another session is not the confirmed one.
-    s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", headersOf("fansly-token-AnotherLogin0123456789"));
+    read(s, ME, "fansly-token-AnotherLogin0123456789");
     await until(() => s.operator.page.step === "site_loaded", 3000, "back to the loaded site");
     expect(s.engine.last("state")).toMatchObject({ step: "site_loaded", accountId: null });
     // Nothing of the answer but the account id was kept or logged.
     expect(s.lines.join("\n")).not.toContain("owner@example.test");
+  });
+
+  it("the site's API requests failed before the session was confirmed (the engine admits nothing in checks-only): the work tab is loaded anew at the confirmation — once a start, journaled with their count", async () => {
+    let admitting = false;
+    let attempt = 9400;
+    const s = await siteSetUp(() => (admitting ? { admit: ++attempt } : { refuse: "held" }));
+    // The site's first load: its reads are refused, in the interception.
+    const refused = [read(s, ME), read(s, "/api/v1/messaging/groups?limit=25")];
+    await until(() => refused.every((request) => request.outcome === "failed"), 3000, "the refusals");
+    expect(s.operator.site.failures).toBe(2);
+    // What the map closes does not count: it stays closed after any reload.
+    const closed = s.model.pause("https://apiv3.fansly.com/api/v1/message/ack", "POST", s.tab, "XHR", headersOf(TOKEN, "/api/v1/message/ack"));
+    await until(() => closed.outcome === "failed", 3000, "the closed write");
+    expect(s.operator.site.failures).toBe(2);
+    // The engine's identity read: the session is confirmed, the engine admits.
+    admitting = true;
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9501, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9501, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "the page ready");
+    // Loaded anew, once: the navigation of step 8, and this one.
+    expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
+    const notes = stateNotes(s);
+    expect(notes).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
+    expect(notes.slice(-4).map((note) => note.split(":")[0])).toEqual(["site_loaded>exit_open", "exit_open>site_loaded", "site_loaded>session_confirmed", "session_confirmed>ready"]);
+    expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789" });
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    // The new document's request goes under the engine that admits now.
+    const fresh = read(s, ME);
+    expect(await s.engine.waitFor("siteDone", () => true, 10_000)).toMatchObject({ attemptId: 9401, sent: true, status: 200 });
+    expect(fresh.outcome).toBe("continued");
+    // No loop: more failures and another confirmation in the same start —
+    // a new session, refused again, read again — reload nothing.
+    admitting = false;
+    const other = "fansly-token-SecondLogin000111222333";
+    const again = read(s, ME, other);
+    await until(() => again.outcome === "failed" && s.operator.page.step === "site_loaded", 3000, "the new session, its request refused");
+    expect(s.operator.site.failures).toBeGreaterThan(0);
+    s.engine.send(identity(9502, sessionFingerprint(other, CLIENT_ID)));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9502, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready again");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(s.chrome.sent("Page.navigate")).toHaveLength(2);
+    // A new start counts its own: nothing of the site failed in it — the
+    // failures of the start before do not reload it.
+    admitting = true;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length === 3 && s.operator.page.step === "site_loaded", 10_000, "the new start's site");
+    const admitted = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
+    await until(() => admitted.outcome === "continued", 3000, "its admission");
+    s.engine.send(identity(9503, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9503, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready in the new start");
+    expect(s.model.navigations).toHaveLength(3);
+    // And one where the site's request fails has its own once.
+    admitting = false;
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length === 4 && s.operator.page.step === "site_loaded", 10_000, "the third start's site");
+    const next = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", s.operator.control.workTab!.sessionId, "XHR", headersOf(TOKEN, ME));
+    await until(() => next.outcome === "failed", 3000, "its refusal");
+    s.engine.send(identity(9504, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9504, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "ready in the third start");
+    expect(s.model.navigations).toHaveLength(5);
+    expect(stateNotes(s).filter((note) => note.includes("the work tab is loaded anew, once"))).toHaveLength(2);
+  });
+
+  it("the reload's own document must come: a reload whose document never commits fails the start, the page not taken for loaded", async () => {
+    const s = await siteSetUp(() => ({ refuse: "held" }), { params: { restartBackoffMs: [5000] }, siteLoadMs: 300 });
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    s.model.siteLoads = "never";
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9951, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9951, 10_000);
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 5000, "the failure");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(s.engine.of("state").some((state) => state.step === "session_confirmed" || state.step === "ready")).toBe(false);
+  });
+
+  it("what of the site still waits at that reload is closed first: failed in Chrome, its late admission not used, nothing of it released into the new document", async () => {
+    let attempt = 9600;
+    const answers: Array<{ admit: number } | { refuse: string } | null> = [{ refuse: "held" }, null, null];
+    const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    // Two more wait for the engine's word when the session is confirmed.
+    const waiting = [read(s, "/api/v1/notifications"), read(s, "/api/v1/subscribers")];
+    await until(() => s.engine.of("siteAdmit").length === 3, 3000, "all asked");
+    expect(s.operator.site.live).toBe(2);
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9701, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9701, 10_000);
+    await until(() => s.operator.page.step === "ready", 5000, "the page ready");
+    expect(s.model.navigations).toHaveLength(2);
+    // Closed before the tab navigated: failed in Chrome, gone here, never released.
+    expect(waiting.map((request) => request.outcome)).toEqual(["failed", "failed"]);
+    expect(s.operator.site.live).toBe(0);
+    const failCommands = s.chrome.commands.map((command, index) => ({ command, index })).filter(({ command }) => command.method === "Fetch.failRequest" && waiting.some((request) => request.interceptionId === command.params.requestId));
+    const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
+    expect(failCommands).toHaveLength(2);
+    expect(failCommands.every(({ index }) => index < reload)).toBe(true);
+    expect(journal(s.logDir, "requests").filter((line) => line.decision === "ended" && line.result === "the work tab is loaded anew")).toHaveLength(2);
+    // They were not failures of the new document: only the refused one counted.
+    expect(stateNotes(s).some((note) => note.includes("1 API request of the site failed before it"))).toBe(true);
+    // The engine's admission of one of them, coming after the reload: not used.
+    const late = s.engine.of("siteAdmit")[1]!;
+    s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: late.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9650 });
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9650)).toMatchObject({ sent: false, status: null });
+    expect(s.chrome.sent("Fetch.continueRequest").some((command) => waiting.some((request) => request.interceptionId === command.params.requestId))).toBe(false);
+    await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "their ids to go");
+  });
+
+  it("a request of the site in flight at the confirmation is waited out before that reload: the reload cancels nothing, and nothing stops the page", async () => {
+    let attempt = 9800;
+    const answers: Array<{ admit: number } | { refuse: string }> = [{ refuse: "held" }];
+    const s = await siteSetUp(() => (answers.length > 0 ? answers.shift()! : { admit: ++attempt }));
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the refusal");
+    // A request of the site goes out and its answer is slow.
+    s.model.siteAnswerDelayMs = 700;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => s.operator.site.released === 1, 3000, "the request in flight");
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9901, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9901, 10_000);
+    // Confirmed by the read, but the tab does not navigate while it flies.
+    expect(s.model.navigations).toHaveLength(1);
+    expect(s.operator.site.released).toBe(1);
+    await until(() => s.operator.page.step === "ready", 8000, "the page ready");
+    expect(s.model.navigations).toHaveLength(2);
+    expect(await s.engine.waitFor("siteDone", (message) => message.attemptId === 9801)).toMatchObject({ sent: true, status: 200 });
+    const answered = s.chrome.commands.findIndex((command) => command.method === "Fetch.continueResponse" && command.params.requestId === flying.interceptionId);
+    const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
+    expect(answered).toBeGreaterThan(-1);
+    expect(answered).toBeLessThan(reload);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.engine.of("state").every((state) => state.stopReason === null)).toBe(true);
   });
 
   it("waits for the engine: a new connection is asked again by the same id; the wait is the engine's parameter, and past it the request fails (Failed)", async () => {

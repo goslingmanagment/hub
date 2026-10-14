@@ -15,6 +15,10 @@
 // - A request whose document is not known yet is judged by its frame: a
 //   frame that committed another document after the request paused
 //   replaced it. A request of no frame (a worker's) is never judged so.
+// - The operator replaces a document itself when it loads the work tab anew
+//   (`retire`): the frame's document counts as replaced from that moment,
+//   before Chrome commits the next one — nothing of it is released into
+//   the reload.
 //
 // Memory is bounded: the newest few thousand ids of each kind are kept.
 
@@ -41,8 +45,10 @@ export class Documents {
   readonly #loaderOf = new Map<string, string>();
   /** A preflight's request. */
   readonly #preflightOf = new Map<string, string>();
-  /** Each frame's current loader and how many documents it committed. */
-  readonly #frames = new Map<string, { loader: string; navigations: number }>();
+  /** Each frame's current loader and how many documents it committed;
+   *  `retired`: the operator replaced its document, Chrome has not
+   *  committed the next one yet. */
+  readonly #frames = new Map<string, { loader: string; navigations: number; commits: number; retired?: boolean }>();
   readonly #replaced = new Map<string, true>();
   /** Told when a frame's document is replaced. */
   onReplaced: () => void = () => undefined;
@@ -56,7 +62,10 @@ export class Documents {
 
   /** Where `request` stands now (at its pause). */
   mark(request: { networkId: string | null; frameId: string | null }): DocumentMark {
-    return { networkId: request.networkId, frameId: request.frameId, navigations: request.frameId === null ? 0 : (this.#frames.get(request.frameId)?.navigations ?? 0) };
+    const frame = request.frameId === null ? undefined : this.#frames.get(request.frameId);
+    // A frame the operator retired has no document of its own until Chrome
+    // commits the next: what pauses in it meanwhile is of the retired one.
+    return { networkId: request.networkId, frameId: request.frameId, navigations: (frame?.navigations ?? 0) - (frame?.retired ? 1 : 0) };
   }
 
   /** The request's document was replaced since `mark`. */
@@ -65,6 +74,20 @@ export class Documents {
     if (loader !== null) return this.#replaced.has(loader);
     if (mark.frameId === null || mark.frameId === "") return false;
     return (this.#frames.get(mark.frameId)?.navigations ?? 0) > mark.navigations;
+  }
+
+  /** The frame's document is being replaced by the operator (the work tab
+   *  loaded anew): replaced from now on, whatever Chrome has told so far. */
+  retire(frameId: string): void {
+    const known = this.#frames.get(frameId);
+    if (known !== undefined && known.loader !== "") remember(this.#replaced, known.loader, true);
+    remember(this.#frames, frameId, { loader: "", navigations: (known?.navigations ?? 0) + 1, commits: known?.commits ?? 0, retired: true });
+    this.onReplaced();
+  }
+
+  /** How many documents Chrome committed in the frame so far. */
+  commits(frameId: string | null): number {
+    return frameId === null ? 0 : (this.#frames.get(frameId)?.commits ?? 0);
   }
 
   /** The request a preflight was made for (its network id), once Chrome
@@ -107,7 +130,7 @@ export class Documents {
     const known = this.#frames.get(frame.id);
     if (known !== undefined && known.loader === loader && loader !== "") return;
     if (known !== undefined && known.loader !== "") remember(this.#replaced, known.loader, true);
-    remember(this.#frames, frame.id, { loader, navigations: (known?.navigations ?? 0) + 1 });
+    remember(this.#frames, frame.id, { loader, navigations: (known?.navigations ?? 0) + 1, commits: (known?.commits ?? 0) + 1 });
     if (known !== undefined) this.onReplaced();
   }
 }

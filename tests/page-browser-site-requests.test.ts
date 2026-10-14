@@ -762,6 +762,60 @@ describe("documents, owners, restarts (stage 1, amendment 41; plan §4.7, §4.9)
     expect(w.chrome.wire).toEqual([]);
   });
 
+  it("the work tab loaded anew (plan §4.1, step 9): what failed before is counted, what waits ends under that reason — never counted, never released — and a request that pauses before the next document comes is of the old one", async () => {
+    let release: () => void = () => undefined;
+    const w = await world({ holdRelease: new Promise<void>((resolve) => (release = resolve)) });
+    w.chrome.navigate("F1", "L1");
+    const refuse = (ask: Record<string, unknown>): SiteAdmitResult => ({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: false, reason: "mode" });
+    const admit = w.engine.answer;
+    w.engine.answer = (ask) => (ask.path === "/api/v1/notifications" ? refuse(ask) : ask.path === "/api/v1/subscribers" ? null : admit(ask));
+    // Refused by the engine: one that failed, nothing of it sent. What the
+    // map closes is not of the count.
+    const refused = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications") });
+    const closed = w.chrome.request(`${API}/message/ack`, { method: "POST", headers: siteHeaders("/api/v1/message/ack"), postData: "{}" });
+    await until(() => refused.outcome === "failed" && closed.outcome === "failed", 3000, "both to fail");
+    expect(w.site.failures).toBe(1);
+    // Failed at once, never asked: a buffer that takes no writes, no network id.
+    w.refusal.why = "buffer_full";
+    const unwritten = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications") });
+    await until(() => unwritten.outcome === "failed", 3000, "the refusal");
+    w.refusal.why = null;
+    w.cdp.emit("Fetch.requestPaused", { requestId: "I-anon", request: { url: `${API}/account/me`, method: "GET", headers: siteHeaders("/api/v1/account/me") }, resourceType: "XHR", frameId: "F1" });
+    await until(() => w.cdp.sent("Fetch.failRequest").some((command) => command.params.requestId === "I-anon"), 3000, "the anonymous one to fail");
+    expect(w.site.failures).toBe(3);
+    // One asked and not answered, one admitted whose release is not durable yet.
+    const waiting = w.chrome.request(`${API}/subscribers`, { headers: siteHeaders("/api/v1/subscribers") });
+    const admitted = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me") });
+    await until(() => w.engine.of("siteAdmit").length === 3, 3000, "both asked");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(w.site.released).toBe(0);
+    w.site.reloading("F1");
+    release();
+    await until(() => waiting.outcome === "failed" && admitted.outcome === "failed", 3000, "both to end");
+    const [done] = await doneOf(w);
+    expect(done).toMatchObject({ attemptId: 5001, sent: false, error: { message: "not used: the work tab is loaded anew" } });
+    expect(w.journal).toContainEqual(expect.objectContaining({ path: "/api/v1/subscribers", decision: "ended", result: "the work tab is loaded anew" }));
+    expect(w.site.failures).toBe(3);
+    // An admission for the one that waited, late: not used.
+    const late = String(w.engine.of("siteAdmit")[1]!.siteRequestId);
+    w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: late, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 71 });
+    await doneOf(w, 2);
+    expect(w.done.get(71)).toMatchObject({ sent: false });
+    // The old document's request that pauses before Chrome commits the next,
+    // its loader not told yet: never released, though admitted.
+    const stray = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { noWillBeSent: true } });
+    await until(() => stray.outcome === "failed", 3000, "the stray to fail");
+    expect(w.chrome.wire).toEqual([]);
+    // The new document's own: as ever, released, in flight until its end.
+    w.chrome.navigate("F1", "L2");
+    w.site.resetFailures();
+    expect(w.site.failures).toBe(0);
+    const fresh = w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), loaderId: "L2", script: { chunkDelayMs: 150, chunks: [JSON_BODY.subarray(0, 20), JSON_BODY.subarray(20)] } });
+    await until(() => w.site.released === 1, 3000, "the release");
+    await until(() => fresh.ended && w.site.released === 0, 3000, "its end");
+    expect(w.chrome.wire).toEqual([{ role: "main", method: "GET", url: `${API}/account/me` }]);
+  });
+
   it("a new owner: an earlier owner's admission not released never goes; a released one is waited for", async () => {
     let release: () => void = () => undefined;
     const w = await world({ holdRelease: new Promise<void>((resolve) => (release = resolve)) });
