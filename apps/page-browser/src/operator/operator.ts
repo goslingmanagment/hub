@@ -300,6 +300,18 @@ export class Operator {
    *  person may have been in the page since (Astra's review of PR 15,
    *  item 6). */
   #identityFloorMono = Number.NEGATIVE_INFINITY;
+  /** A profile no page has yet (page 0: its onboarding, Project Browser PR
+   *  16): its identity read names whatever account the browser is logged
+   *  into — so it confirms only the session that exists after the person's
+   *  login: the one the site's own authorized GET showed in a document whose
+   *  load began after the mode last changed (Astra's review of PR 16, round
+   *  2: until then the Hub requests' headers may still be the session of
+   *  before the login). The changes of the mode are counted; the change a
+   *  load began in, and the one it ended in; the session shown since. */
+  #modeChanges = 0;
+  #loadBeganInMode = -1;
+  #loadedInMode = -1;
+  #sessionShownInMode: string | null = null;
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -601,7 +613,13 @@ export class Operator {
         send: (message) => this.rpc.send(message),
       },
       notUp: () => this.#siteNotUp(),
-      session: { fingerprint: () => this.hub.session.fingerprint, note: (request) => this.hub.noteSiteRequest(request) },
+      session: {
+        fingerprint: () => this.hub.session.fingerprint,
+        note: (request) => {
+          this.hub.noteSiteRequest(request);
+          this.#siteShowedSession(request);
+        },
+      },
       mode: () => this.#mode,
       fault: (reason, note) => this.#requestFault(reason, note),
       journal: (line) => this.journals.request(line),
@@ -942,6 +960,8 @@ export class Operator {
    *  admission. A site that does not load fails the start. */
   async #loadSite(run: number): Promise<void> {
     const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.page.step !== "exit_open" || !this.egress.exitOpen;
+    const mode = this.#modeChanges;
+    this.#loadBeganInMode = mode;
     try {
       const tab = this.control.workTab;
       if (tab === null) throw new StartFailure("cdp_lost", "no work tab to load the site in");
@@ -957,6 +977,7 @@ export class Operator {
       const atSite = await this.#waitUntil(() => stale() || (this.#workTabAtSite() && documents() > before), this.#timings.siteLoadMs);
       if (stale()) return;
       if (!atSite) throw new StartFailure("proxy_unavailable", `the site's document did not come within ${this.#timings.siteLoadMs} ms`);
+      if (mode === this.#modeChanges) this.#loadedInMode = mode;
       this.page.advance("site_loaded", SITE_URL);
       this.#confirmSession();
     } catch (error) {
@@ -985,7 +1006,7 @@ export class Operator {
     const identity = this.#identity;
     const live = this.hub.session.fingerprint;
     if (this.page.step !== "site_loaded" || identity === null || live === null || identity.fingerprint !== live) return;
-    if (identity.accountId !== this.#settings?.expectedAccountId) return;
+    if (!this.#identityConfirms(identity)) return;
     if (this.#reloadPending) return;
     const failed = this.site.failures;
     if (failed > 0 && !this.#siteReloaded) {
@@ -997,6 +1018,32 @@ export class Operator {
     }
     this.page.advance("session_confirmed", "the engine's identity read named the expected account");
     this.page.advance("ready");
+  }
+
+  /** Whether the identity read confirms the session: a page's, when it names
+   *  the page's account; a profile's no page has yet (page 0, its
+   *  onboarding), whatever account it names — but, once the mode changed,
+   *  only under the session the site showed in a document loaded after the
+   *  change (PR 16, Astra's round 2). */
+  #identityConfirms(identity: { accountId: string; fingerprint: string }): boolean {
+    const settings = this.#settings;
+    if (settings === null) return false;
+    if (settings.pageId !== 0) return identity.accountId === settings.expectedAccountId;
+    return this.#modeChanges === 0 || (this.#loadedInMode === this.#modeChanges && this.#sessionShownInMode === identity.fingerprint);
+  }
+
+  /** The site's own API request, as it stopped: a GET with its session in
+   *  the automation, asked by a document whose load began after the mode
+   *  last changed, shows the session that exists now (page 0's
+   *  confirmation, `#identityConfirms`). */
+  #siteShowedSession(request: { method: string; headers: Record<string, string> }): void {
+    if (this.#mode !== "automation" || this.#loadBeganInMode !== this.#modeChanges || request.method.toUpperCase() !== "GET") return;
+    if (!Object.entries(request.headers).some(([name, value]) => name.toLowerCase() === "authorization" && value !== "")) return;
+    const live = this.hub.session.fingerprint;
+    if (live === null || live === this.#sessionShownInMode) return;
+    this.#sessionShownInMode = live;
+    this.#confirmSession();
+    this.#sendState();
   }
 
   /** The work tab loaded anew at the session's confirmation, once a start:
@@ -1569,6 +1616,10 @@ export class Operator {
     // sent from now on, before the page is ready again.
     this.#identity = null;
     this.#identityFloorMono = monoMs();
+    // Page 0's confirmation waits for the site to show its session again,
+    // in a document loaded from now on.
+    this.#modeChanges += 1;
+    this.#sessionShownInMode = null;
     this.#mode = mode;
     this.#modeGeneration = generation;
     this.#log("mode", { mode, generation, why });

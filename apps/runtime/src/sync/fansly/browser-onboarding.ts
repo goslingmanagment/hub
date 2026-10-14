@@ -155,6 +155,9 @@ export interface BrowserOnboardingTiming {
   identityWaitMs: number;
   /** A Hub request's wait for its result. */
   resultWaitMs: number;
+  /** An account read's wait for the operator to confirm the session it went
+   *  under (`confirmsRead`). */
+  confirmWaitMs: number;
 }
 
 export const BROWSER_ONBOARDING_TIMING: Readonly<BrowserOnboardingTiming> = Object.freeze({
@@ -168,6 +171,7 @@ export const BROWSER_ONBOARDING_TIMING: Readonly<BrowserOnboardingTiming> = Obje
   lockRetryMs: 5_000,
   identityWaitMs: 45_000,
   resultWaitMs: 60_000,
+  confirmWaitMs: 15_000,
 });
 
 /** TESTS ONLY: the operator's address and hello, scaled timings, a pacer
@@ -358,6 +362,19 @@ const STEP_ORDER = ["exit_closed", "env_applied", "chrome_started", "control_att
 function takesHubRequests(state: State): boolean {
   return state.mode === "automation" && state.exitOpen && state.stopReason === null && state.sessionFingerprint !== null
     && STEP_ORDER.indexOf(state.step) >= STEP_ORDER.indexOf("site_loaded");
+}
+
+/** The operator confirmed the session an account read went under — PR 15's
+ *  mechanism, a page's «ready only after a fresh identity read under the
+ *  live session», which for a profile no page has confirms whatever account
+ *  the read named, but only under the session the site showed after the
+ *  person's login (Astra's review of PR 16, round 2): it says so in its
+ *  state, at `session_confirmed` or later, with that account and that
+ *  session live. */
+export function confirmsRead(state: State | null, accountId: string, fingerprint: string): boolean {
+  return state !== null && state.mode === "automation" && state.stopReason === null && state.exitOpen
+    && STEP_ORDER.indexOf(state.step) >= STEP_ORDER.indexOf("session_confirmed")
+    && state.sessionFingerprint === fingerprint && state.accountId === accountId;
 }
 
 const PROTOCOL_REFUSALS: ReadonlySet<string> = new Set(REFUSALS);
@@ -945,11 +962,15 @@ export class OnboardingLink {
       const journal = prepareJournalBody({ kind: spec.kind }, { response: read.response, contractAccepted: true });
       // Captured whatever it proves (capture before parse).
       observation = { kind: spec.kind, payload: journal.payload, payloadHash: journal.payloadHash, accountId: account.id };
-      // Proof: the operator's own `sent`, after the login's boundary.
+      // Proof: the operator's own `sent`, after the login's boundary; and
+      // the operator's word that the session the read went under is the one
+      // that exists after the login (its confirmation, `confirmsRead`).
       if (sent.sentFloorMono === null || admission.sentWall === null) {
         result = failure("the browser did not say when the account's read left it: what it names proves nothing — check again");
       } else if (sent.sentFloorMono <= boundary.mono) {
         result = failure("the account was read before the browser's login closed: check again");
+      } else if (!(await this.#operatorConfirms(account.id, fingerprint, signal))) {
+        result = failure("the browser did not confirm the session the account was read under as the one after the login (the site has not shown it since, or shows another): check again");
       } else {
         result = {
           requestId,
@@ -972,6 +993,9 @@ export class OnboardingLink {
         // A move since (a login opened again, given up): the read is of
         // before it. (A move voids the request too: nothing is written then.)
         result = failure("the onboarding changed while the account was read: check again");
+      } else if (result.ok && !confirmsRead(this.client.state, result.accountId, result.sessionFingerprint)) {
+        // Still the browser's session, confirmed, at the write.
+        result = failure("the browser's session changed while the account was read: check again");
       }
       if (observation !== null) {
         const inserted = await insertObservation(tx, {
@@ -993,6 +1017,30 @@ export class OnboardingLink {
     this.#metrics.increment("sync_browser_onboarding_identity", { ok: result.ok ? "true" : "false" });
     this.#o.logger.info({ profileId: this.profileId, attemptId, ok: result.ok, accountId: result.ok ? result.accountId : null },
       "Fansly sync browser onboarding: the account read through the browser");
+  }
+
+  /** The operator confirms the session `fingerprint` with `accountId`
+   *  (`confirmsRead`) — now, or within `confirmWaitMs` (a read that went
+   *  before the site showed that same session is confirmed once it does). */
+  async #operatorConfirms(accountId: string, fingerprint: string, signal: AbortSignal): Promise<boolean> {
+    if (confirmsRead(this.client.state, accountId, fingerprint)) return true;
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (confirmed: boolean) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        unlisten();
+        signal.removeEventListener("abort", onAbort);
+        resolve(confirmed);
+      };
+      const onAbort = () => finish(false);
+      const timer = setTimeout(() => finish(false), this.#t.confirmWaitMs);
+      const unlisten = this.client.onState((state) => {
+        if (confirmsRead(state, accountId, fingerprint)) finish(true);
+      });
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /** One Hub request `GET /account/me` through the browser, under the

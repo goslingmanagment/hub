@@ -23,6 +23,9 @@ export interface FakeLoginOptions {
   /** The session the site holds once logged in (its token and client id). */
   token: string;
   clientId: string;
+  /** Once logged in, each new document reads the account with its session
+   *  as it loads (the site's stored session, as Fansly's app does). */
+  readsOnLoad?: boolean;
 }
 
 /** The button's box on the fake page, and its centre. */
@@ -115,9 +118,11 @@ export class FakeLoginSite {
       }
       return {};
     });
-    // A new document: nothing of the old one is pressed any more.
+    // A new document: nothing of the old one is pressed any more; a site
+    // logged in reads with its session as it loads (`readsOnLoad`).
     chain("Page.navigate", () => {
       this.down = false;
+      if (this.#options.readsOnLoad === true && this.#signedIn) setTimeout(() => this.#readAccount(), 50);
       return undefined;
     });
     chain("Page.captureScreenshot", () => ({ data: Buffer.from(`FAKEJPEG:${this.screen}`).toString("base64") }));
@@ -201,9 +206,17 @@ export class FakeLoginSite {
     }
   }
 
+  #signedIn = false;
+
   /** Logged in: no form, and the site's own reads carry the new session. */
   #loggedIn(): void {
     this.screen = "success";
+    this.#signedIn = true;
+    this.#readAccount();
+  }
+
+  /** The site's own read of the account, with its session. */
+  #readAccount(): void {
     const path = "/api/v1/account/me";
     const { token, clientId } = this.#options;
     this.#model.pause(`https://apiv3.fansly.com${path}`, "GET", this.#tab(), "XHR", {

@@ -145,7 +145,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
     cleanups.push(() => chrome.shutdown());
     const model = new BrowserModel(chrome);
     model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: ACCOUNT, username: "ari2", displayName: "Ari Two", createdAt: 0, followCount: 3, subscriberCount: 5 } } }));
-    const site = new FakeLoginSite(model, { login: LOGIN_MARKER, password: PASSWORD_MARKER, code: CODE_MARKER, token: SITE_TOKEN, clientId: SITE_CLIENT });
+    const site = new FakeLoginSite(model, { login: LOGIN_MARKER, password: PASSWORD_MARKER, code: CODE_MARKER, token: SITE_TOKEN, clientId: SITE_CLIENT, readsOnLoad: true });
     const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
     await holder.start();
     cleanups.push(() => holder.stop());

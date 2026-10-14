@@ -37,7 +37,7 @@ import { harnessConfig, until } from "./helpers/sync-engine.ts";
 const S = 300;
 const ENV = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } };
 const RPC_TIMING = { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 };
-const TIMING = { everyMs: 100, driveEveryMs: 50, commandWaitMs: 2_000, unreachableEndMs: 1_000, restartEveryMs: 500, lockRetryMs: 200, identityWaitMs: 2_000, resultWaitMs: 5_000 };
+const TIMING = { everyMs: 100, driveEveryMs: 50, commandWaitMs: 2_000, unreachableEndMs: 1_000, restartEveryMs: 500, lockRetryMs: 200, identityWaitMs: 2_000, resultWaitMs: 5_000, confirmWaitMs: 1_500 };
 const ACCOUNT = "300000000000000777";
 const HOLDER: FanslySendHolderIdentity = { host: "sync-test", pid: process.pid, pidStart: "1", pidNs: "ns", bootId: "boot", instance: randomUUID(), role: "sync" };
 
@@ -72,8 +72,11 @@ interface Rig {
 }
 
 /** A profile as add-profile registers it, its proxy given and its exit IP
- *  pinned as the owner does in the dashboard. */
-async function rig(options: { onboarding?: "login" | "open" } = {}): Promise<Rig> {
+ *  pinned as the owner does in the dashboard. Its fake operator confirms an
+ *  account read's session as the real one does for a profile no page has
+ *  (its state at `ready` with the account, before the read's result) —
+ *  unless `confirmReads` is false. */
+async function rig(options: { onboarding?: "login" | "open"; confirmReads?: boolean } = {}): Promise<Rig> {
   const operator = await FakeOperator.start({ accountId: ACCOUNT, session: null });
   cleanups.push(() => operator.close());
   operator.startStatePushes(100);
@@ -96,7 +99,24 @@ async function rig(options: { onboarding?: "login" | "open" } = {}): Promise<Rig
   });
   await setPageBrowserSettings(db(), { profileId, pinnedExitIp: "203.0.113.7" });
   if (options.onboarding !== undefined) await moveOnboarding(profileId, options.onboarding);
-  return { operator, profileId, config };
+  const r = { operator, profileId, config };
+  if (options.confirmReads !== false) confirmingReads(r);
+  return r;
+}
+
+/** The operator's confirmation of an account read (PR 15's mechanism, page
+ *  0's): before the read's result goes, its state says the session it went
+ *  under is confirmed, with the account it named. */
+function confirmingReads(r: Rig): void {
+  intercept(r, (message) => {
+    if (message.type !== "result") return message;
+    const send = r.operator.sends.find((sent) => sent.attemptId === message.attemptId);
+    const outcome = message.outcome as { kind?: string };
+    if (send?.route === "account.me" && outcome.kind === "response") {
+      r.operator.pushState({ step: "ready", accountId: ACCOUNT, sessionFingerprint: String(message.sessionFingerprint) });
+    }
+    return message;
+  });
 }
 
 async function moveOnboarding(profileId: string, to: "login" | "open" | "closing"): Promise<void> {
@@ -439,6 +459,35 @@ describe("the account read through the browser proves it only when fresh (Astra'
     expect(profile.identityRequest).toBeNull();
     expect(profile.identityResult).toBeNull();
     expect(profile.onboardingGeneration).toBeGreaterThanOrEqual(3n);
+  });
+
+  it("names no account the operator did not confirm: a read under the session of before the login, the site showing another one after it (Astra's review of PR 16, round 2)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login", confirmReads: false });
+    r.operator.setSession(SESSION_A);
+    // The read goes under A's headers; the site then shows session B — the
+    // operator confirms nothing of A's read.
+    startTask(r);
+    const requestId = await loginThenAsk(r);
+    await until(async () => r.operator.physical.length === 1, 10_000, "the read sent");
+    r.operator.setSession(SESSION_B);
+    const answer = await answerOf(r, requestId);
+    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining("did not confirm the session") });
+    // Its answer is journaled all the same (capture before parse).
+    expect((await testDb.pool.query("select 1 from observations where producer = 'fansly-onboarding:account.me'")).rows).toHaveLength(1);
+  });
+
+  it("waits for the operator's confirmation of a read that went before the site showed that same session", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login", confirmReads: false });
+    r.operator.setSession(SESSION_A);
+    startTask(r);
+    const requestId = await loginThenAsk(r);
+    await until(async () => r.operator.acks.length >= 1 || r.operator.held.size >= 1, 10_000, "the read answered");
+    await sleep(300);
+    // The new document shows A: the operator confirms the read.
+    r.operator.pushState({ step: "ready", accountId: ACCOUNT, sessionFingerprint: SESSION_A });
+    expect(await answerOf(r, requestId)).toMatchObject({ ok: true, accountId: ACCOUNT, sessionFingerprint: SESSION_A });
   });
 
   it("opened without a login (a profile logged in before): asks the operator for the automation all the same, and reads the account after its answer", async (context) => {
