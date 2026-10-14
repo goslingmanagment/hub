@@ -10,6 +10,7 @@ import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collection
 import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
+import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
 import {
   PERIOD_OPTIONS,
@@ -6118,6 +6119,7 @@ const baseRouteSchemas = {
   ...ofapiMediaImageRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...ofLinksRouteSchemas,
+  ...pageBrowserRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

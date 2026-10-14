@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 25 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (289)
+## Routes (296)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -265,6 +265,13 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
+| GET | `/api/v1/page-browser/pages/:pageLabel/login` | `pageBrowserLoginGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/pages/:pageLabel/login/code` | `pageBrowserLoginCode` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/pages/:pageLabel/login/finish` | `pageBrowserLoginFinish` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/pages/:pageLabel/login/screenshot` | `pageBrowserLoginScreenshot` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/pages/:pageLabel/login/start` | `pageBrowserLoginStart` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/pages/:pageLabel/login/submit` | `pageBrowserLoginSubmit` | `owner-session` | — | — | no |
+| GET | `/api/v1/page-browser/pages/:pageLabel/screen/*` | `pageBrowserScreen` | `owner-session` | — | — | no |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |

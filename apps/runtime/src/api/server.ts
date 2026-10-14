@@ -75,6 +75,7 @@ import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
+import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
@@ -187,6 +188,22 @@ export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec
       "audio/mpeg": {
         ...audioJsonContent,
         schema: { ...(audioJsonContent.schema ?? {}), type: "string", format: "binary" },
+      },
+    };
+  }
+
+  // A page browser's screenshot (Project Browser PR 15): raw image/jpeg, as
+  // the voice-note audio above.
+  const screenshotResponse = paths?.["/api/v1/page-browser/pages/{pageLabel}/login/screenshot"]
+    ?.get?.responses?.["200"];
+  const screenshotJsonContent = screenshotResponse?.content?.["application/json"] as
+    | { schema?: Record<string, unknown> }
+    | undefined;
+  if (screenshotResponse && screenshotJsonContent) {
+    screenshotResponse.content = {
+      "image/jpeg": {
+        ...screenshotJsonContent,
+        schema: { ...(screenshotJsonContent.schema ?? {}), type: "string", format: "binary" },
       },
     };
   }
@@ -654,6 +671,7 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Fansly Sync Engine owner routes (history requests) --- (module: apps/runtime/src/modules/sync-engine)
   registerSyncEngineRoutes(server, moduleContext);
+  registerPageBrowserRoutes(server, moduleContext);
 
   // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
   registerClientRoutes(server, moduleContext);

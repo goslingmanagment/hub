@@ -1,3 +1,4 @@
+import type { PageBrowserEndpoints } from "./services/egress/page-browser-login.ts";
 import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
 import {
   assertRuntimeSchemaReady,
@@ -73,6 +74,10 @@ export interface AppContext {
   // Undefined when either boot dependency is absent (admission then 503s
   // voice_provider_unavailable).
   voiceTtsProvider?: VoiceTtsProvider | undefined;
+  /** Where the API reaches a page's browser (Project Browser PR 15): its
+   *  operator's /rpc and its screen on pb-control. Absent: the container's
+   *  own addresses. Tests point it at fakes. */
+  pageBrowserEndpoints?: PageBrowserEndpoints | undefined;
   /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
    *  captures a page through it any more (step 4): it is this process's holder
    *  identity — for the journal of the identity check without a page, the
