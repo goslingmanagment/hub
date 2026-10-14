@@ -511,3 +511,81 @@ describe("the site's requests pass only while the owner's login is open (Astra's
     expect((await journal(r.profileId)).map((row) => [row.operation, row.outcome, row.sent_at])).toEqual([["login:auth.login", "aborted_before_send", null]]);
   });
 });
+
+describe("the site's requests keep the route and family budgets a page's keep, across a restart (Astra's review of PR 16, item 4)", () => {
+  /** The next grant: the instant it was seen (polled every 25 ms: never early). */
+  async function nextGrant(r: Rig, count: number): Promise<{ answer: SiteAdmitResult & { admit: true }; at: number }> {
+    await until(async () => granted(r).length >= count, 15_000, `admission ${count}`);
+    return { answer: granted(r)[count - 1]!, at: Date.now() };
+  }
+
+  async function upInTheLogin(r: Rig): Promise<void> {
+    await untilLoginMode(r);
+    await until(async () => r.operator.state.mode === "manual_login" && r.operator.state.exitOpen, 10_000, "up in the manual login");
+  }
+
+  it("admits the site's reads outside the catalogue no sooner than site.other's interval apart (15/min), not the owner's pause alone", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    // The budgets × 0.25: site.other 1 000 ms (its family's 750 ms); the pause 300–360 ms.
+    startTask(r, HOLDER, { routeTimeScale: 0.25 });
+    await upInTheLogin(r);
+    for (let i = 0; i < 3; i++) r.operator.siteAdmit({ path: `/api/v1/notice/${i}`, route: "site.other" });
+    const gaps: number[] = [];
+    let done = 0;
+    for (let n = 1; n <= 3; n++) {
+      const next = await nextGrant(r, n);
+      if (n > 1) gaps.push(next.at - done);
+      done = Date.now();
+      r.operator.siteDone(next.answer, { status: 200 });
+    }
+    expect(gaps).toHaveLength(2);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(1_000 - 5);
+  });
+
+  it("reads the account no sooner than account.me's interval after its previous read", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    r.operator.setSession(SESSION_A);
+    // × 0.25: account.me 1 000 ms apart; the pause 300–360 ms.
+    startTask(r, HOLDER, { routeTimeScale: 0.25 });
+    await answerOf(r, await loginThenAsk(r));
+    const requested = await requestOnboardingIdentity(db(), { profileId: r.profileId, source: "credentials_verify" });
+    await answerOf(r, requested.kind === "requested" ? requested.requestId : "");
+    expect(r.operator.physical).toHaveLength(2);
+    expect(r.operator.physical[1]!.sentMono - r.operator.physical[0]!.sentMono).toBeGreaterThanOrEqual(1_000 - 5);
+  });
+
+  it("holds a new link (a restart) to the interval and to a 429's hold its journal shows", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    // The production budgets: site.other 4 000 ms apart. A new link's own
+    // floor is 1.2 × the owner's minimum pause (2 000 ms): 2 400 ms.
+    const first = startTask(r);
+    await upInTheLogin(r);
+    r.operator.siteAdmit({ path: "/api/v1/notice/1", route: "site.other" });
+    const sent = await nextGrant(r, 1);
+    const sentAt = Date.now();
+    r.operator.siteDone(sent.answer, { status: 200 });
+    await until(async () => (await journal(r.profileId)).every((row) => row.completed_at !== null), 5_000, "journaled");
+    // A restart: the next link's first site.other waits out the interval.
+    await first.stop();
+    const second = startTask(r);
+    await until(async () => r.operator.hellos.length >= 2, 10_000, "the second link's hello");
+    r.operator.siteAdmit({ path: "/api/v1/notice/2", route: "site.other" });
+    const again = await nextGrant(r, 2);
+    expect(again.at - sentAt).toBeGreaterThanOrEqual(4_000 - 5);
+    // A 429 with its Retry-After (6 s): recorded with the send, and a link
+    // after a restart is held by it.
+    const limitedAt = Date.now();
+    r.operator.siteDone(again.answer, { status: 429, retryAfter: "6" });
+    await until(async () => (await journal(r.profileId)).every((row) => row.completed_at !== null), 5_000, "journaled");
+    expect((await testDb.pool.query<{ outcome_detail: string | null }>("select outcome_detail from fansly_send_log where browser_profile_id = $1 order by id desc limit 1", [r.profileId])).rows[0]!.outcome_detail).toBe("route_hold_ms=6000");
+    await second.stop();
+    startTask(r);
+    await until(async () => r.operator.hellos.length >= 3, 10_000, "the third link's hello");
+    r.operator.siteAdmit({ path: "/api/v1/notice/3", route: "site.other" });
+    const held = await nextGrant(r, 3);
+    expect(held.at - limitedAt).toBeGreaterThanOrEqual(6_000 - 5);
+  }, 60_000);
+});

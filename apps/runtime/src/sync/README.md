@@ -1094,7 +1094,9 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   exit IP starts again only once the owner pins the IP again. The site's login operations and the reads its interface
   makes are admitted by the profile key (`loginOnly`; the rest of the site and its socket refused): one in flight,
   the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
-  profile's last send (the journal's and the operator's `quiesced`), the hour's ceiling and a 429's route hold — each
+  profile's last send (the journal's and the operator's `quiesced`), and a page's site decision (`decideSite`): the
+  route and family budgets of `route-policy.ts`, the hour's ceiling and a 429's route hold, all read from the
+  profile's journal on every slot (a hold as `route_hold_ms=` on its send), so a restart keeps them — each
   journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
   `sync_attempts`' sequence, so the operator never sees an id twice) — only while the onboarding is the owner's
   login, checked under the profile's row lock at the journal entry and again, in the same generation, at the grant

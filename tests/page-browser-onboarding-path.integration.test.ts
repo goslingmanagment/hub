@@ -219,6 +219,9 @@ describe("a new page connected through its own browser, the whole path (plan §3
         rpcTiming: { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 },
         timing: { everyMs: 100, driveEveryMs: 50, commandWaitMs: 5_000, unreachableEndMs: 2_000, restartEveryMs: 1_000, lockRetryMs: 200 },
         pacerFactory: (deps) => new Pacer({ ...deps, minSettingMs: S }),
+        // The route budgets at a test's scale (auth.login 200 ms apart): the
+        // owner's second try of the password comes within a second here.
+        routeTimeScale: 0.05,
       },
     });
     cleanups.push(() => task.stop());

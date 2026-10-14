@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 
 import {
+  browserProfileRouteHoldDetail,
   closeUnfinishedBrowserProfileSends,
   completeFanslySendAttempt,
   countBrowserProfileSendsSince,
@@ -15,6 +16,7 @@ import {
   lockOnboardingLink,
   nextBrowserAttemptId,
   OnboardingLinkLostError,
+  readBrowserProfileRouteJournal,
   readProfileIntakePosition,
   recordOnboardingIdentity,
   recordPageBrowserLinkError,
@@ -25,6 +27,7 @@ import {
   type FanslySendHolderIdentity,
   type OnboardingIdentityResult,
   type OnboardingProfile,
+  type SyncRouteSend,
 } from "@agency_hub_core/db";
 import { buildFanslyWireUrl, FANSLY_WIRE_MAX_BODY_BYTES, fanslyWireSpec, readFanslyWireResponse, type FanslyWireOutcome } from "@agency_hub_core/fansly";
 import { FANSLY_PAUSE_MIN_MS, redactSensitiveText, type AppConfig } from "@agency_hub_core/shared";
@@ -49,14 +52,16 @@ import {
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import { FLOOR_LOOKBACK_MS, Pacer, REQUEST_TIMEOUT_MS, TAKEOVER_FACTOR, type Admission, type PacerDeps } from "../engine/pacer.ts";
 import { cryptoRng, noopMetrics, systemClock, type Clock, type Metrics, type PauseSource, type Rng } from "../engine/ports.ts";
+import { EMPTY_ROUTE_STATE, routeAdmissionView, RouteClocks, routeJournalLookbackMs, type RouteState } from "../engine/route-policy.ts";
 import {
   classifySiteRequest,
+  decideSite,
   SITE_END_WAIT_MS,
-  SITE_SENDS_PER_HOUR,
   SITE_WAIT_MS,
   siteAnswerEffect,
   transportOutcomeOfSite,
 } from "../engine/site-admission.ts";
+import { routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "./routes.ts";
 import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
 import { prepareJournalBody } from "./capture.ts";
@@ -83,8 +88,12 @@ import { accountOf } from "./identity-without-page.ts";
 //   (`loginOnly`: everything else, and every socket, refused at once); the
 //   owner's pause S × (1 + u) between any two sends of the profile, one in
 //   flight (the engine's pacer, its floor 1.2 × S after the profile's last
-//   send — the journal's, and the operator's `quiesced`); the hour's ceiling
-//   and a 429's hold of its route; each journaled in `fansly_send_log`
+//   send — the journal's, and the operator's `quiesced`); the route and
+//   family budgets a page's sends keep (`engine/route-policy.ts`), the hour's
+//   ceiling and a 429's hold of its route, by the site decision a page's
+//   requests take (`decideSite`) — the clocks read from the profile's journal
+//   on every slot, so a new link (a restart) is held as the one before was
+//   (Astra's review of PR 16, item 4); each journaled in `fansly_send_log`
 //   without a page (source `onboarding`, the profile and the attempt), as
 //   today's check without a page is. Only while the onboarding is the
 //   owner's login in the generation the request was admitted in, checked
@@ -173,6 +182,28 @@ export interface BrowserOnboardingOverrides {
   /** Awaited between a site request's journal entry and its grant (a test
    *  moves the onboarding there). */
   beforeGrant?: (siteRequestId: string) => Promise<void>;
+  /** Every route and family interval × this (`RoutePolicyOptions.timeScale`). */
+  routeTimeScale?: number;
+}
+
+/** A route hold an answer puts on the profile is kept at most this long
+ *  (the journal is read back as far for it). */
+const ROUTE_HOLD_MAX_MS = 3_600_000;
+/** The site loop's longest wait for a route that opens later: a request of
+ *  another route asked meanwhile waits no longer. */
+const ROUTE_WAIT_STEP_MS = 250;
+
+/** A profile's journal operation as the route clocks read it: the site's
+ *  and the login's (`site:<route>`, `login:<route>`) by their route, the
+ *  engine's own (the account's read) by its legacy operation. */
+function routeSendOf(operation: string, lastAt: Date): SyncRouteSend {
+  const site = /^(?:site|login):(.+)$/.exec(operation);
+  return site === null ? { journal: "legacy", operation, lastAt } : { journal: "engine", operation: site[1]!, lastAt };
+}
+
+function routeOfProfileOperation(operation: string): FanslyRoute | null {
+  const send = routeSendOf(operation, new Date(0));
+  return send.journal === "engine" ? routeOfEngineOperation(send.operation) : routeOfLegacyOperation(send.operation);
 }
 
 export interface BrowserOnboardingOptions {
@@ -345,7 +376,6 @@ export class OnboardingLink {
   readonly #bridge: MonoBridge;
   readonly #holds: () => boolean;
   readonly #stop = new AbortController();
-  readonly #routeHolds = new Map<string, number>();
   readonly #unlisten: Array<() => void> = [];
   #profile: OnboardingProfile;
   #lost = false;
@@ -660,8 +690,8 @@ export class OnboardingLink {
     const signal = this.#stop.signal;
     while (!signal.aborted) {
       try {
-        const admitted = await this.#siteStep(signal);
-        if (!admitted) await this.#clock.sleep(this.#t.siteIdleMs, signal);
+        const waitMs = await this.#siteStep(signal);
+        if (waitMs > 0) await this.#clock.sleep(waitMs, signal);
       } catch (error) {
         if (signal.aborted) return;
         if (error instanceof OnboardingLinkLostError) return;
@@ -671,36 +701,67 @@ export class OnboardingLink {
     }
   }
 
-  /** Refuse what cannot pass; admit the oldest that can. True: one went. */
-  async #siteStep(signal: AbortSignal): Promise<boolean> {
-    if (this.#refuseExpired() === 0) return false;
+  /** The profile's route clocks now: its journal's sends and the holds its
+   *  answers put on routes. */
+  async #routeClocks(): Promise<RouteClocks> {
+    const scale = this.#o.overrides?.routeTimeScale;
+    const options = scale === undefined ? {} : { timeScale: scale };
+    const read = await readBrowserProfileRouteJournal(this.#o.db, {
+      profileId: this.profileId,
+      withinMs: routeJournalLookbackMs(EMPTY_ROUTE_STATE, options),
+      holdsWithinMs: ROUTE_HOLD_MAX_MS,
+    });
+    const routes: RouteState["routes"] = {};
+    for (const hold of read.holds) {
+      const route = routeOfProfileOperation(hold.operation);
+      if (route === null) continue;
+      routes[route] = { holdUntil: hold.until.toISOString(), ladderStep: 0, effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null, revision: 0 };
+    }
+    return new RouteClocks({ sends: read.sends.map((send) => routeSendOf(send.operation, send.lastAt)), state: { routes }, ...options });
+  }
+
+  /** Refuse what cannot pass; admit the oldest that can. 0: one went (or
+   *  was refused at its grant); else how long to wait before looking again. */
+  async #siteStep(signal: AbortSignal): Promise<number> {
+    const idle = this.#t.siteIdleMs;
+    if (this.#refuseExpired() === 0) return idle;
     return this.#inSlot(async () => {
-      if (this.#refuseExpired() === 0) return false;
+      if (this.#refuseExpired() === 0) return idle;
       const grant = await this.pacer.waitForSlot(signal);
-      // At the slot: what still waits, and may pass now.
-      if (this.#refuseExpired() === 0) return false;
-      const sendsLastHour = await countBrowserProfileSendsSince(this.#o.db, { profileId: this.profileId, since: new Date(Date.now() - 3_600_000) });
-      const now = this.#clock.monoNow();
-      let chosen: { id: string; route: string; origin: "site" | "login"; manualLogin: boolean } | null = null;
-      for (const request of this.site.pending()) {
-        const classified = classifySiteRequest(request);
-        if ("refuse" in classified) {
-          this.site.refuse(request.id, classified.refuse);
-          continue;
+      // At the slot: what still waits, and may pass now — by the decision a
+      // page's site requests take: the hour's ceiling, the route and family
+      // budgets and holds (the manual login's own exemptions; the profile
+      // has no pause or hold of a page).
+      if (this.#refuseExpired() === 0) return idle;
+      const now = this.#clock.wallNow();
+      const view = routeAdmissionView(await this.#routeClocks(), [], now);
+      const sendsLastHour = await countBrowserProfileSendsSince(this.#o.db, { profileId: this.profileId, since: new Date(now.getTime() - 3_600_000) });
+      const decision = decideSite(this.site.pending(), {
+        nowMono: this.#clock.monoNow(),
+        now,
+        pausedAll: false,
+        pageHeld: null,
+        checksOnly: false,
+        routeOpensAt: (route) => {
+          const closure = view.routeOpensAt(route);
+          return closure === null ? null : { at: closure.at };
+        },
+        sendsLastHour,
+      });
+      for (const refusal of decision.refuse) this.site.refuse(refusal.id, refusal.reason);
+      const admit = decision.admit;
+      if (admit === null) {
+        // Looked at again when the first closed route opens (or sooner).
+        let opensInMs = Number.POSITIVE_INFINITY;
+        for (const request of this.site.pending()) {
+          const classified = classifySiteRequest(request);
+          if ("refuse" in classified) continue;
+          const at = view.routeOpensAt(classified.route)?.at.getTime();
+          if (at !== undefined) opensInMs = Math.min(opensInMs, at - now.getTime());
         }
-        if (sendsLastHour >= SITE_SENDS_PER_HOUR) {
-          this.site.refuse(request.id, "hour_ceiling");
-          continue;
-        }
-        const heldUntil = this.#routeHolds.get(classified.route) ?? Number.NEGATIVE_INFINITY;
-        const leftMs = Math.min(SITE_WAIT_MS - (now - request.askedMono), (request.waitDeadlineMono ?? Number.POSITIVE_INFINITY) - now);
-        if (heldUntil > now) {
-          if (heldUntil - now >= leftMs) this.site.refuse(request.id, "route_held");
-          continue;
-        }
-        chosen ??= { id: request.id, route: classified.route, origin: classified.origin, manualLogin: request.manualLogin };
+        return Math.max(idle, Math.min(ROUTE_WAIT_STEP_MS, opensInMs));
       }
-      if (chosen === null) return false;
+      const chosen = { id: admit.request.id, route: admit.route, origin: admit.origin, manualLogin: admit.exempt };
       const attemptId = await nextBrowserAttemptId(this.#o.db);
       const token = randomUUID();
       const issuedMono = this.#clock.monoNow();
@@ -724,14 +785,14 @@ export class OnboardingLink {
       if (generation === null) {
         // The login is no longer open: nothing of the site passes.
         for (const request of this.site.pending()) this.site.refuse(request.id, "mode");
-        return false;
+        return idle;
       }
       const admission = this.pacer.arm(grant, attemptId, issuedMono);
       const refusal = this.pacer.checkRemoteGrant(admission);
       if (refusal !== null) {
         this.site.refuse(chosen.id, "lease");
         await this.#complete(admission, token, { kind: "aborted_before_send", refusal: refusal.reason }, null);
-        return true;
+        return 0;
       }
       await this.#o.overrides?.beforeGrant?.(chosen.id);
       // The grant under the profile's row lock, the login still open in that
@@ -752,7 +813,7 @@ export class OnboardingLink {
         this.site.refuse(chosen.id, "mode");
         await this.#complete(admission, token, { kind: "aborted_before_send", refusal: "lease_inactive" }, null);
         this.#metrics.increment("sync_browser_onboarding_site", { origin: chosen.origin, outcome: "refused_at_grant" });
-        return true;
+        return 0;
       }
       let end: Awaited<ReturnType<BrowserSiteAdmission["end"]>>;
       try {
@@ -762,12 +823,14 @@ export class OnboardingLink {
         end = { kind: "transport_error", sent: true, message: "no end of the site request was heard" };
       }
       const outcome = transportOutcomeOfSite(end);
-      await this.#complete(admission, token, outcome, end.kind === "response" ? end.status : null);
+      // A 429 (or a 5xx naming its deadline) holds the route that answered:
+      // recorded with the send's completion, read back by every slot.
       const effect = siteAnswerEffect(end, chosen.manualLogin);
-      if (effect.kind === "route_limited") this.#routeHolds.set(chosen.route, this.#clock.monoNow() + (effect.retryAfterMs ?? 60_000));
+      const hold = effect.kind === "route_limited" ? browserProfileRouteHoldDetail(Math.min(ROUTE_HOLD_MAX_MS, effect.retryAfterMs ?? 60_000)) : null;
+      await this.#complete(admission, token, outcome, end.kind === "response" ? end.status : null, hold);
       this.site.settled(chosen.id, attemptId);
       this.#metrics.increment("sync_browser_onboarding_site", { origin: chosen.origin, outcome: outcome.kind });
-      return true;
+      return 0;
     });
   }
 
@@ -785,7 +848,7 @@ export class OnboardingLink {
 
   /** The pacer's completion and the journal's: the send instant as the
    *  browser reported it, on the wall clock. */
-  async #complete(admission: Admission, token: string, outcome: FanslyWireOutcome, httpStatus: number | null): Promise<void> {
+  async #complete(admission: Admission, token: string, outcome: FanslyWireOutcome, httpStatus: number | null, responseDetail: string | null = null): Promise<void> {
     this.pacer.complete(admission, outcome);
     const sentAt = admission.sentWall;
     await completeFanslySendAttempt(this.#o.db, {
@@ -793,7 +856,7 @@ export class OnboardingLink {
       token,
       nextU: 0,
       outcome: outcome.kind,
-      outcomeDetail: outcome.kind === "aborted_before_send" ? outcome.refusal : outcome.kind === "response" ? null : redactSensitiveText(outcome.message).slice(0, 200),
+      outcomeDetail: outcome.kind === "aborted_before_send" ? outcome.refusal : outcome.kind === "response" ? responseDetail : redactSensitiveText(outcome.message).slice(0, 200),
       httpStatus,
       sentAt,
       sendOffsetMs: admission.sentMono === null ? null : Math.max(0, Math.ceil(admission.sentMono - admission.issuedMono)),
@@ -838,6 +901,13 @@ export class OnboardingLink {
     const signal = this.#stop.signal;
     const spec = fanslyWireSpec("account.me");
     if (spec.legacyOperation === null || spec.kind === null) throw new Error("account.me is journaled under its legacy operation and its kind");
+    // Its route's budget and hold first (a page's account check keeps them).
+    for (;;) {
+      const opensAt = (await this.#routeClocks()).notBefore("account.me");
+      const waitMs = opensAt === null ? 0 : opensAt.getTime() - this.#clock.wallNow().getTime();
+      if (waitMs <= 0) break;
+      await this.#clock.sleep(Math.min(waitMs, 1_000), signal);
+    }
     const grant = await this.pacer.waitForSlot(signal);
     const attemptId = await nextBrowserAttemptId(this.#o.db);
     const token = randomUUID();

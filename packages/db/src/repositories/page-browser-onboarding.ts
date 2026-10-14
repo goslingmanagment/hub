@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import type { FanslySendHolderIdentity } from "./fansly-send-guard.ts";
+import { SYNC_ROUTE_JOURNAL_SLACK_MS, SYNC_SEND_WINDOW_MS } from "./sync/attempts.ts";
 
 // Project Browser (plan §3.2 «Подключение новой страницы через браузер», §3.4,
 // §4.8; 0281; stage 3 PR 16): a new Fansly page connected through its own
@@ -585,6 +586,55 @@ export async function countBrowserProfileSendsSince(db: Database, input: { profi
        and sent_at is not null
   `);
   return Number(result.rows[0]?.n ?? 0);
+}
+
+/** A route hold an answer put on the profile (a 429, a 5xx naming its own
+ *  deadline), as its send's completion records it in `outcome_detail`. */
+export function browserProfileRouteHoldDetail(holdMs: number): string {
+  return `route_hold_ms=${Math.max(0, Math.ceil(holdMs))}`;
+}
+
+/**
+ * The profile's route clocks' journal read (Astra's review of PR 16, item
+ * 4), as `readRouteJournal` reads a page's: per operation, the newest send
+ * of the profile whose capture lies within `withinMs` +
+ * `SYNC_ROUTE_JOURNAL_SLACK_MS` — its actual send; without one, a send that
+ * may have gone counts at its completion, else its capture + the send window
+ * (an unknown outcome consumes budget); only what never went
+ * (`aborted_before_send`) does not count. And per operation, the latest end
+ * of a route hold an answer put on it within `holdsWithinMs`
+ * (`browserProfileRouteHoldDetail`): a new link (a restart) is held as the
+ * one before was.
+ */
+export async function readBrowserProfileRouteJournal(
+  db: Database,
+  input: { profileId: string; withinMs: number; holdsWithinMs: number },
+): Promise<{ sends: Array<{ operation: string; lastAt: Date }>; holds: Array<{ operation: string; until: Date }> }> {
+  const scanMs = Math.max(0, input.withinMs) + SYNC_ROUTE_JOURNAL_SLACK_MS;
+  const sends = await db.execute<{ operation: string; lastAt: Date | string }>(sql`
+    select operation,
+           max(coalesce(sent_at, completed_at, lease_until,
+             captured_at + ${SYNC_SEND_WINDOW_MS}::double precision * interval '1 millisecond')) as "lastAt"
+      from fansly_send_log
+     where browser_profile_id = ${input.profileId}::uuid
+       and captured_at > statement_timestamp() - ${scanMs}::double precision * interval '1 millisecond'
+       and (sent_at is not null or outcome is distinct from 'aborted_before_send')
+     group by operation
+  `);
+  const holds = await db.execute<{ operation: string; until: Date | string }>(sql`
+    select operation,
+           max(completed_at + (substring(outcome_detail from '^route_hold_ms=([0-9]+)$'))::double precision * interval '1 millisecond') as until
+      from fansly_send_log
+     where browser_profile_id = ${input.profileId}::uuid
+       and captured_at > statement_timestamp() - ${Math.max(0, input.holdsWithinMs) + SYNC_ROUTE_JOURNAL_SLACK_MS}::double precision * interval '1 millisecond'
+       and completed_at is not null
+       and outcome_detail ~ '^route_hold_ms=[0-9]+$'
+     group by operation
+  `);
+  return {
+    sends: sends.rows.map((row) => ({ operation: row.operation, lastAt: dateOf(row.lastAt)! })),
+    holds: holds.rows.map((row) => ({ operation: row.operation, until: dateOf(row.until)! })),
+  };
 }
 
 /** Where the intake of the profile's buffer stands (0276's columns, the
