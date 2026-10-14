@@ -14,8 +14,7 @@ const mocks = vi.hoisted(() => ({
   usePageBrowserLogin: vi.fn(),
   useStartPageBrowserLogin: vi.fn(),
   useFinishPageBrowserLogin: vi.fn(),
-  useSubmitPageBrowserLogin: vi.fn(),
-  useSubmitPageBrowserCode: vi.fn(),
+  usePageBrowserLoginStep: vi.fn(),
   pageBrowserScreenshotUrl: vi.fn((label: string, tick: number) => `/api/v1/page-browser/pages/${label}/login/screenshot?t=${tick}`),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
@@ -53,7 +52,8 @@ function render(data: PageBrowserLoginResponse): string {
 }
 
 beforeEach(() => {
-  for (const hook of [mocks.useStartPageBrowserLogin, mocks.useFinishPageBrowserLogin, mocks.useSubmitPageBrowserLogin, mocks.useSubmitPageBrowserCode]) hook.mockReset().mockReturnValue(mutation());
+  for (const hook of [mocks.useStartPageBrowserLogin, mocks.useFinishPageBrowserLogin]) hook.mockReset().mockReturnValue(mutation());
+  mocks.usePageBrowserLoginStep.mockReset().mockReturnValue({ pending: false, send: vi.fn() });
 });
 
 describe("the login's views", () => {

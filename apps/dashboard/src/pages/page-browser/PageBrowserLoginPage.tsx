@@ -7,9 +7,9 @@ import {
   pageBrowserScreenshotUrl,
   useFinishPageBrowserLogin,
   usePageBrowserLogin,
+  usePageBrowserLoginStep,
   useStartPageBrowserLogin,
-  useSubmitPageBrowserCode,
-  useSubmitPageBrowserLogin,
+  type PageBrowserLoginStep,
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -123,24 +123,17 @@ function LoginForm({ pageLabel, view, onAnswer }: { pageLabel: string; view: Ext
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const submit = useSubmitPageBrowserLogin(pageLabel);
-  const sendCode = useSubmitPageBrowserCode(pageLabel);
-  const pending = submit.isPending || sendCode.isPending;
+  const { pending, send } = usePageBrowserLoginStep(pageLabel);
   const codeStep = wantsCode(view);
   const handle = (event: FormEvent) => {
     event.preventDefault();
     if (pending) return;
-    const settle = {
-      onSuccess: (answer: PageBrowserLoginStepResponse) => onAnswer(answer),
-      onError: () => onAnswer({ screen: null, refused: null, unreachable: true }),
-      // What was typed leaves the page's memory once it was sent.
-      onSettled: () => {
-        setPassword("");
-        setCode("");
-      },
-    };
-    if (codeStep) sendCode.mutate({ code: code.trim() }, settle);
-    else submit.mutate({ login: login.trim(), password }, settle);
+    const step: PageBrowserLoginStep = codeStep ? { kind: "code", code: code.trim() } : { kind: "submit", login: login.trim(), password };
+    // The password and the code leave the form at once: the step carries
+    // them to the API, and nothing keeps them after it (no query cache).
+    setPassword("");
+    setCode("");
+    send(step).then(onAnswer, () => onAnswer({ screen: null, refused: null, unreachable: true }));
   };
   return (
     <form onSubmit={handle} className="flex flex-col gap-3" aria-busy={pending} autoComplete="off">
