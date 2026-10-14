@@ -57,6 +57,11 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     const sockets = matching(/new WebSocket\(/);
     expect(sockets).toEqual([
       "apps/runtime/src/services/egress/fansly-receiver-socket.ts",
+      // Project Browser (PR 15): the API's call of the login form to a
+      // page's operator on pb-control — `ws:` to `<container>:7700/rpc`
+      // only, never Fansly; the site's login it leads to goes under the
+      // engine's admission.
+      "apps/runtime/src/services/egress/page-browser-login.ts",
       // Project Browser (PR 12): the engine's link to a page's operator on
       // pb-control — never Fansly (`ws:` to `<container>:7700/rpc` only); a
       // Fansly request through it is the operator's, released only on the
@@ -69,6 +74,9 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     const rpc = read("apps/runtime/src/services/egress/page-browser-rpc.ts");
     expect(rpc).toContain('if (url.protocol !== "ws:" || url.pathname !== "/rpc" || url.username !== "" || url.password !== "") {');
     expect(rpc).toContain("socket = new WebSocket(this.#o.url, { dispatcher: agent });");
+    const login = read("apps/runtime/src/services/egress/page-browser-login.ts");
+    expect(login).toContain('if (url.protocol !== "ws:" || url.pathname !== "/rpc" || url.username !== "" || url.password !== "") {');
+    expect(login).toContain("socket = new WebSocket(url, { dispatcher: agent });");
   });
 
   it("a request through a page's browser goes only on the engine's grant: an unrouted check is refused", () => {

@@ -345,6 +345,19 @@ export interface Alarm {
   detail: Record<string, string | number | boolean>;
   kind: AlarmKind;
 }
+// ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
+export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginRequest = { callId: string; token: string } & (
+  | { type: "login.state" }
+  | { type: "login.screenshot" }
+  | { type: "login.submit"; login: string; password: string }
+  | { type: "login.code"; code: string }
+);
+export type LoginReply = { callId: string } & (
+  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null }
+  | { type: "login.screenshotResult"; jpeg: BodyRef }
+  | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
+);
 export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command;
 export type OperatorToEngine =
   | HelloResult
@@ -717,6 +730,44 @@ export function parseOperatorMessage(text: string): ParsedOperatorMessage {
   }
   try {
     return { ok: true, message: parseValue(record(value, "the message")) };
+  } catch (error) {
+    if (error instanceof Invalid) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+// ── the login form's answers (PR 15): the API reads them ─────────────────────
+
+const LOGIN_SCREENS: ReadonlySet<string> = new Set(["login", "code", "error", "success", "unknown"]);
+const LOGIN_FIELDS: ReadonlySet<string> = new Set(["login", "password", "code"]);
+const LOGIN_REFUSALS: ReadonlySet<string> = new Set(["token", "not_manual_login", "screen_changed", "busy"]);
+
+export type ParsedLoginReply = { ok: true; reply: LoginReply } | { ok: false; error: string };
+
+/** An answer of the operator to a call of the login form, read strictly. */
+export function parseLoginReply(text: string): ParsedLoginReply {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "not JSON" };
+  }
+  try {
+    const m = record(value, "the answer");
+    const callId = str(m.callId, "callId", 64);
+    switch (m.type) {
+      case "login.stateResult": {
+        if (!Array.isArray(m.fields) || m.fields.length > 3) throw new Invalid("fields is not a list of fields");
+        const fields = m.fields.map((field, i) => oneOf<"login" | "password" | "code">(field, LOGIN_FIELDS, `fields[${i}]`));
+        return { ok: true, reply: { type: "login.stateResult", callId, screen: oneOf<LoginScreen>(m.screen, LOGIN_SCREENS, "screen"), screenVersion: str(m.screenVersion, "screenVersion", 64), fields, siteError: strOrNull(m.siteError, "siteError", 300) } };
+      }
+      case "login.screenshotResult":
+        return { ok: true, reply: { type: "login.screenshotResult", callId, jpeg: bodyRef(m.jpeg, "jpeg") } };
+      case "login.refused":
+        return { ok: true, reply: { type: "login.refused", callId, reason: oneOf<Extract<LoginReply, { type: "login.refused" }>["reason"]>(m.reason, LOGIN_REFUSALS, "reason") } };
+      default:
+        throw new Invalid("an unknown answer of the login form");
+    }
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message };
     throw error;

@@ -40,6 +40,7 @@ import {
   type BrowserPage,
   type BrowserPageOverrides,
 } from "../fansly/browser-page.ts";
+import { LoginSitePort, openBrowserLoginLink, type BrowserLoginLink } from "../fansly/browser-login.ts";
 import { createPageTransport } from "../fansly/transport.ts";
 import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
 import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
@@ -140,6 +141,17 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // wait is no stall: every look is reported to the process's watchdog. A
 // host that starts again finds the leave pending and runs it before
 // anything else. A shutdown leaves the browser running.
+//
+// The owner's login of a page's browser (Project Browser plan §4.8; PR 15):
+// a page whose transport is `browser` follows it over its slot's link
+// (`browser-page.ts`, `login`). A page on Node is linked to its browser only
+// while the owner's login of it is open (`sync_pages.manual_login`): the pass
+// opens a link of its own for the slot (`openBrowserLoginLink`: the site path
+// of the login's own requests behind the slot's `LoginSitePort`, the
+// buffer's intake, the login driver) and closes it once the login is over —
+// the owner logs a page in before its switch, its login's requests under the
+// same pacer as Node's. A browser that cannot be linked to leaves its login
+// waiting; the page runs on Node as before.
 
 /** The live loop runs only when this is true (flipped at step 3, S3-05).
  *  Still no page sends without its `live` row, the engine's guard row and the
@@ -265,6 +277,15 @@ interface PageSlot {
   sender: SyncPageTransport;
   /** A browser page's slot (null: a `node` page). */
   browser: BrowserPage | null;
+  /** A `node` page's link to its browser while the owner's login of it is
+   *  open (null: none — a browser page's own slot follows its login). */
+  login: BrowserLoginLink | null;
+  /** A `node` page's site path, the login link's while it is open. */
+  loginSite: LoginSitePort | null;
+  /** What a login link of the slot is opened with. */
+  ownRef: string | null;
+  floorSettingMs: number;
+  pacer: Pacer;
   /** The page's transport changed: it leaves this sender (a browser is
    *  stopped). */
   leaving: boolean;
@@ -476,6 +497,8 @@ export class SyncEngineHost {
           this.#o.logger.info({ pageId: page.pageId, pageLabel: page.pageLabel, from: slot.sender, to: sender },
             "Fansly sync host: the page's transport changed; its slot ends and the page is taken again");
           slot.stop.abort();
+        } else if (slot.sender === "node" && !slot.leaving) {
+          await this.#followLogin(slot, senders.get(page.pageId)?.manualLogin ?? "off");
         }
         continue;
       }
@@ -623,6 +646,8 @@ export class SyncEngineHost {
 
     let transport: PageTransport | null = null;
     let browser: BrowserPage | null = null;
+    const loginSite = sender === "node" ? new LoginSitePort() : null;
+    let floorSettingMs: number;
     let pacer: Pacer;
     let ownRef: string | null;
     // The page's socket (J6): created with the slot, started once its actor
@@ -638,7 +663,7 @@ export class SyncEngineHost {
     try {
       const settingMs = await this.#pause.readSettingMs();
       // I5: computed by the database clock, from every send of every owner.
-      const floorSettingMs = Math.max(settingMs, FANSLY_PAUSE_MIN_MS);
+      floorSettingMs = Math.max(settingMs, FANSLY_PAUSE_MIN_MS);
       const floorDelayMs = await paceFloorFromDb(db, { pageId, settingMs: floorSettingMs });
       const slotPacer = (this.#o.pacerFactory ?? createPacer)({
         clock: this.#clock,
@@ -663,6 +688,7 @@ export class SyncEngineHost {
           settingMs: floorSettingMs,
           raiseTakeoverFloor: (atMono) => slotPacer.raiseTakeoverFloor(atMono),
           enqueue: (signals) => this.#enqueueLiveDemand(pageId, generation, signals),
+          login: true,
           ...(this.#o.browserOverrides === undefined ? {} : { overrides: this.#o.browserOverrides }),
         });
         transport = browser.transport;
@@ -717,7 +743,7 @@ export class SyncEngineHost {
       secrets: createSyncWorkSecretBox(this.#o.config),
       // No admission of a sender the page left commits (0277).
       pageTransport: sender,
-      ...(browser === null ? {} : { site: browser.site }),
+      ...(browser !== null ? { site: browser.site } : loginSite !== null ? { site: loginSite } : {}),
     });
     const stop = new AbortController();
     const abort = new AbortController();
@@ -726,6 +752,11 @@ export class SyncEngineHost {
       generation,
       sender,
       browser,
+      login: null,
+      loginSite,
+      ownRef,
+      floorSettingMs,
+      pacer,
       leaving: false,
       actor,
       transport,
@@ -762,6 +793,63 @@ export class SyncEngineHost {
     if (closed.length > 0) {
       this.#o.logger.info({ pageId: page.pageId, pageLabel: page.pageLabel, streams: closed },
         "Fansly sync host: the legacy stream incidents of a live page closed (engine_owned)");
+    }
+  }
+
+  /** A page on Node's slot follows the owner's login of its browser: a
+   *  link while it is open, none once it is over (and the operator said it
+   *  is back in the automation). */
+  async #followLogin(slot: PageSlot, wanted: "off" | "wanted" | "ending"): Promise<void> {
+    if (slot.stop.signal.aborted || slot.loginSite === null) return;
+    if (wanted !== "off" && slot.login === null) {
+      const link = await this.#loginLink(slot.pageId, slot.generation, slot.ownRef, slot.floorSettingMs, slot.pacer);
+      if (link === null) return;
+      if (slot.stop.signal.aborted || this.#slots.get(slot.pageId) !== slot) {
+        await link.stop();
+        return;
+      }
+      slot.login = link;
+      slot.loginSite.attach(link.site);
+      link.start();
+      this.#o.logger.info({ pageId: slot.pageId, generation: slot.generation.toString() }, "Fansly sync host: the owner's login of the page's browser is open; linked to its operator");
+      return;
+    }
+    if (wanted === "off" && slot.login !== null && slot.login.login.settled) {
+      const link = slot.login;
+      slot.login = null;
+      slot.loginSite.detach();
+      await link.stop();
+      this.#o.logger.info({ pageId: slot.pageId }, "Fansly sync host: the owner's login of the page's browser is over; its link closed");
+    }
+  }
+
+  /**
+   * A page on Node's link to its browser for the owner's login (PR 15), when
+   * the page has a browser it can be linked to; null otherwise — the page
+   * runs as before. Never throws: a link that cannot be had is no reason to
+   * keep a page from Node.
+   */
+  async #loginLink(pageId: number, generation: bigint, ownRef: string | null, settingMs: number, pacer: Pacer): Promise<BrowserLoginLink | null> {
+    const { db, logger } = this.#o;
+    try {
+      if ((await browserPageProblem(db, pageId)) !== null) return null;
+      return await openBrowserLoginLink({
+        db,
+        config: this.#o.config,
+        logger,
+        metrics: this.#metrics,
+        registry: this.#o.registry,
+        clock: this.#clock,
+        pageId,
+        generation,
+        ownRef,
+        settingMs,
+        raiseTakeoverFloor: (atMono) => pacer.raiseTakeoverFloor(atMono),
+        ...(this.#o.browserOverrides === undefined ? {} : { overrides: this.#o.browserOverrides }),
+      });
+    } catch (error) {
+      logger.warn({ pageId, err: errorName(error) }, "Fansly sync host: the page's browser cannot be linked to; its login waits");
+      return null;
     }
   }
 
@@ -866,6 +954,10 @@ export class SyncEngineHost {
     // A page that left its browser: the leave that follows stops it (a
     // pending leave, confirmed before Node takes the page).
     await slot.browser?.stop();
+    // A page on Node's link for the owner's login: its browser stays as it is.
+    slot.loginSite?.detach();
+    await slot.login?.stop();
+    slot.login = null;
     await slot.transport.close().catch(() => undefined);
     const foreign = exit.kind === "ownership_lost" && exit.foreign;
     if (!foreign) {

@@ -23,9 +23,17 @@ describe("dashboard vite config", () => {
     const config = await loadDashboardViteConfig();
 
     expect(config.server?.proxy).toMatchObject({
-      "/api": "http://127.0.0.1:3100",
+      "/api": { target: "http://127.0.0.1:3100" },
       "/documentation": "http://127.0.0.1:3100",
     });
+  });
+
+  it("passes the browser's Host to the API as it is, and its WebSockets: Origin and Host agree, as behind nginx", async () => {
+    const config = await loadDashboardViteConfig();
+
+    // Vite's string shorthand rewrites the Host (changeOrigin: true): the
+    // API then refuses every page-browser change as `cross_origin`.
+    expect(config.server?.proxy?.["/api"]).toMatchObject({ changeOrigin: false, ws: true });
   });
 
   it("defaults backend proxy routes to IPv4 localhost", async () => {
@@ -34,7 +42,7 @@ describe("dashboard vite config", () => {
     const config = await loadDashboardViteConfig();
 
     expect(config.server?.proxy).toMatchObject({
-      "/api": "http://127.0.0.1:3000",
+      "/api": { target: "http://127.0.0.1:3000" },
       "/documentation": "http://127.0.0.1:3000",
     });
   });

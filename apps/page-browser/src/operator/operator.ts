@@ -56,6 +56,19 @@
 // Chrome's sockets is dropped, and the connections the buffer kept from
 // before are ended there.
 //
+// The manual login (login/, PR 15; plan §4.8; spec §7): the engine's
+// `setMode` of the current owner generation switches it on — the map lets
+// the login operations through beside the interface's reads, Hub's
+// requests and the site's socket stay out, the page is never ready — and
+// off again, with the checks before the page resumes: the exit IP now, the
+// session and the account by an identity read of the engine's under the
+// live session sent after the mode changed (what was confirmed before a
+// person could be in the page confirms nothing). The API's calls of the
+// login form (`login.*`, their own token) are taken only while the mode is
+// that owner's: the screen, its screenshot, the owner's input typed in as a
+// person types it. What was typed lives in the call for the time of the
+// hand-over: never in a log line, a journal, the buffer or an error.
+//
 // What holds, whatever happens:
 // - No API request leaves without the engine's admission. A Hub request goes
 //   only by its `check` and through the gate's window; a socket only by its
@@ -93,6 +106,7 @@ import { Cdp, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
+import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
@@ -111,7 +125,7 @@ import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
@@ -175,6 +189,9 @@ const DEFAULT_TIMINGS: OperatorTimings = {
 export const SITE_URL = `${SITE_ORIGIN}/`;
 /** An identity answer is read for its account id up to this size. */
 const IDENTITY_BODY_MAX = 1024 * 1024;
+/** A discarded work tab's blank document comes within this, or the
+ *  browser goes (#discardDocument). */
+const DISCARD_WAIT_MS = 5_000;
 
 export interface OperatorDeps {
   config: OperatorConfig;
@@ -193,6 +210,8 @@ export interface OperatorDeps {
   socketTimings?: Partial<SocketTimings>;
   /** Tests: the site requests' waits and limits. */
   siteTimings?: Partial<SiteTimings>;
+  /** Tests: the login desk's waits. */
+  loginTimings?: Partial<LoginTimings>;
   log?: Logger;
 }
 
@@ -248,6 +267,9 @@ export class Operator {
   /** The site's own requests: the map, the engine's admission, the
    *  answers (plan §4.3). */
   readonly site: SiteRequests;
+  /** The login form's desk (plan §4.8): the screen, its screenshot, the
+   *  owner's input. */
+  readonly login: LoginDesk;
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
   readonly #log: Logger;
@@ -256,11 +278,28 @@ export class Operator {
   readonly #extension: ExtensionChecks;
   readonly #classify: HostClassifier;
   #params: OperatorParams = DEFAULT_PARAMS;
-  /** The operator's mode (spec §6.1): the manual login comes with PR 15. */
+  /** The operator's mode (spec §6.1; plan §4.8): `manual_login` only by the
+   *  engine's `setMode`, for the owner generation that set it. */
   #mode: OperatorMode = "automation";
+  /** The owner generation whose `setMode` switched the manual login on: the
+   *  login form's calls are taken only while it is the current one. */
+  #modeGeneration: number | null = null;
+  /** The work tab is loaded anew for a change of the mode (it waits out
+   *  what is in flight first). */
+  #modeReload = 0;
+  /** Changes whenever what a login call was taken under may have: a change
+   *  of the mode, a hand-over, the engine's link lost or found. A step of
+   *  the login form taken before stops at its next input step (Astra's
+   *  review of PR 15, item 3). */
+  #loginEpoch = 0;
   /** The account the engine's identity read named, and under which
    *  session (plan §4.1, step 9). */
   #identity: { accountId: string; fingerprint: string } | null = null;
+  /** An identity read sent before this instant (CLOCK_MONOTONIC ms) names
+   *  nothing: what it confirmed was before the last change of the mode — a
+   *  person may have been in the page since (Astra's review of PR 15,
+   *  item 6). */
+  #identityFloorMono = Number.NEGATIVE_INFINITY;
   /** The work tab was loaded anew at a confirmation of this start: once. */
   #siteReloaded = false;
   /** That reload is under way (it waits out what is in flight first). */
@@ -426,6 +465,7 @@ export class Operator {
 
     this.rpc = new RpcServer({
       token: this.config.rpcToken,
+      apiToken: this.config.apiToken ?? null,
       generations: new GenerationStore(join(this.config.stateDir, "owner-generation")),
       pingMs: DEFAULT_PARAMS.pingMs,
       linkLossMs: DEFAULT_PARAMS.linkLossMs,
@@ -440,7 +480,10 @@ export class Operator {
         },
         onSocket: (message) => this.sockets.onAdmitResult(message),
         onSite: (message) => this.site.onAdmitResult(message),
+        onLogin: (request) => this.#onLogin(request),
         onLink: (up, reason) => {
+          // What the login form was typing for the engine of before stops.
+          this.#cancelLogin(up ? "a new engine connection" : "the engine's link was lost");
           // A new connection subscribes anew; the outcomes not acknowledged
           // go to it again (spec §6.2), a page at a time.
           this.stream.reset();
@@ -562,13 +605,27 @@ export class Operator {
       mode: () => this.#mode,
       fault: (reason, note) => this.#requestFault(reason, note),
       journal: (line) => this.journals.request(line),
+      loginEnded: (end) => this.login.loginEnded(end),
+      readEnded: (end) => this.login.readEnded(end),
       ...(deps.siteTimings ? { timings: deps.siteTimings } : {}),
+    });
+    this.login = new LoginDesk({
+      cdp: this.cdp,
+      tab: () => this.control.workTab?.sessionId ?? null,
+      world: () => {
+        const tab = this.control.workTab;
+        return tab ? this.control.isolatedWorld(tab, WORLD) : Promise.reject(new Error("no work tab"));
+      },
+      session: () => this.hub.session.fingerprint,
+      discard: (why) => this.#discardDocument(why),
+      ...(deps.loginTimings ? { timings: deps.loginTimings } : {}),
     });
     this.sockets = new SiteSockets({
       cdp: this.cdp,
       buffer: this.buffer,
       link: { send: (message) => this.rpc.send(message) },
-      notAdmitting: () => (this.admissionsOpen() ? null : this.#noAdmissionWhy()),
+      // The site's socket is not of the manual login (spec §2.4).
+      notAdmitting: () => (this.#mode === "manual_login" ? "the manual login: no socket of the site" : this.admissionsOpen() ? null : this.#noAdmissionWhy()),
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
@@ -704,6 +761,8 @@ export class Operator {
           continue;
         }
         this.#log("holder.linked", { cdpUp: link.cdpUp, stored: link.stored, lastSeq: link.lastSeq });
+        // A new CDP link: Chrome's clock is calibrated anew for its sessions.
+        this.sockets.clocksInvalidated("a new link to the CDP holder");
         // What the holder kept from before this instance is handled first:
         // paused requests among it are failed (cdp/paused.ts), and Chrome
         // has answered that before anything else is decided.
@@ -920,6 +979,9 @@ export class Operator {
    *  under the live session named the expected account; the page is ready
    *  then. */
   #confirmSession(): void {
+    // In the manual login the page is never ready: a person is in it (plan
+    // §4.8), and its session is confirmed once the automation is back.
+    if (this.#mode === "manual_login") return;
     const identity = this.#identity;
     const live = this.hub.session.fingerprint;
     if (this.page.step !== "site_loaded" || identity === null || live === null || identity.fingerprint !== live) return;
@@ -967,9 +1029,18 @@ export class Operator {
   }
 
   /** A whole answer of the engine's identity read (hub-requests/): its
-   *  account id, read from the body and nothing else of it kept. */
-  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number }): void {
+   *  account id, read from the body and nothing else of it kept. A read sent
+   *  before the last change of the mode (or whose send is not known since
+   *  then) names nothing: it is from before the person's login. Both
+   *  instants are this process's own clock — the gate's first bytes, never
+   *  Chrome's timing, which may run on another base. */
+  #onIdentity(answer: { fingerprint: string; status: number; bodyId: string; bytes: number; gateSentMono: number | null }): void {
     try {
+      if (this.#mode === "manual_login") return;
+      if (this.#identityFloorMono > Number.NEGATIVE_INFINITY && (answer.gateSentMono === null || answer.gateSentMono < this.#identityFloorMono)) {
+        this.#log("session.identity_stale", { why: "sent before the mode last changed" });
+        return;
+      }
       if (answer.status !== 200 || answer.bytes > IDENTITY_BODY_MAX) return;
       const body = this.buffer.readBody(answer.bodyId, 0, Math.max(1, answer.bytes));
       if (body === null) return;
@@ -1239,6 +1310,7 @@ export class Operator {
   /** Why a Hub request may not start now, or null: the page is up, and the
    *  site is in the work tab (plan §4.1, step 8 — a later PR loads it). */
   #siteNotReady(): string | null {
+    if (this.#mode === "manual_login") return "the manual login: no Hub request while a person is in the page";
     if (!this.admissionsOpen()) return `no admissions (${this.page.halted ? "halted" : this.page.step}${this.rpc.linkUp ? "" : ", no engine link"})`;
     const tab = this.control.workTab;
     if (!tab) return "no work tab";
@@ -1340,7 +1412,14 @@ export class Operator {
    *  turn — each is refused there now, the generation having moved on — and
    *  there are no admissions yet: the last send the gate saw is all there is. */
   async #quiesce(): Promise<{ lastSendMono: number | null; lastSendWall: number | null }> {
+    // The login form's step under way was the earlier owner's: it stops at
+    // its next input step, and is over before anything else is.
+    this.#cancelLogin("a new owner of the page");
+    await this.login.drain();
     await this.#commandChain;
+    // The manual login is its owner's (plan §4.8): a new owner switches it on
+    // again if it still wants it. The automation is back first.
+    if (this.#mode === "manual_login") await this.#leaveManualLogin("a new owner of the page");
     // A start under way ends here, the exit closed: the new owner starts the
     // page. A page that is up stays up — the browser outlives its owner
     // (a Hub deploy is one).
@@ -1397,6 +1476,8 @@ export class Operator {
         return { ok: true, detail: "the start began" };
       case "selfTest":
         return this.#selfTestCommand();
+      case "setMode":
+        return command.command.mode === "manual_login" ? this.#enterManualLogin(command.ownerGeneration) : this.#leaveManualLogin("the engine's setMode");
       default:
         return { ok: false, detail: `${command.command.kind} is not supported by this operator yet` };
     }
@@ -1426,6 +1507,171 @@ export class Operator {
     if (run !== this.#run || this.page.step !== "exit_ip_verified" || this.#exitHeld) return { ok: false, detail: "superseded" };
     this.#openExit();
     return { ok: true, detail: "the exit is open" };
+  }
+
+  // ── the manual login (plan §4.8; spec §7) ─────────────────────────────
+
+  /** The engine of `generation` puts the page into the manual login: the
+   *  map lets the login operations through beside the interface's reads
+   *  (policy/operations.ts), the site's socket and Hub's requests stay out,
+   *  the page is never ready.
+   *  A page that is up loads the site anew, so its login screen is shown
+   *  under this mode; one that is not waits for the engine's start. */
+  async #enterManualLogin(generation: number): Promise<CommandOutcome> {
+    if (this.#mode === "manual_login") {
+      if (this.#modeGeneration !== generation) this.#cancelLogin("the manual login is another owner's now");
+      this.#modeGeneration = generation;
+      return { ok: true, detail: "the manual login: already" };
+    }
+    this.#setMode("manual_login", generation, "the engine's setMode");
+    this.login.begin();
+    // Hub's requests that wait for their check are refused (#siteNotReady
+    // says so from here); a ready page is no longer ready.
+    if (atLeast(this.page.step, "session_confirmed")) this.page.back("site_loaded", "the manual login: a person is in the page");
+    const reload = this.#reloadForMode("the manual login begins: the site is loaded anew for its login screen");
+    return { ok: true, detail: `the manual login${reload ? "; the site is loaded anew" : ""}` };
+  }
+
+  /** The automation is back: the login operations are closed again, and
+   *  before the page resumes the checks of plan §4.8, step 5 — the exit IP
+   *  now (a changed one halts the page), the session and the account by the
+   *  engine's identity read under the live session (#confirmSession: the
+   *  page is ready only then). A page that is up loads the site anew under
+   *  the automation. */
+  async #leaveManualLogin(why: string): Promise<CommandOutcome> {
+    if (this.#mode === "automation") return { ok: true, detail: "the automation: already" };
+    this.#setMode("automation", null, why);
+    // The login form's step under way stops at its next input step: nothing
+    // of it acts once the automation is back.
+    await this.login.drain();
+    const up = atLeast(this.page.step, "exit_open") && !this.page.halted && this.egress.exitOpen;
+    if (!up) return { ok: true, detail: "the automation; the page is not up: its start checks the exit IP and the session" };
+    const run = this.#run;
+    try {
+      const ip = await this.#verifyExitIp();
+      if (run !== this.#run) return { ok: true, detail: "the automation; superseded by a new start" };
+      const reload = this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
+      const session = this.hub.session.fingerprint === null ? "no live session yet" : "the live session waits for the engine's identity read";
+      return { ok: true, detail: `the automation; the exit IP ${ip} is the pinned one; ${session}${reload ? "; the site is loaded anew" : ""}` };
+    } catch (error) {
+      if (run !== this.#run) return { ok: true, detail: "the automation; superseded by a new start" };
+      const failure = error instanceof StartFailure ? error : new StartFailure("proxy_unavailable", errorMessage(error));
+      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
+      else await this.#fail(failure.reason, failure.message);
+      return { ok: true, detail: `the automation; the exit IP check failed: ${failure.message}` };
+    }
+  }
+
+  #setMode(mode: Mode, generation: number | null, why: string): void {
+    this.#cancelLogin(`the mode changes to ${mode}`);
+    // What the engine's identity read confirmed was before a person could
+    // be in the page: the session and the account are read anew, by a read
+    // sent from now on, before the page is ready again.
+    this.#identity = null;
+    this.#identityFloorMono = monoMs();
+    this.#mode = mode;
+    this.#modeGeneration = generation;
+    this.#log("mode", { mode, generation, why });
+    this.journals.state({ from: this.page.step, to: this.page.step, stopReason: this.page.snapshot.stopReason, retryAtWall: this.page.snapshot.retryAtWall, halted: this.page.halted, note: `mode ${mode}: ${why}` });
+    this.#sendState();
+  }
+
+  /** The work tab of a page that is up is loaded anew for the mode now —
+   *  what of the site is in flight waited out first (a request cancelled by
+   *  the reload would stop the page). False: nothing to load (the page is
+   *  not up, or its site is loading already). */
+  #reloadForMode(note: string): boolean {
+    if (this.page.halted || !this.egress.exitOpen || !atLeast(this.page.step, "site_loaded")) return false;
+    const run = this.#run;
+    const reload = ++this.#modeReload;
+    const stale = () => run !== this.#run || reload !== this.#modeReload || this.#stopped || this.page.halted || !this.egress.exitOpen || !atLeast(this.page.step, "site_loaded");
+    void (async () => {
+      const idle = await this.#waitUntil(() => stale() || this.site.released === 0, this.#timings.reloadWaitMs);
+      if (stale()) return;
+      if (!idle) {
+        this.#log("site.mode_reload_skipped", { released: this.site.released });
+        return;
+      }
+      this.site.reloading(this.control.workTab?.mainFrameId ?? null);
+      this.page.back("exit_open", note);
+      await this.#loadSite(run);
+    })();
+    return true;
+  }
+
+  /** The work tab's document goes, failed closed: a press of the login form
+   *  was not let go on its button (login/desk.ts) and dies with its
+   *  document. The tab is taken to a blank document at once — no network,
+   *  nothing of the old document left; what of the site was in flight is cut
+   *  with it, which stops the page as a reload's would (#reloadForMode) — and
+   *  a page that is up loads the site anew after it. A blank document that
+   *  does not come (CDP lost, no answer, no work tab known): the page's
+   *  Chrome goes (#fail), and the press with it. Never throws. */
+  async #discardDocument(why: string): Promise<void> {
+    this.#log("login.document_discarded", { why });
+    const tab = this.control.workTab;
+    const run = this.#run;
+    const up = !this.page.halted && this.egress.exitOpen && atLeast(this.page.step, "site_loaded");
+    try {
+      if (tab === null) throw new Error("no work tab known");
+      if (up) {
+        this.site.reloading(tab.mainFrameId ?? null);
+        this.page.back("exit_open", why);
+      }
+      const reply = await this.cdp.send<{ errorText?: string }>("Page.navigate", { url: "about:blank" }, tab.sessionId, DISCARD_WAIT_MS);
+      if (typeof reply.errorText === "string" && reply.errorText !== "") throw new Error(reply.errorText);
+      const blank = await this.#waitUntil(() => this.control.workTab === tab && tab.url.startsWith("about:blank"), DISCARD_WAIT_MS);
+      if (!blank) throw new Error(`no blank document within ${DISCARD_WAIT_MS} ms`);
+    } catch (error) {
+      await this.#fail("cdp_lost", `${why}; its document could not be discarded (${errorMessage(error)}): the browser goes with it`).catch(() => undefined);
+      return;
+    }
+    if (up && run === this.#run) await this.#loadSite(run);
+  }
+
+  /** A call of the login form (spec §6.1 `login.*`): taken only in the
+   *  manual login that the engine of the current owner generation switched
+   *  on, with the page up; what types into the site, also only while that
+   *  engine is heard (its admission is what lets the login go) — and only
+   *  for as long as all of it holds (`#loginGuard`, read before every input
+   *  step). */
+  async #onLogin(request: LoginRequest): Promise<LoginOutcome | { kind: "refused"; reason: "not_manual_login" }> {
+    const current = this.#mode === "manual_login" && this.#modeGeneration !== null && this.#modeGeneration === this.rpc.generation;
+    const up = !this.page.halted && atLeast(this.page.step, "exit_open") && this.egress.exitOpen;
+    if (!current || !up) return { kind: "refused", reason: "not_manual_login" };
+    switch (request.type) {
+      case "login.state":
+        return this.login.state();
+      case "login.screenshot":
+        return this.login.screenshot();
+      case "login.submit":
+        return this.login.submit(request.login, request.password, this.#loginGuard());
+      case "login.code":
+        return this.login.code(request.code, this.#loginGuard());
+    }
+  }
+
+  /** A login call's claim on the browser, taken now: null while the manual
+   *  login it was taken in lasts — the same mode, owner generation and
+   *  engine connection (`#loginEpoch`), that engine heard, the same start
+   *  of the page and the page up — else why not. */
+  #loginGuard(): LoginGuard {
+    const epoch = this.#loginEpoch;
+    const generation = this.#modeGeneration;
+    const run = this.#run;
+    return () => {
+      if (epoch !== this.#loginEpoch) return "the manual login it was taken in is over";
+      if (this.#mode !== "manual_login" || generation === null || this.#modeGeneration !== generation || this.rpc.generation !== generation) return "not the manual login it was taken in";
+      if (!this.rpc.linkUp) return "no engine link";
+      if (run !== this.#run || this.page.halted || !atLeast(this.page.step, "exit_open") || !this.egress.exitOpen) return "the page is not up as it was";
+      return null;
+    };
+  }
+
+  /** The login calls taken until now may act no more. */
+  #cancelLogin(why: string): void {
+    this.#loginEpoch += 1;
+    this.#log("login.epoch", { why });
   }
 
   async #selfTestCommand(): Promise<CommandOutcome> {

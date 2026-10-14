@@ -39,6 +39,11 @@
 //     answer is not kept;
 //   - the page's cancel of a released request before its answer stops the
 //     page (request_unended);
+//   - Chrome's clock as the socket path calibrates it (cdp/chrome-clock.ts):
+//     read in the work tab within its round-trip limit, sending nothing
+//     (no request at the server, no tunnel through the proxy), and a
+//     timestamp of Chrome's mapped by it falls between the operator's ask
+//     (less its round trip) and its take of the event;
 //   - no password, token or session in the log or the journal.
 //
 // What it does not prove:
@@ -70,6 +75,7 @@ import zlib from "node:zlib";
 
 import { EventBuffer } from "../src/buffer/buffer.ts";
 import { CdpError, type CdpEvent, type CdpPort, type EventHandler } from "../src/cdp/client.ts";
+import { CALIBRATION_MAX_MS, chromeToOperator, readChromeClock, type ChromeClockReading } from "../src/cdp/chrome-clock.ts";
 import { PausedRequests } from "../src/cdp/paused.ts";
 import { classifyFanslyHost } from "../src/egress/hosts.ts";
 import { Egress } from "../src/egress/proxy.ts";
@@ -550,9 +556,12 @@ egress.gate.onEvent = (event) => site.onGateEvent(event);
 
 const ends: string[] = [];
 const urlOf = new Map<string, string>();
+/** Chrome's moment of a request it is about to send, and when the operator took it. */
+const willSend: Array<{ path: string; timestamp: number; take: number }> = [];
 cdp.on("Network.requestWillBeSent", (event) => {
-  const params = event.params as { requestId: string; request: { url: string; method: string } };
+  const params = event.params as { requestId: string; request: { url: string; method: string }; timestamp?: number };
   urlOf.set(params.requestId, `${params.request.method} ${new URL(params.request.url).pathname}`);
+  if (typeof params.timestamp === "number") willSend.push({ path: new URL(params.request.url).pathname, timestamp: params.timestamp, take: monoMs() });
 });
 cdp.on("Network.loadingFailed", (event) => {
   const params = event.params as { requestId: string; errorText: string; canceled?: boolean };
@@ -724,6 +733,32 @@ if (verbose) console.log(JSON.stringify({ phase2, phase3, cache, waited, waitedL
 
 // ── the comparison ───────────────────────────────────────────────────────
 
+// ── Chrome's clock (Astra's review of PR 15, round 7) ──────────────────────
+// The socket path's calibration (cdp/chrome-clock.ts) on a real Chrome: a
+// few readings of `Performance.getMetrics`' Timestamp in the work tab —
+// nothing sent anywhere (the server and the proxy see nothing) — and the
+// tightest one maps a timestamp of Chrome's into the bracket of the
+// operator's clock it must fall in: after the operator asked for the
+// request, never after the operator took Chrome's event of it.
+const clockBefore = { arrivals: arrivals.length, tunnels: tunnels.length };
+const readings: Array<ChromeClockReading | { refused: string }> = [];
+for (let i = 0; i < 5; i++) readings.push(await readChromeClock(cdp, tab, { enable: i === 0 }));
+await sleep(300);
+const clockAfter = { arrivals: arrivals.length, tunnels: tunnels.length };
+const calibrated = readings.filter((reading): reading is ChromeClockReading => !("refused" in reading)).sort((a, b) => a.spread - b.spread);
+const asked = monoMs();
+await evaluate(`fetch("https://apiv3.fansly.com/api/v1/clock-bracket", { method: "POST", body: "x" }).then(() => "sent", () => "refused")`, true);
+for (let i = 0; i < 40 && !willSend.some((one) => one.path === "/api/v1/clock-bracket"); i++) await sleep(25);
+const bracket = willSend.find((one) => one.path === "/api/v1/clock-bracket");
+const mapped = bracket === undefined || calibrated[0] === undefined ? null : chromeToOperator(bracket.timestamp, calibrated[0], bracket.take);
+const clockChecks = {
+  spreads: readings.map((reading) => ("refused" in reading ? reading.refused : Math.round(reading.spread * 1000) / 1000)),
+  before: clockBefore,
+  after: clockAfter,
+  askedToMapped: mapped === null ? null : Math.round((mapped - asked) * 1000) / 1000,
+  mappedToTake: mapped === null || bracket === undefined ? null : Math.round((bracket.take - mapped) * 1000) / 1000,
+};
+
 const problems: string[] = [];
 const check = (ok: boolean, what: string) => {
   console.log(`${ok ? "ok  " : "FAIL"} ${what}`);
@@ -812,7 +847,10 @@ const doneOf = (path: string) => committed.filter((done) => admissions.find((adm
 check(doneOf("/api/v1/notifications").some((done) => done.status === 429 && done.retryAfter === "7" && done.sent), `siteDone of the 429 carries Retry-After: ${JSON.stringify(doneOf("/api/v1/notifications")[0] ?? null)}`);
 check(doneOf("/api/v1/post").some((done) => done.status === 302), "siteDone of the redirect has its status (not followed)");
 check(!arrivals.some((arrival) => arrival.path === "/api/v1/elsewhere"), "the redirect's next hop never left");
-check(phase1Done > 0 && committed.slice(0, phase1Done).every((done) => done.sent && typeof done.sentMono === "number"), `every siteDone of the site's load says sent, with Chrome's moment (${phase1Done})`);
+check(phase1Done > 0 && committed.slice(0, phase1Done).every((done) => done.sent && typeof done.sentMono === "number"), `every siteDone of the site's load says sent, with the gate's moment (${phase1Done})`);
+check(calibrated.length > 0 && calibrated[0]!.spread <= CALIBRATION_MAX_MS, `Chrome's clock read in the work tab, its round trip within ${CALIBRATION_MAX_MS} ms: ${JSON.stringify(clockChecks.spreads)} ms`);
+check(clockChecks.after.arrivals === clockChecks.before.arrivals && clockChecks.after.tunnels === clockChecks.before.tunnels, `the clock's readings sent nothing: no request reached the server, no tunnel through the proxy (${JSON.stringify({ before: clockChecks.before, after: clockChecks.after })})`);
+check(mapped !== null && mapped >= asked - calibrated[0]!.spread && bracket !== undefined && mapped <= bracket.take, `a timestamp of Chrome's mapped by it falls after the operator asked for the request (less its round trip) and never after the operator took the event: ${JSON.stringify({ askedToMapped: clockChecks.askedToMapped, mappedToTake: clockChecks.mappedToTake })} ms`);
 const armFailed = logLines.filter((line) => line.includes("body.arm_failed")).length;
 check(armFailed === 0, `no stream failed to arm (${armFailed})`);
 if (verbose) {

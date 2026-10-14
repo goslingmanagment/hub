@@ -95,8 +95,8 @@
 // 41, documents.ts). The page that stops ends what is in flight: an answer
 // already begun keeps its status and headers, its body a mark.
 //
-// `siteDone` — sent or not (the gate's word), when (Chrome's moment, never
-// before the gate's first bytes), the status, `Retry-After`, the error and
+// `siteDone` — sent or not (the gate's word), when (the gate's first bytes,
+// the operator's own clock; never Chrome's timing), the status, `Retry-After`, the error and
 // what became of the body — is stored with the `site.response` it names and
 // the request's end in one commit, and goes to the engine once durable
 // (buffer/replay.ts), until its `resultAck`. A buffer that refuses it: the
@@ -191,6 +191,14 @@ export interface SiteDeps {
   /** The page must stop: the exit is closed when this returns. */
   fault: (reason: "request_unended", note: string) => void;
   journal: (line: RequestLine) => void;
+  /** A login operation ended (PR 15: the login desk's sign of the success):
+   *  its route, its status (null: no answer; a preflight's answer is not
+   *  its request's) and whether it was sent. Never what it carried. */
+  loginEnded?: (end: { route: string; status: number | null; sent: boolean }) => void;
+  /** A read of the site ended (PR 15: the login desk's sign of the loaded
+   *  account): its route, its status, whether it was sent, and the session
+   *  its own headers carried. Never its body. */
+  readEnded?: (end: { route: string; status: number | null; sent: boolean; session: string | null }) => void;
   timings?: Partial<SiteTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -205,7 +213,6 @@ interface Physical {
   answered: boolean;
   ended: boolean;
   firstBytesMono: number | null;
-  timingMono: number | null;
   status: number | null;
   headers: Array<{ name: string; value: string }>;
 }
@@ -327,12 +334,11 @@ function keyOf(method: string, url: string): string {
   return `${method.toUpperCase()} ${url.split("#", 1)[0]}`;
 }
 
-/** When a physical request left: Chrome's moment, never earlier than the
- *  gate's first bytes of it. */
+/** When a physical request left: the gate's first bytes of it, this
+ *  process's clock alone — Chrome's own timing runs on a clock of its own
+ *  and never crosses the protocol (Astra's review of PR 15, round 5). */
 function sendMoment(phys: Physical | null): number | null {
-  if (phys === null) return null;
-  const known = [phys.timingMono, phys.firstBytesMono].filter((mono): mono is number => mono !== null);
-  return known.length > 0 ? Math.max(...known) : null;
+  return phys?.firstBytesMono ?? null;
 }
 
 export class SiteRequests {
@@ -891,7 +897,7 @@ export class SiteRequests {
       op.held.add(request);
       return this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: sent ? `its request did not go: ${why}` : `not used: ${why}` });
     }
-    const phys: Physical = { role, networkId: request.networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, timingMono: null, status: null, headers: [] };
+    const phys: Physical = { role, networkId: request.networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, status: null, headers: [] };
     // The window right before the release (spec §9).
     const opened = this.#deps.gate.open(phys.window, op.deadline!, request.bodyBytes, request.networkId);
     if (!opened.ok) {
@@ -1091,13 +1097,11 @@ export class SiteRequests {
   #onResponseReceived(event: CdpEvent): void {
     const params = event.params as {
       requestId?: unknown;
-      response?: { timing?: { requestTime?: number; sendStart?: number }; fromDiskCache?: boolean; fromServiceWorker?: boolean; fromPrefetchCache?: boolean; connectionReused?: boolean };
+      response?: { fromDiskCache?: boolean; fromServiceWorker?: boolean; fromPrefetchCache?: boolean; connectionReused?: boolean };
     };
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { op, phys } = found;
-    const timing = params.response?.timing;
-    if (timing && typeof timing.requestTime === "number" && typeof timing.sendStart === "number" && timing.sendStart >= 0) phys.timingMono = timing.requestTime * 1000 + timing.sendStart;
     if (phys.released) this.#deps.gate.responding(phys.window);
     if (phys.role !== "main") return;
     op.responseSeen = true;
@@ -1286,6 +1290,8 @@ export class SiteRequests {
     // unless its document is gone (replaced, or loaded anew by the operator).
     if (end.status === null && !end.reload && !this.#sent(op) && !this.documents.replaced(op.document)) this.#failures += 1;
     op.end();
+    if (op.operation === "login") this.#deps.loginEnded?.({ route: op.route, status: end.preflightAnswer ? null : end.status, sent: this.#sent(op) });
+    else this.#deps.readEnded?.({ route: op.route, status: end.preflightAnswer ? null : end.status, sent: this.#sent(op), session: op.ownFingerprint });
     // The body: whole and sealed, a mark, or none to keep.
     const capture = op.capture;
     let body: OutcomeBody | null = null;
@@ -1467,7 +1473,7 @@ export class SiteRequests {
     if (phys !== null && phys.networkId === networkId) return { op, phys };
     if (role === undefined) return null;
     // A request of the operation not released (yet): its failure counts.
-    return { op, phys: { role, networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, timingMono: null, status: null, headers: [] } };
+    return { op, phys: { role, networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, status: null, headers: [] } };
   }
 
   /** Did anything of the operation leave? The gate's word. */

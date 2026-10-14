@@ -111,6 +111,7 @@ import {
 import type { RouteAdmissionIntervals } from "./route-policy.ts";
 import { judgePaceGap } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
+import { provenSentAt } from "./send-instant.ts";
 
 // The transactions of one step (plan §8, design §3.7). Each runs as ONE short
 // transaction that starts with the generation fence (`lockOwnedPage`, I7):
@@ -1872,7 +1873,9 @@ async function recordIdentityProof(
     // Its apply held the page row FOR SHARE: never upgraded (see above).
     throw new ApplyQuarantine("identity_proof_route", { operation: attempt.operation });
   }
-  const sentAt = attempt.sentAt ?? attempt.admittedAt;
+  // Known by its sender's word, else its admission: an unknown send proves
+  // nothing fenced after it was admitted (Astra's review of PR 15, round 6).
+  const sentAt = provenSentAt(attempt);
   const recorded = await recordSyncPageIdentityProof(tx, {
     pageId: d.pageId,
     generation: d.generation,

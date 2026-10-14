@@ -229,6 +229,11 @@ describe("the statements that write the page row", () => {
       "update setNetworkFailureStreak",
       "update addSyncPageLiftedDmExclusion",
       "update removeSyncPageLiftedDmExclusion",
+      // The owner's login of the page's browser (Project Browser, 0279): the
+      // owner's lever, the engine's pause kept and its end.
+      "update setSyncPageManualLogin",
+      "update holdSyncPageManualLoginPause",
+      "update endSyncPageManualLogin",
       "update setPagePause",
       "update adjustPausedResources",
       "update setRegistryOverride",

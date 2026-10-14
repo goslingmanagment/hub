@@ -68,6 +68,7 @@ services:
     secrets:
       - vnc_password
       - rpc_token
+      - api_token
     volumes:
       - profile:/data/profile
       - buffer:/data/buffer
@@ -92,9 +93,13 @@ volumes:
     name: pb-buffer-${PB_PROFILE_ID}
 
 # The owner's screen password; the page's RPC token, which the engine's
-# hello must carry (plan §4.13). Both are made by page.sh, root's alone.
+# hello must carry (plan §4.13); the API's own token, which every call of
+# the login form carries (plan §4.8, PR 15). All three are made by page.sh,
+# root's alone; Hub keeps the same three sealed (page_browsers).
 secrets:
   vnc_password:
     file: ${PB_SECRETS_DIR:?the page's secrets directory}/vnc_password
   rpc_token:
     file: ${PB_SECRETS_DIR:?the page's secrets directory}/rpc_token
+  api_token:
+    file: ${PB_SECRETS_DIR:?the page's secrets directory}/api_token

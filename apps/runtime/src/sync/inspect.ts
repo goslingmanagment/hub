@@ -15,6 +15,7 @@ import {
   readSyncPageWsStatus,
   requeueQuarantinedWork,
   setPagePause,
+  SyncPageManualLoginOpenError,
   setRegistryOverride,
   setSyncPageMode,
   upsertDemand,
@@ -411,7 +412,9 @@ export async function changeSyncPageModeByOwner(
 }
 
 /** `sync page pause|resume`: the owner's pauses (§10). Resources are added to
- *  (pause) or removed from (resume) the paused set. */
+ *  (pause) or removed from (resume) the paused set. While the owner's login
+ *  of the page's browser is open, a resume of the whole page is refused and
+ *  a pause of it is the owner's own, kept after the login (`setPagePause`). */
 export async function changeSyncPagePause(
   db: Database,
   registry: EngineRegistry,
@@ -440,13 +443,22 @@ export async function changeSyncPagePause(
     else paused.delete(key);
   }
   const flag = input.action === "pause";
-  const updated = await setPagePause(db, {
-    pageId: page.pageId,
-    ...(input.all === true ? { all: flag } : {}),
-    ...(input.requests === true ? { requests: flag } : {}),
-    ...(resources.length > 0 ? { resources: [...paused] } : {}),
-    ...(input.note === undefined ? {} : { note: input.note }),
-  });
+  let updated: SyncPageRow | null;
+  try {
+    updated = await setPagePause(db, {
+      pageId: page.pageId,
+      ...(input.all === true ? { all: flag } : {}),
+      ...(input.requests === true ? { requests: flag } : {}),
+      ...(resources.length > 0 ? { resources: [...paused] } : {}),
+      ...(input.note === undefined ? {} : { note: input.note }),
+    });
+  } catch (error) {
+    if (!(error instanceof SyncPageManualLoginOpenError)) throw error;
+    throw new SyncOwnerLeverError(
+      `${input.pageLabel}: the owner's login of its browser is open, and the page stays paused while it is — `
+      + "nothing was changed; close the login in the dashboard (the page's browser login), and its own pause is lifted with it",
+    );
+  }
   if (updated === null) throw new SyncPageNotFoundError(input.pageLabel);
   return updated;
 }

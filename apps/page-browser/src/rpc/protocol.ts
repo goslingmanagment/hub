@@ -74,8 +74,20 @@
 //   "proxy"` for a record the socket gate held, `left: true` for one CDP
 //   says left.
 //
+// - PR 15 (the login form, plan §4.8): no shape changes. The API's calls
+//   (`login.*`) come on /rpc too; a connection whose first message is one is
+//   the API's and carries only those, each with the API's own token — a
+//   wrong one is answered `login.refused` "token" and the connection closes.
+//   `login.submit` and `login.code` answer with `login.stateResult` (the
+//   screen the site shows once it changed, or as it is after a wait);
+//   `login.screenshotResult`'s JPEG comes as body frames before it. The
+//   login, the password and the code have no line break and are at most
+//   320, 1024 and 32 characters. `setMode` is carried out (it was parsed
+//   since PR 4): `manual_login` holds for the owner generation that set it,
+//   a new owner's hello ends it.
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
-// openExit, stopPage, restartBrowser, selfTest — PR 4), the buffer's
+// openExit, stopPage, restartBrowser, selfTest — PR 4; setMode — PR 15), the buffer's
 // messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
 // Hub request's (PR 9): `send`, `checkResult`, the site socket's (PR 10):
 // `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
@@ -706,6 +718,50 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: parseSiteAdmitResult(m) };
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
+    }
+  } catch (error) {
+    if (error instanceof Invalid) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+// ── the login form's calls (API → operator; PR 15) ──
+
+/** A login (user name or e-mail) is at most this long. */
+export const LOGIN_MAX = 320;
+/** A password is at most this long. */
+export const PASSWORD_MAX = 1024;
+/** A code is at most this long. */
+export const CODE_MAX = 32;
+const CALL_ID = /^[A-Za-z0-9-]{1,64}$/;
+/** No line break or NUL in what is typed into the site's form. */
+const TYPED = /^[^\r\n\0]*$/;
+
+export type ParsedLogin = { ok: true; request: LoginRequest } | { ok: false; error: string };
+
+/** A call of the API as this operator reads it, its token checked by the
+ *  caller first. An error never repeats what was typed: it names the field. */
+export function parseLoginRequest(value: unknown): ParsedLogin {
+  try {
+    const m = record(value, "the call");
+    const callId = str(m.callId, "callId", 64);
+    if (!CALL_ID.test(callId)) throw new Invalid("callId is not an id");
+    const token = str(m.token, "token");
+    const typed = (field: unknown, what: string, max: number): string => {
+      const text = str(field, what, max);
+      if (text === "" || !TYPED.test(text)) throw new Invalid(`${what} is empty or has a line break`);
+      return text;
+    };
+    switch (m.type) {
+      case "login.state":
+      case "login.screenshot":
+        return { ok: true, request: { type: m.type, callId, token } };
+      case "login.submit":
+        return { ok: true, request: { type: "login.submit", callId, token, login: typed(m.login, "login", LOGIN_MAX), password: typed(m.password, "password", PASSWORD_MAX) } };
+      case "login.code":
+        return { ok: true, request: { type: "login.code", callId, token, code: typed(m.code, "code", CODE_MAX) } };
+      default:
+        return { ok: false, error: "an unknown call of the login form" };
     }
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message };

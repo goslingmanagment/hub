@@ -44,6 +44,7 @@ pages that account is granted; the owner is granted every page implicitly.
 |---|---|---|---|---|---|---|---|---|
 | Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **no — 401 on both lanes** | yes (password sign-in, `client`) |
 | Owner console — `/admin/*` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
+| A page browser's login and screen — `/page-browser/pages/{label}/login*`, `/screen/*` and its WebSocket (`owner-session`; the WebSocket checks the cookie session and its Origin itself) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | Dashboard — `/models`, revenue (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — | no (403) |
 | Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | — | no (403) |
 | `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — | yes |

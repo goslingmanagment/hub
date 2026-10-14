@@ -21,6 +21,7 @@ import { TAKEOVER_FACTOR } from "../engine/pacer.ts";
 import type { Clock, Metrics, PageTransport } from "../engine/ports.ts";
 import type { DemandSignal, EngineRegistry } from "../engine/resource.ts";
 import { BrowserBufferIntake, type BrowserIntakeTiming } from "./browser-intake.ts";
+import { BrowserLoginDriver, type BrowserLoginTiming } from "./browser-login.ts";
 import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { createBrowserPageTransport, type BrowserPageTransportOptions } from "./browser-transport.ts";
 import { BrowserWsGuard, type BrowserWsGuardTiming } from "./ws/browser-guard.ts";
@@ -57,6 +58,10 @@ import { routeFanslyWsReceiptDemand } from "./ws/route-receipt.ts";
 // Chrome; the profile stays (plan §3.2 «Переключение транспорта страницы и
 // откат»). Otherwise the site would go on and open a second socket. A
 // shutdown or a deploy leaves the browser running: it outlives its owner.
+//
+// The owner's login (PR 15, `login`: the slot of a page, never a leave):
+// the login driver (`browser-login.ts`) follows `sync_pages.manual_login`
+// over the same link — the operator into the manual login and back.
 
 /** How long the slot waits for the operator's answer to `stopPage`. */
 export const BROWSER_LEAVE_WAIT_MS = 15_000;
@@ -81,6 +86,7 @@ export interface BrowserPageOverrides {
   guardTiming?: Partial<BrowserWsGuardTiming>;
   cdnUrlAllowed?: (url: URL) => boolean;
   leaveWaitMs?: number;
+  loginTiming?: Partial<BrowserLoginTiming>;
 }
 
 export interface BrowserPageDeps {
@@ -102,6 +108,9 @@ export interface BrowserPageDeps {
   /** The page's demand under the slot's generation (the socket's
    *  `dm-conversations.ws-down`). Rejects when it was not written. */
   enqueue(signals: readonly DemandSignal[]): Promise<void>;
+  /** The slot follows the owner's login of the page's browser (PR 15): a
+   *  page's slot, never a leave. */
+  login?: boolean;
   overrides?: BrowserPageOverrides;
 }
 
@@ -114,6 +123,8 @@ export interface BrowserPage {
   readonly socket: BrowserWsSource;
   readonly intake: BrowserBufferIntake;
   readonly guard: BrowserWsGuard;
+  /** The owner's login of the page's browser (PR 15); null: not followed. */
+  readonly login: BrowserLoginDriver | null;
   /** The intake and the socket's guard run (the link was started with the
    *  transport). */
   start(): void;
@@ -154,6 +165,88 @@ export async function browserPageProblem(db: Database, pageId: number): Promise<
  * page's browser has no profile or no settings: nothing was started then.
  */
 export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPage> {
+  const { db, logger, metrics, pageId, generation } = deps;
+  const { profileId, client, bridge, bufferUndrainedSince } = await openBrowserLink(deps);
+  const overrides = deps.overrides ?? {};
+  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics });
+  let transport: PageTransport;
+  try {
+    transport = await createBrowserPageTransport({ db, config: deps.config }, { pageId }, {
+      client,
+      monoNow: () => deps.clock.monoNow(),
+      bridge,
+      ...(overrides.transportTiming === undefined ? {} : { timing: overrides.transportTiming }),
+      ...(overrides.cdnUrlAllowed === undefined ? {} : { cdnUrlAllowed: overrides.cdnUrlAllowed }),
+    });
+  } catch (error) {
+    site.close();
+    await client.close();
+    throw error;
+  }
+  const { socket, applier, intake } = browserIntakeOf(deps, client);
+  const guard = new BrowserWsGuard({
+    db,
+    pageId,
+    clock: deps.clock,
+    metrics,
+    logger,
+    link: client,
+    intake,
+    socket,
+    enqueue: deps.enqueue,
+    ...(overrides.guardTiming === undefined ? {} : { timing: overrides.guardTiming }),
+  });
+  if (bufferUndrainedSince !== null) clearUndrainedOnceDrained(deps, profileId, client, intake);
+  const login = deps.login === true
+    ? new BrowserLoginDriver({ db, pageId, generation, transport: "browser", client, bridge, clock: deps.clock, logger, metrics, ...(overrides.loginTiming === undefined ? {} : { timing: overrides.loginTiming }) })
+    : null;
+  let stopped: Promise<void> | null = null;
+  return {
+    profileId,
+    client,
+    bridge,
+    transport,
+    site,
+    socket,
+    intake,
+    guard,
+    login,
+    start() {
+      intake.start();
+      guard.start();
+      login?.start();
+    },
+    async leave() {
+      const waitMs = overrides.leaveWaitMs ?? BROWSER_LEAVE_WAIT_MS;
+      const result = await client.command("stopPage", bridge.toKernel(deps.clock.monoNow() + waitMs), waitMs);
+      if (result === null || !result.ok) {
+        logger.warn({ pageId, detail: result?.detail ?? "no answer" },
+          "Fansly sync browser page: the operator did not confirm it stopped the page; with no owner of it, it admits nothing");
+      } else {
+        logger.info({ pageId }, "Fansly sync browser page: the operator stopped the page (exit closed, Chrome stopped)");
+      }
+      return result;
+    },
+    stop() {
+      stopped ??= (async () => {
+        await login?.stop();
+        await guard.stop();
+        await intake.stop();
+        await applier.drain(SYNC_WS_APPLY_DRAIN_MS);
+        socket.stop();
+        site.close();
+      })().catch(() => undefined);
+      return stopped;
+    },
+  };
+}
+
+/** The link to a page's operator: its client (the hello's settings read
+ *  anew at every connect) and the hand-over of `quiesced` — the takeover
+ *  floor raised, the generation recorded on the profile. Throws
+ *  `BrowserPageNotReadyError` when the page's browser has no profile or no
+ *  settings: nothing was started then. */
+export async function openBrowserLink(deps: Omit<BrowserPageDeps, "enqueue" | "registry" | "ownRef">): Promise<{ profileId: string; client: PageBrowserRpcClient; bridge: MonoBridge; bufferUndrainedSince: Date | null }> {
   const { db, config, logger, metrics, pageId, generation } = deps;
   const read = await readPageBrowserPageSettings(db, pageId);
   if ("problem" in read) throw new BrowserPageNotReadyError(pageId, read.problem);
@@ -200,29 +293,24 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     });
   }
 
-  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics });
-  let transport: PageTransport;
-  try {
-    transport = await createBrowserPageTransport({ db, config }, { pageId }, {
-      client,
-      monoNow: () => deps.clock.monoNow(),
-      bridge,
-      ...(overrides.transportTiming === undefined ? {} : { timing: overrides.transportTiming }),
-      ...(overrides.cdnUrlAllowed === undefined ? {} : { cdnUrlAllowed: overrides.cdnUrlAllowed }),
-    });
-  } catch (error) {
-    site.close();
-    await client.close();
-    throw error;
-  }
+  return { profileId, client, bridge, bufferUndrainedSince: read.profile.bufferUndrainedSince };
+}
+
+/** The buffer's intake of a link (PR 13): the site socket's connection
+ *  rows, the live overlay's applier (a captured frame reaches the overlay,
+ *  its receipt routed in the ack transaction, I18), the intake itself. */
+export function browserIntakeOf(
+  deps: Pick<BrowserPageDeps, "db" | "pageId" | "generation" | "ownRef" | "registry" | "logger" | "metrics" | "overrides">,
+  client: PageBrowserRpcClient,
+): { socket: BrowserWsSource; applier: ReturnType<typeof createFanslyWsLiveApplier>; intake: BrowserBufferIntake } {
+  const { db, pageId, logger, metrics } = deps;
   const socket = new BrowserWsSource({ db, pageId });
-  // A captured frame reaches the overlay, its receipt routed in the ack
-  // transaction (I18), as the engine's own socket's.
   const applier = createFanslyWsLiveApplier({ db, logger: logger as never }, { afterAck: routeFanslyWsReceiptDemand });
+  const intakeTiming = deps.overrides?.intakeTiming;
   const intake = new BrowserBufferIntake({
     db,
     pageId,
-    generation,
+    generation: deps.generation,
     ownRef: deps.ownRef,
     client,
     source: socket,
@@ -230,73 +318,27 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     logger,
     metrics,
     applyLive: (observationId) => applier.enqueue(observationId),
-    ...(overrides.intakeTiming === undefined ? {} : { timing: overrides.intakeTiming }),
+    ...(intakeTiming === undefined ? {} : { timing: intakeTiming }),
   });
-  const guard = new BrowserWsGuard({
-    db,
-    pageId,
-    clock: deps.clock,
-    metrics,
-    logger,
-    link: client,
-    intake,
-    socket,
-    enqueue: deps.enqueue,
-    ...(overrides.guardTiming === undefined ? {} : { timing: overrides.guardTiming }),
+  return { socket, applier, intake };
+}
+
+/** The owner said the container stopped before its buffer was drained
+ *  (0278): drained once its operator says its open buffer keeps nothing and
+ *  this intake committed its last event (`browserBufferDrained`). */
+function clearUndrainedOnceDrained(deps: Pick<BrowserPageDeps, "db" | "pageId" | "logger">, profileId: string, client: PageBrowserRpcClient, intake: BrowserBufferIntake): void {
+  let clearing = false;
+  const unlisten = client.onState((state) => {
+    if (clearing || !browserBufferDrained(state, intake.position)) return;
+    clearing = true;
+    void clearPageBrowserUndrained(deps.db, { profileId }).then(
+      () => {
+        unlisten();
+        deps.logger.info({ pageId: deps.pageId }, "Fansly sync browser page: the browser's buffer is drained");
+      },
+      () => {
+        clearing = false;
+      },
+    );
   });
-  if (read.profile.bufferUndrainedSince !== null) {
-    // The owner said the container stopped before its buffer was drained
-    // (0278): drained once its operator says its open buffer keeps nothing
-    // and this intake committed its last event (`browserBufferDrained`).
-    let clearing = false;
-    const unlisten = client.onState((state) => {
-      if (clearing || !browserBufferDrained(state, intake.position)) return;
-      clearing = true;
-      void clearPageBrowserUndrained(db, { profileId }).then(
-        () => {
-          unlisten();
-          logger.info({ pageId }, "Fansly sync browser page: the browser's buffer is drained");
-        },
-        () => {
-          clearing = false;
-        },
-      );
-    });
-  }
-  let stopped: Promise<void> | null = null;
-  return {
-    profileId,
-    client,
-    bridge,
-    transport,
-    site,
-    socket,
-    intake,
-    guard,
-    start() {
-      intake.start();
-      guard.start();
-    },
-    async leave() {
-      const waitMs = overrides.leaveWaitMs ?? BROWSER_LEAVE_WAIT_MS;
-      const result = await client.command("stopPage", bridge.toKernel(deps.clock.monoNow() + waitMs), waitMs);
-      if (result === null || !result.ok) {
-        logger.warn({ pageId, detail: result?.detail ?? "no answer" },
-          "Fansly sync browser page: the operator did not confirm it stopped the page; with no owner of it, it admits nothing");
-      } else {
-        logger.info({ pageId }, "Fansly sync browser page: the operator stopped the page (exit closed, Chrome stopped)");
-      }
-      return result;
-    },
-    stop() {
-      stopped ??= (async () => {
-        await guard.stop();
-        await intake.stop();
-        await applier.drain(SYNC_WS_APPLY_DRAIN_MS);
-        socket.stop();
-        site.close();
-      })().catch(() => undefined);
-      return stopped;
-    },
-  };
 }

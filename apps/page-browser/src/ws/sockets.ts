@@ -151,6 +151,7 @@ import type { AlarmKind, WsAdmit, WsAdmitResult, WsDone } from "../rpc/protocol.
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 import { messageKind, shapeFields, shapeOf, type GuardReport } from "./guard.ts";
 import type { GuardTarget } from "./install.ts";
+import { chromeToOperator, readChromeClock, tightestOf, type ChromeClockReading } from "../cdp/chrome-clock.ts";
 
 export interface SocketTimings {
   /** How long a socket's CONNECT waits — for the one before it, then for
@@ -168,6 +169,29 @@ export interface SocketTimings {
 }
 
 const DEFAULT_TIMINGS: SocketTimings = { admitWaitMs: 60_000, bindWaitMs: 15_000, accountWaitMs: 15_000, retryMs: [1000, 2000, 5000, 15_000, 30_000] };
+
+// Chrome's clock on the operator's (Astra's review of PR 15, rounds 5–7): a
+// socket event's moment is Chrome's own timestamp (Network.MonotonicTime),
+// which a delivery delay does not move; it is mapped by an active
+// calibration of each CDP session (`cdp/chrome-clock.ts`: at most its round
+// trip early, never late) — never by what a delivery took. A calibration is
+// the tightest of CALIBRATION_READINGS readings; it is taken again every
+// CALIBRATION_EVERY_MS (the new one replaces the old, so the two clocks'
+// drift — none expected: on Linux both are CLOCK_MONOTONIC — is followed,
+// not accumulated) and anew for a new session (a new target, a new CDP
+// connection) or a new Chrome. Until a session has one, its events are
+// stamped no later than what is proven of them: the latest of their
+// connection's CONNECT, its handshake as the proxy saw it, and its last
+// calibrated event — never their take.
+
+export { CALIBRATION_MAX_MS } from "../cdp/chrome-clock.ts";
+/** A session's calibration is taken again this often (the tightest kept). */
+export const CALIBRATION_EVERY_MS = 10 * 60_000;
+/** Readings one calibration takes (the tightest bound of them kept). */
+const CALIBRATION_READINGS = 3;
+/** A calibration refused or failed is tried again after these (the last
+ *  repeats). */
+const CALIBRATION_RETRY_MS = [250, 1_000, 5_000, 30_000];
 
 /** The buffer as the socket uses it. */
 export interface SocketBuffer {
@@ -286,6 +310,10 @@ interface Admission {
   tunnelEnded: string | null;
   /** Its CDP socket, bound at its handshake. */
   socket: CdpSocket | null;
+  /** The latest moment proven of its events so far (operator mono): its
+   *  CONNECT, its handshake as the proxy saw it, its last calibrated event —
+   *  what an event not calibrated is stamped with. */
+  provenMono: number;
   /** CDP's word must come in time (bindWaitMs, accountWaitMs). */
   accountTimer: NodeJS.Timeout | null;
   status: number | null;
@@ -418,6 +446,18 @@ export class SiteSockets {
    *  from its last event. */
   #uncovered: Mark | null = null;
   #lastHandshake: { mono: number; wall: number } | null = null;
+  /** Each CDP session's calibration of Chrome's clock. */
+  readonly #clocks = new Map<string, ChromeClockReading>();
+  /** The sessions a calibration runs for, and those Performance was
+   *  enabled in. */
+  readonly #calibrating = new Set<string>();
+  readonly #performanceOn = new Set<string>();
+  /** A session's calibrations refused in a row, and the next try's timer. */
+  readonly #clockTries = new Map<string, number>();
+  readonly #clockTimers = new Map<string, NodeJS.Timeout>();
+  /** Changes when every calibration goes (a new Chrome, a new CDP link):
+   *  one under way from before is dropped. */
+  #clockEpoch = 0;
   #binaryFrames = 0;
   /** Events dropped: delivered again from before this operator, or of no
    *  socket bound here (one closed, refused, of another Chrome). */
@@ -457,6 +497,7 @@ export class SiteSockets {
         this.#replayed += 1;
         if (this.#replayed === 1 || this.#replayed % 100 === 0) this.#log("event.replayed_dropped", { method: event.method, count: this.#replayed });
       } else {
+        if (event.sessionId !== undefined) this.#ensureClock(event.sessionId);
         taken = handle(event);
       }
     } finally {
@@ -531,6 +572,7 @@ export class SiteSockets {
       port,
       stage: "queued",
       connectMono: this.#now(),
+      provenMono: this.#now(),
       resolve,
       waitTimer: null,
       generation: 0,
@@ -753,6 +795,8 @@ export class SiteSockets {
    *  one commit — and its sockets are forgotten: whatever CDP still says of
    *  them is dropped. Every socket is accounted for by Chrome's going. */
   #chromeGone(why: string): void {
+    // A new Chrome's sessions are new: their clocks are taken anew.
+    this.clocksInvalidated(why);
     // A socket that may have spoken through its tunnel and whose end CDP
     // has not shown: what it carried is lost with Chrome, open in the
     // stream or not (its 101 and frames may still be on their way).
@@ -833,6 +877,8 @@ export class SiteSockets {
         return;
       case "handshake_sent":
         admission.handshake = { mono: event.mono, wall: event.wall };
+        // What its events are proven to come after, on this clock.
+        if (event.mono > admission.provenMono) admission.provenMono = event.mono;
         if (this.#lastHandshake === null || event.mono > this.#lastHandshake.mono) this.#lastHandshake = { mono: event.mono, wall: event.wall };
         // CDP must show this socket's handshake soon.
         if (admission.socket === null) this.#await(admission, this.#timings.bindWaitMs, "its tunnel carried a handshake CDP did not show");
@@ -880,13 +926,98 @@ export class SiteSockets {
     return typeof requestId === "string" ? `${event.sessionId ?? ""}|${requestId}` : null;
   }
 
-  /** When Chrome saw it (Network.MonotonicTime, on the operator's clock),
-   *  else now — an event's stamp. */
-  #at(event: CdpEvent): { mono: number; wall: number } {
-    const now = monoMs();
+  /** An event's stamp, on this process's clock, never later than when
+   *  Chrome saw it: its timestamp mapped by its session's calibration (at
+   *  most the calibration's spread early) — or, its session not calibrated,
+   *  the latest moment proven of its connection (`provenMono`). Never the
+   *  take: a delivery delay would make it late. */
+  #at(event: CdpEvent, admission: Admission | null): { mono: number; wall: number } {
+    const take = monoMs();
+    const wall = wallMs();
+    const stamp = (mono: number) => ({ mono, wall: Math.round(wall - (take - mono)) });
     const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
-    const mono = Number.isFinite(seen) && seen > 0 && seen <= now + 1000 && seen >= now - 3_600_000 ? seen : now;
-    return { mono, wall: Math.round(wallMs() - (now - mono)) };
+    const clock = event.sessionId === undefined ? undefined : this.#clocks.get(event.sessionId);
+    if (clock !== undefined && Number.isFinite(seen) && seen > 0) {
+      const mono = chromeToOperator(seen / 1000, clock, take);
+      if (admission !== null && mono > admission.provenMono) admission.provenMono = mono;
+      return stamp(mono);
+    }
+    return stamp(Math.min(take, admission?.provenMono ?? take));
+  }
+
+  // ── Chrome's clock (rounds 5–7 of Astra's review of PR 15) ─────────────
+
+  /** The calibration of `sessionId`, if one was taken (tests, the log). */
+  clockOf(sessionId: string): { spread: number } | null {
+    const clock = this.#clocks.get(sessionId);
+    return clock === undefined ? null : { spread: clock.spread };
+  }
+
+  /** Every calibration goes: a new CDP link (its sessions may be new), a new
+   *  Chrome. They are taken again with the next events. */
+  clocksInvalidated(why: string): void {
+    this.#clockEpoch += 1;
+    this.#clocks.clear();
+    this.#calibrating.clear();
+    this.#performanceOn.clear();
+    for (const timer of this.#clockTimers.values()) clearTimeout(timer);
+    this.#clockTimers.clear();
+    this.#clockTries.clear();
+    this.#log("clock.invalidated", { why });
+  }
+
+  /** A calibration of `sessionId` is taken when it has none, or an old one. */
+  #ensureClock(sessionId: string): void {
+    if (this.#calibrating.has(sessionId) || this.#clockTimers.has(sessionId)) return;
+    const clock = this.#clocks.get(sessionId);
+    if (clock !== undefined && monoMs() - clock.takenMono < CALIBRATION_EVERY_MS) return;
+    void this.#calibrate(sessionId);
+  }
+
+  async #calibrate(sessionId: string): Promise<void> {
+    const epoch = this.#clockEpoch;
+    const cdp = this.#deps.cdp;
+    this.#calibrating.add(sessionId);
+    let why: string | null = null;
+    try {
+      const readings: ChromeClockReading[] = [];
+      for (let index = 0; index < CALIBRATION_READINGS; index += 1) {
+        const reading = await readChromeClock(cdp, sessionId, { enable: !this.#performanceOn.has(sessionId) });
+        if (epoch !== this.#clockEpoch) return;
+        this.#performanceOn.add(sessionId);
+        // A slow round trip: the link is loaded — the rest wait for a retry.
+        if ("refused" in reading) {
+          why = reading.refused;
+          break;
+        }
+        readings.push(reading);
+      }
+      const clock = tightestOf(readings);
+      if (clock !== null) {
+        // The new one replaces the old (one refused keeps the old).
+        why = null;
+        this.#clocks.set(sessionId, clock);
+        this.#clockTries.delete(sessionId);
+        this.#log("clock.calibrated", { sessionId, readings: readings.length, spreadMs: Math.round(clock.spread * 1000) / 1000 });
+      }
+    } catch (error) {
+      if (epoch !== this.#clockEpoch) return;
+      why = errorMessage(error);
+    } finally {
+      if (epoch === this.#clockEpoch) this.#calibrating.delete(sessionId);
+    }
+    if (why === null || epoch !== this.#clockEpoch) return;
+    // Tried again: its events meanwhile are stamped with what is proven.
+    const tries = (this.#clockTries.get(sessionId) ?? 0) + 1;
+    this.#clockTries.set(sessionId, tries);
+    const wait = CALIBRATION_RETRY_MS[Math.min(tries - 1, CALIBRATION_RETRY_MS.length - 1)]!;
+    this.#log("clock.refused", { sessionId, why, tries, retryMs: wait });
+    const timer = setTimeout(() => {
+      this.#clockTimers.delete(sessionId);
+      if (epoch === this.#clockEpoch) void this.#calibrate(sessionId);
+    }, wait);
+    timer.unref();
+    this.#clockTimers.set(sessionId, timer);
   }
 
   /** The socket an event is of — one of this Chrome to the socket host — or
@@ -1027,7 +1158,7 @@ export class SiteSockets {
     }
     const done = this.#finish(admission, { sent: true, status: 101, error: null });
     if (done === null) return null;
-    const at = this.#at(event);
+    const at = this.#at(event, admission);
     // The open, its outcome and the reconnect's gap: one commit, tried until
     // durable whatever becomes of the socket meanwhile.
     const uncovered = this.#uncovered;
@@ -1077,7 +1208,7 @@ export class SiteSockets {
       if (this.#binaryFrames === 1 || this.#binaryFrames % 100 === 0) this.#log("frame.not_text", { connectionId: socket.admission.id, opcode: Number(response?.opcode), count: this.#binaryFrames });
       return null;
     }
-    const at = this.#at(event);
+    const at = this.#at(event, socket.admission);
     const appended = this.#deps.buffer.append({ kind: "ws.in", connectionId: socket.admission.id, frame: response.payloadData }, at);
     if (!appended.ok) {
       // The buffer stops the page itself, and its own gap follows.
@@ -1151,7 +1282,7 @@ export class SiteSockets {
     const admission = socket.admission;
     switch (socket.state) {
       case "open":
-        return this.#close(socket, "closed", this.#at(event));
+        return this.#close(socket, "closed", this.#at(event, admission));
       case "handshaking":
         socket.state = "ended";
         this.#done(admission!, { sent: admission!.handshake !== null, status: admission!.status, error: "the socket closed before its handshake's answer" });
@@ -1191,8 +1322,11 @@ export class SiteSockets {
     // event of the socket before this close — a moment saved before the
     // loss, not the close's (CDP may tell it late; a close of ours is now).
     this.#uncovered ??= this.#last ?? unknownBoundary();
-    // The connection's last event: its number once the close is durable.
-    const mark: Mark = { seq: null, wall: stamp.wall };
+    // The connection's last event: its number once the close is durable —
+    // and, as a boundary, the moment of the last event received before it
+    // (the open or a frame): a close moves no boundary later (Astra's
+    // review of PR 15, round 6).
+    const mark: Mark = { seq: null, wall: Math.min(stamp.wall, this.#last?.wall ?? stamp.wall) };
     this.#last = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
@@ -1375,6 +1509,9 @@ export class SiteSockets {
   close(): void {
     if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
+    for (const timer of this.#clockTimers.values()) clearTimeout(timer);
+    this.#clockTimers.clear();
+    this.#clockEpoch += 1;
     for (const admission of [this.#current, ...this.#queue, ...this.#admissions.values()]) {
       if (admission === null) continue;
       if (admission.waitTimer) clearTimeout(admission.waitTimer);
