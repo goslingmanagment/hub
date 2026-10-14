@@ -80,6 +80,14 @@ const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*
  *   longer the open one (closed by other means), is closed within
  *   `SCREEN_WATCH_MS`. The API is one process (docker-compose.production.yml:
  *   one `api`), so its screens are all here.
+ * - Every change (`POST`) is taken only from a page of the dashboard's own
+ *   origin — the dashboard is served by this API, so its `Origin` names the
+ *   host the request came to — as the screen's upgrade checks it (Astra's
+ *   review of PR 15, item 7). The session cookie is `SameSite=Lax`, which a
+ *   page of another origin of the same site (any `*.gosling-agency.ru`)
+ *   still sends with a POST; the API has no CSRF token, and a browser sends
+ *   `Origin` with every POST. Refused: 403 `cross_origin`, before the
+ *   session is read.
  */
 export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -288,6 +296,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/page-browser/pages/:pageLabel/login/start", {
     schema: routeSchemas.pageBrowserLoginStart,
   }, async (request): Promise<PageBrowserLoginChangeResponse> => {
+    requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return change(request, principal, "wanted");
@@ -296,6 +305,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/page-browser/pages/:pageLabel/login/finish", {
     schema: routeSchemas.pageBrowserLoginFinish,
   }, async (request): Promise<PageBrowserLoginChangeResponse> => {
+    requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return change(request, principal, "ending");
@@ -319,6 +329,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserLoginSubmit,
     config: { rateLimit: { max: 20, timeWindow: 60_000 } },
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return step(request, principal, { type: "login.submit", login: request.body.login, password: request.body.password });
@@ -328,6 +339,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserLoginCode,
     config: { rateLimit: { max: 20, timeWindow: 60_000 } },
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return step(request, principal, { type: "login.code", code: request.body.code });
@@ -389,14 +401,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const match = SCREEN_PATH.exec(req.url ?? "");
     if (match === null) return refuseUpgrade(socket, 404);
     // A page of another origin may not open the owner's screen.
-    const origin = req.headers.origin;
-    let sameOrigin: boolean;
-    try {
-      sameOrigin = origin !== undefined && new URL(origin).host === req.headers.host;
-    } catch {
-      sameOrigin = false;
-    }
-    if (!sameOrigin) return refuseUpgrade(socket, 403);
+    if (!fromThisOrigin(req.headers)) return refuseUpgrade(socket, 403);
     const token = cookieOf(req.headers.cookie, SESSION_COOKIE_NAME);
     const principal = token === null ? null : await authenticateSessionToken(appContext, token);
     if (principal === null || token === null) return refuseUpgrade(socket, 401);
@@ -425,6 +430,26 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     tunnel.close = proxied.close;
     tunnel.opening = false;
   }
+}
+
+/** The request came from a page of this host — the dashboard's origin: its
+ *  `Origin` (http or https) names the host it came to. No `Origin` (no
+ *  browser sends a POST or a WebSocket without one), another host or port,
+ *  or `null`: not. */
+export function fromThisOrigin(headers: IncomingMessage["headers"]): boolean {
+  const origin = headers.origin;
+  const host = headers.host;
+  if (typeof origin !== "string" || typeof host !== "string" || host === "") return false;
+  try {
+    const url = new URL(origin);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.host === host;
+  } catch {
+    return false;
+  }
+}
+
+function requireThisOrigin(headers: IncomingMessage["headers"]): void {
+  if (!fromThisOrigin(headers)) throw new AppError("A change of the page's browser is taken only from the dashboard's own pages", 403, "cross_origin");
 }
 
 function refuseUpgrade(socket: Duplex, status: number): void {

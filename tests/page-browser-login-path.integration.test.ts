@@ -317,7 +317,9 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     if (!testDb) return context.skip();
     const r = await rig();
     const base = `/api/v1/page-browser/pages/${r.page.pageLabel}/login`;
-    const as = (cookie: string) => ({ cookie });
+    // As the dashboard's own page asks: its cookie, its origin (item 7 of
+    // Astra's review: a change from another origin is refused).
+    const as = (cookie: string) => ({ cookie, host: "hub.test", origin: "https://hub.test" });
     await eventually(async () => r.fansly.arrivals.length >= 1, 15_000, "the page running on Node");
 
     // Only the owner: a lead is refused, nobody is refused.

@@ -13,14 +13,15 @@ import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTes
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { ensureHarnessSettingTable, harnessConfig, seedHarnessPage, until } from "./helpers/sync-engine.ts";
 
-// The browser's own screen (KasmVNC) after it was opened (Project Browser
-// PR 15; Astra's review, item 2), against the real API on a test database —
-// no engine (a login the owner closes stays `ending`), no operator (the
-// screen is a fake KasmVNC): an open screen closes when the owner closes the
-// login, before the closing is written (the engine brings the automation
-// back only once it reads it), and none opens while it is written; and it
-// closes when its session is revoked or expired, or its login is no longer
-// the open one.
+// The browser's own screen (KasmVNC) after it was opened, and the login's
+// changes from another origin (Project Browser PR 15; Astra's review, items 2
+// and 7), against the real API on a test database — no engine (a login the
+// owner closes stays `ending`), no operator (the screen is a fake KasmVNC):
+// - an open screen closes when the owner closes the login, before the
+//   closing is written (the engine brings the automation back only once it
+//   reads it), and none opens while it is written; and it closes when its
+//   session is revoked or expired, or its login is no longer the open one;
+// - a change of the login is taken only from a page of the API's own origin.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -220,5 +221,32 @@ describe("the browser's screen once open (Astra's review of PR 15, item 2)", () 
     // ends only a closing one; here the row itself): the last screen goes.
     await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_changed_at = clock_timestamp() where page_id = $1", [r.pageId]);
     await until(async () => kept.closed() && r.screen.open.size === 0, 5_000, "the last screen closed");
+  }, 60_000);
+});
+
+describe("a change of the login from another origin (Astra's review of PR 15, item 7)", () => {
+  it("is refused before anything is read: no Origin, another origin of the same site, `null`; the dashboard's own is taken", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const cookie = await r.login();
+    for (const origin of [null, "https://evil.gosling-agency.ru", "null", `http://${HOST}.evil.example`, "https://hub.test:8443"]) {
+      const refused = await change(r, cookie, "start", origin);
+      expect(refused.statusCode, String(origin)).toBe(403);
+      expect(refused.json(), String(origin)).toMatchObject({ error: "cross_origin" });
+    }
+    expect((await getSyncPageManualLogin(db(), r.pageId))?.value).toBe("off");
+    const steps = [
+      { url: "submit", payload: { login: "pb15-csrf-login", password: "pb15-csrf-password" } },
+      { url: "code", payload: { code: "123456" } },
+    ];
+    for (const step of steps) {
+      const refused = await r.server.inject({ method: "POST", url: `/api/v1/page-browser/pages/${r.label}/login/${step.url}`, headers: { cookie, host: HOST, origin: "https://evil.gosling-agency.ru" }, payload: step.payload });
+      expect(refused.statusCode, step.url).toBe(403);
+      expect(refused.json()).toMatchObject({ error: "cross_origin" });
+    }
+    expect((await change(r, cookie, "start")).json()).toEqual({ state: "wanted", changed: true });
+    expect((await change(r, cookie, "finish", "https://evil.gosling-agency.ru")).statusCode).toBe(403);
+    expect((await getSyncPageManualLogin(db(), r.pageId))?.value).toBe("wanted");
+    expect((await change(r, cookie, "finish")).json()).toEqual({ state: "ending", changed: true });
   }, 60_000);
 });
