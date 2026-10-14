@@ -1065,11 +1065,17 @@ export class SyncEngineHost {
       //    the stop, never a count that happens to be zero — and no site
       //    socket of the page is open. An outcome the operator keeps and did
       //    not give (its body did not read: `unknown`, kept for the next
-      //    delivery) is asked for again at a bounded rate: the unfinished
-      //    attempts by `recover`; with none left to ask, a new connection, to
-      //    which the operator delivers every outcome it keeps.
+      //    delivery) is asked for again at a bounded rate, each step two
+      //    ways: the unfinished attempts by `recover`; and everything it
+      //    keeps — an outcome of an attempt settled already, which `recover`
+      //    cannot name, too — by a new connection, to which the operator
+      //    delivers every outcome it keeps, whenever its count did not fall
+      //    since the step before. Neither waits for the other.
       let recoverEvery = BROWSER_LEAVE_RECOVER_FIRST_MS;
       let nextRecover = this.#clock.monoNow() + recoverEvery;
+      // The operator's count of kept outcomes at the step before (first:
+      // when the loop first saw it keep any).
+      let keptBefore: number | null = null;
       while (!signal.aborted) {
         stall.progress("applies");
         await takeLateHeldOutcomes(d, held);
@@ -1078,12 +1084,15 @@ export class SyncEngineHost {
           && browserBufferDrained(state, browser.intake.position)
           && browser.intake.stopReason === null && !(await hasOpenBrowserWsConnection(this.#o.db, run.pageId))) break;
         const kept = state?.buffer.open?.outcomes ?? 0;
+        if (kept > 0) keptBefore ??= kept;
         if (kept > 0 && this.#clock.monoNow() >= nextRecover) {
           stall.progress("recover");
           const again = await reconcileHeldOutcomesOf(d, held, HELD_RECOVER_WAIT_MS);
-          if (again.asked === 0) client.reconnect("the leave: redeliver the outcomes the operator keeps");
-          this.#o.logger.info({ pageId: run.pageId, kept, asked: again.asked, nextInMs: Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS) },
+          const redeliver = keptBefore === null || kept >= keptBefore;
+          if (redeliver) client.reconnect("the leave: redeliver the outcomes the operator keeps");
+          this.#o.logger.info({ pageId: run.pageId, kept, keptBefore, asked: again.asked, redeliver, nextInMs: Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS) },
             "Fansly sync host: the page's browser still keeps outcomes; asked for them again");
+          keptBefore = kept;
           recoverEvery = Math.min(recoverEvery * 2, BROWSER_LEAVE_RECOVER_MAX_MS);
           nextRecover = this.#clock.monoNow() + recoverEvery;
         }

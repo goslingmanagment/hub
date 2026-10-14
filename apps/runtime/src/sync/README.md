@@ -957,8 +957,10 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   (`state.buffer.open`: no outcome, nothing uncommitted, no byte), and the intake's subscription to that buffer
   committed its last event; a buffer that cannot be opened (it counts 0 bytes) or an operator that does not say is
   never drained, and the leave waits — and no site socket is open. An outcome the operator keeps and does not give
-  (a body that does not read: `unknown`) is asked for again at a bounded rate (2 s, doubling to 30 s): the unfinished
-  attempts by `recover`, with none left a new connection, to which the operator delivers all it keeps. Then the
+  (a body that does not read: `unknown`) is asked for again at a bounded rate (2 s, doubling to 30 s), each step both
+  ways: the unfinished attempts by `recover`, and — whenever the operator's count of kept outcomes did not fall since
+  the step before — a new connection, to which the operator delivers all it keeps (an outcome of an attempt settled
+  already too, which `recover` cannot name). Then the
   leave is confirmed under that generation's fence. An operator out of reach keeps
   the page waiting (`browser_leave_unconfirmed`; alert 2 of that name once the leave has been pending for 2 min,
   read from the pending leave — the page's owner beats meanwhile) until the owner says the container is stopped
