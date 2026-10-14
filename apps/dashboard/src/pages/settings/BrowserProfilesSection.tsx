@@ -37,7 +37,8 @@ export function BrowserProfilesSection() {
             return (
               <li key={profile.profileId} className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3" data-browser-profile={profile.name}>
                 <MonitorSmartphone size={18} className="shrink-0 text-text-muted" aria-hidden />
-                <div className="min-w-0 flex-1">
+                {/* On a phone the chip and the link go under it: the details stay readable. */}
+                <div className="min-w-[12rem] flex-1">
                   <p className="text-sm font-semibold text-text-primary">{profile.name}</p>
                   <p className="truncate text-xs text-text-muted">
                     {browser.label} · создан {new Date(profile.createdAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · <span className="font-mono">{profile.profileId.slice(0, 8)}</span>

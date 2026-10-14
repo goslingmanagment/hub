@@ -13,7 +13,7 @@ import {
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildSettingsRoute, decodeRouteSegment } from "@/lib/navigation";
-import { Card, Chip, LiveScreenshot, LoginForm, PLAIN, PRIMARY } from "./loginParts.js";
+import { Card, Chip, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN } from "./loginParts.js";
 import { loginViewOf, stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // The owner logs a page's server browser in (Project Browser plan §4.8,
@@ -131,12 +131,12 @@ export function PageBrowserLoginPage() {
     </div>
   );
   if (login.isPending) {
-    return <div>{header}<p role="status" className="text-sm text-text-muted">Загружаем…</p></div>;
+    return <div className={SCREEN}>{header}<p role="status" className="text-sm text-text-muted">Загружаем…</p></div>;
   }
   if (login.isError || login.data === undefined) {
     const notFound = login.error instanceof KernelApiError && login.error.status === 404;
     return (
-      <div>
+      <div className={SCREEN}>
         {header}
         {notFound
           ? <StatusPanel tone="error" title="Такой страницы нет" />
@@ -149,7 +149,7 @@ export function PageBrowserLoginPage() {
   const view = loginViewOf(data);
   const live = data.login.state === "wanted" && view.kind !== "unreachable";
   return (
-    <div>
+    <div className={SCREEN}>
       {header}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card title="Экран браузера" aside={<span className="text-xs text-text-muted">{live ? "обновляется раз в секунду" : "не показывается, пока вход закрыт"}</span>}>

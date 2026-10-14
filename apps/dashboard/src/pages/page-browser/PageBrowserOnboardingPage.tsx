@@ -21,7 +21,7 @@ import {
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
-import { Card, Chip, INPUT, LiveScreenshot, LoginForm, PLAIN, PRIMARY, ToneChip } from "./loginParts.js";
+import { Card, Chip, INPUT, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN, ToneChip } from "./loginParts.js";
 import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
 import { stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
@@ -325,12 +325,12 @@ export function PageBrowserOnboardingPage() {
     <Link to={buildSettingsRoute("pages")} className="text-xs font-medium text-accent hover:underline">&larr; Страницы</Link>
   );
   if (onboarding.isPending) {
-    return <div className="mb-5">{back}<p role="status" className="mt-3 text-sm text-text-muted">Загружаем…</p></div>;
+    return <div className={SCREEN}><div className="mb-5">{back}<p role="status" className="mt-3 text-sm text-text-muted">Загружаем…</p></div></div>;
   }
   if (onboarding.isError || onboarding.data === undefined) {
     const status = onboarding.error instanceof KernelApiError ? onboarding.error.status : null;
     return (
-      <div>
+      <div className={SCREEN}>
         <div className="mb-5">{back}</div>
         {status === 404
           ? <StatusPanel tone="error" title="Такого браузера нет" description="Профиль удалён или не создавался." />
@@ -347,7 +347,7 @@ export function PageBrowserOnboardingPage() {
   const live = data.login.state === "login" && view.kind !== "unreachable";
   const givingUp = data.login.state === "closing";
   return (
-    <div>
+    <div className={SCREEN}>
       <div className="mb-5">
         {back}
         <h1 className="mt-1 text-xl font-extrabold text-text-primary">Подключение страницы · {data.profile.name}</h1>

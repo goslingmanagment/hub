@@ -11,6 +11,10 @@ import { loginChipOf, wantsCode, type LoginView, type Tone } from "./pageBrowser
 // fields Fansly asks for. What is typed goes through `send` only and is
 // cleared at once.
 
+/** The page's own gutter on a phone (the layout gives none below md), as
+ *  the settings screen has it. */
+export const SCREEN = "min-w-0 p-4 md:p-0";
+
 export const TONES: Record<Tone, string> = {
   neutral: "border-border bg-hover-alt text-text-secondary",
   progress: "border-accent/30 bg-accent/10 text-accent",
