@@ -15,6 +15,8 @@ import {
 import type { SiteAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { changeSyncPagePause, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A } from "./helpers/page-browser-operator.ts";
@@ -48,7 +50,10 @@ import {
 // - a page on its browser: the same over its own slot, no stop at the end,
 //   Hub's requests through the browser only once the automation is back;
 // - an operator out of reach: a closing login ends without it; a page
-//   unpaused during its login is paused again.
+//   unpaused during its login is paused again;
+// - the owner's own pause and the login (Astra's review of PR 15, item 5):
+//   the owner's pause of the whole page during a login stays after it, and
+//   the owner's resume of it is refused while the login is open.
 
 const S = 300;
 const ENV = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } };
@@ -282,4 +287,49 @@ describe("a page on its browser", () => {
     expect(r.operator.state.mode).toBe("automation");
     await until(async () => r.operator.sends.length > sends, 15_000, "Hub's requests through the browser again");
   }, 60_000);
+});
+
+describe("the owner's pause and the login (Astra's review of PR 15, item 5)", () => {
+  const lever = (r: Rig, action: "pause" | "resume", what: { all?: boolean; requests?: boolean }) =>
+    changeSyncPagePause(db(), createFanslyRegistry(), { pageLabel: r.page.pageLabel, action, ...what });
+
+  it("a pause of the whole page the owner asks for during a login is the owner's: it stays when the login ends", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await startHost(r);
+    // An unpaused page: the login puts it on its pause.
+    await login(r, "wanted");
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: true, pausedAll: true });
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the browser started");
+    // The owner pauses the page meanwhile: the pause is the owner's now.
+    expect(await lever(r, "pause", { all: true })).toMatchObject({ pausedAll: true });
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "wanted", paused: false, pausedAll: true });
+    // The login ends (the engine, after the automation is back): the
+    // owner's pause stands.
+    await login(r, "ending");
+    await until(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 10_000, "the login closed");
+    expect(await getSyncPageManualLogin(db(), r.page.pageId)).toMatchObject({ value: "off", paused: false, pausedAll: true });
+  }, 30_000);
+
+  it("a resume of the whole page is refused while a login is open, nothing changed; the other levers work; after it, the resume does", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await login(r, "wanted");
+    for (const state of ["wanted", "ending"] as const) {
+      if (state === "ending") await login(r, "ending");
+      const refused = lever(r, "resume", { all: true });
+      await expect(refused, state).rejects.toBeInstanceOf(SyncOwnerLeverError);
+      await expect(refused, state).rejects.toThrow(/login of its browser is open/);
+      expect(await getSyncPageManualLogin(db(), r.page.pageId), state).toMatchObject({ value: state, paused: true, pausedAll: true });
+      // Its history requests are another lever: taken.
+      expect(await lever(r, "pause", { requests: true }), state).toMatchObject({ pausedAll: true, pausedRequests: true });
+      // Nothing of a refused call goes in, not even its part beside the whole page.
+      await expect(lever(r, "resume", { all: true, requests: true }), state).rejects.toBeInstanceOf(SyncOwnerLeverError);
+      expect((await testDb.pool.query("select paused_requests from sync_pages where page_id = $1", [r.page.pageId])).rows[0], state).toEqual({ paused_requests: true });
+      expect(await lever(r, "resume", { requests: true }), state).toMatchObject({ pausedAll: true, pausedRequests: false });
+    }
+    // The login over (no engine here: as it ends it), the owner resumes.
+    await testDb.pool.query("update sync_pages set manual_login = 'off', manual_login_paused = false where page_id = $1", [r.page.pageId]);
+    expect(await lever(r, "resume", { all: true })).toMatchObject({ pausedAll: false });
+  }, 30_000);
 });

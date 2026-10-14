@@ -1536,10 +1536,32 @@ export async function endSyncPageManualLogin(tx: Database, input: { pageId: numb
   return true;
 }
 
+/** The owner's resume of a page's whole pause while the login of its browser
+ *  is open (0279): refused — the page stays paused while a person may be in
+ *  its browser, and the login lifts the pause it put on the page itself once
+ *  the automation is back. */
+export class SyncPageManualLoginOpenError extends Error {
+  readonly pageId: number;
+
+  constructor(pageId: number) {
+    super(`Fansly sync page ${pageId}: the owner's login of its browser is open — the page stays paused until it is closed`);
+    this.name = "SyncPageManualLoginOpenError";
+    this.pageId = pageId;
+  }
+}
+
 /**
  * The owner's pauses (§10 "пауза ресурса / заявок / всей страницы"). Fields
  * left undefined keep their value; `resources` replaces the paused set. Wakes
  * the page's actor.
+ *
+ * The whole pause and the owner's login of the page's browser (0279), under
+ * the page's row lock, so neither is judged on a row the other is changing:
+ * while the login is open (`manual_login` not `off`) a resume of the whole
+ * page is refused (`SyncPageManualLoginOpenError`), and a pause of the whole
+ * page is the owner's own — the login no longer counts it as the pause it
+ * put on the page (`manual_login_paused` false), so the page stays paused
+ * when the login ends. The login lifts only what it set.
  */
 export async function setPagePause(
   db: Database,
@@ -1555,18 +1577,28 @@ export async function setPagePause(
     if (!SYNC_RESOURCE_KEY_PATTERN.test(resource)) throw new Error(`Not a resource key: ${resource}`);
   }
   const resources = input.resources === undefined ? null : [...new Set(input.resources)].sort();
-  const result = await db.execute(sql`
-    update sync_pages
-       set paused_all = coalesce(${input.all ?? null}::boolean, paused_all),
-           paused_requests = coalesce(${input.requests ?? null}::boolean, paused_requests),
-           paused_resources = coalesce(${resources === null ? null : sql.param(resources)}::text[], paused_resources),
-           pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-  `);
-  if ((result.rowCount ?? 0) === 0) return null;
-  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return getSyncPage(db, input.pageId);
+  const all = input.all ?? null;
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const current = await tx.execute<{ manualLogin: SyncPageManualLogin }>(sql`
+      select manual_login as "manualLogin" from sync_pages where page_id = ${input.pageId} for no key update
+    `);
+    const row = current.rows[0];
+    if (row === undefined) return null;
+    if (all === false && row.manualLogin !== "off") throw new SyncPageManualLoginOpenError(input.pageId);
+    await tx.execute(sql`
+      update sync_pages
+         set paused_all = coalesce(${all}::boolean, paused_all),
+             manual_login_paused = case when ${all}::boolean is true then false else manual_login_paused end,
+             paused_requests = coalesce(${input.requests ?? null}::boolean, paused_requests),
+             paused_resources = coalesce(${resources === null ? null : sql.param(resources)}::text[], paused_resources),
+             pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+    `);
+    await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+    return getSyncPage(tx, input.pageId);
+  });
 }
 
 /**
