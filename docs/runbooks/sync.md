@@ -228,6 +228,50 @@ session follows (below).
   owner took over (`browser_page … quiesced true`); `false` after a minute means the new owner still sends nothing
   through it — look at the page's browser.
 
+## A page browser's Chrome update (Project Browser)
+
+`scripts/page-browser-update.sh` (plan §4.10, spec §10), installed on the server by `scripts/deploy-page-browser.sh
+host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the workstation through
+`scripts/deploy-page-browser.sh chrome root@<server> <command> …`.
+
+- **The timer** (`page-browser-update.timer`, 03:20 UTC daily) runs `check`: the newest Chrome Stable in Google's
+  repository — `InRelease` signed by Google's key (pinned in `apps/page-browser/host/google-linux-signing-key.asc`,
+  primary `EB4C 1BFD 4F04 2F6D DDCC EC91 7721 F63B D38B 4796`), `Packages` and the `.deb` by their SHA-256 — archived
+  in `chrome/`, built into `hub-page-browser:<Chrome>-<commit>` on the commit of the last `deploy-page-browser.sh
+  build`, and **proposed**: `journalctl -t page-browser-update`, `update/status`, and `update/notify` if that
+  executable exists. It never updates a page (owner decision №15 is open). It also says when an update stopped
+  midway, waits for the owner, or a page runs a Chrome older than one out for more than three days.
+- **One page** (06:00–20:00 UTC; the first one with its one-hour window):
+
+  ```sh
+  scripts/deploy-page-browser.sh chrome root@<server> update --page lilly-1 --image hub-page-browser:<tag> --detach
+  ```
+
+  It takes the page off its browser through the engine's hand-over (`sync page transport <page> node`, audited; Node
+  has the page meanwhile), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three
+  kept), starts the new image, checks with the exit closed that the new Chrome opens the profile with the image's
+  rules extension, gives the page back (`sync page transport <page> browser`), waits for the engine's record of the
+  operator: ready on the new Chrome, the self-test passed, the exit IP the pinned one, the same account and session
+  — then the window, ending with `sync check live-hour`. Any failure: the page goes back to its previous image
+  **with its snapshot**; before the new image ran, simply as it was. Follow it with `journalctl -fu <unit>` (the
+  command prints the unit); `status --page <page>` shows where it stands.
+- **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
+  (one by one, the first failure stops it).
+- **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot. Never
+  `deploy-page-browser.sh rollback` after a Chrome update: page.sh refuses an image whose Chrome is older than the
+  one that last opened the profile (Chrome never opens a profile a newer one wrote).
+- **Cut off** (a crash, a reboot): `resume --page <page>` goes on from the step it reached. `held` (the owner moved
+  or stopped the page during its checks) and `rollback_failed` (the page stays out, never the old Chrome on a profile
+  the new one wrote) wait for the owner: `resume` or `rollback`.
+- **Until PR 17**: a page with no stored Node session cannot be taken out (it needs `sync browser stop`/`start`),
+  and the engine's checks need PR 17's record of the operator's state and its start of the browser when the page
+  returns to it — without them the checks time out and the update rolls back.
+- **Host step** (the owner's window): `scripts/deploy-page-browser.sh host root@<server>`, one
+  `scripts/deploy-page-browser.sh build root@<server>` (it keeps the build context the timer builds from), then
+  `ssh root@<server> systemctl enable --now page-browser-update.timer`.
+- **Stand check**: `apps/page-browser/stand/chrome-update.sh --from <image> --to <image>` — an update and both
+  rollbacks of a page with a live profile, on the Docker of the machine it runs on (its header: how on agency-de).
+
 ## Holds, breakers and quarantine
 
 `sync page status` shows a page hold under `holds.page`, a file's breaker under `holds.resources`, and a route's
