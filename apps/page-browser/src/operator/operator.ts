@@ -81,7 +81,11 @@
 //   and retries after 10 s, 30 s, 2 min, then every 5 min; a halt (the
 //   engine's stopPage, a changed exit IP) holds until the next
 //   restartBrowser. An operator that starts again stands until the engine
-//   starts the page (stage 1, amendment 17).
+//   starts the page (stage 1, amendment 17). A halt only the owner can
+//   decide is held besides on the volume (state/halt-store.ts, PR 17):
+//   every start and the exit's opening are refused until a clearHalt names
+//   it (or, for login_required, the expected account is confirmed after the
+//   owner's login).
 // - A planned stop closes the exit before CDP goes (plan §4.1). A lost
 //   control — CDP, the holder, its overflow, a browser that stops answering —
 //   closes the exit at once, kills Chrome and retries.

@@ -40,7 +40,7 @@ import {
   readOnboardingLinkRevision,
   readOnboardingLinkSettings,
 } from "../../services/egress/page-browser-link.ts";
-import { REFUSALS, type CommandKind, type CommandResult, type Mode, type Refusal, type State } from "../../services/egress/page-browser-protocol.ts";
+import { REFUSALS, type Command, type CommandKind, type CommandResult, type Refusal, type State } from "../../services/egress/page-browser-protocol.ts";
 import {
   PageBrowserRpcClient,
   systemMonoBridge,
@@ -626,7 +626,10 @@ export class OnboardingLink {
   /** A browser that stands is started (`restartBrowser`); one halted for a
    *  changed exit IP is started again once the owner pinned the IP again —
    *  his word on what the browser should see (PR 17's `sync browser pin-ip`
-   *  then `start`, for a profile no page has). */
+   *  then `start`, for a profile no page has). The operator holds that halt
+   *  on its volume (PR 17, Astra round 3): the new pin, set after it, is the
+   *  owner's decision on it — cleared by its id (`clearHalt`), then the
+   *  start; a halt held since the pin stays. */
   async #startIfStanding(state: State, why: string): Promise<void> {
     const now = this.#clock.monoNow();
     const pinnedAt = this.#profile.pinnedExitIpAt?.getTime() ?? 0;
@@ -634,6 +637,12 @@ export class OnboardingLink {
     if (repinned) {
       this.#haltedPinAt = pinnedAt;
       this.#lastStartMono = now;
+      const held = state.halt ?? null;
+      if (held !== null) {
+        if (held.reason !== "exit_ip_changed" || held.atWall > pinnedAt) return;
+        const cleared = await this.#command({ kind: "clearHalt", haltId: held.id }, "the owner pinned the exit IP again: his decision on the halt for it");
+        if (cleared?.ok !== true) return;
+      }
       await this.#command("restartBrowser", "the owner pinned the exit IP again: the browser starts again and checks it");
       return;
     }
@@ -642,8 +651,8 @@ export class OnboardingLink {
     await this.#command("restartBrowser", why);
   }
 
-  async #command(kind: CommandKind | { kind: "setMode"; mode: Mode }, why: string): Promise<CommandResult | null> {
-    const name = typeof kind === "string" ? kind : `setMode:${kind.mode}`;
+  async #command(kind: CommandKind | Exclude<Command["command"], { kind: CommandKind }>, why: string): Promise<CommandResult | null> {
+    const name = typeof kind === "string" ? kind : kind.kind === "setMode" ? `setMode:${kind.mode}` : kind.kind;
     const waitMs = this.#t.commandWaitMs;
     const result = await this.client.command(kind, this.#bridge.toKernel(this.#clock.monoNow() + waitMs), waitMs);
     this.#metrics.increment("sync_browser_onboarding_command", { command: name, ok: result?.ok === true ? "true" : result === null ? "unknown" : "false" });
@@ -671,7 +680,7 @@ export class OnboardingLink {
   }
 
   #record(state: State): void {
-    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null]);
+    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null, state.halt ?? null]);
     const now = this.#clock.monoNow();
     if (this.#lastRecorded !== null && this.#lastRecorded.key === key && now - this.#lastRecorded.at < this.#t.stateRecordMs) return;
     this.#lastRecorded = { at: now, key };
@@ -688,6 +697,8 @@ export class OnboardingLink {
       operatorVersion: state.operatorVersion,
       selfTest: state.selfTest === null ? null : { ok: state.selfTest.ok, at: new Date(state.selfTest.atWall), failed: state.selfTest.failed },
       buffer: { bytes: state.buffer.bytes, oldestAgeMs: state.buffer.oldestAgeMs },
+      // The halt the operator holds, mirrored (PR 17).
+      halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
     }).catch(() => undefined);
   }
 

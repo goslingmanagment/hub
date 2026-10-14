@@ -325,11 +325,12 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     expect(r.operator.sends).toHaveLength(0);
   });
 
-  it("starts a browser that stopped on another exit IP again only once the owner pinned the IP again", async (context) => {
+  it("starts a browser that stopped on another exit IP again only once the owner pinned the IP again â€” the halt its operator holds cleared by its id first (PR 17)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });
-    // The browser's own check named another IP: it stands for the owner's decision.
-    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" };
+    // The browser's own check named another IP: its operator holds the halt for the owner's decision.
+    const halt = { id: randomUUID(), reason: "exit_ip_changed" as const, atWall: Date.now() - 60_000 };
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed", halt };
     startTask(r);
     await untilLoginMode(r);
     await sleep(1_500);
@@ -339,6 +340,11 @@ describe("a new page's onboarding through its browser, the engine's side (plan Â
     await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.8" });
     await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 5_000, "the start after the pin");
     expect(r.operator.commands.filter((command) => command.command.kind === "restartBrowser")).toHaveLength(1);
+    // The halt it held, cleared by its id before the start (the operator refuses a start while it holds one).
+    const kinds = r.operator.commands.map((command) => command.command.kind === "clearHalt" ? `clearHalt:${command.command.haltId}` : command.command.kind);
+    expect(kinds.indexOf(`clearHalt:${halt.id}`)).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf(`clearHalt:${halt.id}`)).toBeLessThan(kinds.indexOf("restartBrowser"));
+    expect(r.operator.state.halt).toBeNull();
   });
 
   it("gives the onboarding up: the browser stopped, the automation back, then off â€” the profile stays, unbound", async (context) => {
