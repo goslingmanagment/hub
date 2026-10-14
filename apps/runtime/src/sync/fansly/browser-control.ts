@@ -387,9 +387,20 @@ export class BrowserControl {
       return { outcome: "ok", detail: steps.join("; ") };
     }
     const fresh = this.#d.client.state;
-    const refusal = browserStartRefusal({ control: await readPageBrowserControl(db, { profileId }), state: fresh, generation, who: "owner" });
+    const freshControl = await readPageBrowserControl(db, { profileId });
+    const refusal = browserStartRefusal({ control: freshControl, state: fresh, generation, who: "owner" });
     if (refusal !== null) {
       steps.push(`restartBrowser: not run: ${refusal}`);
+      return { outcome: "failed", detail: steps.join("; ") };
+    }
+    // Only the halt his start named was his decision (Astra round 6): one
+    // still standing — Hub's mirror, read now, or the operator's own — refuses
+    // the start; he decides again, naming it.
+    const remaining = freshControl?.haltReason != null
+      ? { id: freshControl.haltId, reason: freshControl.haltReason, where: "Hub's mirror" }
+      : fresh?.halt != null ? { id: fresh.halt.id, reason: fresh.halt.reason, where: "the operator" } : null;
+    if (remaining !== null) {
+      steps.push(`restartBrowser: not run: ${remaining.where} holds halt ${remaining.id ?? "(no id)"} (${remaining.reason}), which this start did not name — sync browser start again names it`);
       return { outcome: "failed", detail: steps.join("; ") };
     }
     if (fresh!.step !== "exit_closed" || fresh!.exitOpen) {

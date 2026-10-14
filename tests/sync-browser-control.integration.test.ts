@@ -352,6 +352,33 @@ describe("a halt for the owner's decision is the operator's (Astra PR 17, round 
     }
   });
 
+  it("Astra's round 6: an owner's start that names no halt (asked before it came) does not start past a halt Hub mirrors now — it says which, for the owner's next start", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await browserPage();
+    // The start is asked with nothing mirrored (no halt to name)…
+    const asked = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+    expect(asked.halt).toBeNull();
+    // …then B is said (its write on the volume failed), and the operator restarts without it.
+    await mirrored(page, held());
+    await mirrored(page, null);
+    const l = link(stands({ halt: null, lastClearedHaltId: null }));
+    const ctl = control(page, l);
+    try {
+      await ctl.tick();
+      expect(l.sent.map((command) => command.kind)).toEqual([]);
+      expect(await getPageBrowserCommand(db(), asked.command.id)).toMatchObject({ outcome: "failed", detail: expect.stringContaining(`Hub's mirror holds halt ${HALT} (header_mismatch)`) });
+      expect((await findPageBrowser(db(), page.profileId))!.haltId).toBe(HALT);
+      // The owner's next start names it: cleared, then started.
+      const again = await startPageBrowser(db(), { pageLabel: await label(page.pageId), actor: "cli@test" });
+      expect(again.halt).toMatchObject({ id: HALT });
+      await ctl.tick();
+      expect(l.sent.map((command) => command.kind)).toEqual(["clearHalt", "restartBrowser"]);
+      expect(await getPageBrowserCommand(db(), again.command.id)).toMatchObject({ outcome: "ok" });
+    } finally {
+      await ctl.stop();
+    }
+  });
+
   it("a login_required Hub still mirrors does not hold the login's own start", async (context) => {
     if (!testDb) return context.skip();
     const page = await browserPage("node");
