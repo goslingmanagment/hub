@@ -268,6 +268,13 @@ describe("check: nothing unverified is fetched, kept or built", () => {
     refused(host, /older than one seen before: refused/);
   });
 
+  it("an InRelease whose Date cannot be read: refused, the replay check is never skipped", () => {
+    host = server();
+    archive(host);
+    publish(host, { date: "sometime soon" });
+    refused(host, /InRelease's Date \('sometime soon'\) cannot be read/);
+  });
+
   it("no build context kept: fetched, the build alerted, nothing built", () => {
     host = server();
     publish(host);

@@ -257,12 +257,17 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   command prints the unit); `status --page <page>` shows where it stands.
 - **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
   (one by one, the first failure stops it).
-- **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot. Never
-  `deploy-page-browser.sh rollback` after a Chrome update: page.sh refuses an image whose Chrome is older than the
-  one that last opened the profile (Chrome never opens a profile a newer one wrote).
-- **Cut off** (a crash, a reboot): `resume --page <page>` goes on from the step it reached. `held` (the owner moved
-  or stopped the page during its checks) and `rollback_failed` (the page stays out, never the old Chrome on a profile
-  the new one wrote) wait for the owner: `resume` or `rollback`.
+- **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot,
+  refused before anything changes when the snapshot is gone or the profile is no longer the page's. The snapshot of a
+  page's last update is kept until its next update. Never `deploy-page-browser.sh rollback` after a Chrome update:
+  page.sh refuses an image whose Chrome is older than the one that last opened the profile (Chrome never opens a
+  profile a newer one wrote). The same rule stops page.sh's own way back after a failed `up`: when the new Chrome
+  had opened the profile, the page stays stopped until `rollback` restores its snapshot.
+- **Cut off** (a crash, a reboot): `resume --page <page>` goes on from the step it reached — an update, a rollback or
+  a standalone `snapshot` (its container is started again). `held` (the owner moved or stopped the page during its
+  checks, or the Hub could not be read) and `rollback_failed` (the page stays out, never the old Chrome on a profile
+  the new one wrote) wait for the owner: `resume` or `rollback`. A state Docker or the Hub cannot tell is never taken
+  for "stopped": the step stops there.
 - **Until PR 17**: a page with no stored Node session cannot be taken out (it needs `sync browser stop`/`start`),
   and the engine's checks need PR 17's record of the operator's state and its start of the browser when the page
   returns to it — without them the checks time out and the update rolls back.

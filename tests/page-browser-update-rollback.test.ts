@@ -125,19 +125,35 @@ describe("failures after the new image ran: a rollback — its previous image WI
     rolledBack(host);
   });
 
-  it("the old Chrome is never started on a profile the new one wrote: a lost snapshot leaves the page out, for the owner", () => {
+  it("a lost snapshot: the owner's rollback is refused before anything changes — the old Chrome never opens a profile the new one wrote", () => {
     host = makeHost();
     expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
     const dir = path.join(host.pbBase, "snapshots", PROFILE);
     writeFileSync(path.join(dir, host.snapshots()[0]!), "not the snapshot");
     const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain("does not match its SHA-256");
+    expect(run.ops).toEqual([]);
+    expect(host.update().STEP).toBe("done");
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
+    expect(hubPage(host).transport).toBe("browser");
+  });
+
+  it("a snapshot lost during an update: its rollback stops before any step, the page left out for the owner", () => {
+    host = makeHost();
+    host.run([...UPDATE, "--window", "0"], { crashOn: "profile-check" });
+    const dir = path.join(host.pbBase, "snapshots", PROFILE);
+    writeFileSync(path.join(dir, host.snapshots()[0]!), "not the snapshot");
+    host.edit((state) => {
+      state.behaviour.profileCheckFails = [TO];
+    });
+    const run = host.run(["resume", "--page", PAGE]);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node", "docker stop"]);
-    expect(host.update()).toMatchObject({ STEP: "rollback_failed", RB_STEP: "stopped" });
+    expect(run.ops).toEqual(["profile-check"]);
+    expect(host.update().STEP).toBe("rollback_failed");
+    expect(host.update().RB_STEP ?? "").toBe("");
     expect(host.update().RB_FAILED).toContain("does not match its SHA-256");
-    expect(containerOf(host)).toMatchObject({ image: TO, running: false });
     expect(profile(host).version).toBe(TO_CHROME);
-    expect(hubPage(host).transport).toBe("node");
   });
 
   it("the owner's rollback after a done update: out, snapshot, previous image, back", () => {

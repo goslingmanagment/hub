@@ -28,12 +28,13 @@
 #       Every other page, one by one (default window 0), once a page passed
 #       its window on that image; the first failure stops it.
 #   page-browser-update.sh resume --page <page> [--detach]
-#       An update or rollback cut off at any step goes on from that step.
+#       An update, rollback or snapshot cut off at any step goes on from it.
 #   page-browser-update.sh rollback --page <page> [--reason <text>] [--detach]
 #       The page's last update undone: its previous image WITH its snapshot.
 #   page-browser-update.sh snapshot --page <page>
 #       A standing page's profile now (Chrome down; the container stopped
-#       for it and started again): the host's half of `sync browser snapshot`.
+#       for it and started again through page.sh): the host's half of
+#       `sync browser snapshot`. Its record is written before the stop.
 #   page-browser-update.sh status [--page <page>]
 #   page-browser-update.sh prune
 #
@@ -66,7 +67,18 @@
 # Any failure before the new image ran puts the page back as it was (its
 # old container, its transport); after it, a rollback: the page out again,
 # the snapshot restored, the old image, the same checks — never the old
-# Chrome on a profile the new one wrote.
+# Chrome on a profile the new one wrote: every container start goes through
+# page.sh's start_state, which refuses it.
+#
+# Rules everything here keeps:
+# - What cannot be read is unknown, and unknown is never "stopped",
+#   "nobody" or "failed": a state Docker or the Hub cannot tell stops the
+#   step (nothing destructive happens on it), or holds the update for the
+#   owner.
+# - A profile is packed or restored only under page.sh's lock, when page.sh
+#   gives it to this page alone and no running container mounts it.
+# - Each operation's record is written before its destructive step, so a
+#   cut-off one is resumed, and the timer reports it.
 #
 # Until PR 17 (visibility) the hand-over is the transport switch: the page
 # runs on Node meanwhile and needs its stored Node session; `sync browser
@@ -111,12 +123,13 @@ PAGE_RE='^[a-z0-9][a-z0-9-]{0,40}$'
 # A stop of the browser's start that waiting does not cure: the update
 # fails at once. The rest (the proxy's) is waited out until the deadline.
 FATAL_STOPS=" selftest_failed env_mismatch exit_ip_changed cdp_lost holder_overflow buffer_full disk_full buffer_unavailable request_unended chrome_crashed unknown_ws_message ws_guard_failed ws_unaccounted header_mismatch login_required "
-TERMINAL_STEPS=" done aborted rolled_back "
+TERMINAL_STEPS=" done aborted rolled_back failed "
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 ORIGINAL_ARGS=("$@")
 LOCK_HELD=0
 ALERTED=0
+C_STATE="" C_IMAGE="" C_HEALTH="" STATE_WHY="" OWN_WHY="" OP_WHY="" RB_WHY="" SNAP_NAME=""
 WORK=""
 CHECK_DETAIL="" LEAVE_WHY="" ENGINE_WHY="" REPO_WHY="" BUILD_WHY="" BUILT_TAG=""
 PROFILE_CHROME="" PROFILE_BYTES=0
@@ -233,9 +246,10 @@ image_chrome() {
   fi
   [[ -n "$version" ]] && printf '%s' "$version"
 }
+# An image's commit ("" when it has no label); 1 when it cannot be read.
 image_revision() {
   local revision
-  revision="$(image_label "$1" agency-hub.page-browser.revision || true)"
+  revision="$(image_label "$1" agency-hub.page-browser.revision)" || return 1
   [[ "$revision" =~ ^[0-9a-f]{7,40}$ ]] && printf '%s' "$revision" || true
 }
 
@@ -248,11 +262,91 @@ value() {
 page_env() { printf '%s/pages/%s/page.env' "$PB_BASE" "$1"; }
 container_of() { printf 'page-browser-%s' "$1"; }
 
-# The container: "<running> <image> <health>", nothing when there is none.
-container_state() {
-  docker inspect -f '{{.State.Running}} {{.Config.Image}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$(container_of "$1")" 2>/dev/null || true
+# The page's container, read and never guessed — one rule for every state
+# this script reads: what cannot be read is unknown, and unknown is never
+# "stopped" or "nobody". C_STATE running|stopped|absent, C_IMAGE, C_HEALTH;
+# 1 (STATE_WHY) when Docker cannot say.
+container_read() {
+  local out rc=0
+  C_STATE=unknown C_IMAGE="" C_HEALTH="" STATE_WHY=""
+  out="$(docker inspect -f '{{.State.Running}} {{.Config.Image}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$(container_of "$1")" 2>&1)" || rc=$?
+  if ((rc != 0)); then
+    if grep -qiE 'no such (object|container)' <<<"$out"; then
+      C_STATE=absent
+      return 0
+    fi
+    STATE_WHY="$(container_of "$1") cannot be read: $(printf '%s' "$out" | scrub)"
+    return 1
+  fi
+  if [[ ! "$out" =~ ^(true|false)\ ([^ ]+)\ ([a-z]+)$ ]]; then
+    STATE_WHY="$(container_of "$1") reads '$(printf '%s' "$out" | scrub)'"
+    return 1
+  fi
+  C_IMAGE="${BASH_REMATCH[2]}"
+  C_HEALTH="${BASH_REMATCH[3]}"
+  [[ "${BASH_REMATCH[1]}" == true ]] && C_STATE=running || C_STATE=stopped
 }
-container_running() { [[ "$(container_state "$1")" == true\ * ]]; }
+
+# The containers that mount a profile's volume, "<name> <state>" a line; 1
+# when Docker cannot list them.
+profile_users() {
+  docker ps -a --filter "volume=pb-profile-$1" --format '{{.Names}} {{.State}}'
+}
+
+# The profile is this page's (call it under page.sh's lock, which `up
+# --profile` takes to give a profile to a page): its page.env names it, no
+# other page's does, and no other container mounts its volume. 1 (OWN_WHY)
+# otherwise, or when any of it cannot be read.
+profile_owned() {
+  local page="$1" profile="$2" file users
+  OWN_WHY=""
+  if [[ "$(value PB_PROFILE_ID "$(page_env "$page")")" != "$profile" ]]; then
+    OWN_WHY="$page's profile is now '$(value PB_PROFILE_ID "$(page_env "$page")")', not $profile"
+    return 1
+  fi
+  for file in "$PB_BASE"/pages/*/page.env "$PB_BASE"/pages/*/page.env.next; do
+    [[ -f "$file" && "$file" != "$(page_env "$page")" ]] || continue
+    if [[ "$(value PB_PROFILE_ID "$file")" == "$profile" ]]; then
+      OWN_WHY="profile $profile is named by $file too"
+      return 1
+    fi
+  done
+  if ! users="$(profile_users "$profile")"; then
+    OWN_WHY="the containers of pb-profile-$profile cannot be listed"
+    return 1
+  fi
+  if grep -v "^$(container_of "$page") " <<<"$users" | grep -q .; then
+    OWN_WHY="pb-profile-$profile is mounted by $(grep -v "^$(container_of "$page") " <<<"$users" | head -n 1)"
+    return 1
+  fi
+}
+
+# Nothing runs on the profile: the page's container stopped or gone, and no
+# running container mounts its volume. 1 (STATE_WHY) otherwise, or unknown.
+profile_quiet() {
+  local page="$1" profile="$2" users
+  container_read "$page" || return 1
+  if [[ "$C_STATE" == running ]]; then
+    STATE_WHY="$(container_of "$page") runs"
+    return 1
+  fi
+  if ! users="$(profile_users "$profile")"; then
+    STATE_WHY="the containers of pb-profile-$profile cannot be listed"
+    return 1
+  fi
+  if grep -q ' running$' <<<"$users"; then
+    STATE_WHY="pb-profile-$profile is in use by $(grep ' running$' <<<"$users" | head -n 1 | cut -d' ' -f1)"
+    return 1
+  fi
+}
+
+# page.sh's own lock ($PB_BASE/.page.lock): a profile cannot change hands
+# while it is held. Never held across a call of page.sh.
+page_lock() {
+  exec 7>"$PB_BASE/.page.lock"
+  flock -w 900 7
+}
+page_unlock() { exec 7>&-; }
 
 # Chrome in the page's container: "down" only when s6 says so and no
 # process of Chrome's user runs Chrome.
@@ -370,14 +464,17 @@ take_snapshot() {
   printf '%s' "$name"
 }
 
-# The newest three of a profile, and every one an unfinished update names.
+# The newest three of a profile, and every one a page's update may still
+# need: an unfinished update's, and a done one's — the page's way back, until
+# its next update replaces it.
 prune_snapshots() {
-  local profile="$1" dir="$SNAP_DIR/$1" keep=" " meta name count=0 file
+  local profile="$1" dir="$SNAP_DIR/$1" keep=" " meta name count=0 file step
   [[ -d "$dir" ]] || return 0
   for file in "$UPDATE_DIR"/pages/*/state; do
     [[ -f "$file" ]] || continue
     [[ "$(value PROFILE "$file")" == "$profile" ]] || continue
-    terminal "$(value STEP "$file")" && continue
+    step="$(value STEP "$file")"
+    terminal "$step" && [[ "$step" != done ]] && continue
     keep+="$(value SNAPSHOT "$file") "
   done
   while IFS= read -r meta; do
@@ -426,10 +523,13 @@ profile_check() {
 # its Chrome opens the profile with the rules extension; the profile names
 # that Chrome afterwards.
 host_checks() {
-  local page="$1" image="$2" chrome="$3" profile="$4" state
-  state="$(container_state "$page")"
-  if [[ "$state" != "true $image healthy" ]]; then
-    CHECK_DETAIL="the container is not running healthy on $image (${state:-absent})"
+  local page="$1" image="$2" chrome="$3" profile="$4"
+  if ! container_read "$page"; then
+    CHECK_DETAIL="$STATE_WHY"
+    return 1
+  fi
+  if [[ "$C_STATE $C_IMAGE $C_HEALTH" != "running $image healthy" ]]; then
+    CHECK_DETAIL="the container is not running healthy on $image ($C_STATE ${C_IMAGE} ${C_HEALTH})"
     return 1
   fi
   profile_check "$page" "$chrome" || return 1
@@ -554,12 +654,32 @@ forward_failed() {
   if [[ "$(sget NEW_RAN)" == 1 ]]; then step_to rolling_back; else step_to aborting; fi
 }
 
-# Waits until the page's leave of its browser is confirmed. 0: by the
-# operator; 1: the deadline; 2: something else happened (said).
+# The update stops where it is (resumable): the owner moved the page, or
+# what it must judge cannot be read — never judged blind.
+hold() {
+  sset "HELD_FROM=$(sget STEP)" "REASON=$1"
+  alert update_held "$1 — the update holds: page-browser-update.sh resume|rollback --page $PAGE"
+  step_to held
+}
+
+# ── the hand-over: the page out of service on its browser, and back ──────
+#
+# The only place that knows HOW a page leaves its browser and returns to
+# it. Today the transport switch (`sync page transport <page> node|browser`,
+# audited): the host's leave — the operator's quiesced, its exit closed,
+# Chrome stopped, its buffer taken, the leave confirmed — and Node has the
+# page meanwhile. With PR 17, `sync browser stop|start` (the operator's
+# confirmed stop, no Node): these functions change, nothing else does.
+
+# Waits until the page's leave is confirmed. 0 by the operator; 1 the
+# deadline, the leave still pending; 2 something else happened; 3 the Hub
+# could not be read at the deadline (LEAVE_WHY says).
 wait_leave() {
-  local since="$1" deadline=$(( $(now_s) + LEAVE_WAIT_S ))
+  local since="$1" deadline=$(( $(now_s) + LEAVE_WAIT_S )) read_ok
   while :; do
+    read_ok=0
     if hub_read; then
+      read_ok=1
       if [[ "$H_TRANSPORT" != node ]]; then
         LEAVE_WHY="the page is back on its browser (transport $H_TRANSPORT): not this update's doing"
         return 2
@@ -574,65 +694,162 @@ wait_leave() {
         return 2
       fi
     fi
-    (( $(now_s) < deadline )) || { LEAVE_WHY="the leave was not confirmed within ${LEAVE_WAIT_S} s"; return 1; }
+    if (( $(now_s) >= deadline )); then
+      if ((read_ok == 1)); then
+        LEAVE_WHY="the leave was not confirmed within ${LEAVE_WAIT_S} s"
+        return 1
+      fi
+      LEAVE_WHY="the Hub cannot be read: whether the page left its browser is unknown"
+      return 3
+    fi
     sleep "$POLL_S"
   done
 }
 
-step_take_out() {
-  local page="$PAGE"
-  if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_BEFORE)" == browser ]]; then
-    if ! hub_read; then forward_failed "the Hub cannot be read"; return; fi
-    if [[ "$H_TRANSPORT" == browser ]]; then
-      sset TRANSPORT_CHANGED=1
-      if ! hub_lever sync page transport "$page" node --note "$(note_of 'the page leaves its browser for the update')"; then
-        forward_failed "the Hub refused to take $page off its browser"
-        return
-      fi
+# The page out of service on its browser. 0 its operator confirmed it; 1
+# not within the deadline (its leave pending); 2 refused, or not this
+# update's doing; 3 the Hub cannot be read (LEAVE_WHY says).
+handover_out() {
+  local note="$1" since
+  hub_read || { LEAVE_WHY="the Hub cannot be read"; return 3; }
+  if [[ "$H_TRANSPORT" == browser ]]; then
+    since="$H_GENERATION"
+    # Recorded before the lever: whatever happens next, it is known.
+    sset TRANSPORT_CHANGED=1
+    if ! hub_lever sync page transport "$PAGE" node --note "$(note_of "$note")"; then
+      LEAVE_WHY="the Hub refused to take $PAGE off its browser"
+      return 2
     fi
+  elif [[ -n "$H_LEAVE" ]]; then
+    since="$H_LEAVE"
+  else
+    since="$(sget PLAN_GENERATION)"
+  fi
+  wait_leave "$since"
+}
+
+# The page out without its operator, which cannot confirm (a rollback's
+# only): its container removed and seen gone, then the Hub told — as
+# deploy-page-browser.sh to-node. 1 (LEAVE_WHY) when not done.
+handover_forced() {
+  sset RB_FORCED=1
+  if ! "$PAGE_SH" down --page "$PAGE" >&2; then
+    LEAVE_WHY="page.sh down failed"
+    return 1
+  fi
+  if ! container_read "$PAGE" || [[ "$C_STATE" != absent ]]; then
+    LEAVE_WHY="$(container_of "$PAGE") is not seen gone (${STATE_WHY:-$C_STATE}): the Hub is not told it stopped"
+    return 1
+  fi
+  if ! hub_lever sync page transport "$PAGE" node --browser-stopped --note "$(note_of "$1")"; then
+    LEAVE_WHY="the Hub was not told the browser stopped"
+    return 1
+  fi
+}
+
+# The page back to its browser. <key>: where the instant goes (the
+# database's clock, before the lever): the engine's checks count only what
+# the operator said after it. A give-back already done (a resume after a
+# crash) keeps the instant it had.
+handover_back() {
+  local key="$1" note="$2"
+  if ! hub_read; then return 1; fi
+  if [[ "$H_TRANSPORT" == browser && -z "$H_LEAVE" ]]; then
+    [[ -n "$(sget "$key")" ]] || sset "$key=$H_NOW"
+    return 0
+  fi
+  sset "$key=$H_NOW"
+  hub_lever sync page transport "$PAGE" browser --note "$(note_of "$note")"
+}
+
+# ── the profile, under page.sh's lock ─────────────────────────────────────
+
+# Under page.sh's lock — a profile cannot change hands meanwhile — the
+# profile must be the page's and nothing may run on it, then <op>:
+# `snapshot` (SNAP_NAME, PROFILE_CHROME) or `restore <name>`. 1 (OP_WHY)
+# when any of it is not so, or cannot be read. (Called in conditions, where
+# errexit is off: every step checks itself.)
+profile_op() {
+  local op="$1" page="$2" profile="$3" image="$4" name="${5:-}" rc=0
+  OP_WHY="" SNAP_NAME=""
+  if ! page_lock; then
+    OP_WHY="page.sh's lock ($PB_BASE/.page.lock) is not had"
+    return 1
+  fi
+  if ! profile_owned "$page" "$profile"; then
+    OP_WHY="$OWN_WHY"
+    rc=1
+  elif ! profile_quiet "$page" "$profile"; then
+    OP_WHY="something may run on the profile: $STATE_WHY"
+    rc=1
+  elif [[ "$op" == snapshot ]]; then
+    if ! read_profile "$profile" "$image"; then
+      OP_WHY="the profile cannot be read"
+      rc=1
+    elif ! SNAP_NAME="$(take_snapshot "$profile" "$image" "$PROFILE_CHROME")"; then
+      OP_WHY="the profile could not be packed"
+      rc=1
+    fi
+  elif ! profile_helper restore "$profile" "$image" "$SNAP_DIR/$profile" "$name" >&2; then
+    OP_WHY="the snapshot could not be restored"
+    rc=1
+  fi
+  page_unlock
+  return "$rc"
+}
+
+# ── one page's update: the steps ─────────────────────────────────────────
+
+step_take_out() {
+  if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_BEFORE)" == browser ]]; then
     local rc=0
-    wait_leave "$(sget PLAN_GENERATION)" || rc=$?
-    if ((rc != 0)); then forward_failed "$LEAVE_WHY"; return; fi
-    say taken_out "the page left its browser: the operator confirmed it (generation $H_LEFT_GEN); Node has the page"
+    handover_out "the page leaves its browser for the update" || rc=$?
+    case "$rc" in
+      0) say taken_out "the page left its browser: the operator confirmed it (generation $H_LEFT_GEN); Node has the page" ;;
+      3) hold "$LEAVE_WHY"; return ;;
+      *) forward_failed "$LEAVE_WHY"; return ;;
+    esac
   fi
   local chrome
-  chrome="$(chrome_state "$page")"
+  chrome="$(chrome_state "$PAGE")"
   if [[ "$chrome" != down ]]; then
-    forward_failed "Chrome is $chrome in $(container_of "$page"): the update never stops a working page"
+    forward_failed "Chrome is $chrome in $(container_of "$PAGE"): the update never stops a working page"
     return
   fi
   step_to taken_out
 }
 
 step_stop() {
+  # Recorded before the stop: a failure from here brings the container back.
   sset CONTAINER_STOPPED=1
-  if container_running "$PAGE" && ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
+  if ! container_read "$PAGE"; then forward_failed "$STATE_WHY"; return; fi
+  if [[ "$C_STATE" == running ]] && ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
     forward_failed "$(container_of "$PAGE") could not be stopped"
     return
   fi
-  if container_running "$PAGE"; then forward_failed "$(container_of "$PAGE") still runs"; return; fi
+  if ! container_read "$PAGE"; then forward_failed "$STATE_WHY"; return; fi
+  if [[ "$C_STATE" != stopped ]]; then forward_failed "$(container_of "$PAGE") is $C_STATE, not stopped"; return; fi
   step_to stopped
 }
 
 step_snapshot() {
-  local profile name
+  local profile
   profile="$(sget PROFILE)"
   if snapshot_valid "$profile" "$(sget SNAPSHOT)"; then step_to snapshotted; return; fi
-  if container_running "$PAGE"; then forward_failed "$(container_of "$PAGE") runs: no snapshot of a profile in use"; return; fi
-  if ! read_profile "$profile" "$(sget FROM_IMAGE)"; then forward_failed "the profile cannot be read"; return; fi
-  if ! name="$(take_snapshot "$profile" "$(sget FROM_IMAGE)" "$PROFILE_CHROME")"; then
-    forward_failed "the profile's snapshot failed"
+  if ! profile_op snapshot "$PAGE" "$profile" "$(sget FROM_IMAGE)"; then
+    forward_failed "no snapshot of the profile: $OP_WHY"
     return
   fi
-  sset "SNAPSHOT=$name" "SNAP_CHROME=$PROFILE_CHROME"
-  say snapshot "snapshots/$profile/$name (Chrome ${PROFILE_CHROME:-none})"
+  sset "SNAPSHOT=$SNAP_NAME" "SNAP_CHROME=$PROFILE_CHROME"
+  say snapshot "snapshots/$profile/$SNAP_NAME (Chrome ${PROFILE_CHROME:-none})"
   step_to snapshotted
 }
 
 step_start_new() {
   local to
   to="$(sget TO_IMAGE)"
-  # From here the new Chrome may open the profile: a failure is a rollback.
+  # Recorded before page.sh: from here the new Chrome may open the profile,
+  # and a failure is a rollback.
   sset NEW_RAN=1
   if ! "$PAGE_SH" up --page "$PAGE" --image "$to" >&2; then
     forward_failed "page.sh up $to failed"
@@ -650,29 +867,14 @@ step_host_checks() {
   step_to host_checked
 }
 
-# The page back to its browser, when this update took it off. <key>: where
-# the instant goes (the database's clock, before the lever): the engine's
-# checks count only what the operator said after it. A give-back already
-# done (a resume after a crash) keeps the instant it had.
-give_back() {
-  local key="$1" note="$2"
-  if ! hub_read; then return 1; fi
-  if [[ "$H_TRANSPORT" == browser && -z "$H_LEAVE" ]]; then
-    [[ -n "$(sget "$key")" ]] || sset "$key=$H_NOW"
-    return 0
-  fi
-  sset "$key=$H_NOW"
-  hub_lever sync page transport "$PAGE" browser --note "$(note_of "$note")"
-}
-
 step_give_back() {
   if [[ "$(sget ENGINE)" != hub || "$(sget TRANSPORT_BEFORE)" != browser ]]; then
-    say engine_checks "skipped: the page was not on its browser before the update (${ENGINE_WHY:-$(sget TRANSPORT_BEFORE)}); it stands until its engine starts it"
+    say engine_checks "skipped: the page was not on its browser before the update ($(sget TRANSPORT_BEFORE)); it stands until its engine starts it"
     sset ENGINE_CHECKS=skipped
     step_to engine_checked
     return
   fi
-  if ! give_back GIVEN_BACK_MS "the page returns to its browser on the new image"; then
+  if ! handover_back GIVEN_BACK_MS "the page returns to its browser on the new image"; then
     forward_failed "the Hub refused to give the page back to its browser"
     return
   fi
@@ -720,33 +922,31 @@ judge_engine() {
 }
 
 # Waits for the engine to report the page ready on <chrome>. 0 ready, 2
-# failed, 3 off its browser (ENGINE_WHY says).
+# failed, 3 the owner's doing, 4 the Hub could not be read at the deadline
+# (ENGINE_WHY says).
 wait_ready() {
-  local chrome="$1" since="$2" revision="$3" deadline=$(( $(now_s) + READY_WAIT_S )) rc
+  local chrome="$1" since="$2" revision="$3" deadline=$(( $(now_s) + READY_WAIT_S )) rc read_ok
   while :; do
+    read_ok=0
     if hub_read; then
+      read_ok=1
       rc=0
       judge_engine "$chrome" "$since" "$revision" || rc=$?
       case "$rc" in
         0) return 0 ;;
         2|3) return "$rc" ;;
       esac
-    else
-      ENGINE_WHY="the Hub cannot be read"
     fi
     if (( $(now_s) >= deadline )); then
+      if ((read_ok == 0)); then
+        ENGINE_WHY="the Hub cannot be read: the page's start is not known"
+        return 4
+      fi
       ENGINE_WHY="not ready within ${READY_WAIT_S} s (last: ${ENGINE_WHY:-nothing})"
       return 2
     fi
     sleep "$POLL_S"
   done
-}
-
-# The update stops where it is (resumable): the owner moved the page.
-hold() {
-  sset "HELD_FROM=$(sget STEP)" "REASON=$1"
-  alert update_held "$1 — the update holds: page-browser-update.sh resume|rollback --page $PAGE"
-  step_to held
 }
 
 step_engine_checks() {
@@ -758,13 +958,13 @@ step_engine_checks() {
       say engine_checks "ready on Chrome $(sget TO_CHROME): self-test, environment, exit IP $H_EXIT_IP, site, the same session confirmed by the engine's identity read"
       step_to engine_checked
       ;;
-    3) hold "$ENGINE_WHY" ;;
+    3|4) hold "$ENGINE_WHY" ;;
     *) forward_failed "engine checks on Chrome $(sget TO_CHROME): $ENGINE_WHY" ;;
   esac
 }
 
 step_window() {
-  local window until misses=0 rc
+  local window until misses=0 blind=0 rc
   window="$(sget WINDOW_S)"
   if [[ "$(sget ENGINE_CHECKS)" != passed || "${window:-0}" == 0 ]]; then
     sset WINDOW=none
@@ -781,24 +981,27 @@ step_window() {
     local left=$(( until - $(now_s) ))
     sleep "$(( left < WINDOW_POLL_S ? left : WINDOW_POLL_S ))"
     if ! hub_read; then
-      misses=$((misses + 1))
-      ENGINE_WHY="the Hub cannot be read"
-    else
-      rc=0
-      judge_engine "$(sget TO_CHROME)" "$(sget GIVEN_BACK_MS)" "$(sget TO_REVISION)" || rc=$?
-      if ((rc == 0)) && (( 10#$H_NOW - 10#$H_STATE_AT > STATE_FRESH_S * 1000 )); then
-        rc=1
-        ENGINE_WHY="no state of the operator for $(( (10#$H_NOW - 10#$H_STATE_AT) / 1000 )) s"
-      fi
-      case "$rc" in
-        0) misses=0 ;;
-        3) hold "during the window: $ENGINE_WHY"; return ;;
-        2) forward_failed "during the window: $ENGINE_WHY"; return ;;
-        *) misses=$((misses + 1)) ;;
-      esac
+      # Not seen is not failed: the window holds for the owner.
+      blind=$((blind + 1))
+      if ((blind >= 2)); then hold "the Hub cannot be read: the window cannot judge the page"; return; fi
+      continue
     fi
+    blind=0
+    rc=0
+    judge_engine "$(sget TO_CHROME)" "$(sget GIVEN_BACK_MS)" "$(sget TO_REVISION)" || rc=$?
+    if ((rc == 0)) && (( 10#$H_NOW - 10#$H_STATE_AT > STATE_FRESH_S * 1000 )); then
+      rc=1
+      ENGINE_WHY="no state of the operator for $(( (10#$H_NOW - 10#$H_STATE_AT) / 1000 )) s"
+    fi
+    case "$rc" in
+      0) misses=0 ;;
+      3) hold "during the window: $ENGINE_WHY"; return ;;
+      2) forward_failed "during the window: $ENGINE_WHY"; return ;;
+      *) misses=$((misses + 1)) ;;
+    esac
     if ((misses >= 2)); then forward_failed "during the window: $ENGINE_WHY"; return; fi
   done
+  if ! hub_read; then hold "the Hub cannot be read: the window's end cannot be judged"; return; fi
   local since out=0
   since="$(iso_of $(( 10#$(sget READY_MS) / 1000 )))"
   hub_lever sync check live-hour --page "$PAGE" --since "$since" --until "$(iso_of "$until")" || out=$?
@@ -819,47 +1022,56 @@ rollback_failed() {
   step_to rollback_failed
 }
 
+# Before anything of a rollback: the snapshot to restore is whole, and the
+# profile is still the page's — never another page's volume restored. 1
+# (RB_WHY) when not.
+rollback_ready() {
+  local profile name rc=0
+  profile="$(sget PROFILE)"
+  name="$(sget SNAPSHOT)"
+  RB_WHY=""
+  if ! snapshot_valid "$profile" "$name"; then
+    RB_WHY="the snapshot ${name:-(none)} is missing or does not match its SHA-256: Chrome $(sget FROM_CHROME) must not open a profile Chrome $(sget TO_CHROME) wrote"
+    return 1
+  fi
+  if ! page_lock; then
+    RB_WHY="page.sh's lock ($PB_BASE/.page.lock) is not had"
+    return 1
+  fi
+  profile_owned "$PAGE" "$profile" || rc=1
+  page_unlock
+  if ((rc != 0)); then
+    RB_WHY="$OWN_WHY: the snapshot of $profile is not for $PAGE's profile now"
+    return 1
+  fi
+}
+
 rb_take_out() {
+  if ! rollback_ready; then rollback_failed "$RB_WHY"; return; fi
   if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_CHANGED)" == 1 ]]; then
-    if ! hub_read; then rollback_failed "the Hub cannot be read"; return; fi
-    local since="$H_GENERATION"
-    if [[ "$H_TRANSPORT" == browser ]]; then
-      if ! hub_lever sync page transport "$PAGE" node --note "$(note_of 'rollback: the page leaves its browser')"; then
-        rollback_failed "the Hub refused to take $PAGE off its browser"
-        return
-      fi
-    elif [[ -n "$H_LEAVE" ]]; then
-      since="$H_LEAVE"
-    else
-      since="$(sget PLAN_GENERATION)"
-    fi
     local rc=0
-    wait_leave "$since" || rc=$?
-    if ((rc == 1)); then
-      # Its operator cannot confirm (the new image's?): the container goes
-      # first, then the Hub is told — as `deploy-page-browser.sh to-node`.
-      alert rollback_forced "$LEAVE_WHY: the container is removed, then the Hub told it stopped (--browser-stopped)"
-      sset RB_FORCED=1
-      if ! "$PAGE_SH" down --page "$PAGE" >&2 || [[ -n "$(container_state "$PAGE")" ]]; then
-        rollback_failed "$(container_of "$PAGE") could not be removed"
-        return
-      fi
-      if ! hub_lever sync page transport "$PAGE" node --browser-stopped --note "$(note_of 'rollback: the container is removed')"; then
-        rollback_failed "the Hub was not told the browser stopped"
-        return
-      fi
-    elif ((rc != 0)); then
-      rollback_failed "$LEAVE_WHY"
-      return
-    fi
+    handover_out "rollback: the page leaves its browser" || rc=$?
+    case "$rc" in
+      0) ;;
+      1)
+        alert rollback_forced "$LEAVE_WHY: the container is removed, then the Hub told it stopped (--browser-stopped)"
+        if ! handover_forced "rollback: the container is removed"; then rollback_failed "$LEAVE_WHY"; return; fi
+        ;;
+      *) rollback_failed "$LEAVE_WHY"; return ;;
+    esac
   fi
   sset RB_STEP=taken_out
 }
 
 rb_stop() {
-  if [[ -n "$(container_state "$PAGE")" ]] && container_running "$PAGE"; then
-    if ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null || container_running "$PAGE"; then
+  if ! container_read "$PAGE"; then rollback_failed "$STATE_WHY"; return; fi
+  if [[ "$C_STATE" == running ]]; then
+    if ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
       rollback_failed "$(container_of "$PAGE") could not be stopped"
+      return
+    fi
+    if ! container_read "$PAGE" || [[ "$C_STATE" == running ]]; then
+      rollback_failed "$(container_of "$PAGE") is not seen stopped (${STATE_WHY:-$C_STATE})"
       return
     fi
   fi
@@ -875,9 +1087,8 @@ rb_restore() {
     rollback_failed "the snapshot ${name:-(none)} is missing or does not match its SHA-256: Chrome $(sget FROM_CHROME) must not open a profile Chrome $(sget TO_CHROME) wrote"
     return
   fi
-  if container_running "$PAGE"; then rollback_failed "$(container_of "$PAGE") runs: no restore under it"; return; fi
-  if ! profile_helper restore "$profile" "$(sget FROM_IMAGE)" "$SNAP_DIR/$profile" "$name" >&2; then
-    rollback_failed "the snapshot could not be restored"
+  if ! profile_op restore "$PAGE" "$profile" "$(sget FROM_IMAGE)" "$name"; then
+    rollback_failed "no restore: $OP_WHY"
     return
   fi
   if ! read_profile "$profile" "$(sget FROM_IMAGE)" || [[ "$PROFILE_CHROME" != "$expected" ]]; then
@@ -906,7 +1117,7 @@ rb_host_checks() {
 
 rb_give_back() {
   if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_CHANGED)" == 1 ]]; then
-    if ! give_back RB_GIVEN_BACK_MS "rollback: the page returns to its browser on its previous image"; then
+    if ! handover_back RB_GIVEN_BACK_MS "rollback: the page returns to its browser on its previous image"; then
       rollback_failed "the Hub refused to give the page back to its browser"
       return
     fi
@@ -923,8 +1134,8 @@ rb_engine_checks() {
     if ((rc == 0)); then
       sset RB_CHECKS=passed
     else
-      sset RB_CHECKS=failed
-      alert rollback_checks "back on $(sget FROM_IMAGE) with its snapshot, but its start did not pass: $ENGINE_WHY"
+      sset "RB_CHECKS=$( ((rc == 4)) && echo unknown || echo failed)"
+      alert rollback_checks "back on $(sget FROM_IMAGE) with its snapshot, but its start is not confirmed: $ENGINE_WHY"
     fi
   fi
   alert rolled_back "the update to $(sget TO_IMAGE) is rolled back ($(sget REASON)): the page is on $(sget FROM_IMAGE) with its profile from before (engine checks: $(sget RB_CHECKS))"
@@ -946,14 +1157,18 @@ step_rollback() {
 
 # Before the new image ran: the page as it was.
 step_abort() {
-  if [[ "$(sget CONTAINER_STOPPED)" == 1 ]] && ! container_running "$PAGE"; then
-    if ! "$PAGE_SH" up --page "$PAGE" --image "$(sget FROM_IMAGE)" >&2; then
+  if [[ "$(sget CONTAINER_STOPPED)" == 1 ]]; then
+    if ! container_read "$PAGE"; then
+      rollback_failed "$STATE_WHY: the page's container is not brought back blind"
+      return
+    fi
+    if [[ "$C_STATE" != running ]] && ! "$PAGE_SH" up --page "$PAGE" --image "$(sget FROM_IMAGE)" >&2; then
       rollback_failed "page.sh up $(sget FROM_IMAGE) failed: the page's container is not back"
       return
     fi
   fi
   if [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_CHANGED)" == 1 ]]; then
-    if ! give_back RB_GIVEN_BACK_MS "abort: the page returns to its browser, unchanged"; then
+    if ! handover_back RB_GIVEN_BACK_MS "abort: the page returns to its browser, unchanged"; then
       rollback_failed "the Hub refused to give the page back to its browser"
       return
     fi
@@ -1002,7 +1217,7 @@ on_exit() {
 # The page's update: refusals change nothing (exit 2).
 plan_update() {
   local image="$1" window="$2" engine="$3" any_hour="$4"
-  local env from profile from_chrome to_chrome run_state
+  local env from profile from_chrome to_chrome
   [[ "$PAGE" =~ $PAGE_RE ]] || fail "--page: lowercase letters, digits and dashes"
   [[ "$image" =~ ^hub-page-browser:[A-Za-z0-9_.-]+$ ]] || fail "--image: hub-page-browser:<tag>"
   env="$(page_env "$PAGE")"
@@ -1017,11 +1232,15 @@ plan_update() {
   profile="$(value PB_PROFILE_ID "$env")"
   [[ -n "$from" && "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "$env names no image or profile"
   [[ "$from" != "$image" ]] || fail "$PAGE is on $image already"
-  run_state="$(container_state "$PAGE")"
-  [[ "$run_state" == "true $from healthy" ]] || fail "$(container_of "$PAGE") is not running healthy on $from (${run_state:-absent})"
+  ! snapshot_pending "$PAGE" || fail "a snapshot of $PAGE is unfinished: page-browser-update.sh resume --page $PAGE first"
+  container_read "$PAGE" || fail "$STATE_WHY"
+  [[ "$C_STATE $C_IMAGE $C_HEALTH" == "running $from healthy" ]] || fail "$(container_of "$PAGE") is not running healthy on $from ($C_STATE ${C_IMAGE} ${C_HEALTH})"
   docker image inspect "$image" >/dev/null 2>&1 || fail "no image $image here (page-browser-update.sh build, or deploy-page-browser.sh build)"
   from_chrome="$(image_chrome "$from")" || fail "the Chrome of $from cannot be read"
   to_chrome="$(image_chrome "$image")" || fail "the Chrome of $image cannot be read"
+  local from_revision to_revision
+  from_revision="$(image_revision "$from")" || fail "$from cannot be read"
+  to_revision="$(image_revision "$image")" || fail "$image cannot be read"
   ver_gt "$from_chrome" "$to_chrome" && fail "$image has Chrome $to_chrome, older than $from_chrome: Chrome never goes back on a profile (rollback restores a snapshot)"
   read_profile "$profile" "$from" || fail "the profile pb-profile-$profile cannot be read"
   ver_gt "$PROFILE_CHROME" "$to_chrome" && fail "the profile was last opened by Chrome $PROFILE_CHROME, newer than $to_chrome"
@@ -1056,7 +1275,7 @@ plan_update() {
   rm -f "$STATE"
   sset "RUN=$RUN" "PAGE=$PAGE" "PROFILE=$profile" "ENGINE=$engine" \
     "FROM_IMAGE=$from" "TO_IMAGE=$image" "FROM_CHROME=$from_chrome" "TO_CHROME=$to_chrome" \
-    "FROM_REVISION=$(image_revision "$from")" "TO_REVISION=$(image_revision "$image")" \
+    "FROM_REVISION=$from_revision" "TO_REVISION=$to_revision" \
     "TRANSPORT_BEFORE=$transport" "PLAN_GENERATION=$generation" "FINGERPRINT_BEFORE=$fingerprint" "ACCOUNT_BEFORE=$account" \
     "WINDOW_S=$window" "STARTED_AT=$(now_iso)"
   say planned "Chrome $from_chrome -> $to_chrome: $from -> $image (profile $profile, transport $transport, engine $engine, window ${window} s)"
@@ -1122,18 +1341,27 @@ cmd_resume() {
   [[ "$PAGE" =~ $PAGE_RE ]] || fail "--page: lowercase letters, digits and dashes"
   ((detached == 0)) || detach "$PAGE"
   take_lock || fail "another update, rollback or build holds $UPDATE_DIR/.lock"
+  local resumed=0 step
+  trap on_exit EXIT
+  if snapshot_pending "$PAGE"; then
+    STATE="$(snapshot_state "$PAGE")"
+    RUN="$(sget RUN)"
+    say resumed "the snapshot from step $(sget STEP)"
+    advance_snapshot || exit 1
+    resumed=1
+  fi
   STATE="$UPDATE_DIR/pages/$PAGE/state"
-  [[ -f "$STATE" ]] || fail "no update of $PAGE to resume"
-  RUN="$(sget RUN)"
-  local step
   step="$(sget STEP)"
-  terminal "$step" && fail "the last update of $PAGE ended ($step): nothing to resume"
+  if [[ ! -f "$STATE" ]] || terminal "$step"; then
+    ((resumed == 1)) && exit 0
+    fail "nothing of $PAGE to resume${step:+ (its last update ended $step)}"
+  fi
+  RUN="$(sget RUN)"
   case "$step" in
     held) step_to "$(sget HELD_FROM)" ;;
     rollback_failed) step_to rolling_back ;;
   esac
   say resumed "from step $(sget STEP)${step:+ (was $step)}"
-  trap on_exit EXIT
   advance
 }
 
@@ -1150,11 +1378,21 @@ cmd_rollback() {
   [[ "$PAGE" =~ $PAGE_RE ]] || fail "--page: lowercase letters, digits and dashes"
   ((detached == 0)) || detach "$PAGE"
   take_lock || fail "another update, rollback or build holds $UPDATE_DIR/.lock"
+  ! snapshot_pending "$PAGE" || fail "a snapshot of $PAGE is unfinished: page-browser-update.sh resume --page $PAGE first"
   STATE="$UPDATE_DIR/pages/$PAGE/state"
   [[ -f "$STATE" ]] || fail "no update of $PAGE to roll back"
   RUN="$(sget RUN)"
   local step
   step="$(sget STEP)"
+  # Refused before anything changes: no snapshot to restore, or the profile
+  # is not the page's any more.
+  local restores=0
+  case "$step" in
+    done) restores=1 ;;
+    aborted|rolled_back|rolling_back|aborting|rollback_failed) ;;
+    *) [[ "$(sget NEW_RAN)" == 1 ]] && restores=1 ;;
+  esac
+  ((restores == 0)) || rollback_ready || fail "no rollback of $PAGE: $RB_WHY"
   case "$step" in
     aborted|rolled_back) fail "the last update of $PAGE ended $step: nothing to roll back" ;;
     rolling_back|aborting) ;;
@@ -1227,6 +1465,86 @@ cmd_rollout() {
   propose rollout_done "every page is on $image (Chrome $to_chrome)"
 }
 
+# ── a standalone snapshot, an operation of its own ───────────────────────
+#
+# Its record (update/pages/<page>/snapshot) is written before the container
+# stops: a run cut off between the stop and the start is resumed (`resume
+# --page`) and reported by the timer — never a page left stopped unknown.
+# The container comes back through page.sh (its Chrome guard).
+
+snapshot_state() { printf '%s/pages/%s/snapshot' "$UPDATE_DIR" "$1"; }
+snapshot_pending() {
+  local file
+  file="$(snapshot_state "$1")"
+  [[ -f "$file" ]] && ! terminal "$(value STEP "$file")"
+}
+
+snap_stop() {
+  if [[ "$(sget WAS_RUNNING)" == 1 ]]; then
+    if ! container_read "$PAGE"; then
+      sset "REASON=$STATE_WHY"
+      alert snapshot_failed "$STATE_WHY: nothing is stopped blind"
+      step_to failed
+      return 1
+    fi
+    if [[ "$C_STATE" == running ]]; then
+      local chrome
+      chrome="$(chrome_state "$PAGE")"
+      if [[ "$chrome" != down ]]; then
+        sset "REASON=Chrome is $chrome"
+        alert snapshot_failed "Chrome is $chrome in $(container_of "$PAGE"): stop the page's browser first (sync browser stop)"
+        step_to failed
+        return 1
+      fi
+      docker stop -t 25 "$(container_of "$PAGE")" >/dev/null || log "warning: $(container_of "$PAGE") did not stop: the snapshot will not be taken"
+    fi
+  fi
+  step_to stopped
+}
+
+snap_take() {
+  if profile_op snapshot "$PAGE" "$(sget PROFILE)" "$(sget IMAGE)"; then
+    sset "SNAPSHOT=$SNAP_NAME" "SNAP_CHROME=$PROFILE_CHROME"
+  else
+    sset "SNAP_FAILED=$OP_WHY"
+    alert snapshot_failed "no snapshot of $PAGE: $OP_WHY"
+  fi
+  step_to snapshotted
+}
+
+# The container back as it was; unknown or not back: the record stays, and
+# resume tries again.
+snap_start() {
+  if [[ "$(sget WAS_RUNNING)" == 1 ]]; then
+    if ! container_read "$PAGE"; then
+      alert snapshot_failed "$STATE_WHY: $(container_of "$PAGE") is not started blind (resume --page $PAGE)"
+      return 1
+    fi
+    if [[ "$C_STATE" != running ]] && ! "$PAGE_SH" up --page "$PAGE" --image "$(sget IMAGE)" >&2; then
+      alert snapshot_failed "$(container_of "$PAGE") did not start again (resume --page $PAGE)"
+      return 1
+    fi
+  fi
+  if [[ -n "$(sget SNAP_FAILED)" ]]; then step_to failed; else step_to done; fi
+}
+
+advance_snapshot() {
+  while :; do
+    case "$(sget STEP)" in
+      planned) snap_stop || return 1 ;;
+      stopped) snap_take ;;
+      snapshotted) snap_start || return 1 ;;
+      done)
+        say snapshot "snapshots/$(sget PROFILE)/$(sget SNAPSHOT) (Chrome $(sget SNAP_CHROME))"
+        printf '%s/%s/%s\n' "$SNAP_DIR" "$(sget PROFILE)" "$(sget SNAPSHOT)"
+        return 0
+        ;;
+      failed) return 1 ;;
+      *) alert snapshot_failed "unknown step '$(sget STEP)' in $STATE"; return 1 ;;
+    esac
+  done
+}
+
 cmd_snapshot() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1235,24 +1553,28 @@ cmd_snapshot() {
     esac
   done
   [[ "$PAGE" =~ $PAGE_RE ]] || fail "--page: lowercase letters, digits and dashes"
-  local env image profile name was_running=0
+  local env image profile update was_running=0
   env="$(page_env "$PAGE")"
   [[ -f "$env" ]] || fail "no page $PAGE here"
   image="$(value PB_IMAGE "$env")"
   profile="$(value PB_PROFILE_ID "$env")"
   take_lock || fail "another update, rollback or build holds $UPDATE_DIR/.lock"
-  if container_running "$PAGE"; then
+  ! snapshot_pending "$PAGE" || fail "a snapshot of $PAGE is unfinished: page-browser-update.sh resume --page $PAGE"
+  update="$(value STEP "$UPDATE_DIR/pages/$PAGE/state")"
+  [[ -z "$update" ]] || terminal "$update" || fail "an update of $PAGE is unfinished (step $update): resume or rollback it first"
+  container_read "$PAGE" || fail "$STATE_WHY"
+  if [[ "$C_STATE" == running ]]; then
     [[ "$(chrome_state "$PAGE")" == down ]] || fail "Chrome is not down in $(container_of "$PAGE"): stop the page's browser first (sync browser stop)"
     was_running=1
-    docker stop -t 25 "$(container_of "$PAGE")" >/dev/null || fail "$(container_of "$PAGE") could not be stopped"
   fi
+  STATE="$(snapshot_state "$PAGE")"
   RUN="manual-$(date -u +%Y%m%dT%H%M%SZ)"
-  local rc=0
-  read_profile "$profile" "$image" && name="$(take_snapshot "$profile" "$image" "$PROFILE_CHROME")" || rc=$?
-  if ((was_running == 1)); then docker start "$(container_of "$PAGE")" >/dev/null || alert snapshot "$(container_of "$PAGE") did not start again"; fi
-  ((rc == 0)) || { alert snapshot "the snapshot of $PAGE failed"; exit 1; }
-  say snapshot "snapshots/$profile/$name (Chrome ${PROFILE_CHROME:-none})"
-  printf '%s/%s/%s\n' "$SNAP_DIR" "$profile" "$name"
+  rm -f "$STATE"
+  # The record before the container stops.
+  sset "RUN=$RUN" "PAGE=$PAGE" "PROFILE=$profile" "IMAGE=$image" "WAS_RUNNING=$was_running" "STARTED_AT=$(now_iso)"
+  step_to planned
+  trap on_exit EXIT
+  advance_snapshot
 }
 
 # ── Chrome's repository: the newest Stable, verified ─────────────────────
@@ -1369,7 +1691,9 @@ fetch_deb() {
 
 # Release tags (hub-page-browser:<Chrome .deb version>-<revision>).
 release_images() {
-  docker image ls --format '{{.Repository}}:{{.Tag}}' hub-page-browser 2>/dev/null | grep -E "$RELEASE_TAG_RE" || true
+  local tags
+  tags="$(docker image ls --format '{{.Repository}}:{{.Tag}}' hub-page-browser)" || return 1
+  grep -E "$RELEASE_TAG_RE" <<<"$tags" || true
 }
 archived_versions() {
   local file
@@ -1380,12 +1704,13 @@ archived_versions() {
 }
 # The newest Chrome among the release images and the archive.
 newest_known() {
-  local newest="" version tag
+  local newest="" version tag tags
+  tags="$(release_images)" || return 1
   while IFS= read -r tag; do
     [[ "$tag" =~ $RELEASE_TAG_RE ]] || continue
     version="${BASH_REMATCH[1]}"
     if [[ -z "$newest" ]] || ver_gt "$version" "$newest"; then newest="$version"; fi
-  done < <(release_images)
+  done <<<"$tags"
   while IFS= read -r version; do
     [[ -n "$version" ]] || continue
     if [[ -z "$newest" ]] || ver_gt "$version" "$newest"; then newest="$version"; fi
@@ -1470,7 +1795,11 @@ prune_all() {
     terminal "$(value STEP "$file")" && continue
     keep+="$(value FROM_IMAGE "$file") $(value TO_IMAGE "$file") "
   done
-  local kept_versions=" " kept_revisions=" "
+  local kept_versions=" " kept_revisions=" " tags
+  if ! tags="$(release_images)"; then
+    log "warning: the images cannot be listed: none is pruned"
+    tags=""
+  fi
   while IFS=' ' read -r created tag; do
     [[ -n "$tag" ]] || continue
     count=$((count + 1))
@@ -1483,7 +1812,12 @@ prune_all() {
       continue
     fi
     if docker image rm "$tag" >/dev/null 2>&1; then journal image_pruned "$tag"; else log "warning: $tag could not be removed"; fi
-  done < <(release_images | while IFS= read -r tag; do printf '%s %s\n' "$(docker image inspect --format '{{.Created}}' "$tag" 2>/dev/null)" "$tag"; done | sort -r)
+  done < <(while IFS= read -r tag; do
+      [[ -n "$tag" ]] || continue
+      # An image whose age cannot be read is kept: never pruned blind.
+      created="$(docker image inspect --format '{{.Created}}' "$tag" 2>/dev/null)" && [[ -n "$created" ]] || created="9999-kept-unread"
+      printf '%s %s\n' "$created" "$tag"
+    done <<<"$tags" | sort -r)
   count=0
   while IFS= read -r version; do
     [[ -n "$version" ]] || continue
@@ -1528,6 +1862,9 @@ report_pages() {
     step="$(value STEP "$state")"
     printf '%-20s %-48s Chrome %-16s update: %s\n' "$page" "$image" "${chrome:-?}" "${step:-none}${step:+ ($(value TO_IMAGE "$state"), $(value UPDATED_AT "$state"))}"
     if [[ -n "$newest" && -n "$chrome" ]] && ver_gt "$newest" "$chrome"; then lagging=$((lagging + 1)); fi
+    if [[ "$alerts" == 1 ]] && snapshot_pending "$page" && lock_free; then
+      PAGE="$page" alert update_stuck "its snapshot stopped at step $(value STEP "$(snapshot_state "$page")"), its container perhaps stopped: page-browser-update.sh resume --page $page"
+    fi
     if [[ "$alerts" == 1 && -n "$step" ]] && ! terminal "$step"; then
       if [[ "$step" == held || "$step" == rollback_failed ]]; then
         PAGE="$page" alert update_waiting "its update stands at $step ($(value REASON "$state")): the owner decides (resume or rollback)"
@@ -1555,50 +1892,65 @@ cmd_check() {
   take_lock || { locked=0; build=0; log "an update or build is running: this check only looks"; }
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT
-  local work="$WORK"
-  if ! repo_latest "$work"; then
-    alert repository "Chrome's repository could not be read or verified: $REPO_WHY"
-    exit 1
-  fi
-  local release_s last_s
-  release_s="$(epoch_of_rfc2822 "$REPO_DATE" || true)"
-  last_s="$(cat "$UPDATE_DIR/repo-date" 2>/dev/null || true)"
-  if [[ "$release_s" =~ ^[0-9]+$ && "$last_s" =~ ^[0-9]+$ ]] && ((release_s < last_s)); then
-    alert repository "the repository's InRelease ($REPO_DATE) is older than one seen before: refused (a replayed index hides releases)"
-    exit 1
-  fi
-  [[ "$release_s" =~ ^[0-9]+$ ]] && printf '%s\n' "$release_s" >"$UPDATE_DIR/repo-date"
-  local known
-  known="$(newest_known)"
-  if [[ -n "$known" ]] && ! ver_gt "$REPO_VERSION" "$known"; then
-    say checked "Chrome Stable $REPO_VERSION ($REPO_DATE): no newer than the newest here ($known)"
-  elif ((locked == 0)); then
-    say checked "Chrome Stable $REPO_VERSION is new; an update or build runs: the next check takes it"
-  else
-    fetch_deb "$work" || { alert fetch "$REPO_WHY"; exit 1; }
-    say fetched "google-chrome-stable $REPO_VERSION ($ARCH, SHA-256 ${REPO_SHA256:0:16}…, signed by subkey $REPO_SIGNER, released $REPO_DATE)"
-    if ((build == 0)); then
-      propose proposed "Chrome $REPO_VERSION is fetched and verified; build it: page-browser-update.sh build --chrome $REPO_VERSION"
-    elif ! build_image "$REPO_VERSION"; then
-      alert build "Chrome $REPO_VERSION is fetched and verified, but its image was not built: $BUILD_WHY"
-    else
-      say built "$BUILT_TAG"
-      prune_all
-      propose proposed "Chrome $REPO_VERSION is out ($REPO_DATE); its image $BUILT_TAG is built. No page is updated by itself (owner decision №15 is open). Next, 06:00–20:00 UTC: page-browser-update.sh update --page <first page> --image $BUILT_TAG --detach (1 h window); then page-browser-update.sh rollout --image $BUILT_TAG --detach"
-    fi
-  fi
+  # What waits for the owner is reported whatever the repository says.
+  check_repository "$WORK" "$locked" "$build" || true
   local newest newest_since meta
-  newest="$(newest_known)"
+  newest="$(newest_known)" || newest=""
   meta="$ARCHIVE_DIR/google-chrome-stable_${newest}_${ARCH}.deb.meta"
   newest_since="$(value fetched_s "$meta")"
   {
-    printf 'checked %s: Chrome Stable %s (%s); newest here %s\n' "$(now_iso)" "$REPO_VERSION" "$REPO_DATE" "${newest:-none}"
+    printf 'checked %s: Chrome Stable %s (%s); newest here %s\n' "$(now_iso)" "${REPO_VERSION:-unknown}" "${REPO_DATE:-the repository not read}" "${newest:-none}"
     report_pages "$newest" "$newest_since" 1
   } > "$UPDATE_DIR/status.part"
   mv -f "$UPDATE_DIR/status.part" "$UPDATE_DIR/status"
   cat "$UPDATE_DIR/status" >&2
   # An alert fails the unit too (systemctl --failed shows it).
   return "$ALERTED"
+}
+
+# The repository's newest Chrome: fetched, verified, built and proposed if
+# it is new. 1 after an alert.
+check_repository() {
+  local work="$1" locked="$2" build="$3"
+  if ! repo_latest "$work"; then
+    alert repository "Chrome's repository could not be read or verified: $REPO_WHY"
+    return 1
+  fi
+  local release_s last_s
+  release_s="$(epoch_of_rfc2822 "$REPO_DATE" || true)"
+  if [[ ! "$release_s" =~ ^[0-9]+$ ]]; then
+    alert repository "InRelease's Date ('$REPO_DATE') cannot be read: whether it is a replayed index is unknown"
+    return 1
+  fi
+  last_s="$(cat "$UPDATE_DIR/repo-date" 2>/dev/null || true)"
+  if [[ "$last_s" =~ ^[0-9]+$ ]] && ((release_s < last_s)); then
+    alert repository "the repository's InRelease ($REPO_DATE) is older than one seen before: refused (a replayed index hides releases)"
+    return 1
+  fi
+  printf '%s\n' "$release_s" >"$UPDATE_DIR/repo-date"
+  local known
+  if ! known="$(newest_known)"; then
+    alert images "the images here cannot be listed: nothing is fetched or built blind"
+    return 1
+  fi
+  if [[ -n "$known" ]] && ! ver_gt "$REPO_VERSION" "$known"; then
+    say checked "Chrome Stable $REPO_VERSION ($REPO_DATE): no newer than the newest here ($known)"
+  elif ((locked == 0)); then
+    say checked "Chrome Stable $REPO_VERSION is new; an update or build runs: the next check takes it"
+  else
+    fetch_deb "$work" || { alert fetch "$REPO_WHY"; return 1; }
+    say fetched "google-chrome-stable $REPO_VERSION ($ARCH, SHA-256 ${REPO_SHA256:0:16}…, signed by subkey $REPO_SIGNER, released $REPO_DATE)"
+    if ((build == 0)); then
+      propose proposed "Chrome $REPO_VERSION is fetched and verified; build it: page-browser-update.sh build --chrome $REPO_VERSION"
+    elif ! build_image "$REPO_VERSION"; then
+      alert build "Chrome $REPO_VERSION is fetched and verified, but its image was not built: $BUILD_WHY"
+      return 1
+    else
+      say built "$BUILT_TAG"
+      prune_all
+      propose proposed "Chrome $REPO_VERSION is out ($REPO_DATE); its image $BUILT_TAG is built. No page is updated by itself (owner decision №15 is open). Next, 06:00–20:00 UTC: page-browser-update.sh update --page <first page> --image $BUILT_TAG --detach (1 h window); then page-browser-update.sh rollout --image $BUILT_TAG --detach"
+    fi
+  fi
 }
 
 cmd_status() {
@@ -1610,9 +1962,11 @@ cmd_status() {
   done
   host_arch
   if [[ -n "$PAGE" ]]; then
-    STATE="$UPDATE_DIR/pages/$PAGE/state"
-    [[ -f "$STATE" ]] || { echo "no update of $PAGE"; return 0; }
-    cat "$STATE"
+    local file
+    for file in "$UPDATE_DIR/pages/$PAGE/state" "$(snapshot_state "$PAGE")"; do
+      if [[ -f "$file" ]]; then printf '%s:\n' "$(basename "$file")"; sed 's/^/  /' "$file"; fi
+    done
+    [[ -f "$UPDATE_DIR/pages/$PAGE/state" || -f "$(snapshot_state "$PAGE")" ]] || echo "no update or snapshot of $PAGE"
     return 0
   fi
   echo "pages:"
