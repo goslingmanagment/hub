@@ -22,9 +22,18 @@ export function onboardingStepsOf(data: PageBrowserProfileResponse): OnboardingS
   const { profile, login } = data;
   if (login.state === "closing") return { proxy: "done", pin: "done", login: "locked", account: "locked" };
   if (!profile.proxySet) return { proxy: "current", pin: "locked", login: "locked", account: "locked" };
-  if (profile.pinnedExitIp === null) return { proxy: "done", pin: "current", login: "locked", account: "locked" };
+  // No pin yet, or the browser's own check named another IP: the pin again.
+  if (profile.pinnedExitIp === null || profile.operator.stopReason === "exit_ip_changed") {
+    return { proxy: "done", pin: "current", login: profile.pinnedExitIp === null ? "locked" : "current", account: "locked" };
+  }
   if (login.state === "open") return { proxy: "done", pin: "done", login: "done", account: "current" };
   return { proxy: "done", pin: "done", login: "current", account: "locked" };
+}
+
+/** The browser stands for a reason of its own (not the owner's stop): what
+ *  the login waits for is in the exit IP's step. */
+export function browserHalted(profile: PageBrowserProfileSummary): boolean {
+  return profile.operator.stopReason !== null && profile.operator.stopReason !== "owner_stop";
 }
 
 /** The login of the profile's browser as PR 15's view shows a page's. */
@@ -38,7 +47,7 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
     case "login":
       break;
   }
-  if (!data.browser.ready || data.browser.reachable === false) return { kind: "unreachable" };
+  if (!data.browser.ready || data.browser.reachable === false || browserHalted(data.profile)) return { kind: "unreachable" };
   const screen = data.screen;
   if (screen === null) return { kind: "preparing" };
   switch (screen.screen) {
@@ -52,7 +61,7 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
 }
 
 const STOPS: Record<string, string> = {
-  exit_ip_changed: "браузер увидел другой выходной IP, не закреплённый: прокси сменил адрес. Проверьте прокси ещё раз и закрепите новый IP",
+  exit_ip_changed: "браузер сам увидел через прокси другой выходной IP, чем закреплённый (опечатка в IP или прокси сменил адрес). Сохраните прокси ещё раз — Hub покажет его IP — и закрепите его",
   proxy_unavailable: "прокси не отвечает",
   proxy_auth: "прокси не принял логин и пароль",
   selftest_failed: "самопроверка браузера не прошла",

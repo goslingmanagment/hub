@@ -102,6 +102,10 @@ describe("the onboarding's steps and words (PR 16)", () => {
     expect(onboardingStepsOf(response({ login: { state: "login", changedAt: null } }))).toMatchObject({ login: "current" });
     expect(onboardingStepsOf(response({ login: { state: "open", changedAt: null } }))).toEqual({ proxy: "done", pin: "done", login: "done", account: "current" });
     expect(onboardingStepsOf(response({ login: { state: "closing", changedAt: null } }))).toMatchObject({ login: "locked", account: "locked" });
+    // The browser's own check named another IP: the pin is the step again.
+    const halted = { operator: { ...summary().operator, step: "exit_closed", stopReason: "exit_ip_changed", lastStateAt: UP.lastStateAt } };
+    expect(onboardingStepsOf(response({ login: { state: "login", changedAt: null } }, halted))).toEqual({ proxy: "done", pin: "current", login: "current", account: "locked" });
+    expect(profileLoginViewOf(response({ login: { state: "login", changedAt: null }, browser: { ready: true, problem: null, reachable: true } }, halted))).toEqual({ kind: "unreachable" });
   });
 
   it("reads the login as a page's: the screens of its browser while it is open", () => {
@@ -121,7 +125,7 @@ describe("the onboarding's steps and words (PR 16)", () => {
       detail: "Браузер сам проверил свой выходной IP: 203.0.113.7 — это закреплённый IP. Самопроверка пройдена.",
     });
     expect(browserStatusOf(summary({ operator: { ...summary().operator, step: "exit_closed", stopReason: "exit_ip_changed", lastStateAt: UP.lastStateAt } })))
-      .toMatchObject({ label: "Браузер стоит", tone: "danger", detail: expect.stringContaining("закрепите новый IP") });
+      .toMatchObject({ label: "Браузер стоит", tone: "danger", detail: expect.stringContaining("другой выходной IP, чем закреплённый") });
     expect(browserStatusOf(summary({ operator: { ...summary().operator, linkError: "token", lastStateAt: UP.lastStateAt, step: "exit_closed" } }))).toMatchObject({ tone: "danger" });
     expect(onboardingChipOf(summary({ proxySet: false }))).toEqual({ label: "Нужен прокси", tone: "warning" });
     expect(onboardingChipOf(summary({ onboarding: "open" }))).toEqual({ label: "Вход выполнен", tone: "good" });

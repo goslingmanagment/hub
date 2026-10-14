@@ -22,7 +22,7 @@ import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { Card, Chip, INPUT, LiveScreenshot, LoginForm, PLAIN, PRIMARY, ToneChip } from "./loginParts.js";
-import { browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
+import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
 import { stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // A new page connected through its own server browser (Project Browser plan
@@ -103,8 +103,11 @@ function PinStep({ data, state, suggested }: { data: PageBrowserProfileResponse;
   const [ip, setIp] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const status = browserStatusOf(data.profile);
-  const value = ip === "" ? (suggested ?? "") : ip;
-  const editable = state !== "locked" && data.login.state !== "login" && data.login.state !== "closing";
+  const value = ip === "" ? (suggested ?? data.profile.pinnedExitIp ?? "") : ip;
+  // Pinned again while the login is open too: a browser that stopped on
+  // another exit IP starts again with the new pin and checks it itself.
+  const editable = state !== "locked" && data.login.state !== "closing";
+  const halted = data.profile.operator.stopReason === "exit_ip_changed";
   return (
     <Card title={<StepTitle n={2} title="Выходной IP" state={state} />} aside={<ToneChip label={status.label} tone={status.tone} />}>
       <p className="mb-3 text-sm text-text-secondary" data-browser-status>{status.detail}</p>
@@ -122,7 +125,7 @@ function PinStep({ data, state, suggested }: { data: PageBrowserProfileResponse;
         >
           <input value={value} onChange={(event) => setIp(event.target.value)} placeholder="203.0.113.7" className={`${INPUT} flex-1 font-mono`} aria-label="Выходной IP" />
           <button type="submit" className={PLAIN} disabled={value.trim() === "" || pin.isPending}>
-            {pin.isPending ? "Закрепляем…" : data.profile.pinnedExitIp === null ? "Закрепить" : "Закрепить другой"}
+            {pin.isPending ? "Закрепляем…" : data.profile.pinnedExitIp === null ? "Закрепить" : halted ? "Закрепить и перезапустить" : "Закрепить другой"}
           </button>
         </form>
       )}
@@ -141,6 +144,7 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
   const step = usePageBrowserProfileLoginStep(profileId);
   const [problem, setProblem] = useState<string | null>(null);
   const failure = (error: unknown) => setProblem(errorText(error));
+  const halted = browserHalted(data.profile);
   const screenLink = (
     <a href={data.screenUrl} target="_blank" rel="noreferrer" className={PLAIN}>
       <ExternalLink size={14} aria-hidden /> Открыть экран браузера
@@ -180,7 +184,9 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
         );
         break;
       case "unreachable":
-        main = <p role="alert" className="text-sm text-danger">Hub не достучался до браузера. Подождите несколько секунд — если браузер стоит, причина в блоке «Выходной IP».</p>;
+        main = halted
+          ? <p role="alert" className="text-sm text-danger">Браузер стоит и экран входа не открыл: причина и что сделать — в шаге «Выходной IP».</p>
+          : <p role="alert" className="text-sm text-danger">Hub не достучался до браузера. Подождите несколько секунд.</p>;
         break;
       case "form":
         main = <LoginForm view={view} step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
@@ -214,13 +220,14 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
         break;
     }
   }
-  const open = data.login.state === "login" && view.kind !== "unknown";
+  const open = data.login.state === "login";
+  const chip = state !== "current" ? undefined : halted ? <ToneChip label="Браузер стоит" tone="danger" /> : <Chip view={view} />;
   return (
-    <Card title={<StepTitle n={3} title="Вход в Fansly" state={state} />} aside={state === "current" ? <Chip view={view} /> : undefined}>
+    <Card title={<StepTitle n={3} title="Вход в Fansly" state={state} />} aside={chip}>
       {main}
       {open && (
         <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-          {screenLink}
+          {view.kind !== "unknown" && screenLink}
           {view.kind !== "success" && (
             <button type="button" className={PLAIN} disabled={finish.isPending} onClick={() => finish.mutate(undefined, { onError: failure })}>
               Закрыть вход
@@ -353,6 +360,12 @@ export function PageBrowserOnboardingPage() {
           <Card title="Экран браузера" aside={<span className="text-xs text-text-muted">{live ? "обновляется раз в секунду" : "показывается, пока открыт вход"}</span>}>
             <LiveScreenshot urlFor={(tick) => pageBrowserProfileScreenshotUrl(profileId, tick)} live={live} />
           </Card>
+        </div>
+        <div className="flex flex-col gap-4">
+          <ProxyStep data={data} state={steps.proxy} exitIp={exitIp} onExitIp={setExitIp} />
+          <PinStep data={data} state={steps.pin} suggested={exitIp} />
+          <LoginStep data={data} state={steps.login} view={view} />
+          <AccountStep data={data} state={steps.account} />
           <Card title="Если передумали">
             <div className="flex flex-col gap-2">
               <p className="text-sm text-text-secondary">
@@ -363,12 +376,6 @@ export function PageBrowserOnboardingPage() {
               </button>
             </div>
           </Card>
-        </div>
-        <div className="flex flex-col gap-4">
-          <ProxyStep data={data} state={steps.proxy} exitIp={exitIp} onExitIp={setExitIp} />
-          <PinStep data={data} state={steps.pin} suggested={exitIp} />
-          <LoginStep data={data} state={steps.login} view={view} />
-          <AccountStep data={data} state={steps.account} />
         </div>
       </div>
     </div>

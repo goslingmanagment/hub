@@ -2,7 +2,6 @@ import { Link } from "react-router";
 import { MonitorSmartphone } from "lucide-react";
 
 import { usePageBrowserProfiles } from "@/api/queries";
-import { formatRelativeTime } from "@/lib/format";
 import { ToneChip } from "../page-browser/loginParts.js";
 import { browserStatusOf, onboardingChipOf } from "../page-browser/pageBrowserOnboardingView.js";
 
@@ -41,7 +40,7 @@ export function BrowserProfilesSection() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-text-primary">{profile.name}</p>
                   <p className="truncate text-xs text-text-muted">
-                    {browser.label} · создан {formatRelativeTime(profile.createdAt)} · <span className="font-mono">{profile.profileId.slice(0, 8)}</span>
+                    {browser.label} · создан {new Date(profile.createdAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · <span className="font-mono">{profile.profileId.slice(0, 8)}</span>
                   </p>
                 </div>
                 <ToneChip label={chip.label} tone={chip.tone} />
