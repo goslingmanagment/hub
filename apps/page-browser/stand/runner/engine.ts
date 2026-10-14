@@ -67,7 +67,9 @@ export interface Grant {
   /** The deadline the engine journals. */
   deadlineMono: number;
   /** The deadline the operator was told — later than the journaled one
-   *  only while a control lies to it (`journalWindowMs`). */
+   *  only while a control lies to it (`journalWindowMs`); none (infinite)
+   *  for a control's own grant, which no operator was told of
+   *  (`journalGrant`). */
   toldDeadlineMono: number;
   generation: number;
 }
@@ -601,7 +603,8 @@ export class StandEngine {
    *  asked — no attempt of the engine's (id 0) unless the control issued one. */
   journalGrant(kind: Grant["kind"], ref: string, target: string, windowMs = this.windowMs, attemptId = 0): void {
     const now = mono();
-    this.grants.push({ kind, page: this.options.page, attemptId, ref, method: null, target, grantedMono: now, deadlineMono: now + windowMs, toldDeadlineMono: now + windowMs, generation: this.generation });
+    // No operator was told anything: the control sends it itself.
+    this.grants.push({ kind, page: this.options.page, attemptId, ref, method: null, target, grantedMono: now, deadlineMono: now + windowMs, toldDeadlineMono: Number.POSITIVE_INFINITY, generation: this.generation });
   }
 
   /** The site's requests that wait now: asked an admission and not given

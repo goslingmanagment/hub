@@ -156,15 +156,21 @@ export async function keptOfMade(store: Store, made: FanslyMade, naive: boolean,
   const read = async (): Promise<Kept> => {
     const frames = new Map<string, Set<number>>();
     const outcomes = new Map<string, Set<number>>();
+    const unseen = new Map<string, Set<number>>();
     const responses = new Map<string, Set<string>>();
     for (const page of pages) {
       const sent = made.frames.filter((frame) => frame.page === page);
       frames.set(page, new Set(sent.length === 0 ? [] : await store.storedFrames(page, sent.reduce((least, frame) => Math.min(least, frame.frame), Infinity))));
       const attempts = made.answers.flatMap((answer) => (answer.page === page && answer.attemptId !== null ? [answer.attemptId] : []));
-      outcomes.set(page, new Set((await store.outcomes(page, attempts, naive)).map((row) => row.attemptId)));
+      const rows = await store.outcomes(page, attempts, naive);
+      outcomes.set(page, new Set(rows.map((row) => row.attemptId)));
+      // No answer seen: not a response (a siteDone with no status, a Hub
+      // result of another kind), and not "not sent" — every row of it.
+      const saw = new Set(rows.filter((row) => row.kind === "response" || row.sent === false).map((row) => row.attemptId));
+      unseen.set(page, new Set(rows.map((row) => row.attemptId).filter((attemptId) => !saw.has(attemptId))));
       responses.set(page, new Set(made.answers.some((answer) => answer.page === page && answer.kind === "site") ? await store.storedResponses(page) : []));
     }
-    return { frames, outcomes, responses, gaps: await store.gapsOf(pages) };
+    return { frames, outcomes, responses, gaps: await store.gapsOf(pages), unseen };
   };
   let verdict = madeAndKept(made, await read(), undefined, blind);
   const deadline = mono() + waitMs;

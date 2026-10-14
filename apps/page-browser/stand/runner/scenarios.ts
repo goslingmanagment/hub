@@ -100,11 +100,12 @@ function closures(page: Page): number[] {
   return page.enginesOfRun.flatMap((engine) => engine.closures);
 }
 
-/** A loss of control's blind stretch: from the fault until the page was up
- *  again (criteria.ts `Blind`). */
-function blindSince(ctx: Ctx, faultMono: number): Blind {
-  const up = transitions(ctx.page).find((state) => state.atMono >= faultMono && state.exitOpen && atLeast(state.step, "exit_open"));
-  return { page: ctx.page.info.name, fromMono: faultMono, toMono: up?.atMono ?? null };
+/** A loss of control's blind stretch: from the fault's injection — its
+ *  command done, the DevTools connection, Chrome or the operator gone —
+ *  until the page was up again (criteria.ts `Blind`). */
+function blindSince(ctx: Ctx, injectedMono: number): Blind {
+  const up = transitions(ctx.page).find((state) => state.atMono >= injectedMono && state.exitOpen && atLeast(state.step, "exit_open"));
+  return { page: ctx.page.info.name, fromMono: injectedMono, toMono: up?.atMono ?? null };
 }
 
 function isUp(engine: StandEngine): boolean {
@@ -131,7 +132,7 @@ async function waitGap(ctx: Ctx, reason: string, sinceMono: number, timeoutMs = 
  *  open, and only the page's own reaction can stop a send (a Chrome that
  *  let a request go between the loss and the exit's close would be seen by
  *  C1, not hidden by the stand's hold: `control-loss-release`). */
-async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>, options: { inFlight?: boolean; beforeMoment?: () => Promise<void> } = {}): Promise<{ activity: Activity; faultMono: number }> {
+async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>, options: { inFlight?: boolean; beforeMoment?: () => Promise<void> } = {}): Promise<{ activity: Activity; faultMono: number; injectedMono: number }> {
   const activity = new Activity(ctx.page);
   activity.start();
   if (!options.inFlight) {
@@ -139,7 +140,7 @@ async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>, 
     ctx.arm();
     const faultMono = mono();
     await fault(activity);
-    return { activity, faultMono };
+    return { activity, faultMono, injectedMono: mono() };
   }
   const api = FANSLY_HOSTS.api[0];
   try {
@@ -153,11 +154,13 @@ async function atMoment(ctx: Ctx, fault: (activity: Activity) => Promise<void>, 
     ctx.arm();
     const faultMono = mono();
     await fault(activity);
-    // The fault is in: the held CONNECT goes at once (socks.ts lets it go
-    // when the hold is lifted), and nothing of the stand holds any more.
+    // The fault is in (its command done).
+    const injectedMono = mono();
+    // The held CONNECT goes at once (socks.ts lets it go when the hold is
+    // lifted), and nothing of the stand holds any more.
     await ctx.stand.socks({ hold: null });
     ctx.notes.holdLiftedAfterFaultMs = Math.round(mono() - faultMono);
-    return { activity, faultMono };
+    return { activity, faultMono, injectedMono };
   } finally {
     await ctx.stand.socks({ hold: null });
   }
@@ -254,7 +257,7 @@ function operatorLoss(how: "kill" | "hang", inFlight = false): Scenario["run"] {
   return async (ctx) => {
     const engine = ctx.page.engine;
     const pid = await servicePid(ctx, "operator");
-    const { activity, faultMono } = await atMoment(ctx, () => inPage(ctx, ["kill", how === "kill" ? "-KILL" : "-STOP", String(pid)]).then(() => undefined), { inFlight });
+    const { activity, faultMono, injectedMono } = await atMoment(ctx, () => inPage(ctx, ["kill", how === "kill" ? "-KILL" : "-STOP", String(pid)]).then(() => undefined), { inFlight });
     // The connection to the engine goes with the process (the watchdog's
     // kill, for a hung one: 5 s without a heartbeat).
     const dropped = await engine.waitClosed(how === "kill" ? 5000 : 12_000);
@@ -279,7 +282,7 @@ function operatorLoss(how: "kill" | "hang", inFlight = false): Scenario["run"] {
     Object.assign(checks, await standsThenStarts(ctx, back, 3000, "after the operator started again"));
     ctx.notes.upAfterMs = Math.round(mono() - faultMono);
     checks.gap = await waitGap(ctx, "operator_start", faultMono);
-    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, faultMono) };
+    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, injectedMono) };
   };
 }
 
@@ -301,8 +304,9 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break", inFlight = false, p
     let planted: Planted[] | undefined;
     let activity: Activity;
     let faultMono: number;
+    let injectedMono: number;
     try {
-      ({ activity, faultMono } = await atMoment(ctx, fault, { inFlight, ...(planting ? { beforeMoment: () => planting.held() } : {}) }));
+      ({ activity, faultMono, injectedMono } = await atMoment(ctx, fault, { inFlight, ...(planting ? { beforeMoment: () => planting.held() } : {}) }));
       if (planting) ({ planted, check: checks.releasedAtFault } = await planting.after(faultMono));
     } finally {
       await planting?.cleanUp();
@@ -322,7 +326,7 @@ function controlLoss(how: "holder" | "chrome" | "cdp-break", inFlight = false, p
     if (alarm) ctx.notes.alarm = alarm.alarm.detail;
     await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 40_000, faultMono);
     checks.upByItself = upWithin(transitions(ctx.page), faultMono, 40_000, "after the control loss");
-    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, faultMono), ...(planted ? { planted } : {}) };
+    return { faultMono, checks, attempts: activity.issued, blind: blindSince(ctx, injectedMono), ...(planted ? { planted } : {}) };
   };
 }
 

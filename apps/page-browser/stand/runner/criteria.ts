@@ -299,6 +299,11 @@ export interface Kept {
    *  marked incomplete (`complete: false`) — by page. */
   responses: ReadonlyMap<string, ReadonlySet<string>>;
   gaps: readonly StoredGap[];
+  /** The attempts whose stored outcome says the operator saw no answer of
+   *  them — sent (or perhaps), and no response: a siteDone with no status,
+   *  a Hub result that is not `response` — by page. Only these can be
+   *  answers given while the page was blind (`Blind`). */
+  unseen?: ReadonlyMap<string, ReadonlySet<number>>;
 }
 
 /** Between Fansly writing a frame and the operator's clock on the event it
@@ -338,24 +343,29 @@ export function madeAndKept(made: FanslyMade, kept: Kept, slackMs = GAP_SLACK_MS
     if (answer.kind === "site" && (answer.rid === null || !kept.responses.get(answer.page)?.has(answer.rid))) missing.push(`no stored site.response event (${answer.rid === null ? "it has no request id to find one by" : `rid ${answer.rid}`})`);
     if (missing.length === 0) continue;
     if (covered(answer.page, answer.wall)) coveredByGap.answers += 1;
-    // Answered while the page was blind: no site.response can exist, and a
-    // request of no attempt is C1's — but an attempt's outcome must.
-    else if (inBlind(answer) && (answer.attemptId === null || kept.outcomes.get(answer.page)?.has(answer.attemptId))) unseenAtLoss += 1;
+    // Answered while the page was blind, and its outcome says the operator
+    // saw no answer of it: no site.response can exist. An outcome that shows
+    // a response asks its site.response whatever the stretch; a request of
+    // no attempt has nothing of the engine's to keep it, and its arrival is
+    // C1's, which no stretch excuses.
+    else if (inBlind(answer) && (answer.attemptId === null || kept.unseen?.get(answer.page)?.has(answer.attemptId))) unseenAtLoss += 1;
     else violations.push(`${answer.method} ${answer.target} of ${answer.page} was answered by Fansly (${answer.status}) and has ${missing.join(" and ")}, and no gap mark covers when it was answered`);
   }
   return { violations, coveredByGap, unseenAtLoss };
 }
 
-/** A loss of control (operatorLoss, controlLoss): from the fault until the
- *  page is up again (null: it never was) the operator sees nothing of its
- *  browser's traffic — its DevTools connection, its Chrome or itself gone.
+/** A loss of control (operatorLoss, controlLoss): from the fault — once it
+ *  is in, its command done — until the page is up again (null: it never
+ *  was) the operator sees nothing of its browser's traffic — its DevTools
+ *  connection, its Chrome or itself gone.
  *  An answer Fansly gives then — to a request the page let go before the
  *  fault, or one Chrome let go itself when its DevTools went (decision
  *  №10's residual) — reaches no one who could keep it: the operator says of
  *  its attempt "sent", with no answer (siteDone `status` null), and writes
  *  no site.response; a gap mark exists only where a socket was open
  *  (ws/sockets.ts `chrome_restart`). C7 counts such an answer
- *  (`unseenAtLoss`) and asks only its attempt's outcome. */
+ *  (`unseenAtLoss`) — only when its attempt's stored outcome says no answer
+ *  was seen (`Kept.unseen`). */
 export interface Blind {
   page: string;
   fromMono: number;
@@ -597,8 +607,9 @@ export interface LateSend {
  *  except the rest of that very operation: once its preflight came over the
  *  held CONNECT, the operator lets its request go too, on a connection of
  *  its own (Chrome keeps credentialed requests apart), before the deadline
- *  it was told (`toldDeadlineMono`) — the same planted send. After the told
- *  deadline, it is a violation of the operator's own. */
+ *  it was told (`toldDeadlineMono`) — the same planted send. One preflight
+ *  and one request at most, each before the told deadline; any other
+ *  arrival of it is a violation of the operator's own. */
 export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: LateSend[]; violations: string[] } {
   const late: LateSend[] = [];
   let elsewhere = 0;
@@ -608,19 +619,23 @@ export function lateUnderHold(events: readonly JournalEvent[], grants: readonly 
     if (rid === null) continue;
     const held = new Set(heldAcross(events, pageAddress, host, grant.deadlineMono).map((hold) => hold.socksId));
     if (held.size === 0) continue;
-    const ofGrant: Array<{ send: LateSend; mono: number }> = [];
+    const ofGrant: Array<{ send: LateSend; mono: number; method: string }> = [];
     for (const arrival of events) {
       if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
       const called = unadmittedArrivals([arrival], grants, pages).find((violation) => violation.includes("arrived outside its admission window"));
       if (called === undefined) continue;
       const socksId = arrival.socksId === null || arrival.socksId === undefined ? null : Number(arrival.socksId);
-      ofGrant.push({ send: { rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, held: socksId !== null && held.has(socksId), violation: called }, mono: arrival.mono });
+      ofGrant.push({ send: { rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, held: socksId !== null && held.has(socksId), violation: called }, mono: arrival.mono, method: String(arrival.method) });
     }
-    // Shown over the held CONNECT: the rest of the operation inside what the
-    // operator was told is the same send; nothing else of it is.
-    const shown = ofGrant.some(({ send }) => send.held);
-    for (const { send, mono } of ofGrant) {
-      if (send.held || (shown && mono <= grant.toldDeadlineMono + ARRIVAL_SLACK_MS)) late.push(send);
+    // The planted operation is at most its preflight and its request — the
+    // first of each, each before the deadline the operator was told — and
+    // it shows only if one of them came over the held CONNECT. Anything
+    // else of that request id is a violation the control does not own.
+    const inTime = ofGrant.filter(({ mono }) => mono <= grant.toldDeadlineMono + ARRIVAL_SLACK_MS);
+    const operation = [inTime.find(({ method }) => method === "OPTIONS"), inTime.find(({ method }) => method !== "OPTIONS")].filter((one) => one !== undefined);
+    const shown = operation.some(({ send }) => send.held);
+    for (const one of ofGrant) {
+      if (shown && operation.includes(one)) late.push(one.send);
       else elsewhere += 1;
     }
   }
