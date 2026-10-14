@@ -57,7 +57,11 @@ case "$1" in
     if [[ "$2" == "inspect" && " $* " == *" --format "* ]]; then echo "155.0.7000.1"; fi
     exit 0 ;;
   run) exit 0 ;;
-  stop) touch "$state/stopped/\${@: -1}"; exit 0 ;;
+  stop)
+    # A container that would not stop; a Docker that cannot be read from here on.
+    [[ "\${TEST_STOP_FAILS:-0}" == "1" ]] || touch "$state/stopped/\${@: -1}"
+    [[ "\${TEST_UNREADABLE_AFTER_STOP:-0}" != "1" ]] || touch "$state/unreadable"
+    exit 0 ;;
   rm) rm -f "$state/containers/\${@: -1}" "$state/stopped/\${@: -1}"; exit 0 ;;
   volume)
     case "$2" in
@@ -69,7 +73,7 @@ case "$1" in
   ps) exit 0 ;;
   logs) exit 0 ;;
   inspect)
-    if [[ "\${TEST_DOCKER_UNREADABLE:-0}" == "1" ]]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
+    if [[ "\${TEST_DOCKER_UNREADABLE:-0}" == "1" || -e "$state/unreadable" ]]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
     if [[ "$2" == "-f" ]]; then
       [[ -e "$state/containers/$4" ]] || { echo "Error: No such object: $4" >&2; exit 1; }
       if [[ "$3" == *".State.Running"* ]]; then [[ -e "$state/stopped/$4" ]] && echo false || echo true; exit 0; fi
@@ -255,6 +259,24 @@ describe("deploy-page-browser.sh add-profile", () => {
     expect(volumes()).toEqual([]);
     expect(existsSync(path.join(pbBase, "pages/ari-2"))).toBe(false);
     expect(hubCalls()).toEqual([]);
+  });
+
+  it("a failed start that page.sh left as it is — a container that would not stop, a Docker that cannot be read — keeps the new profile's files and volumes, and says what to do (Astra's review of PR 16, round 4)", () => {
+    for (const [env, word] of [[{ TEST_STOP_FAILS: "1" }, "is running"], [{ TEST_UNREADABLE_AFTER_STOP: "1" }, "is unreadable"]] as const) {
+      rmSync(state, { recursive: true, force: true });
+      mkdirSync(state);
+      rmSync(path.join(pbBase, "pages/ari-2"), { recursive: true, force: true });
+      const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV], { TEST_UNHEALTHY: "1", ...env });
+      expect(made.status).toBe(1);
+      expect(made.stderr).toContain("left as it is");
+      const profile = /the new profile ([0-9a-f-]{36}) of ari-2 is kept as it is/.exec(made.stderr)?.[1];
+      expect(profile, made.stderr).toBeDefined();
+      expect(made.stderr).toContain(`page-browser-ari-2 ${word}`);
+      // Its files — the secrets of a container that may run — and its volumes stay.
+      expect(existsSync(path.join(pbBase, "pages/ari-2/secrets/rpc_token"))).toBe(true);
+      expect(volumes()).toEqual([`pb-buffer-${profile}`, `pb-profile-${profile}`]);
+      expect(hubCalls()).toEqual([]);
+    }
   });
 
   it("refuses a page that has a container, and needs the environment", () => {

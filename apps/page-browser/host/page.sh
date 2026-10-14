@@ -14,7 +14,9 @@
 #              (Project Browser PR 16: a new profile for a page that has no
 #              container here — `up --new-profile`, refused for a page that
 #              has one; its last lines name it: PB_PROFILE_ID=<uuid> and
-#              PB_SOCKS=<ip>:<port>, the SOCKS5 its rules admit)
+#              PB_SOCKS=<ip>:<port>, the SOCKS5 its rules admit. A start that
+#              fails takes its files and volumes with it only once Docker
+#              says its container is absent; else all stays, and it says so)
 #   page.sh remove-profile --page <name> --profile <uuid>
 #              (a profile given up before it served a page: its container
 #              removed, its files and its two volumes deleted — the session
@@ -367,9 +369,22 @@ add_profile() {
   printf 'PB_SOCKS=%s:%s\n' "$(value PB_SOCKS_IP "$(env_file)")" "$(value PB_SOCKS_PORT "$(env_file)")"
 }
 
+# The new profile's undo, when its start failed: its files and volumes go
+# only once Docker says its container is absent. A container left as it is
+# (one that would not stop, a Docker that cannot be read — switch_to's own
+# words) keeps everything: its secrets and its profile may be in use
+# (Astra's review of PR 16, round 4).
 add_profile_undo() {
-  local profile="$1"
+  local profile="$1" state
   [[ -f "$(env_file)" ]] && return 0
+  if ! state="$(container_status)" || [[ "$state" != absent ]]; then
+    cat >&2 <<EOF
+page: the new profile $profile of $PAGE is kept as it is: page-browser-$PAGE is ${state:-unreadable}, its files $(page_dir) and the volumes pb-profile-$profile and pb-buffer-$profile stay.
+page: once \`docker inspect page-browser-$PAGE\` says it is gone (docker rm -f page-browser-$PAGE after checking it), remove them:
+page:   rm -rf $(page_dir) && docker volume rm pb-profile-$profile pb-buffer-$profile && $PB_BASE/egress-rules.sh apply
+EOF
+    return 0
+  fi
   rm -rf "$(page_dir)"
   docker volume rm "pb-profile-$profile" "pb-buffer-$profile" >/dev/null 2>&1 || true
   echo "page: the new profile $profile of $PAGE was not kept (its volumes and files removed)" >&2
