@@ -35,14 +35,16 @@ async function setUp() {
     const cdp = new Cdp({ socketPath: holder.socketPath, commandTimeoutMs: 500, log: quiet });
     const decided: Array<[PausedRequest, string]> = [];
     const indeterminate: string[] = [];
+    const resolved: Array<[string, string, string]> = [];
     const paused = new PausedRequests(cdp, {
       decide,
       onDecided: (request, decision) => decided.push([request, decision.action]),
+      onResolved: (request, decision, resolution) => resolved.push([request.requestId, decision.action, resolution]),
       onIndeterminate: (request) => indeterminate.push(request.requestId),
       log: quiet,
     });
     cleanups.push(() => cdp.close());
-    return { cdp, paused, decided, indeterminate };
+    return { cdp, paused, decided, indeterminate, resolved };
   };
   return { chrome, holder, operator };
 }
@@ -55,7 +57,7 @@ describe("paused requests", () => {
       answer = () => chrome.reply(command, {});
       return null;
     });
-    const { cdp, decided } = operator();
+    const { cdp, decided, resolved } = operator();
     await cdp.connect();
     chrome.event("Fetch.requestPaused", { requestId: "interception-1", networkId: "R1", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
     await until(() => chrome.sent("Fetch.failRequest").length === 1);
@@ -63,8 +65,11 @@ describe("paused requests", () => {
     expect(decided[0]?.[0]).toMatchObject({ requestId: "interception-1", networkId: "R1", replayed: false, stage: "request", method: "GET" });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(holder.holder?.stats.stored).toBe(1);
+    // Decided is not resolved: what needs Chrome's answer waits for it.
+    expect(resolved).toEqual([]);
     answer!();
     await until(() => holder.holder?.stats.stored === 0, 2000, "the acknowledgement");
+    expect(resolved).toEqual([["interception-1", "fail", "answered"]]);
   });
 
   it("left unresolved by an operator that died are learned from the replay and failed by the next one — never continued", async () => {
@@ -96,22 +101,24 @@ describe("paused requests", () => {
   it("whose resolution Chrome does not answer stay unacknowledged — the request may still be paused — and are reported", async () => {
     const { chrome, holder, operator } = await setUp();
     chrome.handlers.set("Fetch.failRequest", () => null);
-    const { cdp, indeterminate } = operator();
+    const { cdp, indeterminate, resolved } = operator();
     await cdp.connect();
     chrome.event("Fetch.requestPaused", { requestId: "interception-3", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
     await until(() => indeterminate.length === 1, 3000, "the unanswered resolution");
     expect(indeterminate).toEqual(["interception-3"]);
+    expect(resolved).toEqual([["interception-3", "fail", "unanswered"]]);
     expect(holder.holder?.stats.stored).toBe(1);
   });
 
   it("whose resolution Chrome refuses (the pause is gone) are acknowledged", async () => {
     const { chrome, holder, operator } = await setUp();
     chrome.handlers.set("Fetch.failRequest", () => ({ error: { code: -32602, message: "Invalid InterceptionId." } }));
-    const { cdp, indeterminate } = operator();
+    const { cdp, indeterminate, resolved } = operator();
     await cdp.connect();
     chrome.event("Fetch.requestPaused", { requestId: "interception-4", request: { url: "https://fansly.com/", method: "GET" }, resourceType: "Document" });
-    await until(() => holder.holder?.stats.stored === 0, 2000, "the acknowledgement");
+    await until(() => resolved.length === 1 && holder.holder?.stats.stored === 0, 2000, "the acknowledgement");
     expect(indeterminate).toEqual([]);
+    expect(resolved).toEqual([["interception-4", "fail", "refused"]]);
   });
 
   it("held by the path that owns them are resolved by it later — the response stage too — and acknowledged only then", async () => {

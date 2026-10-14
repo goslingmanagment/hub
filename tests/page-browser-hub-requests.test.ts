@@ -73,7 +73,7 @@ interface World {
   ready: { why: string | null };
 }
 
-async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; capBytes?: number; noSession?: boolean; dir?: string } = {}): Promise<World> {
+async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string } = {}): Promise<World> {
   let dir = options.dir;
   if (dir === undefined) {
     const temp = tempDir("pb-hub-");
@@ -83,7 +83,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
   const lines: string[] = [];
   setLogSink((line) => lines.push(line));
   const cdp = new FakeCdpPort();
-  const gate = new ApiGate(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {});
+  const gate = new ApiGate({ ...(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) });
   const chrome = new HubChrome(cdp, gate);
   gate.cut = () => chrome.cut("api");
   gate.cutHeld = () => 0;
@@ -290,6 +290,62 @@ describe("a Hub request (plan §4.2)", () => {
     expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
     expect(w.chrome.wire).toEqual([]);
     expect(w.faults).toEqual([]);
+  });
+
+  it("one admitted request of the page at a time: a second admission while the first is unfinished — its admission ran out unsent, Chrome still holds it — is not released (not sent, \"pace\"); nothing goes late; once the first ended, the next goes", async () => {
+    const w = await world();
+    let deadlineMs = 150;
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
+    // The first: released, its records written only after its deadline.
+    const first = send(w, {}, { sendDelayMs: 400 });
+    await until(() => w.cdp.sent("Fetch.continueRequest").length === 1, 3000, "the first released");
+    // An engine that admits the next one meanwhile.
+    deadlineMs = 15_000;
+    const second = send(w);
+    expect(await outcomeOf(w, second.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
+    // Failed in its pause with the gate's reason (the journal's line), not
+    // as an attempt that merely ended.
+    expect(w.cdp.sent("Fetch.failRequest").at(-1)?.params.errorReason).toBe("Failed");
+    // The first never goes: not in its window, not in another's.
+    expect(await outcomeOf(w, first.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "send_deadline_passed" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(w.chrome.wire).toEqual([]);
+    // Its end known, the next one goes.
+    const third = send(w);
+    expect(await outcomeOf(w, third.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(w.chrome.wire.map((request) => request.attemptId)).toEqual([third.attemptId]);
+  });
+
+  it("its request cancelled before its release while its preflight is released and held: the attempt ends, the slot does not — the next admission is refused, the preflight never goes; past the slot's bound, a fault (Astra's 1)", async () => {
+    const w = await world({ slotLimitMs: 400 });
+    const unended: string[] = [];
+    w.gate.onUnended = (operation) => unended.push(operation);
+    let deadlineMs = 300;
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
+    // The preflight released; its connection comes only after the deadline.
+    const first = send(w, {}, { preflight: 204, sendDelayMs: 700 });
+    await until(() => w.cdp.sent("Fetch.continueRequest").length === 1, 3000, "the preflight released");
+    const main = w.chrome.requestsOf(first.attemptId).find((request) => request.role === "main")!;
+    // The page cancels the request while its preflight is in flight.
+    w.cdp.emit("Network.loadingFailed", { requestId: main.networkId, errorText: "net::ERR_ABORTED", canceled: true }, w.chrome.session);
+    expect((await outcomeOf(w, first.attemptId)).kind).not.toBe("response");
+    expect(w.gate.slotOwner).toBe(`hub:${first.attemptId}`);
+    // An engine that admits the next one meanwhile: refused, not sent.
+    deadlineMs = 15_000;
+    const second = send(w);
+    expect(await outcomeOf(w, second.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    // The preflight's connection comes after its deadline: nothing goes.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(w.chrome.wire).toEqual([]);
+    // Past the bound with its end unknown: a fault; the slot stays until Chrome is gone.
+    await until(() => unended.length === 1, 3000, "the slot's bound");
+    expect(unended).toEqual([`hub:${first.attemptId}`]);
+    expect(w.gate.slotOwner).toBe(`hub:${first.attemptId}`);
+    w.gate.browserGone();
+    const third = send(w);
+    expect(await outcomeOf(w, third.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(w.chrome.wire.map((request) => request.attemptId)).toEqual([third.attemptId]);
   });
 
   // Astra's review of PR 15, round 5: every instant the operator reports is

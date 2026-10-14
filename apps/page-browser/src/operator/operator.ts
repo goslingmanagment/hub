@@ -118,6 +118,7 @@ import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
 import { ExtensionFiles } from "../egress/extension-files.ts";
+import { ApiGate, SLOT_LIMIT_MS } from "../egress/gate.ts";
 import { classifyFanslyHost, FANSLY_HOSTS, type HostClassifier } from "../egress/hosts.ts";
 import { Egress } from "../egress/proxy.ts";
 import { SocksError, type SocksConfig } from "../egress/socks5.ts";
@@ -162,6 +163,8 @@ export interface OperatorTimings {
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
+  /** The page's slot past its admission's deadline (egress/gate.ts). */
+  slotLimitMs: number;
 }
 
 const DEFAULT_TIMINGS: OperatorTimings = {
@@ -179,6 +182,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   quitWaitMs: 5000,
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
+  slotLimitMs: SLOT_LIMIT_MS,
 };
 
 /** The site the work tab loads (plan §4.1, step 8). */
@@ -366,6 +370,7 @@ export class Operator {
     // The rules extension's package, for Chrome's policy (PR 6).
     this.extension = new ExtensionFiles(this.config.extensionDir, this.#log);
     this.egress = new Egress({
+      gate: new ApiGate({ slotLimitMs: this.#timings.slotLimitMs }),
       classify: this.#classify,
       serve: (req, res) => this.extension.serve(req, res),
       admitSocket: (host, port) => this.sockets.admit(host, port),
@@ -410,6 +415,14 @@ export class Operator {
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
       onDecided: (request, decision) => this.#journalRequest(request, decision),
+      // An answer resolved at the response stage — and confirmed by Chrome,
+      // never merely decided — ends its request for the page's slot,
+      // whoever decided it (a path, or a decision for an operation that
+      // already ended). Unanswered or refused, the request stays pending
+      // and the slot's bound runs.
+      onResolved: (request, decision, resolution) => {
+        if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.egress.gate.requestEnded(request.networkId);
+      },
       // With CDP or the holder link down, their own loss handles it; with
       // both up, Chrome is not answering for its paused requests.
       onIndeterminate: (_request, why) => {
@@ -631,6 +644,12 @@ export class Operator {
       this.site.onGateEvent(event);
       if (event.kind !== "first_bytes" && event.kind !== "announced") this.#log("gate", { kind: event.kind, window: event.window, ...event.detail });
     };
+    // The page's slot past its bound with an end unknown: fail closed — the
+    // exit closes and Chrome goes (the slot is freed only then).
+    this.egress.gate.onUnended = (operation, pending) => {
+      this.#log("slot.unended", { operation, pending: pending.length });
+      this.#requestFault("request_unended", `${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
+    };
   }
 
   /** Listen (the exit closed), link to the holder, and stand until the
@@ -836,6 +855,8 @@ export class Operator {
       // starts with a fresh one.
       await this.#withChrome(async () => {
         if (await this.chrome.isUp()) await this.#stopChrome("a start begins with a fresh Chrome");
+        // No Chrome now: nothing it held can go any more.
+        this.egress.gate.browserGone();
       });
       check();
       if (!(await this.#waitUntil(() => !this.cdp.cdpUp, 3000))) throw new StartFailure("cdp_lost", "the holder still holds the previous Chrome");
@@ -1138,7 +1159,9 @@ export class Operator {
     if (run !== this.#run) return;
     this.#controlExpected = false;
     await this.#withChrome(async () => {
-      if (run === this.#run) await this.chrome.kill();
+      if (run !== this.#run) return;
+      await this.chrome.kill();
+      this.egress.gate.browserGone();
     }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run) return;
     this.control.reset();
@@ -1163,7 +1186,10 @@ export class Operator {
     if (why === "cdp_lost" && wasControlled && !(await this.chrome.isUp().catch(() => true))) why = "chrome_crashed";
     if (run !== this.#run) return;
     const retryAtWall = this.page.fail(why, note);
-    await this.#withChrome(() => this.chrome.kill()).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
+    await this.#withChrome(async () => {
+      await this.chrome.kill();
+      this.egress.gate.browserGone();
+    }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run || this.#stopped) return; // a newer start took over meanwhile
     this.control.reset();
     this.#retryTimer = setTimeout(() => void this.#launch(false, `a retry after ${why}`), Math.max(0, retryAtWall - Date.now()));
@@ -1182,7 +1208,10 @@ export class Operator {
     this.page.halt(reason, note);
     this.#controlExpected = false;
     try {
-      await this.#withChrome(() => (how === "stop" ? this.#stopChrome(note) : this.chrome.kill()));
+      await this.#withChrome(async () => {
+        await (how === "stop" ? this.#stopChrome(note) : this.chrome.kill());
+        this.egress.gate.browserGone();
+      });
     } catch (error) {
       this.#log("chrome.stop_failed", { error: errorMessage(error) });
     }
@@ -1456,6 +1485,10 @@ export class Operator {
 
   async #openExitCommand(): Promise<CommandOutcome> {
     if (this.page.halted) return { ok: false, detail: `the page is stopped (${this.page.snapshot.stopReason ?? "?"}): restartBrowser starts it` };
+    // The same Chrome may still hold a request released before the close:
+    // the exit opens only once every one has its end (or Chrome went).
+    const owner = this.egress.gate.slotOwner;
+    if (owner !== null) return { ok: false, detail: `a request released before the exit closed has no end yet (${owner}): restartBrowser starts the page with a fresh Chrome` };
     this.#exitHeld = false;
     if (this.#starting) return { ok: true, detail: "the running start opens it" };
     if (atLeast(this.page.step, "exit_open")) return { ok: true, detail: "the exit is open" };

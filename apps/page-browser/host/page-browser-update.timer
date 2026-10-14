@@ -1,0 +1,13 @@
+# Project Browser — once a day, at night (UTC), the look for a new Chrome
+# (page-browser-update.service). Installed by deploy-page-browser.sh host;
+# enabled by the owner: systemctl enable --now page-browser-update.timer
+[Unit]
+Description=Project Browser: the daily look for a newer Chrome
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 UTC
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

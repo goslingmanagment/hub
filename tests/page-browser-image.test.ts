@@ -287,9 +287,11 @@ describe("a page's container on the server (page.sh)", () => {
     expect(page).toContain('switch_to "rollback to $previous"');
     const switchTo = page.slice(page.indexOf("switch_to() {"), page.indexOf("\n}\n", page.indexOf("switch_to() {")));
     // The host's rules admit the candidate before it starts; failing, nothing changes.
-    expect(switchTo.indexOf('egress-rules.sh" apply')).toBeLessThan(switchTo.indexOf('compose_with "$next" up'));
+    expect(switchTo.indexOf('egress-rules.sh" apply')).toBeLessThan(switchTo.indexOf('start_state "$next"'));
     expect(switchTo.indexOf("healthy")).toBeLessThan(switchTo.indexOf('mv "$next" "$(env_file)"'));
-    expect(switchTo).toContain('compose_with "$(env_file)" up -d --force-recreate --no-build');
+    expect(switchTo).toContain('start_state "$(env_file)"');
+    // Every start of a container goes through start_state (PR 18): the guard, then Compose.
+    expect(page.match(/compose_with "\$[^"]*" up /g)).toEqual(['compose_with "$env" up ']);
     expect(read("apps/page-browser/host/egress-rules.sh")).toContain('"$BASE"/pages/*/page.env "$BASE"/pages/*/page.env.next');
   });
 
