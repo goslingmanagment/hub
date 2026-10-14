@@ -1,7 +1,9 @@
+import { Link } from "react-router";
+
 import { usePageSyncBlocks, useSyncHistoryRequests } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
-import { syncSettingsTab } from "@/lib/navigation";
+import { buildPageSectionRoute, syncSettingsTab } from "@/lib/navigation";
 import { SyncBackButton, SyncPageOnOtherTab, SyncPageTitle } from "../sync/SyncPageParts.js";
 import { EngineBlockCard, EnginePageAttention } from "./EngineBlocks.js";
 import { EnginePageMode, EnginePageStatusBody } from "./EnginePageCard.js";
@@ -66,6 +68,10 @@ export function EnginePageDetail({ pageLabel, onBack }: { pageLabel: string; onB
         <div className="flex flex-wrap items-center gap-2">
           <SyncPageTitle page={page} />
           <EnginePageMode state={state} />
+          {/* Project Browser PR 15: the page's server browser and its login. */}
+          <Link to={buildPageSectionRoute(pageLabel, "browser-login")} className="ml-auto text-xs font-medium text-accent hover:underline">
+            Вход в браузер &rarr;
+          </Link>
         </div>
       </div>
       <div className="space-y-3">

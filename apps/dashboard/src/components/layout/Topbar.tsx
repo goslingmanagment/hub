@@ -199,6 +199,8 @@ function buildBreadcrumbs(
       crumbs.push({ label: "Deleted Fans" });
     } else if (parts[2] === "spender-autolists") {
       crumbs.push({ label: "Auto List" });
+    } else if (parts[2] === "browser-login") {
+      crumbs.push({ label: "Вход в браузер" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
       const fanLabel = resolveFanLabelFromState(locationState) ?? decodeRouteSegment(parts[4]);
       crumbs.push({ label: fanLabel });

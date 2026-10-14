@@ -34,6 +34,7 @@ const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage.js").then((m) => 
 const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m) => ({ default: m.IncidentsPage })));
 const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((m) => ({ default: m.SyncStatusPage })));
 const ClientHealthPage = lazy(() => import("./pages/dev/ClientHealthPage.js").then((m) => ({ default: m.ClientHealthPage })));
+const PageBrowserLoginPage = lazy(() => import("./pages/page-browser/PageBrowserLoginPage.js").then((m) => ({ default: m.PageBrowserLoginPage })));
 
 function LazyFallback() {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
@@ -61,6 +62,8 @@ export function App() {
             <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
             <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
             <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
+            {/* Project Browser PR 15: the owner logs a page's server browser in. */}
+            <Route path="pages/:pageLabel/browser-login" element={<OwnerRoute><PageBrowserLoginPage /></OwnerRoute>} />
             <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
             <Route path="ofapi-media" element={<OfapiMediaPage />} />
             <Route path="ofapi-marketing" element={<OwnerRoute><OfapiMarketing /></OwnerRoute>} />
