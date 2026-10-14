@@ -893,7 +893,7 @@ export class SiteRequests {
     }
     const phys: Physical = { role, networkId: request.networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, timingMono: null, status: null, headers: [] };
     // The window right before the release (spec §9).
-    const opened = this.#deps.gate.open(phys.window, op.deadline!, request.bodyBytes);
+    const opened = this.#deps.gate.open(phys.window, op.deadline!, request.bodyBytes, request.networkId);
     if (!opened.ok) {
       op.held.add(request);
       return this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: `the gate refused the request: ${opened.reason}` });
@@ -907,7 +907,7 @@ export class SiteRequests {
     this.#armRequestDeadline(op);
     op.held.delete(request);
     this.#log("release", { siteRequestId: op.id, attemptId: op.attemptId, role });
-    const resolution = await this.#deps.resolve(request, { action: "continue", params: { interceptResponse: true } });
+    const resolution = await this.#resolve(request, { action: "continue", params: { interceptResponse: true } });
     if (resolution === "refused" && !op.done) {
       // The pause was gone (the page dropped the request): it never left.
       phys.released = false;
@@ -929,7 +929,7 @@ export class SiteRequests {
     op.held.delete(request);
     const phrase = response.statusText ? { phrase: response.statusText } : {};
     if (phys.role === "preflight") {
-      await this.#deps.resolve(request, { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a site request's preflight answer, handed on", ...phrase });
+      await this.#resolve(request, { action: "fulfill", status: response.status, headers: response.headers, body: "", why: "a site request's preflight answer, handed on", ...phrase });
       if (op.done) return;
       // The preflight's end, by the sender's word (Chrome 155 tells no other
       // of one handed on so).
@@ -946,7 +946,7 @@ export class SiteRequests {
       op.capture?.writer?.abandon();
       if (op.capture) op.capture.writer = null;
       this.#finish(op, { status: response.status, headers: response.headers, preflightAnswer: false, whole: true, empty: true, error: null });
-      await this.#deps.resolve(request, { action: "fulfill", status: response.status, headers: response.headers.filter((entry) => entry.name.toLowerCase() !== "location"), body: "", why: "a site request's redirect, answered as final", ...phrase });
+      await this.#resolve(request, { action: "fulfill", status: response.status, headers: response.headers.filter((entry) => entry.name.toLowerCase() !== "location"), body: "", why: "a site request's redirect, answered as final", ...phrase });
       return;
     }
     const capture = op.capture;
@@ -957,10 +957,10 @@ export class SiteRequests {
       if (!capture.armed) capture.broken ??= "the body's stream could not be armed";
     }
     if (op.done) {
-      await this.#deps.resolve(request, { action: "fail", reason: "Aborted", why: "its operation ended" });
+      await this.#resolve(request, { action: "fail", reason: "Aborted", why: "its operation ended" });
       return;
     }
-    await this.#deps.resolve(request, { action: "continueResponse" });
+    await this.#resolve(request, { action: "continueResponse" });
   }
 
   // ── the body's stream ──────────────────────────────────────────────────
@@ -1130,6 +1130,9 @@ export class SiteRequests {
 
   #onFinished(event: CdpEvent): void {
     const params = event.params as { requestId?: unknown; encodedDataLength?: unknown };
+    // Chrome's end of this very request, for the page's slot (gate.ts) —
+    // whatever became of its operation.
+    if (typeof params.requestId === "string") this.#deps.gate.requestEnded(params.requestId);
     if (typeof params.requestId === "string") this.#passedEnd(params.requestId, "finished", typeof params.encodedDataLength === "number" ? params.encodedDataLength : null);
     const found = this.#physical(params.requestId);
     if (!found) return;
@@ -1146,6 +1149,7 @@ export class SiteRequests {
 
   #onFailed(event: CdpEvent): void {
     const params = event.params as { requestId?: unknown; errorText?: unknown; canceled?: unknown };
+    if (typeof params.requestId === "string") this.#deps.gate.requestEnded(params.requestId);
     if (typeof params.requestId === "string") this.#passedEnd(params.requestId, String(params.errorText ?? "failed"), null);
     const found = this.#physical(params.requestId);
     if (!found) return;
@@ -1269,6 +1273,8 @@ export class SiteRequests {
     if (op.limitTimer) clearTimeout(op.limitTimer);
     op.limitTimer = null;
     for (const phys of [op.preflight, op.main]) if (phys) this.#deps.gate.close(phys.window);
+    // The slot is free once every request it released has its end (gate.ts).
+    this.#deps.gate.operationEnded(`site:${op.id}`);
     // A pause still held is failed: nothing of an ended operation goes.
     const failReason = end.error !== null && stage !== "released" ? "Failed" : "Aborted";
     for (const request of [...op.held]) void this.#failHeld(op, request, failReason, end.error ?? "its operation ended");
@@ -1374,9 +1380,21 @@ export class SiteRequests {
     });
   }
 
+  /** The paths' resolution of a pause, and the request's end for the page's
+   *  slot (egress/gate.ts): an answer resolved at the response stage (a
+   *  preflight handed on by fulfill has no other end), or a release whose
+   *  pause was already gone (it never left). An unanswered resolution says
+   *  nothing: the request may still be Chrome's. */
+  async #resolve(request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>): Promise<Resolution> {
+    const resolution = await this.#deps.resolve(request, decision);
+    const atResponse = request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill") && resolution !== "unanswered";
+    if (atResponse || (decision.action === "continue" && resolution === "refused")) this.#deps.gate.requestEnded(request.networkId);
+    return resolution;
+  }
+
   async #failHeld(op: SiteOp, request: PausedRequest, reason: "Aborted" | "Failed", why: string): Promise<void> {
     op.held.delete(request);
-    await this.#deps.resolve(request, { action: "fail", reason, why });
+    await this.#resolve(request, { action: "fail", reason, why });
   }
 
   /** Requests of replaced documents that wait are failed now: released

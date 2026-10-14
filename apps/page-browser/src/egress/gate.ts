@@ -39,18 +39,26 @@
 //   when the window closes: Chrome finishes such a connection later, and it
 //   would take the next window's one new connection — or pass for that
 //   window's request (stage 1, amendment 21).
-// - One admitted request of the page at a time, kept here and not only
+// - One admitted operation of the page at a time, kept here and not only
 //   taken from the engine (the owner's rule: one managed request in flight
-//   per page): a window opens only while no other operation's request is
-//   unfinished — its window not closed, or closed at its deadline with its
-//   end not known yet (Chrome may still hold it, unwritten, and write it
-//   into the next window's new connection, where it would pass for that
-//   window's request: two overlapping admissions on stand t9 let a Hub
-//   preflight go 3.8 s and a site preflight 13.7 s past their deadlines).
-//   Unfinished until the path closes its window (`close`): at the end Chrome
-//   reports, or at its operation's end. A preflight and its request are one
-//   operation (owner decision №1). Refused, the request is not released:
-//   the path ends it not sent (fail closed).
+//   per page). The page's slot is the operation's from its first release
+//   until its path has ended it and every request it released has its end
+//   confirmed: Chrome's loadingFinished or loadingFailed for that very
+//   request, or its answer resolved at the response stage (a preflight
+//   handed on by fulfill has no other end in Chrome 155) — or until Chrome
+//   is gone (`browserGone`). Nothing else frees it: not a window's close, a
+//   preflight's end while its request is still to come, a sibling's cancel,
+//   the operation's own end, the exit's close, a reset. Another operation's
+//   window is refused while it is owned: Chrome may still hold a released
+//   request unwritten and write it into the next window's new connection,
+//   where it would pass for that window's request (two overlapping
+//   admissions on stand t9 let a Hub preflight go 3.8 s and a site
+//   preflight 13.7 s past their deadlines). Refused, the request is not
+//   released: the path ends it not sent (fail closed). The slot's bound —
+//   its admission's deadline and the operation's limit (`slotLimitMs`) —
+//   passing with an end still unknown is a fault (`onUnended`): the exit
+//   closes and Chrome goes, never the slot just cleared. A preflight and its
+//   request are one operation (owner decision №1).
 //
 // What stays open (spec §9, owner decisions №10 and №1б): a request Chrome
 // releases by itself in the very moment a window opens can take the window's
@@ -114,13 +122,29 @@ export function operationOf(windowId: string): string {
   return windowId.replace(/:(?:preflight|main)$/, "");
 }
 
-/** The open's refusal while another operation's request is unfinished. */
+/** The open's refusal while the page's slot is another operation's. */
 export const IN_FLIGHT_REFUSAL = "another admitted request of the page is unfinished: one at a time";
+
+/** The slot's bound past its admission's deadline: the operation's limit
+ *  (21 s, hub-requests/hub.ts and intercept/site.ts `opLimitMs`) and a
+ *  second for the path's own limit to act first. */
+export const SLOT_LIMIT_MS = 22_000;
+
+/** The page's slot: the operation that owns it, what of it was released and
+ *  has no confirmed end, whether its path ended it. */
+interface Slot {
+  operation: string;
+  pending: Set<string>;
+  ended: boolean;
+  boundMono: number;
+  timer: NodeJS.Timeout | null;
+}
 
 export interface GateOptions {
   /** CLOCK_MONOTONIC ms (tests use their own clock). */
   now?: () => number;
   noResponseMs?: number;
+  slotLimitMs?: number;
 }
 
 export class ApiGate {
@@ -131,21 +155,24 @@ export class ApiGate {
   /** Cut one API tunnel; returns whether it was there. */
   cutTunnel: (tunnel: number, reason: string) => boolean = () => false;
   onEvent: (event: GateEvent) => void = () => undefined;
+  /** The slot's bound passed with an end unknown: the caller closes the exit
+   *  and lets Chrome go (the slot stays the operation's until then). */
+  onUnended: (operation: string, pending: string[]) => void = () => undefined;
 
   readonly #now: () => number;
   readonly #noResponseMs: number;
+  readonly #slotLimitMs: number;
   #phase: GatePhase = "closed";
   #window: Window | null = null;
   #deadlineTimer: NodeJS.Timeout | null = null;
   #noResponseTimer: NodeJS.Timeout | null = null;
   #lastSend: { mono: number; wall: number } | null = null;
-  /** The last window opened whose request's end is not known yet (its
-   *  window may have closed at the deadline). */
-  #unfinished: string | null = null;
+  #slot: Slot | null = null;
 
   constructor(options: GateOptions = {}) {
     this.#now = options.now ?? monoMs;
     this.#noResponseMs = options.noResponseMs ?? NO_RESPONSE_MS;
+    this.#slotLimitMs = options.slotLimitMs ?? SLOT_LIMIT_MS;
   }
 
   get state(): { phase: GatePhase; window: string | null; deadline: number | null } {
@@ -161,18 +188,19 @@ export class ApiGate {
    *  follows): its window, until `deadlineMono`. `bodyBytes`: its body
    *  (0 = none, null = of unknown length). Refused — the request must then
    *  not be released — for a body the gate cannot count or a deadline gone. */
-  open(id: string, deadlineMono: number, bodyBytes: number | null): { ok: true } | { ok: false; reason: string; inFlight?: string } {
+  open(id: string, deadlineMono: number, bodyBytes: number | null, request: string | null = null): { ok: true } | { ok: false; reason: string; inFlight?: string } {
     if (bodyBytes === null) return { ok: false, reason: "a body of unknown length" };
     if (bodyBytes > MAX_BODY_BYTES) return { ok: false, reason: `a body of ${bodyBytes} bytes, over ${MAX_BODY_BYTES}` };
     const now = this.#now();
     if (!(deadlineMono > now)) return { ok: false, reason: "the admission's deadline has passed" };
-    const unfinished = this.#unfinished;
-    if (unfinished !== null && operationOf(unfinished) !== operationOf(id)) {
-      // Nothing is changed: the unfinished window stays as it is.
-      this.onEvent({ kind: "in_flight_refused", window: id, detail: { unfinished, phase: this.#phase } });
-      return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${unfinished})`, inFlight: unfinished };
+    const operation = operationOf(id);
+    const owned = this.#slot;
+    if (owned !== null && owned.operation !== operation) {
+      // Nothing is changed: the slot stays its owner's.
+      this.onEvent({ kind: "in_flight_refused", window: id, detail: { owner: owned.operation, pending: owned.pending.size, ended: owned.ended, phase: this.#phase } });
+      return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${owned.operation})`, inFlight: owned.operation };
     }
-    this.#unfinished = id;
+    this.#take(operation, deadlineMono, request ?? `window ${id}`);
     this.#clearTimers();
     // Whatever a tunnel still holds was never admitted.
     const cut = this.cutHeld("gate: bytes held from before this window");
@@ -268,9 +296,9 @@ export class ApiGate {
     this.#phase = "responding";
   }
 
-  /** The request finished (or its operation was closed): its end is known. */
+  /** The window's request finished, or its operation was closed: the window
+   *  closes (the page's slot is apart: `requestEnded`, `operationEnded`). */
   close(id: string): void {
-    if (this.#unfinished === id) this.#unfinished = null;
     const w = this.#window;
     if (w?.id !== id) return;
     this.#clearTimers();
@@ -281,14 +309,70 @@ export class ApiGate {
     }
   }
 
-  /** The window whose request's end is not known yet, if any. */
-  get unfinished(): string | null {
-    return this.#unfinished;
+  // ── the page's slot ────────────────────────────────────────────────────
+
+  /** The operation that owns the page's slot, if any. */
+  get slotOwner(): string | null {
+    return this.#slot?.operation ?? null;
   }
 
-  /** The exit closed or control was lost: no window any more. What was
-   *  unfinished stays so until its path closes it (at its end, or at its
-   *  operation's: a page that stops ends every operation). */
+  /** Released requests of the owner without a confirmed end (tests). */
+  get slotPending(): string[] {
+    return [...(this.#slot?.pending ?? [])];
+  }
+
+  /** A request released under the slot has its end confirmed: Chrome's
+   *  loadingFinished or loadingFailed for it, or its answer resolved at the
+   *  response stage, or its pause gone before its release. */
+  requestEnded(request: string | null): void {
+    const slot = this.#slot;
+    if (slot === null || request === null || !slot.pending.delete(request)) return;
+    this.#freeIfDone();
+  }
+
+  /** The operation's path ended it (its outcome decided): the slot is free
+   *  once every request it released has its end confirmed. */
+  operationEnded(operation: string): void {
+    const slot = this.#slot;
+    if (slot === null || slot.operation !== operation) return;
+    slot.ended = true;
+    this.#freeIfDone();
+  }
+
+  /** Chrome is gone (killed, stopped, crashed and reaped): whatever it held
+   *  is gone with it. */
+  browserGone(): void {
+    if (this.#slot?.timer) clearTimeout(this.#slot.timer);
+    this.#slot = null;
+  }
+
+  #take(operation: string, deadlineMono: number, request: string): void {
+    let slot = this.#slot;
+    if (slot === null) {
+      slot = { operation, pending: new Set(), ended: false, boundMono: deadlineMono + this.#slotLimitMs, timer: null };
+      this.#slot = slot;
+      const owned = slot;
+      owned.timer = setTimeout(() => this.#onBound(owned), Math.max(0, owned.boundMono - this.#now()));
+    }
+    slot.pending.add(request);
+  }
+
+  #freeIfDone(): void {
+    const slot = this.#slot;
+    if (slot === null || !slot.ended || slot.pending.size > 0) return;
+    if (slot.timer) clearTimeout(slot.timer);
+    this.#slot = null;
+  }
+
+  #onBound(slot: Slot): void {
+    slot.timer = null;
+    if (this.#slot !== slot) return;
+    // Not cleared: it stays the operation's until Chrome is gone.
+    this.onUnended(slot.operation, [...slot.pending]);
+  }
+
+  /** The exit closed or control was lost: no window any more. The page's
+   *  slot stays its owner's (`browserGone` frees it, or every end). */
   reset(): void {
     this.#clearTimers();
     this.#phase = "closed";

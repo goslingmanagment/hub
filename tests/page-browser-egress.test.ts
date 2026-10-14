@@ -250,6 +250,9 @@ describe("the gate at the proxy", () => {
     // The next window: what the tunnel holds was never admitted — cut, not flushed.
     const closed = new Promise((resolve) => socket.once("close", resolve));
     egress.gate.close("w1");
+    // Its operation over (its request's end, its path's end): the slot is free.
+    egress.gate.requestEnded("window w1");
+    egress.gate.operationEnded("w1");
     egress.gate.open("w2", monoMs() + 15_000, 0);
     await closed;
     expect(server.received().length).toBe(sent + ping.length);

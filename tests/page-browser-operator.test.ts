@@ -95,6 +95,8 @@ async function setUp(
     siteTimings?: OperatorDeps["siteTimings"];
     /** How long the site's document may take (30 s in the operator). */
     siteLoadMs?: number;
+    /** The page's slot past its admission's deadline (22 s in the operator). */
+    slotLimitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
   } = {},
@@ -154,7 +156,7 @@ async function setUp(
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -1575,6 +1577,48 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(answered).toBeLessThan(reload);
     expect(s.operator.page.snapshot.stopReason).toBeNull();
     expect(s.engine.of("state").every((state) => state.stopReason === null)).toBe(true);
+  });
+
+  it("the engine's closeExit keeps the page's slot while a released request of the site has no end: openExit is refused until Chrome is started anew (Astra's 2)", async () => {
+    let attempt = 9600;
+    const s = await siteSetUp(() => ({ admit: ++attempt }));
+    // A request of the site released; its answer does not come.
+    s.model.siteAnswerDelayMs = 60_000;
+    const flying = read(s, "/api/v1/notifications");
+    // Its tunnel up and its records written: Chrome waits for the answer.
+    await until(() => flying.proxyStatus === 200 && s.model.requests.includes(flying) && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    expect(owner).toMatch(/^site:/);
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    // The site's operations are ended (told not sent); the slot is kept.
+    expect(s.operator.site.live).toBe(0);
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    expect(await command(s.engine, "openExit")).toMatchObject({ ok: false, detail: expect.stringContaining(`has no end yet (${owner})`) });
+    expect(s.operator.egress.exitOpen).toBe(false);
+    // A fresh Chrome: nothing of the old one can go; the page comes up.
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded" && s.operator.egress.exitOpen, 10_000, "the page anew");
+    expect(s.operator.egress.gate.slotOwner).toBeNull();
+  });
+
+  it("the page's slot past its bound with a released request's end unknown: the page stops (request_unended), Chrome goes, and only then is the slot free", async () => {
+    let attempt = 9700;
+    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
+    // Admissions of 1 s here.
+    const answer = s.engine.onMessage;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: true, deadlineMono: monoMs() + 1000, attemptId: ++attempt });
+      else answer?.(message);
+    };
+    s.model.siteAnswerDelayMs = 60_000;
+    const flying = read(s, "/api/v1/notifications");
+    await until(() => flying.proxyStatus === 200 && s.operator.egress.gate.state.phase !== "open", 3000, "the request in flight");
+    const owner = s.operator.egress.gate.slotOwner;
+    expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
+    expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 5000, "the stop past the bound");
+    expect(s.lines.join("\n")).toContain('"e":"slot.unended"');
+    await until(() => s.operator.egress.gate.slotOwner === null, 5000, "Chrome gone, the slot free");
   });
 
   it("waits for the engine: a new connection is asked again by the same id; the wait is the engine's parameter, and past it the request fails (Failed)", async () => {
