@@ -1135,6 +1135,16 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
   } satisfies AuthPrincipal;
 }
 
+/** The session is still an owner's: not revoked, not expired, its user an
+ *  active owner. Reads only (no touch): for a check that repeats while a
+ *  connection the session opened lives (the page browser's screen). */
+export async function isLiveOwnerSession(app: AppContext, sessionToken: string): Promise<boolean> {
+  const session = await findAuthSessionByDigest(app.db, sha256Hex(sessionToken));
+  if (!session || session.revokedAt || session.expiresAt <= new Date()) return false;
+  const user = await getAuthenticatedUserById(app, session.userId);
+  return user !== null && user.role === "owner";
+}
+
 export async function logoutSessionToken(app: AppContext, sessionToken: string) {
   const session = await findAuthSessionByDigest(app.db, sha256Hex(sessionToken));
   if (!session || session.revokedAt) {

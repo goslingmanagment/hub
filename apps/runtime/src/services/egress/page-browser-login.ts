@@ -209,7 +209,7 @@ export function proxyScreenRequest(input: { req: IncomingMessage; res: ServerRes
 /** The screen's WebSocket (an upgrade of the owner's request), passed to
  *  the page's KasmVNC as a TCP stream once the request line and its headers
  *  — the screen's password in, the owner's cookie out — went ahead. */
-export function proxyScreenUpgrade(input: { req: IncomingMessage; socket: Duplex; head: Buffer; target: { host: string; port: number }; path: string; password: string }): void {
+export function proxyScreenUpgrade(input: { req: IncomingMessage; socket: Duplex; head: Buffer; target: { host: string; port: number }; path: string; password: string; onClose?: () => void }): { close(): void } {
   const { req, socket } = input;
   socket.on("error", () => undefined);
   const upstream = tcpConnect({ host: input.target.host, port: input.target.port }, () => {
@@ -230,12 +230,17 @@ export function proxyScreenUpgrade(input: { req: IncomingMessage; socket: Duplex
   });
   // Either side's end is the stream's: both go (an HTTP server's socket
   // stays half-open after its peer's end, and would never close).
+  let closed = false;
   const both = () => {
     upstream.destroy();
     socket.destroy();
+    if (closed) return;
+    closed = true;
+    input.onClose?.();
   };
   upstream.on("close", both);
   upstream.on("end", both);
   socket.on("close", both);
   socket.on("end", both);
+  return { close: both };
 }
