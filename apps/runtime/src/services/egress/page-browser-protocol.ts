@@ -165,6 +165,11 @@ export interface State {
    *  halt is cleared (`clearHalt` with its id). `null`: none. Absent: an
    *  operator from before — it holds nothing and takes no `clearHalt`. */
   halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
+  /** (Minor 1, PR 17.) The id of the last halt cleared — by the owner's
+   *  clearHalt, or by the operator once the expected account was confirmed
+   *  after his login — kept with the halt across restarts. Hub lets its
+   *  mirror of a halt go only on this word. */
+  lastClearedHaltId?: string | null;
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -505,6 +510,7 @@ function parseState(m: Record<string, unknown>): State {
     },
     selfTest,
     ...(m.halt === undefined ? {} : { halt: m.halt === null ? null : parseHalt(m.halt) }),
+    ...(m.lastClearedHaltId === undefined ? {} : { lastClearedHaltId: m.lastClearedHaltId === null ? null : str(m.lastClearedHaltId, "lastClearedHaltId", 64) }),
   };
 }
 

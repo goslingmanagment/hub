@@ -241,6 +241,11 @@ export interface State {
    *  account is confirmed after a login). `null`: none. Absent: an operator
    *  from before the addition (it holds nothing, and takes no `clearHalt`). */
   halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
+  /** (Minor 1, PR 17.) The id of the last halt cleared — by the owner's
+   *  clearHalt, or by the operator once the expected account was confirmed
+   *  after his login — kept with the halt across restarts. Hub lets its
+   *  mirror of a halt go only on this word. */
+  lastClearedHaltId?: string | null;
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {

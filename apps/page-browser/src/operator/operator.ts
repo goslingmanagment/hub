@@ -378,6 +378,10 @@ export class Operator {
   /** The held halt is not on the volume yet (its write failed): tried again
    *  with every state the operator says. */
   #heldUnwritten = false;
+  /** The id of the last halt cleared (the owner's clearHalt, or the
+   *  operator's own login_required clearing), kept with the halt: Hub lets
+   *  its mirror of a halt go only on this word (Astra round 4). */
+  #lastClearedId: string | null = null;
   /** The id of the held `login_required` the owner's login was opened for:
    *  the expected account confirmed after it clears that halt. */
   #loginForHalt: string | null = null;
@@ -406,7 +410,9 @@ export class Operator {
     // The halt held from before this operator: read first — a file that
     // cannot be read stops the operator here (HaltFileUnreadable).
     this.#haltStore = deps.haltStore ?? new HaltStore(join(this.config.stateDir, "halt.json"));
-    this.#held = this.#haltStore.read();
+    const kept = this.#haltStore.read();
+    this.#held = kept.halt;
+    this.#lastClearedId = kept.lastClearedId;
 
     this.journals = new Journals({
       dir: this.config.logDir,
@@ -816,6 +822,7 @@ export class Operator {
       buffer: this.#bufferState(),
       selfTest: selfTest ? { ok: selfTest.ok, atWall: selfTest.atWall, failed: selfTest.failed, ...(notInstalled.length > 0 ? { notInstalled } : {}) } : null,
       halt: this.#held === null ? null : { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall },
+      lastClearedHaltId: this.#lastClearedId,
     };
   }
 
@@ -1439,7 +1446,7 @@ export class Operator {
    *  state (in memory it holds meanwhile). */
   #writeHeld(): boolean {
     try {
-      this.#haltStore.write(this.#held);
+      this.#haltStore.write({ halt: this.#held, lastClearedId: this.#lastClearedId });
       if (this.#heldUnwritten) this.#log("halt.written", { id: this.#held?.id ?? null });
       this.#heldUnwritten = false;
       return true;
@@ -1465,12 +1472,13 @@ export class Operator {
     const held = this.#held;
     if (held === null) return true;
     try {
-      this.#haltStore.write(null);
+      this.#haltStore.write({ halt: null, lastClearedId: held.id });
     } catch (error) {
       this.#log("halt.clear_unwritten", { id: held.id, error: errorMessage(error) });
       return false;
     }
     this.#held = null;
+    this.#lastClearedId = held.id;
     this.#heldUnwritten = false;
     this.#loginForHalt = null;
     this.#log("halt.cleared", { id: held.id, reason: held.reason, why });
@@ -1482,7 +1490,16 @@ export class Operator {
   /** The owner's `clearHalt` (his audited start): only the halt it names. */
   #clearHaltCommand(haltId: string): CommandOutcome {
     const held = this.#held;
-    if (held === null) return { ok: true, detail: "no halt is held" };
+    if (held === null) {
+      // The owner's word on a halt this operator does not hold (it was lost,
+      // or cleared already): said as cleared, so Hub's mirror of it goes.
+      if (this.#lastClearedId !== haltId) {
+        this.#lastClearedId = haltId;
+        this.#writeHeld();
+        this.#sendState();
+      }
+      return { ok: true, detail: "no halt is held" };
+    }
     if (held.id !== haltId) return { ok: false, detail: `the halt held is ${held.id} (${held.reason}), not ${haltId}: nothing cleared` };
     return this.#clearHeld("the owner's clearHalt")
       ? { ok: true, detail: `halt ${held.id} (${held.reason}) cleared` }

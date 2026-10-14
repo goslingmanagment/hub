@@ -782,7 +782,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
   it("a browser Fansly signed out (login_required held): started only for the owner's login, and that halt cleared by the operator once the expected account is confirmed after it (PR 17, Astra round 3)", async () => {
     const store = new HaltStore(null);
     const held = { id: randomUUID(), reason: "login_required" as const, atWall: Date.now() - 60_000 };
-    store.write(held);
+    store.write({ halt: held, lastClearedId: null });
     const s = await setUp({ haltStore: store });
     expect(s.operator.heldHalt).toEqual(held);
     let attempt = 7600;
@@ -811,7 +811,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     s.engine.send({ type: "send", ownerGeneration: 1, attemptId: 9701, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
     await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
     expect(s.operator.heldHalt).toBeNull();
-    expect(store.read()).toBeNull();
+    expect(store.read()).toEqual({ halt: null, lastClearedId: held.id });
     await s.engine.waitFor("state", (state) => state.halt === null && state.step === "ready", WAIT_MS);
   });
 

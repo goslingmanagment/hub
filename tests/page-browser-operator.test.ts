@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
 
@@ -12,7 +12,7 @@ import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
-import { HaltFileUnreadable, HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
+import { HaltFileUnreadable, HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -672,7 +672,7 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
     engine.send({ type: "command", ownerGeneration: engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: body });
     return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
   }
-  const heldOnDisk = (s: SetUp) => JSON.parse(readFileSync(join(s.dir, "state", "halt.json"), "utf8")) as { id: string; reason: string } | null;
+  const heldOnDisk = (s: SetUp) => new HaltStore(join(s.dir, "state", "halt.json")).read().halt;
 
   it("is on the volume before the browser stops, survives a restart of the operator, and refuses every start and the exit's opening until the owner's clearHalt names it; a stale id clears nothing", async () => {
     const s = await setUp({ exitIp: () => "198.51.100.9" });
@@ -718,7 +718,7 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
       exitIp: () => "198.51.100.9",
       prepare: ({ stateDir }) => {
         mkdirSync(stateDir, { recursive: true });
-        writeFileSync(join(stateDir, "halt.json"), `${JSON.stringify(loginRequired)}\n`);
+        new HaltStore(join(stateDir, "halt.json")).write({ halt: loginRequired as HeldHalt, lastClearedId: null });
       },
     });
     expect(s.operator.heldHalt).toEqual(loginRequired);
@@ -748,11 +748,11 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
     const s = await setUp({ exitIp: () => "198.51.100.9", haltStore: store });
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.operator.heldHalt !== null, 10_000, "the halt held");
-    expect(store.read()).toBeNull();
+    expect(store.read().halt).toBeNull();
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: false });
     failing = false;
-    await until(() => store.read() !== null, 5000, "the halt written");
-    expect(store.read()).toEqual(s.operator.heldHalt);
+    await until(() => store.read().halt !== null, 5000, "the halt written");
+    expect(store.read().halt).toEqual(s.operator.heldHalt);
   });
 
   it("a halt file that cannot be understood stops the operator before it starts", async () => {
@@ -762,8 +762,55 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "halt.json"), "{ not json");
     expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
-    writeFileSync(join(stateDir, "halt.json"), JSON.stringify({ id: "x", reason: "exit_ip_changed", atWall: 1 }));
+    // Its size, but neither slot this store's.
+    writeFileSync(join(stateDir, "halt.json"), Buffer.alloc(2 * SLOT_BYTES, 0x41));
     expect(() => new HaltStore(join(stateDir, "halt.json")).read()).toThrow(HaltFileUnreadable);
+  });
+
+  it("is written in place into a preallocated file — never a write that needs new room — and a write cut midway keeps the record before it (Astra round 4)", () => {
+    const temp = tempDir();
+    cleanups.push(temp.remove);
+    const path = join(temp.dir, "state", "halt.json");
+    // Made, both slots preallocated, when the operator first reads it.
+    expect(new HaltStore(path).read()).toEqual({ halt: null, lastClearedId: null });
+    const made = statSync(path);
+    expect(made.size).toBe(2 * SLOT_BYTES);
+    const first = { id: "66666666-6666-4666-8666-666666666666", reason: "header_mismatch" as const, atWall: 1_000 };
+    const store = new HaltStore(path);
+    store.read();
+    store.write({ halt: first, lastClearedId: null });
+    store.write({ halt: null, lastClearedId: first.id });
+    store.write({ halt: { ...first, id: "77777777-7777-4777-8777-777777777777" }, lastClearedId: first.id });
+    // The same file (the same inode), the same size: written in place.
+    expect(statSync(path)).toMatchObject({ ino: made.ino, size: 2 * SLOT_BYTES });
+    expect(new HaltStore(path).read()).toEqual({ halt: { ...first, id: "77777777-7777-4777-8777-777777777777" }, lastClearedId: first.id });
+    // The next write is cut midway (its slot spoilt): the record before it holds.
+    const fd = openSync(path, "r+");
+    writeSync(fd, Buffer.from("cut"), 0, 3, (4 % 2) * SLOT_BYTES + 10);
+    closeSync(fd);
+    expect(new HaltStore(path).read()).toEqual({ halt: { ...first, id: "77777777-7777-4777-8777-777777777777" }, lastClearedId: first.id });
+  });
+
+  it("says the last halt cleared, kept across a restart: the owner's clearHalt, and one for a halt it no longer holds", async () => {
+    const s = await setUp({ exitIp: () => "198.51.100.9" });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.heldHalt !== null, 10_000, "the halt held");
+    const held = s.operator.heldHalt!;
+    expect(s.operator.state.lastClearedHaltId ?? null).toBeNull();
+    expect(await commandOf(s.engine, { kind: "clearHalt", haltId: held.id })).toMatchObject({ ok: true });
+    expect(s.operator.state).toMatchObject({ halt: null, lastClearedHaltId: held.id });
+    await s.operator.stop();
+    await s.engine.close();
+    const next = await s.newOperator();
+    expect(next.state).toMatchObject({ halt: null, lastClearedHaltId: held.id });
+    // A halt it does not hold (lost before): the owner's word, said as cleared.
+    const engine = new FakeEngine();
+    await engine.connect(s.rpcPort());
+    cleanups.push(() => engine.close());
+    engine.send(hello({ socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await engine.waitFor("helloResult");
+    expect(await commandOf(engine, { kind: "clearHalt", haltId: "88888888-8888-4888-8888-888888888888" })).toMatchObject({ ok: true, detail: "no halt is held" });
+    expect(next.state.lastClearedHaltId).toBe("88888888-8888-4888-8888-888888888888");
   });
 });
 
