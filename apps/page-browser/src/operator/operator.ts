@@ -1679,12 +1679,15 @@ export class Operator {
     const reload = ++this.#modeReload;
     const stale = () => run !== this.#run || reload !== this.#modeReload || this.#stopped || this.page.halted || !this.egress.exitOpen || !atLeast(this.page.step, "site_loaded");
     void (async () => {
-      const idle = await this.#waitUntil(() => stale() || this.site.released === 0, this.#timings.reloadWaitMs);
-      if (stale()) return;
-      if (!idle) {
-        this.#log("site.mode_reload_skipped", { released: this.site.released });
-        return;
+      // Waited out however long it takes (each request of the site ends
+      // within its own limits, or the page stops): a document of this mode
+      // always comes — a profile no page has is confirmed only by one
+      // (Astra's review of PR 16, round 3).
+      while (!(await this.#waitUntil(() => stale() || this.site.released === 0, this.#timings.reloadWaitMs))) {
+        if (stale()) return;
+        this.#log("site.mode_reload_waits", { released: this.site.released });
       }
+      if (stale()) return;
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
       this.page.back("exit_open", note);
       await this.#loadSite(run);

@@ -55,6 +55,7 @@ interface SetUp {
   operator: Operator;
   engine: FakeEngine;
   model: BrowserModel;
+  chrome: FakeChrome;
   lines: string[];
   /** The loader of each document committed, as Chrome named it. */
   loaders: string[];
@@ -120,7 +121,7 @@ async function setUp(): Promise<SetUp> {
     chrome: control,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
-    timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
+    timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, reloadWaitMs: 300 },
   });
   const ports = await operator.start();
   cleanups.push(() => operator.stop());
@@ -140,7 +141,7 @@ async function setUp(): Promise<SetUp> {
   };
   expect(await command(engine, { kind: "restartBrowser" })).toMatchObject({ ok: true });
   await until(() => operator.page.step === "site_loaded", 10_000, "the site loaded");
-  return Object.assign(s, { operator, engine, model, lines }) as SetUp;
+  return Object.assign(s, { operator, engine, model, chrome, lines }) as SetUp;
 }
 
 let commandN = 0;
@@ -160,9 +161,9 @@ async function siteReadDone(s: SetUp, token: string): Promise<void> {
 
 /** The site's own authorized read, as its script sets its headers — of the
  *  document `loaderId` (default: the one committed last). */
-function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!): void {
+function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!): ReturnType<BrowserModel["pause"]> {
   const path = "/api/v1/account/me";
-  s.model.pause(`https://apiv3.fansly.com${path}?ngsw-bypass=true`, "GET", s.operator.control.workTab!.sessionId, "XHR", {
+  return s.model.pause(`https://apiv3.fansly.com${path}?ngsw-bypass=true`, "GET", s.operator.control.workTab!.sessionId, "XHR", {
     Accept: "application/json, text/plain, */*",
     authorization: token,
     "fansly-client-check": fanslyClientCheck(path, CLIENT),
@@ -172,13 +173,44 @@ function siteRead(s: SetUp, token: string, loaderId: string = s.loaders.at(-1)!)
   }, undefined, loaderId);
 }
 
+/** The site's GET under `token` from the document committed last, then
+ *  the engine's read under it: confirmed (ready, with `account`) — the two
+ *  done again from the newest document if the site was loaded anew
+ *  meanwhile (its API requests failed before the engine admitted any: the
+ *  operator loads it once more, and only that document's GET counts). */
+async function confirmedUnder(s: SetUp, token: string, fingerprint: string, account: string): Promise<void> {
+  for (let tries = 0; ; tries++) {
+    await until(() => s.operator.page.step === "site_loaded" || s.operator.page.step === "ready", 10_000, "the site loaded");
+    await siteReadDone(s, token);
+    expect(s.operator.state.sessionFingerprint).toBe(fingerprint);
+    await accountRead(s, fingerprint, account);
+    try {
+      await until(() => s.operator.page.step === "ready", tries < 2 ? 3_000 : 10_000, "confirmed");
+      expect(s.operator.state).toMatchObject({ sessionFingerprint: fingerprint, accountId: account });
+      return;
+    } catch (error) {
+      if (tries >= 2) throw error;
+    }
+  }
+}
+
 let readN = 9700;
-/** The engine's account read under `fingerprint`, answered with `account`. */
+/** The engine's account read under `fingerprint`, answered with `account` —
+ *  asked again when it did not go at all (the gate busy with the site's last
+ *  request under a loaded machine), as the engine asks again. */
 async function accountRead(s: SetUp, fingerprint: string, account: string): Promise<void> {
   s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: account } } }));
-  const attemptId = ++readN;
-  s.engine.send({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
-  expect((await s.engine.waitFor("result", (message) => message.attemptId === attemptId, 10_000)).outcome).toMatchObject({ kind: "response", status: 200 });
+  for (let tries = 0; ; tries++) {
+    const attemptId = ++readN;
+    s.engine.send({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
+    const outcome = (await s.engine.waitFor("result", (message) => message.attemptId === attemptId, 10_000)).outcome as { kind: string; sent?: boolean };
+    if (outcome.kind === "transport_error" && outcome.sent === false && tries < 3) {
+      await pause(200);
+      continue;
+    }
+    expect(outcome).toMatchObject({ kind: "response", status: 200 });
+    return;
+  }
 }
 
 /** The owner's login through the form, the operator in the manual login and
@@ -280,11 +312,7 @@ describe("a profile no page has yet: its account read confirms only the session 
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId === ACCOUNT_A && atLeastConfirmed(s)).toBe(false);
     // The new document's GET shows B; a read under B is confirmed.
-    await siteReadDone(s, TOKEN_B);
-    expect(s.operator.state.sessionFingerprint).toBe(b);
-    await accountRead(s, b, ACCOUNT_B);
-    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
-    expect(s.operator.state).toMatchObject({ sessionFingerprint: b, accountId: ACCOUNT_B });
+    await confirmedUnder(s, TOKEN_B, b, ACCOUNT_B);
   });
 
   it("the login closed while a load is under way: once it is in, the site is loaded anew for the automation, and its GET confirms (Astra's review of PR 16, round 3)", async () => {
@@ -309,11 +337,35 @@ describe("a profile no page has yet: its account read confirms only the session 
     release();
     // That load comes in, and the site is loaded anew for the automation.
     await until(() => s.model.navigations.length > loads && s.loaders.length >= 3 && s.operator.page.step === "site_loaded", 10_000, "loaded anew for the automation");
-    await siteReadDone(s, TOKEN_B);
-    expect(s.operator.state.sessionFingerprint).toBe(b);
-    await accountRead(s, b, ACCOUNT_B);
-    await until(() => s.operator.page.step === "ready", 10_000, "confirmed");
-    expect(s.operator.state.accountId).toBe(ACCOUNT_B);
+    await confirmedUnder(s, TOKEN_B, b, ACCOUNT_B);
+  });
+
+  it("the login closed while a request of the site is in flight longer than the reload's wait: the load anew waits it out, and comes (Astra's review of PR 16, round 3)", async () => {
+    const s = await setUp();
+    const b = sessionFingerprint(TOKEN_B, CLIENT);
+    await siteReadDone(s, TOKEN_A);
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.operator.page.step === "site_loaded", 10_000, "the login screen loaded");
+    // An interface read of the login, released and held in flight.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const continueRequest = s.chrome.handlers.get("Fetch.continueRequest")!;
+    let heldId = "";
+    s.chrome.handlers.set("Fetch.continueRequest", async (cmd) => {
+      if (cmd.params.requestId === heldId) await gate;
+      return continueRequest(cmd);
+    });
+    heldId = siteRead(s, TOKEN_A).interceptionId;
+    await until(() => s.operator.site.released > 0, 10_000, "the read in flight");
+    const loads = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    // Longer than the reload's wait (300 ms): no load yet …
+    await pause(900);
+    expect(s.model.navigations.length).toBe(loads);
+    // … and once the read ends, the load anew comes.
+    release();
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", 10_000, "loaded anew for the automation");
+    await confirmedUnder(s, TOKEN_B, b, ACCOUNT_B);
   });
 });
 
