@@ -390,7 +390,11 @@ remove_profile() {
   [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "$PAGE names no profile"
   [[ "$profile" == "$PROFILE" ]] || fail "$PAGE's files name profile $profile, not $PROFILE: nothing removed"
   compose_with "$(env_file)" down >/dev/null 2>&1 || true
-  ! docker inspect "page-browser-$PAGE" >/dev/null 2>&1 || fail "page-browser-$PAGE is still there"
+  # Gone means Docker says so (as forget): a state it cannot read is never
+  # taken for absent.
+  local state
+  state="$(container_status)" || fail "page-browser-$PAGE cannot be read: nothing of $PAGE is removed"
+  [[ "$state" == absent ]] || fail "page-browser-$PAGE is still there"
   rm -rf "$(page_dir)"
   "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the removed page" >&2
   docker volume rm "pb-profile-$profile" "pb-buffer-$profile" >/dev/null

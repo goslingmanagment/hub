@@ -32,14 +32,16 @@ command="\${command//\\/opt\\/agency-hub/$TEST_HUB_DIR}"
 PB_BASE="$TEST_PB_BASE" exec bash -c "$command"
 `;
 
-// docker: containers, volumes and Hub calls as files under $TEST_STATE. The
+// docker: containers, volumes and Hub calls as files under $TEST_STATE; an
+// image's Chrome by its label, a new profile's last Chrome none (page.sh's
+// start guard, PR 18). The
 // n-th Hub call (from 0) runs $TEST_HUB_HOOK_<n> (what happens on the server
 // meanwhile), prints $TEST_HUB_OUT_<n> and exits with $TEST_HUB_EXIT_<n>
 // (else $TEST_HUB_EXIT, else 0) — 255 is ssh's word for an answer that never
 // came back.
 const fakeDocker = `#!/usr/bin/env bash
 state="$TEST_STATE"
-mkdir -p "$state/volumes" "$state/containers"
+mkdir -p "$state/volumes" "$state/containers" "$state/stopped"
 echo "$*" >> "$state/docker.log"
 if [[ "$1" == "compose" && " $* " == *" exec -T api "* ]]; then
   n=$(ls "$state" | grep -c '^hub-call-[0-9]*[.]args$' || true)
@@ -51,7 +53,12 @@ if [[ "$1" == "compose" && " $* " == *" exec -T api "* ]]; then
   exit "\${!code:-\${TEST_HUB_EXIT:-0}}"
 fi
 case "$1" in
-  image) exit 0 ;;
+  image)
+    if [[ "$2" == "inspect" && " $* " == *" --format "* ]]; then echo "155.0.7000.1"; fi
+    exit 0 ;;
+  run) exit 0 ;;
+  stop) touch "$state/stopped/\${@: -1}"; exit 0 ;;
+  rm) rm -f "$state/containers/\${@: -1}" "$state/stopped/\${@: -1}"; exit 0 ;;
   volume)
     case "$2" in
       create) touch "$state/volumes/$3"; echo "$3" ;;
@@ -62,16 +69,18 @@ case "$1" in
   ps) exit 0 ;;
   logs) exit 0 ;;
   inspect)
+    if [[ "\${TEST_DOCKER_UNREADABLE:-0}" == "1" ]]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
     if [[ "$2" == "-f" ]]; then
-      [[ -e "$state/containers/$4" ]] || exit 1
+      [[ -e "$state/containers/$4" ]] || { echo "Error: No such object: $4" >&2; exit 1; }
+      if [[ "$3" == *".State.Running"* ]]; then [[ -e "$state/stopped/$4" ]] && echo false || echo true; exit 0; fi
       if [[ "\${TEST_UNHEALTHY:-0}" == "1" ]]; then echo unhealthy; else echo healthy; fi
       exit 0
     fi
     [[ -e "$state/containers/$2" ]]; exit $? ;;
   compose)
     project="$3"
-    if [[ " $* " == *" up "* ]]; then touch "$state/containers/$project"; fi
-    if [[ " $* " == *" down"* ]]; then rm -f "$state/containers/$project"; fi
+    if [[ " $* " == *" up "* ]]; then touch "$state/containers/$project"; rm -f "$state/stopped/$project"; fi
+    if [[ " $* " == *" down"* ]]; then rm -f "$state/containers/$project" "$state/stopped/$project"; fi
     exit 0 ;;
 esac
 exit 0
@@ -311,6 +320,19 @@ describe("deploy-page-browser.sh remove-profile", () => {
     expect(refused.stderr).toContain("not 00000000-0000-4000-8000-000000000000: nothing removed");
     expect(hubCalls()).toHaveLength(1);
     expect(volumes()).toHaveLength(2);
+  });
+
+  it("page.sh removes nothing when Docker cannot say the container is gone (PR 18's rule, as forget)", () => {
+    expect(run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--socks", "socks.example:1080", "--env", ENV]).status).toBe(0);
+    const profile = /^PB_PROFILE_ID=(.+)$/m.exec(readFileSync(path.join(pbBase, "pages/ari-2/page.env"), "utf8"))![1]!;
+    const refused = spawnSync("bash", [pageSh, "remove-profile", "--page", "ari-2", "--profile", profile], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${path.join(root, "bin")}:${process.env.PATH}`, PB_BASE: pbBase, TEST_STATE: state, TEST_DOCKER_UNREADABLE: "1" },
+    });
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("cannot be read: nothing of ari-2 is removed");
+    expect(volumes()).toHaveLength(2);
+    expect(existsSync(path.join(pbBase, "pages/ari-2/page.env"))).toBe(true);
   });
 
   it("page.sh removes a profile only when told which one, and only that one", () => {

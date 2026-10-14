@@ -196,15 +196,15 @@ async function confirmedUnder(s: SetUp, token: string, fingerprint: string, acco
 
 let readN = 9700;
 /** The engine's account read under `fingerprint`, answered with `account` —
- *  asked again when it did not go at all (the gate busy with the site's last
- *  request under a loaded machine), as the engine asks again. */
+ *  asked again when it did not go at all (the page's one request in flight
+ *  still the site's last, the gate busy with it), as the engine asks again. */
 async function accountRead(s: SetUp, fingerprint: string, account: string): Promise<void> {
   s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: account } } }));
   for (let tries = 0; ; tries++) {
     const attemptId = ++readN;
     s.engine.send({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
-    const outcome = (await s.engine.waitFor("result", (message) => message.attemptId === attemptId, 10_000)).outcome as { kind: string; sent?: boolean };
-    if (outcome.kind === "transport_error" && outcome.sent === false && tries < 3) {
+    const outcome = (await s.engine.waitFor("result", (message) => message.attemptId === attemptId, 10_000)).outcome as { kind: string; sent?: boolean; refusal?: string };
+    if (((outcome.kind === "transport_error" && outcome.sent === false) || outcome.kind === "aborted_before_send") && tries < 3) {
       await pause(200);
       continue;
     }
