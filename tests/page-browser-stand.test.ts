@@ -891,6 +891,23 @@ describe("each control passes only with the very violations its run planted — 
     expect(judged(late).ok).toBe(false);
   });
 
+  it("Astra's repeat: the operation is the first preflight and the first request among every arrival of the request id — a late repeat of one sent in time is not planted", () => {
+    // Journaled 6 s, told 14 s; the request went in time at 1 000 ms, a repeat came over the held #7 at 8 050 ms.
+    const told = grant("hub", `${API}/api/v1/a?rid=r1`, 0, { attemptId: 41, ref: "41", deadlineMono: 6000, toldDeadlineMono: 14_000 });
+    const held = [socks("socks.hold", 10, 7), socks("socks.release", 8040, 7)];
+    const checks = (journal: JournalEvent[]) => checksOf({ [C1]: unadmittedArrivals(journal, [told], PAGES) });
+    const control = controlOf("control-site-late-send");
+    const judged = (journal: JournalEvent[]) => judge(checks(journal), control, plantedLate(lateUnderHold(journal, [told], "p1", PAGE_IP, API, PAGES).late));
+    for (const method of ["GET", "OPTIONS"]) {
+      const journal = [...held, apiRequest(1000, method, "/api/v1/a?rid=r1", { socksId: 5 }), apiRequest(8050, method, "/api/v1/a?rid=r1", { socksId: 7 })];
+      expect(lateUnderHold(journal, [told], "p1", PAGE_IP, API, PAGES).late).toEqual([]);
+      expect(judged(journal).ok).toBe(false);
+      unplanted(judged(journal));
+    }
+    // The first of each late, over the held connection, before the told deadline: planted.
+    expect(judged([...held, apiRequest(8050, "OPTIONS", "/api/v1/a?rid=r1", { socksId: 7 }), apiRequest(8060, "GET", "/api/v1/a?rid=r1", { socksId: 9 })])).toEqual({ ok: true, why: [] });
+  });
+
   it("control-held-late: the lever's late request and its unkept answer — another unkept answer fails it", () => {
     // A control's own grant (journalGrant): no operator was told any deadline.
     const site = grant("site", `${API}/api/v1/account/me?rid=held-1`, 0, { attemptId: 0, ref: "held-1", deadlineMono: 6000, toldDeadlineMono: Number.POSITIVE_INFINITY });

@@ -607,11 +607,12 @@ export interface LateSend {
  *  except the rest of that very operation: once its preflight came over the
  *  held CONNECT, the operator lets its request go too, on a connection of
  *  its own (Chrome keeps credentialed requests apart), before the deadline
- *  it was told (`toldDeadlineMono`) — the same planted send. One preflight
- *  and one request at most, each before the told deadline; any other
- *  arrival of it is a violation of the operator's own. */
+ *  it was told (`toldDeadlineMono`) — the same planted send. Its first
+ *  preflight and its first request among every arrival of it, each late and
+ *  before the told deadline; any other arrival of it — a repeat, one past
+ *  the told deadline — is a violation of the operator's own. */
 export function lateUnderHold(events: readonly JournalEvent[], grants: readonly Grant[], page: string, pageAddress: string, host: string, pages: PagesByAddress): { late: LateSend[]; violations: string[] } {
-  const late: LateSend[] = [];
+  const shownLate: LateSend[] = [];
   let elsewhere = 0;
   for (const grant of grants) {
     if (grant.page !== page || grant.kind === "ws" || grant.target === null || grant.target.split("/")[0] !== host) continue;
@@ -619,27 +620,30 @@ export function lateUnderHold(events: readonly JournalEvent[], grants: readonly 
     if (rid === null) continue;
     const held = new Set(heldAcross(events, pageAddress, host, grant.deadlineMono).map((hold) => hold.socksId));
     if (held.size === 0) continue;
-    const ofGrant: Array<{ send: LateSend; mono: number; method: string }> = [];
-    for (const arrival of events) {
-      if (arrival.type !== "req" || arrival.role !== "api" || arrival.rid !== rid || arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
+    // Every arrival of that request id, in time or not: the operation is
+    // its first preflight and its first request among them.
+    const arrivals = events.filter((arrival) => arrival.type === "req" && arrival.role === "api" && arrival.rid === rid).sort((a, b) => a.mono - b.mono);
+    const operation = new Set([arrivals.find((arrival) => arrival.method === "OPTIONS"), arrivals.find((arrival) => arrival.method !== "OPTIONS")].filter((one) => one !== undefined));
+    const late: Array<{ send: LateSend; planted: boolean }> = [];
+    for (const arrival of arrivals) {
+      if (arrival.mono <= grant.deadlineMono + ARRIVAL_SLACK_MS) continue;
       const called = unadmittedArrivals([arrival], grants, pages).find((violation) => violation.includes("arrived outside its admission window"));
       if (called === undefined) continue;
       const socksId = arrival.socksId === null || arrival.socksId === undefined ? null : Number(arrival.socksId);
-      ofGrant.push({ send: { rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, held: socksId !== null && held.has(socksId), violation: called }, mono: arrival.mono, method: String(arrival.method) });
+      // Planted: one of those two, late, and before the told deadline.
+      const planted = operation.has(arrival) && arrival.mono <= grant.toldDeadlineMono + ARRIVAL_SLACK_MS;
+      late.push({ send: { rid, attemptId: grant.attemptId, lateMs: Math.round(arrival.mono - grant.deadlineMono), socksId, held: socksId !== null && held.has(socksId), violation: called }, planted });
     }
-    // The planted operation is at most its preflight and its request — the
-    // first of each, each before the deadline the operator was told — and
-    // it shows only if one of them came over the held CONNECT. Anything
-    // else of that request id is a violation the control does not own.
-    const inTime = ofGrant.filter(({ mono }) => mono <= grant.toldDeadlineMono + ARRIVAL_SLACK_MS);
-    const operation = [inTime.find(({ method }) => method === "OPTIONS"), inTime.find(({ method }) => method !== "OPTIONS")].filter((one) => one !== undefined);
-    const shown = operation.some(({ send }) => send.held);
-    for (const one of ofGrant) {
-      if (shown && operation.includes(one)) late.push(one.send);
+    // It shows only if one of them came over the held CONNECT. Anything else
+    // of that request id — a repeat, one past the told deadline — is a
+    // violation the control does not own.
+    const shown = late.some(({ send, planted }) => planted && send.held);
+    for (const { send, planted } of late) {
+      if (shown && planted) shownLate.push(send);
       else elsewhere += 1;
     }
   }
-  return { late, violations: late.length > 0 ? [] : [`no admitted request arrived after its deadline over the CONNECT held across that deadline, with C1 calling it late (${elsewhere} late over another connection): the control showed no late send`] };
+  return { late: shownLate, violations: shownLate.length > 0 ? [] : [`no admitted request arrived after its deadline over the CONNECT held across that deadline, with C1 calling it late (${elsewhere} late over another connection): the control showed no late send`] };
 }
 
 /** A request was in flight when the engine restarted: one of `rids` had
