@@ -237,7 +237,9 @@ export function browserDeliveryText(browser: EngineBrowser, now: number): string
   if (delivery.p95Ms !== null) parts.push(`p95 ${msText(delivery.p95Ms)}`);
   if (delivery.p50Ms !== null) parts.push(`p50 ${msText(delivery.p50Ms)}`);
   const last = engineAgeText(delivery.lastEventAt, now);
-  parts.push(last === null ? "событий ещё не было" : `последнее событие ${last} назад`);
+  // The site socket's last open or message the intake committed (#614: the
+  // loss boundary): other events of the buffer do not move it.
+  parts.push(last === null ? "событий сокета ещё не было" : `последнее событие сокета ${last.replaceAll(" ", NBSP)} назад`);
   return parts.join(" · ");
 }
 

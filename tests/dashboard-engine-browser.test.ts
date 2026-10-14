@@ -37,7 +37,7 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     expect(html).toContain("работает");
     for (const text of [
       "браузер страницы", "оператор сообщал 4 с назад", "готов", "сессия есть · аккаунт 300000000000000001",
-      "203.0.113.7 (закреплён)", "1,5 МБ", "p95 180 мс", "последнее событие 3 с назад", "Chrome 155.0.7339.80 · оператор d8cb9ac",
+      "203.0.113.7 (закреплён)", "1,5 МБ", "p95 180 мс", "последнее событие сокета 3 с назад", "Chrome 155.0.7339.80 · оператор d8cb9ac",
       "пройдена в", "pnpm cli sync browser status --page lilly-1",
     ]) expect(html, text).toContain(text);
     expect(html).not.toContain("data-browser-alerts");

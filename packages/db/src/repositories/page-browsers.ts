@@ -610,8 +610,9 @@ export interface PageBrowserOfPage {
   leaveSince: Date | null;
   /** The page's whole pause is the owner's browser stop's (0281). */
   browserStopPaused: boolean;
-  /** The intake (0276): the operator's instant of the last event committed,
-   *  the last commit, and a halted buffer (null: none). */
+  /** The intake (0276): the operator's instant of the last socket open or
+   *  message committed (its loss boundary, #614), the last commit, and a
+   *  halted buffer (null: none). */
   intake: {
     lastEventAt: Date | null;
     lastCommitAt: Date | null;

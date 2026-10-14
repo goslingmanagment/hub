@@ -208,7 +208,9 @@ describe("what the operator says goes on its profile's row, to the status and th
       alarm: { kind: "header_mismatch" },
       alerts: [{ kind: "protocol_changed", detail: "alarm_header_mismatch" }],
     });
-    expect(wire.browser!.delivery.lastEventAt).not.toBeNull();
+    // A gap is no event of the socket (its loss boundary, #614): the last
+    // commit is said, the socket's last event not yet.
+    expect(wire.browser!.delivery).toMatchObject({ lastEventAt: null, lastCommitAt: expect.any(String), p95Ms: expect.any(Number) });
     const text = JSON.stringify(wire);
     for (const secret of [OPERATOR_TOKEN, SECRETS.apiToken, SECRETS.vncPassword, SESSION_A, row.sessionFingerprint!]) expect(text).not.toContain(secret);
 
