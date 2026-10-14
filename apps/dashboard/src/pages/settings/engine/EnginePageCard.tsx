@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EngineBlockRow, EnginePageAttention } from "./EngineBlocks.js";
+import { EngineBrowserBlock } from "./EngineBrowser.js";
 import { EngineModeChip, EngineQueueTable, EngineStatusGrid } from "./EngineStatus.js";
 import { engineBlockOrder } from "./engineBlockDisplay.js";
 import { HistoryRequestsBlock, type HistoryRequestsState } from "./HistoryRequests.js";
@@ -95,6 +96,13 @@ export function EnginePageCard({
       </div>
 
       <EnginePageAttention page={page} className="mt-3" now={now} />
+
+      {/* Only a page with a browser (Project Browser PR 17). */}
+      {state.kind === "ready" && state.status.browser !== undefined && (
+        <div className="mt-3">
+          <EngineBrowserBlock browser={state.status.browser} pageLabel={page.pageLabel} compact now={now} />
+        </div>
+      )}
 
       <div className="mt-3 border-t border-border pt-3">
         <EnginePageStatusBody
