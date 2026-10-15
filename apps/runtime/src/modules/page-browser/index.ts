@@ -40,6 +40,7 @@ import {
 import {
   callPageBrowserLogin,
   PAGE_BROWSER_ENDPOINTS,
+  pageBrowserScreenUrl,
   proxyScreenRequest,
   proxyScreenUpgrade,
   type LoginAnswer,
@@ -217,8 +218,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const base = target.kind === "page"
       ? `/api/v1/page-browser/pages/${encodeURIComponent(target.label)}/screen`
       : `/api/v1/page-browser/profiles/${target.profileId}/screen`;
-    const socketPath = `${base.slice(1)}/websockify`;
-    return `${base}/index.html?autoconnect=1&resize=remote&path=${encodeURIComponent(socketPath)}`;
+    return pageBrowserScreenUrl(base);
   }
 
   function stepOf(answer: LoginAnswer): PageBrowserLoginStepResponse {

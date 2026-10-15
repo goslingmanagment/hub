@@ -543,6 +543,7 @@ async function setUp(options: { apiToken?: string | null; haltStore?: HaltStore 
       operatorVersion: "test",
     },
     chrome: control,
+      display: async () => control.geometry,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
     ...(options.haltStore ? { haltStore: options.haltStore } : {}),
