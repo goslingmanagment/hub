@@ -595,9 +595,9 @@ describe("dashboard sync layout", () => {
   it("supports settings tab deep links for the sync workspace", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Financials");
-    expect(html).toContain("View details");
-    expect(html).not.toContain("Update Credentials");
+    expect(html).toContain("Финансы");
+    expect(html).toContain(">Открыть<");
+    expect(html).not.toContain("Обновить данные входа");
   });
 
   it("offers recovery for an actionable paused OnlyFans substream hidden by a healthy block", () => {
@@ -651,8 +651,8 @@ describe("dashboard sync layout", () => {
       showPause: false,
       showResume: true,
       showReset: true,
-      resumeLabel: "Resume top spenders",
-      resetLabel: "Reset",
+      resumeLabel: "Снять паузу: топ фанов",
+      resetLabel: "Сбросить",
     });
 
     expect(getSyncBlockActionPresentation({
@@ -673,9 +673,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Sync status failed to load");
+    expect(html).toContain("Состояние сбора не загрузилось");
     expect(html).toContain("Sync API unavailable");
-    expect(html).not.toContain("No pages configured");
+    expect(html).not.toContain("Страниц OnlyFans нет");
   });
 
   it("shows a stale-data warning when sync overview refresh fails with cached data", () => {
@@ -690,8 +690,8 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Sync overview timeout");
-    expect(html).toContain("Financials");
-    expect(html).not.toContain("Sync status failed to load");
+    expect(html).toContain("Финансы");
+    expect(html).not.toContain("Состояние сбора не загрузилось");
   });
 
   it("shows stale sync overview warnings for cached empty page lists", () => {
@@ -710,8 +710,8 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Sync overview timeout");
-    expect(html).toContain("No pages configured");
-    expect(html).not.toContain("Sync status failed to load");
+    expect(html).toContain("Страниц OnlyFans нет");
+    expect(html).not.toContain("Состояние сбора не загрузилось");
   });
 
   it("shows an explicit sync detail load error instead of page not found", () => {
@@ -724,9 +724,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
 
-    expect(html).toContain("Sync page failed to load");
+    expect(html).toContain("Страница не загрузилась");
     expect(html).toContain("Details API unavailable");
-    expect(html).not.toContain("Page not found");
+    expect(html).not.toContain("Страница не найдена");
   });
 
   it("shows overall and page-level worker diagnostics on the sync overview", () => {
@@ -740,7 +740,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("No sync worker is processing jobs");
+    // The headline in the screen's words, from the diagnosis code; the
+    // server's own detail as its secondary line.
+    expect(html).toContain("Сбор отстаёт: работа стоит в очереди, но не выполняется");
     expect(html).toContain("Start or restart the worker service.");
   });
 
@@ -762,7 +764,7 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
 
-    expect(html).toContain("Sync needs attention");
+    expect(html).toContain("Загрузка остановилась и не продвигается");
     expect(html).toContain("Subscribers stopped making progress and need the worker to recover.");
   });
 
@@ -782,8 +784,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect((html.match(/Sync is delayed/g) ?? [])).toHaveLength(2);
+    expect((html.match(/Сбор отстаёт/g) ?? [])).toHaveLength(2);
     expect(html).not.toContain("messages_history needs attention");
+    expect(html).not.toContain("Нужна проверка");
   });
 
   it("fills delayed sync detail notices when the backend has no explicit summary", () => {
@@ -805,7 +808,7 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
 
-    expect((html.match(/Sync is delayed/g) ?? [])).toHaveLength(2);
+    expect((html.match(/Сбор отстаёт/g) ?? [])).toHaveLength(2);
   });
 
   it("renders fresh queue waits as healthy while another stream of the page is running", () => {
@@ -862,9 +865,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Up to date · waiting for conversation sync to finish");
-    expect(html).not.toContain("Queued — conversation sync is running");
-    expect(html).toContain("Backfilling… 203/3,669 conversations");
+    expect(html).toContain("Актуально · ждёт, пока закончится «список чатов»");
+    expect(html).not.toContain("В очереди — сейчас идёт «список чатов»");
+    expect(html).toContain("Догружает историю… 203 из 3\u00a0669 чатов");
   });
 
   it("shows sync-status breadcrumbs under the dev workspace", () => {

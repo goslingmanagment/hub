@@ -3,6 +3,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { useAdminClientHealth } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { DevHeader } from "./DevHeader.js";
 import {
   CLIENT_HEALTH_PERIODS,
   clientHealthPageModel,
@@ -12,21 +13,34 @@ import {
   type ClientHealthPeriod,
 } from "./clientHealthView.js";
 
-const HEAD_CELL = "whitespace-nowrap px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
-const HEAD_CELL_NUMBER = `${HEAD_CELL} text-right`;
-const CELL = "px-4 py-3 text-sm text-text-secondary";
+const CELL = "muted";
 /** A version, a build or a code: never broken across lines; the section scrolls sideways instead. */
-const CELL_CODE = `${CELL} whitespace-nowrap`;
-const CELL_NUMBER = `${CELL} whitespace-nowrap text-right tabular-nums`;
+const CELL_CODE = "muted whitespace-nowrap";
+const CELL_NUMBER = "num";
 
-function Section({ title, description, children }: { title: string; description: ReactNode; children: ReactNode }) {
+/** A section of the page: what it shows in a sentence, how to read it under
+ *  «Как читать», and its table. */
+function Section({ title, description, help, children }: {
+  title: string;
+  description: ReactNode;
+  help?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <section className="mb-8 overflow-x-auto rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
-        <p className="mt-1 max-w-3xl text-[13px] text-text-muted">{description}</p>
+    <section className="card">
+      <div className="card-header">
+        <div className="min-w-0 max-w-3xl">
+          <h3 className="card-title">{title}</h3>
+          <p className="card-description">{description}</p>
+          {help && (
+            <details className="help mt-2">
+              <summary>Как читать</summary>
+              <div className="help-body">{help}</div>
+            </details>
+          )}
+        </div>
       </div>
-      {children}
+      <div className="overflow-x-auto">{children}</div>
     </section>
   );
 }
@@ -34,7 +48,7 @@ function Section({ title, description, children }: { title: string; description:
 function EmptyRow({ columns, children }: { columns: number; children: ReactNode }) {
   return (
     <tr>
-      <td colSpan={columns} className="px-4 py-8 text-center text-sm text-text-muted">{children}</td>
+      <td colSpan={columns} className="py-8 text-center text-text-muted">{children}</td>
     </tr>
   );
 }
@@ -50,31 +64,23 @@ export function ClientHealthPage() {
   const { data, isLoading, isError, isFetching, refetch } = useAdminClientHealth(range);
 
   const header = (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-extrabold text-text-primary">Расширение для чата: отчёты о работе</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">
-          Пока у сотрудника открыт ChatSpace, расширение раз в 15 минут присылает технический отчёт.
-          Hub складывает отчёты в почасовые суммы по версиям: имён сотрудников, страниц и фанов в них нет.
-        </p>
-      </div>
-      <div className="ml-auto flex flex-col items-end gap-1">
+    <>
+      <DevHeader
+        title="Расширение для чата: отчёты о работе"
+        description="Пока открыт ChatSpace, расширение раз в 15 минут присылает технический отчёт; Hub хранит только суммы по версиям — без имён сотрудников, страниц и фанов."
+      />
+      <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2">
         <FilterButtons
           filters={CLIENT_HEALTH_PERIODS.map(({ key, label }) => ({ key, label }))}
           active={period}
           onChange={(key) => setPeriod(key as ClientHealthPeriod)}
         />
-        <p className="text-xs text-text-muted">{clientHealthRangeLabel(range)}, дни по московскому времени</p>
+        <p className="text-sm text-text-muted">{clientHealthRangeLabel(range)}, дни по московскому времени</p>
       </div>
-    </div>
+    </>
   );
   const retry = (
-    <button
-      type="button"
-      onClick={() => void refetch()}
-      disabled={isFetching}
-      className="rounded-lg border border-border px-3 py-2 text-sm"
-    >
+    <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn">
       Повторить
     </button>
   );
@@ -96,7 +102,7 @@ export function ClientHealthPage() {
     <div>
       {header}
       {isError && (
-        <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning-dark/50 p-3 text-sm text-text-secondary">
+        <div role="alert" className="notice notice-warning mb-4 flex-wrap items-center justify-between">
           <span>Обновить не получилось. Показаны данные прошлой загрузки.</span>
           {retry}
         </div>
@@ -108,36 +114,36 @@ export function ClientHealthPage() {
           description="Отчёты приходят, когда в настройках включены «Расширение для чата: общий выключатель» и «Расширение для чата: отчёты о работе», а сотрудник в расширении согласился отправлять технические замеры."
         />
       ) : (
-        <>
+        <div className="space-y-5">
           <Section
             title="Проверка страницы ChatSpace"
-            description={(
-              <>
+            description={<>Всего отчётов: {formatCount(model.reports)}, с ошибкой: {formatCount(model.failedReports)}.</>}
+            help={(
+              <p>
                 При запуске расширение проверяет, что на странице ChatSpace есть всё, на что оно опирается.
                 Отчёт с ошибкой значит: чего-то не нашлось, и зависящие от этого функции были выключены.
-                Всего отчётов: {formatCount(model.reports)}, с ошибкой: {formatCount(model.failedReports)}.
-              </>
+              </p>
             )}
           >
-            <table className="w-full border-collapse">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className={HEAD_CELL}>Версия расширения</th>
-                  <th className={HEAD_CELL}>Сборка ChatSpace</th>
-                  <th className={HEAD_CELL_NUMBER}>Отчётов</th>
-                  <th className={HEAD_CELL_NUMBER}>С ошибкой</th>
-                  <th className={HEAD_CELL}>Что не найдено и в скольких отчётах</th>
+                <tr>
+                  <th>Версия расширения</th>
+                  <th>Сборка ChatSpace</th>
+                  <th className="num">Отчётов</th>
+                  <th className="num">С ошибкой</th>
+                  <th>Что не найдено и в скольких отчётах</th>
                 </tr>
               </thead>
               <tbody>
                 {model.contract.length === 0 && <EmptyRow columns={5}>Отчётов о проверке нет.</EmptyRow>}
                 {model.contract.map((row) => (
-                  <tr key={row.key} className="border-t border-border">
-                    <td className={`${CELL_CODE} font-medium text-text-primary`}>{row.version}</td>
-                    <td className={`${CELL_CODE} font-mono`}>{row.build}</td>
+                  <tr key={row.key}>
+                    <td className="whitespace-nowrap font-medium">{row.version}</td>
+                    <td className={`${CELL_CODE} font-mono text-xs`}>{row.build}</td>
                     <td className={CELL_NUMBER}>{row.reports}</td>
                     <td className={CELL_NUMBER}>{row.failedReports}</td>
-                    <td className={`${CELL} font-mono`}>{row.missing || "—"}</td>
+                    <td className={`${CELL} font-mono text-xs`}>{row.missing || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -146,42 +152,43 @@ export function ClientHealthPage() {
 
           <Section
             title="Скорость"
-            description={(
-              <>
+            description="Сколько времени занимают действия расширения, по версиям."
+            help={(
+              <p>
                 Медиана: половина замеров быстрее этого. «95 из 100»: быстрее этого 95 замеров из 100.
                 Если замеров меньше {formatCount(model.minGroupSize)}, показано только их число: по нескольким замерам судить нельзя.
-              </>
+              </p>
             )}
           >
-            <table className="w-full border-collapse">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className={HEAD_CELL}>Версия расширения</th>
-                  <th className={HEAD_CELL}>Сборка ChatSpace</th>
-                  <th className={HEAD_CELL_NUMBER}>Замеров</th>
-                  <th className={HEAD_CELL_NUMBER}>Среднее</th>
-                  <th className={HEAD_CELL_NUMBER}>Медиана</th>
-                  <th className={HEAD_CELL_NUMBER}>95 из 100</th>
-                  <th className={HEAD_CELL_NUMBER}>Самый долгий</th>
+                <tr>
+                  <th>Версия расширения</th>
+                  <th>Сборка ChatSpace</th>
+                  <th className="num">Замеров</th>
+                  <th className="num">Среднее</th>
+                  <th className="num">Медиана</th>
+                  <th className="num">95 из 100</th>
+                  <th className="num">Самый долгий</th>
                 </tr>
               </thead>
               <tbody>
                 {model.perf.length === 0 && <EmptyRow columns={7}>Замеров скорости нет.</EmptyRow>}
                 {model.perf.map((block) => (
                   <Fragment key={block.key}>
-                    <tr className="border-t border-border bg-hover-alt/50">
-                      <th colSpan={7} scope="rowgroup" className="px-4 py-2 text-left text-[13px] font-semibold text-text-primary">
+                    <tr>
+                      <th colSpan={7} scope="rowgroup" className="bg-hover-alt text-sm font-semibold text-text-primary">
                         {block.label ?? block.metric}
-                        {block.label !== null && <span className="ml-2 font-mono text-[12px] font-normal text-text-muted">{block.metric}</span>}
+                        {block.label !== null && <span className="ml-2 font-mono text-xs font-normal text-text-muted">{block.metric}</span>}
                       </th>
                     </tr>
                     {block.rows.map((row) => (
-                      <tr key={row.key} className="border-t border-border">
-                        <td className={`${CELL_CODE} font-medium text-text-primary`}>{row.version}</td>
-                        <td className={`${CELL_CODE} font-mono`}>{row.build}</td>
+                      <tr key={row.key}>
+                        <td className="whitespace-nowrap font-medium">{row.version}</td>
+                        <td className={`${CELL_CODE} font-mono text-xs`}>{row.build}</td>
                         <td className={CELL_NUMBER}>{row.count}</td>
                         {row.suppressed ? (
-                          <td colSpan={4} className={`${CELL_CODE} text-right text-text-muted`}>мало замеров</td>
+                          <td colSpan={4} className={`${CELL_CODE} text-right`}>мало замеров</td>
                         ) : (
                           <>
                             <td className={CELL_NUMBER}>{row.mean}</td>
@@ -200,22 +207,29 @@ export function ClientHealthPage() {
 
           <Section
             title="Счётчики"
-            description="Сколько раз за период случилось событие, по всем версиям вместе. Счётчики вставки, отправки и чтения расширение присылает всегда, даже без событий. Строки без названия — прочие коды; те, что начинаются с CG-, — ошибки. Внизу служебные счётчики: что расширение не включило в отчёты. Это не ошибки."
+            description="Сколько раз за период случилось событие, по всем версиям вместе."
+            help={(
+              <p>
+                Счётчики вставки, отправки и чтения расширение присылает всегда, даже без событий. Строки без
+                названия — прочие коды; те, что начинаются с CG-, — ошибки. Внизу служебные счётчики: что
+                расширение не включило в отчёты. Это не ошибки.
+              </p>
+            )}
           >
-            <table className="w-full border-collapse">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className={HEAD_CELL}>Событие</th>
-                  <th className={HEAD_CELL}>Код</th>
-                  <th className={HEAD_CELL_NUMBER}>Сколько раз</th>
+                <tr>
+                  <th>Событие</th>
+                  <th>Код</th>
+                  <th className="num">Сколько раз</th>
                 </tr>
               </thead>
               <tbody>
                 {model.counters.length === 0 && <EmptyRow columns={3}>Счётчиков нет.</EmptyRow>}
                 {model.counters.map((row) => (
-                  <tr key={row.code} className="border-t border-border">
-                    <td className={`${CELL} text-text-primary`}>{row.label ?? "—"}</td>
-                    <td className={`${CELL_CODE} font-mono`}>{row.code}</td>
+                  <tr key={row.code}>
+                    <td>{row.label ?? "—"}</td>
+                    <td className={`${CELL_CODE} font-mono text-xs`}>{row.code}</td>
                     <td className={CELL_NUMBER}>{row.total}</td>
                   </tr>
                 ))}
@@ -225,27 +239,28 @@ export function ClientHealthPage() {
 
           <Section
             title="Сколько расширение держит у себя"
-            description={(
-              <>
-                Размер сохранённых данных и журналов расширения и число его собственных элементов на странице ChatSpace.
-                Показано значение, которого не превышают 95 отчётов из 100. Нужно не меньше {formatCount(model.minGroupSize)} отчётов.
-              </>
+            description="Размер сохранённых данных и журналов расширения и число его элементов на странице ChatSpace."
+            help={(
+              <p>
+                Показано значение, которого не превышают 95 отчётов из 100. Нужно не меньше{" "}
+                {formatCount(model.minGroupSize)} отчётов.
+              </p>
             )}
           >
-            <table className="w-full border-collapse">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className={HEAD_CELL}>Версия расширения</th>
-                  <th className={HEAD_CELL_NUMBER}>Сохранённые данные</th>
-                  <th className={HEAD_CELL_NUMBER}>Журналы</th>
-                  <th className={HEAD_CELL_NUMBER}>Элементов на странице</th>
+                <tr>
+                  <th>Версия расширения</th>
+                  <th className="num">Сохранённые данные</th>
+                  <th className="num">Журналы</th>
+                  <th className="num">Элементов на странице</th>
                 </tr>
               </thead>
               <tbody>
                 {model.footprint.length === 0 && <EmptyRow columns={4}>Данных о размере нет.</EmptyRow>}
                 {model.footprint.map((row) => (
-                  <tr key={row.version} className="border-t border-border">
-                    <td className={`${CELL_CODE} font-medium text-text-primary`}>{row.version}</td>
+                  <tr key={row.version}>
+                    <td className="whitespace-nowrap font-medium">{row.version}</td>
                     <td className={CELL_NUMBER}>{row.caches}</td>
                     <td className={CELL_NUMBER}>{row.logs}</td>
                     <td className={CELL_NUMBER}>{row.domNodes}</td>
@@ -254,7 +269,7 @@ export function ClientHealthPage() {
               </tbody>
             </table>
           </Section>
-        </>
+        </div>
       )}
     </div>
   );

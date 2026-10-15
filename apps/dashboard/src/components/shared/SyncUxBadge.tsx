@@ -1,4 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { SYNC_STATE_LABELS } from "./syncUxDisplay.js";
 
 type SyncUxState = SyncUxSummary["state"];
 
@@ -6,54 +7,22 @@ function joinClasses(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+// A page's sync summary as a badge, in the theme's tones and the console's
+// words (the server's English `label` is not shown).
+
 const SYNC_UX_TONES: Record<SyncUxState, {
   badge: string;
   dot: string;
   panel: string;
   text: string;
 }> = {
-  healthy: {
-    badge: "border-green/30 bg-green/10 text-green",
-    dot: "bg-green",
-    panel: "border-green/20 bg-green/[0.04]",
-    text: "text-green",
-  },
-  syncing: {
-    badge: "border-[#bfdbfe] bg-[#dbeafe] text-[#1d4ed8]",
-    dot: "bg-[#2563eb]",
-    panel: "border-[#bfdbfe] bg-[#eff6ff]",
-    text: "text-[#1d4ed8]",
-  },
-  catching_up: {
-    badge: "border-warning/25 bg-warning/10 text-warning-dark",
-    dot: "bg-warning-dark",
-    panel: "border-warning/20 bg-warning/[0.05]",
-    text: "text-warning-dark",
-  },
-  retrying: {
-    badge: "border-warning/35 bg-warning/12 text-warning-dark",
-    dot: "bg-warning-dark",
-    panel: "border-warning/25 bg-warning/[0.06]",
-    text: "text-warning-dark",
-  },
-  attention: {
-    badge: "border-danger/30 bg-danger/10 text-danger",
-    dot: "bg-danger",
-    panel: "border-danger/20 bg-danger/[0.04]",
-    text: "text-danger",
-  },
-  setup: {
-    badge: "border-border bg-hover-alt text-text-secondary",
-    dot: "bg-text-muted",
-    panel: "border-border bg-hover-alt/50",
-    text: "text-text-secondary",
-  },
-  off: {
-    badge: "border-border bg-card text-text-muted",
-    dot: "bg-text-muted",
-    panel: "border-border bg-card",
-    text: "text-text-muted",
-  },
+  healthy: { badge: "badge badge-success", dot: "status-dot status-dot-ok", panel: "notice notice-success", text: "text-green" },
+  syncing: { badge: "badge badge-info", dot: "status-dot status-dot-ok", panel: "notice", text: "text-text-secondary" },
+  catching_up: { badge: "badge badge-warning", dot: "status-dot status-dot-warn", panel: "notice notice-warning", text: "text-warning-dark" },
+  retrying: { badge: "badge badge-warning", dot: "status-dot status-dot-warn", panel: "notice notice-warning", text: "text-warning-dark" },
+  attention: { badge: "badge badge-danger", dot: "status-dot status-dot-error", panel: "notice notice-danger", text: "text-danger" },
+  setup: { badge: "badge", dot: "status-dot", panel: "notice", text: "text-text-secondary" },
+  off: { badge: "badge", dot: "status-dot", panel: "notice", text: "text-text-muted" },
 };
 
 export function getSyncUxTone(state: SyncUxState) {
@@ -67,20 +36,20 @@ function formatSyncUxTime(iso: string) {
   const mins = Math.floor(absMs / 60_000);
 
   if (mins < 1) {
-    return future ? "in under a minute" : "just now";
+    return future ? "меньше чем через минуту" : "только что";
   }
 
   if (mins < 60) {
-    return future ? `in ${mins}m` : `${mins}m ago`;
+    return future ? `через ${mins} мин` : `${mins} мин назад`;
   }
 
   const hours = Math.floor(mins / 60);
   if (hours < 24) {
-    return future ? `in ${hours}h` : `${hours}h ago`;
+    return future ? `через ${hours} ч` : `${hours} ч назад`;
   }
 
   const days = Math.floor(hours / 24);
-  return future ? `in ${days}d` : `${days}d ago`;
+  return future ? `через ${days} дн` : `${days} дн назад`;
 }
 
 export function formatSyncUxMeta(
@@ -91,11 +60,11 @@ export function formatSyncUxMeta(
   },
 ) {
   if (summary.nextRetryAt) {
-    return `${input?.retryPrefix ?? "Retrying"} ${formatSyncUxTime(summary.nextRetryAt)}`;
+    return `${input?.retryPrefix ?? "Повтор"} ${formatSyncUxTime(summary.nextRetryAt)}`;
   }
 
   if (summary.updatedAt) {
-    return `${input?.updatedPrefix ?? "Updated"} ${formatSyncUxTime(summary.updatedAt)}`;
+    return `${input?.updatedPrefix ?? "Обновлено"} ${formatSyncUxTime(summary.updatedAt)}`;
   }
 
   return null;
@@ -107,14 +76,8 @@ export function SyncUxBadge(
   const tone = getSyncUxTone(summary.state);
 
   return (
-    <span className={joinClasses(
-      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold",
-      tone.badge,
-      className,
-    )}
-    >
-      <span className={joinClasses("h-1.5 w-1.5 rounded-full", tone.dot)} />
-      {summary.label}
+    <span className={joinClasses(tone.badge, className)} data-sync-ux-state={summary.state}>
+      {SYNC_STATE_LABELS[summary.state]}
     </span>
   );
 }

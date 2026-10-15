@@ -1,10 +1,11 @@
 import { Link } from "react-router";
 import { useSyncHistoryRequests, useSyncOverview } from "@/api/queries";
-import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { buildSettingsRoute, syncSettingsTab } from "@/lib/navigation";
+import { EngineDevCommands } from "./EngineDevCommands.js";
 import { EnginePageCard } from "./EnginePageCard.js";
+import { engineDevCommands } from "./enginePageSummary.js";
 import { useEngineStatusOf } from "./useEngineStatusOf.js";
 
 /** The server's cap of one history-request read (`limit` ≤ 200). */
@@ -24,7 +25,7 @@ export function EnginePageList({ onSelectPage }: { onSelectPage: (pageLabel: str
     return (
       <StatusPanel
         title="Страницы не загрузились"
-        description={error instanceof Error ? error.message : "Состояние синхронизации получить не удалось."}
+        description={error instanceof Error ? error.message : "Состояние сбора получить не удалось."}
         tone="error"
       />
     );
@@ -32,20 +33,26 @@ export function EnginePageList({ onSelectPage }: { onSelectPage: (pageLabel: str
 
   const visible = data?.pages ?? [];
   const pages = visible.filter((page) => syncSettingsTab(page.platform) === "engine");
+  const otherPages = visible.length - pages.length;
   const openRequests = history.data?.requests;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {isError && data && <StaleDataNotice title="Показаны сохранённые данные" error={error} />}
       {pages.length === 0 && (
-        <EmptyState
+        <StatusPanel
           title="Страниц Fansly нет"
-          description="Fansly Sync Engine читает страницу Fansly с момента её подключения."
+          description={otherPages > 0
+            ? "Сбор страницы Fansly начинается с её подключения. Страницы OnlyFans — в разделе «OnlyFans»."
+            : "Сбор страницы Fansly начинается с её подключения."}
+          action={otherPages > 0
+            ? <Link to={buildSettingsRoute("sync")} className="link">Открыть раздел «OnlyFans»</Link>
+            : undefined}
         />
       )}
       {openRequests?.length === OPEN_REQUESTS_LIMIT && (
-        <p className="text-xs text-warning-dark">
-          Открытых заявок больше {OPEN_REQUESTS_LIMIT}: показаны самые новые.
+        <p className="text-sm text-text-muted">
+          Открытых заявок на историю больше {OPEN_REQUESTS_LIMIT}: показаны самые новые.
         </p>
       )}
       {pages.map((page) => (
@@ -61,15 +68,9 @@ export function EnginePageList({ onSelectPage }: { onSelectPage: (pageLabel: str
           onSelect={() => onSelectPage(page.pageLabel)}
         />
       ))}
-      {visible.length > pages.length && (
-        <p className="text-xs text-text-secondary">
-          Остальные страницы ({visible.length - pages.length}) — на вкладке{" "}
-          <Link to={buildSettingsRoute("sync")} className="font-semibold text-accent hover:underline">
-            «Синхронизация»
-          </Link>
-          .
-        </p>
-      )}
+      <EngineDevCommands
+        groups={pages.map((page) => ({ title: page.pageLabel, commands: engineDevCommands(page, statusOf(page.pageLabel)) }))}
+      />
     </div>
   );
 }

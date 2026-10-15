@@ -354,6 +354,8 @@
     line-height: 20px;
     color: var(--color-text-secondary);
   }
+  /* A notice's text wraps even inside a table cell. */
+  .notice > * { min-width: 0; }
   .notice-warning { border-color: #f1d9b5; background: var(--color-warning-soft); color: #7a4708; }
   .notice-danger { border-color: #f1c4c4; background: var(--color-danger-soft); color: #8f2525; }
   .notice-success { border-color: #bfe3cc; background: var(--color-success-soft); color: #14532d; }

@@ -1,10 +1,20 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
-import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
+import { DevHeader } from "./DevHeader.js";
 
+const COLUMNS = ["Время", "Страница", "Поток", "Код", "Важность", "Сообщение"];
+
+function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
+  return typeof details?.code === "string" ? details.code : fallback;
+}
+
+/** System → «Аномалии синка»: unusual sync events grouped by their code (not
+ *  the owner's «Инциденты» under «Требует внимания»). A code's tile filters
+ *  the table; a row opens its detail. */
 export function IncidentsPage() {
   const [codeFilter, setCodeFilter] = useState<string | undefined>(undefined);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -16,17 +26,25 @@ export function IncidentsPage() {
 
   const { data, isLoading, isError, error } = useAdminIncidents(params);
 
-  function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
-    return typeof details?.code === "string" ? details.code : fallback;
-  }
+  const header = (
+    <DevHeader
+      title="Аномалии синка"
+      description="Необычные события сбора данных по кодам: последние 100 записей, не вся история."
+    />
+  );
 
   if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading incidents" description="Fetching recent sync anomaly groups." />
-    ) : isError ? (
-      <StatusPanel title="Incidents failed to load" description="The incidents feed could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Incidents unavailable" description="The incidents feed did not return data." tone="error" />
+    return (
+      <div>
+        {header}
+        {isLoading ? (
+          <StatusPanel title="Загружаем аномалии" />
+        ) : isError ? (
+          <StatusPanel title="Аномалии не загрузились" description="Hub не ответил. Попробуйте обновить страницу." tone="error" />
+        ) : (
+          <StatusPanel title="Аномалии недоступны" description="Hub не вернул записей." tone="error" />
+        )}
+      </div>
     );
   }
 
@@ -53,85 +71,68 @@ export function IncidentsPage() {
 
   return (
     <div>
+      {header}
       {isError && <StaleDataNotice error={error} className="mb-4" />}
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Incidents</h1>
-        <p className="text-sm text-text-muted mt-1">Sync anomalies aggregated from events</p>
-      </div>
 
-      {/* Summary cards */}
       {displaySummary.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" role="group" aria-label="Коды аномалий">
           {displaySummary.map((s) => {
             const isActive = s.code !== null && codeFilter === s.code;
-            const displayCode = s.code ?? "Unclassified";
-            return (
+            const card = (
+              <>
+                <p
+                  className={`truncate text-sm font-medium ${s.code === null ? "text-text-secondary" : "font-mono text-text-primary"}`}
+                  title={s.code ?? undefined}
+                >
+                  {s.code ?? "Без кода"}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <span className="text-xl font-semibold tabular-nums text-text-primary">{s.count}</span>
+                  {s.severity && <SeverityBadge severity={s.severity} />}
+                </div>
+              </>
+            );
+            // The tile of events with no code has nothing to filter by.
+            return s.code === null ? (
+              <div key={`null:${s.severity}`} className="stat">{card}</div>
+            ) : (
               <button
                 key={`${s.code}:${s.severity}`}
                 type="button"
-                onClick={() => setCodeFilter(s.code === null || isActive ? undefined : s.code)}
-                className={`rounded-xl border p-4 text-left transition-colors ${
-                  isActive
-                    ? "border-accent bg-accent/5"
-                    : "border-border bg-card hover:bg-hover"
-                }`}
+                aria-pressed={isActive}
+                onClick={() => setCodeFilter(isActive ? undefined : s.code ?? undefined)}
+                className={`stat text-left transition-colors hover:bg-hover ${isActive ? "border-accent bg-accent-soft" : ""}`}
               >
-                <p className="text-sm font-semibold text-text-primary">{displayCode}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-lg font-extrabold text-text-primary tabular-nums">
-                    {s.count}
-                  </span>
-                  {s.severity && (
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[s.severity] ?? SEVERITY_STYLES.info}`}
-                    >
-                      {s.severity}
-                    </span>
-                  )}
-                </div>
+                {card}
               </button>
             );
           })}
         </div>
       )}
 
-      {/* Active filter indicator */}
       {codeFilter && (
-        <div className="mb-4 flex items-center gap-2">
-          <span className="text-sm text-text-muted">
-            Filtered by: <span className="font-medium text-text-primary">{codeFilter}</span>
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-text-secondary">
+            Показан код: <span className="font-mono font-medium text-text-primary">{codeFilter}</span>
           </span>
-          <button
-            type="button"
-            onClick={() => setCodeFilter(undefined)}
-            className="text-sm text-accent hover:underline"
-          >
-            Clear
+          <button type="button" onClick={() => setCodeFilter(undefined)} className="btn btn-ghost btn-sm">
+            Показать все
           </button>
         </div>
       )}
 
-      {/* Incidents table */}
-      <p className="mb-2 text-xs text-text-muted">Up to 100 recent matching records. This is a bounded view, not the full history.</p>
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      <section className="card overflow-x-auto" aria-label="Аномалии">
+        <table className="data-table">
           <thead>
-            <tr className="bg-hover-alt">
-              {["Time", "Page", "Stream", "Code", "Severity", "Message"].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
+            <tr>
+              {COLUMNS.map((col) => <th key={col}>{col}</th>)}
             </tr>
           </thead>
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No incidents found.
+                <td colSpan={COLUMNS.length} className="py-8 text-center text-text-muted">
+                  Аномалий нет.
                 </td>
               </tr>
             )}
@@ -144,47 +145,36 @@ export function IncidentsPage() {
                 severity: item.severity,
                 details: item.details,
               });
+              const toggle = () => setExpandedId(isExpanded ? null : rowId);
 
               return (
                 <Fragment key={rowId}>
                   <tr
-                    className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                    onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                    className="cursor-pointer"
+                    onClick={toggle}
                     tabIndex={0}
                     aria-expanded={isExpanded}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        setExpandedId(isExpanded ? null : rowId);
+                        toggle();
                       }
                     }}
                   >
-                    <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                      {item.emittedAt ? formatRelativeTime(item.emittedAt) : "\u2014"}
+                    <td className="muted whitespace-nowrap">
+                      {item.emittedAt ? formatRelativeTime(item.emittedAt) : "—"}
                     </td>
-                    <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                      {item.pageLabel ?? "\u2014"}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-text-secondary">
-                      {item.stream ?? "\u2014"}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-text-primary font-mono">
-                      {resolveEventCode(item.details, item.eventType) ?? "\u2014"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[displaySeverity] ?? SEVERITY_STYLES.info}`}
-                      >
-                        {displaySeverity}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-text-secondary max-w-xs truncate">
-                      {item.message ?? "\u2014"}
+                    <td className="font-medium">{item.pageLabel ?? "—"}</td>
+                    <td className="muted">{item.stream ?? "—"}</td>
+                    <td className="font-mono text-xs">{eventCode ?? "—"}</td>
+                    <td><SeverityBadge severity={displaySeverity} /></td>
+                    <td className="muted">
+                      <span className="block max-w-[18rem] truncate" title={item.message ?? undefined}>{item.message ?? "—"}</span>
                     </td>
                   </tr>
                   {isExpanded && (
                     <tr>
-                      <td colSpan={6} className="p-0">
+                      <td colSpan={COLUMNS.length} className="p-0">
                         <EventDetailPanel
                           message={item.message}
                           syncRunId={item.syncRunId}

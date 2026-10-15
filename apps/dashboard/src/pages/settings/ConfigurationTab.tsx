@@ -400,7 +400,7 @@ function StagedConfirmModal({
             <span>
               После перезапуска откройте{" "}
               <Link to="/settings?tab=sync" className="link">
-                «Синхронизация»
+                «Система → Сбор данных → OnlyFans»
               </Link>
               {" "}и возобновите нужные потоки данных.
             </span>

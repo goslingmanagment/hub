@@ -1,20 +1,11 @@
 import type { SyncDiagnosis } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
+import { buildSettingsRoute } from "@/lib/navigation";
+import { getDiagnosisHeadline } from "./syncBlockDisplay.js";
 
-function noticeTone(severity: SyncDiagnosis["severity"]) {
-  if (severity === "warning") {
-    return {
-      container: "border-warning/25 bg-warning/10",
-      title: "text-warning-dark",
-    };
-  }
-
-  return {
-    container: "border-danger/20 bg-danger/[0.04]",
-    title: "text-danger",
-  };
-}
-
+/** What the server diagnosed of a page: the headline in the screen's words,
+ *  the server's own detail as a secondary line, and the credentials form when
+ *  that is the way out. */
 export function SyncDiagnosisNotice({
   diagnosis,
   className = "",
@@ -22,28 +13,20 @@ export function SyncDiagnosisNotice({
   diagnosis: SyncDiagnosis;
   className?: string;
 }) {
-  const tone = noticeTone(diagnosis.severity);
-  const classes = [
-    "rounded-lg border px-3 py-2.5",
-    tone.container,
-    className,
-  ].filter(Boolean).join(" ");
+  const tone = diagnosis.severity === "warning" ? "notice-warning" : "notice-danger";
 
   return (
-    <div className={classes}>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-        <span className={`font-medium ${tone.title}`}>
-          {diagnosis.headline}
-        </span>
-        <span className="text-text-secondary">{diagnosis.detail}</span>
-        {diagnosis.actionKind === "credentials" && (
-          <Link
-            to="/settings?tab=credentials"
-            className="font-semibold text-accent hover:underline"
-          >
-            Update credentials
-          </Link>
-        )}
+    <div className={`notice ${tone} ${className}`} data-sync-diagnosis={diagnosis.code}>
+      <div className="min-w-0">
+        <p className="font-semibold">
+          {getDiagnosisHeadline(diagnosis)}
+          {diagnosis.actionKind === "credentials" && (
+            <Link to={buildSettingsRoute("credentials")} className="link ml-2 font-semibold">
+              Обновить данные входа
+            </Link>
+          )}
+        </p>
+        <p className="mt-0.5 break-words text-xs opacity-80">{diagnosis.detail}</p>
       </div>
     </div>
   );

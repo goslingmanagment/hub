@@ -2,7 +2,8 @@ import { SyncPageList } from "./SyncPageList.js";
 import { SyncPageDetail } from "./SyncPageDetail.js";
 import { useSelectedSyncPage } from "./useSelectedSyncPage.js";
 
-/** «Синхронизация»: the pages the legacy page-sync executor serves. */
+/** System → «OnlyFans»: the pages the legacy page-sync executor serves. The
+ *  screen's heading is the System section's own (SettingsPage). */
 export function SyncTab() {
   const { selectedPage, selectPage, clearPage } = useSelectedSyncPage();
 
@@ -10,12 +11,5 @@ export function SyncTab() {
     return <SyncPageDetail pageLabel={selectedPage} onBack={clearPage} />;
   }
 
-  return (
-    <div>
-      <div className="mb-4">
-        <h2 className="text-sm font-bold text-text-primary">Sync</h2>
-      </div>
-      <SyncPageList onSelectPage={selectPage} />
-    </div>
-  );
+  return <SyncPageList onSelectPage={selectPage} />;
 }

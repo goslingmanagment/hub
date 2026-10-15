@@ -10,6 +10,7 @@ import {
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { buildSettingsRoute } from "@/lib/navigation";
+import { SYNC_LEVER_LABELS } from "../sync/syncVocabulary.js";
 import {
   ENGINE_BLOCK_NOT_READ,
   engineAttentionLines,
@@ -43,11 +44,11 @@ import {
   type EngineReadingState,
 } from "./engineDisplay.js";
 
-// The five blocks of a Fansly page as the «Синк» tab shows them: a line each
-// on the page's card of the list, a card each on the page's detail, and the
-// buttons that act on the engine. What a block says — read, paused, held,
-// without an owner — is the server's verdict over the block's own keys
-// (`engineBlockDisplay.ts`); a button says what it moved.
+// The five blocks of a Fansly page as the Fansly screen shows them: a line
+// each on the page's card of the list, a card each on the page's detail, and
+// the buttons that act on the engine. What a block says — read, paused, held,
+// without a processing host — is the server's verdict over the block's own
+// keys (`engineBlockDisplay.ts`); a button says what it moved.
 
 const CREDENTIALS_LINK = "Обновить данные входа";
 
@@ -61,12 +62,12 @@ export function EngineBlockRow({ block, now = Date.now() }: { block: SyncBlockSt
   const engine = isEngineBlock(block) ? block : null;
   const tone = engine === null ? null : engineStateTone(engineBlockState(engine));
   return (
-    <div className="grid grid-cols-[9rem_1fr] gap-x-3 py-1 items-baseline" data-engine-block={block.block}>
-      <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-        <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tone?.dot ?? "bg-text-muted/50"}`} />
+    <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-baseline gap-x-3 py-1 text-sm sm:grid-cols-[8.5rem_minmax(0,1fr)]" data-engine-block={block.block}>
+      <span className="flex items-center gap-2 font-medium text-text-secondary">
+        <span className={tone?.dot ?? "status-dot"} />
         {label}
       </span>
-      <span className={`text-xs min-w-0 break-words ${tone?.text ?? "text-text-muted"}`}>
+      <span className={`min-w-0 break-words ${tone?.text ?? "text-text-muted"}`}>
         {engine === null ? "не читается" : engineBlockSummary(engine, now)}
       </span>
     </div>
@@ -74,8 +75,8 @@ export function EngineBlockRow({ block, now = Date.now() }: { block: SyncBlockSt
 }
 
 /** What on a page needs the owner: new credentials, else the work of its
- *  blocks that is quarantined or refused by Fansly, with the commands that
- *  list it. Nothing when nothing does. */
+ *  blocks that is quarantined or refused by Fansly. Nothing when nothing
+ *  does. The commands that list that work are the screen's «Для разработчика». */
 export function EnginePageAttention({
   page,
   className = "",
@@ -89,25 +90,25 @@ export function EnginePageAttention({
   const refusal = blocks.flatMap((block) => block.engine.stops).find(isCredentialsStop);
   if (refusal !== undefined) {
     return (
-      <div className={`rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5 ${className}`} data-engine-attention="credentials">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-          <span className="font-medium text-danger">{engineBlockStopText(refusal, now)}</span>
-          <span className="text-text-secondary">Из страницы ничего не читается.</span>
-          <Link to={buildSettingsRoute("credentials")} className="font-semibold text-accent hover:underline">
+      <div className={`notice notice-danger ${className}`} data-engine-attention="credentials">
+        <p className="min-w-0">
+          <span className="font-semibold">{engineBlockStopText(refusal, now)}</span>{" "}
+          <span>Из страницы ничего не читается.</span>{" "}
+          <Link to={buildSettingsRoute("credentials")} className="link font-semibold">
             {CREDENTIALS_LINK}
           </Link>
-        </div>
+        </p>
       </div>
     );
   }
   const lines = blocks.flatMap((block) =>
-    engineAttentionLines(block, page.pageLabel).map((line) => `${engineBlockLabel(block.block)} — ${line}`));
+    engineAttentionLines(block).map((line) => `${engineBlockLabel(block.block)} — ${line}`));
   if (lines.length === 0) return null;
   return (
-    <div className={`rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 space-y-0.5 ${className}`} data-engine-attention="work">
-      {lines.map((line) => (
-        <p key={line} className="break-words text-xs font-medium text-warning-dark">{line}</p>
-      ))}
+    <div className={`notice notice-warning ${className}`} data-engine-attention="work">
+      <ul className="min-w-0 space-y-0.5">
+        {lines.map((line) => <li key={line} className="break-words">{line}</li>)}
+      </ul>
     </div>
   );
 }
@@ -119,17 +120,16 @@ function notify(notice: ReturnType<typeof engineLeverNotice>): void {
 }
 
 const LEVER_FAILED: Record<EngineLeverAction, string> = {
-  trigger: "Не удалось поставить опросы в очередь",
+  trigger: "Не удалось запустить обновление",
   pause: "Не удалось поставить на паузу",
   resume: "Не удалось снять паузу",
-  reset: "Не удалось вернуть из карантина",
+  reset: "Не удалось сбросить карантин",
 };
 
-const BUTTON = "rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-40";
-const BUTTON_PLAIN = `${BUTTON} border border-border bg-card text-text-secondary hover:bg-hover`;
-
 /** The buttons of a block: each acts on the block's own keys, and its toast
- *  says what the engine's lever answered. */
+ *  says what the engine's lever answered. The same verbs as on the OnlyFans
+ *  screen; the reset here returns quarantined work, and its confirmation
+ *  says so. */
 export function EngineBlockActions({ pageLabel, block }: { pageLabel: string; block: EngineBlock }) {
   const [confirmRequeue, setConfirmRequeue] = useState(false);
   const mutations = {
@@ -155,43 +155,38 @@ export function EngineBlockActions({ pageLabel, block }: { pageLabel: string; bl
   return (
     <>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {buttons.trigger && (
-          <button
-            type="button"
-            onClick={() => void run("trigger")}
-            disabled={pending}
-            className={`${BUTTON} bg-accent text-white hover:opacity-90`}
-          >
-            Опросить сейчас
-          </button>
-        )}
-        {buttons.pause && (
-          <button type="button" onClick={() => void run("pause")} disabled={pending} className={BUTTON_PLAIN}>
-            {buttons.pause.label}
-          </button>
-        )}
-        {buttons.resume && (
-          <button type="button" onClick={() => void run("resume")} disabled={pending} className={BUTTON_PLAIN}>
-            {buttons.resume.label}
-          </button>
-        )}
         {buttons.requeue && (
           <button
             type="button"
             onClick={() => setConfirmRequeue(true)}
             disabled={pending}
-            className={`${BUTTON} border border-danger/25 bg-danger/5 font-medium text-danger hover:bg-danger/10`}
+            className="btn btn-ghost btn-sm text-danger"
           >
             {buttons.requeue.label}
+          </button>
+        )}
+        {buttons.pause && (
+          <button type="button" onClick={() => void run("pause")} disabled={pending} className="btn btn-sm">
+            {buttons.pause.label}
+          </button>
+        )}
+        {buttons.resume && (
+          <button type="button" onClick={() => void run("resume")} disabled={pending} className="btn btn-sm">
+            {buttons.resume.label}
+          </button>
+        )}
+        {buttons.trigger && (
+          <button type="button" onClick={() => void run("trigger")} disabled={pending} className="btn btn-primary btn-sm">
+            {SYNC_LEVER_LABELS.trigger}
           </button>
         )}
       </div>
 
       {confirmRequeue && (
         <ConfirmModal
-          title={`Вернуть из карантина: ${label}?`}
+          title={`Сбросить карантин: ${label}?`}
           message={engineRequeueConfirmText(block, pageLabel)}
-          confirmLabel="Вернуть"
+          confirmLabel={SYNC_LEVER_LABELS.reset}
           cancelLabel="Отмена"
           closeLabel="Закрыть"
           tone="primary"
@@ -205,14 +200,8 @@ export function EngineBlockActions({ pageLabel, block }: { pageLabel: string; bl
 }
 
 function StateBadge({ state }: { state: EngineReadingState }) {
-  const tone = engineStateTone(state);
   return (
-    <span
-      title={engineReadingWords(state, "ru").detail}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tone.badge}`}
-      data-engine-state={state}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+    <span title={engineReadingWords(state, "ru").detail} className={engineStateTone(state).badge} data-engine-state={state}>
       {engineStateLabel(state)}
     </span>
   );
@@ -222,9 +211,6 @@ function readAgo(iso: string | null, now: number): string {
   const age = engineAgeText(iso, now);
   return age === null ? "—" : `${age} назад`;
 }
-
-const STREAM_HEAD = "px-3 py-1.5 text-left font-medium text-text-muted";
-const STREAM_CELL = "px-3 py-1.5 text-text-secondary";
 
 /** The streams of a block: a table where its five columns fit, and one
  *  labelled block per stream where they would run past the card (a phone, a
@@ -247,42 +233,40 @@ function EngineStreams({ block, now }: { block: EngineBlock; now: number }) {
     };
   });
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-border">
-      <table className="hidden w-full text-xs @md:table" data-engine-streams="table">
+    <div className="mt-2 overflow-hidden rounded-lg border border-border">
+      <table className="hidden data-table @md:table" data-engine-streams="table">
         <thead>
-          <tr className="bg-hover-alt">
-            <th className={STREAM_HEAD}>Поток</th>
-            <th className={STREAM_HEAD}>Состояние</th>
-            <th className={STREAM_HEAD}>Последнее чтение</th>
-            <th className={STREAM_HEAD}>Следующее</th>
-            <th className={STREAM_HEAD}>Опрос</th>
+          <tr>
+            <th>Поток</th>
+            <th>Состояние</th>
+            <th>Последнее чтение</th>
+            <th>Следующее</th>
+            <th>Опрос</th>
           </tr>
         </thead>
         <tbody>
           {streams.map((row) => (
-            <tr key={row.stream} className="border-t border-border" data-engine-stream={row.stream}>
-              <td className="px-3 py-1.5 font-medium text-text-primary">{row.label}</td>
-              <td className="px-3 py-1.5">
-                <span className="flex items-center gap-1.5">
-                  <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${row.dot}`} />
-                  <span className={row.stateClass}>{row.stateText}</span>
+            <tr key={row.stream} data-engine-stream={row.stream}>
+              <td className="font-medium">{row.label}</td>
+              <td>
+                <span className="flex items-center gap-2">
+                  <span className={row.dot}></span><span className={row.stateClass}>{row.stateText}</span>
                 </span>
               </td>
-              <td className={STREAM_CELL}>{row.read}</td>
-              <td className={STREAM_CELL}>{row.next}</td>
-              <td className={STREAM_CELL}>{row.poll}</td>
+              <td className="muted">{row.read}</td>
+              <td className="muted">{row.next}</td>
+              <td className="muted">{row.poll}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <ul className="divide-y divide-border text-xs @md:hidden" data-engine-streams="list">
+      <ul className="divide-y divide-border-light text-sm @md:hidden" data-engine-streams="list">
         {streams.map((row) => (
           <li key={row.stream} className="px-3 py-2">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
               <span className="font-medium text-text-primary">{row.label}</span>
-              <span className="flex items-center gap-1.5">
-                <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${row.dot}`} />
-                <span className={row.stateClass}>{row.stateText}</span>
+              <span className="flex items-center gap-2">
+                <span className={row.dot}></span><span className={row.stateClass}>{row.stateText}</span>
               </span>
             </div>
             <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-text-secondary">
@@ -314,95 +298,101 @@ export function EngineBlockCard({
   const label = engineBlockLabel(block.block);
   if (!isEngineBlock(block)) {
     return (
-      <div className="rounded-xl border border-border bg-card px-5 py-4" data-engine-block={block.block}>
-        <span className="text-sm font-semibold text-text-muted">{label}</span>
-        <p className="mt-1 text-xs text-text-muted">{ENGINE_BLOCK_NOT_READ}</p>
-      </div>
+      <section className="card" data-engine-block={block.block}>
+        <div className="card-header">
+          <div>
+            <h4 className="card-title text-text-secondary">{label}</h4>
+            <p className="card-description">{ENGINE_BLOCK_NOT_READ}</p>
+          </div>
+        </div>
+      </section>
     );
   }
 
   const state = engineBlockState(block);
   const { engine } = block;
-  const attention = engineAttentionLines(block, pageLabel);
-  const chatsUnavailable = engineChatsUnavailableLine(block, pageLabel);
+  const attention = engineAttentionLines(block);
+  const chatsUnavailable = engineChatsUnavailableLine(block);
   const nothingDue = NOTHING_DUE.has(state);
   // The owner's pause is the owner's own doing: it is said, not sounded.
-  const stopsTone = engine.stops.every((stop) => stop.reason === "paused")
-    ? "border-border bg-hover-alt text-text-secondary"
-    : "border-warning/25 bg-warning/10 text-warning-dark";
+  const stopsTone = engine.stops.every((stop) => stop.reason === "paused") ? "notice" : "notice notice-warning";
 
   return (
-    <div className="@container rounded-xl border border-border bg-card px-5 py-4" data-engine-block={block.block}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="text-sm font-semibold text-text-primary">{label}</span>
+    <section className="@container card" data-engine-block={block.block}>
+      <div className="card-header">
+        <div className="min-w-0">
+          <h4 className="card-title">{label}</h4>
+          <p className="card-description">{engineBlockDescription(block.block)}</p>
+        </div>
         <StateBadge state={state} />
       </div>
-      <p className="mt-0.5 text-xs text-text-muted">{engineBlockDescription(block.block)}</p>
 
-      {!engine.ownerRunning && (
-        <p className="mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 text-xs font-medium text-warning-dark">
-          {engineReadingWords(state, "ru").detail}
-        </p>
-      )}
+      <div className="card-body space-y-3">
+        {!engine.ownerRunning && (
+          <p className="notice notice-warning font-medium">{engineReadingWords(state, "ru").detail}</p>
+        )}
 
-      {engine.stops.length > 0 && (
-        <div className={`mt-3 rounded-lg border px-3 py-2.5 space-y-1 ${stopsTone}`} data-engine-stops>
-          {engine.stops.map((stop) => (
-            <p key={`${stop.reason}:${stop.by.join(",")}:${stop.until ?? ""}`} className="break-words text-xs font-medium">
-              {engineBlockStopText(stop, now, engine.keys.length)}
-            </p>
-          ))}
-          {block.block === "connection" && engineBlockCredentialsRefused(block) && (
-            <Link
-              to={buildSettingsRoute("credentials")}
-              className="inline-block text-xs font-semibold text-accent hover:underline"
-            >
-              {CREDENTIALS_LINK} &rarr;
-            </Link>
+        {engine.stops.length > 0 && (
+          <div className={`${stopsTone} flex-col gap-1`} data-engine-stops>
+            {engine.stops.map((stop) => (
+              <p key={`${stop.reason}:${stop.by.join(",")}:${stop.until ?? ""}`} className="break-words font-medium">
+                {engineBlockStopText(stop, now, engine.keys.length)}
+              </p>
+            ))}
+            {block.block === "connection" && engineBlockCredentialsRefused(block) && (
+              <Link to={buildSettingsRoute("credentials")} className="link inline-block font-semibold">
+                {CREDENTIALS_LINK} &rarr;
+              </Link>
+            )}
+          </div>
+        )}
+
+        {attention.length > 0 && (
+          <div className="notice notice-warning flex-col gap-1" data-engine-attention="work">
+            {attention.map((line) => (
+              <p key={line} className="break-words font-medium">{line}</p>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          <span className="text-text-muted">Последнее чтение</span>
+          <span className="text-text-secondary">{block.succeededAt === null ? "ещё не было" : readAgo(block.succeededAt, now)}</span>
+          {!nothingDue && block.nextDueAt !== null && (
+            <>
+              <span className="text-text-muted">Следующее</span>
+              <span className="text-text-secondary">{engineDueText(block.nextDueAt, now)}</span>
+            </>
+          )}
+          {block.intervals.length > 0 && (
+            <>
+              <span className="text-text-muted">Опросы</span>
+              <span className="text-text-secondary">
+                {block.intervals
+                  .map((interval) => `${engineStreamLabel(interval.stream)} — ${engineCadenceText(interval.cadenceSeconds)}`)
+                  .join(", ")}
+              </span>
+            </>
           )}
         </div>
-      )}
 
-      {attention.length > 0 && (
-        <div className="mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 space-y-1" data-engine-attention="work">
-          {attention.map((line) => (
-            <p key={line} className="break-words text-xs font-medium text-warning-dark">{line}</p>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
-        <span className="text-text-muted">Последнее чтение</span>
-        <span className="text-text-secondary">{block.succeededAt === null ? "ещё не было" : readAgo(block.succeededAt, now)}</span>
-        {!nothingDue && block.nextDueAt !== null && (
-          <>
-            <span className="text-text-muted">Следующее</span>
-            <span className="text-text-secondary">{engineDueText(block.nextDueAt, now)}</span>
-          </>
+        {chatsUnavailable !== null && (
+          <p className="break-words text-sm text-text-secondary" data-engine-chats-unavailable>
+            {chatsUnavailable}
+          </p>
         )}
-        {block.intervals.length > 0 && (
-          <>
-            <span className="text-text-muted">Опросы</span>
-            <span className="text-text-secondary">
-              {block.intervals
-                .map((interval) => `${engineStreamLabel(interval.stream)} — ${engineCadenceText(interval.cadenceSeconds)}`)
-                .join(", ")}
-            </span>
-          </>
+
+        {block.substreams.length > 1 && (
+          <details className="help">
+            <summary>Потоки блока ({block.substreams.length})</summary>
+            <EngineStreams block={block} now={now} />
+          </details>
         )}
       </div>
 
-      {chatsUnavailable !== null && (
-        <p className="mt-2 break-words text-xs text-text-secondary" data-engine-chats-unavailable>
-          {chatsUnavailable}
-        </p>
-      )}
-
-      {block.substreams.length > 1 && <EngineStreams block={block} now={now} />}
-
-      <div className="mt-4">
+      <div className="card-footer justify-end">
         <EngineBlockActions pageLabel={pageLabel} block={block} />
       </div>
-    </div>
+    </section>
   );
 }

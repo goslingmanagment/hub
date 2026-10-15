@@ -44,11 +44,11 @@ const sections: Record<SettingsTab, { title: string; description: string }> = {
     description: "Telegram-бот, оповещения о сбоях и ежедневный отчёт о доходе.",
   },
   engine: {
-    title: "Сбор Fansly",
+    title: "Сбор данных — Fansly",
     description: "Как Hub читает каждую страницу Fansly: очередь, паузы и заявки на историю.",
   },
   sync: {
-    title: "Синхронизация OnlyFans",
+    title: "Сбор данных — OnlyFans",
     description: "Какие данные страниц OnlyFans обновляются и где нужна помощь.",
   },
   ofapi: {
