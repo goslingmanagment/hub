@@ -1901,6 +1901,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // Project Browser (0275): the page's browser — its account, session
     // fingerprint and sealed secrets go with the page's sync rows.
     ["page_browsers", "page_id"],
+    // Project Browser (0282): an existing page's draft of its browser — the
+    // page's proxy as checked, its sealed credentials, its environment.
+    ["page_browser_drafts", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
