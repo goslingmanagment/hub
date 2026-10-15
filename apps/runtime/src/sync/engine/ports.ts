@@ -254,6 +254,10 @@ export interface PageTransport {
   /** A fresh browser learns its session from admitted site GETs. While
    *  unknown, only the bootstrap reads may use that path. Absent on Node. */
   needsSiteBootstrap?(): boolean;
+  /** A newly loaded browser must witness an engine identity read in this
+   *  Chrome start even when its saved session's digest is already trusted.
+   *  Absent on Node; never grants permission around a page/route hold. */
+  needsSessionConfirmation?(): boolean;
   close(): Promise<void>;
 }
 

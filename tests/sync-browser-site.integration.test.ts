@@ -192,7 +192,7 @@ describe("the site path over the operator's RPC", () => {
     expect((await attempts(r.page.pageId)).some((row) => row.browserRequestId === dead.siteRequestId)).toBe(false);
   });
 
-  it("a Chrome restart learns its session through the site with engine work waiting and its site turn already spent (lilly-1)", async () => {
+  it.each([{ session: SESSION_A, label: "same session" }, { session: SESSION_B, label: "new session" }])("a Chrome restart learns $label through the site and reaches ready with engine work waiting and its site turn already spent (lilly-1)", async ({ session }) => {
     const r = await rig();
     const { made, browser } = await actorOn(r, { withRead: true });
     const diagnostics: Array<Record<string, unknown>> = [];
@@ -208,7 +208,7 @@ describe("the site path over the operator's RPC", () => {
     // standing poll remains due, while the new Chrome knows no session.
     const unavailableBefore = (made.deps.metrics as RecordingMetrics).get("sync_transport_unavailable");
     r.operator.setSession(null);
-    r.operator.pushState({ step: "site_loaded" });
+    r.operator.pushState({ step: "site_loaded", accountId: null });
     r.operator.siteDone(warmAnswer, { status: 200 });
     await until(async () => r.operator.acks.includes(warmAnswer.attemptId), 5_000, "the warm send committed");
     await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_transport_unavailable") >= unavailableBefore + 3, 4_000, "repeated empty bootstrap laps");
@@ -222,21 +222,25 @@ describe("the site path over the operator's RPC", () => {
     const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === bootstrap.siteRequestId)!;
     if (!answer.admit) throw new Error("the bootstrap request was refused");
     // The fake learns only from that admitted GET, never from its hello.
-    r.operator.setSession(SESSION_B);
+    r.operator.setSession(session);
     const respond = r.operator.respond;
     r.operator.respond = (send) => {
       const result = respond(send);
-      if (new URL(send.url).pathname.endsWith("/account/me")) r.operator.pushState({ step: "ready" });
+      if (new URL(send.url).pathname.endsWith("/account/me")) r.operator.pushState({ step: "ready", accountId: HARNESS_OWN_REF });
       return result;
     };
     r.operator.siteDone(answer, { status: 200 });
-    const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_B);
+    const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, session);
     await until(async () => {
       const result = await testDb!.pool.query("select credentials_generation from sync_pages where page_id=$1", [r.page.pageId]);
       return result.rows[0]?.credentials_generation === expected && browser.client.state?.step === "ready";
     }, 5_000, "fresh identity and ready after the restart");
     const after = (await attempts(r.page.pageId)).filter((row) => row.id > answer.attemptId && row.origin === "engine");
     expect(after[0]).toMatchObject({ operation: "account.me", outcome: "response", httpStatus: 200 });
+    // Ready ends this startup demand even when the trusted digest never
+    // changed. Further ordinary laps must not keep raising account.verify.
+    await sleep(200);
+    expect((await attempts(r.page.pageId)).filter((row) => row.id > answer.attemptId && row.origin === "engine" && row.operation === "account.me")).toHaveLength(1);
   }, 20_000);
 
   it("a site request and the site socket's CONNECT are admitted through the pacer and journaled; their ends are committed, then acknowledged", async (context) => {

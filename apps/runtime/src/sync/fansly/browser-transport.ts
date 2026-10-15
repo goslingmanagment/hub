@@ -756,6 +756,10 @@ export async function createBrowserPageTransport(
   return {
     held,
     needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
+    needsSessionConfirmation: () => {
+      const state = client.state;
+      return state !== null && state.step === "site_loaded" && state.sessionFingerprint !== null && state.accountId === null;
+    },
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
       const refused = refusalNow();
       if (refused !== null) throw refused;

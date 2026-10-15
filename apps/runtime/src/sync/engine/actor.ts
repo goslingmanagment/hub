@@ -348,7 +348,10 @@ export class SyncActor {
     // G2 from the database, never from memory: while the stored credentials
     // are not the ones the engine trusts, only the identity checks go out.
     const unverified = underCredentials ? null : await this.#unverifiedStoredDigest(page);
-    const checksOnly = unverified !== null;
+    // Trust in a saved digest outlives Chrome, but the operator's identity
+    // confirmation does not. The current start needs its own account.me.
+    const confirmingSession = !underCredentials && d.transport.needsSessionConfirmation?.() === true;
+    const checksOnly = unverified !== null || confirmingSession;
     const exclusions = pickExclusions(page, d.registry, now, { checksOnly });
     if (d.site && this.#siteTurns.due()) {
       const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
@@ -365,7 +368,11 @@ export class SyncActor {
       await d.wake.wait(d.pageId, Math.max(0, picked.waitUntil.getTime() - now.getTime()), signals.stop);
       return null;
     }
-    if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed", unverified)) return null;
+    if (picked === null && checksOnly && await ensureCredentialsVerify(d,
+      confirmingSession ? "browser_loaded" : "credentials_changed", unverified ?? await this.#storedDigest())) {
+      if (confirmingSession) d.logger.info({ pageId: d.pageId }, "Fansly sync actor: identity verify raised for the current browser start");
+      return null;
+    }
     if (picked === null && d.site) {
       // A slot the engine leaves empty is the site's.
       const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
@@ -523,7 +530,7 @@ export class SyncActor {
     const now = d.clock.wallNow();
     const holds = holdSetOf(page.holds);
     const clocks = holds.routes.ok ? await this.#routeClocks(holds.routes.state) : null;
-    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null || d.transport.needsSessionConfirmation?.() === true;
     const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, bootstrapOnly: d.transport.needsSiteBootstrap?.() === true, now });
     return settleSiteDecision(d, d.site!, ctx);
   }
@@ -550,7 +557,7 @@ export class SyncActor {
       return null;
     }
     const clocks = await this.#routeClocks(holds.routes.state);
-    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null;
+    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null || d.transport.needsSessionConfirmation?.() === true;
     const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals);
     return served === "none" ? null : served;
   }
