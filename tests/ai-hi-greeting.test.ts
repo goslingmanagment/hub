@@ -333,7 +333,7 @@ describe('unified hi-greeting prompt', () => {
     // above, and the name rule covers "username or display name" either way.
     const released = userText(promptInput({ fanDisplayName: 'alex_runner', fanUsername: undefined, fanCustomName: undefined, fanBio: undefined }));
     expect(released).toBe(fallback);
-    expect(released).toContain('take a natural name or nickname from the username or display name');
+    expect(released).toContain('otherwise a natural name from the username or display name');
   });
 
   it('leaves the greeting slots out of every other feature', () => {
@@ -367,19 +367,23 @@ describe('greeting avatar image', () => {
   });
 });
 
-// Lora persona audit (2026-10-16, owner-approved after the all-feature bench):
-// the hooks are plain. No "tease or dare" technique and no guess about what
-// kind of person the fan is; a two-way opener and a bit of herself instead.
-describe('hi-greeting hooks after the persona audit', () => {
-  it('drops the guessing technique and offers plain hooks', () => {
-    expect(HI_GREETING_TEMPLATE).not.toContain('**Tease or dare**');
-    expect(HI_GREETING_TEMPLATE).not.toContain('a playful riff on it');
-    expect(HI_GREETING_TEMPLATE).toContain('**Two-way opener**');
-    expect(HI_GREETING_TEMPLATE).toContain('**A bit of yourself**');
-    expect(HI_GREETING_TEMPLATE).toContain('Never guess what kind of person he is');
-    expect(HI_GREETING_TEMPLATE).toContain('- Clever guesses about him or jokes about what his username "says" about him');
-    // The hooks stay in the 1h static prefix, before the transcript.
-    expect(HI_GREETING_TEMPLATE.indexOf('## How to Hook the Fan')).toBeLessThan(
+// Lora persona audit (2026-10-16, owner-approved after the Hi bench): a short
+// opener. One or two short sentences, his real name, one real hook, a light
+// joke only about something real in his profile, no guess about what kind of
+// person he is, and one easy question or invitation at the end.
+describe('hi-greeting opener after the persona audit', () => {
+  it('asks for a short opener with one real hook and no guessing', () => {
+    expect(HI_GREETING_TEMPLATE).toContain('## How to Write the Opener');
+    expect(HI_GREETING_TEMPLATE).toContain('one or two short sentences.');
+    expect(HI_GREETING_TEMPLATE).toContain('Pick ONE real thing to hook on');
+    expect(HI_GREETING_TEMPLATE).toContain('Never guess what kind of person he is.');
+    expect(HI_GREETING_TEMPLATE).toContain('- Several questions at once');
+    expect(HI_GREETING_TEMPLATE).toContain('- Guesses about him ("I have a theory about you", "I bet you\'re the type who...")');
+    for (const gone of ['## How to Hook the Fan', '**Tease or dare**', '**Two-way opener**', '**A bit of yourself**', 'a playful riff on it']) {
+      expect(HI_GREETING_TEMPLATE, gone).not.toContain(gone);
+    }
+    // The opener rules stay in the 1h static prefix, before the transcript.
+    expect(HI_GREETING_TEMPLATE.indexOf('## How to Write the Opener')).toBeLessThan(
       HI_GREETING_TEMPLATE.indexOf('## Conversation Transcript'),
     );
   });
