@@ -240,21 +240,51 @@ export function readPastedProxy(text: string, order?: PastedProxyOrder): PastedP
   // password in the colon forms: those are tried next).
   let atProblem: string | null = null;
   if (rest.includes("@")) {
+    const readings: Reading[] = [];
     // login:password@host:port — the password may hold an @: the host is
     // after the last one.
     const last = rest.lastIndexOf("@");
     const at = hostPortOf(rest.slice(last + 1));
     const credentials = credentialsOf(rest.slice(0, last), decode);
-    if (at !== null && credentials !== null) return { kind: "parsed", proxy: proxyOf(scheme, schemeGiven, at, credentials), order: null };
+    if (at !== null && credentials !== null) readings.push({ order: "user_first", proxy: proxyOf(scheme, schemeGiven, at, credentials), strong: at.host.strong });
     // host:port@login:password
     const first = rest.indexOf("@");
     const reversedAt = hostPortOf(rest.slice(0, first));
     const reversed = credentialsOf(rest.slice(first + 1), decode);
-    if (reversedAt !== null && reversed !== null) return { kind: "parsed", proxy: proxyOf(scheme, schemeGiven, reversedAt, reversed), order: "host_first" };
+    if (reversedAt !== null && reversed !== null) readings.push({ order: "host_first", proxy: proxyOf(scheme, schemeGiven, reversedAt, reversed), strong: reversedAt.host.strong });
+    const chosen = choose(readings, order);
+    if (chosen !== null) return chosen;
     atProblem = credentials === null ? "Перед @ нет логина" : hostPortProblem(rest.slice(last + 1));
   }
   const colonRead = readColonForm(rest, scheme, schemeGiven, order);
   return atProblem !== null && colonRead.kind === "invalid" ? invalid(atProblem) : colonRead;
+}
+
+/** One way to read a text: which end is the host, and whether that host
+ *  is plainly one (an address, or a name with a dot and a real TLD). */
+interface Reading {
+  order: PastedProxyOrder;
+  proxy: PastedProxy;
+  strong: boolean;
+}
+
+/**
+ * The reading the text has (Astra's review of PR #627, item 2): the one the
+ * owner asked for; else the only one; else the only one whose host is
+ * plainly a host — a bare word (`alice`) is no proxy's address, so
+ * `203.0.113.10:1080@alice:54321` is the proxy 203.0.113.10:1080 with the
+ * password 54321. Two readings whose hosts are both plainly hosts — which
+ * number is the port, which the password, cannot be told — are ambiguous:
+ * the owner says which. Null: none.
+ */
+function choose(readings: Reading[], order: PastedProxyOrder | undefined): PastedProxyRead | null {
+  if (readings.length === 0) return null;
+  const asked = order === undefined ? undefined : readings.find((reading) => reading.order === order);
+  if (asked !== undefined) return { kind: "parsed", proxy: asked.proxy, order: asked.order };
+  if (readings.length === 1) return { kind: "parsed", proxy: readings[0]!.proxy, order: readings[0]!.order };
+  const strong = readings.filter((reading) => reading.strong);
+  if (strong.length === 1) return { kind: "parsed", proxy: strong[0]!.proxy, order: strong[0]!.order };
+  return { kind: "ambiguous", options: readings.map((reading) => ({ order: reading.order, proxy: reading.proxy })) };
 }
 
 /** The colon forms: host:port, and the four parts either way round. */
@@ -273,23 +303,19 @@ function readColonForm(rest: string, scheme: PastedProxyScheme, schemeGiven: boo
   if (parts.length === 3) return invalid("Три части через двоеточие: не хватает логина или пароля (адрес:порт:логин:пароль)");
 
   const n = parts.length;
+  const readings: Reading[] = [];
   const hostFirstAt = hostOf(parts[0]!);
   const hostFirstPort = portOf(parts[1]!);
+  if (hostFirstAt !== null && hostFirstPort !== null) {
+    readings.push({ order: "host_first", proxy: proxyOf(scheme, schemeGiven, { host: hostFirstAt, port: hostFirstPort }, { username: parts[2]!, password: parts.slice(3).join(":") }), strong: hostFirstAt.strong });
+  }
   const userFirstAt = hostOf(parts[n - 2]!);
   const userFirstPort = portOf(parts[n - 1]!);
-  const hostFirst = hostFirstAt !== null && hostFirstAt.strong && hostFirstPort !== null
-    ? proxyOf(scheme, schemeGiven, { host: hostFirstAt, port: hostFirstPort }, { username: parts[2]!, password: parts.slice(3).join(":") })
-    : null;
-  const userFirst = userFirstAt !== null && userFirstAt.strong && userFirstPort !== null
-    ? proxyOf(scheme, schemeGiven, { host: userFirstAt, port: userFirstPort }, { username: parts[0]!, password: parts.slice(1, n - 2).join(":") })
-    : null;
-  if (order === "host_first" && hostFirst !== null) return { kind: "parsed", proxy: hostFirst, order };
-  if (order === "user_first" && userFirst !== null) return { kind: "parsed", proxy: userFirst, order };
-  if (hostFirst !== null && userFirst !== null) {
-    return { kind: "ambiguous", options: [{ order: "host_first", proxy: hostFirst }, { order: "user_first", proxy: userFirst }] };
+  if (userFirstAt !== null && userFirstPort !== null) {
+    readings.push({ order: "user_first", proxy: proxyOf(scheme, schemeGiven, { host: userFirstAt, port: userFirstPort }, { username: parts[0]!, password: parts.slice(1, n - 2).join(":") }), strong: userFirstAt.strong });
   }
-  if (hostFirst !== null) return { kind: "parsed", proxy: hostFirst, order: "host_first" };
-  if (userFirst !== null) return { kind: "parsed", proxy: userFirst, order: "user_first" };
+  const chosen = choose(readings, order);
+  if (chosen !== null) return chosen;
   if (!rest.includes("[") && ipv6Of(rest.replace(/:\d{1,5}$/, "")) !== null) {
     return invalid("IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:1080");
   }

@@ -136,6 +136,34 @@ describe("readPastedProxy: the four-part forms", () => {
   });
 });
 
+describe("readPastedProxy: which number is the port (Astra's review of PR #627, item 2)", () => {
+  it("a numeric password is never read as the port: a bare word is no proxy's host", () => {
+    const read = readPastedProxy("203.0.113.10:1080@alice:54321");
+    expect(read).toMatchObject({ kind: "parsed", order: "host_first", proxy: { host: "203.0.113.10", port: 1080, username: "alice", password: "54321" } });
+    expect(JSON.stringify(maskPastedProxy(parsed(read)))).not.toContain("54321");
+    expect(pastedProxyConfig(parsed(read)).url).toBe("socks5://203.0.113.10:1080");
+    // The usual way round reads the same proxy.
+    expect(readPastedProxy("alice:54321@203.0.113.10:1080")).toMatchObject({ kind: "parsed", order: "user_first", proxy: { host: "203.0.113.10", port: 1080, password: "54321" } });
+  });
+
+  it("the owner's order is honoured, either way round, in the @ forms and the colon forms", () => {
+    expect(parsed(readPastedProxy("203.0.113.10:1080@alice:54321", "host_first"))).toMatchObject({ host: "203.0.113.10", port: 1080, password: "54321" });
+    expect(parsed(readPastedProxy("203.0.113.10:1080@alice:54321", "user_first"))).toMatchObject({ host: "alice", port: 54321, password: "1080" });
+    expect(parsed(readPastedProxy("gate.example.com:1080:user123:4567", "user_first"))).toMatchObject({ host: "user123", port: 4567 });
+  });
+
+  it("both ends plainly a host: ambiguous — the form asks, in the @ forms too", () => {
+    for (const text of ["198.51.100.7:2080@203.0.113.10:1080", "john.doe:5555@gate.example.com:1080", "gate.example.com:1080:john.doe:5555"]) {
+      expect(readPastedProxy(text).kind, text).toBe("ambiguous");
+    }
+    const options = readPastedProxy("john.doe:5555@gate.example.com:1080");
+    expect(options.kind === "ambiguous" ? options.options.map((option) => [option.order, option.proxy.host, option.proxy.port]) : []).toEqual([
+      ["user_first", "gate.example.com", 1080],
+      ["host_first", "john.doe", 5555],
+    ]);
+  });
+});
+
 describe("a page's browser and the proxy read", () => {
   it("SOCKS5 with a login and a password, on IPv4 or a name: usable", () => {
     expect(pageBrowserProxyProblem(parsed(readPastedProxy("203.0.113.5:1080:user:pass")))).toBeNull();
