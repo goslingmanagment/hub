@@ -44,7 +44,8 @@
 #     killing it: its browser stopped by `sync browser snapshot
 #     --if-no-owner-stop` (audited, carried out by the engine that owns the
 #     page; refused in its own transaction, nothing changed, while a stop
-#     of the owner's stands — the update holds, his stop stays his): the
+#     of the owner's stands, or the page is not on its browser with no
+#     leave pending — the update holds, the page stays as he has it): the
 #     page paused by the stop, the operator's exit closed and Chrome
 #     stopped, confirmed only by the operator's answer to that stop once
 #     Chrome is down. The page stays on its browser transport (no Node: a
@@ -705,7 +706,8 @@ hold() {
 # too:
 # - out: `sync browser snapshot --if-no-owner-stop` — the update's own stop
 #   of the browser and the pause it puts on the page, never asked over
-#   another's stop (refused in the transaction that would record it,
+#   another's stop nor of a page its owner moved off its browser (the page
+#   read as it is now; refused in the transaction that would record it,
 #   nothing changed); confirmed only by the operator's answer to that very
 #   stopPage, which comes once Chrome is down;
 # - back: `sync browser start --if-no-halt` — that stop and its pause
@@ -748,19 +750,24 @@ SQL
 
 # The stop in force on the page's browser now: STOP_SET (the owner's stop
 # stands), the page's latest stop command — STOP_ID, STOP_OUTCOME — and
-# STOP_OURS (it is this run's). 1: the Hub cannot be read.
+# STOP_OURS (it is this run's); and where the page is: STOP_TRANSPORT, and
+# STOP_LEAVE, a pending leave of its browser ("" none). 1: the Hub cannot be
+# read.
 hub_stop_now() {
   local row
-  STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
+  STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS="" STOP_TRANSPORT="" STOP_LEAVE=""
   row="$(hub_compose exec -T postgres sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtqX -F "|"' <<SQL
 -- pb-update:stop $PAGE
 BEGIN READ ONLY;
 SELECT (pb.owner_stop_at IS NOT NULL)::text,
        coalesce(c.id::text, ''),
        coalesce(c.outcome, ''),
-       coalesce((c.note LIKE 'page-browser-update $RUN %')::text, 'false')
+       coalesce((c.note LIKE 'page-browser-update $RUN %')::text, 'false'),
+       sp.transport,
+       coalesce(sp.browser_leave_generation::text, '')
   FROM pages p
   JOIN page_browsers pb ON pb.page_id = p.id
+  JOIN sync_pages sp ON sp.page_id = p.id
   LEFT JOIN LATERAL (
     SELECT id, outcome, note FROM page_browser_commands
      WHERE page_id = p.id AND kind = 'stopPage'
@@ -772,8 +779,17 @@ SQL
 )" || return 1
   row="$(sed -n '1p' <<<"$row")"
   [[ -n "$row" ]] || return 1
-  IFS='|' read -r STOP_SET STOP_ID STOP_OUTCOME STOP_OURS <<<"$row"
+  IFS='|' read -r STOP_SET STOP_ID STOP_OUTCOME STOP_OURS STOP_TRANSPORT STOP_LEAVE <<<"$row"
   [[ "$STOP_SET" == true || "$STOP_SET" == false ]] || return 1
+  [[ "$STOP_TRANSPORT" == node || "$STOP_TRANSPORT" == browser ]] || return 1
+}
+
+# The page is not on its browser now (STOP_*, read by hub_stop_now): its
+# owner moved it — the update asks no stop of it, whatever its state file
+# says. 0 (CMD_WHY) when so.
+off_browser() {
+  [[ "$STOP_TRANSPORT" == browser && -z "$STOP_LEAVE" ]] && return 1
+  CMD_WHY="the page is not on its browser now (transport $STOP_TRANSPORT${STOP_LEAVE:+, a leave of it pending since generation $STOP_LEAVE}): its owner moved it — the update asks no stop of it"
 }
 
 # Waits for the run's <kind> command of <tag> to end. 0 ok; 1 the operator
@@ -822,14 +838,18 @@ hub_ask() {
 
 # The page's browser out of service. 0 the operator confirmed its stop
 # (Chrome down; the page paused by it), CMD_ID its command; 1 refused; 3
-# not known; 4 a stop of the owner's stands — never asked over (the
-# update's own stop would then be the latest, and its start could lift the
-# owner's) (CMD_WHY). The read below is only a first look: the lever's
+# not known; 4 the owner's — a stop of his stands, never asked over (the
+# update's own stop would then be the latest, and its start could lift
+# his), or he moved the page off its browser (never paused by the update)
+# (CMD_WHY). The page is read as it is now, never as the update's state
+# file had it; the read is only a first look: the lever's
 # `--if-no-owner-stop` refuses in the very transaction that would record
-# the stop, nothing changed, if an owner's stop stands by then.
+# the stop, nothing changed, if by then an owner's stop stands or the page
+# is not on its browser with no leave pending.
 handover_out() {
   local tag="$1" text="$2" before=""
   hub_stop_now || { CMD_WHY="the Hub cannot be read"; return 3; }
+  off_browser && return 4
   if [[ "$STOP_SET" == true && "$STOP_OURS" != true ]]; then
     CMD_WHY="the owner's stop stands on the page's browser (stop command ${STOP_ID:-unknown}): it stays his"
     return 4
@@ -859,6 +879,10 @@ handover_out() {
     hub_command stopPage "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
     if [[ "$CMD_ID" == "$before" ]]; then
       hub_stop_now || { CMD_WHY="the Hub cannot be read"; return 3; }
+      if off_browser; then
+        CMD_WHY="$CMD_WHY (moved meanwhile): the update's stop was refused, nothing changed"
+        return 4
+      fi
       if [[ "$STOP_SET" == true && "$STOP_OURS" != true ]]; then
         CMD_WHY="the owner's stop stands on the page's browser (stop command ${STOP_ID:-unknown}, asked meanwhile): the update's stop was refused, nothing changed — it stays his"
         return 4

@@ -440,6 +440,41 @@ describe("Astra (hand-over 2): the update's stop is never asked over the owner's
   });
 });
 
+describe("Astra (hand-over 3): the update's stop is asked only of a page on its browser — read as it is now", () => {
+  it("cut off before its stop; the owner moves the page to Node: resume asks no stop — never paused by the update, held for him", () => {
+    host = makeHost((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { paused: false, ownerStop: false });
+    });
+    expect(host.run(UPDATE, { crashBefore: "hub sync browser snapshot" }).status).toBe(137);
+    expect(host.update()).toMatchObject({ STEP: "planned", HANDOVER: "1" });
+    host.edit((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { transport: "node", leave: null, gen: 8 });
+    });
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status).toBe(1);
+    expect(resumed.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "planned" });
+    expect(host.update().HELD_WHY).toContain("the page is not on its browser now (transport node): its owner moved it — the update asks no stop of it");
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ transport: "node", paused: false, ownerStop: false });
+    expect(host.state().commands ?? []).toEqual([]);
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
+  });
+
+  it("… moved between the update's look and its stop: the lever refuses, nothing changed — held", () => {
+    host = makeHost((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { paused: false, ownerStop: false });
+      state.behaviour.ownerMovesToNodeBefore = "snapshot";
+    });
+    const run = host.run(UPDATE);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["hub sync browser snapshot"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "planned" });
+    expect(host.update().HELD_WHY).toContain("(transport node): its owner moved it — the update asks no stop of it (moved meanwhile): the update's stop was refused, nothing changed");
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ transport: "node", paused: false, ownerStop: false });
+    expect(host.state().commands ?? []).toEqual([]);
+  });
+});
+
 describe("Astra (hand-over 2): one guard before every deed on the page's container or profile", () => {
   it("cut off after the take-out, before the container's stop; the owner starts the browser: resume never stops it — held, nothing touched; rollback ends it with the page as he has it", () => {
     host = makeHost();

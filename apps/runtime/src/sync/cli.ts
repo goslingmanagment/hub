@@ -697,7 +697,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .option("--wait-ms <ms>", `how long to wait for the operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
     .option(
       "--if-no-owner-stop [command]",
-      "never over another's stop: refused, nothing changed, while an owner's stop stands — unless the page's latest stop is this command's (the Chrome update's stop)",
+      "never over another's stop, never of a page off its browser: refused, nothing changed, while an owner's stop stands (unless the page's latest stop is this command's) or the page is not on its browser with no leave pending (the Chrome update's stop)",
     )
     .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoOwnerStop?: true | string }) => {
       await withContext(deps, async ({ db }) => {

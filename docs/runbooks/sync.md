@@ -250,8 +250,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
 
   It stops the page's browser with the owner's lever (`sync browser snapshot --if-no-owner-stop`, audited: the page
   paused by the stop, confirmed by the operator once Chrome is down — the page stays on its browser, so a page with no
-  Node session is updated too; refused in its own transaction, nothing changed, while a stop of yours stands: the
-  update holds and your stop stays yours), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
+  Node session is updated too; refused in its own transaction, nothing changed, while a stop of yours stands or the
+  page is not on its browser — you moved it to Node, or its leave is pending: the update holds and the page stays as
+  you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
   the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
   starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause lifted —
   only while the stop in force is the update's own; a stop or start of yours since stays yours and the update holds;

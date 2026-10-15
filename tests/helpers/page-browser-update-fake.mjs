@@ -190,6 +190,15 @@ function browserLever(cli) {
     command(page, label, "stopPage", "the owner's", "ok");
     if (container !== undefined) container.chrome = "down";
   }
+  // The owner's move of the page to Node, done just before this lever.
+  if (behaviour.ownerMovesToNodeBefore === action) {
+    delete behaviour.ownerMovesToNodeBefore;
+    Object.assign(page, { transport: "node", leave: null, gen: page.gen + 1 });
+  }
+  if (action === "snapshot" && cli.includes("--if-no-owner-stop") && (page.transport !== "browser" || page.leave)) {
+    err(`${label} is not on its browser (transport ${page.transport}${page.leave ? `, a leave of it pending since generation ${page.leave}` : ""}): the update's stop is asked only of a page on its browser — refused, nothing changed\n`);
+    return 1;
+  }
   if (action === "snapshot" && cli.includes("--if-no-owner-stop")) {
     // In the transaction that would record the stop: never over another's.
     const next = cli[cli.indexOf("--if-no-owner-stop") + 1];
@@ -401,7 +410,7 @@ function docker(argv) {
         if (page === undefined) return 0;
         const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
         const last = (state.commands ?? []).filter((row) => row.page === stopNow[1] && row.kind === "stopPage").at(-1);
-        out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}\n`);
+        out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}|${page.transport}|${page.leave ?? ""}\n`);
         return 0;
       }
       const guard = /-- pb-update:guard (\S+)/.exec(input);

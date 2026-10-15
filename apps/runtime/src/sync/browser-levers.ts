@@ -3,6 +3,8 @@ import {
   expirePageBrowserCommands,
   findPageBrowserByPage,
   getPageBrowserCommand,
+  getSyncPageBrowserLeave,
+  getSyncPageTransport,
   insertAuditEvent,
   insertPageBrowserCommand,
   listPageBrowsersOfPages,
@@ -129,7 +131,10 @@ export interface BrowserStopResult {
  *  transaction, nothing changed, while an owner's stop stands, unless the
  *  page's latest stop command is the one named (the update's own, asked
  *  again). A stop asked over the owner's would be the latest, and the
- *  update's start (`--if-stop`) could lift his. */
+ *  update's start (`--if-stop`) could lift his. Nor of a page that is not
+ *  on its browser: refused the same way unless its transport is `browser`
+ *  with no leave of it pending — a page its owner moved to Node is never
+ *  paused by the update. */
 export async function stopPageBrowsers(
   db: Database,
   input: { pageLabel?: string; all?: boolean; actor: string; note?: string | null; snapshot?: boolean; ifNoOwnerStop?: true | number },
@@ -141,8 +146,17 @@ export async function stopPageBrowsers(
       const paused = await pausePageForBrowserStop(tx, { pageId: page.pageId, note: SYNC_BROWSER_STOP_PAUSE_NOTE });
       if (paused === null) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
       if (input.ifNoOwnerStop !== undefined) {
-        // Under the page row's lock, taken by the pause: an owner's stop
-        // asked concurrently is seen here, or comes after this one.
+        // Under the page row's lock, taken by the pause — the lock every
+        // change of its transport takes: an owner's stop or a transport
+        // change asked concurrently is seen here, or comes after this one.
+        const transport = await getSyncPageTransport(tx, page.pageId);
+        const leave = await getSyncPageBrowserLeave(tx, page.pageId);
+        if (transport !== "browser" || leave !== null) {
+          throw new SyncOwnerLeverError(
+            `${page.label} is not on its browser (transport ${transport ?? "none"}${leave === null ? "" : `, a leave of it pending since generation ${leave.generation}`}): `
+            + "the update's stop is asked only of a page on its browser — refused, nothing changed",
+          );
+        }
         const current = await readPageBrowserOwnerStop(tx, { pageId: page.pageId });
         if (current === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
         const own = typeof input.ifNoOwnerStop === "number" ? input.ifNoOwnerStop : null;
