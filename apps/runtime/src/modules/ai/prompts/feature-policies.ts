@@ -84,15 +84,16 @@ export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
 // ─── Model defaults ───────────────────────────────────────────────────
 
-/** All text features share Opus 5.5; their effort levels remain feature-specific.
- * The background image describer has its own independent model setting. */
+/** All text features share Opus 5.5 at high effort (owner, 2026-10-15, after a
+ * blind bench of Opus 5.5 and Sonnet 5.5 / 5 / 4.6 at low, medium and high on
+ * real prompts). The background image describer has its own independent model
+ * setting. */
 export const DEFAULT_MODEL_ID = 'anthropic:claude-opus-5-5';
 export const DEFAULT_FAN_SUMMARY_MODEL_ID = DEFAULT_MODEL_ID;
 /** improve-draft, hi-greeting and voice-script delegate to fast-reply. */
 export const DEFAULT_REPLY_MODEL_ID = DEFAULT_MODEL_ID;
-/** fan-notes-fill: a short extraction over the whole chat runs on Sonnet 5.5
- * by default (owner, 2026-10-12). A request's `model` still overrides it. */
-export const DEFAULT_FAN_NOTES_FILL_MODEL_ID = 'anthropic:claude-sonnet-5-5';
+/** fan-notes-fill keeps its own model row; a request's `model` still overrides it. */
+export const DEFAULT_FAN_NOTES_FILL_MODEL_ID = DEFAULT_MODEL_ID;
 
 export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'fast-reply': DEFAULT_REPLY_MODEL_ID,
@@ -105,13 +106,13 @@ export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
 };
 
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
-  'fast-reply': 'low',
-  'help-me': 'low',
-  'fan-summary': 'medium',
-  'chat-review': 'low',
-  'ping': 'low',
-  'coach-chat': 'low',
-  'fan-notes-fill': 'low',
+  'fast-reply': 'high',
+  'help-me': 'high',
+  'fan-summary': 'high',
+  'chat-review': 'high',
+  'ping': 'high',
+  'coach-chat': 'high',
+  'fan-notes-fill': 'high',
 };
 
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {

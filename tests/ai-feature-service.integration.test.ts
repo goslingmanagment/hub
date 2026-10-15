@@ -452,9 +452,9 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Reply features share the Opus 5.5 default at low effort.
+    // Reply features share the Opus 5.5 default at high effort.
     expect(body.model).toBe("anthropic:claude-opus-5-5");
-    expect(body.reasoningEffort).toBe("low");
+    expect(body.reasoningEffort).toBe("high");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
     const userText = body.prompt.userBlocks.map((block) => block.text).join("\n");
@@ -876,7 +876,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     expect(capture.input!.body).toMatchObject({
       feature: "help-me",
       model: "anthropic:claude-opus-5-5",
-      reasoningEffort: "low",
+      reasoningEffort: "high",
     });
 
     // hi-greeting: allowed on a short conversation, WITHOUT earnings blocks.
@@ -1562,7 +1562,7 @@ describe("coach-chat gates", () => {
     expect(capture.input!.body).toMatchObject({
       feature: "coach-chat",
       model: "anthropic:claude-opus-5-5",
-      reasoningEffort: "low",
+      reasoningEffort: "high",
     });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
     expect(frames.at(-1)?.type).toBe("done");
@@ -4146,8 +4146,8 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     const body = capture.input!.body;
     expect(body).toMatchObject({
       feature: "fan-notes-fill",
-      model: "anthropic:claude-sonnet-5-5",
-      reasoningEffort: "low",
+      model: "anthropic:claude-opus-5-5",
+      reasoningEffort: "high",
     });
     expect(body.prompt.userBlocks.every((block) => block.cache === "none")).toBe(true);
     expect(body.prompt.systemBlocks.every((block) => block.cache === "none")).toBe(true);
@@ -4221,9 +4221,9 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     }
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
-    const res = await post("fan-notes-fill", notesPayload({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" }));
+    const res = await post("fan-notes-fill", notesPayload({ model: "anthropic:claude-sonnet-5-5", reasoningEffort: "low" }));
     expect(res.statusCode, res.body).toBe(200);
-    expect(capture.input!.body).toMatchObject({ model: "anthropic:claude-opus-5-5", reasoningEffort: "medium" });
+    expect(capture.input!.body).toMatchObject({ model: "anthropic:claude-sonnet-5-5", reasoningEffort: "low" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("requires noteFields, refuses them on every other feature, before any provider call", async (context) => {
