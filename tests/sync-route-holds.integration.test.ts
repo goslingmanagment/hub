@@ -312,8 +312,13 @@ describe("a route's 429 through the actor", () => {
     expect(holdUntil - answeredAt).toBeGreaterThanOrEqual(2_000);
     expect(holdUntil - answeredAt).toBeLessThan(ROUTE_HOLD_LADDER_MS[0]!);
     expect(next!.sent_at.getTime()).toBeGreaterThanOrEqual(holdUntil);
+    // The page went on while its route was held: polls went out after the
+    // refusal and before the hold's end. The actor sends one request of a
+    // page at a time, so none was in flight from before the refusal, and a
+    // page hold would have left none. How many fit in the 2 s is the
+    // machine's speed, not the rule (3 on a loaded one where 4 was asked).
     expect((await sends(pageId)).filter((attempt) => attempt.operation === "polls"
-      && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(3);
+      && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(0);
     expect(pageHoldKindOf((await getSyncPage(db(), pageId))!)).toBeNull();
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["transactions.page", "unavailable"]]);
