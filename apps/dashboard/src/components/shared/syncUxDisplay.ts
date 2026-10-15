@@ -57,8 +57,11 @@ export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>>
   off: "Не обновляется",
 };
 
-export function syncStateLabel(summary: SyncUxSummary): string {
-  return summary.requiresAction ? "Нужен вход" : SYNC_STATE_LABELS[summary.state];
+/** An OnlyFans page is reached through OFAPI, so "needs action" there means
+ *  the OFAPI connection, not a login the owner can renew in Hub. */
+export function syncStateLabel(summary: SyncUxSummary, platform?: "fansly" | "onlyfans"): string {
+  if (summary.requiresAction) return platform === "onlyfans" ? "Проверьте OFAPI" : "Нужен вход";
+  return SYNC_STATE_LABELS[summary.state];
 }
 
 export type SyncTone = "ok" | "warn" | "error" | "muted";

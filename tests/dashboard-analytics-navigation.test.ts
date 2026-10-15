@@ -13,6 +13,7 @@ import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
+  useAttentionCounts: vi.fn(() => ({ heldSends: null, openIncidents: null, total: 0 })),
   useAuthMe: vi.fn(),
 }));
 

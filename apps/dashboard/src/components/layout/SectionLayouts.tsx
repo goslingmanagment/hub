@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
-import { useAuthMe } from "@/api/queries";
+import { useAttentionCounts, useAuthMe } from "@/api/queries";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionTabs } from "@/components/ui/SectionTabs";
 import { buildSettingsSectionRoute, resolveSettingsTab } from "@/lib/navigation";
@@ -17,15 +17,30 @@ import {
 /** A section of sibling screens under one title and a row of tabs. */
 export function TabbedSectionLayout({ id }: { id: TabbedSection["id"] }) {
   const { data } = useAuthMe();
+  const role = data?.user.role ?? "team_lead";
   const section = TABBED_SECTIONS[id];
-  const tabs = visibleTabs(section, data?.user.role ?? "team_lead");
+  const tabs = id === "attention" ? <AttentionTabs role={role} /> : <SectionTabs label={section.title} items={visibleTabs(section, role)} />;
   return (
     <div className="min-w-0">
       <PageHeader title={section.title} />
-      <SectionTabs label={section.title} items={tabs} />
+      {tabs}
       <Outlet />
     </div>
   );
+}
+
+/** The work queues, each tab with how many items wait in it. */
+function AttentionTabs({ role }: { role: string }) {
+  const counts = useAttentionCounts(role);
+  const section = TABBED_SECTIONS.attention;
+  const items = visibleTabs(section, role).map((tab) => ({
+    ...tab,
+    // An empty queue shows no number: a "0" on every tab is noise.
+    count: tab.to === "/held-sends" ? counts.heldSends || undefined
+      : tab.to === "/incidents" ? counts.openIncidents || undefined
+        : undefined,
+  }));
+  return <SectionTabs label={section.title} items={items} />;
 }
 
 const SETTINGS_LINK = /^\/settings\?tab=([A-Za-z]+)$/;

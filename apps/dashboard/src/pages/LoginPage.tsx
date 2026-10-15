@@ -75,7 +75,7 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-[380px] rounded-xl border border-border bg-card p-6 sm:p-8 shadow-sm">
-        <h1 className="mb-6 text-center text-2xl font-bold">
+        <h1 className="mb-6 text-center text-2xl font-bold tracking-[-0.03em]">
           <Wordmark />
         </h1>
 
@@ -88,7 +88,7 @@ export function LoginPage() {
         )}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={login.isPending}>
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="username" className="text-sm text-text-secondary">
+            <label htmlFor="username" className="field-label mb-0">
               Логин
             </label>
             <input
@@ -102,12 +102,12 @@ export function LoginPage() {
               onChange={(e) => { setUsername(e.target.value); login.reset(); }}
               placeholder="Введите логин"
               required
-              className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
+              className="input"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="password" className="text-sm text-text-secondary">
+            <label htmlFor="password" className="field-label mb-0">
               Пароль
             </label>
             <input
@@ -119,7 +119,7 @@ export function LoginPage() {
               onChange={(e) => { setPassword(e.target.value); login.reset(); }}
               placeholder="Введите пароль"
               required
-              className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
+              className="input"
             />
           </div>
 
@@ -127,7 +127,7 @@ export function LoginPage() {
           <button
             type="submit"
             disabled={login.isPending || !username.trim() || !password}
-            className="w-full rounded-lg bg-accent py-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            className="btn btn-primary w-full min-h-10"
           >
             {login.isPending ? "Входим…" : "Войти"}
           </button>

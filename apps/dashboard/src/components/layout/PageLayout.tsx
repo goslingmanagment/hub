@@ -65,7 +65,7 @@ export function PageIdentity({ page }: {
         {syncUx ? (
           <span className={`badge ${TONE_BADGE[tone]}`} title={syncUx.detail ?? undefined}>
             <span className={`status-dot ${TONE_DOT[tone]}`} aria-hidden="true" />
-            {syncStateLabel(syncUx)}
+            {syncStateLabel(syncUx, page.platform)}
           </span>
         ) : (
           <span className="badge">{syncQuery.isLoading ? "Загружаем состояние сбора…" : "Состояние сбора недоступно"}</span>

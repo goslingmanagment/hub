@@ -50,7 +50,7 @@ export function pageAccess(page: AssignedPage, connection: Connection | undefine
     return { label: "Нет прокси", tone: "error", hint: "Без прокси страница Fansly не читается." };
   }
   return {
-    label: syncStateLabel(connection.syncUx),
+    label: syncStateLabel(connection.syncUx, page.platform),
     tone: syncTone(connection.syncUx),
     hint: connection.syncUx.detail ?? undefined,
   };

@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router";
 import { ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useAdminConnections } from "@/api/queries";
+import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
 import { PlatformTag } from "@/components/shared/PlatformBadge";
 import { buildAnalyticsRoute, buildPageRoute, decodeRouteSegment } from "@/lib/navigation";
@@ -57,6 +57,7 @@ export function Sidebar({ user }: SidebarProps) {
   const owner = user.role === "owner";
   const { data: connections } = useAdminConnections({ enabled: owner });
   const hasSyncWarning = owner && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
+  const attention = useAttentionCounts(user.role);
 
   type PageItem = (typeof pages)[number];
   const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
@@ -114,7 +115,14 @@ export function Sidebar({ user }: SidebarProps) {
             <NavItem to={onlyFansHome} icon={Layers} active={section === "onlyfans"}>OnlyFans</NavItem>
           )}
           {attentionHome && (
-            <NavItem to={attentionHome} icon={Inbox} active={section === "attention"}>Требует внимания</NavItem>
+            <NavItem
+              to={attentionHome}
+              icon={Inbox}
+              active={section === "attention"}
+              trailing={attention.total > 0 ? <span className="nav-count" aria-label={`ждут: ${attention.total}`}>{attention.total}</span> : undefined}
+            >
+              Требует внимания
+            </NavItem>
           )}
         </div>
 

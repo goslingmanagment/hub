@@ -7,6 +7,7 @@ import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
+  useAttentionCounts: vi.fn(() => ({ heldSends: 2, openIncidents: 1, total: 3 })),
   useAdminModels: vi.fn(),
   useAdminPages: vi.fn(),
   useAdminReorderModels: vi.fn(),
@@ -391,6 +392,8 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Настройки");
     // Diagnostics live in one owner-only «Система» item, not in the main list.
     expect(html).toContain("Система");
+    // The work queues say how much waits in them.
+    expect(html).toMatch(/Требует внимания<\/span><span class="nav-count"[^>]*>3</);
   });
 
   it("does not enable the owner-only connections query for non-owner sidebars", () => {

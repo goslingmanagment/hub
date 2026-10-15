@@ -612,3 +612,12 @@
   }
   .empty-actions :is(button, a):not([class]):hover { background: var(--color-hover); }
 }
+
+/* On a phone a table scrolls sideways inside its wrapper rather than
+   crushing every cell into a word per line. */
+@layer components {
+  @media (max-width: 767px) {
+    .data-table th,
+    .data-table td { white-space: nowrap; }
+  }
+}
