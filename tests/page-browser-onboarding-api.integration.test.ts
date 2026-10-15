@@ -91,6 +91,8 @@ async function rig() {
   const app = createTestAppContext(testDb!, {
     pageBrowserEndpoints: { rpcUrl: () => "ws://127.0.0.1:9/rpc", screen: () => ({ host: "127.0.0.1", port: screen.port }) },
     pageBrowserScreenWatch: { everyMs: 100, deadlineMs: 1_000 },
+    // The documentation block this test's proxies sit in, taken as public.
+    pageBrowserProxyCheck: { allowAddresses: (ip) => ip.startsWith("203.0.113.") },
   });
   await createUserAccount(app, { username: "owner-onb", role: "owner", password: "synthetic-password" }, { source: "cli" });
   await createUserAccount(app, { username: "lead-onb", role: "team_lead", password: "synthetic-password" }, { source: "cli" });

@@ -4,6 +4,8 @@ import { connect as tcpConnect, isIP, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { connect as tlsConnect } from "node:tls";
 
+import { nonGlobalAddressReason } from "@agency_hub_core/shared";
+
 // The owner's check of a proxy for a page's server browser (Project Browser,
 // owner decision 2026-10-15: «чекала прокси как в антик браузерах»): like
 // Dolphin, AdsPower or GoLogin, Hub connects through the proxy and says
@@ -38,13 +40,75 @@ import { connect as tlsConnect } from "node:tls";
 //
 // The credentials are used for the SOCKS5 login and nowhere else: never
 // logged, never in an error, never in the answer.
+//
+// The proxy is reached by an IP address only, judged before (Astra's review
+// of PR #627, item 1): a name is resolved ONCE (`resolveProxyHost`), every
+// address it resolves to must be a public one, and the check connects to
+// that very address — nothing here resolves a name again, so a second DNS
+// answer cannot point the check at Hub's own networks.
 
 export interface ProxyCheckProxy {
-  host: string;
-  hostKind: "ipv4" | "ipv6" | "name";
+  /** The proxy's IPv4 address, judged public by the caller. */
+  ip: string;
   port: number;
   username: string | null;
   password: string | null;
+}
+
+/** A proxy's host resolved once: the IPv4 address to reach it at — every
+ *  address the name resolved to a public one — or why not. */
+export type ProxyHostRead =
+  | { ip: string }
+  | { problem: "dns" | "ipv6" | "private_address"; detail: string };
+
+export interface ProxyHostOptions {
+  /** A name to every address it resolves to (default: the system's DNS). */
+  resolve?: (host: string) => Promise<string[]>;
+  timeoutMs?: number;
+  /** TESTS ONLY: addresses taken as public (a test's proxy listens on
+   *  loopback). */
+  allow?: (ip: string) => boolean;
+}
+
+async function resolveAll(host: string): Promise<string[]> {
+  return (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+}
+
+/**
+ * The proxy's host as an IPv4 address to connect to, resolved once: an
+ * address as it is, a name by one DNS query whose every answer — IPv4 and
+ * IPv6 — must be public. A page's browser reaches IPv4 only (pb-egress has
+ * no IPv6), so the first IPv4 answer is the one.
+ */
+export async function resolveProxyHost(host: string, hostKind: "ipv4" | "ipv6" | "name", options: ProxyHostOptions = {}): Promise<ProxyHostRead> {
+  const judge = (ip: string) => (options.allow?.(ip) === true ? null : nonGlobalAddressReason(ip));
+  if (hostKind === "ipv6") return { problem: "ipv6", detail: "the page browsers' network is IPv4 only" };
+  let addresses: string[];
+  if (hostKind === "ipv4") {
+    addresses = [host];
+  } else {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      addresses = await Promise.race([
+        (options.resolve ?? resolveAll)(host),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timeout")), options.timeoutMs ?? PROXY_CHECK_TIMEOUTS.dnsMs);
+        }),
+      ]);
+    } catch {
+      return { problem: "dns", detail: `the name ${host} does not resolve` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (addresses.length === 0) return { problem: "dns", detail: `the name ${host} resolves to no address` };
+  for (const address of addresses) {
+    const reason = judge(address);
+    if (reason !== null) return { problem: "private_address", detail: `${hostKind === "name" ? `the name ${host} resolves to` : "the address is"} ${address}: ${reason}` };
+  }
+  const ip = addresses.find((address) => isIP(address) === 4);
+  if (ip === undefined) return { problem: "ipv6", detail: `the name ${host} resolves to IPv6 only; the page browsers' network is IPv4 only` };
+  return { ip };
 }
 
 /** Where the proxy goes out, as an IP-info service names it. */
@@ -189,8 +253,6 @@ export interface ProxyCheckOptions {
   /** The stream the IP-info request goes over: TLS to the service by default
    *  (tests talk plain HTTP to a local server behind a local SOCKS5). */
   wrap?: (socket: Socket, host: string) => Duplex;
-  /** The proxy's name to an IPv4 address (the page's container dials one). */
-  resolve?: (host: string) => Promise<string>;
   timeouts?: Partial<ProxyCheckTimeouts>;
 }
 
@@ -224,10 +286,6 @@ const REPLIES: Record<number, string> = {
   7: "command not supported",
   8: "address type not supported",
 };
-
-async function resolveIpv4(host: string): Promise<string> {
-  return (await lookup(host, { family: 4 })).address;
-}
 
 /** A connection to the proxy, or why not; kept in `open` until the check
  *  ends (its overall bound closes what is still open). */
@@ -447,21 +505,10 @@ export async function checkProxy(proxy: ProxyCheckProxy, options: ProxyCheckOpti
   let spoken: ProxyCheckResult["spoken"] = null;
   const open = new Set<Socket>();
   const run = async (): Promise<ProxyCheckResult> => {
-    let ip: string;
-    if (proxy.hostKind === "name") {
-      try {
-        ip = await Promise.race([
-          (options.resolve ?? resolveIpv4)(proxy.host),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), timeouts.dnsMs)),
-        ]);
-      } catch {
-        throw new CheckFailure("dns", `the name ${proxy.host} does not resolve to an IPv4 address`);
-      }
-      if (isIP(ip) !== 4) throw new CheckFailure("dns", `the name ${proxy.host} does not resolve to an IPv4 address`);
-    } else {
-      ip = proxy.host;
-    }
-    socksEndpoint = isIP(ip) === 4 ? `${ip}:${proxy.port}` : null;
+    // An address only: no name is resolved here.
+    const ip = proxy.ip;
+    if (isIP(ip) !== 4) throw new CheckFailure("dns", "the proxy is not given as an IPv4 address");
+    socksEndpoint = `${ip}:${proxy.port}`;
     const failures: string[] = [];
     let tunnelsOnly = true;
     for (const service of services) {

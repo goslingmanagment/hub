@@ -1,11 +1,9 @@
-import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 import type { PageBrowserMaskedProxy, PageBrowserProxyCheckResponse } from "@agency_hub_core/contracts";
 import {
   decryptJsonWithKeyVersion,
   encryptJson,
-  isDisallowedProxyHostname,
   maskPastedProxy,
   normalizeProxyConfigWithMetadata,
   pageBrowserProxyProblem,
@@ -17,7 +15,7 @@ import {
   type PastedProxyOrder,
 } from "@agency_hub_core/shared";
 
-import { checkProxy, type ProxyCheckOptions } from "./egress/proxy-check.ts";
+import { checkProxy, resolveProxyHost, type ProxyCheckOptions, type ProxyHostRead } from "./egress/proxy-check.ts";
 import { BadRequestError } from "./errors.ts";
 
 // The proxy of a page's server browser as the owner gives it (Project
@@ -32,10 +30,33 @@ import { BadRequestError } from "./errors.ts";
 type SecretsConfig = Pick<AppConfig, "encryptionKey" | "encryptionKeyVersion" | "encryptionKeysByVersion">;
 
 /** TESTS ONLY: the check's options (its services behind a local SOCKS5),
- *  and loopback proxies let through (a test's SOCKS5 listens there). */
+ *  the proxy names' DNS, and the addresses taken as public (a test's
+ *  SOCKS5 listens on loopback). */
 export interface ProxyCheckOverrides {
   options?: ProxyCheckOptions;
-  allowLoopback?: boolean;
+  resolve?: (host: string) => Promise<string[]>;
+  allowAddresses?: (ip: string) => boolean;
+}
+
+/** The proxy's host resolved ONCE and judged (every address public): the
+ *  IPv4 address the check connects to and a page's container is made for. */
+export function proxyHostOf(proxy: Pick<PastedProxy, "host" | "hostKind">, overrides?: ProxyCheckOverrides): Promise<ProxyHostRead> {
+  return resolveProxyHost(proxy.host, proxy.hostKind, {
+    ...(overrides?.resolve === undefined ? {} : { resolve: overrides.resolve }),
+    ...(overrides?.allowAddresses === undefined ? {} : { allow: overrides.allowAddresses }),
+  });
+}
+
+/** Why a host cannot be a page browser's proxy, in the owner's words. */
+function hostProblemText(read: Exclude<ProxyHostRead, { ip: string }>): string {
+  switch (read.problem) {
+    case "dns":
+      return "Имя прокси не находится в DNS — проверьте адрес";
+    case "ipv6":
+      return "Адрес прокси — только IPv6, а сеть браузеров страниц только IPv4";
+    case "private_address":
+      return "Адрес прокси локальный, частный или служебный: нужна прокси с публичным адресом в интернете";
+  }
 }
 
 /** The pasted text read by Hub, or a 400 in the owner's words (`reason`:
@@ -81,40 +102,41 @@ export function maskStoredProxy(config: SecretsConfig, stored: { url: string; en
   }
 }
 
-/** Why the proxy's address is a local or private one (its name resolved),
- *  or null. */
-async function privateAddressProblem(proxy: PastedProxy): Promise<string | null> {
-  if (isDisallowedProxyHostname(proxy.host)) return "Адрес прокси локальный или частный: нужна прокси в интернете";
-  if (proxy.hostKind !== "name") return null;
-  try {
-    const addresses = await lookup(proxy.host, { all: true, verbatim: true });
-    if (addresses.some((address) => isDisallowedProxyHostname(address.address))) return "Имя прокси ведёт на локальный или частный адрес";
-  } catch {
-    // A name that does not resolve: the check says so in its own words.
-  }
-  return null;
+/**
+ * The SOCKS5 endpoint a page's container is made for: the proxy's host
+ * resolved once, every address public, `ip:port` of its IPv4 one — or a 400
+ * in the owner's words (`reason: proxy_unusable`). Stored with the draft:
+ * add-profile takes this address, never a later DNS answer (Astra's review
+ * of PR #627, item 3).
+ */
+export async function socksEndpointOrRefuse(proxy: Pick<PastedProxy, "host" | "hostKind" | "port">, overrides?: ProxyCheckOverrides): Promise<string> {
+  const read = await proxyHostOf(proxy, overrides);
+  if (!("ip" in read)) throw new BadRequestError(hostProblemText(read), { reason: "proxy_unusable" });
+  return `${read.ip}:${proxy.port}`;
 }
 
 /**
  * A pasted proxy a page's browser can go out through, sealed for storing:
  * its URL (`socks5://host:port`) and its login and password as one
- * encrypted envelope with the key version. A 400 in the owner's words
- * otherwise (`reason: proxy_unusable`).
+ * encrypted envelope with the key version, and the public `ip:port` it was
+ * judged at. A 400 in the owner's words otherwise (`reason:
+ * proxy_unusable`).
  */
 export async function sealUsableProxy(
   config: SecretsConfig,
   proxy: PastedProxy,
   overrides?: ProxyCheckOverrides,
-): Promise<{ url: string; encryptedAuth: string; keyVersion: number; masked: PageBrowserMaskedProxy }> {
-  const problem = pageBrowserProxyProblem(proxy)
-    ?? (overrides?.allowLoopback === true ? null : await privateAddressProblem(proxy));
+): Promise<{ url: string; encryptedAuth: string; keyVersion: number; masked: PageBrowserMaskedProxy; socksEndpoint: string }> {
+  const problem = pageBrowserProxyProblem(proxy);
   if (problem !== null) throw new BadRequestError(problem, { reason: "proxy_unusable" });
+  const socksEndpoint = await socksEndpointOrRefuse(proxy, overrides);
   const stored = pastedProxyConfig(proxy);
   return {
     url: stored.url,
     encryptedAuth: JSON.stringify(encryptJson({ username: stored.username, password: stored.password }, config.encryptionKey, config.encryptionKeyVersion)),
     keyVersion: config.encryptionKeyVersion,
     masked: maskPastedProxy(proxy),
+    socksEndpoint,
   };
 }
 
@@ -125,17 +147,12 @@ export async function sealUsableProxy(
  */
 export async function checkPageBrowserProxy(proxy: PastedProxy, overrides?: ProxyCheckOverrides): Promise<PageBrowserProxyCheckResponse> {
   const base = { proxy: maskPastedProxy(proxy), checkedAt: new Date().toISOString() };
-  if (proxy.hostKind === "ipv6") {
-    return { ...base, ok: false, problem: { code: "ipv6", detail: "the page browsers' network is IPv4 only" }, spoken: null, socksEndpoint: null, latencyMs: null, exit: null, ipInfoService: null, env: null };
+  // Resolved once, every address judged; the check connects to that address.
+  const host = await proxyHostOf(proxy, overrides);
+  if (!("ip" in host)) {
+    return { ...base, ok: false, problem: { code: host.problem, detail: host.detail }, spoken: null, socksEndpoint: null, latencyMs: null, exit: null, ipInfoService: null, env: null };
   }
-  const local = overrides?.allowLoopback === true ? null : await privateAddressProblem(proxy);
-  if (local !== null) {
-    return { ...base, ok: false, problem: { code: "private_address", detail: "a local or private address" }, spoken: null, socksEndpoint: null, latencyMs: null, exit: null, ipInfoService: null, env: null };
-  }
-  const result = await checkProxy(
-    { host: proxy.host, hostKind: proxy.hostKind, port: proxy.port, username: proxy.username, password: proxy.password },
-    overrides?.options,
-  );
+  const result = await checkProxy({ ip: host.ip, port: proxy.port, username: proxy.username, password: proxy.password }, overrides?.options);
   const env = result.exit === null ? null : proposeBrowserEnv(result.exit);
   return { ...base, ...result, env };
 }

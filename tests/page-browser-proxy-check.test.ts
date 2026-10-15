@@ -37,7 +37,7 @@ async function world(ipinfoAnswer = () => ({ status: 200, body: IPINFO_BERLIN as
 }
 
 const at = (port: number, overrides: Partial<ProxyCheckProxy> = {}): ProxyCheckProxy => ({
-  host: "127.0.0.1", hostKind: "ipv4", port, username: SOCKS_USER, password: SOCKS_PASSWORD, ...overrides,
+  ip: "127.0.0.1", port, username: SOCKS_USER, password: SOCKS_PASSWORD, ...overrides,
 });
 
 describe("the proxy check (Project Browser: «Проверить прокси»)", () => {
@@ -120,7 +120,7 @@ describe("the proxy check (Project Browser: «Проверить прокси»)
     expect(await checkProxy(at(tls.port), options)).toMatchObject({ ok: false, spoken: "tls", problem: { code: "not_socks5" } });
   });
 
-  it("refused, no answer in time, a name that does not resolve: each in its own word, within its deadline", async () => {
+  it("refused, no answer in time: each in its own word, within its deadline", async () => {
     const { options } = await world();
     const closed = await rawServer(() => undefined);
     const port = closed.port;
@@ -128,11 +128,9 @@ describe("the proxy check (Project Browser: «Проверить прокси»)
     expect(await checkProxy(at(port), options)).toMatchObject({ ok: false, spoken: null, problem: { code: "refused" } });
     // 192.0.2.1 (TEST-NET-1) takes nothing: no answer — or no route.
     const started = Date.now();
-    const black = await checkProxy(at(9, { host: "192.0.2.1" }), { ...options, timeouts: { ...options.timeouts, connectMs: 300 } });
+    const black = await checkProxy(at(9, { ip: "192.0.2.1" }), { ...options, timeouts: { ...options.timeouts, connectMs: 300 } });
     expect(["no_answer", "unreachable"]).toContain(black.problem?.code);
     expect(Date.now() - started).toBeLessThan(5_000);
-    const dns = await checkProxy(at(1080, { host: "proxy.invalid", hostKind: "name" }), { ...options, resolve: async () => { throw new Error("ENOTFOUND"); } });
-    expect(dns).toMatchObject({ ok: false, problem: { code: "dns" }, socksEndpoint: null });
   });
 
   it("the proxy could not reach either service: the SOCKS5 replies' reasons", async () => {
@@ -145,10 +143,12 @@ describe("the proxy check (Project Browser: «Проверить прокси»)
     expect(socks.connects).toEqual(["ipinfo.io:443", "get.geojs.io:443"]);
   });
 
-  it("a name resolves to the IPv4 address a page's container would be made for", async () => {
-    const { socks, options } = await world();
-    const result = await checkProxy(at(socks.port, { host: "proxy.example.test", hostKind: "name" }), { ...options, resolve: async () => "127.0.0.1" });
-    expect(result).toMatchObject({ ok: true, socksEndpoint: `127.0.0.1:${socks.port}` });
+  it("takes an address only: nothing in the check resolves a name", async () => {
+    const { options } = await world();
+    expect(await checkProxy(at(1080, { ip: "proxy.example.test" }), options)).toMatchObject({ ok: false, problem: { code: "dns" }, spoken: null });
+    const source = readFileSync(new URL("../apps/runtime/src/services/egress/proxy-check.ts", import.meta.url), "utf8");
+    // The one DNS query is resolveProxyHost's, before the check.
+    expect(source.match(/lookup\(/g)).toHaveLength(1);
   });
 
   it("asks the IP-info services only — never a platform — by HTTPS, in this order", () => {

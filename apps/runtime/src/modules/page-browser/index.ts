@@ -29,13 +29,11 @@ import {
   type Database,
   type OnboardingProfile,
 } from "@agency_hub_core/db";
-import { redactSensitiveText } from "@agency_hub_core/shared";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { authenticateSessionToken, ownerSessionExpiry, recordAudit, requireOwner, SESSION_COOKIE_NAME } from "../../services/auth.ts";
 import {
   onboardingLinkProblem,
-  onboardingProxyMismatch,
   openPageBrowserSecret,
   readPageBrowserPageSettings,
 } from "../../services/egress/page-browser-link.ts";
@@ -644,8 +642,11 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // One field, any common format, read by Hub; a proxy a page's browser
     // can use, or the owner's words why not.
     const sealed = await sealUsableProxy(appContext.config, readProxyText(request.body.proxy), appContext.pageBrowserProxyCheck);
-    const mismatch = await onboardingProxyMismatch(profile, { url: sealed.url });
-    if (mismatch !== null) throw new BadRequestError(`Invalid proxy: ${redactSensitiveText(mismatch)}`, { reason: "proxy_mismatch" });
+    // The address it was judged public at, never a second DNS answer: it
+    // must be the SOCKS5 the container was made for.
+    if (profile.socksEndpoint !== null && sealed.socksEndpoint !== profile.socksEndpoint) {
+      throw new BadRequestError(`Invalid proxy: the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${sealed.socksEndpoint}`, { reason: "proxy_mismatch" });
+    }
     if (!(await setOnboardingProxy(appContext.db, { profileId: profile.profileId, url: sealed.url, encryptedAuth: sealed.encryptedAuth, keyVersion: sealed.keyVersion }))) {
       throw new AppError(`Profile ${profile.profileId} serves a page now`, 409, "profile_bound");
     }
