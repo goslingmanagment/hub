@@ -11,8 +11,9 @@ import {
 describe("text feature model defaults", () => {
   // fan-notes-fill is the one text feature on Sonnet 5.5 by default (owner).
   const OPUS_FEATURES = OPERATION_FEATURES.filter((feature) => feature !== "fan-notes-fill");
-  it.each(OPUS_FEATURES)("routes %s to Opus 5.5 through its model delegation", (feature) => {
+  it.each(OPUS_FEATURES)("routes %s to Opus 5.5 at high effort through its model delegation", (feature) => {
     expect(DEFAULT_FEATURE_MODELS[FEATURE_POLICIES[feature].modelFeature]).toBe("anthropic:claude-opus-5-5");
+    expect(DEFAULT_FEATURE_REASONING[FEATURE_POLICIES[feature].modelFeature]).toBe("high");
   });
 
   it("routes fan-notes-fill to Sonnet 5.5 at low reasoning, through its own model row", () => {
@@ -40,7 +41,7 @@ describe("coach-chat feature policy", () => {
       usesPingSegment: false,
     });
     expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-opus-5-5");
-    expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("low");
+    expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("high");
   });
 
   it("moves the bio decision into policy", () => {

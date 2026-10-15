@@ -826,7 +826,8 @@ costs from input, output, cache-write, and cache-read tokens. Aggregate cache-wr
 5m/1h provider breakdown is recorded as approximate. Unsupported models fail closed instead of
 being silently underpriced.
 
-Text features use Opus 5.5 with low effort, except full Recap, which uses medium.
+Text features use Opus 5.5 with high effort, full Recap included; fan-notes-fill
+keeps its own default (Sonnet 5.5, low).
 Short Recap uses low effort and a 4096-token total cap for thinking plus text;
 models that can disable thinking retain the 2048-token cap. Opus 5.5 always uses
 adaptive thinking, so an `off` preference is mapped to low effort. Explicit
