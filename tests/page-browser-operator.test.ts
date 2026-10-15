@@ -330,7 +330,7 @@ describe("the start (plan §4.1)", () => {
     await until(() => s.operator.page.snapshot.stopReason === "selftest_failed");
     expect(s.operator.page.snapshot.retryAtWall).not.toBeNull();
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     // The retry runs the start again (and fails again).
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
@@ -867,6 +867,39 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
   });
 });
 
+describe("a failed Chrome's profile-writing quit (F7)", () => {
+  it("finishes the old quit before a concurrent restart can start a new Chrome", async () => {
+    const s = await setUp(); s.model.shows.timeZone = "UTC";
+    let release: () => void = () => undefined; let closing = false;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const previous = s.chrome.handlers.get("Browser.close");
+    s.chrome.handlers.set("Browser.close", async (c) => { closing = true; await waiting; return previous?.(c) ?? {}; });
+    await command(s.engine, "restartBrowser");
+    await until(() => closing, 5000, "old Chrome asked to quit");
+    delete s.model.shows.timeZone;
+    const restart = command(s.engine, "restartBrowser");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(s.control.calls.filter((c) => c === "start")).toHaveLength(1);
+    release(); await restart;
+    await until(() => s.control.calls.filter((c) => c === "start").length === 2 && s.operator.page.step === "site_loaded", START_MS, "new Chrome loaded the site");
+    expect(s.control.calls).not.toContain("kill");
+    expect(s.operator.egress.exitOpen).toBe(true);
+  });
+
+  it("closes the exit, then asks Browser.close before forcing a failed startup down", async () => {
+    const s = await setUp();
+    s.model.shows.timeZone = "UTC";
+    const previous = s.chrome.handlers.get("Browser.close");
+    let closedExit = false;
+    s.chrome.handlers.set("Browser.close", (c) => { closedExit = !s.operator.egress.exitOpen; return previous?.(c) ?? {}; });
+    await command(s.engine, "restartBrowser");
+    await until(() => s.operator.page.snapshot.stopReason === "env_mismatch" && !s.chrome.running, 5000, "failed Chrome down");
+    expect(s.chrome.sent("Browser.close")).toHaveLength(1);
+    expect(closedExit).toBe(true);
+    expect(s.control.calls).not.toContain("kill");
+  });
+});
+
 describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
   const evaluations = (s: SetUp, marker: string) => s.chrome.sent("Runtime.evaluate").filter((command) => String(command.params.expression).includes(marker));
 
@@ -930,7 +963,7 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
     // No self-test, no exit IP: the start stopped at the check.
     expect(s.socks.connects).toEqual([]);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
   });
 
@@ -2193,7 +2226,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     client.request();
     await until(() => s.operator.page.snapshot.stopReason === "ws_unaccounted", 5000, "the failure");
     expect(s.operator.egress.exitOpen).toBe(false);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "site_loaded", 10_000, "Chrome started again");
     client.destroy();

@@ -552,3 +552,31 @@ type OperatorToEngine = HelloResult | Quiesced | State | PingPong | Check | Sent
 6. Пороги раздела 4: 7 страниц; темп ≥ 95 % потолка (≥ 1 240 в час при S = 2,5 с, ≥ 1 550 при 2,0 с); события вдвое выше замеров; p95 сообщения фана ≤ 5 с; добавка браузера ≤ 300 мс к запросу и ≤ 500 мс к событию; выгрузка после 15 минут без Hub ≤ 10 минут; ресурсы контейнера; Postgres ≤ 1,1 × базового.
 
 После прототипа: карта операций (№2, §2), потолки буфера (№6, §5), рубеж отправки и повторы Chrome (№10, №16, №1б, §9). Статус присутствия (№4) — по замеру этапа 1, окно наблюдения (№7) — к этапу 4.
+
+
+### Остановка после сбоя и фоновые модели Chrome (F7)
+
+При #fail выход закрывается до остановки Chrome. Оператор под своим
+последовательным владением процессом пробует Browser.close; команда и
+ожидание фактического завершения имеют один общий срок не более 2 с.
+По сроку или без CDP — kill через s6. До подтверждённого завершения не
+освобождается владение gate; неуспех kill не выдаётся за browserGone.
+Новый старт ждёт завершения остановки прежнего Chrome. Лог
+chrome.failure_quit сообщает исход, answered, deadlineMs и elapsedMs.
+Это возможность записать профиль, а не обещание сохранности при сбое диска.
+
+GenAILocalFoundationalModelSettings=1 запрещает автоматическую загрузку
+локальной GenAI-модели. На pinned Chrome155.0.8059.39 проверена фактическая
+mandatory Platform policy со статусом OK. Safe Browsing не отключается.
+Нельзя безопасно отождествить все загрузки optimizationguide/edgedl с
+ненужными моделями по одному имени хоста: Chromium155 относит к
+Optimization Guide в том числе Client Side Phishing / Image Embedder.
+Поэтому blanket ComponentUpdatesEnabled=false и отключение всего
+Optimization Guide здесь не применяются. Для владельца в PR остаётся
+вопрос об остальных загрузках/моделях защиты и допустимом компромиссе;
+полного устранения 59 МБ пилота эта узкая политика не обещает.
+
+Проверенные исходники pinned155:
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/GenerativeAI/GenAILocalFoundationalModelSettings.yaml
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/optimization_guide/core/delivery/prediction_model_component_configs.cc
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/Miscellaneous/ComponentUpdatesEnabled.yaml

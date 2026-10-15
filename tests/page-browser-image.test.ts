@@ -407,6 +407,7 @@ describe("the image", () => {
       BrowserAddPersonEnabled: false,
       SyncDisabled: true,
       DownloadRestrictions: 3,
+      GenAILocalFoundationalModelSettings: 1,
       RestoreOnStartup: 4,
       RemoteDebuggingAllowed: true,
       ExtensionSettings: { "*": { installation_mode: "blocked" } },

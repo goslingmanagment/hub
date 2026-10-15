@@ -32,5 +32,6 @@
     "*": {
       "installation_mode": "blocked"
     }
-  }
+  },
+  "GenAILocalFoundationalModelSettings": 1
 }

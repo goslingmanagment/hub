@@ -88,7 +88,7 @@
 //   owner's login).
 // - A planned stop closes the exit before CDP goes (plan §4.1). A lost
 //   control — CDP, the holder, its overflow, a browser that stops answering —
-//   closes the exit at once, kills Chrome and retries.
+//   closes the exit at once, gives Chrome a bounded quit then kills if needed, and retries.
 // - Nothing passes that could not be kept (spec §5): a start waits for the
 //   journals and the buffer to be written and to have room; a buffer that
 //   fills up (its caps, the disk) closes the exit and fails the page with
@@ -141,6 +141,7 @@ import type { OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
+import { quitChromeAfterFailure } from "./quit.ts";
 import type { OperatorConfig } from "./config.ts";
 import { HealthProbe } from "./health.ts";
 
@@ -164,6 +165,8 @@ export interface OperatorTimings {
   exitIpTimeoutMs: number;
   /** A planned stop waits this long for Chrome to quit by itself. */
   quitWaitMs: number;
+  /** One total close-and-exit deadline on a failure (at most 2 s). */
+  failureQuitMs: number;
   /** The site's document in the work tab (plan §4.1, step 8). */
   siteLoadMs: number;
   /** Before the work tab is loaded anew, how long a request of the site
@@ -190,6 +193,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   selfTestProbeMs: 4000,
   exitIpTimeoutMs: 15_000,
   quitWaitMs: 5000,
+  failureQuitMs: 2000,
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
@@ -1375,9 +1379,9 @@ export class Operator {
     else this.page.stand(note);
   }
 
-  /** A failure: the exit closes, Chrome is killed (nothing of it is trusted
-   *  any more; a self-test probe still queued dies with it), and the start
-   *  is tried again after the backoff. */
+  /** A failure: the exit closes, Chrome gets a bounded profile-writing quit
+   *  and then a kill if needed. Nothing of it is released meanwhile. The
+   *  start is tried again after the backoff, after that Chrome is down. */
   async #fail(reason: StopReason, note: string): Promise<void> {
     this.egress.closeExit(note);
     this.#endWork(note);
@@ -1394,7 +1398,8 @@ export class Operator {
     if (run !== this.#run) return;
     const retryAtWall = this.page.fail(why, note);
     await this.#withChrome(async () => {
-      await this.chrome.kill();
+      if (run !== this.#run) return;
+      await quitChromeAfterFailure(this.cdp, this.chrome, this.#timings.failureQuitMs, this.#log);
       this.egress.gate.browserGone();
     }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run || this.#stopped) return; // a newer start took over meanwhile
