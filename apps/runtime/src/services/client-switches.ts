@@ -278,7 +278,7 @@ export async function requireClientGrantedPage(
 
 /**
  * Why these switches refuse a flagged feature on a page, null when they do not:
- * the feature evaluation (`platform_unsupported`, `disabled`, `flag_off`,
+ * the feature evaluation (`disabled`, `platform_unsupported`, `flag_off`,
  * `binding_missing`, `hub_not_ready`). Pure: requireClientFeature reads the
  * switches per request, a dispatch (H-7b) from rows locked in its transaction.
  */
@@ -337,11 +337,12 @@ async function requireClientPageRow(
  * Refuses with 409 `client_feature_disabled` and the reason, in this order:
  * - `not_granted`: the page is not an active page granted to the caller (a
  *   missing page answers the same, so the refusal reveals nothing);
+ * - `disabled`: the master switch is off, on every platform;
  * - `platform_unsupported` when the route serves one part of the feature
  *   (`part`, its capability) and the feature needs no such part on the page's
  *   platform (clientFeatureNeedsOn: the list of new subscribers on Fansly,
  *   R20 HF-2);
- * - the feature evaluation (`platform_unsupported`, `disabled`, `flag_off`,
+ * - the feature evaluation (`platform_unsupported`, `flag_off`,
  *   `binding_missing`, `hub_not_ready`);
  * - `client_outdated`: the caller's `x-client-version` is below the owner's
  *   minimum or unreadable.
@@ -356,11 +357,14 @@ export async function requireClientFeature(
   flag: ClientFeatureFlagName,
   part?: ClientHubCapabilityName,
 ): Promise<ClientBootstrapPageRow> {
-  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
-    part !== undefined && !clientFeatureNeedsOn(flag, part, row.platform)
+  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => {
+    if (!switches.settings.enabled) {
+      return "disabled";
+    }
+    return part !== undefined && !clientFeatureNeedsOn(flag, part, row.platform)
       ? "platform_unsupported"
-      : clientFeatureRefusal(switches, row, flag)
-  ));
+      : clientFeatureRefusal(switches, row, flag);
+  });
 }
 
 /**
@@ -394,7 +398,7 @@ export async function requireClientFeatureOnLabel(
  * flagged feature it belongs to (it exists only where that feature does), or
  * a test of the platform (the claim status: where the greeting custody
  * exists, client-claim-admission.ts). `platform_unsupported` on any other
- * platform, before `disabled`, as in the feature evaluation. Without it no
+ * platform, after `disabled`, as in the feature evaluation. Without it no
  * platform is asked for.
  */
 export async function requireClientPage(
@@ -409,9 +413,12 @@ export async function requireClientPage(
     : typeof existsWith === "function" ? existsWith
     : (platform: Platform) => clientFeatureExistsOn(existsWith, platform);
   return requireClientPageRow(app, request, principal, page, feature, (switches, row) => {
+    if (!switches.settings.enabled) {
+      return "disabled";
+    }
     if (exists !== null && !exists(row.platform)) {
       return "platform_unsupported";
     }
-    return switches.settings.enabled ? null : "disabled";
+    return null;
   });
 }

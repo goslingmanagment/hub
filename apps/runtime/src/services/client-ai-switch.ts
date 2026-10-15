@@ -13,8 +13,8 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * extension token asks for, before any context is loaded or quota reserved.
  *
  * - A feature with a flag of its own runs the full server-side check of that
- *   flag on the request's page (requireClientFeature: granted page, platform,
- *   master switch, flag, binding, served capabilities, minimum version):
+ *   flag on the request's page (requireClientFeature: granted page, master
+ *   switch, platform, flag, binding, served capabilities, minimum version):
  *   Coach, Recap and Review everywhere; on Fansly (R20 HF-12) also Reply, Fix,
  *   Hi and Ping (`drafts`), the voice script (`voice`) and the notes fill
  *   (`notesFill`).
@@ -24,7 +24,7 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  *   Ping, the voice script and the notes fill: their Fansly flags do not exist
  *   there; and Help.
  * - A feature the extension does not have on the platform is refused
- *   `platform_unsupported` first, whatever the switches say: Help on Fansly
+ *   `platform_unsupported` after the master switch: Help on Fansly
  *   (R20 HF-2; the owner removed it from the extension's Fansly site).
  *
  * Which of the two a feature takes depends on the platform the request names
@@ -75,7 +75,7 @@ const CLIENT_AI_UNFLAGGED_FEATURE_PLATFORMS: ReadonlyMap<string, readonly Platfo
   ["help-me", ["onlyfans"]],
 ]);
 
-/** Whether the extension has this AI feature on this platform at all (the narrow token's AI switch asks it first). */
+/** Whether the extension has this AI feature on this platform at all (asked after the master switch). */
 export function clientAiFeatureExistsOn(feature: string, platform: Platform): boolean {
   return CLIENT_AI_UNFLAGGED_FEATURE_PLATFORMS.get(feature)?.includes(platform) ?? true;
 }
@@ -100,9 +100,6 @@ export async function requireClientTokenAiFeature(
   if (principal.clientProfile === undefined) {
     return;
   }
-  if (!clientAiFeatureExistsOn(input.feature, input.platform)) {
-    throw new ClientFeatureDisabledError(input.feature, "platform_unsupported");
-  }
   const flag = clientAiFeatureFlag(input.feature, input.platform);
   if (flag !== null) {
     // A missing page answers like one not granted: the refusal reveals nothing.
@@ -112,6 +109,9 @@ export async function requireClientTokenAiFeature(
   const switches = await loadClientSwitches(app);
   if (!switches.settings.enabled) {
     throw new ClientFeatureDisabledError(input.feature, "disabled");
+  }
+  if (!clientAiFeatureExistsOn(input.feature, input.platform)) {
+    throw new ClientFeatureDisabledError(input.feature, "platform_unsupported");
   }
   const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
   if (outdated !== null) {

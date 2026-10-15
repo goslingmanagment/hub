@@ -621,7 +621,7 @@ describe("[R20 HF-2] the narrow token's AI on a Fansly page: the page's own row 
     }
   }, AI_TEST_TIMEOUT_MS);
 
-  it("Help: the narrow token's is refused on Fansly whatever the switches say; OnlyFans and the full token keep it", async (context) => {
+  it("Help: master off reads disabled, master on keeps platform_unsupported on Fansly; OnlyFans and full tokens are unchanged", async (context) => {
     if (!server) return context.skip();
     const before = await generationCount();
     capture.prompts = [];
@@ -632,10 +632,11 @@ describe("[R20 HF-2] the narrow token's AI on a Fansly page: the page's own row 
       [{ "*": EVERYTHING, "lora-1": EVERYTHING }, true],
     ] as const) {
       setSwitches(rows, enabled);
-      expectFeatureRefused(await narrowHelp(), "platform_unsupported", "the narrow token's Help on Fansly");
-      // The platform answers first: before the version, and for a page the caller is not granted.
-      expectFeatureRefused(await narrowHelp({ clientVersion: "chat-extension/1.1.9" }), "platform_unsupported", "an outdated extension");
-      expectFeatureRefused(await narrowHelp({ pageLabel: "lora-2" }), "platform_unsupported", "a page not granted");
+      const reason = enabled ? "platform_unsupported" : "disabled";
+      expectFeatureRefused(await narrowHelp(), reason, "the narrow token's Help on Fansly");
+      // The master, then the platform answer before the version, also for a page not granted.
+      expectFeatureRefused(await narrowHelp({ clientVersion: "chat-extension/1.1.9" }), reason, "an outdated extension");
+      expectFeatureRefused(await narrowHelp({ pageLabel: "lora-2" }), reason, "a page not granted");
     }
     expect(capture.prompts).toEqual([]);
     expect(await generationCount()).toBe(before);

@@ -1349,6 +1349,14 @@ describe("chat-extension claim and custody routes", () => {
       expectRefused(await post(body), 409, "client_feature_disabled", "platform_unsupported");
     }
     expect(await custodyRows(fan)).toEqual([]);
+    // Master off takes precedence for a new dispatch even where its group does
+    // not exist. Recording an already-sent native message remains switch-free.
+    await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
+    expectRefused(await post(dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 })), 409, "client_feature_disabled", "disabled");
+    expectRefused(await post(nativeBody({ group: manualGroup(text), partIndex: 0 })), 409, "client_feature_disabled", "platform_unsupported");
+    expectRefused(await act(grishaToken, nextFan(), replyBody(), { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "disabled");
+    expect(await custodyRows(fan)).toEqual([]);
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }]);
     // An AI group never takes a manual group's ref.
     const forged = await post(dispatchBody({ leaseToken, group: group({ generationRef: `manual:${fingerprintOf(text)}` }) }));
     expect(forged.statusCode, forged.body).toBe(400);

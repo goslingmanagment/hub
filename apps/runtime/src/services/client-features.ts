@@ -50,7 +50,8 @@ export interface ClientFeaturePlatformRequirement {
 /**
  * What a feature needs, by platform (R20 HF-2): one entry per platform the
  * feature exists on. A platform with no entry has no such feature: every page
- * of it reads `platform_unsupported`, whatever the owner's switches say.
+ * of it reads `platform_unsupported` while the master switch is on; with the
+ * master off every feature on every platform reads `disabled`.
  */
 export type ClientFeatureRequirement = Readonly<Partial<Record<Platform, ClientFeaturePlatformRequirement>>>;
 
@@ -229,9 +230,9 @@ function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boo
 }
 
 /**
- * Whether a flagged feature exists on a platform at all: the first thing the
- * evaluation asks. Also for a client route or action that has no flag of its
- * own but exists only where a feature does (the claim status and
+ * Whether a flagged feature exists on a platform at all: the evaluation asks
+ * after the master switch. Also for a client route or action that has no flag
+ * of its own but exists only where a feature does (the claim status and
  * registerNativeSend exist where the greeting custody does: where every flag
  * of one of its sends exists, client-claim-admission.ts).
  */
@@ -256,8 +257,9 @@ export function clientFeatureNeedsOn(
 }
 
 /**
- * The reasons, in the order they are checked: the feature does not exist on the
- * page's platform; the master switch is off; the flag is off for the page (its
+ * The reasons, in the order they are checked: the master switch is off
+ * (`disabled` for every feature on every platform); the feature does not exist
+ * on the page's platform; the flag is off for the page (its
  * own row, else the `"*"` row where the page's platform takes it: a Fansly
  * page reads its own row alone, R20 HF-2); the extension has no way to bind a
  * host account to the page; the hub does not serve what the feature needs on
@@ -270,12 +272,12 @@ export function evaluateClientFeature(input: {
   flag: ClientFeatureFlagName;
   served: readonly string[];
 }): ClientFeatureAvailability {
+  if (!input.settings.enabled) {
+    return unavailable("disabled");
+  }
   const requirement = clientFeatureRequirementOn(input.flag, input.page.platform);
   if (requirement === undefined) {
     return unavailable("platform_unsupported");
-  }
-  if (!input.settings.enabled) {
-    return unavailable("disabled");
   }
   const on = flagValue(input.settings, input.page.label, input.flag)
     ?? (clientStarRowReaches(input.page.platform) ? flagValue(input.settings, "*", input.flag) : undefined)
