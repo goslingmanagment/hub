@@ -4,6 +4,7 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime } from "@/lib/format";
 
+/** The daily revenue report: what the next one says, send one now, and what was sent. */
 export function NotificationsReportsTab() {
   const { data: preview, refetch: fetchPreview, isFetching: previewLoading, isError: previewError, error: previewErrorValue } = useReportPreview();
   const sendReport = useSendReport();
@@ -17,87 +18,92 @@ export function NotificationsReportsTab() {
     sendReport.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          toast.success("Report sent");
+          toast.success("Отчёт отправлен");
         } else {
-          toast.error(result.error ?? "Failed to send report");
+          toast.error(result.error ?? "Отчёт не отправился");
         }
       },
-      onError: () => toast.error("Failed to send report"),
+      onError: () => toast.error("Отчёт не отправился"),
     });
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={handlePreview}
-          disabled={previewLoading}
-          className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
-        >
-          {previewLoading ? "Loading..." : "Preview Next Report"}
-        </button>
-        <button
-          onClick={handleSendNow}
-          disabled={sendReport.isPending}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
-        >
-          {sendReport.isPending ? "Sending..." : "Send Now to Telegram"}
-        </button>
+    <section className="card" aria-labelledby="daily-report-title">
+      <div className="card-header">
+        <div>
+          <h3 id="daily-report-title" className="card-title">Ежедневный отчёт</h3>
+          <p className="card-description">Предпросмотр и отправка в Telegram вручную.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={handlePreview} disabled={previewLoading} className="btn btn-sm">
+            {previewLoading ? "Загружаем…" : "Показать следующий отчёт"}
+          </button>
+          <button type="button" onClick={handleSendNow} disabled={sendReport.isPending} className="btn btn-primary btn-sm">
+            {sendReport.isPending ? "Отправляем…" : "Отправить сейчас"}
+          </button>
+        </div>
       </div>
 
-      {previewError && <StatusPanel tone="error" title={preview ? "Preview refresh failed; the previous preview remains below" : "Report preview failed to load"} description={previewErrorValue instanceof Error ? previewErrorValue.message : "Try Preview Next Report again."} />}
-
-      {preview && (
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="mb-2 text-[12px] text-text-muted">Preview for {preview.reportDate}</div>
-          <pre className="whitespace-pre-wrap rounded-lg bg-hover p-3 font-mono text-[12px] text-text-primary">
-            {preview.text}
-          </pre>
+      {(previewError || preview) && (
+        <div className="card-body space-y-3 border-b border-border">
+          {previewError && (
+            <StatusPanel
+              tone="error"
+              title={preview ? "Не удалось обновить предпросмотр — ниже прежний" : "Предпросмотр не загрузился"}
+              description={previewErrorValue instanceof Error ? previewErrorValue.message : "Нажмите «Показать следующий отчёт» ещё раз."}
+            />
+          )}
+          {preview && (
+            <div>
+              <div className="mb-2 text-[13px] text-text-secondary">Отчёт за {preview.reportDate}</div>
+              <pre className="whitespace-pre-wrap rounded-lg bg-hover-alt p-3 font-mono text-[13px] text-text-primary">
+                {preview.text}
+              </pre>
+            </div>
+          )}
         </div>
       )}
 
       <div>
-        <h3 className="mb-3 text-sm font-semibold text-text-primary">Report History</h3>
-        {historyError && history && <StaleDataNotice error={historyErrorValue} className="mb-3" />}
+        <h4 className="px-5 pb-2 pt-4 text-sm font-semibold text-text-primary">История отправок</h4>
+        {historyError && history && <StaleDataNotice error={historyErrorValue} className="mx-5 mb-3" />}
         {historyLoading && !history ? (
-          <StatusPanel title="Loading report history" description="Fetching recent notification reports." />
+          <p className="px-5 pb-5 text-[13px] text-text-secondary">Загружаем историю…</p>
         ) : !history ? (
-          <StatusPanel
-            title="Report history failed to load"
-            description="The notification report history could not be fetched."
-            tone="error"
-          />
+          <div className="px-5 pb-5">
+            <StatusPanel
+              title="История отправок не загрузилась"
+              description="Сервер не ответил. Попробуйте обновить страницу."
+              tone="error"
+            />
+          </div>
         ) : history.items.length === 0 ? (
-          <StatusPanel
-            title="No reports sent yet"
-            description="Enable daily reports in the Settings tab to start receiving revenue summaries."
-          />
+          <p className="px-5 pb-5 text-[13px] text-text-secondary">
+            Отчёты ещё не отправлялись. Здесь появится каждая отправка — по расписанию или вручную.
+          </p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-card">
-            <table className="w-full border-collapse">
+          <div className="overflow-x-auto">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Date</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Kind</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Status</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Error</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Sent At</th>
+                <tr>
+                  <th>За день</th>
+                  <th>Как</th>
+                  <th>Статус</th>
+                  <th>Отправлен</th>
                 </tr>
               </thead>
               <tbody>
                 {history.items.map((item) => (
-                  <tr key={item.id} className="border-t border-border hover:bg-hover">
-                    <td className="px-4 py-2.5 text-[13px] font-medium tabular-nums text-text-primary">{item.reportDate ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-secondary">
-                      {item.kind === "daily_report_scheduled" ? "Scheduled" : "Manual"}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-[12px] font-medium ${item.status === "sent" ? "text-green" : "text-danger"}`}>
-                        {item.status === "sent" ? "Sent" : "Failed"}
+                  <tr key={item.id}>
+                    <td className="font-medium tabular-nums">{item.reportDate ?? "—"}</td>
+                    <td className="muted">{item.kind === "daily_report_scheduled" ? "По расписанию" : "Вручную"}</td>
+                    <td>
+                      <span className={item.status === "sent" ? "badge badge-success" : "badge badge-danger"} title={item.error ?? undefined}>
+                        {item.status === "sent" ? "Отправлен" : "Ошибка"}
                       </span>
+                      {item.error && <div className="mt-0.5 max-w-[320px] truncate text-xs text-text-secondary" title={item.error}>{item.error}</div>}
                     </td>
-                    <td className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.error ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatDateTime(item.createdAt)}</td>
+                    <td className="muted whitespace-nowrap">{formatDateTime(item.createdAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -105,6 +111,6 @@ export function NotificationsReportsTab() {
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

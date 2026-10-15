@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { toast } from "sonner";
 import {
   useDiscoverTelegramChats,
@@ -18,6 +18,12 @@ function apiErrorMessage(error: unknown): string | undefined {
   return error instanceof Error && error.message ? error.message : undefined;
 }
 
+const CONNECTION_LABELS = {
+  connected: { label: "Подключён", badge: "badge badge-success", dot: "status-dot status-dot-ok" },
+  last_message_failed: { label: "Последнее сообщение не доставлено", badge: "badge badge-danger", dot: "status-dot status-dot-error" },
+  untested: { label: "Ещё не проверен", badge: "badge", dot: "status-dot" },
+} as const;
+
 export function NotificationsSettingsTab() {
   const { data, isLoading, isError, error, refetch, isFetching } = useNotificationsSettings();
   const updateSettings = useUpdateNotificationsSettings();
@@ -29,21 +35,16 @@ export function NotificationsSettingsTab() {
   const [botUsername, setBotUsername] = useState<string | null>(null);
 
   if (isLoading && !data) {
-    return (
-      <StatusPanel
-        title="Loading notification settings"
-        description="Fetching the current Telegram notification configuration."
-      />
-    );
+    return <StatusPanel title="Загружаем настройки уведомлений…" />;
   }
 
   if (!data) {
     return (
       <StatusPanel
-        title="Notification settings failed to load"
-        description="The notification settings could not be fetched."
+        title="Настройки уведомлений не загрузились"
+        description="Сервер не ответил. Попробуйте ещё раз."
         tone="error"
-        action={<button type="button" disabled={isFetching} onClick={() => void refetch()} className="text-sm text-accent underline">Retry</button>}
+        action={<button type="button" disabled={isFetching} onClick={() => void refetch()} className="btn btn-sm">Повторить</button>}
       />
     );
   }
@@ -59,12 +60,12 @@ export function NotificationsSettingsTab() {
     value: boolean,
   ) {
     if (updateSettings.isPending || isError) return;
-    updateSettings.mutate({ [field]: value }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "The setting was not saved") });
+    updateSettings.mutate({ [field]: value }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "Настройка не сохранилась") });
   }
 
   function handleReportHourChange(hour: number) {
     if (updateSettings.isPending || isError) return;
-    updateSettings.mutate({ reportHourUtc: hour }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "The report hour was not saved") });
+    updateSettings.mutate({ reportHourUtc: hour }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "Час отчёта не сохранился") });
   }
 
   // After saving credentials, send a real test so the connection status reflects
@@ -74,12 +75,12 @@ export function NotificationsSettingsTab() {
     sendTest.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          toast.success("Connected — test message sent");
+          toast.success("Подключено — проверочное сообщение отправлено");
         } else {
-          toast.error(result.error ?? "Saved, but the test message failed");
+          toast.error(result.error ?? "Сохранено, но проверочное сообщение не дошло");
         }
       },
-      onError: () => toast.error("Saved, but the test message failed"),
+      onError: () => toast.error("Сохранено, но проверочное сообщение не дошло"),
     });
   }
 
@@ -94,12 +95,12 @@ export function NotificationsSettingsTab() {
     const haveToken = settings.botTokenSet || !!botToken;
     const haveChat = !!settings.chatId || !!chatId;
     if (!haveToken || !haveChat) {
-      toast.error("Bot token and Chat ID are both required");
+      toast.error("Нужны и токен бота, и ID чата");
       return false;
     }
 
     if (!botToken && !chatId) {
-      toast.error("Nothing to update");
+      toast.error("Нечего сохранять");
       return false;
     }
 
@@ -110,26 +111,26 @@ export function NotificationsSettingsTab() {
       verifyAfterSave();
       return true;
     } catch (mutationError) {
-      toast.error(apiErrorMessage(mutationError) ?? "Failed to save credentials");
+      toast.error(apiErrorMessage(mutationError) ?? "Не удалось сохранить данные Telegram");
       return false;
     }
   }
 
   async function handleClearCredentials(): Promise<boolean> {
     if (updateSettings.isPending || sendTest.isPending || isError) return false;
-    if (!window.confirm("Clear the stored Telegram bot token and chat ID? Environment credentials may become active again. To stop automatic notifications, turn Notifications Enabled off.")) {
+    if (!window.confirm("Удалить сохранённые токен бота и ID чата? Если они заданы в настройках сервера, снова начнут действовать те. Чтобы остановить автоматические уведомления, выключите «Уведомления включены».")) {
       return false;
     }
     try {
       await updateSettings.mutateAsync({ botToken: null, chatId: null });
-      toast.success("Stored credentials cleared");
+      toast.success("Сохранённые данные удалены");
       setDetectedChats(null);
       setBotUsername(null);
       if (botTokenRef.current) botTokenRef.current.value = "";
       if (chatIdRef.current) chatIdRef.current.value = "";
       return true;
     } catch {
-      toast.error("Failed to clear credentials");
+      toast.error("Не удалось удалить данные");
       return false;
     }
   }
@@ -143,20 +144,20 @@ export function NotificationsSettingsTab() {
         setBotUsername(result.botUsername);
         if (result.chats.length === 0) {
           setDetectedChats(null);
-          toast.message("No chats yet — open the bot in Telegram, send it any message, then Detect again.");
+          toast.message("Чатов пока нет — откройте бота в Telegram, напишите ему что-нибудь и нажмите «Найти чат» ещё раз.");
           return;
         }
         if (result.chats.length === 1) {
           const only = result.chats[0]!;
           if (chatIdRef.current) chatIdRef.current.value = only.id;
           setDetectedChats(null);
-          toast.success(`Found ${only.title}`);
+          toast.success(`Найден чат: ${only.title}`);
           return;
         }
         setDetectedChats(result.chats);
-        toast.success(`Found ${result.chats.length} chats — pick one`);
+        toast.success(`Найдено чатов: ${result.chats.length} — выберите нужный`);
       },
-      onError: (error) => toast.error(apiErrorMessage(error) ?? "Could not reach Telegram"),
+      onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось связаться с Telegram"),
     });
   }
 
@@ -169,173 +170,195 @@ export function NotificationsSettingsTab() {
     sendTest.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          toast.success("Test message sent");
+          toast.success("Проверочное сообщение отправлено");
         } else {
-          toast.error(result.error ?? "Failed to send test message");
+          toast.error(result.error ?? "Проверочное сообщение не отправилось");
         }
       },
-      onError: () => toast.error("Failed to send test message"),
+      onError: () => toast.error("Проверочное сообщение не отправилось"),
     });
   }
 
   const savePending = updateSettings.isPending || sendTest.isPending;
   const writesUnavailable = savePending || isError;
+  const connection = CONNECTION_LABELS[settings.connectionStatus as keyof typeof CONNECTION_LABELS] ?? CONNECTION_LABELS.untested;
 
   return (
-    <div className="space-y-4">
-      {isError && <div className="flex flex-wrap items-center gap-2"><StaleDataNotice title="Settings refresh failed; your input is kept" error={error} className="flex-1" /><button type="button" disabled={isFetching} onClick={() => void refetch()} className="text-sm text-accent underline">Retry</button></div>}
-      {!settings.configured ? (
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-1 text-sm font-semibold text-text-primary">Connect Telegram</h3>
-          <p className="mb-4 text-[12px] text-text-muted">
-            Create a bot via @BotFather and paste its token below. Send the bot any message in Telegram,
-            then click <span className="font-medium text-text-secondary">Detect</span> to pick your chat automatically.
-          </p>
-          <div className="max-w-md space-y-3">
-            <div>
-              <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
-              <input
-                ref={botTokenRef}
-                aria-label="Bot Token"
-                type="password"
-                placeholder="7123456789:AAH..."
-                className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-              />
-              {botUsername && (
-                <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
-              )}
-              {settings.botTokenSet && (
-                <p className="mt-1 text-[12px] text-text-muted">
-                  A bot token is already configured{settings.botTokenSource === "env" ? " via environment" : ""} — leave blank to keep it.
-                </p>
-              )}
-            </div>
-            <ChatIdField
-              chatIdRef={chatIdRef}
-              defaultValue={settings.chatId ?? ""}
-              onDetect={handleDetectChats}
-              isDetecting={discoverChats.isPending}
-              detectedChats={detectedChats}
-              onPick={handlePickChat}
-            />
-            <button
-              onClick={handleSaveCredentials}
-              disabled={writesUnavailable}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
-            >
-              {updateSettings.isPending ? "Saving..." : sendTest.isPending ? "Connecting..." : "Save & Send Test"}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-3">
-            <div className={`h-2.5 w-2.5 rounded-full ${
-              settings.connectionStatus === "connected" ? "bg-green"
-                : settings.connectionStatus === "last_message_failed" ? "bg-danger"
-                : "bg-text-muted"
-            }`} />
-            <div>
-              <span className="text-sm font-medium text-text-primary">
-                {settings.connectionStatus === "connected" ? "Connected"
-                  : settings.connectionStatus === "last_message_failed" ? "Last message failed"
-                  : "Not tested yet"}
-              </span>
-              {settings.chatId && (
-                <span className="ml-2 text-[12px] text-text-muted">
-                  Chat {settings.chatId}
-                  {settings.chatIdSource === "env" && " (from env)"}
-                </span>
-              )}
-              {settings.lastMessageAt && (
-                <span className="ml-2 text-[12px] text-text-muted">
-                  &middot; {formatRelativeTime(settings.lastMessageAt)}
-                </span>
-              )}
-              {settings.connectionStatus === "untested" && (
-                <p className="mt-0.5 text-[12px] text-text-muted">Send a test message to verify delivery.</p>
-              )}
-              {settings.lastMessageError && (
-                <p className="mt-0.5 text-[12px] text-danger">{settings.lastMessageError}</p>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <CredentialsEdit
-              chatId={settings.chatId}
-              onClear={handleClearCredentials}
-              onSave={handleSaveCredentials}
-              botTokenRef={botTokenRef}
-              chatIdRef={chatIdRef}
-              isPending={savePending}
-              writesUnavailable={isError}
-              onDetect={handleDetectChats}
-              isDetecting={discoverChats.isPending}
-              detectedChats={detectedChats}
-              onPick={handlePickChat}
-              botUsername={botUsername}
-            />
-            <button
-              onClick={handleSendTest}
-              disabled={writesUnavailable}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
-            >
-              {sendTest.isPending ? "Sending..." : "Send Test"}
-            </button>
-          </div>
+    <div className="space-y-5">
+      {isError && (
+        <div className="flex flex-wrap items-center gap-2">
+          <StaleDataNotice title="Не удалось обновить настройки — введённое сохранено" error={error} className="flex-1" />
+          <button type="button" disabled={isFetching} onClick={() => void refetch()} className="btn btn-sm">Повторить</button>
         </div>
       )}
 
-      <ToggleRow
-        disabled={writesUnavailable}
-        label="Notifications Enabled"
-        description="When off, blocks automatic incident alerts and scheduled daily reports. Manual actions still work."
-        checked={settings.enabled}
-        onChange={(value) => handleToggle("enabled", value)}
-      />
+      {!settings.configured ? (
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">Подключите Telegram</h3>
+              <p className="card-description">Hub будет присылать в чат оповещения о сбоях и ежедневный отчёт.</p>
+            </div>
+          </div>
+          <ol className="card-body max-w-xl space-y-5">
+            <Step number={1} title="Создайте бота у @BotFather в Telegram и вставьте его токен">
+              <input
+                ref={botTokenRef}
+                aria-label="Токен бота"
+                type="password"
+                placeholder="7123456789:AAH…"
+                className="input"
+              />
+              {botUsername && (
+                <p className="field-hint text-green">Бот найден: @{botUsername}</p>
+              )}
+              {settings.botTokenSet && (
+                <p className="field-hint">
+                  Токен уже задан{settings.botTokenSource === "env" ? " в настройках сервера" : ""} — оставьте поле пустым, чтобы его не менять.
+                </p>
+              )}
+            </Step>
+            <Step number={2} title="Напишите боту любое сообщение и нажмите «Найти чат»">
+              <ChatIdField
+                chatIdRef={chatIdRef}
+                defaultValue={settings.chatId ?? ""}
+                onDetect={handleDetectChats}
+                isDetecting={discoverChats.isPending}
+                detectedChats={detectedChats}
+                onPick={handlePickChat}
+              />
+            </Step>
+            <Step number={3} title="Сохраните — Hub отправит проверочное сообщение">
+              <button
+                type="button"
+                onClick={handleSaveCredentials}
+                disabled={writesUnavailable}
+                className="btn btn-primary"
+              >
+                {updateSettings.isPending ? "Сохраняем…" : sendTest.isPending ? "Проверяем…" : "Сохранить и проверить"}
+              </button>
+            </Step>
+          </ol>
+        </section>
+      ) : (
+        <section className="card">
+          <div className="card-header">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="card-title">Telegram</h3>
+                <span className={connection.badge}>
+                  <span className={connection.dot} aria-hidden="true" />
+                  {connection.label}
+                </span>
+              </div>
+              <p className="card-description">
+                {settings.chatId ? <>Чат {settings.chatId}{settings.chatIdSource === "env" && " (задан в настройках сервера)"}</> : "Чат не задан"}
+                {settings.lastMessageAt && <> · последнее сообщение {formatRelativeTime(settings.lastMessageAt)}</>}
+              </p>
+              {settings.connectionStatus === "untested" && (
+                <p className="card-description">Отправьте проверочное сообщение, чтобы убедиться, что оно доходит.</p>
+              )}
+              {settings.lastMessageError && (
+                <p className="mt-1 text-[13px] text-danger">{settings.lastMessageError}</p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <CredentialsEdit
+                chatId={settings.chatId}
+                onClear={handleClearCredentials}
+                onSave={handleSaveCredentials}
+                botTokenRef={botTokenRef}
+                chatIdRef={chatIdRef}
+                isPending={savePending}
+                writesUnavailable={isError}
+                onDetect={handleDetectChats}
+                isDetecting={discoverChats.isPending}
+                detectedChats={detectedChats}
+                onPick={handlePickChat}
+                botUsername={botUsername}
+              />
+              <button
+                type="button"
+                onClick={handleSendTest}
+                disabled={writesUnavailable}
+                className="btn btn-sm"
+              >
+                {sendTest.isPending ? "Отправляем…" : "Отправить проверку"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
-      <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
-        <div>
-          <div className="text-sm font-medium text-text-primary">Report Hour (UTC)</div>
-          <div className="text-[12px] text-text-muted">Hour when the daily revenue report is sent</div>
+      <section className="card">
+        <div className="card-header">
+          <div>
+            <h3 className="card-title">Что присылать</h3>
+            <p className="card-description">Время отчёта — UTC.</p>
+          </div>
         </div>
-        <select
-          aria-label="Daily report hour in UTC"
-          disabled={writesUnavailable}
-          value={settings.reportHourUtc}
-          onChange={(event) => handleReportHourChange(Number(event.target.value))}
-          className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
-        >
-          {Array.from({ length: 24 }, (_, index) => (
-            <option key={index} value={index}>{String(index).padStart(2, "0")}:00 UTC</option>
-          ))}
-        </select>
-      </div>
-
-      <ToggleRow
-        disabled={writesUnavailable}
-        label="Daily Revenue Report"
-        description="Send a daily revenue summary via Telegram"
-        checked={settings.dailyReportEnabled}
-        onChange={(value) => handleToggle("dailyReportEnabled", value)}
-      />
-
-      <ToggleRow
-        disabled={writesUnavailable}
-        label="Sync Failure Alerts"
-        description="Send alerts when sync incidents open or resolve"
-        checked={settings.syncFailureAlertsEnabled}
-        onChange={(value) => handleToggle("syncFailureAlertsEnabled", value)}
-      />
-
-      <ToggleRow
-        disabled={writesUnavailable}
-        label="AI Critical Alerts"
-        description="Send critical AI provider alerts separately from sync incident alerts."
-        checked={settings.aiCriticalAlertsEnabled}
-        onChange={(value) => handleToggle("aiCriticalAlertsEnabled", value)}
-      />
+        <ul className="divide-y divide-border-light">
+          <ToggleRow
+            disabled={writesUnavailable}
+            label="Уведомления включены"
+            description="Если выключить, автоматические оповещения и отчёт по расписанию не отправляются. Ручные действия работают."
+            checked={settings.enabled}
+            onChange={(value) => handleToggle("enabled", value)}
+          />
+          <ToggleRow
+            disabled={writesUnavailable}
+            label="Ежедневный отчёт о доходе"
+            description="Сводка дохода за прошедший день, каждый день в выбранный час."
+            checked={settings.dailyReportEnabled}
+            onChange={(value) => handleToggle("dailyReportEnabled", value)}
+            extra={(
+              <select
+                aria-label="Час ежедневного отчёта (UTC)"
+                disabled={writesUnavailable}
+                value={settings.reportHourUtc}
+                onChange={(event) => handleReportHourChange(Number(event.target.value))}
+                className="select w-auto min-h-[34px] py-1.5"
+              >
+                {Array.from({ length: 24 }, (_, index) => (
+                  <option key={index} value={index}>{String(index).padStart(2, "0")}:00 UTC</option>
+                ))}
+              </select>
+            )}
+          />
+          <ToggleRow
+            disabled={writesUnavailable}
+            label="Сбои сбора данных"
+            description="Сообщать, когда инцидент сбора открывается и закрывается."
+            checked={settings.syncFailureAlertsEnabled}
+            onChange={(value) => handleToggle("syncFailureAlertsEnabled", value)}
+          />
+          <ToggleRow
+            disabled={writesUnavailable}
+            label="Критичные сбои AI"
+            description="Проблемы AI-провайдера — отдельно от сбоев сбора."
+            checked={settings.aiCriticalAlertsEnabled}
+            onChange={(value) => handleToggle("aiCriticalAlertsEnabled", value)}
+          />
+        </ul>
+      </section>
     </div>
+  );
+}
+
+function Step({ number, title, children }: { number: number; title: string; children: ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span
+        aria-hidden="true"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent"
+      >
+        {number}
+      </span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className="text-sm font-medium text-text-primary">{title}</p>
+        {children}
+      </div>
+    </li>
   );
 }
 
@@ -356,36 +379,35 @@ function ChatIdField({
 }) {
   return (
     <div>
-      <label className="mb-1 block text-[12px] font-medium text-text-secondary">Chat ID</label>
       <div className="flex gap-2">
         <input
           ref={chatIdRef}
-          aria-label="Chat ID"
+          aria-label="ID чата"
           type="text"
           defaultValue={defaultValue}
-          placeholder="123456789 or -100..."
-          className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+          placeholder="ID чата: 123456789 или -100…"
+          className="input"
         />
         <button
           type="button"
           onClick={onDetect}
           disabled={isDetecting}
-          className="shrink-0 rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
+          className="btn"
         >
-          {isDetecting ? "Detecting..." : "Detect"}
+          {isDetecting ? "Ищем…" : "Найти чат"}
         </button>
       </div>
       {detectedChats && detectedChats.length > 0 && (
-        <div className="mt-2 space-y-1 rounded-lg border border-border bg-card p-2">
+        <div className="mt-2 space-y-1 rounded-lg border border-border bg-card p-1.5">
           {detectedChats.map((chat) => (
             <button
               key={chat.id}
               type="button"
               onClick={() => onPick(chat.id)}
-              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-hover"
+              className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover"
             >
               <span className="font-medium text-text-primary">{chat.title}</span>
-              <span className="text-text-muted">{chat.type} · {chat.id}</span>
+              <span className="text-text-secondary">{chat.type} · {chat.id}</span>
             </button>
           ))}
         </div>
@@ -425,61 +447,59 @@ function CredentialsEdit({
 
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
-      >
-        Edit Credentials
+      <button type="button" onClick={() => setOpen(true)} className="btn btn-sm">
+        Изменить данные
       </button>
     );
   }
 
   return (
-    <ModalShell title="Update Telegram Credentials" onClose={() => { if (!isPending) setOpen(false); }}>
-        <div className="space-y-3">
-          <div>
-            <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
+    <ModalShell title="Данные Telegram" onClose={() => { if (!isPending) setOpen(false); }}>
+        <div className="space-y-4">
+          <label className="block">
+            <span className="field-label">Токен бота</span>
             <input
               ref={botTokenRef}
-              aria-label="Bot Token"
+              aria-label="Токен бота"
               type="password"
-              placeholder="Paste new token (leave empty to keep current)"
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+              placeholder="Новый токен (пусто — оставить текущий)"
+              className="input"
             />
             {botUsername && (
-              <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+              <p className="field-hint text-green">Бот найден: @{botUsername}</p>
             )}
+          </label>
+          <div>
+            <span className="field-label">ID чата</span>
+            <ChatIdField
+              chatIdRef={chatIdRef}
+              defaultValue={chatId ?? ""}
+              onDetect={onDetect}
+              isDetecting={isDetecting}
+              detectedChats={detectedChats}
+              onPick={onPick}
+            />
           </div>
-          <ChatIdField
-            chatIdRef={chatIdRef}
-            defaultValue={chatId ?? ""}
-            onDetect={onDetect}
-            isDetecting={isDetecting}
-            detectedChats={detectedChats}
-            onPick={onPick}
-          />
         </div>
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
           <button
+            type="button"
             onClick={() => void onClear().then((cleared) => { if (cleared) setOpen(false); })}
             disabled={isPending || writesUnavailable}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
+            className="btn btn-ghost mr-auto text-danger"
           >
-            Clear Stored Credentials
+            Удалить сохранённые данные
+          </button>
+          <button type="button" onClick={() => setOpen(false)} disabled={isPending} className="btn">
+            Отмена
           </button>
           <button
-            onClick={() => setOpen(false)}
-            disabled={isPending}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
-          >
-            Cancel
-          </button>
-          <button
+            type="button"
             onClick={() => void onSave().then((saved) => { if (saved) setOpen(false); })}
             disabled={isPending || writesUnavailable}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+            className="btn btn-primary"
           >
-            Save & Send Test
+            Сохранить и проверить
           </button>
         </div>
     </ModalShell>
@@ -492,34 +512,39 @@ function ToggleRow({
   checked,
   onChange,
   disabled,
+  extra,
 }: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (value: boolean) => void;
   disabled: boolean;
+  extra?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
-      <div>
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4">
+      <div className="min-w-0 flex-1 basis-60">
         <div className="text-sm font-medium text-text-primary">{label}</div>
-        <div className="text-[12px] text-text-muted">{description}</div>
+        <div className="mt-0.5 text-[13px] text-text-secondary">{description}</div>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-label={label}
-        disabled={disabled}
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-          checked ? "bg-accent" : "bg-border"
-        }`}
-      >
-        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-          checked ? "translate-x-5" : "translate-x-0"
-        }`} />
-      </button>
-    </div>
+      <div className="flex items-center gap-3">
+        {extra}
+        <button
+          type="button"
+          role="switch"
+          aria-label={label}
+          disabled={disabled}
+          aria-checked={checked}
+          onClick={() => onChange(!checked)}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            checked ? "bg-accent" : "bg-border-strong"
+          }`}
+        >
+          <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+            checked ? "translate-x-5" : "translate-x-0"
+          }`} />
+        </button>
+      </div>
+    </li>
   );
 }

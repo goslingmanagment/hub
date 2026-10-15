@@ -2,13 +2,15 @@ import { useRef, useState } from "react";
 import type { AgentHydrationRequestDecideBody } from "@agency_hub_core/contracts";
 import { useAgentHydrationRequests, useDecideAgentHydrationRequest } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
-import { formatRelativeTime } from "@/lib/format";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
 /**
- * The owner approval queue for agent hydration requests (Agent Read Plane,
- * slice C).
+ * The owner approval queue for agent history requests — "Дозагрузка истории"
+ * on screen (Agent Read Plane, slice C; hydration in the code).
  *
  * WHAT THIS SCREEN IS FOR: an agent can write down that it wants a thread
  * deepened. It cannot make that happen. Every OnlyFans row here is a request to
@@ -27,23 +29,38 @@ import { formatRelativeTime } from "@/lib/format";
  *     six months later;
  *   - the #158 MARK-READ CONSENT, on platforms whose history read marks the
  *     fan's chat read. Approving one of those silently would change what the
- *     fan sees. The checkbox states it either way, never by omission.
+ *     fan sees. The checkbox states it either way, never by omission — which
+ *     is why it stays visible while the caps fold under «Изменить лимиты».
  *
- * The `rowVersion` and `coverageFingerprint` shown on each card travel back with
- * the decision: if the request moved, or the thread's coverage moved, the server
+ * The `rowVersion` and `coverageFingerprint` of each card travel back with the
+ * decision: if the request moved, or the thread's coverage moved, the server
  * answers 409 instead of applying a decision you formed against a different
- * picture.
+ * picture. They are shown under «Технические детали».
  */
 
-const STATE_STYLES: Record<string, string> = {
-  requested: "bg-accent/10 text-accent",
-  approved: "bg-success/10 text-success",
-  dispatching: "bg-accent/10 text-accent",
-  completed: "bg-success/10 text-success",
-  partially_completed: "bg-warning/10 text-warning",
-  rejected: "bg-text-muted/10 text-text-muted",
-  expired: "bg-text-muted/10 text-text-muted",
-  failed: "bg-danger/10 text-danger",
+const STATE_LABELS: Record<string, { label: string; badge: string }> = {
+  requested: { label: "Ждёт решения", badge: "badge badge-accent" },
+  approved: { label: "Одобрена", badge: "badge badge-success" },
+  dispatching: { label: "Выполняется", badge: "badge badge-info" },
+  completed: { label: "Выполнена", badge: "badge badge-success" },
+  partially_completed: { label: "Выполнена частично", badge: "badge badge-warning" },
+  rejected: { label: "Отклонена", badge: "badge" },
+  expired: { label: "Истекла", badge: "badge" },
+  failed: { label: "Ошибка", badge: "badge badge-danger" },
+};
+
+/** The state filter: the same states the queue has always offered, in words. */
+const STATE_FILTERS: ReadonlyArray<{ state: string | undefined; label: string }> = [
+  { state: "requested", label: "Ждут решения" },
+  { state: "approved", label: "Одобренные" },
+  { state: "dispatching", label: "Выполняются" },
+  { state: "completed", label: "Выполненные" },
+  { state: "failed", label: "С ошибкой" },
+  { state: undefined, label: "Все" },
+];
+
+const COST_NOTES: Record<string, string> = {
+  ofapi_credits: "тратит кредиты OnlyFans API",
 };
 
 interface DecisionDraft {
@@ -79,10 +96,10 @@ export function reviewHydrationDraft(draft: ReviewedHydrationDraft, request: Rev
 }
 
 export function hydrationApprovalError(draft: DecisionDraft): string | null {
-  if (!Number.isInteger(draft.maxCalls) || draft.maxCalls < 1 || draft.maxCalls > 500) return "Max calls must be a whole number from 1 to 500.";
-  if (!Number.isInteger(draft.maxPages) || draft.maxPages < 1 || draft.maxPages > 500) return "Max pages must be a whole number from 1 to 500.";
-  if (!Number.isInteger(draft.maxCredits) || draft.maxCredits < 0 || draft.maxCredits > 100_000) return "Max credits must be a whole number from 0 to 100,000.";
-  if (!Number.isFinite(draft.expiresInHours) || draft.expiresInHours <= 0 || !Number.isFinite(new Date(Date.now() + draft.expiresInHours * 3_600_000).getTime())) return "Enter a valid positive approval lifetime.";
+  if (!Number.isInteger(draft.maxCalls) || draft.maxCalls < 1 || draft.maxCalls > 500) return "Лимит запросов — целое число от 1 до 500.";
+  if (!Number.isInteger(draft.maxPages) || draft.maxPages < 1 || draft.maxPages > 500) return "Лимит страниц — целое число от 1 до 500.";
+  if (!Number.isInteger(draft.maxCredits) || draft.maxCredits < 0 || draft.maxCredits > 100_000) return "Лимит кредитов — целое число от 0 до 100 000.";
+  if (!Number.isFinite(draft.expiresInHours) || draft.expiresInHours <= 0 || !Number.isFinite(new Date(Date.now() + draft.expiresInHours * 3_600_000).getTime())) return "Укажите срок действия одобрения — положительное число часов.";
   return null;
 }
 
@@ -92,9 +109,9 @@ export function prepareHydrationDecision(
   decision: "approve" | "reject",
 ): { error: string } | { body: AgentHydrationRequestDecideBody } {
   const error = !hydrationDraftMatches(draft, request)
-    ? "This request changed. Review the current version before deciding."
+    ? "Заявка изменилась. Проверьте текущую версию, прежде чем решать."
     : decision === "approve" ? hydrationApprovalError(draft)
-      : !draft.reason.trim() ? "Enter a reason before rejecting this request." : null;
+      : !draft.reason.trim() ? "Укажите причину, прежде чем отклонить заявку." : null;
   if (error) return { error };
   return { body: {
     decision,
@@ -132,10 +149,20 @@ export function hydrationDecisionStatusIsDefiniteRefusal(status: number | null):
   return status !== null && [400, 401, 403, 404, 409, 422].includes(status);
 }
 
+function creditsWord(value: number) {
+  return ruPlural(value, "кредит", "кредита", "кредитов");
+}
+
 export function frozenHydrationDecisionSummary(body: AgentHydrationRequestDecideBody): string {
   return body.decision === "approve"
-    ? `Frozen approval · v${body.expectedVersion} · calls ${body.maxCalls} · pages ${body.maxPages} · credits ${body.maxCredits} · expires ${body.expiresAt} · mark-read ${body.allowMarkReadSideEffect ? "allowed" : "refused"}`
-    : `Frozen rejection · v${body.expectedVersion} · reason: ${body.reason}`;
+    ? `Зафиксировано одобрение · запросов до ${body.maxCalls} · страниц до ${body.maxPages} · кредитов до ${body.maxCredits} · действует до ${formatDateTime(body.expiresAt ?? "")} · отметка «прочитано»: ${body.allowMarkReadSideEffect ? "разрешена" : "запрещена"}`
+    : `Зафиксирован отказ · причина: ${body.reason}`;
+}
+
+/** "Одобрить · до 5 кредитов, 24 ч": the button says what it permits. */
+function approveLabel(draft: DecisionDraft): string {
+  const hours = Number.isFinite(draft.expiresInHours) ? draft.expiresInHours : 0;
+  return `Одобрить · до ${draft.maxCredits} ${creditsWord(draft.maxCredits)}, ${hours} ч`;
 }
 
 /**
@@ -152,6 +179,28 @@ const EMPTY_DRAFT: DecisionDraft = {
   allowMarkRead: false,
   reason: "",
 };
+
+function CapInput(props: {
+  label: string;
+  value: number;
+  min: number;
+  max?: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="field-label">{props.label}</span>
+      <input
+        type="number"
+        min={props.min}
+        max={props.max}
+        value={props.value}
+        onChange={(event) => props.onChange(Number(event.target.value))}
+        className="input w-28"
+      />
+    </label>
+  );
+}
 
 export function AgentHydrationPage() {
   const [stateFilter, setStateFilter] = useState<string | undefined>("requested");
@@ -205,26 +254,49 @@ export function AgentHydrationPage() {
       });
       setErrors((current) => ({
         ...current,
-        [request.requestRef]: `${error instanceof Error ? error.message : String(error)}${definiteRefusal ? "" : " The outcome is unknown. Refresh first; any manual retry will reuse the same decision and request key."}`,
+        [request.requestRef]: `${error instanceof Error ? error.message : String(error)}${definiteRefusal ? "" : " Итог неизвестен. Сначала обновите список; повтор отправит точно то же решение, и дважды оно не применится."}`,
       }));
     } finally {
       submitting.current = false;
     }
   }
 
+  const refreshButton = (
+    <button type="button" disabled={isFetching} onClick={() => void refetch()} className="btn btn-sm">
+      {isFetching ? "Обновляем…" : "Обновить"}
+    </button>
+  );
+
+  const intro = (
+    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0 max-w-3xl">
+        <p className="text-sm text-text-secondary">
+          AI-агенты просят догрузить старую историю переписки. На OnlyFans это тратит кредиты, поэтому заявка
+          выполняется только после вашего одобрения и только в пределах лимитов.
+        </p>
+      </div>
+      {refreshButton}
+    </div>
+  );
+
   if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading hydration requests" description="Fetching the approval queue." />
-    ) : (
-      <StatusPanel
-        title="Hydration queue unavailable"
-        description={
-          isError
-            ? "The queue could not be fetched. It answers 503 while agentHydrationMode is off."
-            : "The queue did not return data."
-        }
-        tone="error"
-      />
+    return (
+      <div>
+        {intro}
+        {isLoading ? (
+          <StatusPanel title="Загружаем заявки…" />
+        ) : (
+          <StatusPanel
+            title="Заявки не загрузились"
+            description={
+              isError
+                ? "Сервер не ответил. Если дозагрузка истории выключена в Система → Возможности, очередь недоступна."
+                : "Сервер не вернул данных."
+            }
+            tone="error"
+          />
+        )}
+      </div>
     );
   }
 
@@ -232,40 +304,28 @@ export function AgentHydrationPage() {
 
   return (
     <div>
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Hydration requests</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          Agents ask for a thread to be deepened. Approval permits work within the caps below; rejected requests do not run.
-        </p>
-      </div>
+      {intro}
 
-      {isError && <StaleDataNotice title="Queue refresh failed; decisions are paused" error={queryError} className="mb-4" />}
-      <button type="button" disabled={isFetching} onClick={() => void refetch()} className="mb-4 rounded-lg border border-border px-3 py-1.5 text-sm text-text-secondary disabled:opacity-50">
-        {isFetching ? "Refreshing…" : "Refresh requests"}
-      </button>
+      {isError && <StaleDataNotice title="Не удалось обновить список — решения на паузе" error={queryError} className="mb-4" />}
 
-      <div className="mb-5 flex flex-wrap gap-2">
-        {["requested", "approved", "dispatching", "completed", "failed", undefined].map((state) => (
+      <div className="segmented mb-5 max-w-full flex-wrap" role="group" aria-label="Состояние заявки">
+        {STATE_FILTERS.map(({ state, label }) => (
           <button
             key={state ?? "all"}
             type="button"
             aria-pressed={stateFilter === state}
             onClick={() => setStateFilter(state)}
-            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-              stateFilter === state
-                ? "border-accent bg-accent/5 text-text-primary"
-                : "border-border bg-card text-text-muted hover:bg-hover"
-            }`}
+            className="segment"
           >
-            {state ?? "all"}
+            {label}
           </button>
         ))}
       </div>
 
       {items.length === 0 && (
         <StatusPanel
-          title="Nothing waiting"
-          description="No hydration request matches this filter."
+          title="Заявок нет"
+          description="Под этот фильтр не подходит ни одна заявка."
         />
       )}
 
@@ -278,222 +338,203 @@ export function AgentHydrationPage() {
           const changed = !hydrationDraftMatches(draft, request);
           const approvalError = hydrationApprovalError(draft);
           const attempt = attempts[request.requestRef];
+          const state = STATE_LABELS[request.state] ?? { label: request.state, badge: "badge" };
+          const costNote = request.admissibility.costNote ? COST_NOTES[request.admissibility.costNote] : undefined;
           return (
-            <div key={request.requestRef} className="rounded-xl border border-border bg-card p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    STATE_STYLES[request.state] ?? "bg-text-muted/10 text-text-muted"
-                  }`}
-                >
-                  {request.state}
-                </span>
-                <span className="text-sm font-semibold text-text-primary">
-                  {request.pageLabel} · {request.platform}
-                </span>
-                <span className="text-sm text-text-muted">thread {request.conversationRef}</span>
-                <span className="ml-auto text-xs text-text-muted">
-                  {formatRelativeTime(request.createdAt)}
-                </span>
+            <article key={request.requestRef} className="card">
+              <div className="card-body space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={state.badge}>{state.label}</span>
+                  <span className="text-sm font-semibold text-text-primary">{request.pageLabel}</span>
+                  {request.platform === "onlyfans" || request.platform === "fansly"
+                    ? <PlatformBadge platform={request.platform} />
+                    : <span className="text-sm text-text-secondary">{request.platform}</span>}
+                  <span className="text-sm text-text-secondary">чат {request.conversationRef}</span>
+                  <span className="ml-auto text-[13px] text-text-secondary">
+                    {formatRelativeTime(request.createdAt)}
+                  </span>
+                </div>
+
+                <p className="text-sm text-text-primary">
+                  {request.target.beforeAt
+                    ? `Догрузить историю до ${formatDateTime(request.target.beforeAt, { yearUnlessCurrent: true })}`
+                    : request.target.beforeMessageRef
+                      ? `Догрузить историю до сообщения ${request.target.beforeMessageRef}`
+                      : "Догрузить историю"}
+                  {approvable
+                    ? costNote ? <span className="text-text-secondary"> · {costNote}</span> : null
+                    : !decidable ? <span className="text-text-secondary"> · историю загружает сбор данных Fansly</span> : null}
+                </p>
+
+                {request.decision && (
+                  <p className="text-[13px] text-text-secondary">
+                    {request.decision.approved ? "Одобрено" : "Отклонено"}
+                    {" "}
+                    {formatRelativeTime(request.decision.decidedAt)}
+                    {request.decision.approved && (
+                      <>
+                        {" "}· лимиты: запросов {request.decision.maxCalls ?? "—"}, страниц {request.decision.maxPages ?? "—"},
+                        {" "}кредитов {request.decision.maxCredits ?? "—"} · отметка «прочитано»
+                        {" "}
+                        {request.decision.allowMarkReadSideEffect ? "разрешена" : "запрещена"}
+                      </>
+                    )}
+                  </p>
+                )}
+
+                {request.progress.executionRef && (
+                  <p className="text-[13px] text-text-secondary">
+                    Выполнение: загружено записей — {request.progress.acceptedItems}
+                  </p>
+                )}
+
+                <details className="help">
+                  <summary>Технические детали</summary>
+                  <dl className="help-body grid max-w-none grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+                    <div>
+                      <dt className="inline font-medium text-text-primary">Способ: </dt>
+                      <dd className="inline">
+                        {approvable
+                          ? `${request.admissibility.selected ?? "нет"} · ${request.admissibility.costNote ?? "—"}`
+                          : "Сбор данных Fansly · запрос истории"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-text-primary">Агент: </dt>
+                      <dd className="inline font-mono text-xs">{request.requestedBy.keyPrefix}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-text-primary">Версия заявки: </dt>
+                      <dd className="inline tabular-nums">{request.rowVersion}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-text-primary">Причина агента: </dt>
+                      <dd className="inline">
+                        {request.reasonLength} {ruPlural(request.reasonLength, "знак", "знака", "знаков")}, отпечаток{" "}
+                        <span className="font-mono text-xs">{request.reasonSha256.slice(0, 12)}…</span>
+                      </dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="inline font-medium text-text-primary">Покрытие: </dt>
+                      <dd className="inline break-all font-mono text-xs">{request.coverageFingerprint.slice(0, 16)}…</dd>
+                    </div>
+                    {request.progress.executionRef && (
+                      <div className="sm:col-span-2">
+                        <dt className="inline font-medium text-text-primary">Выполнение: </dt>
+                        <dd className="inline break-all">
+                          <span className="font-mono text-xs">{request.progress.executionRef}</span> · последняя ошибка: {request.progress.lastError}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                </details>
               </div>
 
-              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-text-muted sm:grid-cols-4">
-                <div>
-                  <dt className="font-medium text-text-primary">Target</dt>
-                  <dd>
-                    before {request.target.beforeAt ?? request.target.beforeMessageRef ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-text-primary">Lane</dt>
-                  <dd>
-                    {approvable
-                      ? `${request.admissibility.selected ?? "none"} · ${request.admissibility.costNote ?? "—"}`
-                      : "Fansly Sync Engine · history request"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-text-primary">Key</dt>
-                  <dd>{request.requestedBy.keyPrefix}</dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-text-primary">Version</dt>
-                  <dd className="tabular-nums">v{request.rowVersion}</dd>
-                </div>
-              </dl>
-
-              <p className="mt-2 break-all font-mono text-[11px] text-text-muted">
-                coverage {request.coverageFingerprint.slice(0, 16)}… · reason sha
-                {" "}
-                {request.reasonSha256.slice(0, 12)}… ({request.reasonLength} chars)
-              </p>
-
-              {request.decision && (
-                <p className="mt-2 text-xs text-text-muted">
-                  {request.decision.approved ? "Approved" : "Rejected"}
-                  {" "}
-                  {formatRelativeTime(request.decision.decidedAt)}
-                  {request.decision.approved && (
-                    <>
-                      {" "}· caps {request.decision.maxCalls ?? "—"}/
-                      {request.decision.maxPages ?? "—"}/
-                      {request.decision.maxCredits ?? "—"} · mark-read
-                      {" "}
-                      {request.decision.allowMarkReadSideEffect ? "allowed" : "refused"}
-                    </>
-                  )}
-                </p>
-              )}
-
-              {request.progress.executionRef && (
-                <p className="mt-1 text-xs text-text-muted">
-                  execution {request.progress.executionRef} · items
-                  {" "}
-                  {request.progress.acceptedItems} · lastError {request.progress.lastError}
-                </p>
-              )}
-
               {decidable && (
-                <div className="mt-4 border-t border-border pt-3">
+                <div className="card-footer block space-y-3 text-sm">
                   {changed && (
-                    <div role="alert" className="mb-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-text-primary">
-                      Request or coverage changed since your draft (v{draft.expectedVersion} → v{request.rowVersion}). Your limits are preserved; review the current coverage and limits before deciding.
-                      <button type="button" disabled={decide.isPending || isError || Boolean(attempt)} className="mt-2 block rounded-lg border border-border px-3 py-1.5 disabled:opacity-50" onClick={() => {
-                        setDrafts((current) => ({ ...current, [request.requestRef]: reviewHydrationDraft(draft, request) }));
-                        setErrors((current) => ({ ...current, [request.requestRef]: "" }));
-                      }}>I reviewed v{request.rowVersion}; keep limits and reconsider mark-read</button>
+                    <div role="alert" className="notice notice-warning">
+                      <div>
+                        <p>
+                          Заявка изменилась после того, как вы начали решение. Лимиты сохранены; проверьте заявку и
+                          заново решите про отметку «прочитано».
+                        </p>
+                        <button type="button" disabled={decide.isPending || isError || Boolean(attempt)} className="btn btn-sm mt-2" onClick={() => {
+                          setDrafts((current) => ({ ...current, [request.requestRef]: reviewHydrationDraft(draft, request) }));
+                          setErrors((current) => ({ ...current, [request.requestRef]: "" }));
+                        }}>Проверено — оставить лимиты</button>
+                      </div>
                     </div>
                   )}
                   {!approvable && (
-                    <p className="mb-3 text-xs text-text-muted">
-                      The Fansly Sync Engine reads this page's history as a history request; there is nothing to approve here. A request still waiting can be rejected.
+                    <p className="text-[13px] text-text-secondary">
+                      Историю этой страницы загружает сбор данных Fansly, одобрять здесь нечего. Ждущую заявку можно отклонить.
                     </p>
                   )}
-                  <fieldset disabled={decide.isPending || Boolean(attempt)} className="min-w-0">
-                  {approvable && (
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="text-xs text-text-muted">
-                      <span className="block font-medium text-text-primary">Max calls</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={500}
-                        value={draft.maxCalls}
-                        onChange={(event) =>
-                          setDraft(request, {
-                            maxCalls: Number(event.target.value),
-                          })}
-                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
-                      />
-                    </label>
-                    <label className="text-xs text-text-muted">
-                      <span className="block font-medium text-text-primary">Max pages</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={500}
-                        value={draft.maxPages}
-                        onChange={(event) =>
-                          setDraft(request, {
-                            maxPages: Number(event.target.value),
-                          })}
-                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
-                      />
-                    </label>
-                    <label className="text-xs text-text-muted">
-                      <span className="block font-medium text-text-primary">Max credits</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100000}
-                        value={draft.maxCredits}
-                        onChange={(event) =>
-                          setDraft(request, {
-                            maxCredits: Number(event.target.value),
-                          })}
-                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
-                      />
-                    </label>
-                    <label className="text-xs text-text-muted">
-                      <span className="block font-medium text-text-primary">Expires in (h)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={draft.expiresInHours}
-                        onChange={(event) =>
-                          setDraft(request, {
-                            expiresInHours: Number(event.target.value),
-                          })}
-                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
-                      />
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-text-muted">
-                      <input
-                        type="checkbox"
-                        checked={draft.allowMarkRead}
-                        onChange={(event) =>
-                          setDraft(request, { allowMarkRead: event.target.checked })}
-                      />
-                      <span>
-                        Allow the vendor read to mark this chat READ on the platform (#158)
-                      </span>
-                    </label>
-                  </div>
-                  )}
+                  <fieldset disabled={decide.isPending || Boolean(attempt)} className="min-w-0 space-y-3">
+                    {approvable && (
+                      <>
+                        <details className="help">
+                          <summary>Изменить лимиты</summary>
+                          <div className="help-body max-w-none">
+                            <div className="flex flex-wrap items-end gap-3">
+                              <CapInput label="Лимит запросов" value={draft.maxCalls} min={1} max={500} onChange={(value) => setDraft(request, { maxCalls: value })} />
+                              <CapInput label="Лимит страниц" value={draft.maxPages} min={1} max={500} onChange={(value) => setDraft(request, { maxPages: value })} />
+                              <CapInput label="Лимит кредитов" value={draft.maxCredits} min={0} max={100000} onChange={(value) => setDraft(request, { maxCredits: value })} />
+                              <CapInput label="Действует, ч" value={draft.expiresInHours} min={1} onChange={(value) => setDraft(request, { expiresInHours: value })} />
+                            </div>
+                            <p className="text-xs">
+                              Сейчас: до {draft.maxCalls} запросов, {draft.maxPages} страниц и {draft.maxCredits} {creditsWord(draft.maxCredits)}; одобрение действует {draft.expiresInHours} ч.
+                            </p>
+                          </div>
+                        </details>
+                        <label className="flex items-start gap-2 text-[13px] text-text-primary">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={draft.allowMarkRead}
+                            onChange={(event) =>
+                              setDraft(request, { allowMarkRead: event.target.checked })}
+                          />
+                          <span>
+                            Разрешить отметить этот чат прочитанным на площадке — чтение истории может это сделать,
+                            и фан это увидит
+                          </span>
+                        </label>
+                      </>
+                    )}
 
-                  <label className="mt-3 block text-xs text-text-muted">
-                    <span className="block font-medium text-text-primary">
-                      Reason (required to reject)
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.reason}
-                      maxLength={1000}
-                      onChange={(event) =>
-                        setDraft(request, { reason: event.target.value })}
-                      className="mt-1 w-full rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
-                    />
-                  </label>
+                    <label className="block max-w-xl">
+                      <span className="field-label">Причина (обязательна для отказа)</span>
+                      <input
+                        type="text"
+                        value={draft.reason}
+                        maxLength={1000}
+                        onChange={(event) =>
+                          setDraft(request, { reason: event.target.value })}
+                        className="input"
+                      />
+                    </label>
                   </fieldset>
 
-                  <div className="mt-3 flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {approvable && (
                       <button
                         type="button"
                         disabled={decide.isPending || isError || changed || approvalError !== null || Boolean(attempt)}
                         onClick={() => void submit(request, "approve")}
-                        className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                        className="btn btn-primary"
                       >
-                        Approve
+                        {approveLabel(draft)}
                       </button>
                     )}
                     <button
                       type="button"
                       disabled={decide.isPending || isError || changed || !draft.reason.trim() || Boolean(attempt)}
                       onClick={() => void submit(request, "reject")}
-                      className="rounded-lg border border-border px-3 py-1.5 text-sm font-semibold text-text-primary disabled:opacity-50"
+                      className="btn"
                     >
-                      Reject
+                      Отклонить
                     </button>
                   </div>
 
-                  {approvable && approvalError && <p className="mt-2 text-xs text-danger">{approvalError}</p>}
+                  {approvable && approvalError && <p className="text-[13px] text-danger">{approvalError}</p>}
 
                   {error && (
-                    <p role="alert" className="mt-2 text-xs text-danger">{error}</p>
+                    <p role="alert" className="text-[13px] text-danger">{error}</p>
                   )}
-                  {attempt && <div className="mt-2 text-xs text-text-secondary" role="status">
-                    {attempt.confirmed ? "Decision accepted by the server. Refresh to see its current state." : `Recorded ${attempt.body.decision} request; its limits and expiry are frozen until the outcome is known.`}
+                  {attempt && <div className="text-[13px] text-text-secondary" role="status">
+                    {attempt.confirmed ? "Сервер принял решение. Обновите список, чтобы увидеть состояние заявки." : `Решение отправлено (${attempt.body.decision === "approve" ? "одобрение" : "отказ"}); его лимиты и срок зафиксированы, пока не известен итог.`}
                     <p className="mt-1 break-words">{frozenHydrationDecisionSummary(attempt.body)}</p>
-                    {!attempt.confirmed && error && <button type="button" disabled={decide.isPending || isError} className="mt-2 block rounded-lg border border-border px-3 py-1.5 disabled:opacity-50" onClick={() => void submit(request, attempt.body.decision)}>Retry the same {attempt.body.decision === "approve" ? "approval" : "rejection"}</button>}
+                    {!attempt.confirmed && error && <button type="button" disabled={decide.isPending || isError} className="btn btn-sm mt-2" onClick={() => void submit(request, attempt.body.decision)}>Повторить {attempt.body.decision === "approve" ? "то же одобрение" : "тот же отказ"}</button>}
                   </div>}
                 </div>
               )}
-            </div>
+            </article>
           );
         })}
       </div>
-      {items.length === 50 && <p className="mt-4 text-xs text-text-muted">Showing the first 50 matching requests. Narrow the status filter to inspect this queue; this view has no older-page control.</p>}
+      {items.length === 50 && <p className="mt-4 text-[13px] text-text-secondary">Показаны первые 50 заявок. Чтобы увидеть остальные, выберите другое состояние.</p>}
     </div>
   );
 }

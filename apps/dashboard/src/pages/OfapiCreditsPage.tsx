@@ -28,6 +28,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StatCardSkeleton, TableSkeleton } from "@/components/shared/TableSkeleton";
+import { ruPlural } from "@/lib/plural";
 
 const LEDGER_PAGE_SIZE = 50;
 const CHART_DAYS = 30;
@@ -36,11 +37,12 @@ const CHART_DAYS = 30;
 const RUNWAY_DANGER_DAYS = 3;
 const RUNWAY_WARNING_DAYS = 7;
 
+// Theme tokens, so the charts follow the console's palette.
 const SOURCE_SERIES = [
-  { key: "rest", label: "Приложение", color: "#4ead6b" },
-  { key: "webhookAccrual", label: "Вебхуки", color: "#5b8def" },
-  { key: "external", label: "Сверка баланса", color: "#e0a14f" },
-  { key: "adjustment", label: "Корректировки", color: "#9b7ede" },
+  { key: "rest", label: "Приложение", color: "var(--color-accent)" },
+  { key: "webhookAccrual", label: "Вебхуки", color: "var(--color-fansly)" },
+  { key: "external", label: "Сверка баланса", color: "var(--color-warning)" },
+  { key: "adjustment", label: "Корректировки", color: "var(--color-text-muted)" },
 ] as const;
 
 const SOURCE_FILTER_OPTIONS = [
@@ -116,10 +118,6 @@ function streamLabel(stream: string) {
   return STREAM_LABELS[stream] ?? stream;
 }
 
-function streamConfigKey(stream: string) {
-  return stream === "audience" ? "ofapiAudienceDailyCreditBudget" : "ofapiDmDailyCreditBudget";
-}
-
 const INCIDENT_LABELS: Record<string, string> = {
   ofapi_burn_rate: "Кредиты сгорают необычно быстро",
   "ofapi_burn_rate:auto_redelivery_cap": "Исчерпан суточный лимит автоповтора вебхуков",
@@ -140,8 +138,8 @@ const COMPARISON_STATUS_LABELS: Record<string, string> = {
   matched: "совпало",
   skipped: "пропущено",
   ppv_estimated: "PPV оценён",
-  tips_blocked: "типсы заблокированы",
-  tips_signal: "типсы (сигнал)",
+  tips_blocked: "чаевые заблокированы",
+  tips_signal: "чаевые (сигнал)",
   blocked: "заблокировано",
 };
 
@@ -155,13 +153,13 @@ function fmtCredits(value: number) {
   return value.toLocaleString("ru-RU");
 }
 
-// Russian plural form: 1 день / 2 дня / 5 дней (with the 11–14 exception).
-function ruPlural(value: number, one: string, few: string, many: string) {
-  const mod10 = Math.abs(value) % 10;
-  const mod100 = Math.abs(value) % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
+function creditsWord(value: number) {
+  return ruPlural(value, "кредит", "кредита", "кредитов");
+}
+
+/** "1 500 кредитов": the amount with its unit, for prose. */
+function credits(value: number) {
+  return `${fmtCredits(value)} ${creditsWord(value)}`;
 }
 
 function daysWord(value: number) {
@@ -171,6 +169,11 @@ function daysWord(value: number) {
 // All timestamps on this page are UTC (budgets reset at UTC midnight).
 function utcDateTime(iso: string) {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+/** A table cell's time: the column header says UTC once. */
+function utcCellTime(iso: string) {
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
 }
 
 function utcTime(iso: string) {
@@ -213,43 +216,28 @@ function ledgerDateEndExclusive(value: string) {
 
 type ValueTone = "neutral" | "warning" | "danger";
 
-const eyebrowClass = "text-[11px] font-bold uppercase tracking-wide text-text-secondary";
-
-function StatusChip(props: { tone: ValueTone; children: ReactNode; title?: string }) {
-  const toneClass = props.tone === "danger"
-    ? "border-red-500/40 bg-red-500/10 text-red-700"
-    : props.tone === "warning"
-      ? "border-amber-500/40 bg-amber-500/10 text-amber-700"
-      : "border-border bg-hover-alt text-text-secondary";
-  return (
-    <span
-      title={props.title}
-      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[12px] font-medium ${toneClass}`}
-    >
-      {props.children}
-    </span>
-  );
+function toneBadge(tone: ValueTone) {
+  return tone === "danger" ? "badge badge-danger" : tone === "warning" ? "badge badge-warning" : "badge";
 }
 
 function RetryButton(props: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover"
-    >
+    <button type="button" onClick={props.onClick} className="btn btn-sm">
       Повторить
     </button>
   );
 }
 
-// Deep-links a shown value to its Settings > Configuration entry (anchored by
-// config key), without inline editing.
-function ConfigLink(props: { configKey: string; children: ReactNode }) {
+/**
+ * A reference to a value's entry in the parameter list. Most credit values are
+ * set when the server is configured and are read-only there, so this reads as
+ * a footnote, not as an action.
+ */
+function ConfigReference(props: { configKey: string; children: ReactNode }) {
   return (
     <Link
       to={`/settings?tab=configuration#config-${props.configKey}`}
-      className="font-medium text-accent underline-offset-2 hover:underline"
+      className="text-text-secondary underline decoration-dotted underline-offset-2 hover:text-text-primary"
     >
       {props.children}
     </Link>
@@ -311,29 +299,23 @@ function BudgetMeter(props: {
     ? 0
     : Math.max(0, Math.min(100, Math.round((props.spentToday / props.dailyCeiling) * 100)));
   const barClass = paused
-    ? "bg-red-500"
+    ? "bg-danger"
     : pct >= 80
-      ? "bg-amber-500"
+      ? "bg-warning"
       : "bg-accent";
   return (
     <div>
-      <div className="flex items-baseline justify-between gap-2 text-[12px]">
-        <Link
-          to={`/settings?tab=configuration#config-${streamConfigKey(props.stream)}`}
-          title="Открыть этот бюджет в настройках"
-          className="font-medium text-text-secondary underline-offset-2 hover:text-accent hover:underline"
-        >
-          {label}
-        </Link>
-        <span className={`tabular-nums ${paused ? "font-semibold text-red-700" : "text-text-secondary"}`}>
+      <div className="flex items-baseline justify-between gap-2 text-[13px]">
+        <span className="font-medium text-text-primary">{label}</span>
+        <span className={`tabular-nums ${paused ? "font-semibold text-danger" : "text-text-secondary"}`}>
           {unlimited
-            ? `${fmtCredits(props.spentToday)} кр · без дневного лимита`
-            : `${fmtCredits(props.spentToday)} из ${fmtCredits(props.dailyCeiling)} кр`}
+            ? `${credits(props.spentToday)} · без дневного лимита`
+            : `${fmtCredits(props.spentToday)} из ${credits(props.dailyCeiling)}`}
         </span>
       </div>
       {!unlimited && (
         <div
-          className="mt-1 h-1.5 overflow-hidden rounded-full bg-hover-alt"
+          className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-hover"
           role="progressbar"
           aria-valuenow={pct}
           aria-valuemin={0}
@@ -344,10 +326,10 @@ function BudgetMeter(props: {
         </div>
       )}
       {paused && (
-        <p className="mt-1 text-[11px] font-medium text-amber-700">
+        <p className="mt-1 text-xs font-medium text-warning-dark">
           {props.state === "floor_blocked"
-            ? "Пауза — баланс ниже порога автостопа."
-            : `Пауза — дневной бюджет исчерпан. Продолжит ${
+            ? "На паузе — баланс ниже порога автостопа."
+            : `На паузе — дневной бюджет исчерпан. Продолжит ${
               props.retryAt ? `в ${utcDateTime(props.retryAt)}` : "после сброса бюджета в полночь UTC"
             }.`}
         </p>
@@ -360,10 +342,10 @@ function BalanceChart(props: {
   days: string[];
   balanceByDay: Map<string, number>;
   refills: Array<{ day: string; credits: number; count: number }>;
-  usd?: (credits: number) => string;
+  usd?: ((credits: number) => string) | undefined;
 }) {
   const gradientId = useId();
-  const color = "#5b8def";
+  const color = "var(--color-fansly)";
 
   // The x-axis spans the full requested window (dense day list from the API), so
   // "last 30 days" is honest even when balance readings only cover part of it,
@@ -380,20 +362,18 @@ function BalanceChart(props: {
     : null;
   // When readings start mid-window, say so — otherwise the mostly-empty plot
   // reads as broken rather than young.
-  const readingsStartedLate = firstReadingDay !== null
+  const readingsStartedLate = firstReadingDay != null
     && props.days.length > 0
-    && firstReadingDay > props.days[0];
+    && firstReadingDay > (props.days[0] ?? "");
 
   return (
-    <div className="bg-card border border-border rounded-xl p-5">
-      <div className="mb-4 flex items-baseline justify-between">
-        <h2 className="text-[12px] text-text-secondary uppercase tracking-wider font-semibold">
-          Баланс
-        </h2>
-        <span className="text-[12px] text-text-secondary">Последние {CHART_DAYS} дней · UTC</span>
+    <div className="card p-5">
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <h2 className="card-title">Баланс</h2>
+        <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
       </div>
       {!hasReadings ? (
-        <div className="flex h-[300px] items-center justify-center px-6 text-center text-[13px] text-text-muted">
+        <div className="flex h-[300px] items-center justify-center px-6 text-center text-[13px] text-text-secondary">
           Показаний баланса пока нет — график начнётся с первой проверки баланса у провайдера.
         </div>
       ) : (
@@ -405,17 +385,17 @@ function BalanceChart(props: {
                 <stop offset="100%" stopColor={color} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border, #333)" />
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
             <XAxis
               dataKey="day"
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
+              tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
               axisLine={false}
               tickLine={false}
               interval="preserveStartEnd"
               tickFormatter={shortDay}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
+              tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
               axisLine={false}
               tickLine={false}
               width={56}
@@ -426,7 +406,7 @@ function BalanceChart(props: {
               <ReferenceLine
                 key={refill.day}
                 x={refill.day}
-                stroke="#4ead6b"
+                stroke="var(--color-green)"
                 strokeDasharray="4 4"
               />
             ))}
@@ -443,8 +423,8 @@ function BalanceChart(props: {
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: "var(--color-card, #1a1a2e)",
-                border: "1px solid var(--color-border, #333)",
+                backgroundColor: "var(--color-card)",
+                border: "1px solid var(--color-border)",
                 borderRadius: 8,
                 fontSize: 13,
               }}
@@ -453,9 +433,9 @@ function BalanceChart(props: {
                 if (value === null || value === undefined) {
                   return ["нет показания", "Баланс"];
                 }
-                const credits = Number(value);
+                const amount = Number(value);
                 return [
-                  `${fmtCredits(credits)} кр${props.usd ? ` · ${props.usd(credits)}` : ""}`,
+                  `${credits(amount)}${props.usd ? ` · ${props.usd(amount)}` : ""}`,
                   "Баланс",
                 ];
               }}
@@ -464,12 +444,12 @@ function BalanceChart(props: {
         </ResponsiveContainer>
       )}
       {(refillCount > 0 || readingsStartedLate) && (
-        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-secondary">
+        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-text-secondary">
           {refillCount > 0 && (
             <span className="inline-flex items-center gap-2">
               <span aria-hidden="true" className="inline-block w-4 border-t-2 border-dashed border-green" />
               {refillCount} {ruPlural(refillCount, "увеличение", "увеличения", "увеличений")} баланса по сверке за
-              период · +{fmtCredits(refillTotal)} кр
+              период · +{credits(refillTotal)}
             </span>
           )}
           {refillCount > 0 && readingsStartedLate && <span aria-hidden="true">·</span>}
@@ -482,11 +462,8 @@ function BalanceChart(props: {
   );
 }
 
-const thClass = "px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-secondary";
-const tdClass = "px-4 py-2.5 text-[13px] text-text-secondary tabular-nums";
-// A breakdown label that drills into the matching activity-log filter.
-const drillCellClass =
-  "text-left text-accent underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent rounded";
+// A breakdown label that drills into the matching journal filter.
+const drillCellClass = "link whitespace-nowrap text-left";
 
 // Ledger credits are "credits spent": positive = balance went down, negative
 // (top-ups, corrections) = balance went up. Render the balance impact a human
@@ -509,7 +486,7 @@ const LEDGER_ESTIMATE_EXPLANATIONS: Record<OfapiCreditsLedgerResponse["rows"][nu
   adjustment: "Оценочная корректировка учёта кредитов",
 };
 
-function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
+function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number]; showHttp: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const { row } = props;
@@ -519,11 +496,8 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
 
   return (
     <Fragment>
-      <tr
-        className="cursor-pointer border-t border-border-light hover:bg-hover"
-        onClick={toggle}
-      >
-        <td className={`${tdClass} w-8 pr-0`}>
+      <tr className="cursor-pointer" onClick={toggle}>
+        <td className="w-8 pr-0">
           {/* A real button gives keyboard + screen-reader access to the detail
               row; the row onClick stays as a mouse convenience. */}
           <button
@@ -535,35 +509,39 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
               event.stopPropagation();
               toggle();
             }}
-            className="flex h-5 w-5 items-center justify-center rounded text-text-muted hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="flex h-6 w-6 items-center justify-center rounded text-text-muted hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             <Caret expanded={expanded} />
           </button>
         </td>
-        <td className={tdClass}>{utcDateTime(row.occurredAt)}</td>
-        <td className={tdClass}>{sourceLabel(row.source)}</td>
-        <td className={tdClass}>
+        <td className="muted whitespace-nowrap tabular-nums">{utcCellTime(row.occurredAt)}</td>
+        <td className="muted">{sourceLabel(row.source)}</td>
+        <td>
           {row.operation ? <span title={row.operation}>{operationLabel(row.operation)}</span> : "—"}
+          {failed && !props.showHttp && <span className="badge badge-danger ml-2">ошибка {row.httpStatus}</span>}
         </td>
-        <td className={tdClass}>{row.pageLabel ?? "—"}</td>
+        <td className="muted">{row.pageLabel ?? "—"}</td>
         <td
-          className={`${tdClass} text-right ${row.credits < 0 ? "font-medium text-green-700" : ""}`}
+          className={`num ${row.credits < 0 ? "font-medium text-green" : ""}`}
           title={estimateExplanation ?? undefined}
         >
           {ledgerAmount(row)}
         </td>
-        <td className={`${tdClass} text-right`}>
+        <td className="num muted">
           {row.balanceAfter !== null ? fmtCredits(row.balanceAfter) : "—"}
         </td>
-        <td className={`${tdClass} text-right ${failed ? "font-medium text-red-700" : ""}`}>
-          {row.httpStatus ?? "—"}
-        </td>
+        {props.showHttp && (
+          <td className={`num ${failed ? "font-medium text-danger" : "muted"}`}>
+            {row.httpStatus ?? "—"}
+          </td>
+        )}
       </tr>
       {expanded && (
-        <tr id={detailId} className="border-t border-border-light bg-hover-alt/20">
-          <td colSpan={8} className="px-4 py-2 text-[12px] text-text-secondary">
+        <tr id={detailId}>
+          <td colSpan={props.showHttp ? 8 : 7} className="bg-hover-alt text-[13px] text-text-secondary">
             {row.operation ? `Операция ${row.operation} · ` : ""}
             {row.requestId ? `запрос ${row.requestId}` : "без id запроса"}
+            {row.httpStatus !== null ? ` · код ответа ${row.httpStatus}` : ""}
             {estimateExplanation ? ` · ${estimateExplanation}` : ""}
             {row.accrualDay ? ` · день начисления ${row.accrualDay}` : ""}
             {` · запись #${row.id}`}
@@ -598,14 +576,12 @@ function SpendComparisonBody() {
   }
   if (query.isError || !data) {
     return (
-      <div className="p-4">
-        <StatusPanel
-          tone="error"
-          title="Не удалось загрузить точность проекций"
-          description="Эндпоинт сравнения вернул ошибку."
-          action={<RetryButton onClick={() => query.refetch()} />}
-        />
-      </div>
+      <StatusPanel
+        tone="error"
+        title="Не удалось загрузить точность проекций"
+        description="Сервер не ответил. Повторите чуть позже."
+        action={<RetryButton onClick={() => query.refetch()} />}
+      />
     );
   }
 
@@ -613,16 +589,12 @@ function SpendComparisonBody() {
     && data.samples.length === 0;
   if (noData) {
     return (
-      <div className="pb-6">
-        <EmptyState
-          title="Пока нечего сравнивать"
-          description="Теневая проекция оценивает выручку по событиям вебхуков до прихода синка, а эта диагностика проверяет её точность. За выбранный период ничего не спроецировано."
-        />
-        <div className="text-center text-[13px]">
-          <ConfigLink configKey="ofapiSpendProjectionShadowEnabled">
-            Включить теневую проекцию →
-          </ConfigLink>
-        </div>
+      <div className="space-y-2">
+        <p>
+          Пока нечего сравнивать: за последние 7 дней теневая проекция ничего не оценила. Она оценивает выручку по
+          событиям вебхуков до прихода синка, а эта проверка сравнивает оценку с синком.
+        </p>
+        <ConfigReference configKey="ofapiSpendProjectionShadowEnabled">Параметр теневой проекции</ConfigReference>
       </div>
     );
   }
@@ -633,51 +605,51 @@ function SpendComparisonBody() {
     .reduce((sum, row) => sum + row.count, 0);
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        <StatusChip tone={drift > 0 ? "danger" : "neutral"}>
+        <span className={toneBadge(drift > 0 ? "danger" : "neutral")}>
           {fmtCredits(matched)} совпало · {fmtCredits(drift)}{" "}
           {ruPlural(drift, "расхождение", "расхождения", "расхождений")}
-        </StatusChip>
+        </span>
         {data.summary
           .filter((row) => row.status !== "matched")
           .map((row) => (
-            <StatusChip key={row.status} tone={comparisonTone(row.status)} title={row.status}>
+            <span key={row.status} className={toneBadge(comparisonTone(row.status))} title={row.status}>
               {comparisonStatusLabel(row.status)} · {fmtCredits(row.count)}
-            </StatusChip>
+            </span>
           ))}
       </div>
 
       {data.samples.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
+        <div className="table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="bg-hover-alt">
-                <th className={thClass}>Статус</th>
-                <th className={thClass}>Страница</th>
-                <th className={thClass}>Время (UTC)</th>
-                <th className={thClass}>Событие</th>
-                <th className={`${thClass} text-right`}>Прогноз (нетто)</th>
-                <th className={`${thClass} text-right`}>Синк (нетто)</th>
+              <tr>
+                <th>Статус</th>
+                <th>Страница</th>
+                <th>Время (UTC)</th>
+                <th>Событие</th>
+                <th className="num">Прогноз (нетто)</th>
+                <th className="num">Синк (нетто)</th>
               </tr>
             </thead>
             <tbody>
               {data.samples.map((sample) => (
-                <tr key={sample.projectionId} className="border-t border-border-light">
-                  <td className={tdClass}>
-                    <StatusChip tone={comparisonTone(sample.comparisonStatus)} title={sample.comparisonStatus}>
+                <tr key={sample.projectionId}>
+                  <td>
+                    <span className={toneBadge(comparisonTone(sample.comparisonStatus))} title={sample.comparisonStatus}>
                       {comparisonStatusLabel(sample.comparisonStatus)}
-                    </StatusChip>
+                    </span>
                   </td>
-                  <td className={tdClass}>{sample.pageLabel}</td>
-                  <td className={tdClass}>{utcDateTime(sample.occurredAt)}</td>
-                  <td className={tdClass}>{sample.sourceEventType}</td>
-                  <td className={`${tdClass} text-right`}>
+                  <td>{sample.pageLabel}</td>
+                  <td className="muted whitespace-nowrap">{utcCellTime(sample.occurredAt)}</td>
+                  <td className="muted">{sample.sourceEventType}</td>
+                  <td className="num">
                     {sample.creatorNetAmountMills !== null
                       ? formatUsdFromMills(sample.creatorNetAmountMills)
                       : "—"}
                   </td>
-                  <td className={`${tdClass} text-right`}>
+                  <td className="num">
                     {sample.coreCreatorNetAmountMills !== null
                       ? formatUsdFromMills(sample.coreCreatorNetAmountMills)
                       : "—"}
@@ -690,7 +662,7 @@ function SpendComparisonBody() {
       )}
 
       {data.limitations.length > 0 && (
-        <ul className="list-disc space-y-0.5 pl-5 text-[11px] text-text-secondary">
+        <ul className="list-disc space-y-0.5 pl-5 text-xs">
           {data.limitations.map((note) => <li key={note}>{note}</li>)}
         </ul>
       )}
@@ -698,43 +670,27 @@ function SpendComparisonBody() {
   );
 }
 
-// Read-only shadow-projection diagnostic, collapsed by default so it only
-// fetches (and runs the comparison) when an operator opens it.
+// Read-only shadow-projection diagnostic. Its body mounts (and fetches) only
+// once an operator opens it.
 function ProjectionAccuracySection() {
   const [open, setOpen] = useState(false);
-  const bodyId = useId();
   return (
-    <div className="border-t border-border-light">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-hover"
-      >
-        <span className="text-text-muted">
-          <Caret expanded={open} />
-        </span>
-        <h3 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
-          Точность проекций
-        </h3>
-        <span className="text-[11px] text-text-secondary">
-          диагностика — прогноз выручки против синка · последние 7 дней
-        </span>
-      </button>
+    <details className="help" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>Точность проекций — прогноз выручки против синка за 7 дней</summary>
       {open && (
-        <div id={bodyId} className="border-t border-border-light">
+        <div className="help-body max-w-none">
           <SpendComparisonBody />
         </div>
       )}
-    </div>
+    </details>
   );
 }
 
 // Everything an operator only needs when something is off: reconciliation,
-// accrual posting, burn rate, stream states, incidents, settings links, and the
+// webhook accrual and burn rate, plus where the values are set and the
 // projection diagnostic. Collapsed by default while healthy; opens itself when
-// anything needs attention.
+// anything needs attention. Open incidents, the floor and paused streams are
+// told once elsewhere (the alarm, the budget meters), not repeated here.
 function SystemHealthSection(props: {
   summary: OfapiCreditsSummaryResponse;
   hasAudienceBudget: boolean;
@@ -749,6 +705,7 @@ function SystemHealthSection(props: {
     || (burn?.alerting ?? false)
     || (summary.forecast.unverifiedResidual?.credits ?? 0) !== 0
     || parked.length > 0;
+  const urgent = summary.floor.blocked || summary.incidents.length > 0 || (burn?.alerting ?? false);
   const [open, setOpen] = useState(needsAttention);
   const bodyId = useId();
 
@@ -764,37 +721,32 @@ function SystemHealthSection(props: {
   const pending = summary.accrual.pendingToday ?? null;
 
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+    <section className="card">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full flex-wrap items-center gap-2 px-4 py-3 text-left hover:bg-hover"
+        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-[inherit] px-5 py-3.5 text-left hover:bg-hover-alt"
       >
-        <span className="text-text-muted">
-          <Caret expanded={open} />
-        </span>
-        <h2 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
-          Состояние системы
-        </h2>
+        <h2 className="card-title">Состояние системы</h2>
         {needsAttention
-          ? (
-            <StatusChip tone={summary.floor.blocked || summary.incidents.length > 0 || (burn?.alerting ?? false) ? "danger" : "warning"}>
-              Требует внимания
-            </StatusChip>
-          )
-          : <StatusChip tone="neutral">Всё в порядке</StatusChip>}
+          ? <span className={urgent ? "badge badge-danger" : "badge badge-warning"}>Требует внимания</span>
+          : <span className="badge badge-success">Всё в порядке</span>}
         {summary.reconciliation.lastRunAt && (
-          <span className="text-[11px] text-text-secondary">
+          <span className="text-[13px] text-text-secondary">
             баланс сверен {utcTime(summary.reconciliation.lastRunAt)}
           </span>
         )}
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[13px] text-text-secondary">
+          {open ? "Свернуть" : "Подробнее"}
+          <Caret expanded={open} />
+        </span>
       </button>
       {open && (
-        <div id={bodyId} className="border-t border-border-light">
-          <dl className="space-y-3 px-4 py-4 text-[13px]">
-            <div className="sm:flex sm:gap-3">
+        <div id={bodyId} className="space-y-4 border-t border-border px-5 py-4">
+          <dl className="space-y-3 text-sm">
+            <div className="sm:flex sm:gap-4">
               <dt className="shrink-0 font-medium text-text-primary sm:w-44">Сверка баланса</dt>
               <dd className="text-text-secondary">
                 {summary.reconciliation.lastRunAt
@@ -803,54 +755,54 @@ function SystemHealthSection(props: {
                       Сверен с провайдером {utcDateTime(summary.reconciliation.lastRunAt)}
                       {drift === 0
                         ? " — последнее окно без расхождений."
-                        : ` — расхождение ${fmtCredits(drift)} кр; источник изменения не подтверждён.`}
+                        : ` — расхождение ${credits(drift)}; источник изменения не подтверждён.`}
                     </>
                   )
                   : "Ещё не выполнялась. Приложение периодически сверяет свой журнал с реальным балансом провайдера."}
               </dd>
             </div>
-            <div className="sm:flex sm:gap-3">
+            <div className="sm:flex sm:gap-4">
               <dt className="shrink-0 font-medium text-text-primary sm:w-44">Начисления вебхуков</dt>
               <dd className="text-text-secondary">
                 {summary.accrual.lastPostedDay
                   ? `Проведены по ${summary.accrual.lastPostedDay}.`
                   : "Ещё ничего не проведено."}
                 {pending && pending.eventCount > 0 && (
-                  ` Сегодня: ~${fmtCredits(pending.estimatedCredits)} кр за ${fmtCredits(pending.eventCount)} ${
+                  ` Сегодня: ~${credits(pending.estimatedCredits)} за ${fmtCredits(pending.eventCount)} ${
                     ruPlural(pending.eventCount, "событие", "события", "событий")
                   } — спишутся в полночь UTC.`
                 )}
               </dd>
             </div>
-            <div className="sm:flex sm:gap-3">
+            <div className="sm:flex sm:gap-4">
               <dt className="shrink-0 font-medium text-text-primary sm:w-44">Скорость трат</dt>
               <dd className="text-text-secondary">
                 {burn
                   ? (
                     <>
-                      <span className={burn.alerting ? "font-semibold text-red-700" : undefined}>
-                        {fmtCredits(burn.total)} кр за последние {burn.windowMinutes} мин
+                      <span className={burn.alerting ? "font-semibold text-danger" : undefined}>
+                        {credits(burn.total)} за последние {burn.windowMinutes} мин
                         {props.priceKnown ? ` (≈ ${props.usd(burn.total)})` : ""}
                       </span>
                       {burn.threshold > 0
-                        ? ` · тревога выше ${fmtCredits(burn.threshold)} кр/ч`
+                        ? ` · тревога выше ${credits(burn.threshold)} в час`
                         : " · тревога выключена"}
                       {(burn.topOperations.length > 0 || burn.topPages.length > 0) && (
                         <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          <span className="text-[11px]">больше всего тратят:</span>
+                          <span className="text-xs">больше всего тратят:</span>
                           {burn.topOperations.map((op) => (
-                            <StatusChip
+                            <span
                               key={`op-${op.operation ?? "unknown"}`}
-                              tone={burn.alerting ? "danger" : "neutral"}
+                              className={toneBadge(burn.alerting ? "danger" : "neutral")}
                               title={op.operation ?? undefined}
                             >
-                              {op.operation ? operationLabel(op.operation) : "без атрибуции"} · {fmtCredits(op.credits)} кр
-                            </StatusChip>
+                              {op.operation ? operationLabel(op.operation) : "без атрибуции"} · {fmtCredits(op.credits)}
+                            </span>
                           ))}
                           {burn.topPages.map((page) => (
-                            <StatusChip key={`page-${page.pageId}`} tone={burn.alerting ? "danger" : "neutral"} title="страница">
-                              {page.pageLabel} · {fmtCredits(page.credits)} кр
-                            </StatusChip>
+                            <span key={`page-${page.pageId}`} className={toneBadge(burn.alerting ? "danger" : "neutral")} title="страница">
+                              {page.pageLabel} · {fmtCredits(page.credits)}
+                            </span>
                           ))}
                         </span>
                       )}
@@ -859,54 +811,30 @@ function SystemHealthSection(props: {
                   : "За последний час трат нет."}
               </dd>
             </div>
-            <div className="sm:flex sm:gap-3">
-              <dt className="shrink-0 font-medium text-text-primary sm:w-44">Потоки синка</dt>
-              <dd className="text-text-secondary">
-                {summary.budgets.length === 0
-                  ? "Бюджеты синка не настроены."
-                  : parked.length === 0
-                    ? "Все работают."
-                    : parked.map((budget) => (
-                      <span key={budget.stream} className="block">
-                        {streamLabel(budget.stream)} на паузе — {budget.state === "floor_blocked"
-                          ? "баланс ниже порога автостопа."
-                          : `дневной бюджет исчерпан; продолжит ${budget.retryAt ? `в ${utcDateTime(budget.retryAt)}` : "после полуночи UTC"}.`}
-                      </span>
-                    ))}
-              </dd>
-            </div>
-            <div className="sm:flex sm:gap-3">
-              <dt className="shrink-0 font-medium text-text-primary sm:w-44">Открытые инциденты</dt>
-              <dd className="text-text-secondary">
-                {summary.incidents.length === 0
-                  ? "Нет."
-                  : summary.incidents.map((incident) => (
-                    <span key={`${incident.kind}-${incident.openedAt}`} className="block">
-                      {incidentLabel(incident.kind)} — открыт с {utcDateTime(incident.openedAt)}.
-                      {incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
-                    </span>
-                  ))}
-              </dd>
-            </div>
           </dl>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">
-            <span className={eyebrowClass}>Настройки</span>
-            <Link
-              to="/settings?tab=collection"
-              className="font-medium text-accent underline-offset-2 hover:underline"
-            >
-              Настройки сбора
-            </Link>
-            <ConfigLink configKey="ofapiDmDailyCreditBudget">Бюджет сообщений</ConfigLink>
-            {props.hasAudienceBudget && (
-              <ConfigLink configKey="ofapiAudienceDailyCreditBudget">Бюджет аудитории</ConfigLink>
-            )}
-            <ConfigLink configKey="ofapiCreditFloor">Порог автостопа</ConfigLink>
-            <ConfigLink configKey="ofapiBurnAlertCreditsPerHour">Тревога по тратам</ConfigLink>
-            <ConfigLink configKey="ofapiCreditMicroUsdPrice">Цена кредита</ConfigLink>
-            <span>· тревога по тратам меняется там и применяется сразу; цена, бюджеты и порог — только через переменные окружения</span>
-          </div>
-          <ProjectionAccuracySection />
+          <details className="help">
+            <summary>Технические детали</summary>
+            <div className="help-body max-w-none">
+              <p>
+                Тревога по тратам меняется в списке параметров и применяется сразу. Цена кредита, дневные бюджеты
+                и порог автостопа задаются при настройке сервера — в списке их можно только посмотреть:{" "}
+                <ConfigReference configKey="ofapiBurnAlertCreditsPerHour">тревога по тратам</ConfigReference>
+                {" · "}
+                <ConfigReference configKey="ofapiDmDailyCreditBudget">бюджет сообщений</ConfigReference>
+                {props.hasAudienceBudget && (
+                  <>
+                    {" · "}
+                    <ConfigReference configKey="ofapiAudienceDailyCreditBudget">бюджет аудитории</ConfigReference>
+                  </>
+                )}
+                {" · "}
+                <ConfigReference configKey="ofapiCreditFloor">порог автостопа</ConfigReference>
+                {" · "}
+                <ConfigReference configKey="ofapiCreditMicroUsdPrice">цена кредита</ConfigReference>
+              </p>
+              <ProjectionAccuracySection />
+            </div>
+          </details>
         </div>
       )}
     </section>
@@ -926,6 +854,7 @@ export function OfapiCreditsPage() {
   const [pageFilter, setPageFilter] = useState("");
   const [fromFilter, setFromFilter] = useState("");
   const [toFilter, setToFilter] = useState("");
+  const [showHttp, setShowHttp] = useState(false);
 
   const ledgerRef = useRef<HTMLElement | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -1014,27 +943,18 @@ export function OfapiCreditsPage() {
     return active.length > 0 ? active : [...SOURCE_SERIES];
   }, [dailyBars]);
 
-  const filterSelectClass =
-    "rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] text-text-secondary";
-
   if (summaryQuery.isLoading) {
-    return (
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        <StatCardSkeleton count={4} />
-      </div>
-    );
+    return <StatCardSkeleton count={3} />;
   }
 
   if (!summary) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        <StatusPanel
-          title="Не удалось загрузить кредиты OFAPI"
-          description="Эндпоинт сводки вернул ошибку. Повторите чуть позже."
-          tone="error"
-          action={<RetryButton onClick={() => summaryQuery.refetch()} />}
-        />
-      </div>
+      <StatusPanel
+        title="Не удалось загрузить кредиты OnlyFans API"
+        description="Сервер не ответил. Повторите чуть позже."
+        tone="error"
+        action={<RetryButton onClick={() => summaryQuery.refetch()} />}
+      />
     );
   }
 
@@ -1045,12 +965,12 @@ export function OfapiCreditsPage() {
   // estimate on the page is suppressed.
   const microUsdPerCredit = summary.pricing?.microUsdPerCredit ?? 0;
   const priceKnown = microUsdPerCredit > 0;
-  const usd = (credits: number) => creditsToUsd(credits, microUsdPerCredit);
+  const usd = (amount: number) => creditsToUsd(amount, microUsdPerCredit);
 
   const focusLedger = () => {
     ledgerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  // A breakdown row drills straight into the matching activity-log filter.
+  // A breakdown row drills straight into the matching journal filter.
   const drillByOperation = (operation: string) => {
     setOperationFilter(operation);
     setLedgerOffset(0);
@@ -1100,9 +1020,9 @@ export function OfapiCreditsPage() {
   const runwayToneClass = forecast.daysLeft === null
     ? "text-text-primary"
     : forecast.daysLeft < RUNWAY_DANGER_DAYS
-      ? "text-red-700"
+      ? "text-danger"
       : forecast.daysLeft < RUNWAY_WARNING_DAYS
-        ? "text-amber-700"
+        ? "text-warning-dark"
         : "text-text-primary";
 
   const burn = summary.recentBurn;
@@ -1111,8 +1031,8 @@ export function OfapiCreditsPage() {
   const burnDrivers = burn
     ? [
       ...burn.topOperations.map((op) =>
-        `${op.operation ? operationLabel(op.operation) : "без атрибуции"} (${fmtCredits(op.credits)} кр)`),
-      ...burn.topPages.map((page) => `${page.pageLabel} (${fmtCredits(page.credits)} кр)`),
+        `${op.operation ? operationLabel(op.operation) : "без атрибуции"} (${fmtCredits(op.credits)})`),
+      ...burn.topPages.map((page) => `${page.pageLabel} (${fmtCredits(page.credits)})`),
     ]
     : [];
 
@@ -1124,53 +1044,81 @@ export function OfapiCreditsPage() {
   const recordedActivityForecast = forecast.basis === "recorded_activity";
   const unverifiedResidual = forecast.unverifiedResidual;
 
-  const heroValueClass = "mt-1 text-[28px] font-semibold leading-tight";
-  const heroUnitClass = "text-[15px] font-medium text-text-secondary";
-  const heroSubClass = "mt-1 text-[12px] text-text-secondary";
+  const heroValueClass = "mt-1 text-[28px] font-semibold leading-tight tracking-tight tabular-nums";
+  const heroUnitClass = "text-[15px] font-medium tracking-normal text-text-secondary";
+  const heroSubClass = "mt-1 text-[13px] text-text-secondary";
+
+  const selectClass = "select w-auto min-h-[34px] py-1.5 text-[13px]";
+  const inputClass = "input w-auto min-h-[34px] py-1.5 text-[13px]";
+  const filterField = (
+    label: string,
+    control: ReactNode,
+  ) => (
+    <label className="flex min-w-0 flex-col gap-1">
+      <span className="text-xs font-medium text-text-secondary">{label}</span>
+      {control}
+    </label>
+  );
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
-      <div className="mb-5">
-        <div className="flex items-center justify-between gap-4"><h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1><Link className="text-sm text-accent" to={buildSettingsRoute("collection")}>Настройки сбора</Link></div>
-        <p className="mt-1 text-sm text-text-secondary">
-          Кредиты расходуются на платные запросы к API OnlyFans и учитываемые события.
-          Журнал отделяет запросы приложения, вебхуки и сверку баланса. Всё время на странице — UTC.
-        </p>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 max-w-3xl">
+          <p className="text-sm text-text-secondary">
+            Баланс кредитов OnlyFans API, на сколько его хватит и на что он уходит. Всё время на странице — UTC.
+          </p>
+          <details className="help mt-1">
+            <summary>Как это считается</summary>
+            <div className="help-body">
+              <p>
+                Кредиты расходуются на платные запросы к OnlyFans API и на учитываемые события. Журнал разделяет
+                запросы приложения, начисления за вебхуки и сверку баланса с провайдером.
+              </p>
+              <p>
+                «Хватит на» — баланс, делённый на средний дневной расход за последние 7 дней. Дневные бюджеты
+                синка обнуляются в полночь UTC.
+              </p>
+              <p>
+                Отношение «выручка / стоимость» включает всю выручку страницы за период. Оно не показывает, сколько
+                выручки принесли запросы к OnlyFans API, и не учитывает остальные расходы.
+              </p>
+            </div>
+          </details>
+        </div>
+        <Link className="btn btn-sm" to={buildSettingsRoute("collection")}>Настройки сбора</Link>
       </div>
 
-      {summaryQuery.isError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3 text-sm text-text-secondary"><p>Сводку не удалось обновить. Баланс, прогноз и ограничения ниже относятся к предыдущему ответу.</p><RetryButton onClick={() => summaryQuery.refetch()} /></div>}
-
+      {summaryQuery.isError && (
+        <div role="alert" className="notice notice-warning flex-wrap items-center justify-between">
+          <p>Сводку не удалось обновить. Баланс, прогноз и ограничения ниже относятся к предыдущему ответу.</p>
+          <RetryButton onClick={() => summaryQuery.refetch()} />
+        </div>
+      )}
 
       {!summary.enabled ? (
         <StatusPanel
           title="Журнал кредитов выключен"
-          description="Включите журнал кредитов OFAPI в Настройки → Конфигурация, чтобы записывать траты по каждому запросу, начисления вебхуков, сверку баланса, тревоги по скорости трат и оценку несписанных событий. Это staged-флаг: сначала включите OFAPI account health, затем журнал кредитов."
+          description="Включите журнал кредитов OnlyFans API в Система → Все параметры, чтобы видеть баланс, прогноз и траты по каждому запросу. Сначала должна быть включена проверка аккаунтов OnlyFans API."
           action={(
-            <Link
-              to="/settings?tab=configuration#config-ofapiCreditLedgerEnabled"
-              className="inline-flex items-center rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-accent hover:bg-hover"
-            >
-              Открыть конфигурацию →
+            <Link to="/settings?tab=configuration#config-ofapiCreditLedgerEnabled" className="btn btn-sm">
+              Открыть параметры
             </Link>
           )}
         />
       ) : (
         <>
           {showAlarm && (
-            <div
-              role="alert"
-              className="mb-4 space-y-1.5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-[13px] font-medium text-red-700"
-            >
+            <div role="alert" className="notice notice-danger flex-col gap-1.5 font-medium">
               {summary.floor.blocked && (
                 <p>
-                  Траты остановлены — баланс ниже порога автостопа{" "}
-                  {fmtCredits(summary.floor.value)} кр. Пополните баланс, чтобы синк продолжился.
+                  Траты остановлены — баланс ниже порога автостопа ({credits(summary.floor.value)}).
+                  Пополните баланс, чтобы синк продолжился.
                 </p>
               )}
               {burnAlerting && burn && (
                 <p>
-                  Журнал показывает расход или разницу баланса: {fmtCredits(burn.total)} кр за последние{" "}
-                  {burn.windowMinutes} минут (порог тревоги {fmtCredits(burn.threshold)} кр/ч).
+                  Журнал показывает расход или разницу баланса: {credits(burn.total)} за последние{" "}
+                  {burn.windowMinutes} минут (порог тревоги — {credits(burn.threshold)} в час).
                   {burnDrivers.length > 0 ? ` Больше всего тратят: ${burnDrivers.join(", ")}.` : ""}
                 </p>
               )}
@@ -1180,19 +1128,25 @@ export function OfapiCreditsPage() {
                   {incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
                 </p>
               ))}
+              {summary.incidents.length > 0 && (
+                <p>
+                  <Link to="/incidents" className="font-semibold underline underline-offset-2">Все инциденты</Link>
+                </p>
+              )}
             </div>
           )}
 
           {/* The answer card: balance → runway → what to do about it. */}
-          <section className="rounded-xl border border-border bg-card p-5">
-            <div className="grid gap-4 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border">
+          <section className="card p-5">
+            <div className="grid gap-5 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border">
               <div className="sm:pr-6">
-                <div className={eyebrowClass}>Баланс</div>
+                <div className="stat-label">Баланс</div>
                 <div className={`${heroValueClass} text-text-primary`}>
                   {summary.balance.value !== null
                     ? (
                       <>
-                        {fmtCredits(summary.balance.value)} <span className={heroUnitClass}>кр</span>
+                        {fmtCredits(summary.balance.value)}{" "}
+                        <span className={heroUnitClass}>{creditsWord(summary.balance.value)}</span>
                       </>
                     )
                     : "—"}
@@ -1205,7 +1159,7 @@ export function OfapiCreditsPage() {
                 </div>
               </div>
               <div className="sm:px-6">
-                <div className={eyebrowClass}>{recordedActivityForecast ? "Прогноз по операциям" : "Хватит на"}</div>
+                <div className="stat-label">{recordedActivityForecast ? "Прогноз по операциям" : "Хватит на"}</div>
                 <div className={`${heroValueClass} ${runwayToneClass}`}>
                   {forecast.daysLeft !== null
                     ? (
@@ -1220,9 +1174,11 @@ export function OfapiCreditsPage() {
                   {forecast.daysLeft !== null
                     ? (
                       <>
-                        {forecast.runOutDate ? `закончатся ~${humanDay(forecast.runOutDate)} · ` : ""}
-                        ~{fmtCredits(Math.round(forecast.avgDailySpend7d))} кр/день
-                        {priceKnown ? ` ≈ ${usd(Math.round(forecast.avgDailySpend7d))}/день` : ""} (среднее за 7 дней)
+                        {forecast.runOutDate ? <span className="block">закончатся ~{humanDay(forecast.runOutDate)}</span> : null}
+                        <span className="block">
+                          ~{credits(Math.round(forecast.avgDailySpend7d))} в день
+                          {priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней
+                        </span>
                       </>
                     )
                     : forecast.avgDailySpend7d <= 0
@@ -1231,13 +1187,14 @@ export function OfapiCreditsPage() {
                 </div>
               </div>
               <div className="sm:pl-6">
-                <div className={eyebrowClass}>Пополнение</div>
+                <div className="stat-label">Пополнение</div>
                 {refillRecommendation
                   ? refillRecommendation.credits > 0
                     ? (
                       <>
-                        <div className={`${heroValueClass} text-amber-700`}>
-                          +{fmtCredits(refillRecommendation.credits)} <span className={heroUnitClass}>кр</span>
+                        <div className={`${heroValueClass} text-warning-dark`}>
+                          +{fmtCredits(refillRecommendation.credits)}{" "}
+                          <span className={heroUnitClass}>{creditsWord(refillRecommendation.credits)}</span>
                         </div>
                         <div className={heroSubClass}>
                           чтобы хватило на {refillRecommendation.targetDays}{" "}
@@ -1248,7 +1205,7 @@ export function OfapiCreditsPage() {
                     )
                     : (
                       <>
-                        <div className={`${heroValueClass} text-green-700`}>
+                        <div className={`${heroValueClass} text-green`}>
                           {unverifiedResidual && unverifiedResidual.credits > 0 ? "Уточнить расход" : "Не нужно"}
                         </div>
                         <div className={heroSubClass}>
@@ -1266,33 +1223,33 @@ export function OfapiCreditsPage() {
               </div>
             </div>
             {recordedActivityForecast && (
-              <p className="mt-4 text-[12px] text-text-secondary">
-                Прогноз учитывает HTTP-запросы, их корректировки и оценку вебхуков.
+              <p className="mt-4 text-[13px] text-text-secondary">
+                Прогноз учитывает запросы приложения, их корректировки и оценку вебхуков.
                 Необъяснённая разница баланса в прогноз не включена.
               </p>
             )}
             {unverifiedResidual && unverifiedResidual.credits > 0 && (
-              <p role="note" className="mt-3 rounded-lg bg-amber-50 p-3 text-[12px] text-amber-800">
+              <p role="note" className="notice notice-warning mt-3">
                 По сверке за {utcDateTime(unverifiedResidual.from)} — {utcDateTime(unverifiedResidual.to)}:{" "}
-                ещё {fmtCredits(unverifiedResidual.credits)} кр уменьшения баланса без подтверждённого источника.
+                ещё {credits(unverifiedResidual.credits)} уменьшения баланса без подтверждённого источника.
                 Фактический расход может быть выше прогноза; требуется проверка этой разницы.
               </p>
             )}
             {(forecast.monthToDateSpend !== undefined || forecast.monthEndProjection !== undefined) && (
-              <div className="mt-4 border-t border-border-light pt-3 text-[12px] text-text-secondary">
+              <div className="mt-4 border-t border-border-light pt-3 text-[13px] text-text-secondary">
                 {forecast.monthToDateSpend !== undefined && (
                   <>
-                    {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{fmtCredits(forecast.monthToDateSpend)} кр
+                    {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{credits(forecast.monthToDateSpend)}
                     {priceKnown ? ` (≈ ${usd(forecast.monthToDateSpend)})` : ""}
                   </>
                 )}
                 {forecast.monthUnverifiedResidualCredits !== undefined && forecast.monthUnverifiedResidualCredits !== 0 && (
-                  <> · разница баланса за месяц: {fmtCredits(forecast.monthUnverifiedResidualCredits)} кр</>
+                  <> · разница баланса за месяц: {credits(forecast.monthUnverifiedResidualCredits)}</>
                 )}
                 {forecast.monthEndProjection !== undefined && (
                   <>
                     {forecast.monthToDateSpend !== undefined ? " · " : ""}
-                    к концу месяца выйдет ~{fmtCredits(forecast.monthEndProjection)} кр
+                    к концу месяца выйдет ~{credits(forecast.monthEndProjection)}
                     {priceKnown ? ` (≈ ${usd(forecast.monthEndProjection)})` : ""}
                   </>
                 )}
@@ -1300,12 +1257,13 @@ export function OfapiCreditsPage() {
             )}
           </section>
 
-          <section className="mt-4 rounded-xl border border-border bg-card p-5">
-            <div className="grid gap-5 lg:grid-cols-[1fr_1.3fr]">
+          <section className="card">
+            <div className="card-body grid gap-6 lg:grid-cols-[1fr_1.3fr]">
               <div>
-                <div className={eyebrowClass}>Учтено сегодня · {summary.today.day}</div>
-                <div className="mt-1 text-[22px] font-semibold leading-tight text-text-primary">
-                  {fmtCredits(summary.today.total)} <span className={heroUnitClass}>кр</span>
+                <div className="stat-label">Учтено сегодня, {humanDay(summary.today.day)}</div>
+                <div className="mt-1 text-[22px] font-semibold leading-tight tabular-nums text-text-primary">
+                  {fmtCredits(summary.today.total)}{" "}
+                  <span className={heroUnitClass}>{creditsWord(summary.today.total)}</span>
                   {priceKnown && (
                     <span className="ml-2 text-[13px] font-medium text-text-secondary">
                       ≈ {usd(summary.today.total)}
@@ -1314,7 +1272,7 @@ export function OfapiCreditsPage() {
                 </div>
                 {todaySources.length > 0
                   ? (
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-text-secondary tabular-nums">
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] tabular-nums text-text-secondary">
                       {todaySources.map((series) => (
                         <span key={series.key} className="inline-flex items-center gap-1.5">
                           <span
@@ -1327,18 +1285,18 @@ export function OfapiCreditsPage() {
                       ))}
                     </div>
                   )
-                  : <p className="mt-2 text-[12px] text-text-secondary">Сегодня пока ничего не потрачено.</p>}
+                  : <p className="mt-2 text-[13px] text-text-secondary">Сегодня пока ничего не потрачено.</p>}
                 {pendingWebhookEstimate && pendingWebhookEstimate.eventCount > 0 && (
-                  <p className="mt-2 text-[12px] text-text-secondary">
-                    + ~{fmtCredits(pendingWebhookEstimate.estimatedCredits)} кр за{" "}
+                  <p className="mt-2 text-[13px] text-text-secondary">
+                    Ещё ~{credits(pendingWebhookEstimate.estimatedCredits)} за{" "}
                     {fmtCredits(pendingWebhookEstimate.eventCount)}{" "}
                     {ruPlural(pendingWebhookEstimate.eventCount, "событие", "события", "событий")} вебхуков
-                    ещё не проведены — оценка добавится в журнал после завершения дня
+                    ещё не проведены — оценка добавится в журнал после завершения дня.
                   </p>
                 )}
               </div>
               <div>
-                <div className={eyebrowClass}>Дневные бюджеты синка</div>
+                <div className="stat-label">Дневные бюджеты синка</div>
                 <div className="mt-2 space-y-3">
                   {summary.budgets.length > 0
                     ? summary.budgets.map((budget) => (
@@ -1351,48 +1309,36 @@ export function OfapiCreditsPage() {
                         retryAt={budget.retryAt}
                       />
                     ))
-                    : <p className="text-[12px] text-text-secondary">Бюджеты синка не настроены.</p>}
+                    : <p className="text-[13px] text-text-secondary">Бюджеты синка не заданы.</p>}
                 </div>
               </div>
             </div>
-            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-light pt-3 text-[12px] text-text-secondary">
+            <div className="card-footer justify-start">
               {summary.floor.value > 0
-                ? summary.floor.blocked
-                  ? (
-                    <span className="font-semibold text-red-700">
-                      Порог автостопа: {fmtCredits(summary.floor.value)} кр — траты остановлены,
-                      потому что баланс ниже порога.
-                    </span>
-                  )
-                  : (
-                    <span>
-                      Порог автостопа: {fmtCredits(summary.floor.value)} кр — траты автоматически
-                      остановятся, если баланс упадёт ниже.
-                    </span>
-                  )
+                ? (
+                  <span>
+                    Порог автостопа: {credits(summary.floor.value)} — если баланс упадёт ниже, траты автоматически
+                    остановятся.
+                  </span>
+                )
                 : <span>Автостоп по остатку не задан. Остальные ограничения расхода продолжают действовать.</span>}
-              <ConfigLink configKey="ofapiCreditFloor">
-                {summary.floor.value > 0 ? "Изменить" : "Задать"}
-              </ConfigLink>
             </div>
           </section>
 
           {chartsQuery.isLoading ? (
-            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
               <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
             </div>
           ) : chartsQuery.isError ? (
-            <div className="mt-6">
-              <StatusPanel
-                tone="error"
-                title="Не удалось загрузить графики"
-                description="Эндпоинт дневной статистики вернул ошибку."
-                action={<RetryButton onClick={() => chartsQuery.refetch()} />}
-              />
-            </div>
+            <StatusPanel
+              tone="error"
+              title="Не удалось загрузить графики"
+              description="Сервер не ответил. Повторите чуть позже."
+              action={<RetryButton onClick={() => chartsQuery.refetch()} />}
+            />
           ) : (
-            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               <BalanceChart
                 days={chartDays}
                 balanceByDay={balanceByDay}
@@ -1407,65 +1353,63 @@ export function OfapiCreditsPage() {
                 xTickFormatter={shortDay}
                 valueFormatter={fmtCredits}
                 tooltipValueFormatter={(value) =>
-                  priceKnown ? `${fmtCredits(value)} кр · ${usd(value)}` : `${fmtCredits(value)} кр`}
+                  priceKnown ? `${credits(value)} · ${usd(value)}` : credits(value)}
                 yAxisWidth={48}
                 headerExtra={(
-                  <span className="text-[12px] text-text-secondary">Последние {CHART_DAYS} дней · UTC</span>
+                  <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
                 )}
               />
             </div>
           )}
 
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-              <h2 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
-                Куда уходят кредиты
-              </h2>
-              <div className="flex overflow-hidden rounded-lg border border-border">
+          <section className="card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Куда уходят кредиты</h2>
+                <p className="card-description">По видам запросов и по страницам. Нажмите строку, чтобы открыть её в журнале.</p>
+              </div>
+              <div className="segmented" role="group" aria-label="Период">
                 {BREAKDOWN_PERIODS.map((period) => (
                   <button
                     key={period}
                     type="button"
+                    aria-pressed={breakdownDays === period}
                     onClick={() => setBreakdownDays(period)}
-                    className={`px-3 py-1 text-[11px] font-semibold transition-colors ${
-                      breakdownDays === period
-                        ? "bg-accent text-white"
-                        : "bg-card text-text-secondary hover:text-text-primary"
-                    }`}
+                    className="segment"
                   >
-                    {period}д
+                    {period} {daysWord(period)}
                   </button>
                 ))}
               </div>
             </div>
             {breakdownQuery.isLoading ? (
-              <div className="border-t border-border-light p-4">
+              <div className="p-4">
                 <TableSkeleton rows={6} columns={6} />
               </div>
             ) : breakdownQuery.isError ? (
-              <div className="border-t border-border-light p-4">
+              <div className="p-4">
                 <StatusPanel
                   tone="error"
                   title="Не удалось загрузить разбивку"
-                  description="Эндпоинт разбивки вернул ошибку."
+                  description="Сервер не ответил. Повторите чуть позже."
                   action={<RetryButton onClick={() => breakdownQuery.refetch()} />}
                 />
               </div>
             ) : (
-              <div className="grid border-t border-border-light lg:grid-cols-[1.4fr_1fr]">
+              <div>
                 <div className="min-w-0 overflow-x-auto">
-                  <table className="w-full border-collapse">
+                  <table className="data-table">
                     <thead>
-                      <tr className="bg-hover-alt">
-                        <th className={thClass}>Активность</th>
-                        <th className={`${thClass} text-right`}>Запросы</th>
-                        <th className={`${thClass} text-right`}>Кредиты</th>
+                      <tr>
+                        <th>Активность</th>
+                        <th className="num">Запросы</th>
+                        <th className="num">Кредиты</th>
                         {priceKnown && (
-                          <th className={`${thClass} text-right`} title="Оценка стоимости в $ по заданной цене кредита">
+                          <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
                             Стоимость
                           </th>
                         )}
-                        <th className={`${thClass} text-right`}>Доля</th>
+                        <th className="num">Доля</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1474,8 +1418,8 @@ export function OfapiCreditsPage() {
                           ? Math.round((row.credits / operationTotal) * 100)
                           : null;
                         return (
-                          <tr key={row.operation ?? "unknown"} className="border-t border-border-light">
-                            <td className={tdClass}>
+                          <tr key={row.operation ?? "unknown"}>
+                            <td>
                               {row.operation ? (
                                 <button
                                   type="button"
@@ -1489,19 +1433,19 @@ export function OfapiCreditsPage() {
                                 "Без атрибуции"
                               )}
                             </td>
-                            <td className={`${tdClass} text-right`}>{fmtCredits(row.requests)}</td>
-                            <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
+                            <td className="num muted">{fmtCredits(row.requests)}</td>
+                            <td className="num">{fmtCredits(row.credits)}</td>
                             {priceKnown && (
-                              <td className={`${tdClass} text-right`}>{usd(row.credits)}</td>
+                              <td className="num muted">{usd(row.credits)}</td>
                             )}
-                            <td className={`${tdClass} text-right`}>
+                            <td className="num muted">
                               {sharePct === null
                                 ? "—"
                                 : (
                                   <span className="inline-flex items-center justify-end gap-2">
                                     <span
                                       aria-hidden="true"
-                                      className="h-1 w-10 overflow-hidden rounded-full bg-hover-alt"
+                                      className="h-1 w-10 overflow-hidden rounded-full bg-hover"
                                     >
                                       <span
                                         className="block h-full rounded-full bg-text-muted"
@@ -1516,8 +1460,8 @@ export function OfapiCreditsPage() {
                         );
                       })}
                       {(breakdown?.byOperation ?? []).length === 0 && (
-                        <tr className="border-t border-border-light">
-                          <td colSpan={priceKnown ? 5 : 4} className={`${tdClass} text-text-muted`}>
+                        <tr>
+                          <td colSpan={priceKnown ? 5 : 4} className="muted">
                             Нет трат через приложение за этот период
                           </td>
                         </tr>
@@ -1525,22 +1469,22 @@ export function OfapiCreditsPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="min-w-0 overflow-x-auto lg:border-l lg:border-border-light">
-                  <table className="w-full border-collapse">
+                <div className="min-w-0 overflow-x-auto border-t border-border">
+                  <table className="data-table">
                     <thead>
-                      <tr className="bg-hover-alt">
-                        <th className={thClass}>Страница</th>
-                        <th className={`${thClass} text-right`}>Кредиты</th>
+                      <tr>
+                        <th>Страница</th>
+                        <th className="num">Кредиты</th>
                         {priceKnown && (
-                          <th className={`${thClass} text-right`} title="Оценка стоимости в $ по заданной цене кредита">
+                          <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
                             Стоимость
                           </th>
                         )}
-                        <th className={`${thClass} text-right`} title="Чистая выручка авторов за период">
+                        <th className="num" title="Чистая выручка авторов за период">
                           Выручка
                         </th>
                         {priceKnown && (
-                          <th className={`${thClass} text-right`} title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">
+                          <th className="num" title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">
                             Выручка / стоимость
                           </th>
                         )}
@@ -1551,8 +1495,8 @@ export function OfapiCreditsPage() {
                         const revenueMills = row.revenueMills;
                         const roi = revenueMills == null ? null : computeRoi(revenueMills, row.credits, microUsdPerCredit);
                         return (
-                          <tr key={row.pageId} className="border-t border-border-light">
-                            <td className={tdClass}>
+                          <tr key={row.pageId}>
+                            <td>
                               <button
                                 type="button"
                                 onClick={() => drillByPage(row.pageId)}
@@ -1562,161 +1506,192 @@ export function OfapiCreditsPage() {
                                 {row.pageLabel}
                               </button>
                             </td>
-                            <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
+                            <td className="num">{fmtCredits(row.credits)}</td>
                             {priceKnown && (
-                              <td className={`${tdClass} text-right`}>{usd(row.credits)}</td>
+                              <td className="num muted">{usd(row.credits)}</td>
                             )}
-                            <td className={`${tdClass} text-right`}>{revenueMills == null ? "Нет данных" : formatUsdFromMills(revenueMills)}</td>
+                            <td className="num muted">{revenueMills == null ? "Нет данных" : formatUsdFromMills(revenueMills)}</td>
                             {priceKnown && (
-                              <td className={`${tdClass} text-right`}>
-                                {roi === null
-                                  ? "—"
-                                  : (
-                                    <span>
-                                      {roi.toFixed(1)}×
-                                    </span>
-                                  )}
+                              <td className="num">
+                                {roi === null ? "—" : <span>{roi.toFixed(1)}×</span>}
                               </td>
                             )}
                           </tr>
                         );
                       })}
                       {(breakdown?.byPage ?? []).length === 0 && (
-                        <tr className="border-t border-border-light">
-                          <td colSpan={priceKnown ? 5 : 3} className={`${tdClass} text-text-muted`}>
+                        <tr>
+                          <td colSpan={priceKnown ? 5 : 3} className="muted">
                             Нет трат с привязкой к страницам за этот период
                           </td>
                         </tr>
                       )}
                     </tbody>
                   </table>
-                  {!priceKnown && (
-                    <p className="border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">
-                      Задайте <ConfigLink configKey="ofapiCreditMicroUsdPrice">цену кредита</ConfigLink>,
-                      чтобы видеть стоимость в $ и отношение выручки к стоимости кредитов по страницам.
-                    </p>
-                  )}
-                  {priceKnown && <p className="border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">Отношение включает всю выручку страницы за период. Оно не показывает, сколько выручки принесли запросы OFAPI, и не учитывает остальные расходы.</p>}
                 </div>
+              </div>
+            )}
+            {!priceKnown && !breakdownQuery.isLoading && !breakdownQuery.isError && (
+              <div className="card-footer justify-start">
+                <span>
+                  Цена кредита не задана: её задают при настройке сервера, чтобы видеть стоимость в $ и отношение
+                  выручки к стоимости по страницам.{" "}
+                  <ConfigReference configKey="ofapiCreditMicroUsdPrice">Текущее значение</ConfigReference>
+                </span>
               </div>
             )}
           </section>
 
-          <section
-            ref={ledgerRef}
-            className="mt-6 scroll-mt-20 overflow-hidden rounded-xl border border-border bg-card"
-          >
-            <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-              <h2 className="mr-auto text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
-                Журнал операций
-              </h2>
-              <select
-                value={sourceFilter}
-                onChange={(event) => {
-                  setSourceFilter(event.target.value);
-                  setLedgerOffset(0);
-                }}
-                className={filterSelectClass}
-                aria-label="Фильтр по источнику"
-              >
-                {SOURCE_FILTER_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-              <select
-                value={pageFilter}
-                onChange={(event) => {
-                  setPageFilter(event.target.value);
-                  setLedgerOffset(0);
-                }}
-                className={filterSelectClass}
-                aria-label="Фильтр по странице"
-              >
-                <option value="">Все страницы</option>
-                {pageOptions.map((row) => (
-                  <option key={row.pageId} value={String(row.pageId)}>{row.pageLabel}</option>
-                ))}
-              </select>
-              {/* Exact-match filter fed by a datalist of real operation ids, so a
-                  partial guess resolves to a known value instead of zero rows. */}
-              <input
-                value={operationFilter}
-                onChange={(event) => {
-                  setOperationFilter(event.target.value);
-                  setLedgerOffset(0);
-                }}
-                list={operationListId}
-                placeholder="операция"
-                className={`${filterSelectClass} w-36`}
-                aria-label="Фильтр по операции"
-              />
-              <datalist id={operationListId}>
-                {operationOptions.map((operation) => (
-                  <option key={operation} value={operation} />
-                ))}
-              </datalist>
-              <input
-                type="date"
-                value={fromFilter}
-                onChange={(event) => {
-                  setFromFilter(event.target.value);
-                  setLedgerOffset(0);
-                }}
-                className={filterSelectClass}
-                aria-label="Дата с (UTC)"
-                title="Дата с (UTC)"
-              />
-              <input
-                type="date"
-                value={toFilter}
-                onChange={(event) => {
-                  setToFilter(event.target.value);
-                  setLedgerOffset(0);
-                }}
-                className={filterSelectClass}
-                aria-label="Дата по (UTC)"
-                title="Дата по (UTC)"
-              />
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover"
-                  title="Сбросить все фильтры"
-                >
-                  Сбросить фильтры
-                </button>
-              )}
+          <section ref={ledgerRef} className="card scroll-mt-20">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Журнал операций</h2>
+                <p className="card-description">Каждое движение кредитов. Время — UTC.</p>
+              </div>
               {/* A real CSV export of every row matching the current filters (not
                   just the visible page) for accounting. */}
               <button
                 type="button"
                 onClick={handleExport}
                 disabled={exporting || (ledger?.total ?? 0) === 0}
-                className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-sm"
                 title="Скачать все строки по текущим фильтрам в CSV"
               >
                 {exporting ? "Экспортируем…" : "Экспорт CSV"}
               </button>
+            </div>
+            <div className="space-y-3 border-b border-border px-5 py-4">
+              <div className="flex flex-wrap items-end gap-3">
+                {filterField("Источник", (
+                  <select
+                    value={sourceFilter}
+                    onChange={(event) => {
+                      setSourceFilter(event.target.value);
+                      setLedgerOffset(0);
+                    }}
+                    className={selectClass}
+                    aria-label="Фильтр по источнику"
+                  >
+                    {SOURCE_FILTER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                ))}
+                {filterField("Страница", (
+                  <select
+                    value={pageFilter}
+                    onChange={(event) => {
+                      setPageFilter(event.target.value);
+                      setLedgerOffset(0);
+                    }}
+                    className={selectClass}
+                    aria-label="Фильтр по странице"
+                  >
+                    <option value="">Все страницы</option>
+                    {pageOptions.map((row) => (
+                      <option key={row.pageId} value={String(row.pageId)}>{row.pageLabel}</option>
+                    ))}
+                  </select>
+                ))}
+                {filterField("С", (
+                  <input
+                    type="date"
+                    value={fromFilter}
+                    onChange={(event) => {
+                      setFromFilter(event.target.value);
+                      setLedgerOffset(0);
+                    }}
+                    className={inputClass}
+                    aria-label="Дата с (UTC)"
+                  />
+                ))}
+                {filterField("По", (
+                  <input
+                    type="date"
+                    value={toFilter}
+                    onChange={(event) => {
+                      setToFilter(event.target.value);
+                      setLedgerOffset(0);
+                    }}
+                    className={inputClass}
+                    aria-label="Дата по (UTC)"
+                  />
+                ))}
+                {hasActiveFilters && (
+                  <button type="button" onClick={clearFilters} className="btn btn-ghost btn-sm" title="Сбросить все фильтры">
+                    Сбросить фильтры
+                  </button>
+                )}
+              </div>
+              {operationFilter.trim() && (
+                <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+                  Активность:
+                  <span className="badge badge-accent" title={operationFilter}>
+                    {operationLabel(operationFilter.trim())}
+                    <button
+                      type="button"
+                      aria-label="Убрать фильтр по активности"
+                      onClick={() => {
+                        setOperationFilter("");
+                        setLedgerOffset(0);
+                      }}
+                      className="ml-0.5 font-semibold"
+                    >
+                      ×
+                    </button>
+                  </span>
+                </div>
+              )}
+              <details className="help">
+                <summary>Расширенный фильтр</summary>
+                <div className="help-body max-w-none">
+                  <div className="flex flex-wrap items-end gap-4">
+                    {/* Exact-match filter fed by a datalist of real operation ids, so a
+                        partial guess resolves to a known value instead of zero rows. */}
+                    {filterField("Код операции", (
+                      <input
+                        value={operationFilter}
+                        onChange={(event) => {
+                          setOperationFilter(event.target.value);
+                          setLedgerOffset(0);
+                        }}
+                        list={operationListId}
+                        placeholder="например, ofapi_chats"
+                        className={`${inputClass} w-56`}
+                        aria-label="Фильтр по операции"
+                      />
+                    ))}
+                    <datalist id={operationListId}>
+                      {operationOptions.map((operation) => (
+                        <option key={operation} value={operation} />
+                      ))}
+                    </datalist>
+                    <label className="flex min-h-[34px] items-center gap-2 text-[13px] text-text-primary">
+                      <input type="checkbox" checked={showHttp} onChange={(event) => setShowHttp(event.target.checked)} />
+                      Показывать код ответа (HTTP)
+                    </label>
+                  </div>
+                </div>
+              </details>
               {exportError && (
-                <span role="alert" className="text-[12px] font-medium text-red-700">
-                  Экспорт не удался — повторите
-                </span>
+                <p role="alert" className="text-[13px] font-medium text-danger">
+                  Экспорт не удался — повторите.
+                </p>
               )}
               {exportTruncated && !exportError && (
-                <span role="alert" className="text-[12px] font-medium text-amber-700">
-                  Экспорт обрезан до 50 000 строк — сузьте фильтры, чтобы выгрузить всё
-                </span>
+                <p role="alert" className="text-[13px] font-medium text-warning-dark">
+                  Экспорт обрезан до 50 000 строк — сузьте фильтры, чтобы выгрузить всё.
+                </p>
               )}
             </div>
             {ledgerQuery.isLoading ? (
-              <TableSkeleton rows={8} columns={8} />
+              <TableSkeleton rows={8} columns={7} />
             ) : ledgerQuery.isError ? (
               <div className="p-4">
                 <StatusPanel
                   tone="error"
                   title="Не удалось загрузить журнал"
-                  description="Эндпоинт журнала вернул ошибку. Фильтры сохранены."
+                  description="Сервер не ответил. Фильтры сохранены."
                   action={<RetryButton onClick={() => ledgerQuery.refetch()} />}
                 />
               </div>
@@ -1728,22 +1703,22 @@ export function OfapiCreditsPage() {
             ) : (
               <>
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
+                  <table className="data-table">
                     <thead>
-                      <tr className="bg-hover-alt">
-                        <th className={`${thClass} w-8`}><span className="sr-only">Развернуть детали</span></th>
-                        <th className={thClass}>Время (UTC)</th>
-                        <th className={thClass}>Источник</th>
-                        <th className={thClass}>Активность</th>
-                        <th className={thClass}>Страница</th>
-                        <th className={`${thClass} text-right`}>Кредиты</th>
-                        <th className={`${thClass} text-right`}>Баланс после</th>
-                        <th className={`${thClass} text-right`}>HTTP</th>
+                      <tr>
+                        <th className="relative w-8"><span className="sr-only">Развернуть детали</span></th>
+                        <th>Время (UTC)</th>
+                        <th>Источник</th>
+                        <th>Активность</th>
+                        <th>Страница</th>
+                        <th className="num">Кредиты</th>
+                        <th className="num">Баланс после</th>
+                        {showHttp && <th className="num">HTTP</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {(ledger?.rows ?? []).map((row) => (
-                        <LedgerRow key={row.id} row={row} />
+                        <LedgerRow key={row.id} row={row} showHttp={showHttp} />
                       ))}
                     </tbody>
                   </table>
@@ -1754,8 +1729,6 @@ export function OfapiCreditsPage() {
                   total={ledger?.total ?? 0}
                   onPageChange={setLedgerOffset}
                   emptyLabel="0 записей"
-                  previousLabel="Назад"
-                  nextLabel="Вперёд"
                   formatRange={(start, end, total) => `${start}–${end} из ${fmtCredits(total)}`}
                 />
               </>

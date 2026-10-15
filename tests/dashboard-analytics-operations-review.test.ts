@@ -28,7 +28,7 @@ vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => (
 vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiVendorEvidence.tsx", () => ({ OfapiVendorEvidence: () => null }));
 
-import { UsagePage, otherUsageRequests } from "../apps/dashboard/src/pages/UsagePage.tsx";
+import { UsagePage } from "../apps/dashboard/src/pages/UsagePage.tsx";
 import { OfapiMediaPage } from "../apps/dashboard/src/pages/OfapiMediaPage.tsx";
 import { OfapiExportsPage, exportWindowError, exportQuoteReviewSnapshot, UnconfirmedExportQuoteNotice } from "../apps/dashboard/src/pages/OfapiExportsPage.tsx";
 import { OfapiMarketing } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
@@ -61,41 +61,43 @@ beforeEach(() => {
 });
 
 describe("analytics and operations page review", () => {
-  it("reconciles additional AI features through one column and offers keyboard details", () => {
+  it("reconciles additional AI features in the person's details and offers keyboard details", () => {
     mocks.usage.mockReturnValue(query(usage));
     const html = render(UsagePage);
-    expect(otherUsageRequests(usage.rows[0]!)).toBe(3);
-    expect(html).toContain(">Other</th>");
-    expect(html).toContain(">3</td>");
-    expect(html).not.toContain(">Voice script</th>");
+    // No column per feature: every feature, the ones outside the usual set
+    // included, is listed with its count in the expandable details.
+    expect(html).not.toContain(">Голосовой сценарий</th>");
+    expect(html).toContain("Голосовой сценарий");
+    expect(html).toContain("3 запроса");
+    expect(html).toContain("7 запросов");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("overflow-x-auto");
-    expect(html).toContain("including failed and cancelled requests");
+    expect(html).toContain("включая неудачные и отменённые");
   });
   it("keeps a failed usage refresh distinct from losing the saved report", () => {
     mocks.usage.mockReturnValue(query(usage, true));
     const html = render(UsagePage);
     expect(html).toContain("Alex");
-    expect(html).toContain("previous report is still shown");
-    expect(html).not.toContain("Usage failed to load");
+    expect(html).toContain("показан прежний отчёт");
+    expect(html).not.toContain("Не удалось загрузить расходы на AI");
   });
   it("keeps loading media distinct from an empty vault and avoids a 1–0 range", () => {
     const html = render(OfapiMediaPage);
-    expect(html).toContain("Loading saved media");
-    expect(html).not.toContain("No upload tasks");
-    expect(html).not.toContain("never collected");
+    expect(html).toContain("Загружаем медиа");
+    expect(html).not.toContain("Загрузок для этой страницы пока нет");
+    expect(html).not.toContain("Ещё не собиралась");
     expect(html).not.toContain("1–0");
-    expect(html).toContain("Item count unavailable");
+    expect(html).toContain("Количество неизвестно");
   });
   it("shows zero media only after a successful saved response", () => {
     mocks.media.mockReturnValue(query({ sources: [], uploads: [], media: [], totalMedia: 0, inventory: { state: "unknown", note: "Not collected" } }));
     const html = render(OfapiMediaPage);
-    expect(html).toContain("0 items");
-    expect(html).toContain("does not establish that the provider vault is empty");
+    expect(html).toContain("0 файлов");
+    expect(html).toContain("Это не значит, что медиатека в OnlyFans пуста");
   });
   it("does not turn failed exports or marketing requests into empty inventories", () => {
     mocks.exports.mockReturnValue(query(undefined, true));
-    expect(render(OfapiExportsPage)).not.toContain("No saved export jobs");
+    expect(render(OfapiExportsPage)).not.toContain("Выгрузок для этой страницы пока нет");
     mocks.marketing.mockReturnValue(query(undefined, true));
     const html = render(OfapiMarketing);
     expect(html).toContain("Read failed");
@@ -105,7 +107,7 @@ describe("analytics and operations page review", () => {
     mocks.collection.mockReturnValue(query());
     const html = render(OfapiActions);
     expect(html).toContain("Загружаем привязанные аккаунты");
-    expect(html).not.toContain("Для работы нужна страница");
+    expect(html).not.toContain("Нет страниц с привязанным OnlyFans API");
   });
   it("enforces closed historical export days and the server's 366-day limit", () => {
     expect(exportWindowError("2026-09-10", "2026-09-10", "2026-09-11")).toBeNull();
@@ -115,13 +117,13 @@ describe("analytics and operations page review", () => {
   it("requires a new explicit intention after an unconfirmed quote, showing the frozen scope", () => {
     const quote = { pageLabel: "Reviewed page", body: { pageId: 1, profile: "fans" as const, startDate: "2026-09-01T00:00:00Z", endDate: "2026-09-10T23:59:59Z", maxCredits: 10, maxRows: 1000, maxBytes: 4194304, fanType: "all" as const, expectedPolicyRevision: 1, dryRun: true } };
     const html = renderToStaticMarkup(createElement(UnconfirmedExportQuoteNotice, { quote, reviewSnapshot: "1:200", onReadJobs: vi.fn(), onStartNew: vi.fn() }));
-    expect(html).toContain("Quote creation outcome is unknown");
+    expect(html).toContain("Неизвестно, создан ли запрос цены");
     expect(html).toContain("Reviewed page");
-    expect(html).toContain("2026-09-01");
-    expect(html).toContain("may already have created");
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Prepare a separate new quote<\/button>/);
-    expect(html).toContain("Read and show jobs for this page");
-    expect(html).not.toContain("Create quote</button>");
+    expect(html).toContain("01.09.2026");
+    expect(html).toContain("мог уже создать");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Подготовить новый запрос цены<\/button>/);
+    expect(html).toContain("Прочитать выгрузки этой страницы");
+    expect(html).not.toContain("Запросить цену</button>");
   });
   it("requires a successful original-page read after an unknown quote, even when jobs are cached", () => {
     const cached = { pageId: 1, dataUpdatedAt: 100, hasData: true, isError: false, isFetching: false };
@@ -154,7 +156,7 @@ describe("analytics and operations page review", () => {
     expect(html).toContain("Нет данных");
     expect(html).not.toContain(">ROI<");
     expect(html).not.toContain("0.0×");
-    expect(html).toContain("не показывает, сколько выручки принесли запросы OFAPI");
+    expect(html).toContain("не показывает, сколько выручки принесли запросы к OnlyFans API");
     expect(html).toContain("Остальные ограничения расхода продолжают действовать");
   });
   it("retains the last credit summary with a clear refresh-failure label", () => {

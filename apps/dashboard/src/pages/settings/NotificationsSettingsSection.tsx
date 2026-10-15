@@ -5,12 +5,9 @@ import { NotificationsSettingsTab } from "../notifications/NotificationsSettings
  *  Incidents themselves are work, not settings: they live in «Требует внимания». */
 export function NotificationsSettingsSection() {
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <NotificationsSettingsTab />
-      <section aria-labelledby="daily-report-title">
-        <h3 id="daily-report-title" className="section-title mb-3">Ежедневный отчёт</h3>
-        <NotificationsReportsTab />
-      </section>
+      <NotificationsReportsTab />
     </div>
   );
 }
