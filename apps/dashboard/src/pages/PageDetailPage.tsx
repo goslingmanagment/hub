@@ -189,7 +189,7 @@ export function PageDetailPage() {
               {revenueReady ? formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0) : "—"}
             </div>
             {selectedPeriod !== "all" && (
-              <div className="stat-meta flex items-center gap-1.5">
+              <div className="stat-meta flex flex-wrap items-center gap-x-1.5">
                 <DeltaIndicator pct={selectedRevenue?.comparison?.deltaPct ?? null} />
                 <span>к прошлому периоду</span>
               </div>

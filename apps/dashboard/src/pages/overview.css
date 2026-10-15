@@ -162,6 +162,7 @@
   @media (max-width: 767px) {
     .ov-table th,
     .ov-table td { padding-left: 10px; padding-right: 10px; }
+    .ov-table th,
     .ov-table td:first-child { white-space: normal; }
     .ov-table .ov-delta { flex-direction: column; align-items: flex-end; }
     .ov-model-meta { display: block; margin-left: 0; }
