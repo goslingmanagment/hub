@@ -2587,7 +2587,11 @@ verify_candidate_lifecycle_inventory() {
   local candidate_compose
   local result
   candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
-  result="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node apps/runtime/dist/startup.js verify-desktop-lifecycle-v2-inventory")" \
+  # One-off containers run as `worker`: its image, env file and volumes are
+  # the api's, but it holds no fixed address in pb-control, which the running
+  # api already takes (Project Browser PR 3) — `run api` would fail with
+  # "Address already in use".
+  result="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps worker node apps/runtime/dist/startup.js verify-desktop-lifecycle-v2-inventory")" \
     || fail "Desktop lifecycle v2 production inventory verification failed"
   node - "$result" <<'NODE' \
     || fail "Desktop lifecycle v2 inventory verifier returned an unexpected result"
@@ -2667,7 +2671,8 @@ run_pre_recreate_safe_migrations() {
   log "Applying rollback-compatible migrations through 0097 while the current API remains online"
   # This foreground one-shot owns the migration advisory lock. Deployment
   # cannot enter recreate/rollback handling until it exits and releases it.
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql" \
+  # As `worker`, not `api`: the running api holds its fixed pb-control address.
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps worker node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql" \
     || fail "Pre-recreate migration through 0097 failed; current API was left running"
 }
 
