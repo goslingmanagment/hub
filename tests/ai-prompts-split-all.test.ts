@@ -418,11 +418,11 @@ describe("output structure of a finished Split generation", () => {
     expect(describeSplitOutput("<think>x</think>a [NEXT] b [VARIANT] c [NEXT] d", 1).ok).toBe(false);
 
     // <thinking> is the tag Opus 5.5 leaked in production; <reasoning> and an
-    // unclosed block are reasoning too.
+    // unclosed bare tag on its own line are reasoning too.
     const thinking = "<thinking>a [VARIANT] b [NEXT] c</thinking>one [NEXT] two [VARIANT] three [NEXT] four [VARIANT] five [NEXT] six";
     expect(describeSplitOutput(thinking, 3)).toEqual({ variantsRequested: 3, partsPerVariant: [2, 2, 2], ok: true });
     expect(describeSplitOutput("<reasoning>x [NEXT] y</reasoning>one [NEXT] two", 1).partsPerVariant).toEqual([2]);
-    expect(describeSplitOutput("one [NEXT] two <thinking>x [VARIANT] y [NEXT] z", 1))
+    expect(describeSplitOutput("one [NEXT] two\n<thinking>x [VARIANT] y [NEXT] z", 1))
       .toEqual({ variantsRequested: 1, partsPerVariant: [2], ok: true });
   });
 
@@ -557,6 +557,9 @@ describe("output structure of a finished Coach generation with Split", () => {
     const leaked = `<think>\n\`\`\`draft\nx [NEXT] y [NEXT] z\n\`\`\`\nor [NEXT] and an open \`\`\`draft\n</think>\n${answer("a [NEXT] b")}`;
     expect(describeCoachSplitOutput(leaked, null)).toEqual(clean(null, [2], true));
     expect(describeCoachSplitOutput(leaked.replace(/think>/g, "thinking>"), null)).toEqual(clean(null, [2], true));
+    // A tag the advice only mentions, mid-line and never closed, cuts nothing.
+    const mention = ["```draft\na [NEXT] b\n```", "He wrote <thinking> of you, so play along.", "```draft\nc [NEXT] d\n```"].join("\n\n");
+    expect(describeCoachSplitOutput(mention, null)).toEqual(clean(null, [2, 2], true));
   });
 
   it("records counts and never the text", () => {

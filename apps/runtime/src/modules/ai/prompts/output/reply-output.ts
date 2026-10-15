@@ -39,9 +39,12 @@ const META_LEAK_PATTERNS: readonly RegExp[] = [
 // is how Opus 5.5 leaked its reasoning into a fast reply on 2026-10-09.
 const REASONING_BLOCK = /<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 // A block that never closes (the model forgot the close tag or ran out of
-// tokens): everything from its opener on is reasoning. It runs after the
-// fenced blocks are gone, so an opener quoted inside one cuts nothing.
-const OPEN_REASONING_BLOCK = /<(?:think|thinking|reasoning)\b[^>]*>[\s\S]*$/i;
+// tokens): everything from its opener on is reasoning. Only a bare tag that
+// opens the text or its own line counts, so a reply that quotes one ("what
+// does `<think>` mean") or plays with one ("<thinking of you>") stays whole.
+// It runs after the fenced blocks are gone, so an opener quoted inside one
+// cuts nothing.
+const OPEN_REASONING_BLOCK = /(?:^|\n)\s*<(?:think|thinking|reasoning)>[\s\S]*$/i;
 
 // Exported for output/split-structure.ts (chat-extension H-10a): a reader of the
 // final text must drop reasoning blocks before it looks for delimiter markers,

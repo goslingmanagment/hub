@@ -117,22 +117,31 @@ describe('reply output normalization', () => {
     ).toEqual(['hey you', 'sup stranger']);
   });
 
-  it('drops everything from a reasoning block that never closes', () => {
+  it('drops everything from a bare tag that never closes and opens the text or a line', () => {
+    expect(normalizeReplyParts('<thinking>plan without close')).toEqual([]);
+    expect(normalizeReplyParts('hey\n<thinking>plan')).toEqual(['hey']);
     expect(normalizeReplyParts('<thinking>he said no dashes so [NEXT] maybe')).toEqual([]);
+    // The part the tag opens is dropped when each part is sanitized.
     expect(normalizeReplyParts('hey you[NEXT]<reasoning>now the follow-up')).toEqual(['hey you']);
     // A close tag of another name does not end the block: nothing after it is a reply.
     expect(normalizeReplyParts('<think>plan</thinking>hey you')).toEqual([]);
-    // An opener quoted inside a fenced block goes with the block.
-    expect(normalizeReplyParts('```thinking\nwrap it in <think>?\n```\nhey you')).toEqual([
+    // An opener on its own line inside a fenced block goes with the block.
+    expect(normalizeReplyParts('```thinking\nopen with\n<think>\n```\nhey you')).toEqual([
       'hey you',
     ]);
   });
 
-  it('keeps replies that only mention thinking', () => {
+  it('keeps replies that only mention thinking or quote a reasoning tag', () => {
     expect(normalizeReplyParts("can't stop thinking about you <3")).toEqual([
       "can't stop thinking about you <3",
     ]);
     expect(normalizeReplyParts('i think so[NEXT]<thinkpad> lol')).toEqual(['i think so', '<thinkpad> lol']);
+    expect(normalizeReplyParts('omg <thinking of you> all day[NEXT]come here')).toEqual([
+      'omg <thinking of you> all day',
+      'come here',
+    ]);
+    expect(normalizeReplyParts('what does `<think>` mean lol')).toEqual(['what does `<think>` mean lol']);
+    expect(normalizeReplyParts('<think-tank> lol')).toEqual(['<think-tank> lol']);
   });
 
   it('filters every bracket-garbage token', () => {
