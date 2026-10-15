@@ -1,0 +1,190 @@
+# The stand of plan §5, stage 2 (stage 3, PR 19): the failure scenarios and
+# the load test against the production page image and operator, under the
+# conditions of the owner's decision №14. stand.sh is the only way it is
+# started, and it writes the variables below; the page containers are the
+# production file docker-compose.page-browser.yml with page.stand.yml over
+# it, one Compose project each.
+#
+# - Its own Compose project (pb-suite-<stand>) and its own networks, both
+#   internal and isolated: nothing on them has a route out of the host or to
+#   the host itself, nothing is shared with Hub's networks. The stand's
+#   Fansly is its only "internet", and it connects nowhere else.
+# - Its own Postgres: "the database is unavailable" stops only this one.
+# - Every container has CPU, memory and process limits and no swap; none
+#   restarts by itself — after a reboot the stand stays down.
+# - The runner reaches Docker only through docker-proxy.ts: the stand's own
+#   containers, a short list of calls.
+# - The buffer disk is filled only on the disk page's own fixed-size tmpfs
+#   volume, never on a host disk.
+name: ${PB_SUITE_PROJECT:?the stand's project}
+
+x-stand: &stand
+  restart: "no"
+  labels:
+    agency.stand: pb-suite
+    agency.stand.name: ${PB_SUITE_PROJECT}
+  security_opt:
+    - no-new-privileges:true
+
+# Both networks are internal AND isolated (Docker's gateway mode): an
+# internal network alone still gives its bridge an address on the host, and a
+# container reaches whatever the host listens on at 0.0.0.0 through it — on
+# the production server that is sshd and Hub's Caddy. Isolated, the bridge
+# has no address: nothing of the host is reachable (runner/isolation.ts
+# checks it on every `stand.sh up`). Every container has a fixed address
+# above .1, where the gateway would have been.
+x-isolated: &isolated
+  internal: true
+  enable_ipv6: false
+  labels:
+    agency.stand: pb-suite
+  driver_opts:
+    com.docker.network.bridge.gateway_mode_ipv4: isolated
+    com.docker.network.bridge.gateway_mode_ipv6: isolated
+
+networks:
+  control:
+    <<: *isolated
+    ipam:
+      config:
+        - subnet: ${PB_SUITE_NET_CONTROL:?}.0/24
+  # Production's pb-egress keeps its containers apart (enable_icc=false)
+  # and has a gateway to the pages' SOCKS5s; here the SOCKS5 is the stand's
+  # Fansly on the same network, so its containers do talk.
+  egress:
+    <<: *isolated
+    ipam:
+      config:
+        - subnet: ${PB_SUITE_NET_EGRESS:?}.0/24
+
+volumes:
+  ca:
+    labels:
+      agency.stand: pb-suite
+  private:
+    labels:
+      agency.stand: pb-suite
+  tools:
+    labels:
+      agency.stand: pb-suite
+  proxy:
+    labels:
+      agency.stand: pb-suite
+  pgdata:
+    labels:
+      agency.stand: pb-suite
+
+secrets:
+  stand_socks_password:
+    file: ${PB_SUITE_WORK:?}/secrets/stand_socks_password
+
+services:
+  postgres:
+    <<: *stand
+    image: postgres:16
+    networks:
+      control:
+        ipv4_address: ${PB_SUITE_NET_CONTROL}.5
+    # The stand's database trusts its internal network: no password exists.
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  fansly:
+    <<: *stand
+    image: ${PB_SUITE_TOOLS_IMAGE:?}
+    networks:
+      control:
+        ipv4_address: ${PB_SUITE_NET_CONTROL}.10
+      egress:
+        ipv4_address: ${PB_SUITE_NET_EGRESS}.10
+    cap_drop: [ALL]
+    volumes:
+      - ${PB_SUITE_SRC:?the apps/page-browser tree}:/pb:ro
+      - ca:/stand/ca
+      - private:/stand/private
+      - tools:/stand/tools
+    secrets:
+      - stand_socks_password
+    environment:
+      STAND_CONTROL_IP: ${PB_SUITE_NET_CONTROL}.10
+      STAND_EGRESS_IP: ${PB_SUITE_NET_EGRESS}.10
+      STAND_SOCKS_PASSWORD_FILE: /run/secrets/stand_socks_password
+    command: ["sh", "-c", "cp /bin/busybox /stand/tools/busybox && exec node --no-warnings /pb/stand/fansly/main.ts"]
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://${PB_SUITE_NET_CONTROL}.10:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  docker-proxy:
+    <<: *stand
+    image: ${PB_SUITE_TOOLS_IMAGE}
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - proxy:/proxy
+      - ${PB_SUITE_SRC}:/pb:ro
+    environment:
+      PROXY_SOCKET: /proxy/docker.sock
+      PROXY_CONTAINERS: ${PB_SUITE_PROXY_CONTAINERS:?}
+    command: ["node", "--no-warnings", "/pb/stand/docker-proxy.ts"]
+    cpus: 0.1
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
+
+  runner:
+    <<: *stand
+    image: ${PB_SUITE_TOOLS_IMAGE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      fansly:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    networks:
+      control:
+        ipv4_address: ${PB_SUITE_NET_CONTROL}.20
+      egress:
+        ipv4_address: ${PB_SUITE_NET_EGRESS}.20
+    cap_drop: [ALL]
+    working_dir: /pb
+    volumes:
+      - ${PB_SUITE_SRC}:/pb:ro
+      - proxy:/proxy
+      - ca:/stand/ca:ro
+      - ${PB_SUITE_WORK}:/stand/work:ro
+      - ${PB_SUITE_WORK}/results:/stand/results
+    environment:
+      STAND_WORK: /stand/work
+      STAND_RESULTS: /stand/results
+      STAND_CA_FILE: /stand/ca/ca.crt
+      STAND_PG_HOST: ${PB_SUITE_NET_CONTROL}.5
+      STAND_FANSLY_CONTROL: ${PB_SUITE_NET_CONTROL}.10
+      STAND_DOCKER_SOCK: /proxy/docker.sock
+      STAND_POSTGRES_CONTAINER: ${PB_SUITE_PROJECT}-postgres-1
+      PB_SUITE_REV: ${PB_SUITE_REV:-unknown}
+      PB_SUITE_IMAGE: ${PB_SUITE_PAGE_IMAGE:-unknown}
+    command: ["sleep", "infinity"]
+    cpus: 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
