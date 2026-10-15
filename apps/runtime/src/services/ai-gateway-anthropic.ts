@@ -143,7 +143,7 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // 'max_tokens' → the voice-notes admission guard rejects the source
   // unrecoverably. The non-adaptive FEATURE_MAX_TOKENS cap stays 400.
   "voice-script": 8000,
-  // Thinking headroom over the visible cap (low effort on Sonnet 5.5 by
+  // Thinking headroom over the visible cap (high effort on Opus 5.5 by
   // default), sized for merge mode's quotes like the visible cap above: a
   // truncated note is an error for the client, never a result.
   "fan-notes-fill": 16000,

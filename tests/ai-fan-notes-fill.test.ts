@@ -573,8 +573,8 @@ describe("fan-notes-fill on the gateway", () => {
     platform: "fansly",
     platformUserId: "fan-1",
     conversationId: "group-1",
-    model: "anthropic:claude-sonnet-5-5",
-    reasoningEffort: "low",
+    model: "anthropic:claude-opus-5-5",
+    reasoningEffort: "high",
     isRegeneration: false,
     prompt: {
       systemBlocks: [{ text: "safety", cache: "none" }, { text: "persona", cache: "none" }],
@@ -583,13 +583,13 @@ describe("fan-notes-fill on the gateway", () => {
     ...overrides,
   });
 
-  it("runs the Sonnet 5.5 default with low adaptive thinking, room for it, and no sampling parameter", () => {
+  it("runs the Opus 5.5 default with high adaptive thinking, room for it, and no sampling parameter", () => {
     const built = buildAnthropicGatewayStreamRequest(body());
     expect(built).toMatchObject({
-      model: "claude-sonnet-5-5",
+      model: "claude-opus-5-5",
       max_tokens: 16000,
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "low" },
+      output_config: { effort: "high" },
     });
     expect(built).not.toHaveProperty("temperature");
   });
