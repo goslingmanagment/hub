@@ -89,6 +89,10 @@ export interface AppContext {
    *  services behind a local SOCKS5, loopback proxies let through. Absent:
    *  the real services, public proxies only. */
   pageBrowserProxyCheck?: ProxyCheckOverrides | undefined;
+  /** The clock of the AI prompts' `Now:` line (modules/ai/features), in unix
+   *  ms. Absent: the wall clock. Tests pin it, so two generations a minute
+   *  apart still build one prompt. */
+  aiPromptClock?: (() => number) | undefined;
   /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
    *  captures a page through it any more (step 4): it is this process's holder
    *  identity — for the journal of the identity check without a page, the

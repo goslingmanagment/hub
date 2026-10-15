@@ -105,7 +105,7 @@ describe("the owner's aiTranscriptDeepMaxRows", () => {
     // Raising it costs money per Recap: the console asks before it saves, and
     // the warning names the price at each step.
     const warning = getDescriptor("aiTranscriptDeepMaxRows")?.costWarning ?? "";
-    for (const price of ["$0.42", "$0.67", "$1.00"]) {
+    for (const price of ["$0.41", "$0.66", "$0.99"]) {
       expect(warning).toContain(price);
     }
   });
@@ -348,9 +348,10 @@ describe("X34: a 5000-message full Recap on the Recap's model", () => {
       const chars = promptChars(body);
       const answer = buildAnthropicGatewayStreamRequest(body).max_tokens;
       expect(answer, feature).toBe(feature === "fan-summary" ? 24_000 : 16_000);
-      // About 460k characters: the system part and the 5000 lines.
-      expect(chars, feature).toBeGreaterThan(455_000);
-      expect(chars, feature).toBeLessThan(465_000);
+      // About 455k characters: the system part (the analysis preamble alone
+      // since the Lora persona audit, 2026-10-16) and the 5000 lines.
+      expect(chars, feature).toBeGreaterThan(450_000);
+      expect(chars, feature).toBeLessThan(460_000);
       // At a ratio below any production Recap's, a third of the window.
       expect(Math.ceil(chars / PESSIMISTIC_CHARS_PER_TOKEN) + answer, feature).toBeLessThan(MODEL_WINDOW_TOKENS / 3);
       // And with no tokenizer assumed at all: one token for every character.
@@ -378,7 +379,7 @@ describe("X34: a 5000-message full Recap on the Recap's model", () => {
       cacheReadTokens: 0,
     }).costMicroUsd / 1_000_000;
     const warning = getDescriptor("aiTranscriptDeepMaxRows")?.costWarning ?? "";
-    for (const [count, named] of [[1500, 0.42], [3000, 0.67], [5000, 1.0]] as const) {
+    for (const [count, named] of [[1500, 0.41], [3000, 0.66], [5000, 0.99]] as const) {
       expect(Math.abs(priceOf(count) - named), `${count}: ${priceOf(count)}`).toBeLessThan(0.01);
       expect(warning).toContain(`$${named.toFixed(2)}`);
     }

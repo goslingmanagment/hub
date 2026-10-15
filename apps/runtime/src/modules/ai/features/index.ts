@@ -38,6 +38,7 @@ import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
 import { isPageAllowlisted } from "@agency_hub_core/shared";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
+import { personaLocalTime } from "../persona-local-time.ts";
 import {
   applyOnlyFansMediaNotes,
   listOnlyFansMediaNoteItems,
@@ -101,6 +102,7 @@ import {
   type OperationFeature,
   type Personality,
   type PingSegment,
+  type PromptClock,
   type RecapAttach,
   type ReplyMode,
   type ReplyTone,
@@ -198,12 +200,28 @@ export interface AiFeatureRequestBody {
     /** Whole days since the fan's last text message (same clock as pingSegment). */
     fanSilenceDays?: number;
     transcriptCoverage?: "full-history" | "window";
+    /** The clock of the transcript's times and day lines: "utc" from a client
+     *  that writes them in UTC (fansly-chat E168); absent = the device's clock. */
+    transcriptClock?: "utc";
     /** AI media describer: the window's numbered describable media. */
     media?: {
       groupRef: string;
       items: MediaNoteItem[];
     };
   };
+}
+
+/** Whose clock the transcript's times are in, for the prompt's `Now:` line.
+ * The hub renders its own transcript in UTC with day lines; a client's text
+ * is UTC when the client says so (`clientContext.transcriptClock`, fansly-chat
+ * E168), else in the clock of the device that wrote it. */
+export function promptTranscriptClock(
+  body: Pick<AiFeatureRequestBody, "clientContext">,
+): PromptClock["transcript"] {
+  if (!body.clientContext) {
+    return "utc";
+  }
+  return body.clientContext.transcriptClock === "utc" ? "utc" : "client";
 }
 
 /** Decision 379: one hi-greeting feature with an explicit variant count instead
@@ -963,6 +981,7 @@ export async function prepareAiFeatureStream(
           fanRef,
           platform: stored.page.platform,
           now: Date.now(),
+          feature,
         });
       }
     } catch (error) {
@@ -1075,6 +1094,13 @@ export async function prepareAiFeatureStream(
     && options?.capabilities?.has("split-all-v1") === true
     && await isSplitAllOnForPage(app, pageId);
   const greetingVariantCount = feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined;
+  // One clock for every build of this prompt: the `Now:` line of the uncached
+  // task block.
+  const clock: PromptClock = {
+    nowMs: app.aiPromptClock?.() ?? Date.now(),
+    transcript: promptTranscriptClock(body),
+    modelLocal: personaLocalTime(persona.personality.id),
+  };
 
   const buildFeaturePrompt = (transcriptCoverage: HubTranscriptCoverage | undefined) => buildPrompt({
     feature,
@@ -1108,6 +1134,7 @@ export async function prepareAiFeatureStream(
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
+    clock,
   });
   let prompt = buildFeaturePrompt(hubTranscriptCoverage);
   if (hubTranscriptCoverageManifest !== undefined) {

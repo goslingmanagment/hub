@@ -75,6 +75,20 @@ export interface RecapAttach {
 /** How many greeting variants one hi-greeting generation returns. */
 export type GreetingVariantCount = 1 | 3;
 
+/** When the prompt is built, for the {nowLine} slot of the uncached task block. */
+export interface PromptClock {
+  /** Unix ms of the generation. */
+  nowMs: number;
+  /** Whose clock the transcript's times are in: 'utc' when the hub rendered
+   *  it (transcript/format.ts: UTC times and day lines) or a client's text
+   *  says it is UTC (`clientContext.transcriptClock`), 'client' when the
+   *  request carried a client's own text in that device's clock. */
+  transcript: 'utc' | 'client';
+  /** The persona's place and IANA time zone; absent when unknown, and then
+   *  the line names no local time. */
+  modelLocal?: { place: string; timeZone: string } | undefined;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -141,6 +155,12 @@ export interface PromptBuildInput {
    * the merge rules. Absent, the prompt is the released clients' one, byte for
    * byte. Ignored for other features. */
   noteValues?: readonly string[] | undefined;
+  /** The generation's clock: one `Now:` line opening the task of every
+   *  template with a {nowLine} slot. Absent, the slot is empty and the prompt
+   *  is byte-identical to one built before the slot existed. It sits in the
+   *  uncached task block, so a clock that changes every minute never moves a
+   *  cached prefix. */
+  clock?: PromptClock | undefined;
 }
 
 export interface PromptPayload {
@@ -196,6 +216,17 @@ interface PromptFeaturePolicy {
    * nothing back; revisit if Recap leaves Opus 4.6 for a model with a lower
    * cache minimum. */
   promptCache: 'full' | 'static' | 'none';
+  /** How the model persona reaches the system prompt (Lora persona audit,
+   * 2026-10-16). 'self': the reply features write AS the model, so the persona
+   * follows the reply preamble under "## Model Personality". 'reference': the
+   * coach-style analysis features (coach-chat, help-me, chat-review) advise the
+   * chatter and only draft fan messages in her voice, so the persona is labelled
+   * as a voice reference and the assistant stays the coach. 'none': fan-summary
+   * and fan-notes-fill describe the fan and never write as the model; their
+   * templates read no persona, so the system prompt is the preamble alone. The
+   * feature service still resolves the persona for every feature (recaps stay
+   * persona-scoped through personaDefinitionId). */
+  persona: 'self' | 'reference' | 'none';
 }
 
 const REPLY_POLICY: PromptFeaturePolicy = {
@@ -207,18 +238,20 @@ const REPLY_POLICY: PromptFeaturePolicy = {
   supportsReplyTone: false,
   usesPingSegment: false,
   promptCache: 'static',
+  persona: 'self',
 };
 
 const ANALYSIS_POLICY: PromptFeaturePolicy = {
   ...REPLY_POLICY,
   promptMode: 'analysis',
+  persona: 'reference',
 };
 
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
   'help-me': ANALYSIS_POLICY,
-  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none' },
+  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
@@ -227,7 +260,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
   // no other feature writes a cache it could read, so a cache write would only
   // be paid for.
-  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none' },
+  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -288,6 +321,11 @@ Match the fan's energy and push it upward. Keep escalation believable, don't sna
 const TONE_FOOTER =
   'The personality still controls voice, cadence, emoji habits, slang, and message length; only the intent and energy of this reply should shift.';
 
+// fast-reply's {splitReplyInstructions} slot sits in the uncached "## Your
+// Task" block, on its own line right after {toneInstructions} (Lora persona
+// audit, 2026-10-16; it used to land in the context block under the dossier).
+// The 1h static prefix carries no slot, so it is one byte-stable text for every
+// fan, tone and reply mode.
 const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
 - Deliver the reply as separate short, text-like sends, separated by [NEXT].
 - ALWAYS return at least 2 parts: split even a brief reply into a main send plus a natural follow-up.
@@ -336,6 +374,11 @@ const COACH_SPLIT_INSTRUCTIONS = `
 // template's original wording, so a request without Split renders the same
 // prompt as before the slots existed; Split swaps both, so the prompt never
 // asks for parts and for "a one-liner stays a one-liner" at once.
+//
+// Both slots sit in the 1h static prefix: the static Rules, "Sounding human"
+// and examples come before the "## Current Draft" cache anchor (Lora persona
+// audit, 2026-10-16). The texts below are static and chosen by replyMode alone,
+// so the prefix stays fan-agnostic: one cached variant per mode.
 const IMPROVE_SINGLE_RULES = {
   output: `- Output exactly one ready-to-send message.
 - Do NOT use [NEXT].`,
@@ -405,6 +448,11 @@ Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХО
 `;
 
 const SYSTEM_PERSONALITY_ANCHOR = '\n\n## Model Personality\n\n';
+// persona 'reference' (coach-chat, help-me, chat-review): the persona is written
+// to the model herself ("you ARE her"), so its heading tells the coach it is a
+// voice reference for drafted messages, not who the assistant is.
+const SYSTEM_PERSONA_REFERENCE_ANCHOR =
+  '\n\n## Model persona (voice reference for any message you draft; you are the coach, not her)\n\n';
 const TRANSCRIPT_ANCHOR = '## Conversation Transcript';
 const DRAFT_ANCHOR = '## Current Draft';
 // coach-chat only: the dialog scratchpad grows every turn, so it rides its own
@@ -1153,6 +1201,75 @@ function fanSilenceSection(
   return `Fan silence: the fan's last message was ${days} ${days === 1 ? 'day' : 'days'} ago${approx}.`;
 }
 
+// Three letters each, so the line is one length every day: the Coach budget
+// measures it, and a cut that moved by weekday would rewrite the cached
+// transcript block.
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** `UTC+3`, `UTC-4`, `UTC+5:30`, `UTC`. */
+function utcOffsetLabel(offsetMinutes: number): string {
+  if (offsetMinutes === 0) {
+    return 'UTC';
+  }
+  const sign = offsetMinutes > 0 ? '+' : '-';
+  const hours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const minutes = Math.abs(offsetMinutes) % 60;
+  return `UTC${sign}${hours}${minutes === 0 ? '' : `:${pad2(minutes)}`}`;
+}
+
+/** The wall clock of `timeZone` at `nowMs`: weekday, HH:MM and its UTC offset. */
+function zonedClock(nowMs: number, timeZone: string): { weekday: string; time: string; offset: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(nowMs));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((candidate) => candidate.type === type)?.value);
+  const wallMs = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'));
+  const wall = new Date(wallMs);
+  return {
+    weekday: WEEKDAYS[wall.getUTCDay()]!,
+    time: `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`,
+    offset: utcOffsetLabel(Math.round((wallMs - (nowMs - (nowMs % 60_000))) / 60_000)),
+  };
+}
+
+/**
+ * The {nowLine} slot: the date and time of the generation, whose clock the
+ * transcript's times are in, and the persona's own local time when the hub
+ * knows where the persona lives. Without it the model read `[HH:MM]` as its
+ * own time of day and could not tell an old plan from a coming one.
+ */
+function nowLine(clock: PromptClock | undefined): string {
+  if (!clock) {
+    return '';
+  }
+  const now = new Date(clock.nowMs);
+  const date = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
+  const sentences = [
+    `Now: ${WEEKDAYS[now.getUTCDay()]} ${date}, ${pad2(now.getUTCHours())}:${pad2(now.getUTCMinutes())} UTC.`,
+    clock.transcript === 'utc'
+      ? 'Transcript times and day lines are UTC.'
+      : 'Transcript times come from the chatter\'s device clock, which may be in another time zone.',
+  ];
+  if (clock.modelLocal) {
+    const local = zonedClock(clock.nowMs, clock.modelLocal.timeZone);
+    sentences.push(
+      `The model's local time: ${local.weekday} ${local.time} (${clock.modelLocal.place}, ${local.offset}).`,
+    );
+  }
+  return `${sentences.join(' ')}\n`;
+}
+
 /**
  * Untrusted inputs (transcript, draft, spending/subscription data, fan
  * name/bio) are escaped; the personality is trusted model-owner content and is
@@ -1204,6 +1321,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
     noteFieldsList: noteFieldsList(input),
     ...noteFillSlots(input),
+    nowLine: nowLine(input.clock),
   };
 }
 
@@ -1212,12 +1330,18 @@ function buildSystemBlocks(
   personality: Personality,
   platform: PromptPlatform,
 ): PromptBlock[] {
+  const policy = PROMPT_POLICIES[feature];
   const preamble =
-    PROMPT_POLICIES[feature].promptMode === 'reply'
+    policy.promptMode === 'reply'
       ? REPLY_SAFETY_PREAMBLE
       : ANALYSIS_SAFETY_PREAMBLE;
+  if (policy.persona === 'none') {
+    return [{ text: applyPlatformWording(preamble, platform), cache: 'none' }];
+  }
+  const anchor =
+    policy.persona === 'reference' ? SYSTEM_PERSONA_REFERENCE_ANCHOR : SYSTEM_PERSONALITY_ANCHOR;
   return [
-    { text: applyPlatformWording(`${preamble}${SYSTEM_PERSONALITY_ANCHOR}`, platform), cache: 'none' },
+    { text: applyPlatformWording(`${preamble}${anchor}`, platform), cache: 'none' },
     { text: applyPlatformWording(personality.content, platform), cache: '1h' },
   ];
 }

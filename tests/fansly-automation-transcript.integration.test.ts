@@ -296,6 +296,18 @@ function transcriptLines(): string[] {
   return match[1]!.split("\n");
 }
 
+const DAY_LINE = /^--- \d{4}-\d{2}-\d{2} ---$/;
+
+/** The hub's day lines of the prompt's transcript. */
+function dayLines(): string[] {
+  return transcriptLines().filter((line) => DAY_LINE.test(line));
+}
+
+/** The prompt's transcript without the hub's day lines (2.10.1 sends none). */
+function messageLines(): string[] {
+  return transcriptLines().filter((line) => !DAY_LINE.test(line));
+}
+
 /** What the tests read of a stored generation record's params. */
 interface StoredParams {
   summaryMode?: string;
@@ -346,7 +358,12 @@ describe("[AI-033] Hi on Fansly marks welcome and mass messages as 2.10.1 does (
       capabilities: PROOF_LANE,
       body: hiBody(RELEASED_HI_PERSONAL_COUNT, RELEASED_HI_AUTOMATED_IDS, 12),
     }));
-    expect(transcriptLines()).toEqual(HUB_HI_LINES);
+    expect(messageLines()).toEqual(HUB_HI_LINES);
+    // The 13 lines 2.10.1 sends, undated, span nine days.
+    expect(dayLines()).toEqual([
+      "--- 2026-09-23 ---", "--- 2026-09-24 ---", "--- 2026-09-25 ---", "--- 2026-09-28 ---", "--- 2026-10-01 ---",
+      "--- 2026-10-02 ---", "--- 2026-10-10 ---", "--- 2026-10-12 ---", "--- 2026-10-13 ---",
+    ]);
     // The template's explanation rides with the marks.
     expect(userText()).toContain("Model messages marked [Automatic / mass message] are welcome or mass messages");
 
@@ -406,7 +423,8 @@ describe("[AI-033] Hi on Fansly marks welcome and mass messages as 2.10.1 does (
 
     // The client read every marker from its page: three automatic, one personal.
     served(await askAtNow({ feature: "hi-greeting", capabilities: PROOF_LANE, body: hiBody(1, [1, 2, 4].map(msg), 4) }));
-    expect(transcriptLines()).toEqual([
+    expect(dayLines()).toEqual(["--- 2026-10-10 ---", "--- 2026-10-11 ---", "--- 2026-10-12 ---"]);
+    expect(messageLines()).toEqual([
       "[10:00] Model: [Automatic / mass message] hey babe, welcome to my page 💕",
       "so glad you're here",
       // 2.10.1 reads this one's correlation from its own page; the hub never
