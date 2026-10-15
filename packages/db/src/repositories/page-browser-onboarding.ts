@@ -279,6 +279,9 @@ export interface RegisterPageBrowserInput {
   /** An existing page that moves to its browser (bound now); absent: a new
    *  page's profile, bound at its onboarding. */
   pageId?: number | null;
+  /** A new page's proxy, from the owner's draft (0282): its URL and its
+   *  auth sealed as given — the onboarding's proxy from the start. */
+  onboardingProxy?: { url: string; encryptedAuth: string | null; keyVersion: number | null } | null;
 }
 
 /** A registration and a forget of one profile id, one at a time (a
@@ -297,6 +300,9 @@ async function lockProfileId(tx: Database, profileId: string): Promise<void> {
 export async function registerPageBrowserProfile(db: Database, input: RegisterPageBrowserInput): Promise<void> {
   if (!/^[0-9a-f-]{36}$/.test(input.profileId)) throw new Error("A profile id is a UUID");
   if (!/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(input.socksEndpoint)) throw new Error("A SOCKS5 endpoint is ip:port");
+  const proxy = input.onboardingProxy ?? null;
+  if (proxy !== null && input.pageId !== undefined && input.pageId !== null) throw new Error("An existing page's browser goes out through the page's own proxy");
+  if (proxy !== null && (proxy.encryptedAuth === null) !== (proxy.keyVersion === null)) throw new Error("A sealed auth goes with its key version");
   await db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockProfileId(tx, input.profileId);
@@ -317,10 +323,12 @@ export async function registerPageBrowserProfile(db: Database, input: RegisterPa
     }
     await tx.execute(sql`
       insert into page_browsers (profile_id, page_id, container, encrypted_engine_token, encrypted_api_token,
-                                 encrypted_vnc_password, key_version, socks_endpoint, env)
+                                 encrypted_vnc_password, key_version, socks_endpoint, env,
+                                 onboarding_proxy_url, onboarding_proxy_auth, onboarding_proxy_key_version)
       values (${input.profileId}::uuid, ${input.pageId ?? null}::bigint, ${input.container}, ${input.encryptedEngineToken},
               ${input.encryptedApiToken}, ${input.encryptedVncPassword}, ${input.keyVersion}::integer, ${input.socksEndpoint},
-              ${input.env === undefined || input.env === null ? null : JSON.stringify(input.env)}::jsonb)
+              ${input.env === undefined || input.env === null ? null : JSON.stringify(input.env)}::jsonb,
+              ${proxy?.url ?? null}, ${proxy?.encryptedAuth ?? null}, ${proxy?.keyVersion ?? null}::integer)
     `);
   });
 }

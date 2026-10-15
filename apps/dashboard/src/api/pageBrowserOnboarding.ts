@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   PageBrowserLoginStepResponse,
+  PageBrowserMaskedProxy,
   PageBrowserProfileResponse,
   PageBrowserProfileProxyBody,
 } from "@agency_hub_core/contracts";
@@ -11,8 +12,8 @@ import { kernel } from "./sdk.js";
 import type { PageBrowserLoginStep } from "./pageBrowser.js";
 
 // A new page connected through its own server browser (Project Browser PR
-// 16): the profiles no page has yet, one profile's onboarding — its proxy,
-// its pinned exit IP, the owner's login through the same form, the account
+// 16): the profiles no page has yet, one profile's onboarding — its proxy
+// (given in the owner's draft, replaced here), its pinned exit IP, the owner's login through the same form, the account
 // checked through the browser, the page created and bound.
 
 const POLL_MS = 1_000;
@@ -99,12 +100,13 @@ export function useCreatePageThroughBrowser(profileId: string) {
 }
 
 /**
- * The proxy of the page to be goes straight to the API — never through React
- * Query: a mutation keeps its arguments in the client's cache for its gcTime
- * after the page is gone, and the proxy's password with them (PR 15's lesson
- * for the login form). The view is read anew after it.
+ * The proxy of the page to be — the text the owner pasted, read by Hub —
+ * goes straight to the API, never through React Query: a mutation keeps its
+ * arguments in the client's cache for its gcTime after the page is gone, and
+ * the proxy's password with them (PR 15's lesson for the login form). The
+ * view is read anew after it.
  */
-export async function sendPageBrowserProfileProxy(qc: QueryClient, profileId: string, proxy: PageBrowserProfileProxyBody["proxy"]): Promise<{ exitIp: string }> {
+export async function sendPageBrowserProfileProxy(qc: QueryClient, profileId: string, proxy: PageBrowserProfileProxyBody["proxy"]): Promise<{ proxy: PageBrowserMaskedProxy }> {
   try {
     return await kernel.pageBrowserProfileProxy({ params: { profileId }, body: { proxy } });
   } finally {

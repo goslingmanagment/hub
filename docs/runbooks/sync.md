@@ -1092,29 +1092,47 @@ pnpm cli sync why --page lora-1 --resource probe.manual --subject ''
 A new page can be connected through its own server browser instead of a pasted session: Hub never holds its
 session, the browser logs in from its own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
 
-1. **The profile**, from the workstation — the container with a new profile, an empty buffer and its own secrets,
-   then its row in Hub with its page empty (the secrets go on the Hub CLI's standard input):
+1. **The browser starts in the dashboard** (owner decision 2026-10-15): Settings → Pages → «Новые страницы через
+   серверный браузер» → «Новый браузер страницы». The owner names the new page (its label, the browser's name on the
+   server) and pastes its proxy whole into one field — `host:port:login:password`, `login:password:host:port`,
+   `login:password@host:port`, `socks5://…`, `socks5h://…`; an `http(s)://` one is read and said unusable (a page's
+   browser goes out through SOCKS5 with a login and a password only), a four-part text that reads both ways asks
+   which. «Проверить прокси» connects through it, as the operator would, and says whether it works and why not, what
+   the port speaks, the latency, the exit IP, country, region and city, ISP and ASN, time zone — named by
+   `ipinfo.io` through the proxy (`get.geojs.io` when it refuses); Fansly is never touched. The browser's
+   environment (time zone, languages, position) is proposed from that place; the owner confirms it and saves the
+   draft — the proxy's password sealed in Hub, never shown again. For an existing page that moves to its browser
+   (the pilot lilly-1), choose «Существующая страница…»: its own proxy is shown and checked, and changed in the
+   page's settings, not here.
+2. **The profile**, from the workstation — Hub's draft gives the SOCKS5's `ip:port` and the environment, nothing is
+   typed; the container with a new profile, an empty buffer and its own secrets, then its row in Hub from the draft
+   (the secrets go on the Hub CLI's standard input; the draft is consumed with it):
 
    ```sh
-   scripts/deploy-page-browser.sh add-profile root@152.53.191.242 --page ari-2 --image hub-page-browser:<tag> \
-     --socks <socks-host>:<port> --env '{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}'
+   scripts/deploy-page-browser.sh add-profile root@152.53.191.242 --page ari-2 --image hub-page-browser:<tag>
    ```
 
-   `--page` is the new page's label. `pnpm cli sync browser-profile list` shows the profiles no page has yet. When
-   Hub refuses the profile (its own word: nothing written), the script removes what it made. Any other failure — Hub's
-   answer lost — leaves the outcome unknown (Hub may have registered it; with `--existing`, bound to the page): the
-   script removes nothing and prints what is left and the two commands to resolve it — `sync browser-profile show
-   --profile <uuid>` in the api container, then, if Hub has none, `remove-profile … --page <name> --profile <uuid>`.
-   A profile Hub forgot (removed, or said absent) is never registered again: an add still under way is refused.
-2. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy (the
-   SOCKS5 the container was made for, with its login and password — saved sealed; Hub shows its exit IP), the exit IP
-   pinned (the browser opens its exit only when it sees that IP itself, and says what it saw), the login through
+   `--page` is the new page's label (the draft's name). `--env '<json>'` overrides the draft's environment;
+   `--socks <host>:<port> --env '<json>'` is PR 16's way without a draft (the proxy's login and password are then
+   given in the dashboard) and is refused while the owner has a draft of that name. An add whose draft the owner
+   changed after it was read is refused (Hub's own word: the script removes what it made; run it again).
+   `pnpm cli sync browser-profile draft --name ari-2` shows what add-profile takes; `sync browser-profile list` the
+   profiles no page has yet. When Hub refuses the profile (its own word: nothing written), the script removes what
+   it made. Any other failure — Hub's answer lost — leaves the outcome unknown (Hub may have registered it; with
+   `--existing`, bound to the page): the script removes nothing and prints what is left and the two commands to
+   resolve it — `sync browser-profile show --profile <uuid>` in the api container, then, if Hub has none,
+   `remove-profile … --page <name> --profile <uuid>`. A profile Hub forgot (removed, or said absent) is never
+   registered again: an add still under way is refused.
+3. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy from
+   the draft (checked again here, or replaced in the same one field — the SOCKS5 the container was made for), the
+   exit IP pinned (the check's IP is offered; the browser opens its exit only when it sees that IP itself, and says
+   what it saw), the login through
    the form (the `sync` process admits the site's login requests by the profile key: one at a time, the owner's
    pause, journaled in `fansly_send_log` with `page_id` null and `browser_profile_id`), «Завершить вход», «Проверить
    аккаунт» (one `GET /account/me` through the browser, its answer in `observations`), «Создать страницу» — the page
    born on its browser (transport `browser`), its profile bound to it, in one transaction. A login opened again, or
    the onboarding given up, voids the check: the creation then refuses with 409 and creates nothing — check again.
-3. **Then** the page's own slot takes the browser: it verifies the account through it first (the page is born
+4. **Then** the page's own slot takes the browser: it verifies the account through it first (the page is born
    untrusted), then works as any browser page.
 
 Given up: «Отказаться от подключения» stops the browser (the profile kept, unbound). Removing the profile — its row
@@ -1124,7 +1142,8 @@ in Hub first (refused for a bound one), then its container, files and volumes on
 scripts/deploy-page-browser.sh remove-profile root@152.53.191.242 --page ari-2
 ```
 
-An existing page that moves to its browser gets its profile bound at once: `add-profile … --page lilly-1 --existing`.
+An existing page that moves to its browser gets its profile bound at once, from its draft: `add-profile … --page
+lilly-1 --existing`; its pin is then `sync browser pin-ip lilly-1 --ip <IP>` (its environment came with the draft).
 
 ## Watchdog restarts, shutdown and deploys
 

@@ -61,7 +61,7 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
 }
 
 const STOPS: Record<string, string> = {
-  exit_ip_changed: "браузер сам увидел через прокси другой выходной IP, чем закреплённый (опечатка в IP или прокси сменил адрес). Сохраните прокси ещё раз — Hub покажет его IP — и закрепите его",
+  exit_ip_changed: "браузер сам увидел через прокси другой выходной IP, чем закреплённый (опечатка в IP или прокси сменил адрес). Проверьте прокси — Hub покажет её выходной IP — и закрепите его",
   proxy_unavailable: "прокси не отвечает",
   proxy_auth: "прокси не принял логин и пароль",
   selftest_failed: "самопроверка браузера не прошла",

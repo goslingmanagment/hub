@@ -6,6 +6,8 @@ export * from "./dm-text.ts";
 export * from "./money.ts";
 export * from "./password-policy.ts";
 export * from "./proxy-string.ts";
+export * from "./proxy-paste.ts";
+export * from "./page-browser-env.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./types.ts";

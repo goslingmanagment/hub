@@ -169,6 +169,35 @@ async function resolveHost(host: string): Promise<string> {
   return (await lookup(host, { family: 4 })).address;
 }
 
+/**
+ * `ip:port` of a SOCKS5 proxy as a page's container is made for it — its
+ * host resolved to an IPv4 address here, as the hello resolves it (the
+ * container's rules admit that address alone; pb-egress has no IPv6) — or
+ * why it cannot be one, in the owner's words.
+ */
+export async function socksEndpointOfProxy(
+  url: string,
+  options: { resolve?: (host: string) => Promise<string> } = {},
+): Promise<{ endpoint: string } | { problem: string }> {
+  let normalized: ReturnType<typeof normalizeProxyConfigWithMetadata>;
+  try {
+    normalized = normalizeProxyConfigWithMetadata({ url });
+  } catch {
+    return { problem: "the proxy's URL does not read" };
+  }
+  if (!normalized.protocol.startsWith("socks5")) return { problem: "a page's browser goes out through a SOCKS5 proxy only (socks5://…)" };
+  const host = normalized.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(host) === 6) return { problem: "the proxy's address is IPv6: a page's browser reaches IPv4 only" };
+  let ip: string;
+  try {
+    ip = isIP(host) === 4 ? host : await (options.resolve ?? resolveHost)(host);
+  } catch {
+    return { problem: `the proxy's host ${host} does not resolve` };
+  }
+  if (isIP(ip) !== 4) return { problem: `the proxy's host ${host} does not resolve to an IPv4 address` };
+  return { endpoint: `${ip}:${Number(normalized.port)}` };
+}
+
 // ── a profile no page has yet (Project Browser PR 16) ─────────────────────
 
 /** The hello's page of a profile that serves no page yet: the operator keeps

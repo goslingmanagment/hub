@@ -91,7 +91,6 @@ async function rig() {
   const app = createTestAppContext(testDb!, {
     pageBrowserEndpoints: { rpcUrl: () => "ws://127.0.0.1:9/rpc", screen: () => ({ host: "127.0.0.1", port: screen.port }) },
     pageBrowserScreenWatch: { everyMs: 100, deadlineMs: 1_000 },
-    pageBrowserProxyTest: async () => "203.0.113.9",
   });
   await createUserAccount(app, { username: "owner-onb", role: "owner", password: "synthetic-password" }, { source: "cli" });
   await createUserAccount(app, { username: "lead-onb", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
@@ -147,17 +146,26 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     expect((await post(r, "/pin", { ip: "not-an-ip" })).statusCode).toBe(400);
     // Not ready: no proxy, no pin.
     expect((await post(r, "/login/start")).json()).toMatchObject({ error: "browser_not_ready" });
-    // A proxy that is not the container's SOCKS5, or not a SOCKS5 at all.
-    expect((await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.51:1080", username: "u", password: "p" } })).json().message).toContain("was made for the SOCKS5 203.0.113.50:1080");
-    expect((await post(r, "/proxy", { proxy: { url: "http://203.0.113.50:1080" } })).json().message).toContain("SOCKS5 proxy only");
-    expect((await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.50:1080", username: "u", password: "proxy-password-not-shown" } })).json()).toEqual({ exitIp: "203.0.113.9" });
+    // A proxy that is not the container's SOCKS5, not a SOCKS5 at all, or
+    // with no login and password; one field, any common format.
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.51:1080:u:p" } })).json().message).toContain("was made for the SOCKS5 203.0.113.50:1080");
+    expect((await post(r, "/proxy", { proxy: { text: "http://u:p@203.0.113.50:1080" } })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("HTTP-прокси") });
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080" } })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("логин и пароль") });
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50" } })).json()).toMatchObject({ reason: "proxy_unreadable" });
+    expect((await post(r, "/proxy", { proxy: { text: "u:proxy-password-not-shown@203.0.113.50:1080" } })).json()).toEqual({
+      proxy: { scheme: "socks5", host: "203.0.113.50", port: 1080, username: "u", passwordSet: true },
+    });
     expect((await post(r, "/pin", { ip: "203.0.113.9" })).json()).toEqual({ pinnedExitIp: "203.0.113.9" });
     const view = await r.server.inject({ method: "GET", url: `/api/v1/page-browser/profiles/${r.profileId}`, headers: { cookie: r.cookie } });
-    expect(view.json()).toMatchObject({ profile: { name: "ari-2", proxySet: true, pinnedExitIp: "203.0.113.9" }, proxy: { username: "u" }, browser: { ready: true }, login: { state: "off" }, identity: { pending: false, ok: null } });
+    expect(view.json()).toMatchObject({
+      profile: { name: "ari-2", proxySet: true, pinnedExitIp: "203.0.113.9" },
+      proxy: { url: "socks5://203.0.113.50:1080", username: "u", masked: { host: "203.0.113.50", port: 1080, username: "u", passwordSet: true } },
+      browser: { ready: true }, login: { state: "off" }, identity: { pending: false, ok: null },
+    });
     expect(view.body).not.toContain("proxy-password-not-shown");
     expect((await post(r, "/login/start")).json()).toEqual({ state: "login", changed: true });
     // The proxy does not change under an open login.
-    expect((await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.50:1080" } })).json()).toMatchObject({ error: "login_open" });
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080:u:p" } })).json()).toMatchObject({ error: "login_open" });
     // Given up; then bound: every lever of the profile is refused.
     expect((await post(r, "/close")).json()).toEqual({ state: "closing", changed: true });
     expect((await post(r, "/login/start")).json()).toMatchObject({ error: "onboarding_refused" });
@@ -202,7 +210,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
   it("opens the browser's screen only while its login is open, and closes it before the login's closing is written, and once bound", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.50:1080" } });
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080:u:p" } })).statusCode).toBe(200);
     await post(r, "/pin", { ip: "203.0.113.9" });
     await expect(openScreen(r)).rejects.toThrow(/409/);
     await post(r, "/login/start");
@@ -253,7 +261,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
   it("refuses the page's creation when the onboarding was given up, or its login opened again, after the account's check — nothing created, the profile unbound (Astra's review of PR 16, item 2)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    expect((await post(r, "/proxy", { proxy: { url: "socks5://203.0.113.50:1080", username: "u", password: "p" } })).statusCode).toBe(200);
+    expect((await post(r, "/proxy", { proxy: { text: "socks5://u:p@203.0.113.50:1080" } })).statusCode).toBe(200);
     const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
     const account = "300000000000000916";
     /** The account's check as the engine's link answers it, its answer journaled. */

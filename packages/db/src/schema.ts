@@ -499,6 +499,24 @@ export const pageBrowserForgottenProfiles = pgTable("page_browser_forgotten_prof
   wasRegistered: boolean("was_registered").notNull(),
 });
 
+/** 0282 (Project Browser, owner decision 2026-10-15): a page browser to be
+ *  made, started in the dashboard — its proxy (a new page's) and the
+ *  environment the owner confirmed; add-profile registers the profile from
+ *  it and consumes it (`repositories/page-browser-drafts.ts`). */
+export const pageBrowserDrafts = pgTable("page_browser_drafts", {
+  name: text("name").primaryKey(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "cascade" }).unique(),
+  proxyUrl: text("proxy_url"),
+  proxyAuth: text("proxy_auth"),
+  proxyKeyVersion: integer("proxy_key_version"),
+  env: jsonbSafe("env").$type<Record<string, unknown>>().notNull(),
+  revision: bigint("revision", { mode: "number" }).notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  createdBy: text("created_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  updatedBy: text("updated_by").notNull(),
+});
+
 // Project Browser (0281, PR 17): the owner's one-shot commands to a page's
 // browser, run once by the page's owner over its link (`page-browser-commands.ts`).
 export const pageBrowserCommands = pgTable("page_browser_commands", {

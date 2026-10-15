@@ -16,8 +16,8 @@ Usage:
   scripts/deploy-page-browser.sh build    <user@host>
   scripts/deploy-page-browser.sh up       <user@host> --page <name> --image <tag> [--socks <host:port>]
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
-  scripts/deploy-page-browser.sh add-profile <user@host> --page <name> --image <tag> --socks <host:port>
-                                          --env <json> [--existing] [--hub-dir <dir>]
+  scripts/deploy-page-browser.sh add-profile <user@host> --page <name> --image <tag> [--existing]
+                                          [--env <json>] [--socks <host:port> --env <json>] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--profile <uuid>] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
@@ -51,27 +51,38 @@ Usage:
   up        Creates or recreates a page's container; the image it replaces
             stays the page's previous one.
   add-profile
-            A new browser profile (Project Browser PR 16): a container with
-            a profile of its own, an empty buffer and its own secrets (the
-            engine's RPC token, the API's token, the KasmVNC password), then
-            its row in Hub (`sync browser-profile add` in the api container
-            under --hub-dir, default /opt/agency-hub; the secrets go on its
-            standard input, never in a command line), its page empty: the
-            owner connects the new page in the dashboard (its proxy — the one
-            given here — its exit IP, his login, the account check, the
-            page's creation). --env is the browser's environment by the
-            proxy's region, as `sync browser pin-ip --env` takes it
-            ({"timeZone":…,"languages":[…],"geolocation":{"latitude":…,
-            "longitude":…,"accuracyM":…}}): Chrome's zone and language come
-            from it. --existing: the page <name> exists in Hub and moves to
-            its browser — the profile is bound to it at once (plan §5, stage
-            4). If Hub refuses the profile (its own word: nothing of it
-            written), the container and its volumes go. Any other failure —
-            its answer lost — leaves the outcome unknown (Hub may have
-            registered it, with --existing bound to the page): nothing is
-            removed; the script says what is left, how to ask Hub (`sync
-            browser-profile show`) and, when Hub has none, the remove-profile
-            to run with the profile's UUID.
+            A new browser profile (Project Browser PR 16), made from the
+            browser the owner started in the dashboard (Настройки → Страницы
+            → «Новые страницы через серверный браузер»; owner decision
+            2026-10-15): there he pasted the proxy, Hub checked it and
+            proposed the environment from its exit, he confirmed it. Nothing
+            of it is typed here: Hub's draft of <name> (`sync browser-profile
+            draft` in the api container under --hub-dir, default
+            /opt/agency-hub) gives the SOCKS5's ip:port the container's rules
+            admit and the environment — Chrome's zone and language come from
+            it. Then a container with a profile of its own, an empty buffer
+            and its own secrets (the engine's RPC token, the API's token, the
+            KasmVNC password), then its row in Hub from the draft (`sync
+            browser-profile add --from-draft`, the secrets on its standard
+            input, never in a command line; the draft consumed with it,
+            refused if the owner changed it meanwhile), its page empty: the
+            owner connects the new page in the dashboard (the exit IP, his
+            login, the account check, the page's creation). --existing: the
+            page <name> exists in Hub and moves to its browser (its draft
+            says so; its proxy is its own) — the profile is bound to it at
+            once (plan §5, stage 4). --env <json> overrides the draft's
+            environment ({"timeZone":…,"languages":[…],"geolocation":
+            {"latitude":…,"longitude":…,"accuracyM":…}}). --socks with --env:
+            no draft (PR 16's way) — the proxy's login and password are then
+            given in the dashboard, and Hub refuses a proxy that is not this
+            SOCKS5; refused when the owner has a draft of <name>. If Hub
+            refuses the profile (its own word: nothing of it written), the
+            container and its volumes go. Any other failure — its answer
+            lost — leaves the outcome unknown (Hub may have registered it,
+            with --existing bound to the page): nothing is removed; the
+            script says what is left, how to ask Hub (`sync browser-profile
+            show`) and, when Hub has none, the remove-profile to run with the
+            profile's UUID.
   remove-profile
             A profile no page has, given up: Hub forgets it first (refused
             for a profile bound to a page), then its container, its files and
@@ -143,6 +154,7 @@ PAGE_NAME=""
 TO_NODE_PREPARE=0
 HUB_DIR=/opt/agency-hub
 ENV_JSON=""
+SOCKS_ARG=""
 EXISTING_PAGE=0
 PROFILE_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -154,6 +166,7 @@ while [[ $# -gt 0 ]]; do
     --env) [[ $# -ge 2 ]] || fail "$1 needs a value"; ENV_JSON="$2"; shift 2 ;;
     --hub-dir) [[ $# -ge 2 ]] || fail "$1 needs a value"; HUB_DIR="$2"; shift 2 ;;
     --page) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_NAME="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
+    --socks) [[ $# -ge 2 ]] || fail "$1 needs a value"; SOCKS_ARG="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --new-profile) PAGE_ARGS+=("$1"); shift ;;
     --profile) [[ $# -ge 2 ]] || fail "$1 needs a value"; PROFILE_ARG="$2"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
     --*) [[ $# -ge 2 ]] || fail "$1 needs a value"; PAGE_ARGS+=("$1" "$2"); shift 2 ;;
@@ -331,13 +344,40 @@ hub_cli_line() {
   printf 'docker compose --env-file .env.production -f docker-compose.production.yml exec -T api node apps/runtime/dist/cli.js%s' "$quoted"
 }
 
+# One field of a JSON object Hub printed: a string as it is, anything else
+# as JSON; 1 when it has none.
+json_field() {
+  node -e 'const v = JSON.parse(process.argv[1])[process.argv[2]]; if (v === undefined || v === null) process.exit(1); process.stdout.write(typeof v === "string" ? v : JSON.stringify(v))' "$2" "$1"
+}
+
 # A new profile (Project Browser PR 16): the container on the server, then
-# its row in Hub with its secrets on the CLI's standard input. If Hub does
-# not take it, the container and its volumes go: nothing half-made stays.
+# its row in Hub with its secrets on the CLI's standard input — both from
+# the owner's draft in the dashboard (owner decision 2026-10-15), unless
+# --socks and --env say it here. If Hub does not take it, the container and
+# its volumes go: nothing half-made stays.
 add_profile() {
   [[ -n "$PAGE_NAME" ]] || fail "add-profile needs --page <name>"
   [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || fail "not a page name: $PAGE_NAME"
-  [[ -n "$ENV_JSON" ]] || fail "add-profile needs --env <json>: the browser's environment by the proxy's region"
+  local env_override="$ENV_JSON" from_draft=()
+  if [[ -z "$SOCKS_ARG" ]]; then
+    # The SOCKS5's address and the environment from Hub's draft: nothing of
+    # the proxy is typed here, and its login and password never leave Hub.
+    local draft draft_socks revision existing
+    draft="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile draft --name "$PAGE_NAME")")" \
+      || fail "Hub gave no draft of ${PAGE_NAME}: start its browser in the dashboard (Настройки → Страницы → «Новые страницы через серверный браузер»), or give --socks and --env"
+    draft_socks="$(json_field socks "$draft")" || fail "Hub's draft of ${PAGE_NAME} names no SOCKS5"
+    revision="$(json_field revision "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no revision"
+    existing="$(json_field existingPage "$draft")" || fail "Hub's draft of ${PAGE_NAME} does not say whose it is"
+    [[ "$draft_socks" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ && "$revision" =~ ^[0-9]+$ ]] || fail "Hub's draft of ${PAGE_NAME} does not read"
+    if [[ "$existing" == "true" && "$EXISTING_PAGE" != "1" ]]; then fail "the draft of ${PAGE_NAME} moves the existing page to its browser: add --existing"; fi
+    if [[ "$existing" != "true" && "$EXISTING_PAGE" == "1" ]]; then fail "the draft of ${PAGE_NAME} is a new page's: no --existing"; fi
+    [[ -n "$ENV_JSON" ]] || ENV_JSON="$(json_field env "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no environment"
+    PAGE_ARGS+=(--socks "$draft_socks")
+    from_draft=(--from-draft "$PAGE_NAME" --draft-revision "$revision")
+    log "the draft of ${PAGE_NAME} (revision ${revision}): SOCKS5 ${draft_socks}$([[ -n "$env_override" ]] && echo ", the environment given here")"
+  else
+    [[ -n "$ENV_JSON" ]] || fail "add-profile needs --env <json> with --socks: the browser's environment by the proxy's region"
+  fi
   local zone lang
   # Chrome's zone and first language, from the environment (checked again,
   # whole, by Hub).
@@ -351,7 +391,14 @@ add_profile() {
   profile="$(printf '%s\n' "$made" | sed -n 's/^PB_PROFILE_ID=//p' | tail -n 1)"
   socks="$(printf '%s\n' "$made" | sed -n 's/^PB_SOCKS=//p' | tail -n 1)"
   [[ "$profile" =~ ^[0-9a-f-]{36}$ && "$socks" =~ ^[0-9.]+:[0-9]+$ ]] || fail "the server did not name the new profile"
-  local cli=(sync browser-profile add --profile "$profile" --container "page-browser-${PAGE_NAME}" --socks "$socks" --env "$ENV_JSON" --secrets-stdin)
+  local cli=(sync browser-profile add --profile "$profile" --container "page-browser-${PAGE_NAME}" --socks "$socks")
+  if [[ ${#from_draft[@]} -gt 0 ]]; then
+    cli+=("${from_draft[@]}")
+    [[ -z "$env_override" ]] || cli+=(--env "$env_override")
+  else
+    cli+=(--env "$ENV_JSON")
+  fi
+  cli+=(--secrets-stdin)
   [[ "$EXISTING_PAGE" == "1" ]] && cli+=(--page "$PAGE_NAME") || cli+=(--new-page "$PAGE_NAME")
   local secrets="${REMOTE_BASE}/pages/${PAGE_NAME}/secrets"
   local registered status=0 refused_re='"outcome": "refused"'

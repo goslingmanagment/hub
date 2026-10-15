@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   useStartPageBrowserProfileLogin: vi.fn(),
   useVerifyPageBrowserProfile: vi.fn(),
   sendPageBrowserProfileProxy: vi.fn(),
+  checkPageBrowserProxy: vi.fn(),
   pageBrowserProfileScreenshotUrl: vi.fn((id: string, tick: number) => `/api/v1/page-browser/profiles/${id}/login/screenshot?t=${tick}`),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
@@ -66,7 +67,7 @@ function response(overrides: Partial<PageBrowserProfileResponse> = {}, profile: 
   return {
     profile: summary(profile),
     socksEndpoint: "203.0.113.50:1080",
-    proxy: { url: "socks5://203.0.113.50:1080", username: "pb-user" },
+    proxy: { url: "socks5://203.0.113.50:1080", username: "pb-user", masked: { scheme: "socks5", host: "203.0.113.50", port: 1080, username: "pb-user", passwordSet: true } },
     env: { timeZone: "Europe/Berlin", languages: ["de-DE", "de", "en-US", "en"], geolocation: { latitude: 52.52, longitude: 13.4, accuracyM: 5000 } },
     login: { state: "off", changedAt: null },
     browser: { ready: true, problem: null, reachable: null },
@@ -133,13 +134,24 @@ describe("the onboarding's steps and words (PR 16)", () => {
 });
 
 describe("the onboarding page rendered (PR 16)", () => {
-  it("first the proxy: its field, the container's SOCKS5; the later steps locked", () => {
+  it("first the proxy (a profile made without a draft): one field for it whole, the container's SOCKS5; the later steps locked", () => {
     const html = render(response({ proxy: null }, { proxySet: false, pinnedExitIp: null }));
     expect(html).toContain("Подключение страницы · ari-2");
-    expect(html).toContain('placeholder="user:pass@host:port"');
-    expect(html).toContain("203.0.113.50:1080");
+    expect(html).toContain("data-proxy-field");
+    expect(html).toContain("host:port:login:password или login:password@host:port");
+    expect(html).toContain("Браузер создан для SOCKS5 <span class=\"font-mono\">203.0.113.50:1080</span>");
+    expect(html).toContain("Проверить прокси");
     expect(html).toContain('data-step-state="current"');
     expect(html).toContain("Сначала прокси и выходной IP.");
+  });
+
+  it("the proxy from the owner's draft: shown with its password masked, the environment, a check and a replace — no field until asked", () => {
+    const html = render(response({}, { pinnedExitIp: null }));
+    expect(html).toContain("SOCKS5 · 203.0.113.50:1080 · логин pb-user · пароль ••••••••");
+    expect(html).toContain("Europe/Berlin · de-DE, de, en-US, en · 52.52, 13.4 ±5000 м");
+    expect(html).toContain("Проверить прокси");
+    expect(html).toContain("Заменить прокси");
+    expect(html).not.toContain("data-proxy-field");
   });
 
   it("the login open: the form of the fields Fansly asks for, the browser's exit IP as it saw it", () => {

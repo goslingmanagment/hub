@@ -109,6 +109,12 @@ const SANCTIONED_DELETER_FILES = [
   // a bound profile, no captured fact: its sends stay journaled, its site
   // answers in observations.
   "packages/db/src/repositories/page-browser-onboarding.ts",
+  // Project Browser (owner decision 2026-10-15): a page browser's draft —
+  // the owner's configuration typed in the dashboard (a name, a proxy he
+  // pasted, sealed; the environment he confirmed), not a captured fact —
+  // deleted by his own press, or consumed by the profile's registration
+  // that copies it. Never scheduled.
+  "packages/db/src/repositories/page-browser-drafts.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.
