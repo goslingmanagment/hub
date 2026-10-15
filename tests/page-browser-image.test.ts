@@ -26,7 +26,7 @@ describe("Chrome's start", () => {
   const flags = [...command.matchAll(/^\s+(--[a-z-]+)/gm)].map((match) => match[1]);
 
   it("has the plan's flags and nothing that shows automation or drops the sandbox", () => {
-    expect(flags).toEqual(["--user-data-dir", "--remote-debugging-port", "--window-size", "--lang", "--no-first-run", "--ignore-gpu-blocklist"]);
+    expect(flags).toEqual(["--user-data-dir", "--remote-debugging-port", "--window-size", "--lang", "--no-first-run", "--disable-features", "--ignore-gpu-blocklist"]);
     for (const banned of ["--no-sandbox", "--enable-automation", "--headless", "--remote-debugging-pipe", "--disable-blink-features", "--remote-debugging-port=0"]) {
       expect(command).not.toContain(banned);
     }
@@ -386,6 +386,18 @@ describe("the image", () => {
       expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  kasmvncserver_bookworm_${kasm}_${arch}\\.deb$`, "m"));
     }
     for (const s6 of ["noarch", "x86_64", "aarch64"]) expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  s6-overlay-${s6}\\.tar\\.xz$`, "m"));
+  });
+
+  it("the owner's F7 decision disables background models and Safe Browsing while retaining Chrome TLS/CRL handling", () => {
+    const policies = JSON.parse(read("apps/page-browser/policies/hub.json")) as Record<string, unknown>;
+    expect(policies).toMatchObject({ ComponentUpdatesEnabled: false, SafeBrowsingProtectionLevel: 0, GenAILocalFoundationalModelSettings: 1 });
+    // OptimizationGuideFetchingEnabled ended at Chrome103, so it cannot
+    // substitute for the actual feature gates in pinned155.
+    expect(policies).not.toHaveProperty("OptimizationGuideFetchingEnabled");
+    const run = read("apps/page-browser/s6/s6-rc.d/chrome/run");
+    expect(run).toContain("--disable-features=OptimizationHints");
+    expect(run).not.toMatch(/--(?:disable-background-networking|disable-component-update|ignore-certificate-errors|ignore-ssl-errors)(?:\s|=|$)/);
+    expect(policies).not.toHaveProperty("CertificateTransparencyEnforcementDisabledForUrls");
   });
 
   it("Chrome's policies: only through the operator's proxy, nothing saved, no extension but ours", () => {

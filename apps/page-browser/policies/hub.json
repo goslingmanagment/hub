@@ -33,5 +33,7 @@
       "installation_mode": "blocked"
     }
   },
-  "GenAILocalFoundationalModelSettings": 1
+  "GenAILocalFoundationalModelSettings": 1,
+  "ComponentUpdatesEnabled": false,
+  "SafeBrowsingProtectionLevel": 0
 }
