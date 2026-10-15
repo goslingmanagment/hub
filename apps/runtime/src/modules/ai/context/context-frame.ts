@@ -12,7 +12,7 @@ import { lookupAiKnownMessages, type AiKnownMessageStoreState } from "@agency_hu
 import type { AppContext } from "../../../bootstrap.ts";
 import type { AiFeatureContextFrameBody } from "../../../services/ai-gateway.ts";
 import { loadClientConversationCoverage } from "../../../services/client-coverage.ts";
-import { formatTranscript, type TranscriptMessage } from "../prompts/index.ts";
+import { formatTranscriptDayLine, formatTranscriptLine, type TranscriptMessage } from "../prompts/index.ts";
 import type { AiConversationPairState } from "./chat-access.ts";
 
 // chat-extension H-4b — the `context_v1` frame: which transcript snapshot
@@ -87,8 +87,20 @@ export function transcriptMessagesOmittedByBudget(input: {
     return 0;
   }
   let offset = 0;
+  let previousDay: string | null = null;
   for (let index = 0; index < input.messages.length; index += 1) {
-    const line = formatTranscript([input.messages[index]!]);
+    const message = input.messages[index]!;
+    // A day's first message comes after its day line; the day line alone
+    // vouches for no message.
+    const day = formatTranscriptDayLine(message.createdAtMs);
+    if (day !== previousDay) {
+      if (!input.transcript.startsWith(day, offset)) {
+        return input.messages.length;
+      }
+      offset += day.length + 1;
+      previousDay = day;
+    }
+    const line = formatTranscriptLine(message);
     if (!input.transcript.startsWith(line, offset)) {
       return input.messages.length;
     }

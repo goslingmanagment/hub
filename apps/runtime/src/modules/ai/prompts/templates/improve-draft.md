@@ -55,4 +55,4 @@ GOOD: "ооо привет красавчик 😏 спасибо за подп�
 
 ## Your Task
 
-Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).
+{nowLine}Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).

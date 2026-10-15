@@ -38,6 +38,7 @@ import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
 import { isPageAllowlisted } from "@agency_hub_core/shared";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
+import { personaLocalTime } from "../persona-local-time.ts";
 import {
   applyOnlyFansMediaNotes,
   listOnlyFansMediaNoteItems,
@@ -101,6 +102,7 @@ import {
   type OperationFeature,
   type Personality,
   type PingSegment,
+  type PromptClock,
   type RecapAttach,
   type ReplyMode,
   type ReplyTone,
@@ -1075,6 +1077,14 @@ export async function prepareAiFeatureStream(
     && options?.capabilities?.has("split-all-v1") === true
     && await isSplitAllOnForPage(app, pageId);
   const greetingVariantCount = feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined;
+  // One clock for every build of this prompt: the `Now:` line of the uncached
+  // task block. The hub renders its own transcript in UTC with day lines; a
+  // client's text keeps the clock of the device that wrote it.
+  const clock: PromptClock = {
+    nowMs: Date.now(),
+    transcript: body.clientContext ? "client" : "utc",
+    modelLocal: personaLocalTime(persona.personality.id),
+  };
 
   const buildFeaturePrompt = (transcriptCoverage: HubTranscriptCoverage | undefined) => buildPrompt({
     feature,
@@ -1108,6 +1118,7 @@ export async function prepareAiFeatureStream(
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
+    clock,
   });
   let prompt = buildFeaturePrompt(hubTranscriptCoverage);
   if (hubTranscriptCoverageManifest !== undefined) {

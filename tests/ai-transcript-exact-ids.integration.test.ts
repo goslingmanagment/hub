@@ -199,7 +199,8 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
           "unionHeadRef": null,
         },
         "media": [],
-        "transcript": "[10:00] Fan: hey babe, missed you
+        "transcript": "--- 2026-10-01 ---
+      [10:00] Fan: hey babe, missed you
       [10:05] Model: hey you 😘 where have you been
       [10:07] Fan: the shorter id sorts first
       [10:07] Model: the longer id sorts second
@@ -339,7 +340,8 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
             "sender": "model",
           },
         ],
-        "transcript": "[10:00] Fan: hey babe, missed you
+        "transcript": "--- 2026-10-01 ---
+      [10:00] Fan: hey babe, missed you
       [10:05] Model: [Photo] hey you 😘 where have you been
       [10:07] Fan: the shorter id sorts first
       [10:07] Model: the longer id sorts second
@@ -439,7 +441,8 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
             "fan",
           ],
         ],
-        "transcript": "[10:00] Fan: hey babe, missed you
+        "transcript": "--- 2026-10-01 ---
+      [10:00] Fan: hey babe, missed you
       [10:05] Model: [Photo #1] hey you 😘 where have you been
       [10:07] Fan: the shorter id sorts first
       [10:07] Model: the longer id sorts second
@@ -459,24 +462,24 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
       .map(({ name, input }) => [name, promptDigest(buildPrompt({ ...input, transcript: loaded.transcript }))]));
     expect(digests).toMatchInlineSnapshot(`
       {
-        "onlyfans chat-review": "506f316a02df5dcf273fe83bebe7b5312b5ccc4a74a1987a3ed5dbe21af9f927",
-        "onlyfans coach-chat preset": "6dfb2b2b49dae628cda7806fe46f505b0e52d15ef3371e5eee62fed2e565b5e6",
-        "onlyfans coach-chat question": "2719c981d83713be214e7e42ee1ad5b9bbca139724f92c35381c5af029255fa2",
-        "onlyfans fan-notes-fill": "1c5e81470cd319a7570820947cc3a834b0a4e644a890782d413f0fbb74dda306",
-        "onlyfans fan-notes-fill merge": "274d6d125c2cfc533eae29abd32e3b4bd10daf56d98ac0c9282c0d71645d7670",
-        "onlyfans fan-summary": "336a4ea99a2f46b25b0cb186986803ab64b928657df359fc1b78ab85132a482b",
-        "onlyfans fan-summary short": "5ac45b123db389b66f15199d09d4c9566b397c35343ada052a9b88b360500e84",
-        "onlyfans fast-reply flirty": "d3a48bb14bf2a9f819edb37a3d432e56391a99ba5d3d29e84d15a0f072fc665a",
-        "onlyfans fast-reply split": "3ae67416b8a6fea060f6bb1c230e5882a9c9c5d2470e34aaa384e0ed4bb96103",
-        "onlyfans help-me": "1a81377c227c966d025aa895c06298b5df3635ecd80eef48a5c68a3a4b887bf7",
-        "onlyfans hi-greeting 1 variant": "96be3c0aaceccf216dc955f9ba6fdafb909b64def7c6a37ab4f9b499f89dcae4",
-        "onlyfans hi-greeting 3 variants": "a2b5d30c57a1047abe898c344a6cc113c30b2c4e35027680841e2604bc0e835d",
-        "onlyfans improve-draft": "adbf06a1fe9bccdcc7737ace705efde3619bd933877fdd4976fd8cef753ed023",
-        "onlyfans improve-draft split": "ab9adc826fe100ab5113abb9d3244cf501f18e31cd1eea2ad9c2cfe7f0a31966",
-        "onlyfans ping active": "00c96cf91f14e0f887b5041607bdec414a3e6e09e0eb83cfc5aae48f56196680",
-        "onlyfans ping segment-a": "9f06b11c85ed3079c112f0d04261473df5f991c6dd63ca07cad8ca39a67b42a8",
-        "onlyfans ping segment-b": "32f2504f8a2776e9d2685cf6437419161c5abf1b83d00f0a301f77bf3b97d335",
-        "onlyfans voice-script": "1858800e625da5ea05f05d78d0d00a48ccf9276f2af08c1a66473923c4077d79",
+        "onlyfans chat-review": "607d0f218b112cd56b03fe548cf7b5de084fe74a7ac0801a82bc394842e72502",
+        "onlyfans coach-chat preset": "e42aad08bc24d47160392a152d57780159fa61f1b836e70a168d3a21ce34d840",
+        "onlyfans coach-chat question": "30eec533608c8e254d553982234c4b0390912cd2e88f7f189a33abf1cd241b00",
+        "onlyfans fan-notes-fill": "eaed19344c3ff5225e2f37c2d6f1b1fc07733020f4e816584c6a86578b5462a4",
+        "onlyfans fan-notes-fill merge": "61d4d94681b9b69280215d98baee25bfb9a6363d57212e2da4fac9e9b5880dc1",
+        "onlyfans fan-summary": "db89751484f26aee786c4fbc413ad94ee04a52e105d1f368cc9e3fcfe23da4a8",
+        "onlyfans fan-summary short": "d213007768c364148411adc45ec5fda7c6c13b41c35429e4b3c1ee942cc03a2e",
+        "onlyfans fast-reply flirty": "a3bb453b85b0e1171a29a079be4c65b5a8ff4e913b589b23690a1e880739837a",
+        "onlyfans fast-reply split": "ba6538dae9d8d4e9d26189442762da3bfdcb63c24f8bccb0cb08a7903b5244d3",
+        "onlyfans help-me": "b08a4c7db6dec6bf82f2e780fc3a81f5ff18cbbe9e2eb8ce48f7c6da8c0c8a32",
+        "onlyfans hi-greeting 1 variant": "4dd3630b1e79bd9de2b8e078d11811c15589a7694d8eaf1f7990c203468b2207",
+        "onlyfans hi-greeting 3 variants": "c34af67f5d7fc80199855a5cccfcbed96871654050435ad0ead2641de1d44769",
+        "onlyfans improve-draft": "10a753b0b15e2cf6c3541039eb64faba27224434c4bb20a2efadf73ae41cd144",
+        "onlyfans improve-draft split": "5e3aef1f2af3315e3eb08cb27fd039dd2e87f57da013fbb5d3a166c1d37133d9",
+        "onlyfans ping active": "7c2d676d01d2a41ef1c4fd5b071f829cf57c7c91a26a9a31679dcb7d6738c2b1",
+        "onlyfans ping segment-a": "01f6d57497b0935403f030121bcb749017fab344982dd2b3b35494d38303ca7d",
+        "onlyfans ping segment-b": "ac71994004c643cb2c9a616665a038a94017ed9780330d432e7d1581e7f728c4",
+        "onlyfans voice-script": "374161e2d584fb118b5cc7c6b8aea18263db513b841c1c32a934a3bcd229fb74",
       }
     `);
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -531,7 +534,8 @@ describe("OnlyFans transcripts keep their bytes (HF-8a golden)", () => {
             "reason": "deleted",
           },
         ],
-        "transcript": "[10:00] Fan: hey babe, missed you
+        "transcript": "--- 2026-10-01 ---
+      [10:00] Fan: hey babe, missed you
       [10:05] Model: [Photo] hey you 😘 where have you been
       [10:07] Fan: the shorter id sorts first
       [10:07] Model: the longer id sorts second
@@ -682,6 +686,7 @@ describe("Fansly ids past 2^53 stay apart up to the prompt and the coverage answ
     const loaded = await loadTranscriptContext(app, { pageId: page.id, conversationRef: FS_GROUP, limit: 100 });
 
     expect(loaded.transcript).toBe([
+      "--- 2026-10-01 ---",
       "[10:00] Fan: first of the even pair",
       "[10:01] Fan: second of the even pair",
       "[10:02] Model: the smaller id of the step pair",
@@ -734,6 +739,7 @@ describe("Fansly ids past 2^53 stay apart up to the prompt and the coverage answ
 
     expect(loaded.served.source).toBe("live_union");
     expect(loaded.transcript).toBe([
+      "--- 2026-10-01 ---",
       "[10:00] Fan: first of the even pair",
       "[10:01] Fan: second of the even pair",
       "[10:02] Model: the smaller id of the step pair",

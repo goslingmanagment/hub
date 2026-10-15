@@ -62,4 +62,4 @@ Display name: {fanDisplayName}
 
 ## Your Task
 
-{greetingTask}
+{nowLine}{greetingTask}

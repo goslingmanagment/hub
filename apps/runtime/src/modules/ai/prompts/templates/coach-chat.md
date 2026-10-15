@@ -40,7 +40,7 @@ method you were given.
 
 ## Your Task
 
-The chatter asks:
+{nowLine}The chatter asks:
 
 <chatter_question>
 {chatterQuestion}

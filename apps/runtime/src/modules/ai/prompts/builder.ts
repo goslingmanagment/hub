@@ -75,6 +75,19 @@ export interface RecapAttach {
 /** How many greeting variants one hi-greeting generation returns. */
 export type GreetingVariantCount = 1 | 3;
 
+/** When the prompt is built, for the {nowLine} slot of the uncached task block. */
+export interface PromptClock {
+  /** Unix ms of the generation. */
+  nowMs: number;
+  /** Whose clock the transcript's times are in: 'utc' when the hub rendered
+   *  it (transcript/format.ts: UTC times and day lines), 'client' when the
+   *  request carried a client's own text, in that device's clock. */
+  transcript: 'utc' | 'client';
+  /** The persona's place and IANA time zone; absent when unknown, and then
+   *  the line names no local time. */
+  modelLocal?: { place: string; timeZone: string } | undefined;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -141,6 +154,12 @@ export interface PromptBuildInput {
    * the merge rules. Absent, the prompt is the released clients' one, byte for
    * byte. Ignored for other features. */
   noteValues?: readonly string[] | undefined;
+  /** The generation's clock: one `Now:` line opening the task of every
+   *  template with a {nowLine} slot. Absent, the slot is empty and the prompt
+   *  is byte-identical to one built before the slot existed. It sits in the
+   *  uncached task block, so a clock that changes every minute never moves a
+   *  cached prefix. */
+  clock?: PromptClock | undefined;
 }
 
 export interface PromptPayload {
@@ -1153,6 +1172,75 @@ function fanSilenceSection(
   return `Fan silence: the fan's last message was ${days} ${days === 1 ? 'day' : 'days'} ago${approx}.`;
 }
 
+// Three letters each, so the line is one length every day: the Coach budget
+// measures it, and a cut that moved by weekday would rewrite the cached
+// transcript block.
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** `UTC+3`, `UTC-4`, `UTC+5:30`, `UTC`. */
+function utcOffsetLabel(offsetMinutes: number): string {
+  if (offsetMinutes === 0) {
+    return 'UTC';
+  }
+  const sign = offsetMinutes > 0 ? '+' : '-';
+  const hours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const minutes = Math.abs(offsetMinutes) % 60;
+  return `UTC${sign}${hours}${minutes === 0 ? '' : `:${pad2(minutes)}`}`;
+}
+
+/** The wall clock of `timeZone` at `nowMs`: weekday, HH:MM and its UTC offset. */
+function zonedClock(nowMs: number, timeZone: string): { weekday: string; time: string; offset: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(nowMs));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((candidate) => candidate.type === type)?.value);
+  const wallMs = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'));
+  const wall = new Date(wallMs);
+  return {
+    weekday: WEEKDAYS[wall.getUTCDay()]!,
+    time: `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`,
+    offset: utcOffsetLabel(Math.round((wallMs - (nowMs - (nowMs % 60_000))) / 60_000)),
+  };
+}
+
+/**
+ * The {nowLine} slot: the date and time of the generation, whose clock the
+ * transcript's times are in, and the persona's own local time when the hub
+ * knows where the persona lives. Without it the model read `[HH:MM]` as its
+ * own time of day and could not tell an old plan from a coming one.
+ */
+function nowLine(clock: PromptClock | undefined): string {
+  if (!clock) {
+    return '';
+  }
+  const now = new Date(clock.nowMs);
+  const date = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
+  const sentences = [
+    `Now: ${WEEKDAYS[now.getUTCDay()]} ${date}, ${pad2(now.getUTCHours())}:${pad2(now.getUTCMinutes())} UTC.`,
+    clock.transcript === 'utc'
+      ? 'Transcript times and day lines are UTC.'
+      : 'Transcript times come from the chatter\'s device clock, which may be in another time zone.',
+  ];
+  if (clock.modelLocal) {
+    const local = zonedClock(clock.nowMs, clock.modelLocal.timeZone);
+    sentences.push(
+      `The model's local time: ${local.weekday} ${local.time} (${clock.modelLocal.place}, ${local.offset}).`,
+    );
+  }
+  return `${sentences.join(' ')}\n`;
+}
+
 /**
  * Untrusted inputs (transcript, draft, spending/subscription data, fan
  * name/bio) are escaped; the personality is trusted model-owner content and is
@@ -1204,6 +1292,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
     noteFieldsList: noteFieldsList(input),
     ...noteFillSlots(input),
+    nowLine: nowLine(input.clock),
   };
 }
 
