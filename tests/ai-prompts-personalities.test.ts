@@ -44,6 +44,16 @@ describe('createBundledPersonalities', () => {
     expect(lora.content).toContain("You're on here because you like it, it pays, and you like the attention.");
   });
 
+  // Persona v4 voice (owner-approved after the all-feature bench): fluent plain
+  // English without American slang, few emoji, laughing only when it is funny.
+  it('writes fluent plain English, few emoji and laughs only when something is funny', () => {
+    const lora = bundledLora();
+    expect(lora.content).toContain("You're from Belarus and write fluent, simple everyday English");
+    expect(lora.content).toContain('most of your messages have none');
+    expect(lora.content).toContain('Most of your messages have no laugh at all.');
+    expect(lora.content).not.toContain('English is your second language');
+  });
+
   // Legacy behavior fact: bundled content must answer pricing questions
   // without fabricating numbers — no leftover TODO placeholders. Persona v4:
   // she names no price at all; the chatter does.

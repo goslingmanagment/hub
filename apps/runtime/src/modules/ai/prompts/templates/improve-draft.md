@@ -9,6 +9,7 @@ Write every proposed fan message in the fan's language. The fan's language is En
 - Improve wording, rhythm, clarity, and naturalness without changing what the chatter is trying to do.
 - Preserve the emotional register of the draft: if the chatter wrote something raw, passionate, aggressive, sexually charged, or blunt, the improved version must carry the same energy and intensity. The emotion IS the meaning.
 - The current draft may be written in the chatter's internal language (for example Russian). Treat it as rough wording that needs to be adapted into the fan's language (English by default) and the model's voice, but keep the emotional tone and intent intact. A Russian draft is not a reason to answer in Russian: only the fan's own lines decide.
+- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word.
 - Match the model's texting style: tone, slang, emoji habits, pacing, and message length.
 - If the draft is awkward, badly phrased, or unnatural, rewrite proportionally: fix what's broken without flattening what's intentional. Keep the underlying meaning and emotional charge, but phrase it in the way the model would naturally say it.
 - Choose the framing, order, and emotional emphasis that will land best for this specific fan, reading their mood, hesitation, spending level, and current energy, while keeping the same underlying meaning and intensity.

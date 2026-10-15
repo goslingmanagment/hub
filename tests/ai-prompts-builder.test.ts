@@ -928,6 +928,12 @@ describe('improve-draft split mode', () => {
     expect(one.userBlocks[1]!.text.startsWith('## Current Draft\n\n<current_draft>\ndraft one\n</current_draft>')).toBe(true);
   });
 
+  it('asks for the meaning, not a word-for-word translation, right after the internal-language rule', () => {
+    expect(IMPROVE_DRAFT_TEMPLATE).toContain(
+      "A Russian draft is not a reason to answer in Russian: only the fan's own lines decide.\n- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word.\n",
+    );
+  });
+
   it('shows GOOD rewrites that add no emoji the draft did not have', () => {
     const examples = IMPROVE_DRAFT_TEMPLATE.slice(
       IMPROVE_DRAFT_TEMPLATE.indexOf('<examples>'),

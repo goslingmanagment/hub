@@ -366,3 +366,21 @@ describe('greeting avatar image', () => {
     }
   });
 });
+
+// Lora persona audit (2026-10-16, owner-approved after the all-feature bench):
+// the hooks are plain. No "tease or dare" technique and no guess about what
+// kind of person the fan is; a two-way opener and a bit of herself instead.
+describe('hi-greeting hooks after the persona audit', () => {
+  it('drops the guessing technique and offers plain hooks', () => {
+    expect(HI_GREETING_TEMPLATE).not.toContain('**Tease or dare**');
+    expect(HI_GREETING_TEMPLATE).not.toContain('a playful riff on it');
+    expect(HI_GREETING_TEMPLATE).toContain('**Two-way opener**');
+    expect(HI_GREETING_TEMPLATE).toContain('**A bit of yourself**');
+    expect(HI_GREETING_TEMPLATE).toContain('Never guess what kind of person he is');
+    expect(HI_GREETING_TEMPLATE).toContain('- Clever guesses about him or jokes about what his username "says" about him');
+    // The hooks stay in the 1h static prefix, before the transcript.
+    expect(HI_GREETING_TEMPLATE.indexOf('## How to Hook the Fan')).toBeLessThan(
+      HI_GREETING_TEMPLATE.indexOf('## Conversation Transcript'),
+    );
+  });
+});
