@@ -39,6 +39,10 @@ export class FakeLoginSite {
   readonly fields = { login: "", password: "", code: "" };
   /** Something lies over the button: the hit test fails. */
   covered = false;
+  /** The login comes from a new device: the code is the one Fansly e-mailed,
+   *  and its form says so (the notice above the field; owner decision
+   *  2026-10-15). The same field, button and `POST /login/twofa`. */
+  newDevice = false;
   /** Every text the browser was given by Input.insertText, in order. */
   readonly inserted: string[] = [];
   /** The site's own POSTs of the login. */
@@ -140,15 +144,15 @@ export class FakeLoginSite {
 
   /** What the probe reads now. */
   marks(): PageMarks {
-    const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: this.error, ...marks });
-    const base = { origin: "https://fansly.com", path: "/", readyState: "complete" };
+    const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: this.error, newDevice: false, ...marks });
+    const base = { origin: "https://fansly.com", path: "/", readyState: "complete", outside: false };
     switch (this.screen) {
       case "landing":
         return { ...base, captcha: false, forms: [] };
       case "login":
         return { ...base, captcha: false, forms: [form({ password: 1, login: 1 })] };
       case "code":
-        return { ...base, captcha: false, forms: [form({ code: 1 })] };
+        return { ...base, captcha: false, forms: [form({ code: 1, newDevice: this.newDevice })] };
       case "success":
         return { ...base, path: "/home", captcha: false, forms: [] };
       case "captcha":

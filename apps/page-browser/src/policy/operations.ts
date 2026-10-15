@@ -315,10 +315,19 @@ export const LOGIN_SCREEN_ROWS: readonly ApiRow[] = [
 
 /** The login operations (spec §2.4; stage 1, §9): the only writes open on
  *  the first stage, in the manual login only. The engine's LOGIN_PATHS
- *  (fansly/route-match.ts) — the test holds the two equal. */
+ *  (fansly/route-match.ts) — the test holds the two equal.
+ *
+ *  The confirmation by e-mail of a login from a new device (owner decision
+ *  2026-10-15: open for the time of the login only) is `/login/twofa` too:
+ *  by the site's bundle, `/login` answers it with `twofa` of type 2, Fansly
+ *  e-mails a code, and the site sends it as it sends a 2FA code, `{token,
+ *  code}` — no link, no read that waits for it, no other operation. The
+ *  bundle's `/login/email`, `/login/email/verify` and
+ *  `/login/email/verification{,/token}` change or confirm the account's
+ *  address in its settings: no login operation, closed as every write. */
 export const LOGIN_ROWS: readonly ApiRow[] = [
   { methods: ["POST"], template: "/login", mode: "manual_login", route: "auth.login", platformData: false, what: "the login and password", source: "spec §2.4; stage 1, §9" },
-  { methods: ["POST"], template: "/login/twofa", mode: "manual_login", route: "auth.twofa", platformData: false, what: "the 2FA code", source: "spec §2.4; stage 1, §9" },
+  { methods: ["POST"], template: "/login/twofa", mode: "manual_login", route: "auth.twofa", platformData: false, what: "the 2FA code, or the code Fansly e-mails a new device", source: "spec §2.4; stage 1, §9; owner decision 2026-10-15" },
 ];
 
 /** Every other API read, and the preflights (spec §2.4). The only reads

@@ -225,7 +225,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   function stepOf(answer: LoginAnswer): PageBrowserLoginStepResponse {
     switch (answer.kind) {
       case "state":
-        return { screen: { screen: answer.screen, screenVersion: answer.screenVersion, fields: answer.fields, siteError: answer.siteError }, refused: null, unreachable: false };
+        return { screen: { screen: answer.screen, screenVersion: answer.screenVersion, fields: answer.fields, siteError: answer.siteError, ...(answer.codeFrom === "email" ? { codeFrom: "email" as const } : {}) }, refused: null, unreachable: false };
       case "refused":
         return { screen: null, refused: answer.reason, unreachable: false };
       case "unreachable":
@@ -461,7 +461,14 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   async function step(target: Target, principal: Awaited<ReturnType<typeof requirePrincipal>>, what: LoginCall & { type: "login.submit" | "login.code" }): Promise<PageBrowserLoginStepResponse> {
     const { browser } = await openLoginOf(target);
     const answer = stepOf(await call(browser, what, STEP_CALL_MS));
-    const fact = { step: what.type === "login.submit" ? "submit" : "code", screen: answer.screen?.screen ?? null, refused: answer.refused, unreachable: answer.unreachable };
+    const fact = {
+      step: what.type === "login.submit" ? "submit" : "code",
+      screen: answer.screen?.screen ?? null,
+      // The code the screen asks for is the e-mail one of a new device.
+      ...(answer.screen?.codeFrom === "email" ? { codeFrom: "email" } : {}),
+      refused: answer.refused,
+      unreachable: answer.unreachable,
+    };
     await recordAudit({ db: appContext.db }, target.kind === "page"
       ? { ...auditCtx(principal), eventType: PAGE_BROWSER_LOGIN_AUDIT_EVENT, platformAccountId: target.pageId, metadata: { pageLabel: target.label, ...fact } }
       : { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata: { profileId: target.profileId, ...fact } });

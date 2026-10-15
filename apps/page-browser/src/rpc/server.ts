@@ -449,7 +449,7 @@ export class RpcServer {
         reply = { type: "login.refused", callId, reason: outcome.reason };
         break;
       case "state":
-        reply = { type: "login.stateResult", callId, screen: outcome.screen, screenVersion: outcome.screenVersion, fields: outcome.fields, siteError: outcome.siteError };
+        reply = { type: "login.stateResult", callId, screen: outcome.screen, screenVersion: outcome.screenVersion, fields: outcome.fields, siteError: outcome.siteError, ...(outcome.codeFrom === "email" ? { codeFrom: "email" as const } : {}) };
         break;
       case "screenshot": {
         const bodyId = randomUUID();

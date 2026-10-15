@@ -1,6 +1,6 @@
 import type { PageBrowserProfileResponse, PageBrowserProfileSummary } from "@agency_hub_core/contracts";
 
-import { browserProblemText, type LoginView, type Tone } from "./pageBrowserLoginView.js";
+import { browserProblemText, formViewOf, type LoginView, type Tone } from "./pageBrowserLoginView.js";
 
 // What the onboarding page of a new page's browser shows (Project Browser
 // PR 16): its steps — the proxy, the exit IP, the login, the account and the
@@ -56,7 +56,7 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
     case "unknown":
       return { kind: "unknown" };
     default:
-      return { kind: "form", screen: screen.screen, fields: screen.fields, siteError: screen.siteError };
+      return formViewOf(screen, screen.screen);
   }
 }
 

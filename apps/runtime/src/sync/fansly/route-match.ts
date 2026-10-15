@@ -13,7 +13,9 @@ import { FANSLY_ROUTES, type FanslyRoute, type FanslyRouteHost, type FanslyRoute
 //   paths share one budget (the family `site`, owner decision №3).
 // - The two login operations are the only writes (`auth.login`,
 //   `auth.twofa`; spec §2.4); every other write is refused here, as the
-//   extension and the operator refuse it.
+//   extension and the operator refuse it. `auth.twofa` carries the 2FA code
+//   and the code Fansly e-mails for a login from a new device alike (owner
+//   decision 2026-10-15).
 // - A preflight (OPTIONS) has no route of its own: it goes under its
 //   request's admission (owner decision №1), so it is not matched here.
 

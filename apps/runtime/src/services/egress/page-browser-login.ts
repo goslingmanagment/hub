@@ -51,7 +51,9 @@ export type LoginCall =
   | { type: "login.code"; code: string };
 
 export type LoginAnswer =
-  | { kind: "state"; screen: LoginScreen; screenVersion: string; fields: Array<"login" | "password" | "code">; siteError: string | null }
+  /** `codeFrom` "email": the code asked for is the one Fansly e-mailed for a
+   *  login from a new device (absent: the 2FA code). */
+  | { kind: "state"; screen: LoginScreen; screenVersion: string; fields: Array<"login" | "password" | "code">; siteError: string | null; codeFrom?: "email" }
   | { kind: "screenshot"; jpeg: Buffer }
   | { kind: "refused"; reason: Extract<LoginReply, { type: "login.refused" }>["reason"] }
   /** No answer: the browser cannot be reached, or it broke the protocol. */
@@ -131,7 +133,7 @@ export function callPageBrowserLogin(input: { url: string; token: string; call: 
         case "login.refused":
           return done({ kind: "refused", reason: reply.reason });
         case "login.stateResult":
-          return done({ kind: "state", screen: reply.screen, screenVersion: reply.screenVersion, fields: reply.fields, siteError: reply.siteError });
+          return done({ kind: "state", screen: reply.screen, screenVersion: reply.screenVersion, fields: reply.fields, siteError: reply.siteError, ...(reply.codeFrom === "email" ? { codeFrom: "email" as const } : {}) });
         case "login.screenshotResult": {
           const jpeg = Buffer.concat(parts.get(reply.jpeg.bodyId) ?? []);
           if (jpeg.length !== reply.jpeg.decodedBytes || createHash("sha256").update(jpeg).digest("hex") !== reply.jpeg.sha256) {

@@ -86,6 +86,12 @@
 //   since PR 4): `manual_login` holds for the owner generation that set it,
 //   a new owner's hello ends it.
 //
+// - The e-mail code of a new device (owner decision 2026-10-15): the
+//   optional `login.stateResult.codeFrom` — "email" on the code form (its
+//   screen or its error) of a login from a new device, whose code Fansly
+//   e-mailed; absent otherwise. No minor: a new optional field, which a
+//   reader older than it skips (spec §6.3, 2) and so asks for the 2FA code.
+//
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
 // openExit, stopPage, restartBrowser, selfTest — PR 4; setMode — PR 15), the buffer's
 // messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
@@ -463,7 +469,10 @@ export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.code"; code: string }
 );
 export type LoginReply = { callId: string } & (
-  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null }
+  // codeFrom (an addition, owner decision 2026-10-15): "email" — the code
+  // asked for is the one Fansly e-mailed for a login from a new device;
+  // absent — the 2FA code, or an operator older than this.
+  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null; codeFrom?: "email" }
   | { type: "login.screenshotResult"; jpeg: BodyRef }
   | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
 );

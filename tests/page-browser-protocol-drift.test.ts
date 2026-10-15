@@ -218,6 +218,8 @@ const LOGIN_CALLS: Engine.LoginRequest[] = [
 const LOGIN_REPLIES: Operator.LoginReply[] = [
   { type: "login.stateResult", callId: "c-1", screen: "error", screenVersion: "fansly-login/1", fields: ["login", "password"], siteError: "Invalid" },
   { type: "login.stateResult", callId: "c-1", screen: "unknown", screenVersion: "fansly-login/1", fields: [], siteError: null },
+  // The e-mail code of a login from a new device (owner decision 2026-10-15).
+  { type: "login.stateResult", callId: "c-1", screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" },
   { type: "login.screenshotResult", callId: "c-2", jpeg: { bodyId: UUID, decodedBytes: 10, sha256: FP } },
   { type: "login.refused", callId: "c-3", reason: "not_manual_login" },
 ];
@@ -265,7 +267,12 @@ describe("the engine's mirror of the operator protocol", () => {
     for (const call of LOGIN_CALLS) expect(Operator.parseLoginRequest(JSON.parse(JSON.stringify(call))), call.type).toEqual({ ok: true, request: call });
     for (const reply of LOGIN_REPLIES) expect(Engine.parseLoginReply(JSON.stringify(reply)), reply.type).toEqual({ ok: true, reply });
     expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[0], screen: "captcha" })).ok).toBe(false);
-    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[3], reason: "because" })).ok).toBe(false);
+    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[4], reason: "because" })).ok).toBe(false);
+    // Where a code comes from: the e-mail, or nothing said (an operator older than it).
+    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[2], codeFrom: "sms" })).ok).toBe(false);
+    expect(Engine.parseLoginReply(JSON.stringify({ ...LOGIN_REPLIES[2], codeFrom: null })).ok).toBe(false);
+    const { codeFrom: _omitted, ...older } = LOGIN_REPLIES[2] as Extract<Operator.LoginReply, { type: "login.stateResult" }>;
+    expect(Engine.parseLoginReply(JSON.stringify(older))).toEqual({ ok: true, reply: older });
   });
 
   it("refuses what is not the protocol: an unknown type or value is an error (spec §6.3 rule 3)", () => {

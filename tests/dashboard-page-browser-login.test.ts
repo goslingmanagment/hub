@@ -73,6 +73,19 @@ describe("the login's views", () => {
     expect(loginViewOf(response({ login: { state: "ending", changedAt: null } }))).toEqual({ kind: "closing" });
   });
 
+  it("the code of a new device's login is the one Fansly e-mailed: its own words on the chip (owner decision 2026-10-15)", () => {
+    const email = loginViewOf(response({ screen: { screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" } }));
+    expect(email).toEqual({ kind: "form", screen: "code", fields: ["code"], siteError: null, codeFrom: "email" });
+    expect(loginChipOf(email)).toEqual({ label: "Ждёт код из письма", tone: "progress" });
+    const wrong = loginViewOf(response({ screen: { screen: "error", screenVersion: "fansly-login/2", fields: ["code"], siteError: "2FA code is invalid or already used.", codeFrom: "email" } }));
+    expect(wrong).toMatchObject({ kind: "form", screen: "error", codeFrom: "email" });
+    expect(loginChipOf(wrong)).toEqual({ label: "Fansly показал ошибку", tone: "danger" });
+    // The 2FA code: nothing said of where it comes from.
+    const twofa = loginViewOf(response({ screen: { screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null } }));
+    expect(twofa).not.toHaveProperty("codeFrom");
+    expect(loginChipOf(twofa)).toEqual({ label: "Ждёт код 2FA", tone: "progress" });
+  });
+
   it("their chips and a step's problems in the owner's words", () => {
     expect(loginChipOf({ kind: "success" })).toEqual({ label: "Вход выполнен", tone: "good" });
     expect(loginChipOf({ kind: "unknown" })).toEqual({ label: "Незнакомый экран", tone: "warning" });
@@ -107,9 +120,30 @@ describe("the login page", () => {
     expect(code).toContain('id="pb-code"');
     expect(code).not.toContain('id="pb-password"');
     expect(render(response({ screen: { screen: "success", screenVersion: "v", fields: [], siteError: null } }))).toContain("Завершить вход");
+    expect(code).toContain("Код 2FA");
+    expect(code).not.toContain("Код из письма");
     const unknown = render(response({ screen: { screen: "unknown", screenVersion: "v", fields: [], siteError: null } }));
     expect(unknown).toContain("Ничего не нажато");
     expect(unknown).toContain('href="/api/v1/page-browser/pages/lilly-1/screen/index.html?autoconnect=1"');
     expect(unknown).toContain('target="_blank"');
+  });
+});
+
+describe("the code Fansly e-mailed for a login from a new device (owner decision 2026-10-15)", () => {
+  it("the form asks for the code from the e-mail, says where to find it, and keeps the code's one field", () => {
+    const html = render(response({ screen: { screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" } }));
+    expect(html).toContain("Ждёт код из письма");
+    expect(html).toContain("Код из письма");
+    expect(html).toContain("отправил код на почту аккаунта");
+    expect(html).toContain("Найдите письмо от Fansly");
+    expect(html).toContain('id="pb-code"');
+    expect(html).toContain('autoComplete="one-time-code"');
+    expect(html).not.toContain("Код 2FA");
+    expect(html).not.toContain('id="pb-password"');
+    // Its error: the site's words, the same field, the same notice.
+    const wrong = render(response({ screen: { screen: "error", screenVersion: "fansly-login/2", fields: ["code"], siteError: "2FA code is invalid or already used.", codeFrom: "email" } }));
+    expect(wrong).toContain("2FA code is invalid or already used.");
+    expect(wrong).toContain("Код из письма");
+    expect(wrong).toContain('id="pb-code"');
   });
 });

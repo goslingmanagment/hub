@@ -81,6 +81,8 @@ const SITE_TOKEN = "fansly-token-PaThTeSt0123456789abc";
 const SITE_CLIENT = "720167541418239555";
 const ENV = { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } };
 const MARKERS = [LOGIN_MARKER, PASSWORD_MARKER, WRONG_MARKER, CODE_MARKER];
+/** A wrong code from the e-mail of a new device's login. */
+const WRONG_CODE_MARKER = "pb-email-wrong-code-6d2b";
 
 let testDb: StartedTestDatabase | null = null;
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -429,5 +431,57 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     expect(audit).toEqual(["open:wanted", "submit:error", "submit:code", "code:success", "close:ending"]);
     expect(r.apiLines.length).toBeGreaterThan(0);
     expect(r.engineLines.join("")).toContain("Fansly sync browser login");
+  }, 240_000);
+
+  it("a login from a new device (owner decision 2026-10-15): the form asks for the code Fansly e-mailed, it goes as the site's own POST /login/twofa under the engine's admission — and nowhere else", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    r.site.newDevice = true;
+    const base = `/api/v1/page-browser/pages/${r.page.pageLabel}/login`;
+    const as = { cookie: r.cookie, host: "hub.test", origin: "https://hub.test" };
+    await eventually(async () => r.fansly.arrivals.length >= 1, 60_000, "the page running on Node");
+
+    expect((await r.server.inject({ method: "POST", url: `${base}/start`, headers: as })).json()).toEqual({ state: "wanted", changed: true });
+    await until(() => r.operator.page.step === "site_loaded" && r.operator.state.mode === "manual_login", 60_000, "the login screen up");
+    r.site.setTab(r.operator.control.workTab!.sessionId);
+    const submitted = await r.server.inject({ method: "POST", url: `${base}/submit`, headers: as, payload: { login: LOGIN_MARKER, password: PASSWORD_MARKER } });
+    expect(submitted.json()).toEqual({ screen: { screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" }, refused: null, unreachable: false });
+    // The login's page as the dashboard reads it says so too.
+    expect((await r.server.inject({ method: "GET", url: base, headers: as })).json()).toMatchObject({ screen: { screen: "code", codeFrom: "email" } });
+    // A wrong code: the site's error at the same form, still the e-mail's code.
+    const wrong = await r.server.inject({ method: "POST", url: `${base}/code`, headers: as, payload: { code: WRONG_CODE_MARKER } });
+    expect(wrong.json()).toMatchObject({ screen: { screen: "error", fields: ["code"], siteError: "Invalid code", codeFrom: "email" } });
+    const coded = await r.server.inject({ method: "POST", url: `${base}/code`, headers: as, payload: { code: CODE_MARKER } });
+    expect(coded.json()).toEqual({ screen: { screen: "success", screenVersion: "fansly-login/2", fields: [], siteError: null }, refused: null, unreachable: false });
+    // The site's own login requests went under the engine's admission: the
+    // e-mail's code by the 2FA code's operation, the manual login's only.
+    const logins = (await testDb.pool.query<{ path: string; route: string }>(
+      "select request->>'path' as path, operation as route from sync_attempts where page_id = $1 and origin = 'login' order by id", [r.page.pageId],
+    )).rows;
+    expect(logins).toEqual([{ path: "/api/v1/login", route: "auth.login" }, { path: "/api/v1/login/twofa", route: "auth.twofa" }, { path: "/api/v1/login/twofa", route: "auth.twofa" }]);
+
+    expect((await r.server.inject({ method: "POST", url: `${base}/finish`, headers: as })).json()).toEqual({ state: "ending", changed: true });
+    await eventually(async () => (await getSyncPageManualLogin(db(), r.page.pageId))?.value === "off", 60_000, "the login closed");
+    expect(r.operator.state).toMatchObject({ mode: "automation" });
+
+    // What was typed reached the browser — and nothing else.
+    expect(r.site.inserted).toEqual([LOGIN_MARKER, PASSWORD_MARKER, WRONG_CODE_MARKER, CODE_MARKER]);
+    await r.operator.journals.flushed();
+    await r.operator.buffer.flush();
+    const rows = await everyRow();
+    const files = filesUnder(r.operatorDir);
+    expect(files.length).toBeGreaterThan(3);
+    for (const marker of [LOGIN_MARKER, PASSWORD_MARKER, CODE_MARKER, WRONG_CODE_MARKER]) {
+      expect(rows.includes(marker), `${marker} in the database`).toBe(false);
+      expect(r.apiLines.join("").includes(marker), `${marker} in the API's log`).toBe(false);
+      expect(r.engineLines.join("").includes(marker), `${marker} in the engine's log`).toBe(false);
+      expect(r.operatorLines.join("\n").includes(marker), `${marker} in the operator's log`).toBe(false);
+      for (const file of files) expect(file.includes(marker), `${marker} in a file of the operator`).toBe(false);
+    }
+    // The facts are there: which code the screen asked for, in the audit.
+    const audit = (await testDb.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where event_type = 'admin.page_browser_login' order by id",
+    )).rows.map((row) => `${String(row.metadata.step)}:${String(row.metadata.screen ?? row.metadata.to)}${row.metadata.codeFrom === undefined ? "" : `:${String(row.metadata.codeFrom)}`}`);
+    expect(audit).toEqual(["open:wanted", "submit:code:email", "code:error:email", "code:success", "close:ending"]);
   }, 240_000);
 });

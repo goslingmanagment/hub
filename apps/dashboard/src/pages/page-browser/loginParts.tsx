@@ -3,7 +3,7 @@ import { MonitorSmartphone } from "lucide-react";
 import type { PageBrowserLoginStepResponse } from "@agency_hub_core/contracts";
 
 import type { PageBrowserLoginStep } from "@/api/queries";
-import { loginChipOf, wantsCode, type LoginView, type Tone } from "./pageBrowserLoginView.js";
+import { loginChipOf, wantsCode, wantsEmailCode, type LoginView, type Tone } from "./pageBrowserLoginView.js";
 
 // The parts of the login form of a server browser (Project Browser PR 15),
 // shared by a page's login and a new page's onboarding (PR 16): the chip of
@@ -116,7 +116,8 @@ export function SiteError({ text }: { text: string }) {
   );
 }
 
-/** The fields Fansly asks for now: login and password, or the code. Each
+/** The fields Fansly asks for now: login and password, or the code — the
+ *  2FA code, or the one Fansly e-mailed for a login from a new device. Each
  *  step goes through `send` (straight to the API, never a query cache); the
  *  password and the code leave the form at once. */
 export function LoginForm({
@@ -133,6 +134,7 @@ export function LoginForm({
   const [code, setCode] = useState("");
   const { pending, send } = step;
   const codeStep = wantsCode(view);
+  const emailCode = wantsEmailCode(view);
   const handle = (event: FormEvent) => {
     event.preventDefault();
     if (pending) return;
@@ -146,11 +148,18 @@ export function LoginForm({
   return (
     <form onSubmit={handle} className="flex flex-col gap-3" aria-busy={pending} autoComplete="off">
       {view.siteError !== null && <SiteError text={view.siteError} />}
+      {emailCode && (
+        // A login from a new device (owner decision 2026-10-15): Fansly sent
+        // a code to the account's e-mail; the browser types it in as a 2FA code.
+        <p className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-sm text-text-secondary" data-email-code>
+          Fansly видит вход с нового устройства и отправил код на почту аккаунта. Найдите письмо от Fansly (проверьте и «Спам») и введите код сюда.
+        </p>
+      )}
       {codeStep ? (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="pb-code" className="text-sm text-text-secondary">Код 2FA</label>
+          <label htmlFor="pb-code" className="text-sm text-text-secondary">{emailCode ? "Код из письма" : "Код 2FA"}</label>
           <input id="pb-code" inputMode="numeric" autoComplete="one-time-code" spellCheck={false} value={code} disabled={pending}
-            onChange={(event) => setCode(event.target.value)} placeholder="Код из приложения" className={`${INPUT} tracking-widest`} required maxLength={32} />
+            onChange={(event) => setCode(event.target.value)} placeholder={emailCode ? "Код из письма Fansly" : "Код из приложения"} className={`${INPUT} tracking-widest`} required maxLength={32} />
         </div>
       ) : (
         <>
@@ -170,7 +179,7 @@ export function LoginForm({
         {pending ? "Передаём в браузер…" : codeStep ? "Подтвердить код" : "Войти"}
       </button>
       <p className="text-xs text-text-muted">
-        Браузер сам вставит {codeStep ? "код" : "логин и пароль"} в форму Fansly и нажмёт кнопку. Hub их не сохраняет.
+        Браузер сам вставит {codeStep ? "код" : "логин и пароль"} в форму Fansly и нажмёт кнопку. Hub {codeStep ? "его" : "их"} не сохраняет.
       </p>
     </form>
   );

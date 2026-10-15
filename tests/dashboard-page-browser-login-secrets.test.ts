@@ -21,7 +21,9 @@ import { pageBrowserLoginKey, sendPageBrowserLoginStep } from "../apps/dashboard
 const LOGIN = "pb15-dash-login-4e7a1c";
 const PASSWORD = "pb15-dash-password-9b2f6d03";
 const CODE = "730518";
-const MARKERS = [LOGIN, PASSWORD, CODE];
+/** The code Fansly e-mailed for a login from a new device (owner decision 2026-10-15). */
+const EMAIL_CODE = "pb-email-code-48c1e2";
+const MARKERS = [LOGIN, PASSWORD, CODE, EMAIL_CODE];
 
 const ANSWER: PageBrowserLoginStepResponse = { screen: { screen: "code", screenVersion: "fansly-login/1", fields: ["code"], siteError: null }, refused: null, unreachable: false };
 
@@ -63,10 +65,14 @@ describe("the login form's steps and the query client (Astra's review of PR 15, 
     expect(sdk.pageBrowserLoginSubmit).toHaveBeenCalledWith({ params: { pageLabel: "lilly-1" }, body: { login: LOGIN, password: PASSWORD } });
     expect(await sendPageBrowserLoginStep(qc, "lilly-1", { kind: "code", code: CODE })).toMatchObject({ screen: { screen: "success" } });
     expect(sdk.pageBrowserLoginCode).toHaveBeenCalledWith({ params: { pageLabel: "lilly-1" }, body: { code: CODE } });
+    // The code from the e-mail of a new device's login goes the same way.
+    sdk.pageBrowserLoginCode.mockResolvedValueOnce({ ...ANSWER, screen: { ...ANSWER.screen!, screen: "error", siteError: "2FA code is invalid or already used.", codeFrom: "email" } });
+    expect(await sendPageBrowserLoginStep(qc, "lilly-1", { kind: "code", code: EMAIL_CODE })).toMatchObject({ screen: { screen: "error", codeFrom: "email" } });
+    expect(sdk.pageBrowserLoginCode).toHaveBeenLastCalledWith({ params: { pageLabel: "lilly-1" }, body: { code: EMAIL_CODE } });
     // A failed step: no retry, and nothing kept either.
     sdk.pageBrowserLoginCode.mockRejectedValueOnce(new Error("the API cannot be reached"));
     await expect(sendPageBrowserLoginStep(qc, "lilly-1", { kind: "code", code: CODE })).rejects.toThrow("cannot be reached");
-    expect(sdk.pageBrowserLoginCode).toHaveBeenCalledTimes(2);
+    expect(sdk.pageBrowserLoginCode).toHaveBeenCalledTimes(3);
 
     expect(qc.getMutationCache().getAll()).toHaveLength(0);
     const text = held(qc);
