@@ -13,7 +13,7 @@ export interface ConfigChoiceProps {
 
 export function ConfigChoiceField(props: ConfigChoiceProps) {
   const choices = CONFIG_MODE_CHOICES[props.configKey];
-  if (choices) return <select className="settings-input min-w-0 w-full" aria-label={`${props.label} value`} aria-invalid={props.invalid} value={props.value} disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)}>
+  if (choices) return <select className="select min-w-0" aria-label={`${props.label} value`} aria-invalid={props.invalid} value={props.value} disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)}>
     {!choices.some((entry) => entry.value === props.value) && <option value={props.value}>Текущее: {props.value}</option>}
     {choices.map((entry) => <option value={entry.value} key={entry.value}>{entry.label}</option>)}
   </select>;
@@ -30,7 +30,7 @@ function ConfigPageChoices(props: ConfigChoiceProps) {
   // Unknown/retired labels are retained until the owner deliberately removes them.
   const choices = [...new Set([...labels, ...selected])];
   const unavailable = !query.data || query.isError;
-  return <div className="min-w-0 w-full"><fieldset className="rounded-lg border border-border p-3" disabled={props.disabled || unavailable} aria-invalid={props.invalid}>
+  return <div className="min-w-0 w-full"><fieldset className="rounded-[var(--radius-button)] border border-border p-3" disabled={props.disabled || unavailable} aria-invalid={props.invalid}>
     <legend className="px-1 text-sm font-medium">Выбранные страницы</legend>
     <div className="max-h-52 space-y-1 overflow-y-auto">
       {choices.map((label) => <label key={label} className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-text-primary">
@@ -48,6 +48,6 @@ function ConfigPageChoices(props: ConfigChoiceProps) {
       </p>
     )}
   </fieldset>
-    {query.isError && <button type="button" className="mt-2 min-h-9 text-sm text-accent underline" disabled={props.disabled || query.isFetching} onClick={() => void query.refetch()}>Обновить каталог страниц</button>}
+    {query.isError && <button type="button" className="btn btn-ghost btn-sm mt-2" disabled={props.disabled || query.isFetching} onClick={() => void query.refetch()}>Обновить каталог страниц</button>}
   </div>;
 }

@@ -85,6 +85,7 @@ import {
   groupCategoryViews,
   groupWebhookEvents,
   intervalLabel,
+  localDateTime,
   localDateTimeToIso,
   maskWebhookId,
   parseAuditChanges,
@@ -329,7 +330,7 @@ describe("CollectionTab (static render)", () => {
     collectionMocks.useAdminOfapiCollection.mockReturnValue({ data: fixture, isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
     const markup = renderTab();
     expect(markup).toContain("Балансы и выплаты</span> · lora-of — проход не успевает за лимит кредитов: 1 из 1 кр");
-    expect(markup).toContain("Vault: каталог</span> · lora-vip-of — проход упирается в лимит задачи");
+    expect(markup).toContain("Хранилище: каталог</span> · lora-vip-of — проход упирается в лимит задачи");
     // Credits named → the daily limit is the lever; the ambiguous run recommends nothing, and calls are not suggested.
     expect(markup).toContain("увеличьте «Дневной лимит категории, кр»");
     expect(markup).not.toContain("«Запросов за запуск, не более»");
@@ -363,7 +364,7 @@ describe("CollectionTab (static render)", () => {
     expect(markup).toContain("Профиль и уведомления</span> · lora-of — проход не успевает за лимит вызовов: 25 из 25 · остановился на шаге 2 из 4");
     expect(markup).toContain("успешных проходов не было");
     expect(markup).toContain("проход на паузе — нужен человек");
-    expect(markup).toContain("последний успешный проход 2026-09-29 00:00 UTC");
+    expect(markup).toContain(`последний успешный проход ${localDateTime("2026-09-29T00:00:00.000Z")}`);
     expect(markup).toContain("увеличьте «Запросов за запуск, не более»");
     expect(markup).toContain("устарело");
 
@@ -398,13 +399,17 @@ describe("CollectionTab (static render)", () => {
     });
     const markup = renderTab();
 
-    expect(markup).toContain("Сбор данных OFAPI");
+    // No second heading under the section's own; the Fansly pointer names the real place.
+    expect(markup).not.toContain("Сбор данных OFAPI");
+    expect(markup).toContain("«Система → Все параметры»");
+    expect(markup).not.toContain("Fansly настраивается в разделе «Возможности»");
     // Owner-facing groups in the decided order.
     expect(markup.indexOf("Действующая конфигурация")).toBeLessThan(markup.indexOf("Доступно к включению"));
     expect(markup.indexOf("Доступно к включению")).toBeLessThan(markup.indexOf("Только разовые задачи"));
     // Baseline categories run under the legacy configuration; new ones are off.
     expect(markup).toContain("Сообщения");
-    expect(markup).toContain("baseline · прежняя конфигурация");
+    expect(markup).toContain("Источник настройки: прежняя конфигурация");
+    expect(markup).not.toContain("baseline");
     expect(markup).toContain("Посты и комментарии");
     expect(markup).toContain("выключено по умолчанию");
     expect(markup).toContain("доступно: по запросу, расписание");
@@ -419,15 +424,16 @@ describe("CollectionTab (static render)", () => {
     expect(markup).toContain("лимит дня достигнут");
     expect(markup).toContain("30 из 30 кр · продолжит 00:00 UTC");
     // Spend comes from the GET only; unconfirmed actuals say so.
-    expect(markup).toContain("зарезервировано сегодня под фоновый сбор");
+    expect(markup).toContain("Зарезервировано сегодня");
     expect(markup).toContain("факт не подтверждён");
     expect(markup).toContain("690");
     expect(markup).toContain("Полная картина списаний");
     expect(markup).toContain('href="/ofapi-credits"');
     // The server's own limit wording is shown verbatim, never a client constant.
     expect(markup).toContain("Limits apply to new managed physical requests");
-    // Policy pill: revision + applied time + actor resolved from users.
-    expect(markup).toContain("Политика v3 · применена 2026-09-05 14:10 UTC · owner");
+    // Policy pill: applied time + actor resolved from users; the revision stays in the journal.
+    expect(markup).toContain(`Изменено ${localDateTime("2026-09-05T14:10:00.000Z")} · owner`);
+    expect(markup).not.toContain("Политика v3");
     // No USD, no estimate numbers, no vendor balance on this screen.
     expect(markup).not.toContain("≈ $");
     expect(markup).not.toContain("на балансе команды");
@@ -435,16 +441,16 @@ describe("CollectionTab (static render)", () => {
     expect(markup).toContain("Остановить фоновый сбор");
     expect(markup).not.toContain("в черновике");
     // The webhook card moved to «Система → OnlyFans API»; it is read-only there.
-    expect(markup).not.toContain("одна регистрация на все OF-страницы");
+    expect(markup).not.toContain("Одна регистрация на все страницы OnlyFans");
     const webhook = withRouter(createElement(WebhookCard));
-    expect(webhook).toContain("одна регистрация на все OF-страницы");
+    expect(webhook).toContain("Одна регистрация на все страницы OnlyFans");
     expect(webhook).toContain("wh_43…24d");
     expect(webhook).toContain("в текущем наборе");
     expect(webhook).not.toContain('role="switch"');
     expect(markup).not.toContain('role="switch"');
     // Journal summary line.
     expect(markup).toContain("Журнал изменений");
-    expect(markup).toContain("1 запись · последняя: v3, 2026-09-05 14:10 UTC, owner");
+    expect(markup).toContain(`1 запись · последняя ${localDateTime("2026-09-05T14:10:00.000Z")} · owner`);
   });
 
   it("shows the global pause banner, keeps modes and disables the stop button", () => {
@@ -458,10 +464,10 @@ describe("CollectionTab (static render)", () => {
     });
     const markup = renderTab();
 
-    expect(markup).toContain("Фоновый сбор остановлен · owner · 2026-09-05 16:40 UTC");
+    expect(markup).toContain(`Фоновый сбор остановлен · owner · ${localDateTime("2026-09-05T16:40:00.000Z")}`);
     expect(markup).toContain("1 запрос ещё в полёте");
     expect(markup).toContain("Возобновить сбор");
-    expect(markup).toContain("Политика v4 · глобальная пауза");
+    expect(markup).toContain("Фоновый сбор на паузе");
     expect(markup).toContain("глобальная пауза · режим сохранён");
     expect(markup).toContain("остановлена глобальной паузой");
     // Modes are preserved, not flipped to off.
@@ -489,7 +495,7 @@ describe("CollectionTab (static render)", () => {
     collectionMocks.useAdminOfapiCollection.mockReturnValue({
       data: snapshotFixture({ pages: [], policies: [] }), isLoading: false, isFetching: false, error: null, refetch: vi.fn(),
     });
-    expect(renderTab()).toContain("OF-страниц нет");
+    expect(renderTab()).toContain("Страниц OnlyFans нет");
   });
 });
 
@@ -503,7 +509,7 @@ describe("CategoryEditor (static render)", () => {
     expect(markup.match(/type="radio"/g)?.length).toBe(3);
     expect(markup).toContain("По запросу");
     expect(markup).toContain("Открытие страницы не считается запросом");
-    expect(markup).toContain("прежней конфигурации (baseline)");
+    expect(markup).toContain("работает по прежней конфигурации");
     // A page override exists on lora-vip-of: the default-scope edit will not displace it.
     expect(markup).toContain("Своя настройка есть у: lora-vip-of");
     expect(markup).toContain("Сейчас по страницам");
@@ -635,7 +641,7 @@ describe("draft, preview, pause and conflict surfaces (static render)", () => {
     expect(markup).toContain("→");
     expect(markup).toContain("вебхук не меняется");
     expect(markup).toContain("Перестанет обновляться");
-    expect(markup).toContain("Дашборд, Agent Read");
+    expect(markup).toContain("Дашборд, AI-агенты");
     expect(markup).toContain("не измерена");
     expect(markup).toContain("пустая оценка не означает «0»");
     expect(markup).not.toContain("≈ 0");
@@ -802,21 +808,21 @@ describe("collection model helpers", () => {
   it("describes the policy pill from server state, apply phase and conflict", () => {
     const snapshot = snapshotFixture();
     expect(describePolicyPill({ snapshot, applyPhase: { kind: "idle" }, conflict: false, actorName: "owner" }))
-      .toEqual({ tone: "ok", text: "Политика v3 · применена 2026-09-05 14:10 UTC · owner" });
+      .toEqual({ tone: "ok", text: `Изменено ${localDateTime("2026-09-05T14:10:00.000Z")} · owner` });
     expect(describePolicyPill({ snapshot, applyPhase: { kind: "saved", revision: 4 }, conflict: false, actorName: null }))
-      .toEqual({ tone: "warning", text: "v4 · применяется · ждём readback" });
-    // Readback reached: the pill reports the applied revision even before the
+      .toEqual({ tone: "warning", text: "Применяем — ждём подтверждения сервера" });
+    // Readback reached: the pill reports the applied state even before the
     // journal row is in the snapshot.
     expect(describePolicyPill({ snapshot: { ...snapshot, revision: 4 }, applyPhase: { kind: "saved", revision: 4 }, conflict: false, actorName: null }))
-      .toEqual({ tone: "ok", text: "Политика v4 · применена" });
+      .toEqual({ tone: "ok", text: "Изменения применены" });
     expect(describePolicyPill({ snapshot, applyPhase: { kind: "error", message: "x" }, conflict: false, actorName: null }))
-      .toEqual({ tone: "danger", text: "v3 · ошибка применения" });
+      .toEqual({ tone: "danger", text: "Не удалось применить" });
     expect(describePolicyPill({ snapshot, applyPhase: { kind: "idle" }, conflict: true, actorName: null }))
-      .toEqual({ tone: "accent", text: "изменено в другом окне" });
+      .toEqual({ tone: "accent", text: "Изменено в другом окне" });
     expect(describePolicyPill({ snapshot: { ...snapshot, backgroundPaused: true }, applyPhase: { kind: "idle" }, conflict: false, actorName: null }))
-      .toEqual({ tone: "danger", text: "Политика v3 · глобальная пауза" });
+      .toEqual({ tone: "danger", text: "Фоновый сбор на паузе" });
     expect(describePolicyPill({ snapshot: { ...snapshot, revision: 0, audit: [] }, applyPhase: { kind: "idle" }, conflict: false, actorName: null }).text)
-      .toBe("Политика v0 · baseline, изменений не было");
+      .toBe("Настройки ещё не менялись");
   });
 
   it("compares a stale draft against the current snapshot", () => {
@@ -865,7 +871,7 @@ describe("collection model helpers", () => {
     expect(formatBytes(100 * 1024 * 1024)).toBe("100 МБ");
     expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1,5 ГБ");
     expect(describeSettings(settings({ mode: "off" }))).toBe("Выключено");
-    expect(describeSettings(settings({ mode: "on_demand", includeDetails: true }))).toBe("По запросу · лимит 40 кр/сутки · с detail-запросами");
+    expect(describeSettings(settings({ mode: "on_demand", includeDetails: true }))).toBe("По запросу · лимит 40 кр/сутки · с подробными запросами");
     expect(localDateTimeToIso("")).toBeNull();
     expect(localDateTimeToIso("garbage")).toBeNull();
     expect(localDateTimeToIso("2026-09-01T12:00")).toMatch(/^2026-09-01T\d{2}:\d{2}:00\.000Z$/);

@@ -195,6 +195,13 @@ describe("features surface", () => {
     expect(html).toContain('value="12, 34"');
     expect(html).not.toContain('type="checkbox"');
   });
+  it("offers the friendly mode select in the full list too, not only in a feature's view", () => {
+    mocks.useAdminConfig.mockReturnValue({ data: view({ agentHydrationMode: "request_only" }), isError: false });
+    const full = render(ConfigurationTab, "/settings?tab=configuration");
+    expect(full).toMatch(/<select[^>]*aria-label="[^"]*value"/);
+    expect(full).toContain("Только заявки, без исполнения");
+    expect(full).not.toMatch(/<input[^>]*type="text"[^>]*value="request_only"/);
+  });
   it("provides a direct full-editor link for custom CSV without switching settings sections", () => {
     mocks.useAdminConfig.mockReturnValue({ data: view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: "old-page,lora-1" }), isError: false });
     const focused = render(ConfigurationTab, "/settings?tab=configuration&feature=voice&view=all&q=voice&page=lora-1");
