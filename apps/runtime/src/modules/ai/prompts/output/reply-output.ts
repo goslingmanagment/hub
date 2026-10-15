@@ -33,13 +33,24 @@ const META_LEAK_PATTERNS: readonly RegExp[] = [
   /\bgenerated\s+(?:reply|message|response)\b/i,
 ];
 
+// Reasoning a model writes into the visible text: <think>, <thinking> or
+// <reasoning>, closed by the same tag in any case. The tag name is a group so
+// the close tag must repeat it; a plain `<think\b` misses `<thinking>`, which
+// is how Opus 5.5 leaked its reasoning into a fast reply on 2026-10-09.
+const REASONING_BLOCK = /<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+// A block that never closes (the model forgot the close tag or ran out of
+// tokens): everything from its opener on is reasoning. It runs after the
+// fenced blocks are gone, so an opener quoted inside one cuts nothing.
+const OPEN_REASONING_BLOCK = /<(?:think|thinking|reasoning)\b[^>]*>[\s\S]*$/i;
+
 // Exported for output/split-structure.ts (chat-extension H-10a): a reader of the
 // final text must drop reasoning blocks before it looks for delimiter markers,
 // exactly as normalize() below does.
 export function stripThinkBlocks(text: string): string {
   return text
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/```(?:think|thinking|reasoning|chain-of-thought)[^\n]*\n[\s\S]*?```/gi, '');
+    .replace(REASONING_BLOCK, '')
+    .replace(/```(?:think|thinking|reasoning|chain-of-thought)[^\n]*\n[\s\S]*?```/gi, '')
+    .replace(OPEN_REASONING_BLOCK, '');
 }
 
 function isMetaLeakLine(line: string): boolean {

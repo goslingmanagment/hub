@@ -92,6 +92,49 @@ describe('reply output normalization', () => {
     ]);
   });
 
+  // Production leak, 2026-10-09 (fast reply, Opus 5.5): `<think\b` did not match
+  // `<thinking>`, so the reasoning reached part 1 of the draft.
+  it('strips <thinking> and <reasoning> blocks, not only <think>', () => {
+    expect(
+      normalizeReplyParts(
+        '<thinking>He already told her… No dashes.</thinking>good boy 😏 save it for me[NEXT]wait did your mom really call lmao 😭',
+      ),
+    ).toEqual(['good boy 😏 save it for me', 'wait did your mom really call lmao 😭']);
+    expect(normalizeSingleReplyPart('<reasoning>keep it short</reasoning>\n"sup"')).toEqual(['sup']);
+    expect(normalizeReplyParts('<THINKING mode="plan">a [NEXT] b</Thinking >hey you')).toEqual([
+      'hey you',
+    ]);
+    expect(normalizeReplyParts('<thinking>quote </think> here</thinking>hey you')).toEqual([
+      'hey you',
+    ]);
+  });
+
+  it('strips reasoning blocks before splitting greeting variants', () => {
+    expect(
+      normalizeVariantReplyParts(
+        '<thinking>three openers? a [VARIANT] b [NEXT] c</thinking>hey you[VARIANT]sup stranger',
+      ),
+    ).toEqual(['hey you', 'sup stranger']);
+  });
+
+  it('drops everything from a reasoning block that never closes', () => {
+    expect(normalizeReplyParts('<thinking>he said no dashes so [NEXT] maybe')).toEqual([]);
+    expect(normalizeReplyParts('hey you[NEXT]<reasoning>now the follow-up')).toEqual(['hey you']);
+    // A close tag of another name does not end the block: nothing after it is a reply.
+    expect(normalizeReplyParts('<think>plan</thinking>hey you')).toEqual([]);
+    // An opener quoted inside a fenced block goes with the block.
+    expect(normalizeReplyParts('```thinking\nwrap it in <think>?\n```\nhey you')).toEqual([
+      'hey you',
+    ]);
+  });
+
+  it('keeps replies that only mention thinking', () => {
+    expect(normalizeReplyParts("can't stop thinking about you <3")).toEqual([
+      "can't stop thinking about you <3",
+    ]);
+    expect(normalizeReplyParts('i think so[NEXT]<thinkpad> lol')).toEqual(['i think so', '<thinkpad> lol']);
+  });
+
   it('filters every bracket-garbage token', () => {
     for (const garbage of ['[', ']', '["', '"]', "['", "']"]) {
       expect(isInsertableReplyPart(garbage)).toBe(false);

@@ -38,9 +38,9 @@
     },
     "output/reply-output.ts": {
       "sourceSha256": "f88c93bef9be368f8cc4b6542102ee88739700249c166cdc1799ce6fd2bec985",
-      "coreSha256": "3a5f296df03ef51d578af7ba156269076bcb231909268f7eee245b6618c04a43",
+      "coreSha256": "83619bac06aa84d43d343a6ec4f46226afc266c5dd52ffd589b85bcf1c4874b9",
       "byteIdenticalToSource": false,
-      "note": "Split by capability (2026-10-04; chat-extension hub PR plan H-10a): stripThinkBlocks is exported so output/split-structure.ts strips reasoning blocks before it splits the final text on [VARIANT], the order normalize() already uses. The sanitizer's behaviour and every other export are unchanged."
+      "note": "Split by capability (2026-10-04; chat-extension hub PR plan H-10a): stripThinkBlocks is exported so output/split-structure.ts strips reasoning blocks before it splits the final text on [VARIANT], the order normalize() already uses. The sanitizer's behaviour and every other export are unchanged. Reasoning blocks (2026-10-15, Lora persona audit): stripThinkBlocks also removes <thinking> and <reasoning> blocks closed by the same tag name, in any case, and drops everything from an opener that never closes; `<think\\b` missed the <thinking> block of a 2026-10-09 production draft. The client copies of the sanitizer still carry the old pattern."
     },
     "output/split.ts": {
       "sourceSha256": "0585ab39e43d9fdfcb7b2fb06bda7c4f4e21b7c3ee0cfd0667d38587b23b4cdd",
