@@ -184,7 +184,7 @@ function buildBreadcrumbs(
     return [
       { label: "Настройки", href: "/settings" },
       { label: "Модели и страницы", href: "/settings?tab=pages" },
-      { label: "Подключение страницы" },
+      { label: parts[1] === "new" ? "Новый браузер страницы" : "Подключение страницы" },
     ];
   }
 
@@ -195,7 +195,7 @@ function buildBreadcrumbs(
     if (parts.length === 2) return [{ label: pageTitle }];
     const crumbs: { label: string; href?: string }[] = [{ label: pageTitle, href: buildPageRoute(pageLabel) }];
     if (parts[2] === "fans" && parts[3] && parts[4]) {
-      crumbs.push({ label: resolveFanLabelFromState(locationState) ?? decodeRouteSegment(parts[4]) });
+      crumbs.push({ label: resolveFanLabelFromState(locationState) ?? "Профиль фана" });
     } else {
       const section = parts[2] ? PAGE_SECTION_LABELS[parts[2]] : undefined;
       if (section) crumbs.push({ label: section });

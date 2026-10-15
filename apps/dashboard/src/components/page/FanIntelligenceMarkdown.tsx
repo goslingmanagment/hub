@@ -19,6 +19,8 @@ export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) 
     );
   }
 
+  // The first section is the dossier's summary: it opens by itself, the rest
+  // wait for a click.
   return (
     <div>
       {preamble && (
@@ -26,14 +28,16 @@ export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) 
           <ReactMarkdown>{preamble}</ReactMarkdown>
         </div>
       )}
-      {sections.map((section, index) => (
-        <AccordionSection
-          key={`${section.heading}-${index}`}
-          heading={section.heading}
-          content={section.content}
-          defaultOpen={false}
-        />
-      ))}
+      <div className="divide-y divide-border-light border-y border-border-light">
+        {sections.map((section, index) => (
+          <AccordionSection
+            key={`${section.heading}-${index}`}
+            heading={section.heading}
+            content={section.content}
+            defaultOpen={index === 0}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -50,21 +54,22 @@ function AccordionSection({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="mt-3">
+    <div>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
+        className="flex w-full items-center justify-between gap-3 py-2.5 text-left text-sm font-semibold text-text-primary transition-colors hover:text-accent"
         aria-expanded={open}
       >
-        <span className="text-[13px] font-bold text-text-primary">{heading}</span>
+        <span>{heading}</span>
         <ChevronDown
           size={16}
-          className={`text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+          aria-hidden="true"
+          className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
         />
       </button>
       {open && (
-        <div className="fan-intelligence-markdown mt-2 px-1">
+        <div className="fan-intelligence-markdown pb-3">
           <ReactMarkdown>{content}</ReactMarkdown>
         </div>
       )}

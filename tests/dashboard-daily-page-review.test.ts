@@ -124,7 +124,7 @@ describe("daily-page independent reads", () => {
   it("shows a retryable TopSupporters failure instead of an endless skeleton", () => {
     mocks.queries.useSpenders!.mockReturnValue(failure());
     const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters");
-    expect(html).toContain("Top Supporters: не удалось загрузить");
+    expect(html).toContain("Топ фанов: не удалось загрузить");
     expect(html).toContain("Повторить");
     expect(html).not.toContain("animate-pulse");
   });

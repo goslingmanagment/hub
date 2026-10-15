@@ -148,7 +148,7 @@ describe("FanProfilePage", () => {
   it("shows period-scoped total spent for bounded periods", () => {
     const html = renderPage();
 
-    expect(html).toContain("Total Spent");
+    expect(html).toContain("Потратил за 30 дней");
     expect(html).toContain("$12.34");
     expect(html).not.toContain("$50.00");
   });
@@ -161,7 +161,7 @@ describe("FanProfilePage", () => {
     expect(queryMocks.useSpenderDetail).toHaveBeenCalledWith("fansly", "fan-001", expect.objectContaining({
       period: "lifetime",
     }));
-    expect(html).toContain("Total Spent");
+    expect(html).toContain("Потратил за всё время");
     expect(html).toContain("$50.00");
   });
 });

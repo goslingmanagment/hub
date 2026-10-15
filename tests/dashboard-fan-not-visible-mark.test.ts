@@ -151,8 +151,8 @@ describe("the page's 'not visible' mark on its spender lists", () => {
     const html = renderRoute(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lora-1/top-supporters");
     expectMarkOnlyOnHiddenFan(html);
     // Listing and totals are untouched: every payer stays, the footer sums all three.
-    expect(html).toContain("3 total");
-    expect(html).toContain("3 visible of 3");
+    expect(html).toContain("3 фана");
+    expect(html).toContain("Показано 3 из 3");
   });
 
   it("marks only the payer this page cannot see in the page's Spenders tab", () => {
@@ -170,7 +170,7 @@ describe("the page's 'not visible' mark on its spender lists", () => {
     mocks.queries.usePageSpenderAutoList.mockReturnValue(read(autoList()));
     const html = renderRoute(SpenderAutoListPage, "/pages/:pageLabel/auto-lists/:bucketKey", "/pages/lora-1/auto-lists/25-plus");
     expectMarkOnlyOnHiddenFan(html);
-    expect(html).toContain("3 entries");
+    expect(html).toContain("3 фана");
   });
 
   it("is reachable from the keyboard and says 'probably' with the answer's date", () => {

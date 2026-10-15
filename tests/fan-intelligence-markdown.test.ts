@@ -40,12 +40,15 @@ describe("FanIntelligenceMarkdown", () => {
     expect(html).toContain("aria-expanded");
   });
 
-  it("renders all sections collapsed by default", () => {
+  it("opens the first section by default and keeps the rest collapsed", () => {
     const html = render(
-      "## 1. ДОСЬЕ\n\nD\n\n## 2. ПОРТРЕТ\n\nP\n\n## 3. СТРАТЕГИЯ\n\n- hook one",
+      "## 1. ДОСЬЕ\n\nfirst body\n\n## 2. ПОРТРЕТ\n\nportrait body\n\n## 3. СТРАТЕГИЯ\n\n- hook one",
     );
-    expect(html).not.toContain('aria-expanded="true"');
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);
+    expect(html.match(/aria-expanded="false"/g)).toHaveLength(2);
+    expect(html).toContain("first body");
     // Section content should not be rendered when collapsed
+    expect(html).not.toContain("portrait body");
     expect(html).not.toContain("hook one");
   });
 });

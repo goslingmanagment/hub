@@ -20,9 +20,9 @@ const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "s
 /** Why the chat is gone, as far as Hub can tell (owner's choice, arena
  *  "vanished chat" plan §8 (a)): a guess says "probably". */
 const CHAT_ACCESS_CAUSE_COPY: Record<ChatAccess["cause"], string> = {
-  unchecked: "The fan deleted their account or blocked the page.",
-  probably_blocked: "The fan's account still exists — they have probably blocked this page.",
-  probably_deleted: "The fan's account was not found on Fansly — it was probably deleted.",
+  unchecked: "Фан удалил аккаунт или заблокировал страницу.",
+  probably_blocked: "Аккаунт фана существует — скорее всего, он заблокировал страницу.",
+  probably_deleted: "Аккаунт фана не найден на Fansly — скорее всего, он удалён.",
 };
 
 /** The chat's banner: only an established episode has one — a chat that is
@@ -33,20 +33,22 @@ function ChatAccessNotice({ chatAccess, showsSocketMessages }: { chatAccess: Cha
   }
 
   return (
-    <div role="note" className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[12px]">
-      <div className="font-semibold text-warning-dark">Fansly no longer serves this chat to the page.</div>
-      <div className="mt-0.5 text-text-secondary">
-        {CHAT_ACCESS_CAUSE_COPY[chatAccess.cause]}
-        {showsSocketMessages && " New messages still arrive over the socket, but they can't be confirmed."}
-      </div>
-      <div className="mt-1 text-[11px] text-text-muted">
-        Since {formatDateTime(chatAccess.openedAt, { yearUnlessCurrent: true })}
-      </div>
-      {chatAccess.ownerNote && (
-        <div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-text-secondary">
-          <span className="font-medium">Owner's note:</span> {chatAccess.ownerNote}
+    <div role="note" className="notice notice-warning">
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">Fansly больше не отдаёт этот чат странице.</div>
+        <div className="mt-0.5">
+          {CHAT_ACCESS_CAUSE_COPY[chatAccess.cause]}
+          {showsSocketMessages && " Новые сообщения ещё приходят в реальном времени, но Fansly их не подтверждает."}
         </div>
-      )}
+        <div className="mt-1 text-xs">
+          С {formatDateTime(chatAccess.openedAt, { yearUnlessCurrent: true })}
+        </div>
+        {chatAccess.ownerNote && (
+          <div className="mt-1 whitespace-pre-wrap break-words text-xs">
+            <span className="font-medium">Заметка владельца:</span> {chatAccess.ownerNote}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -60,12 +62,12 @@ function SocketMessageMark({ message }: { message: PreviewMessage }) {
 
   return (
     <span
-      className="text-[11px] text-warning-dark"
+      className="text-xs text-warning-dark"
       title={message.apiUnavailable
-        ? "This chat is excluded from message sync, so Fansly's API will never confirm this message."
-        : "Arrived over the socket; Fansly's API has not confirmed it."}
+        ? "Этот чат исключён из сбора сообщений, поэтому Fansly никогда не подтвердит это сообщение."
+        : "Сообщение пришло в реальном времени; Fansly его ещё не подтвердил."}
     >
-      {message.apiUnavailable ? "From socket · API unavailable" : "From socket · not confirmed"}
+      {message.apiUnavailable ? "Не будет подтверждено" : "Не подтверждено"}
     </span>
   );
 }
@@ -79,55 +81,55 @@ function getEmptyPreviewCopy(data: PageConversationPreviewResponse) {
 
   if (data.messageSyncUx.requiresAction) {
     return {
-      headline: "Reconnect credentials to load conversation history.",
-      detail: "New messages will appear after credentials are updated.",
+      headline: "Обновите данные входа, чтобы загрузить переписку.",
+      detail: "Новые сообщения появятся после обновления данных входа.",
     };
   }
 
   if (data.messageSyncUx.state === "off") {
     return {
-      headline: "Conversation history updates are paused.",
-      detail: "This preview will stay incomplete until page updates resume.",
+      headline: "Обновление переписки приостановлено.",
+      detail: "Превью останется неполным, пока сбор данных страницы не возобновится.",
     };
   }
 
   if (data.messageSyncUx.state === "attention") {
     return {
-      headline: "Conversation history may be incomplete right now.",
-      detail: "Recent message updates need attention before this preview can fully refresh.",
+      headline: "Переписка сейчас может быть неполной.",
+      detail: "Сбор сообщений требует внимания — после этого превью обновится.",
     };
   }
 
   if (previewExcluded) {
     return {
-      headline: "Conversation preview is unavailable for this fan.",
-      detail: "This conversation is excluded from message sync on this page.",
+      headline: "Превью переписки для этого фана недоступно.",
+      detail: "Этот чат исключён из сбора сообщений на этой странице.",
     };
   }
 
   if (unresolvedIdentity) {
     return {
-      headline: "Conversation preview is waiting on fan identity resolution.",
-      detail: "Once the fan is matched, message backfill can continue for this conversation.",
+      headline: "Превью ждёт, пока Hub определит фана.",
+      detail: "Когда фан будет найден, загрузка сообщений продолжится.",
     };
   }
 
   if (previewCapped) {
     return {
-      headline: "Conversation preview is capped to the latest 25 stored messages.",
-      detail: "Older messages are not available locally for this conversation.",
+      headline: "В превью только последние 25 сохранённых сообщений.",
+      detail: "Более ранних сообщений этого чата в Hub нет.",
     };
   }
 
   if (previewLoading) {
     return {
-      headline: "Conversation history is still loading.",
-      detail: "This preview will fill in automatically as more messages arrive.",
+      headline: "Переписка ещё загружается.",
+      detail: "Превью заполнится само, когда придут сообщения.",
     };
   }
 
   return {
-    headline: "No messages to show.",
+    headline: "Сообщений нет.",
     detail: null,
   };
 }
@@ -137,31 +139,31 @@ function getPreviewFooterText(data: PageConversationPreviewResponse) {
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
 
   if (data.messageSyncUx.requiresAction) {
-    return "Reconnect credentials to keep conversation history current.";
+    return "Обновите данные входа, чтобы переписка не отставала.";
   }
 
   if (data.messageSyncUx.state === "off") {
-    return "Conversation history updates are paused for this page.";
+    return "Обновление переписки на этой странице приостановлено.";
   }
 
   if (data.messageSyncUx.state === "attention") {
-    return "Preview may be outdated while message updates recover.";
+    return "Превью может отставать, пока сбор сообщений не восстановится.";
   }
 
   if (data.conversation.messageSyncEligibility === "excluded") {
-    return "Preview unavailable because this conversation is excluded from message sync.";
+    return "Этот чат исключён из сбора сообщений.";
   }
 
   if (data.conversation.messageSyncEligibility === "unresolved_identity") {
-    return "Preview unavailable until the fan identity for this conversation is resolved.";
+    return "Превью неполное, пока Hub не определит фана.";
   }
 
   if (data.conversation.messageCoverageStatus === "partial_window") {
-    return "Preview is capped to the latest 25 stored messages for this conversation.";
+    return "Показаны только последние 25 сохранённых сообщений.";
   }
 
   if (previewLoading) {
-    return "Preview may be incomplete while conversation history loads.";
+    return "Превью может быть неполным, пока переписка загружается.";
   }
 
   return null;
@@ -196,29 +198,29 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
 
   if (isLoading) {
     return (
-      <div className="bg-hover/50 px-6 py-4">
-        <span className="text-sm text-text-muted">Loading preview...</span>
+      <div className="bg-hover-alt px-5 py-4 sm:px-6">
+        <span className="text-sm text-text-secondary">Загружаем переписку…</span>
       </div>
     );
   }
 
   if (isError) {
     return (
-      <div className="bg-hover/50 px-6 py-4">
-        <span className="text-sm text-text-muted">Preview failed to load.</span>
+      <div className="bg-hover-alt px-5 py-4 sm:px-6">
+        <span className="text-sm text-danger">Не удалось загрузить переписку.</span>
       </div>
     );
   }
 
   if (!data || data.messages.length === 0) {
-    const emptyState = data ? getEmptyPreviewCopy(data) : { headline: "No messages to show.", detail: null };
+    const emptyState = data ? getEmptyPreviewCopy(data) : { headline: "Сообщений нет.", detail: null };
 
     return (
-      <div className="bg-hover/50 px-6 py-4 space-y-2">
+      <div className="space-y-3 bg-hover-alt px-5 py-4 sm:px-6">
         <ChatAccessNotice chatAccess={data?.conversation.chatAccess} showsSocketMessages={false} />
         <div>
-          <div className="text-sm text-text-secondary">{emptyState.headline}</div>
-          {emptyState.detail && <div className="mt-1 text-sm text-text-muted">{emptyState.detail}</div>}
+          <div className="text-sm font-medium text-text-primary">{emptyState.headline}</div>
+          {emptyState.detail && <div className="mt-1 text-sm text-text-secondary">{emptyState.detail}</div>}
         </div>
       </div>
     );
@@ -227,12 +229,12 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
   const footerText = getPreviewFooterText(data);
 
   return (
-    <div className="bg-hover/50 px-6 py-4 space-y-2">
+    <div className="space-y-3 bg-hover-alt px-5 py-4 sm:px-6">
       <ChatAccessNotice
         chatAccess={data.conversation.chatAccess}
         showsSocketMessages={data.messages.some((msg) => msg.source === "live")}
       />
-      <div ref={messagesContainerRef} className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
+      <div ref={messagesContainerRef} className="flex max-h-[360px] flex-col gap-2 overflow-y-auto">
         {data.messages.map((msg: PreviewMessage) => {
           const isModel = msg.senderRole === "model";
           return (
@@ -241,20 +243,20 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
               className={`flex ${isModel ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[70%] rounded-lg px-3 py-2 text-[13px] ${
+                className={`max-w-[80%] rounded-xl px-3 py-2 text-sm text-text-primary ${
                   isModel
-                    ? "bg-accent/15 text-text-primary"
-                    : "bg-hover text-text-primary"
+                    ? "bg-accent-soft"
+                    : "border border-border bg-card"
                 }`}
               >
                 <p className="whitespace-pre-wrap break-words">{normalizeDmMessageText(msg.content)}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2">
-                  <span className="text-[11px] text-text-muted">
+                  <span className="text-xs text-text-secondary">
                     {formatRelativeTime(msg.createdAt)}
                   </span>
                   {msg.totalTipAmountCents > 0 && (
-                    <span className="text-[11px] font-semibold text-green">
-                      Tip {formatUsdFromCents(msg.totalTipAmountCents)}
+                    <span className="text-xs font-semibold text-green">
+                      Чаевые {formatUsdFromCents(msg.totalTipAmountCents)}
                     </span>
                   )}
                   <SocketMessageMark message={msg} />
@@ -264,20 +266,18 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
           );
         })}
       </div>
-      <div className="flex items-center justify-between pt-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-light pt-3">
         {footerText ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-text-muted">{footerText}</span>
-          </div>
+          <span className="text-xs text-text-secondary">{footerText}</span>
         ) : (
           <span />
         )}
         <Link
           to={profileHref}
           onClick={(e) => e.stopPropagation()}
-          className="text-[12px] font-medium text-accent hover:underline"
+          className="link text-sm"
         >
-          View Full Profile
+          Открыть профиль
         </Link>
       </div>
     </div>

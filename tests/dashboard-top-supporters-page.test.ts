@@ -157,17 +157,17 @@ describe("TopSupportersPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("All");
-    expect(html).toContain("Active");
-    expect(html).toContain("Cooling");
-    expect(html).toContain("Inactive");
-    expect(html).toContain("Needs reactivation");
-    expect(html).toContain("Reactivate");
-    expect(html).toContain("Sub");
-    expect(html).toContain("Next");
-    expect(html).toContain("Last Chat");
-    expect(html).toContain("Last Spend");
-    expect(html).toContain("Unanswered");
+    expect(html).toContain("Все");
+    expect(html).toContain("Активные");
+    expect(html).toContain("Остывают");
+    expect(html).toContain("Неактивные");
+    expect(html).toContain("Нужно вернуть");
+    expect(html).toContain("Вернуть");
+    expect(html).toContain("Подписка");
+    expect(html).toContain("Действие");
+    expect(html).toContain("Переписка");
+    expect(html).toContain("Последняя трата");
+    expect(html).toContain("ждёт ответа");
     expect(html).toContain("Чаевые");
     expect(html).not.toContain("Last Activity");
     expect(html).not.toContain("Last activity ");
@@ -178,7 +178,7 @@ describe("TopSupportersPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("No supporters found for this period.");
+    expect(html).toContain("За этот период трат нет.");
   });
 
   it("passes the persisted spender period through when it is not \"all\"", () => {
