@@ -203,6 +203,13 @@ function journal(logDir: string, kind: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+/** The journals are written through file streams and the engine hears the
+ *  operator through its socket: a line or a state may come after the event
+ *  the test waited for (a loaded CI machine). What should be there is
+ *  awaited with `expect.poll` — a hang guard, never a speed check — and a
+ *  failure still shows its diff. */
+const SETTLED = { timeout: 10_000, interval: 10 };
+
 describe("the start (plan §4.1)", () => {
   it("stands with the exit closed until the engine starts the page", async () => {
     const s = await setUp();
@@ -210,7 +217,7 @@ describe("the start (plan §4.1)", () => {
     expect(s.operator.page.snapshot).toEqual({ step: "exit_closed", stopReason: null, retryAtWall: null, halted: false });
     expect(s.control.calls).toEqual([]);
     expect(s.operator.egress.exitOpen).toBe(false);
-    expect(s.engine.last("state")).toMatchObject({ step: "exit_closed", exitOpen: false });
+    await expect.poll(() => s.engine.last("state"), SETTLED).toMatchObject({ step: "exit_closed", exitOpen: false });
   });
 
   it("goes step by step to the open exit, with the self-test passed and the exit IP verified, then loads the site (step 8) and stops there", async () => {
@@ -229,8 +236,8 @@ describe("the start (plan §4.1)", () => {
     const probe = s.model.requests.find((request) => request.fragment.startsWith("#pb-selftest-"))!;
     expect(probe).toMatchObject({ method: "GET", outcome: "continued", proxyStatus: 403 });
     expect(new URL(probe.url).hostname).toBe("apiv3.fansly.com");
-    expect(journal(s.logDir, "connections")).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", port: 443, refused: true, result: "refused: exit closed" }));
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/pb-selftest", decision: "continued", admission: "self-test probe (exit closed)" }));
+    await expect.poll(() => journal(s.logDir, "connections"), SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", port: 443, refused: true, result: "refused: exit closed" }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/pb-selftest", decision: "continued", admission: "self-test probe (exit closed)" }));
     // The exit IP through the page's SOCKS5, with its password.
     expect(s.socks.connects).toContain("api.ipify.org:443");
     expect(s.socks.logins.every((login) => login.ok && login.password === SOCKS_PASSWORD)).toBe(true);
@@ -238,13 +245,13 @@ describe("the start (plan §4.1)", () => {
     // open; its document passes unpaced, journaled.
     expect(s.chrome.sent("Page.navigate").map((command) => [command.sessionId, command.params.url])).toEqual([[s.operator.control.workTab!.sessionId, "https://fansly.com/"]]);
     expect(s.operator.control.workTab!.url).toBe("https://fansly.com/");
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "fansly.com", path: "/", resourceType: "Document", decision: "continued", admission: null, result: "passed unpaced" }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ host: "fansly.com", path: "/", resourceType: "Document", decision: "continued", admission: null, result: "passed unpaced" }));
     // No session confirmed without the engine's identity read (step 9).
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId).toBeNull();
     expect(s.operator.admissionsOpen()).toBe(true);
     // The states journal has every transition.
-    expect(journal(s.logDir, "states").map((line) => line.to)).toEqual(expect.arrayContaining(["exit_open", "site_loaded"]));
+    await expect.poll(() => journal(s.logDir, "states").map((line) => line.to), SETTLED).toEqual(expect.arrayContaining(["exit_open", "site_loaded"]));
   });
 
   it("a site whose document never comes fails the start too: the page is not taken for loaded", async () => {
@@ -306,10 +313,10 @@ describe("the start (plan §4.1)", () => {
     await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "its id to go");
     // Not admitted: no end of it goes to the engine.
     expect(s.engine.of("siteDone")).toEqual([]);
-    const requests = journal(s.logDir, "requests");
-    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/message/ack", decision: "failed", result: "BlockedByClient: a read mark: closed until the owner opens it (closed: POST|PUT|PATCH|DELETE /message/ack)" }));
-    expect(requests).toContainEqual(expect.objectContaining({ host: "widget.intercom.io", decision: "continued", result: "passed unpaced" }));
-    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "failed", admission: expect.stringMatching(/^site request /), result: "Failed: refused by the engine: paused" }));
+    const requests = () => journal(s.logDir, "requests");
+    await expect.poll(requests, SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/message/ack", decision: "failed", result: "BlockedByClient: a read mark: closed until the owner opens it (closed: POST|PUT|PATCH|DELETE /message/ack)" }));
+    await expect.poll(requests, SETTLED).toContainEqual(expect.objectContaining({ host: "widget.intercom.io", decision: "continued", result: "passed unpaced" }));
+    await expect.poll(requests, SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: "/api/v1/account/me", decision: "failed", admission: expect.stringMatching(/^site request /), result: "Failed: refused by the engine: paused" }));
     // The gate opened no window: a CONNECT to the API host is refused even with the exit open.
     expect(s.operator.egress.gate.state.phase).toBe("closed");
   });
@@ -347,7 +354,7 @@ describe("the start (plan §4.1)", () => {
       ["/api/v1/message/ack", "blocked_by_extension"],
       ["/api/v1/pb-selftest-unknown", "blocked_by_extension"],
     ]);
-    expect(s.engine.last("state")!.selfTest).toEqual({ ok: true, atWall: expect.any(Number), failed: null });
+    await expect.poll(() => s.engine.last("state")?.selfTest, SETTLED).toEqual({ ok: true, atWall: expect.any(Number), failed: null });
   });
 
   it("without the package nothing installs: the self-test fails on the extension, the exit stays closed", async () => {
@@ -376,7 +383,7 @@ describe("the start (plan §4.1)", () => {
   it("an image without the rules extension reports its checks as not installed — never as passed", async () => {
     const s = await setUp({ extension: "not_installed", noPackage: true });
     await started(s);
-    expect(s.engine.last("state")!.selfTest).toMatchObject({ ok: true, failed: null, notInstalled: ["dnr_never", "dnr_write"] });
+    await expect.poll(() => s.engine.last("state")?.selfTest, SETTLED).toMatchObject({ ok: true, failed: null, notInstalled: ["dnr_never", "dnr_write"] });
     const checks = s.operator.lastSelfTest!.checks;
     expect([checks.dnr_never.status, checks.dnr_write.status]).toEqual(["not_installed", "not_installed"]);
   });
@@ -869,9 +876,9 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     // Chrome's start took the hello's time zone and languages from the hand-over.
     expect(readFileSync(s.chromeEnv, "utf8")).toBe("TZ=Europe/Berlin\nLANGUAGES=en-US,en\n");
     expect(s.model.handovers).toEqual(["TZ=Europe/Berlin\nLANGUAGES=en-US,en\n"]);
-    const states = journal(s.logDir, "states");
-    expect(states.find((line) => line.to === "env_applied")?.note).toBe("time zone Europe/Berlin; languages en-US, en; position 52.5, 13.4 ±50 m");
-    expect(String(states.find((line) => line.to === "control_attached")?.note)).toContain("environment verified: time zone Europe/Berlin");
+    const noteOf = (step: string) => journal(s.logDir, "states").find((line) => line.to === step)?.note;
+    await expect.poll(() => noteOf("env_applied"), SETTLED).toBe("time zone Europe/Berlin; languages en-US, en; position 52.5, 13.4 ±50 m");
+    await expect.poll(() => String(noteOf("control_attached")), SETTLED).toContain("environment verified: time zone Europe/Berlin");
     // The site's grant came before any tab could run; every tab got the position before it ran.
     const order = s.chrome.commands.map((command) => `${command.method}${command.sessionId ? `@${command.sessionId}` : ""}`);
     expect(s.model.grants[0]).toEqual({ origin: "https://fansly.com", context: null, permissions: ["geolocation"] });
@@ -888,7 +895,7 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.model.disposed).toEqual(["C1"]);
     // The self-test's probe, and the site's document once the exit opened.
     expect(s.chrome.sent("Fetch.continueRequest").map((command) => s.model.requests.find((request) => request.interceptionId === command.params.requestId)?.url)).toEqual([expect.stringMatching(/^https:\/\/apiv3\.fansly\.com\/api\/v1\/pb-selftest\?pbst=/), "https://fansly.com/"]);
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "127.0.0.1", path: "/pb-env-check", decision: "fulfilled" }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ host: "127.0.0.1", path: "/pb-env-check", decision: "fulfilled" }));
     // What the browser showed, in the log.
     const verified = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "env.verified");
     expect(verified?.seen).toEqual({
@@ -1450,7 +1457,7 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     expect(outcome.body).toEqual({ bodyId: frame.bodyId, decodedBytes: s.model.hubBody.length, sha256: createHash("sha256").update(s.model.hubBody).digest("hex") });
     expect(s.engine.order.indexOf("binary")).toBeLessThan(s.engine.order.indexOf("result"));
     // The journal: the Hub request by its real host and path, nothing more.
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: "hub attempt 9100", decision: "continued", result: "released under its admission" }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: "hub attempt 9100", decision: "continued", result: "released under its admission" }));
     // A new connection gets it again, the body first.
     const next = await again(s, s.engine);
     await next.waitFor("result", (message) => message.attemptId === 9100);
@@ -1566,9 +1573,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(frame.data.equals(s.model.siteBody)).toBe(true);
     expect(s.engine.order.indexOf("binary")).toBeLessThan(s.engine.order.lastIndexOf("events"));
     // The journal: released under its admission, and its end.
-    const requests = journal(s.logDir, "requests");
-    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: `site request ${String(ask.siteRequestId)} (attempt 8100)`, decision: "continued", result: "released under its admission" }));
-    expect(requests).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, decision: "ended", status: 200, result: "200, body buffered" }));
+    const requests = () => journal(s.logDir, "requests");
+    await expect.poll(requests, SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, admission: `site request ${String(ask.siteRequestId)} (attempt 8100)`, decision: "continued", result: "released under its admission" }));
+    await expect.poll(requests, SETTLED).toContainEqual(expect.objectContaining({ host: "apiv3.fansly.com", path: ME, decision: "ended", status: 200, result: "200, body buffered" }));
     // A new connection gets the end again, until its resultAck.
     const next = new FakeEngine();
     s.engine.close();
@@ -1651,16 +1658,19 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     s.engine.send(identity(9302, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9302, 10_000);
     await until(() => s.operator.page.step === "ready", START_MS, "the page ready");
-    expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789", sessionFingerprint: FINGERPRINT });
-    const steps = journal(s.logDir, "states").map((line) => line.to);
-    expect(steps.slice(steps.lastIndexOf("exit_open"))).toEqual(["exit_open", "site_loaded", "session_confirmed", "ready"]);
+    await expect.poll(() => s.engine.last("state"), SETTLED).toMatchObject({ step: "ready", accountId: "123456789", sessionFingerprint: FINGERPRINT });
+    const stepsSinceTheExitOpened = () => {
+      const steps = journal(s.logDir, "states").map((line) => line.to);
+      return steps.slice(steps.lastIndexOf("exit_open"));
+    };
+    await expect.poll(stepsSinceTheExitOpened, SETTLED).toEqual(["exit_open", "site_loaded", "session_confirmed", "ready"]);
     expect(s.operator.admissionsOpen()).toBe(true);
     // Nothing of the site failed before the confirmation: no reload.
     expect(s.model.navigations).toEqual(["https://fansly.com/"]);
     // The site logs in anew: another session is not the confirmed one.
     read(s, ME, "fansly-token-AnotherLogin0123456789");
     await until(() => s.operator.page.step === "site_loaded", START_MS, "back to the loaded site");
-    expect(s.engine.last("state")).toMatchObject({ step: "site_loaded", accountId: null });
+    await expect.poll(() => s.engine.last("state"), SETTLED).toMatchObject({ step: "site_loaded", accountId: null });
     // Nothing of the answer but the account id was kept or logged.
     expect(s.lines.join("\n")).not.toContain("owner@example.test");
   });
@@ -1685,10 +1695,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.page.step === "ready", START_MS, "the page ready");
     // Loaded anew, once: the navigation of step 8, and this one.
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
-    const notes = stateNotes(s);
-    expect(notes).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
-    expect(notes.slice(-4).map((note) => note.split(":")[0])).toEqual(["site_loaded>exit_open", "exit_open>site_loaded", "site_loaded>session_confirmed", "session_confirmed>ready"]);
-    expect(s.engine.last("state")).toMatchObject({ step: "ready", accountId: "123456789" });
+    await expect.poll(() => stateNotes(s), SETTLED).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
+    await expect.poll(() => stateNotes(s).slice(-4).map((note) => note.split(":")[0]), SETTLED).toEqual(["site_loaded>exit_open", "exit_open>site_loaded", "site_loaded>session_confirmed", "session_confirmed>ready"]);
+    await expect.poll(() => s.engine.last("state"), SETTLED).toMatchObject({ step: "ready", accountId: "123456789" });
     expect(s.operator.page.snapshot.stopReason).toBeNull();
     // The new document's request goes under the engine that admits now.
     const fresh = read(s, ME);
@@ -1731,7 +1740,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await s.engine.waitFor("result", (message) => message.attemptId === 9504, 10_000);
     await until(() => s.operator.page.step === "ready", START_MS, "ready in the third start");
     expect(s.model.navigations).toHaveLength(5);
-    expect(stateNotes(s).filter((note) => note.includes("the work tab is loaded anew, once"))).toHaveLength(2);
+    await expect.poll(() => stateNotes(s).filter((note) => note.includes("the work tab is loaded anew, once")), SETTLED).toHaveLength(2);
   });
 
   it("the reload's own document must come: a reload whose document never commits fails the start, the page not taken for loaded", async () => {
@@ -1769,9 +1778,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     const reload = s.chrome.commands.findLastIndex((command) => command.method === "Page.navigate");
     expect(failCommands).toHaveLength(2);
     expect(failCommands.every(({ index }) => index < reload)).toBe(true);
-    expect(journal(s.logDir, "requests").filter((line) => line.decision === "ended" && line.result === "the work tab is loaded anew")).toHaveLength(2);
+    await expect.poll(() => journal(s.logDir, "requests").filter((line) => line.decision === "ended" && line.result === "the work tab is loaded anew"), SETTLED).toHaveLength(2);
     // They were not failures of the new document: only the refused one counted.
-    expect(stateNotes(s).some((note) => note.includes("1 API request of the site failed before it"))).toBe(true);
+    await expect.poll(() => stateNotes(s).some((note) => note.includes("1 API request of the site failed before it")), SETTLED).toBe(true);
     // The engine's admission of one of them, coming after the reload: not used.
     const late = s.engine.of("siteAdmit")[1]!;
     s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: late.siteRequestId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9650 });
@@ -1897,7 +1906,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     // Nobody admits it: failed once its wait is over.
     await until(() => waiting.outcome === "failed", 5000, "the wait to end");
     expect(waiting.failReason).toBe("Failed");
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: "no admission within 1500 ms" }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: "no admission within 1500 ms" }));
   });
 
   it("the engine's closeExit cancels what the site has waiting: nothing of it goes when the exit opens again", async () => {
@@ -1940,7 +1949,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(waiting.outcome === "failed" || s.control.calls.includes("kill")).toBe(true);
     expect(s.chrome.sent("Fetch.continueRequest").some((command) => command.params.requestId === waiting.interceptionId)).toBe(false);
     expect(s.operator.egress.exitOpen).toBe(false);
-    expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: expect.stringContaining("the page stopped: the page's SOCKS5 failed a tunnel") }));
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toContainEqual(expect.objectContaining({ path: ME, decision: "ended", result: expect.stringContaining("the page stopped: the page's SOCKS5 failed a tunnel") }));
     await until(() => s.control.calls.filter((call) => call === "start").length > starts, 5000, "the page starting again");
     // Nothing of it is asked again.
     expect(s.engine.of("siteAdmit")).toHaveLength(1);
