@@ -400,6 +400,21 @@ describe("compose config", () => {
     expect(text).toMatch(/\nnetworks:\n(?: {2}#.*\n)* {2}pb-control:\n {4}external: true\n/);
   });
 
+  // A one-off `compose run` of a service with a fixed address fails while that
+  // service runs ("Address already in use"): the deploy's pre-recreate
+  // migration did, on the first app-scope deploy after PR 3.
+  it("the deploy's one-off containers run a service that holds no fixed address", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const deployScript = await readComposeFile("scripts/deploy-production.sh");
+    const services = [...deployScript.matchAll(/compose\}?[^\n]*?\srun((?:\s+--?[a-z][a-z-]*(?:=\S+)?)*)\s+([a-z][\w-]*)\s/g)].map((match) => match[2]);
+    expect(services.length).toBeGreaterThanOrEqual(2);
+    for (const service of services) {
+      const block = getServiceBlock(text, service ?? "");
+      expect(block, service).toBeTruthy();
+      expect(block, service).not.toContain("ipv4_address");
+    }
+  });
+
   it("docker-compose.production.yml gives the api time to complete an in-flight Fansly request", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
     expect(getServiceBlock(text, "api")).toMatch(/^ {4}stop_grace_period: 45s$/m);
@@ -749,13 +764,13 @@ describe("compose config", () => {
     expect(capabilityGate).toContain("would regress the already-enabled");
     expect(capabilityGate).toContain("LIFECYCLE_FIRST_ENABLE=1");
     expect(inventoryGate).toContain("verify-desktop-lifecycle-v2-inventory");
-    expect(inventoryGate).toContain("--no-deps api");
+    expect(inventoryGate).toContain("--no-deps worker");
     expect(startup).toContain("loadConfig(process.env, { loadDotEnv: false })");
     expect(postDeployCapability).toContain("desktop-lifecycle-v2");
     expect(capabilityGate).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
     expect(capabilityGateIndex).toBeGreaterThan(buildIndex);
     expect(preRecreateMigration).toContain("RUNTIME_IMAGE=");
-    expect(preRecreateMigration).toContain("--no-deps api node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql");
+    expect(preRecreateMigration).toContain("--no-deps worker node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql");
     expect(preRecreateMigration).toContain("current API was left running");
     expect(forbidRollback).toContain("SCHEMA_BEFORE_FILE");
     expect(forbidRollback).toContain("is_rollback_compatible_migration");
