@@ -80,8 +80,9 @@ export interface PromptClock {
   /** Unix ms of the generation. */
   nowMs: number;
   /** Whose clock the transcript's times are in: 'utc' when the hub rendered
-   *  it (transcript/format.ts: UTC times and day lines), 'client' when the
-   *  request carried a client's own text, in that device's clock. */
+   *  it (transcript/format.ts: UTC times and day lines) or a client's text
+   *  says it is UTC (`clientContext.transcriptClock`), 'client' when the
+   *  request carried a client's own text in that device's clock. */
   transcript: 'utc' | 'client';
   /** The persona's place and IANA time zone; absent when unknown, and then
    *  the line names no local time. */

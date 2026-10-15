@@ -1200,6 +1200,16 @@ describe("client-context path (Stage 32)", () => {
     expect(summaryText).toContain(
       "Now: Thu 2026-10-15, 04:12 UTC. Transcript times come from the chatter's device clock, which may be in another time zone.",
     );
+    // …unless the client says its text is UTC (fansly-chat E168).
+    const utcSummary = await call("fan-summary", {
+      ...baseContext,
+      transcript: "--- 2026-10-14 ---\n[10:00] Fan: fresh client-side message about the beach",
+      transcriptClock: "utc",
+    });
+    expect(utcSummary.statusCode, utcSummary.body).toBe(200);
+    const utcSummaryTask = capture.input!.body.prompt.userBlocks.at(-1)!.text;
+    expect(utcSummaryTask).toContain("Now: Thu 2026-10-15, 04:12 UTC. Transcript times and day lines are UTC.");
+    expect(utcSummaryTask).not.toContain("device clock");
 
     // hi-greeting locks on the client count (35 > 10)…
     const hiLocked = await call("hi-greeting", baseContext);

@@ -2640,6 +2640,11 @@ export const aiFeatureStreamBodySchema = z.object({
     // compatibility with clients released before Decision #127.
     fanSilenceDays: z.number().int().min(0).max(FAN_SILENCE_DAYS_MAX).optional(),
     transcriptCoverage: z.enum(["full-history", "window"]).optional(),
+    // The clock of the transcript's `[HH:MM]` and `--- YYYY-MM-DD ---` lines:
+    // `utc` from a client that writes them in UTC (fansly-chat E168), so the
+    // prompt's `Now:` line says so. Absent: the clock of the device that wrote
+    // the text (clients released before it).
+    transcriptClock: z.literal("utc").optional(),
     // AI media describer (hub docs/runbooks/ai-media-describe.md): the
     // describable media of the KEPT window, numbered as they appear in the
     // transcript — inline `[Photo #3]` (legacy `[Photo]`), appended
