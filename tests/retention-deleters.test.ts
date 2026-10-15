@@ -99,6 +99,11 @@ const SANCTIONED_DELETER_FILES = [
   // forget the API's open screens of a page's browser once closed, and the
   // closings of a login once written. No SQL deletion.
   "apps/runtime/src/modules/page-browser/index.ts",
+  // Project Browser (owner decision 2026-10-15; Astra's review of PR #627,
+  // round 2): Map.delete forgets the owner's proxy checks once stale (10
+  // minutes, in the API's memory). No SQL deletion: nothing of a check is
+  // stored.
+  "apps/runtime/src/services/page-browser-proxy-checks.ts",
   // Project Browser (stage 3 PR 16): Map/Set.delete forget the onboarding
   // links of profiles no page has and a route's in-memory hold. No SQL
   // deletion: every send of a link is journaled and kept.
