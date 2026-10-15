@@ -36,6 +36,9 @@ import { FANSLY_ROUTES } from "../apps/runtime/src/sync/fansly/routes.ts";
 // layers: tests/page-browser-rules.test.ts.
 
 const api = (path: string) => `https://${API_HOST}${API_BASE}${path}`;
+/** The e-mail writes of the site's bundle: the account's address changed or
+ *  confirmed in its settings, a complaint's sender checked — no login. */
+const EMAIL_WRITES = ["/login/email", "/login/email/verify", "/login/email/verification", "/login/email/verification/token", "/email-challenge/v1/", "/email-verify/v1/"] as const;
 const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
 const both = (method: string, url: string, resourceType?: string): [MapDecision, MapDecision] => [
   decide({ method, url, ...(resourceType ? { resourceType } : {}) }, "automation"),
@@ -107,6 +110,24 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     for (const row of LOGIN_SCREEN_ROWS) expect(row).toMatchObject({ methods: ["GET"], mode: "both", route: SITE_OTHER_ROUTE });
     expect(FANSLY_ROUTES.has(SITE_OTHER_ROUTE as never)).toBe(true);
     expect(OPEN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["GET /** both site.other", "OPTIONS /** both null"]);
+  });
+
+  it("carry the e-mail confirmation of a new device's login as the 2FA code's operation — POST /login/twofa, the manual login's only — and no other (owner decision 2026-10-15)", () => {
+    // By the site's bundle the e-mail's code goes as a 2FA code, {token, code}:
+    // one login row, the engine's own, and nothing more opened for it.
+    expect(LOGIN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["POST /login manual_login auth.login", "POST /login/twofa manual_login auth.twofa"]);
+    expect(matchSiteRequest("api", "POST", `${API_BASE}/login/twofa`)).toEqual({ kind: "login", route: "auth.twofa" });
+    expect(decide({ method: "POST", url: api("/login/twofa") }, "manual_login")).toMatchObject({ action: "admit", route: "auth.twofa", operation: "login", platformData: false });
+    expect(decide({ method: "POST", url: api("/login/twofa") }, "automation")).toMatchObject({ action: "refuse", refusal: "mode" });
+    // The bundle's e-mail operations change or confirm the account's address
+    // in its settings, or check a complaint's sender (`/email-challenge/v1/`,
+    // `/email-verify/v1/`): no login, closed in both modes as every other write.
+    for (const path of [...EMAIL_WRITES]) {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        expect(matchSiteRequest("api", method, `${API_BASE}${path}`), `${method} ${path}`).toMatchObject({ kind: "refused" });
+        for (const decision of both(method, api(path))) expect(decision, `${method} ${path}`).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_writes" });
+      }
+    }
   });
 
   it("give every request the route the engine's own matcher gives it", () => {

@@ -29,6 +29,10 @@ export const pageBrowserScreenSchema = z.object({
   fields: z.array(pageBrowserLoginFieldSchema),
   /** The site's own error text, as it shows it. */
   siteError: z.string().nullable(),
+  /** Where the code it asks for comes from: `email` — Fansly e-mailed it
+   *  to the account for a login from a new device (owner decision
+   *  2026-10-15); absent — the page's 2FA code. */
+  codeFrom: z.literal("email").optional(),
 }).strict();
 
 /** Why the browser did not do what was asked: not in the manual login (yet,

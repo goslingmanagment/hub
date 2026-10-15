@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CdpError, type CdpPort, type EventHandler } from "../apps/page-browser/src/cdp/client.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
-import { LoginDesk } from "../apps/page-browser/src/login/desk.ts";
+import { LoginDesk, marksOf } from "../apps/page-browser/src/login/desk.ts";
 import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, type FormMarks, type PageMarks, type SessionMarks } from "../apps/page-browser/src/login/screens.ts";
 import { loadConfig } from "../apps/page-browser/src/operator/config.ts";
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
@@ -66,10 +66,10 @@ const API_TOKEN = "api-token-fedcba9876543210fedcba9876543210";
 const SITE_TOKEN = "fansly-token-AfTeRlOgIn0123456789";
 const SITE_CLIENT = "720167541418239001";
 
-const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: null, ...marks });
+const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: null, newDevice: false, ...marks });
 const page = (forms: FormMarks[], extra: Partial<PageMarks> = {}): PageMarks => ({ origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms, ...extra });
 
-describe("the screens (spec §7; signs fansly-login/1)", () => {
+describe("the screens (spec §7; signs fansly-login/2)", () => {
   const none: SessionMarks = { live: null, atStart: null };
   it("knows the login, the code, the error, the success — and nothing else", () => {
     expect(recognize(page([form({ password: 1, login: 1 })]), none)).toMatchObject({ screen: "login", fields: ["login", "password"], siteError: null });
@@ -86,6 +86,26 @@ describe("the screens (spec §7; signs fansly-login/1)", () => {
     expect(recognize(page([]), { live: "a".repeat(64), atStart: "a".repeat(64), accountLoaded: "a".repeat(64) })).toMatchObject({ screen: "success", why: expect.stringContaining("loaded the account") });
     // A form still shown wins: an accepted code with the code form again is no success.
     expect(recognize(page([form({ code: 1 })]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "code" });
+  });
+
+  it("the code form of a login from a new device asks for the code Fansly e-mailed — on its screen and its error; nothing else does (owner decision 2026-10-15)", () => {
+    expect(SCREEN_VERSION).toBe("fansly-login/2");
+    expect(recognize(page([form({ code: 1, newDevice: true })]), none)).toEqual({ screen: "code", fields: ["code"], siteError: null, codeFrom: "email", why: "the code form of a login from a new device" });
+    expect(recognize(page([form({ code: 1, newDevice: true, error: "2FA code is invalid or already used." })]), none))
+      .toMatchObject({ screen: "error", fields: ["code"], siteError: "2FA code is invalid or already used.", codeFrom: "email" });
+    // The 2FA code: no notice of a new device.
+    expect(recognize(page([form({ code: 1 })]), none)).toMatchObject({ screen: "code", codeFrom: null });
+    expect(recognize(page([form({ code: 1, error: "Invalid code" })]), none)).toMatchObject({ screen: "error", codeFrom: null });
+    // The notice beside the login form, or without a single code form, says nothing.
+    expect(recognize(page([form({ password: 1, login: 1, newDevice: true })]), none)).toMatchObject({ screen: "login", codeFrom: null });
+    expect(recognize(page([form({ code: 1, newDevice: true, other: 1 })]), none)).toMatchObject({ screen: "unknown", codeFrom: null });
+    expect(recognize(page([form({ code: 1, newDevice: true })], { captcha: true }), none)).toMatchObject({ screen: "unknown", codeFrom: null });
+    expect(recognize(page([]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "success", codeFrom: null });
+    // The probe's answer without the mark is no page at all.
+    const probed = { origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms: [{ password: 0, login: 0, code: 1, other: 0, submit: 1, error: null }] };
+    expect(marksOf(probed)).toBeNull();
+    expect(marksOf({ ...probed, forms: [{ ...probed.forms[0], newDevice: "yes" }] })).toBeNull();
+    expect(marksOf({ ...probed, forms: [{ ...probed.forms[0], newDevice: true }] })?.forms[0]).toMatchObject({ code: 1, newDevice: true });
   });
 
   it("a page without a form after the login alone (an e-mail notice, say) is unknown, never a success", () => {
@@ -1088,5 +1108,62 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     await until(() => request.outcome === "failed", WAIT_MS, "the login to be failed");
     expect(request.failReason).toBe("BlockedByClient");
     expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/login")).toBe(false);
+    // The code of a new device's login, e-mailed by Fansly, is no exception
+    // (owner decision 2026-10-15: open for the time of the login only).
+    const code = s.model.pause("https://apiv3.fansly.com/api/v1/login/twofa", "POST", tab, "XHR", { "content-type": "application/json" }, JSON.stringify({ token: "twofa-step-token", code: CODE_MARKER }));
+    await until(() => code.outcome === "failed", WAIT_MS, "the code to be failed");
+    expect(code.failReason).toBe("BlockedByClient");
+    expect(s.engine.of("siteAdmit").some((ask) => ask.path === "/api/v1/login/twofa")).toBe(false);
+  });
+
+  it("a login from a new device: the code Fansly e-mailed, asked for as such — its error, then the code typed in, the site's own POST /login/twofa under the engine's admission, the success; the e-mail's operations closed in the manual login too; nothing typed anywhere but in the browser (owner decision 2026-10-15)", async () => {
+    const s = await setUp();
+    await started(s);
+    const api = await Caller.open(s.rpcPort);
+    cleanups.push(() => api.close());
+    s.site.newDevice = true;
+    const loadsBefore = s.model.navigations.length;
+    expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    await until(() => s.model.navigations.length > loadsBefore && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
+    s.site.setTab(s.operator.control.workTab!.sessionId);
+
+    const afterSubmit = await api.call("login.submit", { login: LOGIN_MARKER, password: PASSWORD_MARKER });
+    expect(afterSubmit).toEqual({ type: "login.stateResult", callId: expect.any(String), screen: "code", screenVersion: SCREEN_VERSION, fields: ["code"], siteError: null, codeFrom: "email" });
+    expect(await api.call("login.state")).toMatchObject({ screen: "code", codeFrom: "email" });
+    // A wrong code: the site's error at the same form, still the e-mail's code.
+    const wrong = await api.call("login.code", { code: "pb-email-wrong-3f1a" });
+    expect(wrong).toMatchObject({ type: "login.stateResult", screen: "error", fields: ["code"], siteError: "Invalid code", codeFrom: "email" });
+    const afterCode = await api.call("login.code", { code: CODE_MARKER });
+    expect(afterCode).toMatchObject({ type: "login.stateResult", screen: "success", fields: [], siteError: null });
+    expect(afterCode).not.toHaveProperty("codeFrom");
+    const codeAsks = s.engine.of("siteAdmit").filter((ask) => ask.path === "/api/v1/login/twofa");
+    expect(codeAsks).toHaveLength(2);
+    for (const ask of codeAsks) expect(ask).toMatchObject({ method: "POST", host: "apiv3.fansly.com", route: "auth.twofa", operation: "login" });
+    await until(() => s.engine.of("siteDone").filter((done) => codeAsks.some((ask) => ask.siteRequestId === done.siteRequestId)).length === 2, WAIT_MS, "both codes' ends");
+    for (const done of s.engine.of("siteDone").filter((end) => codeAsks.some((ask) => ask.siteRequestId === end.siteRequestId))) {
+      // Its answer is not kept: a login's answer carries secrets.
+      expect(done).toMatchObject({ sent: true, status: 200, body: "not_platform_data" });
+    }
+    // The bundle's e-mail operations change or confirm the account's address
+    // — no login: closed in the manual login as every other write.
+    const tab = s.operator.control.workTab!.sessionId;
+    for (const path of ["/login/email", "/login/email/verify", "/login/email/verification", "/login/email/verification/token"]) {
+      const write = s.model.pause(`https://apiv3.fansly.com/api/v1${path}`, "POST", tab, "XHR", { "content-type": "application/json" }, JSON.stringify({ code: CODE_MARKER }));
+      await until(() => write.outcome === "failed", WAIT_MS, `${path} to be failed`);
+      expect(write.failReason, path).toBe("BlockedByClient");
+      expect(s.engine.of("siteAdmit").some((ask) => ask.path === `/api/v1${path}`), path).toBe(false);
+    }
+
+    // What was typed reached the browser — and nothing else.
+    expect(s.site.inserted).toEqual([LOGIN_MARKER, PASSWORD_MARKER, "pb-email-wrong-3f1a", CODE_MARKER]);
+    await s.operator.journals.flushed();
+    await s.operator.buffer.close();
+    const written = [...filesUnder(s.logDir), ...filesUnder(join(s.dir, "buffer")), ...filesUnder(join(s.dir, "state"))];
+    expect(written.length).toBeGreaterThan(0);
+    for (const marker of [LOGIN_MARKER, PASSWORD_MARKER, CODE_MARKER, "pb-email-wrong-3f1a"]) {
+      expect(s.lines.join("\n"), marker).not.toContain(marker);
+      for (const file of written) expect(file.includes(marker), marker).toBe(false);
+      for (const message of s.engine.messages) expect(JSON.stringify(message), marker).not.toContain(marker);
+    }
   });
 });

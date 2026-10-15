@@ -11,8 +11,10 @@ export type LoginView =
   | { kind: "preparing" }
   /** Open, and the browser does not answer. */
   | { kind: "unreachable" }
-  /** A screen the form fills: the login, the code, the site's error. */
-  | { kind: "form"; screen: "login" | "code" | "error"; fields: Array<"login" | "password" | "code">; siteError: string | null }
+  /** A screen the form fills: the login, the code, the site's error.
+   *  `codeFrom` "email": the code is the one Fansly e-mailed for a login
+   *  from a new device, not the 2FA code. */
+  | { kind: "form"; screen: "login" | "code" | "error"; fields: Array<"login" | "password" | "code">; siteError: string | null; codeFrom?: "email" }
   /** Fansly took the login: the owner closes it. */
   | { kind: "success" }
   /** A screen the form does not know: the owner opens the browser's screen. */
@@ -56,8 +58,14 @@ export function loginViewOf(data: PageBrowserLoginResponse): LoginView {
     case "unknown":
       return { kind: "unknown" };
     default:
-      return { kind: "form", screen: screen.screen, fields: screen.fields, siteError: screen.siteError };
+      return formViewOf(screen, screen.screen);
   }
+}
+
+/** The form of a screen it fills, `kind` its screen (a page's login and a
+ *  new page's onboarding alike). */
+export function formViewOf(screen: NonNullable<PageBrowserLoginResponse["screen"]>, kind: "login" | "code" | "error"): Extract<LoginView, { kind: "form" }> {
+  return { kind: "form", screen: kind, fields: screen.fields, siteError: screen.siteError, ...(screen.codeFrom === "email" ? { codeFrom: "email" as const } : {}) };
 }
 
 /** The view's chip: its words and its tone. */
@@ -71,7 +79,8 @@ export function loginChipOf(view: LoginView): { label: string; tone: Tone } {
       return { label: "Браузер не отвечает", tone: "danger" };
     case "form":
       if (view.screen === "error") return { label: "Fansly показал ошибку", tone: "danger" };
-      return view.screen === "code" ? { label: "Ждёт код 2FA", tone: "progress" } : { label: "Ждёт логин и пароль", tone: "progress" };
+      if (view.screen === "login") return { label: "Ждёт логин и пароль", tone: "progress" };
+      return view.codeFrom === "email" ? { label: "Ждёт код из письма", tone: "progress" } : { label: "Ждёт код 2FA", tone: "progress" };
     case "success":
       return { label: "Вход выполнен", tone: "good" };
     case "unknown":
@@ -101,4 +110,9 @@ export function stepProblemText(answer: PageBrowserLoginStepResponse): string | 
 /** The form's fields: login and password together, or the code. */
 export function wantsCode(view: Extract<LoginView, { kind: "form" }>): boolean {
   return view.fields.includes("code");
+}
+
+/** The code is the one Fansly e-mailed for a login from a new device. */
+export function wantsEmailCode(view: Extract<LoginView, { kind: "form" }>): boolean {
+  return wantsCode(view) && view.codeFrom === "email";
 }

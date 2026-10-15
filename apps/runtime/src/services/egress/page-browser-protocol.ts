@@ -368,7 +368,10 @@ export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.code"; code: string }
 );
 export type LoginReply = { callId: string } & (
-  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null }
+  // codeFrom (an addition, owner decision 2026-10-15): "email" — the code
+  // asked for is the one Fansly e-mailed for a login from a new device;
+  // absent — the 2FA code, or an operator older than this.
+  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null; codeFrom?: "email" }
   | { type: "login.screenshotResult"; jpeg: BodyRef }
   | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
 );
@@ -780,7 +783,10 @@ export function parseLoginReply(text: string): ParsedLoginReply {
       case "login.stateResult": {
         if (!Array.isArray(m.fields) || m.fields.length > 3) throw new Invalid("fields is not a list of fields");
         const fields = m.fields.map((field, i) => oneOf<"login" | "password" | "code">(field, LOGIN_FIELDS, `fields[${i}]`));
-        return { ok: true, reply: { type: "login.stateResult", callId, screen: oneOf<LoginScreen>(m.screen, LOGIN_SCREENS, "screen"), screenVersion: str(m.screenVersion, "screenVersion", 64), fields, siteError: strOrNull(m.siteError, "siteError", 300) } };
+        // Absent from an operator older than the e-mail code (an addition).
+        if (m.codeFrom !== undefined && m.codeFrom !== "email") throw new Invalid("codeFrom is not where a code comes from");
+        const codeFrom = m.codeFrom === "email" ? { codeFrom: "email" as const } : {};
+        return { ok: true, reply: { type: "login.stateResult", callId, screen: oneOf<LoginScreen>(m.screen, LOGIN_SCREENS, "screen"), screenVersion: str(m.screenVersion, "screenVersion", 64), fields, siteError: strOrNull(m.siteError, "siteError", 300), ...codeFrom } };
       }
       case "login.screenshotResult":
         return { ok: true, reply: { type: "login.screenshotResult", callId, jpeg: bodyRef(m.jpeg, "jpeg") } };

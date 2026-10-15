@@ -48,7 +48,7 @@
 
 import { CdpError, type CdpPort } from "../cdp/client.ts";
 import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
-import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, SELECT_ALL, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
+import { FOCUSED, HIT, locateExpression, PROBE, recognize, SCREEN_VERSION, SELECT_ALL, type CodeFrom, type LoginField, type LoginScreen, type PageMarks, type Recognized } from "./screens.ts";
 
 export interface LoginTimings {
   /** One CDP command of the desk. */
@@ -84,7 +84,7 @@ export interface LoginDeskDeps {
 
 /** What a call comes to: the screen, a screenshot, or a refusal. */
 export type LoginOutcome =
-  | { kind: "state"; screen: LoginScreen; screenVersion: string; fields: LoginField[]; siteError: string | null }
+  | { kind: "state"; screen: LoginScreen; screenVersion: string; fields: LoginField[]; siteError: string | null; codeFrom: CodeFrom }
   | { kind: "screenshot"; jpeg: Buffer }
   | { kind: "refused"; reason: "screen_changed" | "busy" | "not_manual_login" };
 
@@ -175,8 +175,9 @@ export class LoginDesk {
     });
   }
 
-  /** The 2FA code into the code form, then its button — for as long as
-   *  `guard` lets the call act. */
+  /** The code into the code form, then its button — for as long as `guard`
+   *  lets the call act. The 2FA code and the e-mail code of a new device go
+   *  the same way: one field, one button, the site's `POST /login/twofa`. */
   code(code: string, guard: LoginGuard): Promise<LoginOutcome> {
     return this.#step("code", ["code"], guard, async () => {
       await this.#type("code", ["code"], code, guard);
@@ -237,7 +238,7 @@ export class LoginDesk {
   }
 
   #stateOf(seen: Recognized): LoginOutcome {
-    return { kind: "state", screen: seen.screen, screenVersion: SCREEN_VERSION, fields: seen.fields, siteError: seen.siteError };
+    return { kind: "state", screen: seen.screen, screenVersion: SCREEN_VERSION, fields: seen.fields, siteError: seen.siteError, codeFrom: seen.codeFrom };
   }
 
   async #marks(): Promise<PageMarks | null> {
@@ -391,7 +392,8 @@ export function marksOf(value: unknown): PageMarks | null {
   for (const raw of v.forms) {
     if (raw === null || typeof raw !== "object") return null;
     const f = raw as Record<string, unknown>;
-    const form = { password: count(f.password), login: count(f.login), code: count(f.code), other: count(f.other), submit: count(f.submit), error: typeof f.error === "string" && f.error !== "" ? f.error.slice(0, 300) : null };
+    if (typeof f.newDevice !== "boolean") return null;
+    const form = { password: count(f.password), login: count(f.login), code: count(f.code), other: count(f.other), submit: count(f.submit), error: typeof f.error === "string" && f.error !== "" ? f.error.slice(0, 300) : null, newDevice: f.newDevice };
     if ([form.password, form.login, form.code, form.other, form.submit].some((n) => n < 0)) return null;
     forms.push(form);
   }

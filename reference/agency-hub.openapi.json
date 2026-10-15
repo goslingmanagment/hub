@@ -136998,6 +136998,12 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
+                              ]
                             }
                           },
                           "required": [
@@ -137311,6 +137317,12 @@
                               "type": [
                                 "string",
                                 "null"
+                              ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
                               ]
                             }
                           },
@@ -138302,6 +138314,12 @@
                               "type": [
                                 "string",
                                 "null"
+                              ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
                               ]
                             }
                           },
@@ -139338,6 +139356,12 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
+                              ]
                             }
                           },
                           "required": [
@@ -139958,6 +139982,12 @@
                               "type": [
                                 "string",
                                 "null"
+                              ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
                               ]
                             }
                           },
@@ -140951,6 +140981,12 @@
                               "type": [
                                 "string",
                                 "null"
+                              ]
+                            },
+                            "codeFrom": {
+                              "type": "string",
+                              "enum": [
+                                "email"
                               ]
                             }
                           },

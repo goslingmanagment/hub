@@ -21,6 +21,9 @@ vi.setConfig({ testTimeout: 120_000 });
 const rules = buildRules();
 const level = (priority: number) => rules.filter((rule) => rule.priority === priority);
 const api = (path: string) => `https://${API_HOST}${API_BASE}${path}`;
+/** The e-mail writes of the site's bundle: the account's address changed or
+ *  confirmed in its settings, a complaint's sender checked — no login. */
+const EMAIL_WRITES = ["/login/email", "/login/email/verify", "/login/email/verification", "/login/email/verification/token", "/email-challenge/v1/", "/email-verify/v1/"] as const;
 const placeholder = (path: string) => `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${path}`;
 const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
 /** The methods a row closes, an "every method" row by these. */
@@ -192,6 +195,21 @@ describe("the identity of the two layers (spec §2.7)", () => {
     for (const row of LOGIN_ROWS) {
       for (const rule of level(PRIORITY.closed)) expect(dnrMatches(rule, { method: "POST", url: api(row.template) }), row.template).toBe(false);
       expect(dnrRule(rules, { method: "POST", url: api(row.template) })).toMatchObject({ priority: PRIORITY.login, action: { type: "allow" } });
+    }
+  });
+
+  it("the e-mail confirmation of a new device's login goes by the login rule of /login/twofa, on the real host only; the bundle's e-mail operations both layers cancel in both modes (owner decision 2026-10-15)", () => {
+    for (const type of ["xmlhttprequest", "main_frame"]) {
+      expect(dnrRule(rules, { method: "POST", url: api("/login/twofa"), type }), type).toMatchObject({ priority: PRIORITY.login, action: { type: "allow" } });
+      expect(dnrBlocks(rules, { method: "POST", url: placeholder("/login/twofa"), type }), type).toBe(true);
+    }
+    expect(mapCloses({ method: "POST", url: api("/login/twofa") })).toBe(false);
+    for (const path of [...EMAIL_WRITES]) {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        const request = { method, url: api(path), type: "xmlhttprequest" };
+        expect(dnrRule(rules, request), `${method} ${path}`).toMatchObject({ priority: PRIORITY.general, action: { type: "block" } });
+        expect(mapCloses(request), `${method} ${path}`).toBe(true);
+      }
     }
   });
 
