@@ -104,7 +104,7 @@ beforeEach(() => {
 describe("«Ссылки OnlyFans» screen", () => {
   it("shows the links of the series: claims as fans of a trial link, net money, state, channel, Hub money as no data yet", () => {
     const html = render();
-    expect(html).toContain("Ссылки OnlyFans");
+    expect(html).toContain("Данные обновляются 4 раза в сутки · экран перечитывает их каждые 5 минут");
     expect(html).toContain("Ссылки страницы lora-vip-of");
     expect(html).toContain("2 939");
     expect(html).toContain("активации");
@@ -115,7 +115,7 @@ describe("«Ссылки OnlyFans» screen", () => {
     expect(html).toContain("Порнтоки");
     expect(html).toContain("@coraline_red");
     expect(html).toContain("без канала");
-    expect(html).toContain("OFAPI ещё считает");
+    expect(html).toContain("OnlyFans ещё считает");
     expect(html).toContain("Hub пока не считает");
     expect(html).toContain("пересчёт 09.09.26");
     expect(html).toContain("$992.00 → $728.00");
@@ -145,7 +145,7 @@ describe("«Ссылки OnlyFans» screen", () => {
     mocks.links.mockReturnValue(query(undefined, true));
     const html = render();
     expect(html).toContain("Read failed");
-    expect(html).not.toContain("Ряд ссылок этой страницы ещё не собирался");
+    expect(html).not.toContain("Ссылки этой страницы ещё не собирались");
   });
 });
 
@@ -187,8 +187,8 @@ describe("the screen's rules", () => {
     const page = snapshot().pages[0]!;
     const stale = { ...page, ofapiMapped: false, kinds: [{ ...page.kinds[0]!, stale: true, staleSince: "2026-10-07T21:45:17.000Z", lastUsableAt: "2026-10-07T21:45:17.000Z", lastAttempt: attempt("skipped", false, "page_auth_dead") }] };
     expect(pageWarnings(stale, 15)).toEqual([
-      "Страница не привязана к аккаунту OFAPI: ссылки не собираются.",
-      "Tracking-ссылки: не обновлялись с 08.10, 00:45 — дольше 15 ч. Последняя попытка 09.10, 15:46 — попытки не было: сессия страницы в OFAPI не действует.",
+      "Страница не привязана к аккаунту OnlyFans API: ссылки не собираются.",
+      "Tracking-ссылки: не обновлялись с 08.10, 00:45 — дольше 15 ч. Последняя попытка 09.10, 15:46 — попытки не было: сессия страницы в OnlyFans API не действует.",
     ]);
     expect(pageWarnings({ ...page, kinds: [page.kinds[0]!] }, 15)).toEqual([]);
   });
@@ -209,7 +209,7 @@ describe("the screen's rules", () => {
     });
     // One mill is no difference a person reads: "$0.00", no sign.
     expect(differenceView(comparison({}))).toEqual({
-      amount: "$0.00", period: "за период с 09.10.26", figures: "OFAPI $52.50 · Hub $52.50", note: "предварительно",
+      amount: "$0.00", period: "за период с 09.10.26", figures: "OnlyFans $52.50 · Hub $52.50", note: "предварительно",
     });
     expect(differenceView(comparison({ differenceMills: -9, hubNetMills: 52_491 })).amount).toBe("$0.00");
     expect(differenceView(comparison({ state: "comparable", differenceMills: 1_230, hubNetMills: 53_730 }))).toMatchObject({
@@ -217,7 +217,7 @@ describe("the screen's rules", () => {
     });
     // Not comparable: no amount, the state says why.
     expect(differenceView(comparison({ state: "different_history", vendorDeltaMills: 13_052_500, differenceMills: -13_000_000 }))).toEqual({
-      amount: null, period: "OFAPI за всё время, Hub с 09.10.26", figures: "OFAPI $13,052.50 · Hub $52.50",
+      amount: null, period: "OnlyFans за всё время, Hub с 09.10.26", figures: "OnlyFans $13,052.50 · Hub $52.50",
       note: "разные периоды — не сравнимы",
     });
     expect(differenceView(comparison({ state: "incomplete" }))).toEqual({

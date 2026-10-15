@@ -11,18 +11,14 @@ import {
   linkKindLabels,
   linkStateView,
   moscowDateTime,
+  toneBadge,
   vendorMoneyView,
-  type Tone,
 } from "./ofLinksView.js";
 
-// «Ссылки OnlyFans»: one row per link. A table where the screen is wide, a
-// list of cards where it is not (container query on the section).
-
-const toneClass: Record<Tone, string> = {
-  ok: "bg-emerald-500/10 text-emerald-700",
-  muted: "bg-hover text-text-secondary",
-  warn: "bg-amber-500/10 text-amber-700",
-};
+// «Ссылки»: one row per link. A table where the screen is wide, a list of
+// cards where it is not (container query on the section). The phone rule of
+// ui.css (no wrapping in a data table) does not reach the table: below 56rem
+// the list is shown instead.
 
 function Muted({ children, nowrap = false }: { children: ReactNode; nowrap?: boolean }) {
   return <span className={`block text-xs text-text-muted ${nowrap ? "whitespace-nowrap" : ""}`}>{children}</span>;
@@ -40,12 +36,15 @@ function LinkCell({ link }: { link: OfLink }) {
   </>;
 }
 
-function StateCell({ link }: { link: OfLink }) {
+/** The state, its term, and — when the link fell out of the last collection —
+ *  that fact; when its figures were read is in the cell's tooltip. */
+function StateCell({ link, now }: { link: OfLink; now: number }) {
   const state = linkStateView(link);
-  return <>
-    <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${toneClass[state.tone]}`}>{state.label}</span>
+  return <span className="block" title={`Данные на ${moscowDateTime(link.observedAt)} МСК · ${agoText(link.observedAt, now)}`}>
+    <span className={toneBadge[state.tone]}>{state.label}</span>
     {state.detail && <Muted nowrap>{state.detail}</Muted>}
-  </>;
+    {!link.inLatestRun && <span className="block whitespace-nowrap text-xs text-warning-dark">нет в последнем сборе</span>}
+  </span>;
 }
 
 function FansCell({ link }: { link: OfLink }) {
@@ -61,10 +60,10 @@ function VendorCell({ link }: { link: OfLink }) {
   return <>
     <span className={`block whitespace-nowrap tabular-nums ${vendor.amount === null ? "text-text-muted" : "font-medium"}`}>{vendor.amount ?? "нет данных"}</span>
     <Muted>{vendor.note}</Muted>
-    {vendor.recalculation && <span className="mt-0.5 block text-xs text-amber-700" data-of-link-recalculation="">
+    {vendor.recalculation && <span className="mt-0.5 block text-xs text-warning-dark" data-of-link-recalculation="">
       {vendor.recalculation.when}<br /><span className="whitespace-nowrap">{vendor.recalculation.change}</span>
     </span>}
-    {vendor.recalculation?.account && <span className="block text-xs text-amber-700">{vendor.recalculation.account}</span>}
+    {vendor.recalculation?.account && <span className="block text-xs text-warning-dark">{vendor.recalculation.account}</span>}
   </>;
 }
 
@@ -96,50 +95,41 @@ function ChannelCell({ link }: { link: OfLink }) {
   </span>;
 }
 
-function SnapshotCell({ link, now }: { link: OfLink; now: number }) {
-  return <>
-    <span className="block whitespace-nowrap tabular-nums">{moscowDateTime(link.observedAt)}</span>
-    <Muted nowrap>{link.inLatestRun ? agoText(link.observedAt, now) : "нет в последнем сборе"}</Muted>
-  </>;
-}
-
-const head = "px-2.5 py-2 text-xs font-medium text-text-muted";
-const cell = "px-2.5 py-2.5 align-top";
 const columns: Array<{ title: string; numeric?: boolean; render: (link: OfLink, now: number) => ReactNode }> = [
   { title: "Ссылка", render: (link) => <LinkCell link={link} /> },
-  { title: "Статус и срок", render: (link) => <StateCell link={link} /> },
+  { title: "Статус", render: (link, now) => <StateCell link={link} now={now} /> },
   { title: "Клики", numeric: true, render: (link) => <span className="tabular-nums">{count(link.clicks)}</span> },
   { title: "Фаны", numeric: true, render: (link) => <FansCell link={link} /> },
-  { title: "OFAPI, чистыми", numeric: true, render: (link) => <VendorCell link={link} /> },
-  { title: "Hub, чистыми", numeric: true, render: (link) => <HubCell link={link} /> },
+  { title: "Доход по OnlyFans", numeric: true, render: (link) => <VendorCell link={link} /> },
+  { title: "Доход по Hub", numeric: true, render: (link) => <HubCell link={link} /> },
   { title: "Разница", numeric: true, render: (link) => <DifferenceCell link={link} /> },
-  { title: "Канал · подрядчик", render: (link) => <ChannelCell link={link} /> },
-  { title: "Снимок, МСК", render: (link, now) => <SnapshotCell link={link} now={now} /> },
+  { title: "Канал", render: (link) => <ChannelCell link={link} /> },
 ];
 
 export function OfLinksTable({ links, now }: { links: readonly OfLink[]; now: number }) {
   return <div className="@container">
     <div className="hidden overflow-x-auto @4xl:block">
-      <table className="w-full text-sm" data-of-links="table">
+      <table className="data-table" data-of-links="table">
         <thead>
-          <tr className="border-b border-border">
-            {columns.map((column) => <th key={column.title} scope="col" className={`${head} ${column.numeric ? "text-right" : "text-left"}`}>{column.title}</th>)}
+          <tr>
+            {columns.map((column) => <th key={column.title} scope="col" className={column.numeric ? "num" : undefined}>{column.title}</th>)}
           </tr>
         </thead>
         <tbody>
-          {links.map((link) => <tr key={`${link.pageId}:${link.linkKind}:${link.linkRef}`} className={`border-b border-border-light ${link.state === "active" ? "" : "text-text-secondary"}`} data-of-link={link.linkRef}>
-            {columns.map((column) => <td key={column.title} className={`${cell} ${column.numeric ? "text-right" : ""}`}>{column.render(link, now)}</td>)}
+          {links.map((link) => <tr key={`${link.pageId}:${link.linkKind}:${link.linkRef}`} data-of-link={link.linkRef}>
+            {/* Not `num`: a money cell carries notes that must wrap. */}
+            {columns.map((column) => <td key={column.title} className={`align-top ${column.numeric ? "text-right tabular-nums" : ""} ${link.state === "active" ? "" : "muted"}`}>{column.render(link, now)}</td>)}
           </tr>)}
         </tbody>
       </table>
     </div>
     <ul className="divide-y divide-border-light @4xl:hidden" data-of-links="list">
-      {links.map((link) => <li key={`${link.pageId}:${link.linkKind}:${link.linkRef}`} className="py-3" data-of-link={link.linkRef}>
+      {links.map((link) => <li key={`${link.pageId}:${link.linkKind}:${link.linkRef}`} className="px-5 py-4" data-of-link={link.linkRef}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 break-words"><LinkCell link={link} /></div>
-          <div className="shrink-0 text-right"><StateCell link={link} /></div>
+          <div className="shrink-0 text-right"><StateCell link={link} now={now} /></div>
         </div>
-        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm @md:grid-cols-3 @xl:grid-cols-4">
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm @md:grid-cols-3 @xl:grid-cols-4">
           {columns.slice(2).map((column) => <div key={column.title} className="min-w-0 break-words">
             <dt className="text-xs text-text-muted">{column.title}</dt>
             <dd>{column.render(link, now)}</dd>
