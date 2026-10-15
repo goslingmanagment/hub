@@ -58,6 +58,7 @@ export async function siteContextOf(
     clocks: RouteClocks | null;
     specs: readonly RouteKeySpec[];
     checksOnly: boolean;
+    bootstrapOnly?: boolean;
     now: Date;
   },
 ): Promise<SiteContext> {
@@ -69,6 +70,7 @@ export async function siteContextOf(
     pausedAll: input.page.pausedAll,
     pageHeld: pageHeldForSite(input.holds, input.now),
     checksOnly: input.checksOnly,
+    bootstrapOnly: input.bootstrapOnly === true,
     // A route state this build cannot read admits nothing: no route opens.
     routeOpensAt: (route) => {
       if (view === null) return { at: new Date(input.now.getTime() + 3_600_000) };

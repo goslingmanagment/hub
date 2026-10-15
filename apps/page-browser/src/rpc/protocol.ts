@@ -119,7 +119,8 @@ export type { Step, StopReason };
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id.
-export const PROTOCOL = { major: 1, minor: 1 } as const;
+// Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
+export const PROTOCOL = { major: 1, minor: 2 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -322,6 +323,15 @@ export interface RecoverResult {
   attempts: { attemptId: AttemptId; state: "outcome_resent" | "not_sent" | "unknown" }[];
 }
 // ── the site's requests (plan §4.3; PR 7) ──
+/** Withdraw a still-waiting admission on the connection it was asked on.
+ *  Once the operator accepted a grant it reports the ordinary end instead:
+ *  a cancellation never retracts a possible send. */
+export interface AdmissionCancel {
+  type: "admissionCancel";
+  kind: "site" | "ws";
+  id: string;
+  reason: "request_ended" | "document_replaced" | "wait_expired" | "page_stopped";
+}
 export interface SiteAdmit {
   type: "siteAdmit";
   siteRequestId: SiteRequestId;
@@ -486,6 +496,7 @@ export type OperatorToEngine =
   | Sent
   | Result
   | RecoverResult
+  | AdmissionCancel
   | SiteAdmit
   | SiteDone
   | WsAdmit

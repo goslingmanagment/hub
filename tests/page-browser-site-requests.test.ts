@@ -907,6 +907,9 @@ describe("documents, owners, restarts (stage 1, amendment 41; plan §4.7, §4.9)
     w.chrome.navigate("F1", "L2");
     await until(() => waiting.outcome === "failed", 3000, "the old document's request to fail");
     expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", result: "its document was replaced while it waited" }));
+    expect(w.engine.of("admissionCancel")).toEqual([{
+      type: "admissionCancel", kind: "site", id: w.engine.of("siteAdmit")[0]!.siteRequestId, reason: "document_replaced",
+    }]);
     // Admitted after its document went: not released, the engine hears.
     const late = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications"), frameId: "F1", loaderId: "L2" });
     await until(() => w.engine.of("siteAdmit").length === 2, 3000, "the second ask");

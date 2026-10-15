@@ -118,7 +118,7 @@ import { engineHeaders, isPreflight } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { hostAndPath, type RequestLine } from "../logs/journal.ts";
 import { classifyHost, decide as mapDecide, type MapDecision, type OperatorMode } from "../policy/operations.ts";
-import type { BodyRef, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
+import type { AdmissionCancel, BodyRef, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, wallMs, type Logger } from "../shared/util.ts";
 import { Documents, type DocumentMark } from "./documents.ts";
 
@@ -170,7 +170,7 @@ export interface SiteLink {
   /** Changes with the connection. */
   epoch(): number;
   generation(): number;
-  send(message: SiteAdmit | SiteDone): boolean;
+  send(message: SiteAdmit | SiteDone | AdmissionCancel): boolean;
 }
 
 export interface SiteDeps {
@@ -1316,7 +1316,14 @@ export class SiteRequests {
     this.#journalEnd(op, end, keep ? (whole ? "buffered" : "incomplete") : null);
     const gone: GroupItem = { siteRequest: { siteRequestId: op.id, gone: true } };
     if (op.attemptId === null) {
-      // Never admitted: nothing to tell the engine (it drops what waits).
+      // Only the connection this ask belongs to may withdraw it. A grant
+      // already accepted has an attemptId and follows the normal end path.
+      if (stage === "asked" && op.askedEpoch === this.#deps.link.epoch() && !end.error?.startsWith("refused by the engine:")) {
+        const reason: AdmissionCancel["reason"] = end.reload || this.documents.replaced(op.document) ? "document_replaced"
+          : monoMs() >= op.waitDeadline ? "wait_expired" : this.#deps.notUp() !== null ? "page_stopped" : "request_ended";
+        const withdrawn = this.#deps.link.send({ type: "admissionCancel", kind: "site", id: op.id, reason });
+        this.#log("admit.cancel", { siteRequestId: op.id, epoch: op.askedEpoch, reason, withdrawn });
+      }
       if (op.kept) this.#write(`gone:${op.id}`, () => [gone], null);
       return;
     }

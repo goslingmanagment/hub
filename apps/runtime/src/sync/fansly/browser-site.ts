@@ -1,4 +1,5 @@
-import type { SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
+import type { AdmissionCancel, SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
+import type { SyncLogger } from "../engine/commit.ts";
 import type { LinkStatus, MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
 import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
@@ -135,6 +136,7 @@ export interface BrowserSiteAdmissionOptions {
   /** The engine's monotonic clock (the pacer's). */
   monoNow: () => number;
   metrics?: Metrics;
+  logger?: SyncLogger;
   /** A page on Node (PR 15): only the manual login's own requests. */
   loginOnly?: boolean;
 }
@@ -153,6 +155,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     client.onOtherMessage((message) => {
       if (message.type === "siteAdmit") this.#onSiteAdmit(message);
       else if (message.type === "wsAdmit") this.#onWsAdmit(message);
+      else if (message.type === "admissionCancel") this.#onCancel(message);
     });
     client.onEnd((end) => this.#onEnd(end));
     this.#unlisten.push(() => client.onOtherMessage(null), () => client.onEnd(null));
@@ -171,9 +174,9 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       .sort((a, b) => a.askedMono - b.askedMono);
   }
 
-  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void {
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }, request?: PendingSiteRequest): boolean {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.state !== "pending") return;
+    if (entry === undefined || entry.state !== "pending" || entry.epoch !== this.#o.client.epoch || (request !== undefined && entry.request !== request)) return false;
     const waitDeadline = entry.request.waitDeadlineMono;
     if (waitDeadline !== undefined && this.#o.monoNow() >= waitDeadline) {
       // Its wait ended between the choice and the grant: the browser fails
@@ -182,7 +185,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       entry.attemptId = admission.attemptId;
       this.#answerRefusal(entry, "wait_expired");
       this.#finish(entry, { kind: "aborted_before_send", reason: "wait_expired" });
-      return;
+      return true;
     }
     entry.state = "granted";
     entry.attemptId = admission.attemptId;
@@ -195,11 +198,12 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       this.#o.metrics?.increment("sync_browser_site_grant_unsent", { kind: entry.kind });
       this.#finish(entry, { kind: "aborted_before_send", reason: "link_lost" });
     }
+    return true;
   }
 
-  refuse(id: string, reason: SiteRefusalReason): void {
+  refuse(id: string, reason: SiteRefusalReason, request?: PendingSiteRequest): void {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.state !== "pending") return;
+    if (entry === undefined || entry.state !== "pending" || (request !== undefined && entry.request !== request)) return;
     this.#entries.delete(id);
     this.#remember(id);
     this.#answerRefusal(entry, protocolSiteRefusal(reason));
@@ -250,6 +254,20 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
 
   #manualLogin(): boolean {
     return this.#o.client.state?.mode === "manual_login";
+  }
+
+  #onCancel(message: AdmissionCancel): void {
+    const entry = this.#entries.get(message.id);
+    if (entry === undefined || entry.kind !== message.kind || entry.epoch !== this.#o.client.epoch) return;
+    this.#o.logger?.info({ id: message.id, kind: message.kind, reason: message.reason, epoch: entry.epoch, state: entry.state }, "page browser: pending admission withdrawn");
+    if (entry.state !== "pending") {
+      // The grant crossed the withdrawal. Its ordinary, buffered end is
+      // still required; never reclassify an already possible send here.
+      return;
+    }
+    this.#entries.delete(message.id);
+    this.#remember(message.id);
+    this.#o.metrics?.increment("sync_browser_admission_cancelled", { kind: message.kind });
   }
 
   #remember(id: string): void {

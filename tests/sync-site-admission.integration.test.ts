@@ -5,7 +5,7 @@ import { getSyncPage, setPagePause, type Database } from "@agency_hub_core/db";
 import type { PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../apps/runtime/src/sync/engine/ports.ts";
 import { SITE_SENDS_PER_HOUR } from "../apps/runtime/src/sync/engine/site-admission.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, waitFor } from "./helpers/sync-engine-host.ts";
+import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, testSpec, waitFor } from "./helpers/sync-engine-host.ts";
 
 // The admission of a page's own site requests by the live actor (Project
 // Browser, plan §3.2, spec §3; stage 3 PR 8) on a real Postgres, with a fake
@@ -100,6 +100,26 @@ async function attempts(pageId: number): Promise<AttemptRow[]> {
 }
 
 describe("the site path of the live actor", () => {
+  it("an aborted late admission does not spend the site's turn on ten engine requests (lilly-1 322581)", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const site = new FakeSiteBrowser();
+    site.ask({ id: "dead" });
+    site.ask({ id: "live" });
+    site.answer = (request) => request.id === "dead" ? { kind: "aborted_before_send", reason: "cancelled" } : { kind: "response", status: 200, retryAfterMs: null };
+    const made = await makeTestActor({ db: db(), pageId, settingMs: 40, registry: testRegistry([testSpec("busy.poll", {
+      plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+      apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+    }, { kind: "poll", class: "planned", period: { everyMs: 1 } })]) });
+    made.deps.site = site;
+    const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+    try {
+      await waitFor(() => site.granted.length === 2 ? true : null, 5_000, "the live request after an unsent grant");
+    } finally { made.stop.abort(); await run; }
+    expect((await attempts(pageId)).slice(0, 2)).toMatchObject([
+      { origin: "site", outcome: "aborted_before_send", sent: false }, { origin: "site", outcome: "response", sent: true },
+    ]);
+  });
+
   it("admits the site's reads through the pacer and the journal", async () => {
     const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
     const site = new FakeSiteBrowser();

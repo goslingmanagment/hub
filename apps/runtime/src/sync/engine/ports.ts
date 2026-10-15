@@ -251,6 +251,9 @@ export interface PageTransport {
    *  latest refusal a credentials hold names (the verify it admits, A3).
    *  Absent where the transport stores none. */
   storedCredentialsGeneration?(): Promise<string | null>;
+  /** A fresh browser learns its session from admitted site GETs. While
+   *  unknown, only the bootstrap reads may use that path. Absent on Node. */
+  needsSiteBootstrap?(): boolean;
   close(): Promise<void>;
 }
 
@@ -338,7 +341,7 @@ export class CredentialsGenerationChangedError extends Error {
  *  thrown by `prepare` before anything is admitted. Not the platform's
  *  failure — no network hold, no breaker: the actor waits and asks again. */
 export class PageTransportUnavailableError extends Error {
-  constructor(readonly reason: string, readonly retryInMs: number) {
+  constructor(readonly reason: string, readonly retryInMs: number, readonly code: "unavailable" | "session_unknown" = "unavailable") {
     super(`The page transport cannot take a request now: ${reason}`);
     this.name = "PageTransportUnavailableError";
   }
@@ -455,13 +458,15 @@ export type SiteRefusalReason =
  *  engine's answers, the end of an admitted request. Absent on a page without
  *  a browser: nothing of the site path runs there. */
 export interface SiteAdmissionPort {
-  /** The requests waiting now, oldest first. */
+  /** The requests waiting now, oldest first. Objects stay stable while
+   *  pending, so a choice can be fenced against cancellation/reconnection. */
   pending(): readonly PendingSiteRequest[];
   /** Admit one: the browser may send it within `sendWithinMs` from now (the
-   *  admission's send window left), under the attempt `attemptId`. */
-  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void;
+   *  admission's send window left), under the attempt `attemptId`. False:
+   *  this exact choice was cancelled/replaced before the grant. */
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }, request?: PendingSiteRequest): boolean | void;
   /** Refuse one: it is failed in the browser, nothing is sent. */
-  refuse(id: string, reason: SiteRefusalReason): void;
+  refuse(id: string, reason: SiteRefusalReason, request?: PendingSiteRequest): void;
   /** The end of an admitted request; never throws for an outcome. */
   end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
   /** The end of `id` (its attempt `attemptId`) is committed: a browser that

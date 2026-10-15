@@ -300,7 +300,8 @@ export async function createBrowserPageTransport(
     if (now < unavailableUntil) return unavailable("the page's browser could not take the last request", unavailableUntil - now);
     if (client.up && client.quiesced === null) return unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250);
     const why = notTaking(client.state);
-    return why === null ? null : unavailable(why);
+    return why === null ? null : new PageTransportUnavailableError(why, unavailableRetryMs,
+      client.state?.exitOpen && client.state.stopReason === null && client.state.sessionFingerprint === null ? "session_unknown" : "unavailable");
   }
 
   /** The page's settings changed since the link's hello (a proxy): say it
@@ -322,7 +323,7 @@ export async function createBrowserPageTransport(
 
   async function generationNow(): Promise<{ snapshot: PageSnapshot; generation: string; fingerprint: string }> {
     const fingerprint = client.state?.sessionFingerprint ?? null;
-    if (fingerprint === null) throw unavailable("the page's browser knows no live session yet");
+    if (fingerprint === null) throw new PageTransportUnavailableError("the page's browser knows no live session yet", unavailableRetryMs, "session_unknown");
     const snapshot = await readSnapshot(ctx.db, page.pageId);
     if (snapshot === null) throw new UnsendableRequestError("page_inactive");
     if (snapshot.proxy === null) throw unavailable("the page has no proxy: its browser has no way out");
@@ -754,6 +755,7 @@ export async function createBrowserPageTransport(
 
   return {
     held,
+    needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
       const refused = refusalNow();
       if (refused !== null) throw refused;

@@ -47,6 +47,16 @@ describe("the route of a site request", () => {
 });
 
 describe("the decision at a slot", () => {
+  it("a fresh session admits only bootstrap GETs; their pause, budgets and checks-only still hold", () => {
+    const reads = [request({ id: "data", path: "/api/v1/messaging/groups" }), request({ id: "identity", path: "/api/v1/account/me?x=1" })];
+    const fresh = context({ bootstrapOnly: true });
+    expect(decideSite(reads, fresh)).toMatchObject({ admit: { request: { id: "identity" } }, refuse: [{ id: "data", reason: "credentials" }] });
+    expect(decideSite(reads, { ...fresh, pausedAll: true }).admit).toBeNull();
+    expect(decideSite(reads, { ...fresh, checksOnly: true }).admit).toBeNull();
+    expect(decideSite(reads, { ...fresh, routeOpensAt: () => ({ at: new Date(NOW.getTime() + SITE_WAIT_MS) }) }).admit).toBeNull();
+    expect(decideSite(reads, { ...fresh, sendsLastHour: SITE_SENDS_PER_HOUR }).admit).toBeNull();
+  });
+
   it("admits the oldest request its route admits now", () => {
     const decision = decideSite([
       request({ id: "new", askedMono: NOW_MONO - 100 }),
