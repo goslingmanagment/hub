@@ -1,12 +1,42 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
-import { LogOut, ChevronDown, ChevronRight, Menu, Search } from "lucide-react";
+import { LogOut, ChevronDown, ChevronRight, Menu, Monitor, Moon, Search, Sun, type LucideIcon } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
+import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@/lib/theme";
 import { buildPageRoute, decodeRouteSegment, isSafeInAppPath, resolveFanLabelFromState, resolveFanProfileBackTarget, resolveSettingsTab } from "@/lib/navigation";
 import { SETTINGS_GROUPS, SYSTEM_GROUPS, SYSTEM_HOME, TABBED_SECTIONS, currentSideLink, isSystemPath, sectionOfPath } from "@/lib/sections";
 import { useDashboardShell } from "./DashboardShellContext.js";
+
+const THEME_ICONS: Record<ThemePreference, LucideIcon> = { system: Monitor, light: Sun, dark: Moon };
+
+function ThemeSwitch() {
+  const { theme, setTheme } = useThemeStore();
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 border-b border-border-light px-3 py-2">
+      <span className="text-sm text-text-secondary" id="theme-switch-label">Тема</span>
+      <div className="segmented" role="group" aria-labelledby="theme-switch-label">
+        {THEME_OPTIONS.map((option) => {
+          const Icon = THEME_ICONS[option.value];
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className="segment px-2"
+              aria-pressed={theme === option.value}
+              aria-label={option.label}
+              title={option.label}
+              onClick={() => setTheme(option.value)}
+            >
+              <Icon size={15} aria-hidden="true" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Владелец",
@@ -109,11 +139,12 @@ export function Topbar({ user, onOpenNavigation, onOpenPalette }: TopbarProps) {
                 <div className="text-sm font-semibold text-text-primary">{user.username}</div>
                 <div className="text-xs text-text-muted">{ROLE_LABELS[user.role] ?? user.role}</div>
               </div>
+              <ThemeSwitch />
               <button
                 type="button"
                 onClick={handleLogout}
                 disabled={logout.isPending}
-                className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary disabled:opacity-50"
+                className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary disabled:opacity-50"
               >
                 <LogOut size={14} />
                 {logout.isPending ? "Выходим…" : "Выйти"}

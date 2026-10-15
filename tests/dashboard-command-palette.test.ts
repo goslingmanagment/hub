@@ -46,6 +46,13 @@ describe("command palette entries", () => {
     expect(labels("уведомления")).toEqual(labels("уведомлёния"));
   });
 
+  it("matches words from their start, and a fragment only when nothing starts with it", () => {
+    expect(labels("тема")).toEqual(["Тема: как в системе", "Тема: светлая", "Тема: тёмная"]);
+    expect(labels("тёмн")).toEqual(["Тема: тёмная"]);
+    expect(labels("ведомл")).toEqual(["Уведомления"]);
+    expect(searchCommands(owner, "тёмная")[0]).toMatchObject({ theme: "dark" });
+  });
+
   it("understands a query typed in the wrong keyboard layout", () => {
     expect(labels("edtljvktybz")).toEqual(["Уведомления"]);
     expect(labels("дщкф")[0]).toBe("lora-1");

@@ -56,7 +56,7 @@ export function Tooltip({ content, children, className = "", focusable = false }
             <div
               id={tooltipId}
               role="tooltip"
-              className="max-w-xs whitespace-normal rounded-md bg-text-primary px-2.5 py-1.5 text-[12px] font-medium leading-snug text-white shadow-lg"
+              className="max-w-xs whitespace-normal rounded-md bg-text-primary px-2.5 py-1.5 text-[12px] font-medium leading-snug text-card shadow-lg"
             >
               {content}
             </div>

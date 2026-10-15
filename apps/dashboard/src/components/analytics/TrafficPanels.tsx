@@ -85,7 +85,7 @@ function inOrder(keys: readonly string[]) {
 const FAMILY_SERIES = [
   { key: "10000", label: "Прямые и лента", color: "var(--color-fansly)" },
   { key: "44000", label: "Продвижение FYP", color: "var(--color-green)" },
-  { key: "44010", label: "Рекомендации", color: "#6250d6" },
+  { key: "44010", label: "Рекомендации", color: "var(--color-chart-violet)" },
   { key: "44030", label: "Поиск", color: "var(--color-warning)" },
   { key: "unknown", label: "Неизвестный источник", color: "var(--color-text-muted)" },
 ] as const;

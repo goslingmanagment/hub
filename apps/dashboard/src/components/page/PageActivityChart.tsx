@@ -50,19 +50,19 @@ function getChartMode(
 const gridProps = {
   strokeDasharray: "3 3",
   vertical: false,
-  stroke: "var(--color-border, #333)",
+  stroke: "var(--color-border)",
 } as const;
 
 const xAxisProps = {
   dataKey: "businessDate" as const,
-  tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+  tick: { fontSize: 11, fill: "var(--color-text-muted)" },
   axisLine: false,
   tickLine: false,
   interval: "preserveStartEnd" as const,
 };
 
 const yAxisProps = {
-  tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+  tick: { fontSize: 11, fill: "var(--color-text-muted)" },
   axisLine: false,
   tickLine: false,
   width: "auto" as const,
@@ -71,7 +71,7 @@ const yAxisProps = {
 
 const tooltipProps = {
   contentStyle: {
-    backgroundColor: "var(--color-card, #1a1a2e)",
+    backgroundColor: "var(--color-card)",
     border: "1px solid var(--color-border, #333)",
     borderRadius: 8,
     fontSize: 13,
@@ -178,7 +178,7 @@ export function PageActivityChart(props: {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",
-                style: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+                style: { fontSize: 11, fill: "var(--color-text-muted)" },
                 offset: 0,
               }}
             />
@@ -205,7 +205,7 @@ export function PageActivityChart(props: {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",
-                style: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+                style: { fontSize: 11, fill: "var(--color-text-muted)" },
                 offset: 0,
               }}
             />

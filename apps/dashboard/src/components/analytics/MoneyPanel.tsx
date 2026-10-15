@@ -32,9 +32,9 @@ import {
 const PALETTE = [
   "var(--color-fansly)",
   "var(--color-warning)",
-  "#1baf7a",
-  "#6250d6",
-  "#e87ba4",
+  "var(--color-chart-teal)",
+  "var(--color-chart-violet)",
+  "var(--color-chart-pink)",
   "var(--color-green)",
 ];
 

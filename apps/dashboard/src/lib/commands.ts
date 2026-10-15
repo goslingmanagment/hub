@@ -5,6 +5,7 @@
  * carries everywhere else and a team lead finds only what they can open.
  */
 import { buildAnalyticsRoute } from "./navigation.js";
+import { THEME_OPTIONS, type ThemePreference } from "./theme.js";
 import {
   SETTINGS_GROUPS,
   SYSTEM_GROUPS,
@@ -14,13 +15,12 @@ import {
   type Role,
 } from "./sections.js";
 
-export type CommandGroup = "Разделы" | "Страницы" | "Настройки" | "Система";
+export type CommandGroup = "Разделы" | "Страницы" | "Настройки" | "Система" | "Оформление";
 
-export interface Command {
+interface CommandBase {
   id: string;
   label: string;
   group: CommandGroup;
-  to: string;
   /** Shown after the label: where the entry sits. */
   hint?: string | undefined;
   /** Words the entry is also found by. */
@@ -30,6 +30,9 @@ export interface Command {
   searchOnly?: boolean | undefined;
 }
 
+/** An entry either opens a screen or switches the theme. */
+export type Command = CommandBase & ({ to: string; theme?: undefined } | { theme: ThemePreference; to?: undefined });
+
 export interface CommandPage {
   label: string;
   platform: string;
@@ -38,6 +41,7 @@ export interface CommandPage {
 }
 
 const PLATFORM_NAMES: Record<string, string> = { fansly: "Fansly", onlyfans: "OnlyFans" };
+const THEME_WORDS: Record<ThemePreference, string> = { system: "системная авто", light: "дневная light", dark: "ночная dark" };
 
 export function buildCommands({ role, pages }: { role: Role; pages: readonly CommandPage[] }): Command[] {
   const owner = role === "owner";
@@ -69,6 +73,9 @@ export function buildCommands({ role, pages }: { role: Role; pages: readonly Com
       }
     }
   }
+  for (const option of THEME_OPTIONS) {
+    commands.push({ id: `theme:${option.value}`, label: `Тема: ${option.label.toLowerCase()}`, group: "Оформление", theme: option.value, keywords: `оформление ${THEME_WORDS[option.value]}`, searchOnly: true });
+  }
   return commands;
 }
 
@@ -87,10 +94,19 @@ function swapLayout(text: string, map: ReadonlyMap<string, string>): string {
   return [...text].map((char) => map.get(char) ?? char).join("");
 }
 
-function score(command: Command, tokens: readonly string[]): number | null {
+type Match = "word" | "anywhere";
+
+function words(text: string): string[] {
+  return text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+function score(command: Command, tokens: readonly string[], match: Match): number | null {
   const label = normalize(command.label);
   const haystack = normalize(`${command.label} ${command.hint ?? ""} ${command.keywords ?? ""}`);
-  if (!tokens.every((token) => haystack.includes(token))) return null;
+  const found = match === "word"
+    ? (token: string) => words(haystack).some((word) => word.startsWith(token))
+    : (token: string) => haystack.includes(token);
+  if (!tokens.every((token) => words(token).every(found))) return null;
   const query = tokens.join(" ");
   if (label === query) return 0;
   if (label.startsWith(query)) return 1;
@@ -98,24 +114,30 @@ function score(command: Command, tokens: readonly string[]): number | null {
   return 3;
 }
 
-function rank(commands: readonly Command[], query: string): Command[] | null {
+function rank(commands: readonly Command[], query: string, match: Match): Command[] | null {
   const tokens = normalize(query).split(/\s+/).filter(Boolean);
   const scored = commands
-    .map((command, order) => ({ command, order, score: score(command, tokens) }))
+    .map((command, order) => ({ command, order, score: score(command, tokens, match) }))
     .filter((entry): entry is { command: Command; order: number; score: number } => entry.score !== null);
   if (scored.length === 0) return null;
   // Stable within a score: the order of the tables is the order of the console.
   return scored.sort((a, b) => a.score - b.score || a.order - b.order).map((entry) => entry.command);
 }
 
-/** The entries a query finds, best first; the short default list when empty. */
+/** The entries a query finds, best first; the short default list when empty.
+ *  Words are matched from their start ("тема" is not inside «Система»); only
+ *  when that finds nothing does a fragment anywhere count. */
 export function searchCommands(commands: readonly Command[], query: string): Command[] {
   if (!normalize(query)) return commands.filter((command) => !command.searchOnly);
   const lower = query.toLowerCase();
-  return rank(commands, query)
-    ?? rank(commands, swapLayout(lower, toRu))
-    ?? rank(commands, swapLayout(lower, toEn))
-    ?? [];
+  const spellings = [lower, swapLayout(lower, toRu), swapLayout(lower, toEn)];
+  for (const match of ["word", "anywhere"] as const) {
+    for (const spelling of spellings) {
+      const found = rank(commands, spelling, match);
+      if (found) return found;
+    }
+  }
+  return [];
 }
 
 /** Results under their group headings, a group placed by its best entry. */

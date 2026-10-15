@@ -40,7 +40,7 @@ const releaseFormStatusLabels: Record<string, string> = { approved: "одобр�
 
 /** One numbered step of the upload: the number, its title, its controls. */
 function Step({ number, title, state, children }: { number: number; title: string; state: "done" | "current" | "todo"; children: ReactNode }) {
-  const mark = state === "done" ? "bg-accent-soft text-accent" : state === "current" ? "bg-accent text-white" : "bg-hover text-text-muted";
+  const mark = state === "done" ? "bg-accent-soft text-accent" : state === "current" ? "bg-accent text-on-accent" : "bg-hover text-text-muted";
   return <li className="flex gap-4">
     <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${mark}`}>{state === "done" ? <Check size={15} /> : number}</span>
     <div className="min-w-0 flex-1 space-y-3">

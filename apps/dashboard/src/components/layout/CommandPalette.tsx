@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { useNavigate } from "react-router";
 import { Search } from "lucide-react";
 import { buildCommands, groupCommands, searchCommands, type Command } from "@/lib/commands";
+import { useThemeStore } from "@/lib/theme";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -19,6 +20,7 @@ export function isPaletteShortcut(event: { code: string; key: string; metaKey: b
 export function CommandPalette({ role, onClose }: { role: string; onClose: () => void }) {
   const { pages } = useDashboardShell();
   const navigate = useNavigate();
+  const setTheme = useThemeStore((state) => state.setTheme);
   const dialog = useRef<HTMLDialogElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const [query, setQuery] = useState("");
@@ -45,7 +47,8 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
 
   function open(command: Command) {
     onClose();
-    navigate(command.to);
+    if (command.theme) setTheme(command.theme);
+    else navigate(command.to);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {

@@ -131,7 +131,7 @@ function Devices() {
                   type="button"
                   disabled={revokeAll.isPending}
                   onClick={() => revokeAll.mutate(undefined, { onSuccess: () => setConfirming(false) })}
-                  className="min-h-11 rounded-lg bg-danger px-3 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                  className="min-h-11 rounded-lg bg-danger px-3 text-sm font-semibold text-on-danger hover:opacity-90 disabled:opacity-50"
                 >
                   {revokeAll.isPending ? "Выходим…" : "Да, выйти"}
                 </button>
@@ -171,7 +171,7 @@ function ChangePassword() {
           type="button"
           // A full page load, so nothing cached under the dead session survives.
           onClick={() => window.location.assign("/login")}
-          className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-white hover:opacity-90"
+          className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:opacity-90"
         >
           Войти заново
         </button>
@@ -249,7 +249,7 @@ function ChangePassword() {
         <button
           type="submit"
           disabled={change.isPending || !current || !next || !confirmation}
-          className="min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 sm:self-start"
+          className="min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-50 sm:self-start"
         >
           {change.isPending ? "Меняем…" : "Сменить пароль"}
         </button>

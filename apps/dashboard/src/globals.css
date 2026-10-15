@@ -4,7 +4,8 @@
 @import "./pages/settings/settings-ui.css";
 
 /* Colour tokens. Text colours clear WCAG AA (4.5:1) on white; the accent
-   carries white text at the same ratio. */
+   carries white text at the same ratio. Every colour on screen comes from
+   here, so the dark theme below is these same names with other values. */
 @theme {
   --color-bg: #f6f5f3;
   --color-card: #ffffff;
@@ -31,9 +32,120 @@
   --color-hover: #f1efec;
   --color-hover-alt: #faf9f7;
   --color-active-bg: #ebe8e3;
+  /* A surface raised above its track: the picked segment of a control. */
+  --color-raised: #ffffff;
+  /* Text and icons on a filled accent or danger button. */
+  --color-on-accent: #ffffff;
+  --color-on-danger: #ffffff;
+  --color-danger-hover: #a92f2f;
+  /* A notice's border and text, darker than the badge colour it shares. */
+  --color-warning-border: #f1d9b5;
+  --color-warning-text: #7a4708;
+  --color-danger-border: #f1c4c4;
+  --color-danger-text: #8f2525;
+  --color-success-border: #bfe3cc;
+  --color-success-text: #14532d;
+  /* Chart hues after the named ones, chosen to stay apart for colour-blind
+     readers as neighbours in a stack. */
+  --color-chart-teal: #1baf7a;
+  --color-chart-violet: #6250d6;
+  --color-chart-pink: #e87ba4;
+  /* The dimmed page behind a dialog. */
+  --color-backdrop: rgb(28 25 23 / 0.32);
   --radius-card: 12px;
   --radius-button: 8px;
 }
+
+/* The dark theme: the system's choice unless the account menu set one. The
+   values clear the same 4.5:1 on the dark card; the accent turns light and
+   carries dark text. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: #141211;
+    --color-card: #1c1a18;
+    --color-border: #2f2b28;
+    --color-border-light: #262321;
+    --color-border-strong: #403b37;
+    --color-accent: #e8875f;
+    --color-accent-hover: #f09a76;
+    --color-accent-soft: #3a2419;
+    --color-green: #5bc98a;
+    --color-success-soft: #16301f;
+    --color-warning: #f0a33a;
+    --color-warning-dark: #f5bd6e;
+    --color-warning-soft: #33240f;
+    --color-danger: #f27c7c;
+    --color-danger-soft: #3a1d1d;
+    --color-text-primary: #f2efeb;
+    --color-text-secondary: #b4ada5;
+    --color-text-muted: #948c84;
+    --color-fansly: #82a8ec;
+    --color-fansly-soft: #1b2638;
+    --color-onlyfans: #e2a95c;
+    --color-onlyfans-soft: #33260f;
+    --color-hover: #262321;
+    --color-hover-alt: #191715;
+    --color-active-bg: #2e2a27;
+    --color-raised: #3a3532;
+    --color-on-accent: #1a0f0a;
+    --color-on-danger: #1a0a0a;
+    --color-danger-hover: #f59696;
+    --color-warning-border: #5a4020;
+    --color-warning-text: #f5bd6e;
+    --color-danger-border: #5c2b2b;
+    --color-danger-text: #f6a0a0;
+    --color-success-border: #24503a;
+    --color-success-text: #86dca9;
+    --color-chart-teal: #3cc994;
+    --color-chart-violet: #8f80f0;
+    --color-chart-pink: #ef94b7;
+    --color-backdrop: rgb(0 0 0 / 0.6);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #141211;
+  --color-card: #1c1a18;
+  --color-border: #2f2b28;
+  --color-border-light: #262321;
+  --color-border-strong: #403b37;
+  --color-accent: #e8875f;
+  --color-accent-hover: #f09a76;
+  --color-accent-soft: #3a2419;
+  --color-green: #5bc98a;
+  --color-success-soft: #16301f;
+  --color-warning: #f0a33a;
+  --color-warning-dark: #f5bd6e;
+  --color-warning-soft: #33240f;
+  --color-danger: #f27c7c;
+  --color-danger-soft: #3a1d1d;
+  --color-text-primary: #f2efeb;
+  --color-text-secondary: #b4ada5;
+  --color-text-muted: #948c84;
+  --color-fansly: #82a8ec;
+  --color-fansly-soft: #1b2638;
+  --color-onlyfans: #e2a95c;
+  --color-onlyfans-soft: #33260f;
+  --color-hover: #262321;
+  --color-hover-alt: #191715;
+  --color-active-bg: #2e2a27;
+  --color-raised: #3a3532;
+  --color-on-accent: #1a0f0a;
+  --color-on-danger: #1a0a0a;
+  --color-danger-hover: #f59696;
+  --color-warning-border: #5a4020;
+  --color-warning-text: #f5bd6e;
+  --color-danger-border: #5c2b2b;
+  --color-danger-text: #f6a0a0;
+  --color-success-border: #24503a;
+  --color-success-text: #86dca9;
+  --color-chart-teal: #3cc994;
+  --color-chart-violet: #8f80f0;
+  --color-chart-pink: #ef94b7;
+  --color-backdrop: rgb(0 0 0 / 0.6);
+}
+:root { color-scheme: light; }
 
 html {
   scrollbar-gutter: stable;

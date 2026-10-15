@@ -54,7 +54,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4 sm:p-6"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-backdrop p-4 sm:p-6"
       // Parent space-y utilities must not leave an uncovered strip behind the dialog.
       style={{ margin: 0 }}
       onClick={explicitCloseOnly ? undefined : onClose}
