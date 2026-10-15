@@ -603,6 +603,14 @@ released client's.
 Unchanged: a request with `clientContext` (its transcript is the client's, marked by the client),
 and OnlyFans (no Fansly markers; nothing is read for them).
 
+### The transcript's clock (`clientContext.transcriptClock`)
+
+The `Now:` line of the fan-facing prompts says whose clock the transcript's `[HH:MM]` are in. The
+hub's own transcript is UTC with `--- YYYY-MM-DD ---` day lines. A client's transcript is UTC when
+`clientContext.transcriptClock` is `"utc"` (fansly-chat E168 writes the hub's format); without the
+field it is the clock of the chatter's device, as in the clients released before it. Any other
+value is a 400.
+
 ### Feature-lane transcript coverage on Fansly (chat-extension R20 HF-7д)
 
 `transcriptCoverage` says how much of the conversation the transcript shows: the Recap stores it
@@ -1343,7 +1351,8 @@ chat. The client sends the labels; the hub assembles the prompt
   understand («Sexting 1») stay as written. Facts that go
   stale carry the month they were said, `(MM.YYYY)`, read from the
   transcript's day lines `--- YYYY-MM-DD ---` (the client adds them in merge
-  mode; they are the only source of dates). The prompt also defines «Локация»,
+  mode, in UTC on every feature since fansly-chat E168; they are the only
+  source of dates). The prompt also defines «Локация»,
   «График», «Планы и даты» and «Другое».
 - One fact in one field, merge mode only (2026-10-13, after the owner's review
   of real output, where the same fact landed in «Фетиши», «Медиа» and

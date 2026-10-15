@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { aiFeatureStreamBodySchema } from "@agency_hub_core/contracts";
 import {
   BUNDLED_LORA_PERSONALITY_ID,
   COACH_PROMPT_MAX_CHARS,
@@ -8,6 +9,7 @@ import {
   formatTranscriptDayLine,
   formatTranscriptLine,
   personaLocalTime,
+  promptTranscriptClock,
   transcriptMessagesOmittedByBudget,
   type PromptBuildInput,
   type PromptClock,
@@ -257,6 +259,36 @@ describe("the Now line", () => {
     expect(monday.coachTranscriptOmittedChars).toBeGreaterThan(0);
     expect(wednesday.coachTranscriptOmittedChars).toBe(monday.coachTranscriptOmittedChars);
     expect(wednesday.userBlocks.slice(0, -1)).toEqual(monday.userBlocks.slice(0, -1));
+  });
+});
+
+describe("a client's transcript in UTC (fansly-chat E168)", () => {
+  const clientContext = {
+    transcript: "--- 2026-10-14 ---\n[21:30] Fan: good night",
+    messageCount: 1,
+    fanDisplayName: "Bob",
+  };
+  const wireBody = (extra: Record<string, unknown>) => ({
+    clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
+    pageLabel: "lora-1",
+    platform: "fansly",
+    conversationRef: "123",
+    clientContext: { ...clientContext, ...extra },
+  });
+
+  it("is an optional contract field that takes utc only", () => {
+    expect(aiFeatureStreamBodySchema.safeParse(wireBody({ transcriptClock: "utc" })).success).toBe(true);
+    // A released client that never sends it stays valid.
+    expect(aiFeatureStreamBodySchema.safeParse(wireBody({})).success).toBe(true);
+    for (const transcriptClock of ["UTC", "device", "local", "", null, true]) {
+      expect(aiFeatureStreamBodySchema.safeParse(wireBody({ transcriptClock })).success, String(transcriptClock)).toBe(false);
+    }
+  });
+
+  it("makes the Now line call the client's transcript UTC; without it, the device's clock", () => {
+    expect(promptTranscriptClock({})).toBe("utc");
+    expect(promptTranscriptClock({ clientContext: { ...clientContext, fanSpendingData: "", fanSubscriptionData: "", transcriptClock: "utc" } })).toBe("utc");
+    expect(promptTranscriptClock({ clientContext: { ...clientContext, fanSpendingData: "", fanSubscriptionData: "" } })).toBe("client");
   });
 });
 

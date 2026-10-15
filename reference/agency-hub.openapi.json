@@ -114275,6 +114275,12 @@
                           "window"
                         ]
                       },
+                      "transcriptClock": {
+                        "type": "string",
+                        "enum": [
+                          "utc"
+                        ]
+                      },
                       "media": {
                         "type": "object",
                         "properties": {
