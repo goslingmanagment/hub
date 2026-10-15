@@ -3,9 +3,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FROM, makeHost, REPO_ROOT, TO, writeExecutable, type Host } from "./helpers/page-browser-update.ts";
+
+// Each test runs the script in bash against a fake server that starts a
+// process per call: slower than a unit test, more so under a full parallel run.
+vi.setConfig({ testTimeout: 180_000 });
 
 // The host's side of a Chrome update (Project Browser PR 18):
 // - deploy-page-browser.sh installs the update and its timer (not enabled:
@@ -74,7 +78,7 @@ describe("deploy-page-browser.sh: the update on the server", () => {
   it("build: keeps what the timer builds the next Chrome from, and labels the image with its Chrome", () => {
     const script = read("scripts/deploy-page-browser.sh");
     const build = script.slice(script.indexOf("\nbuild() {"), script.indexOf("\n}\n", script.indexOf("\nbuild() {")));
-    expect(build).toContain("--label agency-hub.page-browser.chrome-version=${chrome_version}");
+    expect(build).toContain("--label agency-hub.page-browser.chrome-version=${chrome_version} --label agency-hub.page-browser.protocol=${protocol}");
     expect(build).toContain("${REMOTE_BASE}/build/context/${revision}.tar");
     expect(build).toContain("> ${REMOTE_BASE}/build/context/LATEST");
     expect(build).toContain('/vendor/kasmvncserver_* \\"\\$dir\\"/vendor/s6-overlay-* ${REMOTE_BASE}/vendor/');

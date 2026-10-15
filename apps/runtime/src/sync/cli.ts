@@ -595,6 +595,12 @@ function parseBrowserEnv(value: string): PageBrowserEnv {
   return env;
 }
 
+/** `--if-stop <command>`: a command's id (page_browser_commands.id). */
+function parseCommandId(value: string): number {
+  if (!/^[1-9][0-9]{0,15}$/.test(value)) throw new InvalidArgumentError("Expected a command id (a positive integer)");
+  return Number(value);
+}
+
 /** How long a lever waits for the engine to carry it out, by default. */
 const BROWSER_WAIT_MS = 30_000;
 
@@ -652,10 +658,18 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .description("start a page's browser again: the owner's stop lifted (and the pause it put), the halt its operator holds for the owner's decision cleared by its id, the browser started (audited)")
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
+    .option("--if-no-halt", "clear no halt: refused, nothing changed, while one is held for the owner's decision (the Chrome update's start)", false)
+    .option("--if-stop <command>", "lift only the stop this stop command made: refused, nothing changed, if the stop in force is another's (the Chrome update's start)", parseCommandId)
     .option("--wait-ms <ms>", `how long to wait for the engine to run it (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
-    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoHalt: boolean; ifStop?: number }) => {
       await withContext(deps, async ({ db }) => {
-        const asked = await startPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
+        const asked = await startPageBrowser(db, {
+          pageLabel,
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+          ...(options.ifNoHalt ? { ifNoHalt: true } : {}),
+          ...(options.ifStop === undefined ? {} : { ifStop: options.ifStop }),
+        });
         const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 5_000 });
         deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
       });
@@ -681,13 +695,19 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
     .option("--wait-ms <ms>", `how long to wait for the operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
-    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+    .option(
+      "--if-no-owner-stop [command]",
+      "never over another's stop, never of a page off its browser: refused, nothing changed, while an owner's stop stands (unless the page's latest stop is this command's) or the page is not on its browser with no leave pending (the Chrome update's stop)",
+    )
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoOwnerStop?: true | string }) => {
       await withContext(deps, async ({ db }) => {
+        const ifNoOwnerStop = options.ifNoOwnerStop === undefined ? undefined : options.ifNoOwnerStop === true ? true : parseCommandId(options.ifNoOwnerStop);
         const [stopped] = await stopPageBrowsers(db, {
           pageLabel,
           actor: cliActor(),
           snapshot: true,
           ...(options.note === undefined ? {} : { note: options.note }),
+          ...(ifNoOwnerStop === undefined ? {} : { ifNoOwnerStop }),
         });
         // Quiet only once the operator answered this very stop — after
         // Chrome is down — under the page's owner that took it.

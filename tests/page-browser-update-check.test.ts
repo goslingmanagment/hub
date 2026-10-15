@@ -4,9 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FROM, makeHost, PAGE, REPO_ROOT, TO, UPDATE_SCRIPT, type Host } from "./helpers/page-browser-update.ts";
+
+// Each test runs the script in bash against a fake server that starts a
+// process per call: slower than a unit test, more so under a full parallel run.
+vi.setConfig({ testTimeout: 180_000 });
 
 // scripts/page-browser-update.sh check — the timer's daily look (Project
 // Browser PR 18; plan §4.10): the newest Chrome Stable in Google's
@@ -94,6 +98,8 @@ function keepContext(h: Host): void {
   const work = mkdtempSync(path.join(tmpdir(), "pb context "));
   mkdirSync(path.join(work, "context"));
   writeFileSync(path.join(work, "context/Dockerfile"), "FROM scratch\n");
+  mkdirSync(path.join(work, "context/src/rpc"), { recursive: true });
+  writeFileSync(path.join(work, "context/src/rpc/protocol.ts"), "export const PROTOCOL = { major: 1, minor: 1 } as const;\n");
   writeFileSync(
     path.join(work, "context/vendor.sha256"),
     [
@@ -145,6 +151,7 @@ describe("page-browser-update.sh check: a newer Chrome is fetched, verified, bui
     expect(build!.tag).toBe(NEW_TAG);
     expect(build!.labels).toEqual({
       "agency-hub.page-browser.revision": "aaaaaaaaaaaa",
+      "agency-hub.page-browser.protocol": "1.1",
       "agency-hub.page-browser.chrome-version": NEW,
       "agency-hub.page-browser.chrome-sha256": sha256(deb),
       "agency-hub.page-browser.built-by": "page-browser-update",

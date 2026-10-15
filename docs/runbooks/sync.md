@@ -248,30 +248,51 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   scripts/deploy-page-browser.sh chrome root@<server> update --page lilly-1 --image hub-page-browser:<tag> --detach
   ```
 
-  It takes the page off its browser through the engine's hand-over (`sync page transport <page> node`, audited; Node
-  has the page meanwhile), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three
-  kept), starts the new image, checks with the exit closed that the new Chrome opens the profile with the image's
-  rules extension, gives the page back (`sync page transport <page> browser`), waits for the engine's record of the
-  operator: ready on the new Chrome, the self-test passed, the exit IP the pinned one, the same account and session
-  — then the window, ending with `sync check live-hour`. Any failure: the page goes back to its previous image
-  **with its snapshot**; before the new image ran, simply as it was. Follow it with `journalctl -fu <unit>` (the
-  command prints the unit); `status --page <page>` shows where it stands.
+  It stops the page's browser with the owner's lever (`sync browser snapshot --if-no-owner-stop`, audited: the page
+  paused by the stop, confirmed by the operator once Chrome is down — the page stays on its browser, so a page with no
+  Node session is updated too; refused in its own transaction, nothing changed, while a stop of yours stands or the
+  page is not on its browser — you moved it to Node, or its leave is pending: the update holds and the page stays as
+  you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
+  the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
+  starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause lifted —
+  only while the stop in force is the update's own; a stop or start of yours since stays yours and the update holds;
+  never a halt cleared),
+  waits for the engine's record of the operator: ready on the new Chrome, the self-test passed, the exit IP the
+  pinned one, the same account and session — then the window, ending with `sync check live-hour`. Any failure: the
+  page goes back to its previous image **with its snapshot**; before the new image ran, simply as it was. Follow it
+  with `journalctl -fu <unit>` (the command prints the unit); `status --page <page>` shows where it stands.
+- **What it never does**: update a page whose browser stands for your decision (a halt Hub mirrors, or one the
+  operator holds on its volume: decide it first with `sync browser start`), clear or pass such a halt (one that
+  comes during the update holds it: `rollback` restores the previous Chrome with its profile, your `start` decides
+  the halt), start a browser you stopped yourself (it updates it stopped, and it stays so until your `start`), update
+  a page you paused (resume it, or stop its browser and update it stopped), go to or back to an image whose operator
+  the engine refuses (protocol before 1.1), or force a page out: a stop its operator does not confirm (`expired`,
+  `unknown`, no answer) holds the update — resume once it answers, or take the page off its browser yourself
+  (`deploy-page-browser.sh to-node`).
+- **One guard before every deed** on the page's container or profile (its stop, the profile's pack and restore, a
+  start on any image), on every path — update, resume, rollback, abort, `snapshot`: the stop the operation took the
+  page out under is still the one in force, answered by the operator, and Chrome is down in the container (Docker's
+  state and Chrome's own). A browser you started or stopped since is yours: the operation holds, nothing touched.
+  An update held so ends with `rollback` (the page as you have it); a rollback held so takes the page out again on
+  `resume`; an abort or a `snapshot` whose container stays stopped waits until you start it yourself (`page.sh up`)
+  and `resume`.
 - **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
   (one by one, the first failure stops it).
 - **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot,
-  refused before anything changes when the snapshot is gone or the profile is no longer the page's. The snapshot of a
+  refused before anything changes when the snapshot is gone or the profile is no longer the page's. It reads the page
+  as it is then: a browser that serves is stopped by its own lever and confirmed before the container is touched
+  (unless the browser stands stopped now, under a stop the operator answered); a stop of yours stays yours (no start
+  after); a Chrome that runs in the container is never stopped. The snapshot of a
   page's last update is kept until its next update. Never `deploy-page-browser.sh rollback` after a Chrome update:
   page.sh refuses an image whose Chrome is older than the one that last opened the profile (Chrome never opens a
   profile a newer one wrote). The same rule stops page.sh's own way back after a failed `up`: when the new Chrome
   had opened the profile, the page stays stopped until `rollback` restores its snapshot.
 - **Cut off** (a crash, a reboot): `resume --page <page>` goes on from the step it reached — an update, a rollback or
-  a standalone `snapshot` (its container is started again). `held` (the owner moved or stopped the page during its
-  checks, or the Hub could not be read) and `rollback_failed` (the page stays out, never the old Chrome on a profile
+  a standalone `snapshot` (its container is started again), each deed through the guard above. `held` (the owner moved or stopped the page during its
+  checks, its browser's stop or start was not confirmed, a halt came, or the Hub could not be read) and
+  `rollback_failed` (the page stays out, never the old Chrome on a profile
   the new one wrote) wait for the owner: `resume` or `rollback`. A state Docker or the Hub cannot tell is never taken
   for "stopped": the step stops there.
-- **Until PR 17**: a page with no stored Node session cannot be taken out (it needs `sync browser stop`/`start`),
-  and the engine's checks need PR 17's record of the operator's state and its start of the browser when the page
-  returns to it — without them the checks time out and the update rolls back.
 - **Host step** (the owner's window): `scripts/deploy-page-browser.sh host root@<server>`, one
   `scripts/deploy-page-browser.sh build root@<server>` (it keeps the build context the timer builds from), then
   `ssh root@<server> systemctl enable --now page-browser-update.timer`.
