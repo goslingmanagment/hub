@@ -595,6 +595,12 @@ function parseBrowserEnv(value: string): PageBrowserEnv {
   return env;
 }
 
+/** `--if-stop <command>`: a command's id (page_browser_commands.id). */
+function parseCommandId(value: string): number {
+  if (!/^[1-9][0-9]{0,15}$/.test(value)) throw new InvalidArgumentError("Expected a command id (a positive integer)");
+  return Number(value);
+}
+
 /** How long a lever waits for the engine to carry it out, by default. */
 const BROWSER_WAIT_MS = 30_000;
 
@@ -653,14 +659,16 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
     .option("--if-no-halt", "clear no halt: refused, nothing changed, while one is held for the owner's decision (the Chrome update's start)", false)
+    .option("--if-stop <command>", "lift only the stop this stop command made: refused, nothing changed, if the stop in force is another's (the Chrome update's start)", parseCommandId)
     .option("--wait-ms <ms>", `how long to wait for the engine to run it (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
-    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoHalt: boolean }) => {
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoHalt: boolean; ifStop?: number }) => {
       await withContext(deps, async ({ db }) => {
         const asked = await startPageBrowser(db, {
           pageLabel,
           actor: cliActor(),
           ...(options.note === undefined ? {} : { note: options.note }),
           ...(options.ifNoHalt ? { ifNoHalt: true } : {}),
+          ...(options.ifStop === undefined ? {} : { ifStop: options.ifStop }),
         });
         const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 5_000 });
         deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));

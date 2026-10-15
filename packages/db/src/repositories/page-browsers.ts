@@ -749,3 +749,24 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
     haltId: row.haltId,
   };
 }
+
+/** Whether the owner's stop stands on the page's browser now, and the page's
+ *  latest stop command (`sync browser stop|snapshot`): the stop in force is
+ *  that command's. Read under the browser row's lock, in the caller's
+ *  transaction — `sync browser start --if-stop` (the Chrome update, PR 18)
+ *  lifts only the stop its own command made. Null: no profile bound. */
+export async function readPageBrowserOwnerStop(
+  db: Database,
+  input: { pageId: number },
+): Promise<{ stopped: boolean; lastStopCommandId: number | null } | null> {
+  const result = await db.execute<{ stopped: boolean; lastStop: string | null }>(sql`
+    select pb.owner_stop_at is not null as stopped,
+           (select max(c.id) from page_browser_commands c where c.page_id = pb.page_id and c.kind = 'stopPage')::text as "lastStop"
+      from page_browsers pb
+     where pb.page_id = ${input.pageId}::bigint
+       for update of pb
+  `);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  return { stopped: row.stopped === true, lastStopCommandId: row.lastStop === null ? null : Number(row.lastStop) };
+}
