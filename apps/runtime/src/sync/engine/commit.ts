@@ -505,9 +505,10 @@ export function pageHoldOperationOf(
   return { kind: "request" };
 }
 
-/** A page hold refused the request at its admission (tx 1 rolled back:
- *  nothing was written, the slot is not consumed). `until` null: no instant
- *  ends it (rows of the hold set this build cannot read). */
+/** A page hold or the owner's pause of the page refused the request at its
+ *  admission (tx 1 rolled back: nothing was written, the slot is not
+ *  consumed). `until` null: no instant ends it (the pause, rows of the hold
+ *  set this build cannot read). */
 export class AdmissionHeldError extends Error {
   constructor(readonly kind: string, readonly until: Date | null) {
     super(`The page is held (${kind}) until ${until === null ? "it is repaired" : until.toISOString()}`);
@@ -518,7 +519,8 @@ export class AdmissionHeldError extends Error {
 /**
  * Admit one request (tx 1). Null when the work is no longer open (another
  * step took it): nothing was written and the slot is not consumed. Throws
- * `AdmissionHeldError` when a page hold refuses the request now,
+ * `AdmissionHeldError` when the owner's pause of the page or a page hold
+ * refuses the request now,
  * `OwnershipLostError` for a foreign generation and `LiveGateClosedError` for
  * an admission without its gates (I17).
  */
@@ -545,11 +547,14 @@ export async function admit(
       live: true,
       ...(d.pageTransport === undefined ? {} : { transport: d.pageTransport }),
     });
-    // The final word of the page holds, under the row lock (ruling 5): the
-    // gate and the pick judged a snapshot; a hold written since refuses
-    // here, before anything is counted. The work stays open.
+    // The final word of the owner's pause and the page holds, under the row
+    // lock (ruling 5): the gate and the pick judged a snapshot; a pause or a
+    // hold written since refuses here, before anything is counted. The work
+    // stays open. Every pause writer takes this row lock, so once a pause
+    // commits no admission follows it; one committed first still goes.
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+    if (page.pausedAll) throw new AdmissionHeldError("paused", null);
     const held = whyHeld(holdSetOf(page.holds), null, { operation: pageHoldOperationOf(picked.work, prepared) }, d.clock.wallNow());
     if (held !== null) throw new AdmissionHeldError(held.kind, held.until);
     const running = await markWorkRunning(tx, { workId: picked.work.id, generation: d.generation });

@@ -451,7 +451,8 @@ export class SyncActor {
         return null;
       }
       if (error instanceof AdmissionHeldError) {
-        // A hold written after the gate looked: the next lap waits for it.
+        // A hold or the owner's pause written after the gate looked: the
+        // next lap waits for it.
         d.metrics.increment("sync_admission_page_held", { pageId: d.pageId, kind: error.kind });
         const untilMs = error.until === null ? ACTOR_IDLE_WAIT_MS : error.until.getTime() - d.clock.wallNow().getTime();
         await d.wake.wait(d.pageId, Math.max(0, Math.min(untilMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
