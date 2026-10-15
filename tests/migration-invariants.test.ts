@@ -607,6 +607,12 @@ describe("database migration invariants", () => {
     // A new page's draft carries its proxy (sealed with its key version); an existing page's uses its own.
     expect(drafts).toContain("(proxy_auth is null) = (proxy_key_version is null)");
     expect(drafts).toContain("(page_id is null) = (proxy_url is not null)");
+    // Its own identity, never reused; the address judged public at its save;
+    // an existing page's proxy as it was then (Astra's review of PR #627).
+    expect(drafts).toContain("draft_id uuid not null default gen_random_uuid()");
+    expect(drafts).toContain("constraint page_browser_drafts_draft_id_key unique (draft_id)");
+    expect(drafts).toContain("socks_endpoint text not null");
+    expect(drafts).toContain("(page_id is null) = (page_proxy_id is null) and (page_proxy_id is null) = (page_proxy_fingerprint is null)");
     // The read role sees every column but the proxy's sealed auth.
     const grant = /grant select \(([^)]*)\)\s+on page_browser_drafts to read_only;/.exec(drafts)?.[1] ?? "";
     expect(grant).toContain("proxy_url");

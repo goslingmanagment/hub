@@ -15,11 +15,12 @@ import {
   listPageBrowserDrafts,
   listPagesWithoutBrowser,
   pageBrowserEnvOf,
+  pageProxyStateOf,
   PageBrowserDraftError,
   savePageBrowserDraft,
   type PageBrowserDraft,
 } from "@agency_hub_core/db";
-import { browserEnvProblem, normalizeProxyConfigWithMetadata, type PastedProxy } from "@agency_hub_core/shared";
+import { browserEnvProblem, type PastedProxy } from "@agency_hub_core/shared";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { recordAudit, requireOwner } from "../../services/auth.ts";
@@ -30,6 +31,7 @@ import {
   maskStoredProxy,
   readProxyText,
   sealUsableProxy,
+  socksEndpointOrRefuse,
   storedProxyAsPasted,
 } from "../../services/page-browser-proxy-entry.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -166,6 +168,10 @@ export function registerPageBrowserProxyEntryRoutes(
     if (envProblem !== null) throw new BadRequestError(envProblem, { reason: "env_invalid" });
     let pageId: number | null = null;
     let sealed: Awaited<ReturnType<typeof sealUsableProxy>> | undefined;
+    // The SOCKS5 the container is made for, judged now: the proxy's host
+    // resolved once, every address public (Astra's review of PR #627, item 3).
+    let socksEndpoint: string;
+    let pageProxy: { id: number; fingerprint: string } | null = null;
     if (body.existingPage) {
       if (body.proxy !== undefined) {
         throw new BadRequestError("Браузер существующей страницы выходит через её собственную прокси: её меняют в настройках страницы", { reason: "proxy_of_page" });
@@ -173,23 +179,36 @@ export function registerPageBrowserProxyEntryRoutes(
       const found = await findFanslyPageForBrowser(appContext.db, name);
       if (found === null) throw new NotFoundError(`No active Fansly page ${name}`);
       pageId = found.pageId;
-      let own: ReturnType<typeof normalizeProxyConfigWithMetadata> | null;
+      // The page's proxy as it is now: the registration refuses once it
+      // changed (item 4).
+      const state = await pageProxyStateOf(appContext.db, pageId);
+      let own: PastedProxy | null;
       try {
-        own = found.proxy == null ? null : normalizeProxyConfigWithMetadata({ url: found.proxy.url });
+        own = state === null ? null : storedProxyAsPasted(appContext.config, { url: state.url, encryptedAuth: null });
       } catch {
         own = null;
       }
-      if (own === null || own.protocol !== "socks5:") {
+      if (state === null || own === null || own.scheme !== "socks5") {
         throw new BadRequestError(`У страницы ${name} ${own === null ? "нет прокси" : "не SOCKS5-прокси"}: браузер страницы выходит только через SOCKS5. Сначала смените прокси страницы`, { reason: "proxy_unusable" });
       }
+      socksEndpoint = await socksEndpointOrRefuse(own, overrides());
+      pageProxy = { id: state.id, fingerprint: state.fingerprint };
     } else if (body.proxy !== undefined) {
       sealed = await sealUsableProxy(appContext.config, readProxyText(body.proxy), overrides());
+      socksEndpoint = sealed.socksEndpoint;
+    } else {
+      // Saved again with the proxy given before: judged again now.
+      const current = await findPageBrowserDraft(appContext.db, name);
+      if (current?.proxy == null) throw new BadRequestError("A new page's browser needs its proxy", { reason: "no_proxy" });
+      socksEndpoint = await socksEndpointOrRefuse(storedProxyAsPasted(appContext.config, { url: current.proxy.url, encryptedAuth: null }), overrides());
     }
     let saved: PageBrowserDraft;
     try {
       saved = await savePageBrowserDraft(appContext.db, {
         name,
         pageId,
+        socksEndpoint,
+        pageProxy,
         ...(sealed === undefined ? {} : { proxy: { url: sealed.url, encryptedAuth: sealed.encryptedAuth, keyVersion: sealed.keyVersion } }),
         env: body.env as unknown as Record<string, unknown>,
         by: `owner:${principal.user.id}`,
@@ -207,6 +226,7 @@ export function registerPageBrowserProxyEntryRoutes(
       name,
       existingPage: pageId !== null,
       revision: saved.revision,
+      socksEndpoint,
       ...(sealed === undefined ? {} : { proxy: `${sealed.masked.host}:${sealed.masked.port}` }),
     }, pageId);
     return draftView(saved);

@@ -293,7 +293,8 @@ describe("deploy-page-browser.sh add-profile", () => {
 
 describe("deploy-page-browser.sh add-profile from the owner's draft (owner decision 2026-10-15)", () => {
   const DRAFT_ENV = { timeZone: "America/New_York", languages: ["en-US", "en"], geolocation: { latitude: 40.7128, longitude: -74.006, accuracyM: 1000 } };
-  const draft = (overrides: Record<string, unknown> = {}) => JSON.stringify({ name: "ari-2", existingPage: false, page: null, socks: "198.51.100.20:7000", env: DRAFT_ENV, revision: 3, ...overrides }, null, 2);
+  const DRAFT_ID = "6f0a3c1e-2b4d-4e8f-9a1b-3c5d7e9f1a2b";
+  const draft = (overrides: Record<string, unknown> = {}) => JSON.stringify({ name: "ari-2", existingPage: false, page: null, socks: "198.51.100.20:7000", env: DRAFT_ENV, draftId: DRAFT_ID, revision: 3, ...overrides }, null, 2);
 
   it("takes the SOCKS5's address and the environment from Hub's draft: nothing of the proxy typed, its login and password never on the server", () => {
     const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc"], { TEST_HUB_OUT_0: draft() });
@@ -310,7 +311,7 @@ describe("deploy-page-browser.sh add-profile from the owner's draft (owner decis
     const socks = /^PB_SOCKS_IP=(.+)$/m.exec(pageEnv)![1];
     expect(added!.args.slice(added!.args.indexOf("node"))).toEqual([
       "node", "apps/runtime/dist/cli.js", "sync", "browser-profile", "add", "--profile", profile, "--container", "page-browser-ari-2",
-      "--socks", `${socks}:7000`, "--from-draft", "ari-2", "--draft-revision", "3", "--secrets-stdin", "--new-page", "ari-2",
+      "--socks", `${socks}:7000`, "--from-draft", "ari-2", "--draft-id", DRAFT_ID, "--draft-revision", "3", "--secrets-stdin", "--new-page", "ari-2",
     ]);
     expect(added!.stdin).toBe(secretsOf("ari-2").join(""));
     expect(made.stderr).toContain("the draft of ari-2 (revision 3): SOCKS5 198.51.100.20:7000");
@@ -322,7 +323,7 @@ describe("deploy-page-browser.sh add-profile from the owner's draft (owner decis
     expect(made.status, made.stderr).toBe(0);
     expect(readFileSync(path.join(pbBase, "pages/ari-2/page.env"), "utf8")).toContain("PB_TZ=Europe/Berlin\nPB_LANG=de-DE\n");
     const added = hubCalls()[1]!;
-    expect(added.args.slice(added.args.indexOf("--from-draft"), added.args.indexOf("--secrets-stdin"))).toEqual(["--from-draft", "ari-2", "--draft-revision", "3", "--env", ENV]);
+    expect(added.args.slice(added.args.indexOf("--from-draft"), added.args.indexOf("--secrets-stdin"))).toEqual(["--from-draft", "ari-2", "--draft-id", DRAFT_ID, "--draft-revision", "3", "--env", ENV]);
   });
 
   it("an existing page's draft binds the profile with --existing, and refuses without it — before anything is made", () => {
@@ -346,6 +347,14 @@ describe("deploy-page-browser.sh add-profile from the owner's draft (owner decis
     const wrong = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc", "--existing"], { TEST_HUB_OUT_0: draft() });
     expect(wrong.status).toBe(1);
     expect(wrong.stderr).toContain("the draft of ari-2 is a new page's: no --existing");
+  });
+
+  it("a draft answer without its own id does not read: nothing is made", () => {
+    const made = run("add-profile", ["--page", "ari-2", "--image", "hub-page-browser:155.0.1-abc"], { TEST_HUB_OUT_0: draft({ draftId: null }) });
+    expect(made.status).toBe(1);
+    expect(made.stderr).toContain("Hub's draft of ari-2 has no id");
+    expect(containers()).toEqual([]);
+    expect(volumes()).toEqual([]);
   });
 
   it("no draft in Hub: says where the owner starts it, and makes nothing", () => {

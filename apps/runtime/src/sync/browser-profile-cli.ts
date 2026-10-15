@@ -6,9 +6,9 @@ import {
   consumePageBrowserDraft,
   findOnboardingProfile,
   findPageBrowserDraft,
-  findPageById,
   findPageByLabel,
   lockPageBrowserDraft,
+  pageProxyStateOf,
   insertProfileClearHaltCommand,
   lockPageBrowserProfile,
   forgetPageBrowserProfile,
@@ -20,10 +20,13 @@ import {
   registerPageBrowserProfile,
   type Database,
   type OnboardingProfile,
+  type PageBrowserDraft,
   type PageBrowserEnv,
 } from "@agency_hub_core/db";
 
-import { sealPageBrowserSecrets, socksEndpointOfProxy } from "../services/egress/page-browser-link.ts";
+import { nonGlobalAddressReason } from "@agency_hub_core/shared";
+
+import { sealPageBrowserSecrets } from "../services/egress/page-browser-link.ts";
 import { awaitPageBrowserCommand, SYNC_BROWSER_COMMAND_TTL_MS } from "./browser-levers.ts";
 import type { SyncContext } from "./context.ts";
 import { SyncOwnerLeverError } from "./inspect.ts";
@@ -36,10 +39,10 @@ import { SyncOwnerLeverError } from "./inspect.ts";
 //
 // - `draft`: the browser the owner started in the dashboard (0282; owner
 //   decision 2026-10-15), as add-profile needs it — the SOCKS5's `ip:port`
-//   its container's rules admit (a new page's proxy from the draft, an
-//   existing page's its own; the name resolved here, as the hello resolves
-//   it), the environment the owner confirmed, the draft's revision. No
-//   secret: the proxy's login and password stay sealed in Hub.
+//   its container's rules admit, the one judged public when the owner saved
+//   the draft (no DNS here), the environment the owner confirmed, the
+//   draft's id and revision. No secret: the proxy's login and password stay
+//   sealed in Hub.
 // - `add`: the row of a profile the deploy script just made a container of:
 //   its three secrets read from the standard input (the engine's RPC token,
 //   the API's token, the KasmVNC password — one per line, as the server's
@@ -48,11 +51,13 @@ import { SyncOwnerLeverError } from "./inspect.ts";
 //   a new page's profile, its page empty — the owner connects the page in
 //   the dashboard; refused when a page of that label exists. `--page
 //   <label>`: an existing page that moves to its browser, bound now.
-//   `--from-draft <name> --draft-revision <n>`: the draft add-profile read —
-//   the profile takes its proxy (a new page's: the onboarding's proxy from
-//   the start) and its environment (`--env` overrides it), and consumes it
-//   in the same transaction; refused when the draft changed or its proxy's
-//   name no longer resolves to the address the container was made for.
+//   `--from-draft <name> --draft-id <uuid> --draft-revision <n>`: the very
+//   draft add-profile read — the profile takes its proxy (a new page's: the
+//   onboarding's proxy from the start) and its environment (`--env`
+//   overrides it), and consumes it in the same transaction; refused for
+//   another draft (one deleted and made again), a changed one, a SOCKS5
+//   other than the one it holds, and an existing page whose proxy changed
+//   since the draft was saved. The SOCKS5 is a public address, or refused.
 //   Without it (`--socks` and `--env` typed, PR 16's way), a name that has a
 //   draft is refused: the draft is the owner's word.
 // - `remove`: a profile no page has, forgotten (its container goes after);
@@ -80,8 +85,9 @@ export interface BrowserProfileCliDeps {
   print(line: string): void;
   /** The standard input, whole (the secrets of `add`). */
   readStdin?: () => Promise<string>;
-  /** A proxy's name to its IPv4 address (tests: no DNS). */
-  resolve?: (host: string) => Promise<string>;
+  /** TESTS ONLY: addresses taken as public (a test's SOCKS5 listens on
+   *  loopback). */
+  allowAddresses?: (ip: string) => boolean;
 }
 
 function cliActor(): string {
@@ -164,41 +170,50 @@ export function profileView(profile: OnboardingProfile) {
   };
 }
 
-/** The SOCKS5 a page's proxy names, as its container is made for it, or
- *  the refusal. */
-async function socksEndpointFor(url: string, what: string, resolve?: (host: string) => Promise<string>): Promise<string> {
-  const read = await socksEndpointOfProxy(url, resolve === undefined ? {} : { resolve });
-  if ("problem" in read) throw new SyncOwnerLeverError(`${what}: ${read.problem}`);
-  return read.endpoint;
+/** Why a SOCKS5 endpoint (`ip:port`) cannot be a page container's — not a
+ *  public address (Astra's review of PR #627, item 3) — or null. */
+function endpointProblem(endpoint: string, allow?: (ip: string) => boolean): string | null {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/.exec(endpoint);
+  if (match === null) return `${endpoint} is not ip:port`;
+  if (allow?.(match[1]!) === true) return null;
+  const reason = nonGlobalAddressReason(match[1]!);
+  return reason === null ? null : `${match[1]} is not a public address (${reason}): a page's container is made for a public SOCKS5 only`;
 }
 
-/** `draft`: what add-profile makes the container from (no secret). */
+/** The existing page's proxy is the one the draft was saved with: the row
+ *  and its hash (Astra's review of PR #627, item 4). */
+function samePageProxy(draft: PageBrowserDraft, now: { id: number; fingerprint: string } | null): boolean {
+  return draft.pageProxy !== null && now !== null && now.id === draft.pageProxy.id && now.fingerprint === draft.pageProxy.fingerprint;
+}
+
+/** `draft`: what add-profile makes the container from (no secret): the
+ *  `ip:port` judged public when the owner saved the draft — never a DNS
+ *  answer of now —, the environment, the draft's identity and revision. */
 export async function showBrowserProfileDraft(
   db: Database,
   name: string,
-  options: { resolve?: (host: string) => Promise<string> } = {},
-): Promise<{ name: string; existingPage: boolean; page: string | null; socks: string; env: PageBrowserEnv; revision: number }> {
+  options: { allowAddresses?: (ip: string) => boolean } = {},
+): Promise<{ name: string; existingPage: boolean; page: string | null; socks: string; env: PageBrowserEnv; draftId: string; revision: number }> {
   const draft = await findPageBrowserDraft(db, name);
   if (draft === null) {
     throw new SyncOwnerLeverError(`Hub has no draft of the browser ${name}: start it in the dashboard (Настройки → Страницы → «Новые страницы через серверный браузер»), or give --socks and --env`);
   }
   const env = pageBrowserEnvOf(draft.env);
   if (env === null) throw new SyncOwnerLeverError(`the draft of ${name} has no well-formed environment: save it again in the dashboard`);
-  let url: string;
-  if (draft.pageId === null) {
-    url = draft.proxy!.url;
-  } else {
-    const page = await findPageById(db, draft.pageId);
-    if (page === null) throw new SyncOwnerLeverError(`the draft of ${name} names page ${draft.pageId}, which is not active`);
-    if (page.proxy == null) throw new SyncOwnerLeverError(`page ${name} has no proxy: give it its SOCKS5 first`);
-    url = page.proxy.url;
+  const problem = endpointProblem(draft.socksEndpoint, options.allowAddresses);
+  if (problem !== null) throw new SyncOwnerLeverError(`the draft of ${name}: ${problem}`);
+  if (draft.pageId !== null && !samePageProxy(draft, await pageProxyStateOf(db, draft.pageId))) {
+    throw new SyncOwnerLeverError(`the proxy of page ${name} changed since its draft was saved: check it and save the draft again in the dashboard`);
   }
-  const socks = await socksEndpointFor(url, `the proxy of ${name}`, options.resolve);
-  return { name, existingPage: draft.pageId !== null, page: draft.pageLabel, socks, env, revision: draft.revision };
+  return { name, existingPage: draft.pageId !== null, page: draft.pageLabel, socks: draft.socksEndpoint, env, draftId: draft.draftId, revision: draft.revision };
 }
 
 /** `add`: the profile's row, audited, in one transaction — from the owner's
- *  draft (consumed with it), or from what was typed. */
+ *  draft (consumed with it), or from what was typed. The SOCKS5 it is made
+ *  for is a public address at every stage; from a draft, it is the very one
+ *  the draft holds, of the very draft read (its identity and revision), and
+ *  for an existing page only while the page's proxy is the one the draft
+ *  was saved with (its row locked until the registration commits). */
 export async function addBrowserProfile(
   ctx: Pick<SyncContext, "db" | "rawConfig">,
   input: {
@@ -210,11 +225,14 @@ export async function addBrowserProfile(
     page: { existing: string } | { new: string };
     secrets: { engineToken: string; apiToken: string; vncPassword: string };
     actor: string;
-    fromDraft?: { name: string; revision: number };
-    resolve?: (host: string) => Promise<string>;
+    fromDraft?: { name: string; draftId: string; revision: number };
+    /** TESTS ONLY: addresses taken as public. */
+    allowAddresses?: (ip: string) => boolean;
   },
-): Promise<{ profileId: string; container: string; socksEndpoint: string; boundTo: string | null; fromDraft: { name: string; revision: number } | null }> {
+): Promise<{ profileId: string; container: string; socksEndpoint: string; boundTo: string | null; fromDraft: { name: string; draftId: string; revision: number } | null }> {
   const label = "existing" in input.page ? input.page.existing : input.page.new;
+  const endpoint = endpointProblem(input.socks, input.allowAddresses);
+  if (endpoint !== null) throw new SyncOwnerLeverError(`--socks: ${endpoint}`);
   const found = await findPageByLabel(ctx.db, label);
   if ("existing" in input.page) {
     // A page of another platform: the registration refuses it (a Fansly page only).
@@ -228,15 +246,8 @@ export async function addBrowserProfile(
     if ((await findPageBrowserDraft(ctx.db, label)) !== null) {
       throw new SyncOwnerLeverError(`the owner started the browser ${label} in the dashboard: add-profile takes it from his draft (no --socks, no --env), or he deletes the draft`);
     }
-  } else {
-    if (fromDraft.name !== label) throw new SyncOwnerLeverError(`the draft ${fromDraft.name} is not the browser ${label}'s`);
-    // The draft's proxy names the address the container was made for (its
-    // name resolved again: a container's rules admit one address).
-    const drafted = await findPageBrowserDraft(ctx.db, label);
-    if (drafted !== null && drafted.pageId === null && drafted.proxy !== null) {
-      const now = await socksEndpointFor(drafted.proxy.url, `the proxy of ${label}`, input.resolve);
-      if (now !== input.socks) throw new SyncOwnerLeverError(`the proxy of ${label} names ${now} now, not ${input.socks} the container was made for: run add-profile again`);
-    }
+  } else if (fromDraft.name !== label) {
+    throw new SyncOwnerLeverError(`the draft ${fromDraft.name} is not the browser ${label}'s`);
   }
   const sealed = sealPageBrowserSecrets(ctx.rawConfig, input.secrets);
   try {
@@ -247,11 +258,26 @@ export async function addBrowserProfile(
       if (fromDraft !== null) {
         const draft = await lockPageBrowserDraft(tx, fromDraft.name);
         if (draft === null) throw new SyncOwnerLeverError(`Hub has no draft of the browser ${label} any more (deleted, or another add-profile took it)`);
+        // Its own identity first: a draft deleted and made again is another
+        // draft, whatever its revision (Astra's review of PR #627, item 5).
+        if (draft.draftId !== fromDraft.draftId) throw new SyncOwnerLeverError(`the draft of ${label} is not the one add-profile read (deleted and made again): run add-profile again`);
         if (draft.revision !== fromDraft.revision) throw new SyncOwnerLeverError(`the owner changed the draft of ${label} meanwhile (revision ${draft.revision}, not ${fromDraft.revision}): run add-profile again`);
         if ((draft.pageId !== null) !== ("existing" in input.page)) {
           throw new SyncOwnerLeverError(draft.pageId !== null ? `the draft of ${label} moves the existing page to its browser: add-profile --existing` : `the draft of ${label} is a new page's: add-profile without --existing`);
         }
-        if (draft.pageId !== null && draft.pageId !== found!.page.id) throw new SyncOwnerLeverError(`the draft of ${label} names another page`);
+        // The container is made for the address the draft holds — judged
+        // public at its save — and no other (item 3).
+        if (draft.socksEndpoint !== input.socks) throw new SyncOwnerLeverError(`the draft of ${label} holds the SOCKS5 ${draft.socksEndpoint}, not ${input.socks} the container was made for: run add-profile again`);
+        const drafted = endpointProblem(draft.socksEndpoint, input.allowAddresses);
+        if (drafted !== null) throw new SyncOwnerLeverError(`the draft of ${label}: ${drafted}`);
+        if (draft.pageId !== null) {
+          if (draft.pageId !== found!.page.id) throw new SyncOwnerLeverError(`the draft of ${label} names another page`);
+          // The page's proxy as the draft was saved with, held until this
+          // commits (item 4).
+          if (!samePageProxy(draft, await pageProxyStateOf(tx, draft.pageId, { lock: true }))) {
+            throw new SyncOwnerLeverError(`the proxy of page ${label} changed since its draft was saved: check it and save the draft again in the dashboard, then run add-profile again`);
+          }
+        }
         env ??= pageBrowserEnvOf(draft.env);
         if (env === null) throw new SyncOwnerLeverError(`the draft of ${label} has no well-formed environment`);
         onboardingProxy = draft.proxy;
@@ -273,7 +299,7 @@ export async function addBrowserProfile(
         metadata: {
           actor: input.actor, action: "add", profileId: input.profileId, container: input.container, socksEndpoint: input.socks,
           ...("existing" in input.page ? { page: label } : { newPage: label }),
-          ...(fromDraft === null ? {} : { fromDraft: fromDraft.name, draftRevision: fromDraft.revision, envOverridden: input.env !== undefined }),
+          ...(fromDraft === null ? {} : { fromDraft: fromDraft.name, draftId: fromDraft.draftId, draftRevision: fromDraft.revision, envOverridden: input.env !== undefined }),
         },
       });
     });
@@ -371,14 +397,17 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     .requiredOption("--socks <ip:port>", "the SOCKS5 its container's rules admit", parseSocks)
     .option("--env <json>", "{timeZone, languages, geolocation: {latitude, longitude, accuracyM}} (with --from-draft: overrides the draft's)", parseEnv)
     .option("--from-draft <name>", "the owner's draft in the dashboard (`draft`): its proxy and environment, consumed")
+    .option("--draft-id <uuid>", "the draft's own id `draft` printed: refused for another draft (one deleted and made again)", parseUuid)
     .option("--draft-revision <n>", "the draft's revision `draft` printed: refused when it changed since", parseRevision)
     .option("--page <label>", "an existing page that moves to its browser: bound now")
     .option("--new-page <label>", "a new page's profile: its page empty until the owner connects it")
     .option("--secrets-stdin", "read the secrets from the standard input (required)", false)
-    .action(async (options: { profile: string; container: string; socks: string; env?: PageBrowserEnv; fromDraft?: string; draftRevision?: number; page?: string; newPage?: string; secretsStdin: boolean }) => {
+    .action(async (options: { profile: string; container: string; socks: string; env?: PageBrowserEnv; fromDraft?: string; draftId?: string; draftRevision?: number; page?: string; newPage?: string; secretsStdin: boolean }) => {
       if ((options.page === undefined) === (options.newPage === undefined)) throw new SyncOwnerLeverError("one of --page <label> (an existing page) and --new-page <label>");
       if (!options.secretsStdin) throw new SyncOwnerLeverError("the secrets come on the standard input (--secrets-stdin), never on a command line");
-      if ((options.fromDraft === undefined) !== (options.draftRevision === undefined)) throw new SyncOwnerLeverError("--from-draft and --draft-revision go together");
+      if ((options.fromDraft === undefined) !== (options.draftRevision === undefined) || (options.fromDraft === undefined) !== (options.draftId === undefined)) {
+        throw new SyncOwnerLeverError("--from-draft, --draft-id and --draft-revision go together");
+      }
       try {
         const secrets = parseProfileSecrets(await (deps.readStdin ?? readProcessStdin)());
         await withContext(async (ctx) => {
@@ -390,8 +419,8 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
             page: options.page !== undefined ? { existing: options.page } : { new: options.newPage! },
             secrets,
             actor: cliActor(),
-            ...(options.fromDraft === undefined ? {} : { fromDraft: { name: options.fromDraft, revision: options.draftRevision! } }),
-            ...(deps.resolve === undefined ? {} : { resolve: deps.resolve }),
+            ...(options.fromDraft === undefined ? {} : { fromDraft: { name: options.fromDraft, draftId: options.draftId!, revision: options.draftRevision! } }),
+            ...(deps.allowAddresses === undefined ? {} : { allowAddresses: deps.allowAddresses }),
           }));
         });
       } catch (error) {
@@ -405,10 +434,10 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
 
   group
     .command("draft")
-    .description("the browser the owner started in the dashboard, as add-profile makes it: its SOCKS5's ip:port, its environment, its revision (JSON, no secret)")
+    .description("the browser the owner started in the dashboard, as add-profile makes it: its SOCKS5's ip:port judged public at the draft's save, its environment, the draft's id and revision (JSON, no secret)")
     .requiredOption("--name <name>", "the browser's name (the page's label)")
     .action(async (options: { name: string }) => {
-      await withContext(async ({ db }) => print(await showBrowserProfileDraft(db, options.name, deps.resolve === undefined ? {} : { resolve: deps.resolve })));
+      await withContext(async ({ db }) => print(await showBrowserProfileDraft(db, options.name, deps.allowAddresses === undefined ? {} : { allowAddresses: deps.allowAddresses })));
     });
 
   group

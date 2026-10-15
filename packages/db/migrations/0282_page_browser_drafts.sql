@@ -29,8 +29,23 @@
 --   env                     the browser's environment the owner confirmed:
 --                           {timeZone, languages, geolocation: {latitude,
 --                           longitude, accuracyM}} (`hello.env`)
+--   socks_endpoint          `ip:port` of the SOCKS5 the container is made
+--                           for: the proxy's host resolved ONCE when the
+--                           draft was saved, every address it resolved to a
+--                           public one — add-profile takes this address,
+--                           never a later DNS answer (Astra's review of PR
+--                           #627, item 3)
+--   page_proxy_id, page_proxy_fingerprint
+--                           an existing page's proxy as it was when the
+--                           draft was saved (its egress_endpoints row and a
+--                           hash of that row): the registration refuses when
+--                           the page's proxy changed since (item 4)
+--   draft_id                this draft's own identity, minted at its
+--                           creation and never reused: a draft deleted and
+--                           made again is another draft (item 5)
 --   revision                raised at every save: add-profile registers the
---                           draft it read, refused when it changed meanwhile
+--                           draft it read (its id and revision), refused when
+--                           it changed meanwhile
 --
 -- A draft is configuration the owner typed, not a captured fact: the
 -- owner's delete, and the registration that consumes it, remove its row.
@@ -52,6 +67,10 @@ create table if not exists page_browser_drafts (
   proxy_auth text,
   proxy_key_version integer,
   env jsonb not null,
+  socks_endpoint text not null,
+  page_proxy_id bigint,
+  page_proxy_fingerprint text,
+  draft_id uuid not null default gen_random_uuid(),
   revision bigint not null default 1,
   created_at timestamptz not null default clock_timestamp(),
   created_by text not null,
@@ -67,6 +86,12 @@ create table if not exists page_browser_drafts (
     and (proxy_url is null or proxy_url ~ '^socks5://')
   ),
   constraint page_browser_drafts_env_check check (jsonb_typeof(env) = 'object'),
+  constraint page_browser_drafts_socks_endpoint_check check (socks_endpoint ~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$'),
+  -- An existing page's draft holds the state of the page's proxy it was saved with.
+  constraint page_browser_drafts_page_proxy_check check (
+    (page_id is null) = (page_proxy_id is null) and (page_proxy_id is null) = (page_proxy_fingerprint is null)
+  ),
+  constraint page_browser_drafts_draft_id_key unique (draft_id),
   constraint page_browser_drafts_revision_check check (revision >= 1)
 );
 
@@ -81,7 +106,8 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'read_only') then
     -- every column but the proxy's sealed auth
-    grant select (name, page_id, proxy_url, proxy_key_version, env, revision, created_at, created_by, updated_at, updated_by)
+    grant select (name, page_id, proxy_url, proxy_key_version, env, socks_endpoint, page_proxy_id, draft_id, revision, created_at, created_by,
+      updated_at, updated_by)
       on page_browser_drafts to read_only;
   end if;
 end $$;

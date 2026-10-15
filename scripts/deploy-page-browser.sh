@@ -59,8 +59,9 @@ Usage:
             of it is typed here: Hub's draft of <name> (`sync browser-profile
             draft` in the api container under --hub-dir, default
             /opt/agency-hub) gives the SOCKS5's ip:port the container's rules
-            admit and the environment — Chrome's zone and language come from
-            it. Then a container with a profile of its own, an empty buffer
+            admit — the public address Hub judged when the draft was saved,
+            never a DNS answer of now — and the environment; Chrome's zone and
+            language come from it. Then a container with a profile of its own, an empty buffer
             and its own secrets (the engine's RPC token, the API's token, the
             KasmVNC password), then its row in Hub from the draft (`sync
             browser-profile add --from-draft`, the secrets on its standard
@@ -362,18 +363,21 @@ add_profile() {
   if [[ -z "$SOCKS_ARG" ]]; then
     # The SOCKS5's address and the environment from Hub's draft: nothing of
     # the proxy is typed here, and its login and password never leave Hub.
-    local draft draft_socks revision existing
+    local draft draft_socks draft_id revision existing
     draft="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile draft --name "$PAGE_NAME")")" \
       || fail "Hub gave no draft of ${PAGE_NAME}: start its browser in the dashboard (Настройки → Страницы → «Новые страницы через серверный браузер»), or give --socks and --env"
     draft_socks="$(json_field socks "$draft")" || fail "Hub's draft of ${PAGE_NAME} names no SOCKS5"
+    draft_id="$(json_field draftId "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no id"
     revision="$(json_field revision "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no revision"
     existing="$(json_field existingPage "$draft")" || fail "Hub's draft of ${PAGE_NAME} does not say whose it is"
-    [[ "$draft_socks" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ && "$revision" =~ ^[0-9]+$ ]] || fail "Hub's draft of ${PAGE_NAME} does not read"
+    [[ "$draft_socks" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ && "$draft_id" =~ ^[0-9a-f-]{36}$ && "$revision" =~ ^[0-9]+$ ]] || fail "Hub's draft of ${PAGE_NAME} does not read"
     if [[ "$existing" == "true" && "$EXISTING_PAGE" != "1" ]]; then fail "the draft of ${PAGE_NAME} moves the existing page to its browser: add --existing"; fi
     if [[ "$existing" != "true" && "$EXISTING_PAGE" == "1" ]]; then fail "the draft of ${PAGE_NAME} is a new page's: no --existing"; fi
     [[ -n "$ENV_JSON" ]] || ENV_JSON="$(json_field env "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no environment"
     PAGE_ARGS+=(--socks "$draft_socks")
-    from_draft=(--from-draft "$PAGE_NAME" --draft-revision "$revision")
+    # The very draft read — its own id (one deleted and made again is
+    # another) and its revision —, for the very address it holds.
+    from_draft=(--from-draft "$PAGE_NAME" --draft-id "$draft_id" --draft-revision "$revision")
     log "the draft of ${PAGE_NAME} (revision ${revision}): SOCKS5 ${draft_socks}$([[ -n "$env_override" ]] && echo ", the environment given here")"
   else
     [[ -n "$ENV_JSON" ]] || fail "add-profile needs --env <json> with --socks: the browser's environment by the proxy's region"

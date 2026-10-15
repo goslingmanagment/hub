@@ -1104,9 +1104,11 @@ session, the browser logs in from its own device and IP (plan §3.2 «Подкл
    draft — the proxy's password sealed in Hub, never shown again. For an existing page that moves to its browser
    (the pilot lilly-1), choose «Существующая страница…»: its own proxy is shown and checked, and changed in the
    page's settings, not here.
-2. **The profile**, from the workstation — Hub's draft gives the SOCKS5's `ip:port` and the environment, nothing is
-   typed; the container with a new profile, an empty buffer and its own secrets, then its row in Hub from the draft
-   (the secrets go on the Hub CLI's standard input; the draft is consumed with it):
+2. **The profile**, from the workstation — Hub's draft gives the SOCKS5's `ip:port` (the public address Hub judged
+   when the draft was saved: no DNS at deploy) and the environment, nothing is typed; the container with a new
+   profile, an empty buffer and its own secrets, then its row in Hub from the very draft read — its own id and
+   revision; for an existing page only while the page's proxy is as it was at the save (the secrets go on the Hub
+   CLI's standard input; the draft is consumed with it):
 
    ```sh
    scripts/deploy-page-browser.sh add-profile root@152.53.191.242 --page ari-2 --image hub-page-browser:<tag>

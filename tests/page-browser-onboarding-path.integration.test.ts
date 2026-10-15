@@ -212,7 +212,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
       pageBrowserEndpoints: { rpcUrl: () => `ws://127.0.0.1:${ports.rpcPort}/rpc`, screen: () => ({ host: "127.0.0.1", port: 1 }) },
       // The owner's check: through the local SOCKS5 to the IP-info services
       // on this machine.
-      pageBrowserProxyCheck: { options: localCheckOptions(socks, ipinfo, geojs), allowLoopback: true },
+      pageBrowserProxyCheck: { options: localCheckOptions(socks, ipinfo, geojs), allowAddresses: (ip) => ip === "127.0.0.1" },
     });
     await createUserAccount(app, { username: "owner-pb16", role: "owner", password: "synthetic-password" }, { source: "cli" });
     await createUserAccount(app, { username: "lead-pb16", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
@@ -247,14 +247,15 @@ describe("a new page connected through its own browser, the whole path (plan §3
       openContext: async () => ({ db: db(), rawConfig: config, close: async () => undefined }),
       print: (line) => void printed.push(line),
       readStdin: async () => `${RPC_TOKEN}\n${API_TOKEN}\n${VNC_PASSWORD}\n`,
+      allowAddresses: (ip) => ip === "127.0.0.1",
     });
     await cli.parseAsync(["browser-profile", "draft", "--name", "ari-2"], { from: "user" });
-    const draft = JSON.parse(printed.at(-1)!) as { socks: string; revision: number };
+    const draft = JSON.parse(printed.at(-1)!) as { socks: string; draftId: string; revision: number };
     expect(draft).toMatchObject({ socks: `127.0.0.1:${socks.port}`, env: ENV, existingPage: false });
     const profileId = randomUUID();
     await cli.parseAsync([
       "browser-profile", "add", "--profile", profileId, "--container", "page-browser-ari-2", "--socks", draft.socks,
-      "--from-draft", "ari-2", "--draft-revision", String(draft.revision), "--secrets-stdin", "--new-page", "ari-2",
+      "--from-draft", "ari-2", "--draft-id", draft.draftId, "--draft-revision", String(draft.revision), "--secrets-stdin", "--new-page", "ari-2",
     ], { from: "user" });
     expect(printed.join("\n")).not.toContain(SOCKS_PASSWORD);
 

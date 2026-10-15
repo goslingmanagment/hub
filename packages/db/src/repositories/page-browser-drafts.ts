@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -8,11 +10,14 @@ import type { Database } from "../client.ts";
 // a new page's proxy as the owner pasted it (its login and password sealed by
 // the caller, as `egress_endpoints.encrypted_auth`), or the existing page
 // that moves to its browser (its proxy is its own), and the environment the
-// owner confirmed. `scripts/deploy-page-browser.sh add-profile` reads it
-// (`sync browser-profile draft`), makes the container from it, and the
+// owner confirmed, and the public `ip:port` its proxy was judged at when it
+// was saved. `scripts/deploy-page-browser.sh add-profile` reads it (`sync
+// browser-profile draft`), makes the container for that address, and the
 // profile's registration takes it under its row lock and consumes it in the
 // same transaction (`sync browser-profile add --from-draft`): only the
-// revision add-profile read.
+// draft add-profile read — its own id (a draft made again is another) and
+// its revision —, only for that address, and for an existing page only
+// while the page's proxy is as it was when the draft was saved.
 
 export interface PageBrowserDraft {
   name: string;
@@ -23,6 +28,12 @@ export interface PageBrowserDraft {
   /** A new page's proxy (its auth sealed); null for an existing page's. */
   proxy: { url: string; encryptedAuth: string | null; keyVersion: number | null } | null;
   env: Record<string, unknown>;
+  /** `ip:port` the proxy was judged public at when the draft was saved. */
+  socksEndpoint: string;
+  /** An existing page's proxy as it was at the save (its row and hash). */
+  pageProxy: { id: number; fingerprint: string } | null;
+  /** This draft's own identity: never reused. */
+  draftId: string;
   revision: number;
   createdAt: Date;
   createdBy: string;
@@ -50,6 +61,10 @@ type DraftRow = {
   proxyAuth: string | null;
   proxyKeyVersion: number | null;
   env: unknown;
+  socksEndpoint: string;
+  pageProxyId: string | null;
+  pageProxyFingerprint: string | null;
+  draftId: string;
   revision: string;
   createdAt: Date | string;
   createdBy: string;
@@ -65,6 +80,10 @@ const columns = sql`
   d.proxy_auth as "proxyAuth",
   d.proxy_key_version as "proxyKeyVersion",
   d.env,
+  d.socks_endpoint as "socksEndpoint",
+  d.page_proxy_id::text as "pageProxyId",
+  d.page_proxy_fingerprint as "pageProxyFingerprint",
+  d.draft_id::text as "draftId",
   d.revision::text as revision,
   d.created_at as "createdAt",
   d.created_by as "createdBy",
@@ -81,6 +100,9 @@ function draftOf(row: DraftRow): PageBrowserDraft {
     pageLabel: row.pageLabel,
     proxy: row.proxyUrl === null ? null : { url: row.proxyUrl, encryptedAuth: row.proxyAuth, keyVersion: row.proxyKeyVersion },
     env: row.env !== null && typeof row.env === "object" && !Array.isArray(row.env) ? (row.env as Record<string, unknown>) : {},
+    socksEndpoint: row.socksEndpoint,
+    pageProxy: row.pageProxyId === null || row.pageProxyFingerprint === null ? null : { id: Number(row.pageProxyId), fingerprint: row.pageProxyFingerprint },
+    draftId: row.draftId,
     revision: Number(row.revision),
     createdAt: dateOf(row.createdAt),
     createdBy: row.createdBy,
@@ -116,13 +138,35 @@ export async function lockPageBrowserDraft(tx: Database, name: string): Promise<
   return row === undefined ? null : draftOf(row);
 }
 
-/** A registration took the draft: removed, only at the revision it read.
- *  True: removed. */
-export async function consumePageBrowserDraft(tx: Database, input: { name: string; revision: number }): Promise<boolean> {
+/** A registration took the draft: removed, only the very draft and
+ *  revision it read. True: removed. */
+export async function consumePageBrowserDraft(tx: Database, input: { name: string; draftId: string; revision: number }): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(input.draftId)) return false;
   const result = await tx.execute(sql`
-    delete from page_browser_drafts where name = ${input.name} and revision = ${input.revision}::bigint returning name
+    delete from page_browser_drafts
+     where name = ${input.name} and draft_id = ${input.draftId}::uuid and revision = ${input.revision}::bigint
+    returning name
   `);
   return result.rows.length === 1;
+}
+
+/**
+ * An existing page's proxy as it is now — its egress_endpoints row and a
+ * hash of what the row holds (URL, sealed auth, key version, updated_at) —
+ * or null: the page has none. `lock`: the row locked until the caller's
+ * transaction ends (the registration), so the proxy cannot change under it.
+ */
+export async function pageProxyStateOf(tx: Database, pageId: number, options: { lock?: boolean } = {}): Promise<{ id: number; fingerprint: string; url: string; encryptedAuth: string | null } | null> {
+  const result = await tx.execute<{ id: string; url: string; auth: string | null; keyVersion: number | null; updatedAt: Date | string }>(options.lock === true
+    ? sql`select id::text as id, url, encrypted_auth as auth, key_version as "keyVersion", updated_at as "updatedAt"
+            from egress_endpoints where platform_account_id = ${pageId}::bigint for update`
+    : sql`select id::text as id, url, encrypted_auth as auth, key_version as "keyVersion", updated_at as "updatedAt"
+            from egress_endpoints where platform_account_id = ${pageId}::bigint`);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.toISOString() : new Date(row.updatedAt).toISOString();
+  const fingerprint = createHash("sha256").update(JSON.stringify([row.id, row.url, row.auth, row.keyVersion, updatedAt])).digest("hex");
+  return { id: Number(row.id), fingerprint, url: row.url, encryptedAuth: row.auth };
 }
 
 /** The owner's delete of a draft. True: there was one. */
@@ -165,6 +209,10 @@ export async function pageBrowserDraftProblem(tx: Database, input: { name: strin
 export interface SavePageBrowserDraftInput {
   name: string;
   pageId: number | null;
+  /** `ip:port` the proxy was judged public at, now. */
+  socksEndpoint: string;
+  /** An existing page's proxy as it was judged (`pageProxyStateOf`). */
+  pageProxy?: { id: number; fingerprint: string } | null;
   /** A new page's proxy, sealed by the caller (`socks5://host:port`).
    *  Undefined: the stored one is kept (an edit that leaves it). */
   proxy?: { url: string; encryptedAuth: string; keyVersion: number };
@@ -192,17 +240,23 @@ export async function savePageBrowserDraft(db: Database, input: SavePageBrowserD
       ? null
       : input.proxy ?? (current !== null && current.pageId === null ? current.proxy : null);
     if (input.pageId === null && proxy === null) throw new PageBrowserDraftError("no_proxy", "A new page's browser needs its proxy");
+    const pageProxy = input.pageId === null ? null : input.pageProxy ?? null;
+    if (input.pageId !== null && pageProxy === null) throw new PageBrowserDraftError("no_proxy", "An existing page's browser goes out through the page's proxy: it has none");
     const env = JSON.stringify(input.env);
     await tx.execute(sql`
-      insert into page_browser_drafts (name, page_id, proxy_url, proxy_auth, proxy_key_version, env, created_by, updated_by)
+      insert into page_browser_drafts (name, page_id, proxy_url, proxy_auth, proxy_key_version, env, socks_endpoint, page_proxy_id,
+                                       page_proxy_fingerprint, created_by, updated_by)
       values (${input.name}, ${input.pageId}::bigint, ${proxy?.url ?? null}, ${proxy?.encryptedAuth ?? null}, ${proxy?.keyVersion ?? null}::integer,
-              ${env}::jsonb, ${input.by}, ${input.by})
+              ${env}::jsonb, ${input.socksEndpoint}, ${pageProxy?.id ?? null}::bigint, ${pageProxy?.fingerprint ?? null}, ${input.by}, ${input.by})
       on conflict (name) do update
          set page_id = excluded.page_id,
              proxy_url = excluded.proxy_url,
              proxy_auth = excluded.proxy_auth,
              proxy_key_version = excluded.proxy_key_version,
              env = excluded.env,
+             socks_endpoint = excluded.socks_endpoint,
+             page_proxy_id = excluded.page_proxy_id,
+             page_proxy_fingerprint = excluded.page_proxy_fingerprint,
              revision = page_browser_drafts.revision + 1,
              updated_at = clock_timestamp(),
              updated_by = excluded.updated_by

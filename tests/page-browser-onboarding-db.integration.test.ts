@@ -303,6 +303,8 @@ describe("a page browser profile's onboarding in the database (0280; PR 16)", ()
       openContext: async () => ({ db: db(), rawConfig: config, close: async () => undefined }),
       print: (line) => void printed.push(line),
       readStdin: async () => "engine-token-of-the-cli-test-0123\napi-token-of-the-cli-test-456789\nvnc-password-of-the-cli-test-ab\n",
+      // The documentation block this test's SOCKS5 sits in, taken as public.
+      allowAddresses: (ip) => ip.startsWith("203.0.113."),
     });
     const env = JSON.stringify({ timeZone: "Europe/Berlin", languages: ["en-US"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } });
     const add = (profileId: string, container: string) => cli().parseAsync(["browser-profile", "add", "--profile", profileId, "--container", container, "--socks", "203.0.113.50:1080", "--env", env, "--new-page", container.replace("page-browser-", ""), "--secrets-stdin"], { from: "user" });
@@ -314,6 +316,13 @@ describe("a page browser profile's onboarding in the database (0280; PR 16)", ()
     await expect(add(second, "page-browser-cli-1")).rejects.toThrow(/has a profile already/);
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: second, outcome: "refused" });
     expect(await findOnboardingProfile(db(), second)).toBeNull();
+    // A SOCKS5 that is not a public address: refused, nothing written
+    // (Astra's review of PR #627, item 3).
+    const inside = randomUUID();
+    await expect(cli().parseAsync(["browser-profile", "add", "--profile", inside, "--container", "page-browser-cli-2", "--socks", "10.230.0.3:1080", "--env", env, "--new-page", "cli-2", "--secrets-stdin"], { from: "user" }))
+      .rejects.toThrow(/not a public address/);
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: inside, outcome: "refused" });
+    expect(await findOnboardingProfile(db(), inside)).toBeNull();
     // `show`: present, then — forgotten — absent and forgotten.
     await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ present: true, profileId: first, pageId: null });
