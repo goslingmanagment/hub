@@ -86,6 +86,21 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
       .then(() => { setReplacing(false); check.reset(); }, (error: unknown) => setProblem(errorText(error)))
       .finally(() => setPending(false));
   };
+  // First the check, then the save: the address it connected to is the one kept.
+  const checkPanel = (
+    <ProxyCheckPanel
+      check={check}
+      onCheck={runCheck}
+      disabled={pasting ? preview.kind !== "parsed" : data.proxy === null}
+      onUseAsSocks5={pasting ? () => {
+        const socks = asSocks5Text(text, order);
+        if (socks !== null) {
+          setText(socks);
+          check.reset();
+        }
+      } : undefined}
+    />
+  );
   return (
     <Card title={<StepTitle n={1} title="Прокси страницы" state={state} />}>
       {data.proxy !== null && (
@@ -102,6 +117,7 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
       {pasting && (
         <form onSubmit={submit} className="mb-3 flex flex-col gap-2" autoComplete="off">
           <ProxyPasteField id="pb-proxy" label={data.proxy === null ? "Прокси этой страницы" : "Новая прокси — тот же SOCKS5, другой логин или пароль"} text={text} onText={(value) => { setText(value); check.reset(); }} order={order} onOrder={setOrder} disabled={pending} />
+          {checkPanel}
           <div className="flex flex-wrap items-center gap-2">
             <button type="submit" className={PLAIN} disabled={!ready || pending}>{pending ? "Сохраняем…" : "Сохранить"}</button>
             {data.proxy !== null && <button type="button" className={PLAIN} onClick={() => { setReplacing(false); setText(""); check.reset(); }}>Отмена</button>}
@@ -109,18 +125,7 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
           </div>
         </form>
       )}
-      <ProxyCheckPanel
-        check={check}
-        onCheck={runCheck}
-        disabled={pasting ? preview.kind !== "parsed" : data.proxy === null}
-        onUseAsSocks5={pasting ? () => {
-          const socks = asSocks5Text(text, order);
-          if (socks !== null) {
-            setText(socks);
-            check.reset();
-          }
-        } : undefined}
-      />
+      {!pasting && checkPanel}
       {editable && data.proxy !== null && !replacing && (
         <button type="button" className={`${PLAIN} mt-3`} onClick={() => { setReplacing(true); check.reset(); }}>Заменить прокси</button>
       )}
