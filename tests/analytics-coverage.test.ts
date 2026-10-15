@@ -61,7 +61,7 @@ describe("analytics capture coverage", () => {
       [row()],
       ANALYTICS_COVERAGE_PLANES.traffic,
       window30d,
-    )).toMatchObject({ state: "complete", label: "complete for 30-day window" });
+    )).toMatchObject({ state: "complete", label: "Полные данные за 30 дней" });
   });
 
   it("marks an exhausted floor stale when the head was not refreshed", () => {
@@ -73,7 +73,7 @@ describe("analytics capture coverage", () => {
       })],
       ANALYTICS_COVERAGE_PLANES.traffic,
       window30d,
-    )).toMatchObject({ state: "stale", label: "stale head" });
+    )).toMatchObject({ state: "stale", label: "Данные устарели" });
   });
 
   it("marks a 90-day selection partial when only 30 days are covered", () => {
@@ -81,7 +81,11 @@ describe("analytics capture coverage", () => {
       [row({ oldestCapturedAt: "2026-07-24T00:00:00.000Z" })],
       ANALYTICS_COVERAGE_PLANES.traffic,
       { from: "2026-05-25T00:00:00.000Z", to: window30d.to },
-    )).toMatchObject({ state: "partial", label: "partial — selected window" });
+    )).toMatchObject({
+      state: "partial",
+      label: "Данные неполные",
+      detail: expect.stringContaining("собран не с начала выбранного периода"),
+    });
   });
 
   it("never calls a multi-plane panel complete when one required plane has no row", () => {
@@ -89,7 +93,7 @@ describe("analytics capture coverage", () => {
       [row({ plane: CAPTURE_COVERAGE_PLANES.catalog })],
       ANALYTICS_COVERAGE_PLANES.contentPerformance,
       window30d,
-    )).toMatchObject({ state: "unknown", label: "coverage unknown" });
+    )).toMatchObject({ state: "unknown", label: "Полнота неизвестна" });
   });
 
   it.each([
@@ -140,7 +144,7 @@ describe("analytics capture coverage", () => {
       row({ scopeRef: "steady", oldestCapturedAt: window30d.from }),
     ], ANALYTICS_COVERAGE_PLANES.traffic, {
       from: "2026-05-25T00:00:00.000Z", to: window30d.to,
-    })).toMatchObject({ state: "partial", label: "partial — in progress" });
+    })).toMatchObject({ state: "partial", label: "Данные неполные", detail: expect.stringContaining("Сбор ещё идёт") });
   });
 
   it("does not bridge a gap between successful historical and fresh windows", () => {
@@ -149,7 +153,7 @@ describe("analytics capture coverage", () => {
       row({ scopeRef: "steady", oldestCapturedAt: window30d.from }),
     ], ANALYTICS_COVERAGE_PLANES.traffic, {
       from: "2026-05-25T00:00:00.000Z", to: window30d.to,
-    })).toMatchObject({ state: "partial", detail: expect.stringContaining("gap") });
+    })).toMatchObject({ state: "partial", detail: expect.stringContaining("пропуск") });
   });
 
   it("retains a failed fresh capture even when history previously covered the selection", () => {
@@ -157,7 +161,7 @@ describe("analytics capture coverage", () => {
       row({ status: "provider_exhausted" }),
       row({ scopeRef: "steady", status: "partial_provider_surface", oldestCapturedAt: window30d.from }),
     ], ANALYTICS_COVERAGE_PLANES.traffic, window30d))
-      .toMatchObject({ state: "partial", label: "partial — partial provider surface" });
+      .toMatchObject({ state: "partial", label: "Данные неполные", detail: expect.stringContaining("Fansly отдал только часть") });
   });
 
   it.each([
@@ -177,7 +181,11 @@ describe("analytics capture coverage", () => {
       row({ scopeRef: "steady", oldestCapturedAt: window30d.from }),
     ], ANALYTICS_COVERAGE_PLANES.traffic, {
       from: "2026-05-25T00:00:00.000Z", to: window30d.to,
-    })).toMatchObject({ state: "partial", label: "partial — selected window" });
+    })).toMatchObject({
+      state: "partial",
+      label: "Данные неполные",
+      detail: expect.stringContaining("собран не с начала выбранного периода"),
+    });
   });
 
   it("keeps the joined head stale when the fresh sweep is also old", () => {
@@ -203,7 +211,7 @@ describe("analytics capture coverage", () => {
     expect(coverageVerdict([
       row({ plane, scopeRef: "media-1", status: "in_progress" }),
       row({ plane, scopeRef: "steady", oldestCapturedAt: window30d.from }),
-    ], [plane], window30d)).toMatchObject({ state: "partial", label: "partial — in progress" });
+    ], [plane], window30d)).toMatchObject({ state: "partial", label: "Данные неполные", detail: expect.stringContaining("Сбор ещё идёт") });
   });
 
   it("preserves unrelated scopes and required planes when choosing a fresh account window", () => {
@@ -212,7 +220,7 @@ describe("analytics capture coverage", () => {
       row({ scopeRef: "steady", oldestCapturedAt: window30d.from }),
       row({ scopeRef: "additional", status: "in_progress" }),
     ], ANALYTICS_COVERAGE_PLANES.traffic, window30d))
-      .toMatchObject({ state: "partial", label: "partial — in progress" });
+      .toMatchObject({ state: "partial", label: "Данные неполные", detail: expect.stringContaining("Сбор ещё идёт") });
     expect(coverageVerdict([
       row({ status: "in_progress" }),
       row({ scopeRef: "steady", oldestCapturedAt: window30d.from }),

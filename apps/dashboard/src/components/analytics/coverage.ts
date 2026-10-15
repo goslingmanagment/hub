@@ -7,6 +7,8 @@ import {
 
 import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
 
+import { formatDays, planeLabel } from "./analytics-words.js";
+
 export type CoverageRow = StatsCoverageResponse["planes"][number];
 
 export type AnalyticsCoverageWindow = {
@@ -42,15 +44,24 @@ const STATS_WINDOW_PLANES = new Set<string>([
   CAPTURE_COVERAGE_PLANES.statsEarnings,
 ]);
 
+/** The badges' words. Every incomplete reason reads "Данные неполные"; the
+ *  reason itself is the badge's tooltip (`detail`). */
+const PARTIAL_LABEL = "Данные неполные";
+
 const STATUS_DETAIL: Readonly<Record<string, string>> = {
-  in_progress: "the walk is still reaching backwards — older rows are missing",
-  sampled: "sampled rather than walked — this is not every row",
-  partial_provider_surface: "the provider served only part of its own surface",
-  unsupported_by_observed_surface: "no live route answers for this; nothing was captured",
-  auth_blocked: "capture is blocked on credentials",
-  contract_drift: "the response shape changed; capture parked itself rather than guess",
-  not_started: "capture of this has not started for this page",
+  in_progress: "Сбор ещё идёт: более старые данные пока не загружены.",
+  sampled: "Данные собраны выборочно, а не полностью.",
+  partial_provider_surface: "Fansly отдал только часть данных.",
+  unsupported_by_observed_surface: "Для этих данных нет рабочего способа получения — ничего не собрано.",
+  auth_blocked: "Сбор остановлен: Fansly не принимает данные входа.",
+  contract_drift: "Fansly изменил формат ответа — сбор остановлен, чтобы не записать неверные данные.",
+  not_started: "Сбор этих данных для страницы ещё не начинался.",
 };
+
+/** «Статистика медиа» — a plane as a quoted name inside a sentence. */
+function quoted(plane: string): string {
+  return `«${planeLabel(plane)}»`;
+}
 
 function instant(value: string | null): number | null {
   if (value === null) return null;
@@ -99,20 +110,20 @@ function selectStatsWindowEvidence(
   }
   const partial = (detail: string): { rows: CoverageRow[]; issue: CoverageVerdict } => ({
     rows,
-    issue: { state: "partial", label: "partial — selected window", detail },
+    issue: { state: "partial", label: PARTIAL_LABEL, detail },
   });
   if (!validSteadyBounds) {
-    return partial(`Plane \`${steady.plane}\` has no complete bounds for its fresh window.`);
+    return partial(`Для раздела ${quoted(steady.plane)} не известны границы свежих данных.`);
   }
   if (history === undefined || !WINDOW_EVIDENCE_STATUSES.has(history.status)) return { rows };
   // A proven exhausted history may have no nonempty oldest bucket. Preserve
   // that existing floor meaning; a missing head is never proof of overlap.
   if (historyTo === null || (historyFrom === null && !exhaustedFloor)
     || (historyFrom !== null && historyFrom > historyTo)) {
-    return partial(`Plane \`${steady.plane}\` has no historical bounds that connect to its fresh window.`);
+    return partial(`В разделе ${quoted(steady.plane)} история не стыкуется со свежими данными.`);
   }
   if (historyTo < steadyFrom || (historyFrom !== null && steadyTo < historyFrom)) {
-    return partial(`Plane \`${steady.plane}\` has a gap between historical and fresh capture.`);
+    return partial(`В разделе ${quoted(steady.plane)} есть пропуск между историей и свежими данными.`);
   }
   return {
     rows: [...remaining, {
@@ -137,8 +148,8 @@ export function coverageVerdict(
     if (planeRows.length === 0) {
       return {
         state: "unknown",
-        label: "coverage unknown",
-        detail: `No capture-coverage row exists for required plane \`${plane}\`.`,
+        label: "Полнота неизвестна",
+        detail: `Нет сведений о сборе раздела ${quoted(plane)}.`,
       };
     }
     if (STATS_WINDOW_PLANES.has(plane)) {
@@ -152,16 +163,16 @@ export function coverageVerdict(
   if (selectionIssue !== undefined) return selectionIssue;
 
   if (selectedRows.every((row) => NOT_STARTED_STATUSES.has(row.status))) {
-    return { state: "not_started", label: "not started", detail: STATUS_DETAIL.not_started! };
+    return { state: "not_started", label: "Сбор не начат", detail: STATUS_DETAIL.not_started! };
   }
 
   const blocked = selectedRows.find((row) => !WINDOW_EVIDENCE_STATUSES.has(row.status));
   if (blocked !== undefined) {
     return {
       state: "partial",
-      label: `partial — ${blocked.status.replace(/_/g, " ")}`,
+      label: PARTIAL_LABEL,
       detail: STATUS_DETAIL[blocked.status]
-        ?? `capture reports \`${blocked.status}\` for scope \`${blocked.scopeRef}\``,
+        ?? `Сбор раздела ${quoted(blocked.plane)} не завершён (${blocked.status.replace(/_/g, " ")}).`,
     };
   }
 
@@ -175,8 +186,8 @@ export function coverageVerdict(
   if (stale !== undefined) {
     return {
       state: "stale",
-      label: "stale head",
-      detail: `Plane \`${stale.plane}\` is not fresh through the selected window.`,
+      label: "Данные устарели",
+      detail: `Раздел ${quoted(stale.plane)} не обновлялся до конца выбранного периода.`,
     };
   }
 
@@ -190,16 +201,16 @@ export function coverageVerdict(
   if (shallow !== undefined) {
     return {
       state: "partial",
-      label: "partial — selected window",
-      detail: `Plane \`${shallow.plane}\` does not reach the selected window's start.`,
+      label: PARTIAL_LABEL,
+      detail: `Раздел ${quoted(shallow.plane)} собран не с начала выбранного периода.`,
     };
   }
 
   const days = selectedWindowDays(window);
   return {
     state: "complete",
-    label: `complete for ${days}-day window`,
-    detail: "Every required plane reaches the selected floor and has a fresh head.",
+    label: `Полные данные за ${formatDays(days)}`,
+    detail: "Все нужные разделы собраны за весь период и свежие.",
   };
 }
 
@@ -231,18 +242,18 @@ export function coverageRequestVerdict(
   if (coverage.status === "loading") {
     return {
       state: "pending",
-      label: "coverage pending",
+      label: "Проверяем полноту",
       detail:
-        "The capture-coverage request has not answered. Whether this window is "
-        + "fully captured is unknown — it is not a claim that it is.",
+        "Сведения о сборе данных ещё загружаются. Пока неизвестно, полные ли "
+        + "данные за этот период, — и это не утверждение, что полные.",
     };
   }
   if (coverage.status === "error") {
     return {
       state: "unavailable",
-      label: "coverage unavailable",
-      detail: `The capture-coverage request failed (${coverage.message}). Nothing here `
-        + "can be read as complete until it answers.",
+      label: "Полнота не проверена",
+      detail: `Не удалось загрузить сведения о сборе данных (${coverage.message}). `
+        + "Пока они не загрузятся, данные нельзя считать полными.",
     };
   }
 
@@ -252,9 +263,9 @@ export function coverageRequestVerdict(
   }
   return {
     state: "refresh_failed",
-    label: "coverage refresh failed",
-    detail: `Cached verdict: ${verdict.label}. ${verdict.detail} The refresh of the `
-      + "coverage rows failed, so this verdict is as old as the cache.",
+    label: "Полнота: не удалось обновить",
+    detail: `Последняя известная оценка: ${verdict.label}. ${verdict.detail} Обновить `
+      + "сведения о сборе не удалось, поэтому оценка может быть устаревшей.",
   };
 }
 
@@ -280,18 +291,17 @@ export function coverageBadgeVerdict(
  */
 export function emptyPanelReason(verdict: CoverageVerdict, sentence: string): string {
   if (verdict.state === "not_started" || verdict.state === "unknown") {
-    return "Nothing captured for this window — and the badge above says why. "
-      + "This is not a reading of zero.";
+    return "За этот период ничего не собрано — причина указана в отметке у заголовка. "
+      + "Это не означает ноль.";
   }
   if (verdict.state === "pending" || verdict.state === "unavailable") {
-    return `${sentence} Whether anything is missing from it is unknown until the `
-      + "coverage request answers.";
+    return `${sentence} Полны ли данные, станет известно, когда загрузятся `
+      + "сведения о сборе.";
   }
   return sentence;
 }
 
 export const SUGGESTIONS_DENOMINATOR_NOTE =
-  "Fansly's own 30-day widget leaves the Suggestions visit code (44011) out of its "
-  + "percentage denominator. This chart counts every raw source, so its shares are "
-  + "smaller than the ones on Fansly's page. Neither is wrong; they answer different "
-  + "questions, and the raw codes are on every row so you can reproduce either.";
+  "Виджет Fansly за 30 дней не учитывает визиты из «Рекомендаций» при расчёте "
+  + "процентов. Здесь учтены все источники, поэтому доли меньше, чем на странице "
+  + "Fansly. Оба расчёта верны — они отвечают на разные вопросы.";
