@@ -79,7 +79,7 @@ describe("readPastedProxy: refused, with the reason in the owner's words", () =>
     ["203.0.113.5", /Нет порта/],
     ["203.0.113.5:99999", /не порт/],
     // A misplaced password is never echoed back.
-    ["user:s3cret-word", /не порт/],
+    ["user:s3cret-word", /не читается/],
     ["203.0.113.5:1080:user", /Три части/],
     ["socks4://203.0.113.5:1080", /SOCKS4 не подходит/],
     ["ftp://203.0.113.5:21", /не знаком/],
@@ -136,31 +136,52 @@ describe("readPastedProxy: the four-part forms", () => {
   });
 });
 
-describe("readPastedProxy: which number is the port (Astra's review of PR #627, item 2)", () => {
-  it("a numeric password is never read as the port: a bare word is no proxy's host", () => {
-    const read = readPastedProxy("203.0.113.10:1080@alice:54321");
-    expect(read).toMatchObject({ kind: "parsed", order: "host_first", proxy: { host: "203.0.113.10", port: 1080, username: "alice", password: "54321" } });
-    expect(JSON.stringify(maskPastedProxy(parsed(read)))).not.toContain("54321");
-    expect(pastedProxyConfig(parsed(read)).url).toBe("socks5://203.0.113.10:1080");
-    // The usual way round reads the same proxy.
-    expect(readPastedProxy("alice:54321@203.0.113.10:1080")).toMatchObject({ kind: "parsed", order: "user_first", proxy: { host: "203.0.113.10", port: 1080, password: "54321" } });
+describe("readPastedProxy: which number is the port — every reading from every form (Astra's review of PR #627, item 2, rounds 1 and 2)", () => {
+  // [text, the readings it has: "host:port login password" each; one —
+  // read; more — ambiguous, the owner asked]. Logins with @, e-mails split
+  // by colons, numeric logins, numeric passwords.
+  const table: Array<[string, string[]]> = [
+    ["203.0.113.10:1080@alice:54321", ["203.0.113.10:1080 alice 54321"]],
+    ["alice:54321@203.0.113.10:1080", ["203.0.113.10:1080 alice 54321"]],
+    ["93.184.216.34:1080:alice@example.com:54321", ["example.com:54321 93.184.216.34 1080:alice", "93.184.216.34:1080 alice@example.com 54321"]],
+    ["alice@example.com:54321:93.184.216.34:1080", ["93.184.216.34:1080 alice@example.com 54321"]],
+    ["alice@example.com:54321@93.184.216.34:1080", ["93.184.216.34:1080 alice@example.com 54321"]],
+    ["93.184.216.34:1080@alice@example.com:54321", ["93.184.216.34:1080 alice@example.com 54321", "example.com:54321 93.184.216.34 1080@alice"]],
+    ["93.184.216.34:1080:12345:67890", ["93.184.216.34:1080 12345 67890"]],
+    ["12345:67890:93.184.216.34:1080", ["93.184.216.34:1080 12345 67890"]],
+    ["12345:67890@93.184.216.34:1080", ["93.184.216.34:1080 12345 67890"]],
+    ["93.184.216.34:1080@12345:67890", ["93.184.216.34:1080 12345 67890"]],
+    ["gate.example.com:1080:john.doe:5555", ["gate.example.com:1080 john.doe 5555", "john.doe:5555 gate.example.com 1080"]],
+    ["john.doe:5555@gate.example.com:1080", ["gate.example.com:1080 john.doe 5555", "john.doe:5555 gate.example.com 1080"]],
+    ["198.51.100.7:2080@203.0.113.10:1080", ["203.0.113.10:1080 198.51.100.7 2080", "198.51.100.7:2080 203.0.113.10 1080"]],
+    ["gate.example.com:1080:user123:4567", ["gate.example.com:1080 user123 4567"]],
+    ["socks5://93.184.216.34:1080:alice@example.com:54321", ["example.com:54321 93.184.216.34 1080:alice", "93.184.216.34:1080 alice@example.com 54321"]],
+  ];
+  const line = (proxy: PastedProxy) => `${proxy.host}:${proxy.port} ${proxy.username} ${proxy.password}`;
+  for (const [text, expected] of table) {
+    it(JSON.stringify(text), () => {
+      const read = readPastedProxy(text);
+      const readings = read.kind === "parsed" ? [line(read.proxy)] : read.kind === "ambiguous" ? read.options.map((option) => line(option.proxy)) : [];
+      expect(new Set(readings)).toEqual(new Set(expected));
+      expect(read.kind).toBe(expected.length === 1 ? "parsed" : "ambiguous");
+      // A reading's port is never a part another reading takes as its password.
+      if (read.kind === "parsed") expect(JSON.stringify(maskPastedProxy(read.proxy))).not.toContain(String(read.proxy.password));
+    });
+  }
+
+  it("the owner's choice picks exactly one reading, in every form; a choice the text has not is no choice", () => {
+    const at = "93.184.216.34:1080:alice@example.com:54321";
+    expect(parsed(readPastedProxy(at, "host_first"))).toMatchObject({ host: "93.184.216.34", port: 1080, username: "alice@example.com", password: "54321" });
+    expect(parsed(readPastedProxy(at, "login_at_host"))).toMatchObject({ host: "example.com", port: 54321 });
+    expect(readPastedProxy(at, "user_first").kind).toBe("ambiguous");
+    expect(parsed(readPastedProxy("gate.example.com:1080:john.doe:5555", "user_first"))).toMatchObject({ host: "john.doe", port: 5555, password: "1080" });
+    expect(parsed(readPastedProxy("john.doe:5555@gate.example.com:1080", "login_at_host"))).toMatchObject({ host: "gate.example.com", port: 1080, password: "5555" });
+    expect(parsed(readPastedProxy("john.doe:5555@gate.example.com:1080", "host_at_login"))).toMatchObject({ host: "john.doe", port: 5555 });
   });
 
-  it("the owner's order is honoured, either way round, in the @ forms and the colon forms", () => {
-    expect(parsed(readPastedProxy("203.0.113.10:1080@alice:54321", "host_first"))).toMatchObject({ host: "203.0.113.10", port: 1080, password: "54321" });
-    expect(parsed(readPastedProxy("203.0.113.10:1080@alice:54321", "user_first"))).toMatchObject({ host: "alice", port: 54321, password: "1080" });
-    expect(parsed(readPastedProxy("gate.example.com:1080:user123:4567", "user_first"))).toMatchObject({ host: "user123", port: 4567 });
-  });
-
-  it("both ends plainly a host: ambiguous — the form asks, in the @ forms too", () => {
-    for (const text of ["198.51.100.7:2080@203.0.113.10:1080", "john.doe:5555@gate.example.com:1080", "gate.example.com:1080:john.doe:5555"]) {
-      expect(readPastedProxy(text).kind, text).toBe("ambiguous");
-    }
-    const options = readPastedProxy("john.doe:5555@gate.example.com:1080");
-    expect(options.kind === "ambiguous" ? options.options.map((option) => [option.order, option.proxy.host, option.proxy.port]) : []).toEqual([
-      ["user_first", "gate.example.com", 1080],
-      ["host_first", "john.doe", 5555],
-    ]);
+  it("a bare word is no proxy's address: `proxy:1080` does not read", () => {
+    expect(readPastedProxy("proxy:1080")).toMatchObject({ kind: "invalid", reason: expect.stringContaining("полное имя") });
+    expect(readPastedProxy("user:pass@proxy:1080").kind).toBe("invalid");
   });
 });
 

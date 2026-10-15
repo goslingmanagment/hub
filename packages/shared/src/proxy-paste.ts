@@ -18,16 +18,22 @@
 // colon-separated. A space inside a part refuses the text: a provider's
 // login or password never holds one.
 //
-// The four-part colon forms are told apart by which end holds a valid host
-// and port: `1.2.3.4:1080:user:pass` is host first, `user:pass:1.2.3.4:1080`
-// is the login first. A host here is an IPv4 address, an IPv6 address in
-// brackets or a name with a dot (`proxy.example.com`) — a bare word is a
-// login. When both ends read as a host and a port (`gate.example.com:1080:
-// john.doe:5555`) the text is ambiguous: the caller asks which it is and
-// reads it again with the order given.
+// Every reading of the text is gathered, from every form — the @ forms and
+// the colon forms alike (Astra's review of PR #627, round 2) — and only a
+// valid one counts: its host an IPv4 address, an IPv6 address in brackets or
+// a full name (a dot and a real TLD: `proxy.example.com`), its port a
+// number from 1 to 65535. A bare word (`alice`) is no proxy's address: a
+// proxy a page's browser can reach has a public address or a public name.
+// One valid reading: the proxy. More than one — which number is the port and
+// which the password cannot be told (`gate.example.com:1080:john.doe:5555`,
+// `93.184.216.34:1080:alice@example.com:54321`) — the text is ambiguous: the
+// caller asks the owner and reads it again with the reading he chose
+// (`order`), which picks exactly one. Never the first form that parses.
 
 export type PastedProxyScheme = "socks5" | "socks5h" | "http" | "https";
-export type PastedProxyOrder = "host_first" | "user_first";
+/** Which reading the owner chose: host:port:login:password,
+ *  login:password:host:port, login:password@host:port, host:port@login:password. */
+export type PastedProxyOrder = "host_first" | "user_first" | "login_at_host" | "host_at_login";
 
 export interface PastedProxy {
   scheme: PastedProxyScheme;
@@ -236,90 +242,101 @@ export function readPastedProxy(text: string, order?: PastedProxyOrder): PastedP
   // URL-encoded credentials only in the URL form, where they must be.
   const decode = schemeGiven;
 
-  // Why the @ forms did not read (an @ may also be part of a login or a
-  // password in the colon forms: those are tried next).
-  let atProblem: string | null = null;
-  if (rest.includes("@")) {
-    const readings: Reading[] = [];
-    // login:password@host:port — the password may hold an @: the host is
-    // after the last one.
-    const last = rest.lastIndexOf("@");
-    const at = hostPortOf(rest.slice(last + 1));
-    const credentials = credentialsOf(rest.slice(0, last), decode);
-    if (at !== null && credentials !== null) readings.push({ order: "user_first", proxy: proxyOf(scheme, schemeGiven, at, credentials), strong: at.host.strong });
-    // host:port@login:password
-    const first = rest.indexOf("@");
-    const reversedAt = hostPortOf(rest.slice(0, first));
-    const reversed = credentialsOf(rest.slice(first + 1), decode);
-    if (reversedAt !== null && reversed !== null) readings.push({ order: "host_first", proxy: proxyOf(scheme, schemeGiven, reversedAt, reversed), strong: reversedAt.host.strong });
-    const chosen = choose(readings, order);
-    if (chosen !== null) return chosen;
-    atProblem = credentials === null ? "Перед @ нет логина" : hostPortProblem(rest.slice(last + 1));
-  }
-  const colonRead = readColonForm(rest, scheme, schemeGiven, order);
-  return atProblem !== null && colonRead.kind === "invalid" ? invalid(atProblem) : colonRead;
+  const readings = readingsOf(rest, scheme, schemeGiven, decode);
+  if ("reason" in readings) return invalid(readings.reason);
+  return choose(readings.readings, order) ?? invalid(problemOf(rest));
 }
 
-/** One way to read a text: which end is the host, and whether that host
- *  is plainly one (an address, or a name with a dot and a real TLD). */
+/** One way to read a text. */
 interface Reading {
-  order: PastedProxyOrder;
+  order: PastedProxyOrder | null;
   proxy: PastedProxy;
-  strong: boolean;
+}
+
+const sameProxy = (a: PastedProxy, b: PastedProxy) =>
+  a.host === b.host && a.port === b.port && a.username === b.username && a.password === b.password;
+
+/** A host:port a reading may take: a valid port, and a host that can be a
+ *  proxy's (an address, or a full name — never a bare word). */
+function proxyHostPortOf(text: string): { host: Host; port: number } | null {
+  const at = hostPortOf(text);
+  return at !== null && at.host.strong ? at : null;
 }
 
 /**
- * The reading the text has (Astra's review of PR #627, item 2): the one the
- * owner asked for; else the only one; else the only one whose host is
- * plainly a host — a bare word (`alice`) is no proxy's address, so
- * `203.0.113.10:1080@alice:54321` is the proxy 203.0.113.10:1080 with the
- * password 54321. Two readings whose hosts are both plainly hosts — which
- * number is the port, which the password, cannot be told — are ambiguous:
- * the owner says which. Null: none.
+ * Every valid reading of the text, from every form (Astra's review of PR
+ * #627, round 2) — or why the text cannot be read at all.
+ */
+function readingsOf(rest: string, scheme: PastedProxyScheme, schemeGiven: boolean, decode: boolean): { readings: Reading[] } | { reason: string } {
+  const readings: Reading[] = [];
+  const add = (order: PastedProxyOrder | null, at: { host: Host; port: number }, credentials: { username: string; password: string | null } | null) => {
+    const proxy = proxyOf(scheme, schemeGiven, at, credentials);
+    if (!readings.some((reading) => sameProxy(reading.proxy, proxy))) readings.push({ order, proxy });
+  };
+  if (rest.includes("@")) {
+    // login:password@host:port — the password may hold an @: the host is
+    // after the last one.
+    const last = rest.lastIndexOf("@");
+    const at = proxyHostPortOf(rest.slice(last + 1));
+    const credentials = credentialsOf(rest.slice(0, last), decode);
+    if (at !== null && credentials !== null) add("login_at_host", at, credentials);
+    // host:port@login:password — the login may hold an @: the host is
+    // before the first one.
+    const first = rest.indexOf("@");
+    const reversedAt = proxyHostPortOf(rest.slice(0, first));
+    const reversed = credentialsOf(rest.slice(first + 1), decode);
+    if (reversedAt !== null && reversed !== null) add("host_at_login", reversedAt, reversed);
+  }
+  const parts = colonParts(rest);
+  if (parts === null) return readings.length > 0 ? { readings } : { reason: "Не закрыта квадратная скобка IPv6-адреса" };
+  if (parts.length === 2 && !rest.includes("@")) {
+    const at = proxyHostPortOf(rest);
+    if (at !== null) add(null, at, null);
+  }
+  if (parts.length >= 4 && parts.every((part) => part.length > 0)) {
+    const n = parts.length;
+    const hostFirst = proxyHostPortOf(`${parts[0]}:${parts[1]}`);
+    if (hostFirst !== null) add("host_first", hostFirst, { username: parts[2]!, password: parts.slice(3).join(":") });
+    const userFirst = proxyHostPortOf(`${parts[n - 2]}:${parts[n - 1]}`);
+    if (userFirst !== null) add("user_first", userFirst, { username: parts[0]!, password: parts.slice(1, n - 2).join(":") });
+  }
+  return { readings };
+}
+
+/**
+ * The reading the text has: the one the owner chose, when his choice picks
+ * exactly one; else the only one; else none — ambiguous, the owner says
+ * which (Astra's review of PR #627, round 2). Null: no reading.
  */
 function choose(readings: Reading[], order: PastedProxyOrder | undefined): PastedProxyRead | null {
   if (readings.length === 0) return null;
-  const asked = order === undefined ? undefined : readings.find((reading) => reading.order === order);
-  if (asked !== undefined) return { kind: "parsed", proxy: asked.proxy, order: asked.order };
+  if (order !== undefined) {
+    const asked = readings.filter((reading) => reading.order === order);
+    if (asked.length === 1) return { kind: "parsed", proxy: asked[0]!.proxy, order };
+  }
   if (readings.length === 1) return { kind: "parsed", proxy: readings[0]!.proxy, order: readings[0]!.order };
-  const strong = readings.filter((reading) => reading.strong);
-  if (strong.length === 1) return { kind: "parsed", proxy: strong[0]!.proxy, order: strong[0]!.order };
-  return { kind: "ambiguous", options: readings.map((reading) => ({ order: reading.order, proxy: reading.proxy })) };
+  const options = readings.flatMap((reading) => (reading.order === null ? [] : [{ order: reading.order, proxy: reading.proxy }]));
+  return { kind: "ambiguous", options };
 }
 
-/** The colon forms: host:port, and the four parts either way round. */
-function readColonForm(rest: string, scheme: PastedProxyScheme, schemeGiven: boolean, order: PastedProxyOrder | undefined): PastedProxyRead {
-  const parts = colonParts(rest);
-  if (parts === null) return invalid("Не закрыта квадратная скобка IPv6-адреса");
+/** Why a text has no reading, in the owner's words — its parts never
+ *  echoed (a misplaced one may be the password). */
+function problemOf(rest: string): string {
   if (!rest.includes("[") && rest.includes("::") && ipv6Of(rest.replace(/:\d{1,5}$/, "")) !== null) {
-    return invalid("IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:1080");
+    return "IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:1080";
   }
-  if (parts.some((part) => part.length === 0)) return invalid("Пустая часть между двоеточиями");
-  if (parts.length === 1) return invalid("Нет порта: нужно адрес:порт");
-  if (parts.length === 2) {
-    const at = hostPortOf(rest);
-    return at === null ? invalid(hostPortProblem(rest)) : { kind: "parsed", proxy: proxyOf(scheme, schemeGiven, at, null), order: null };
+  if (rest.includes("@")) {
+    const last = rest.lastIndexOf("@");
+    if (credentialsOf(rest.slice(0, last), false) === null) return "Перед @ нет логина";
+    return hostPortProblem(rest.slice(last + 1));
   }
-  if (parts.length === 3) return invalid("Три части через двоеточие: не хватает логина или пароля (адрес:порт:логин:пароль)");
-
-  const n = parts.length;
-  const readings: Reading[] = [];
-  const hostFirstAt = hostOf(parts[0]!);
-  const hostFirstPort = portOf(parts[1]!);
-  if (hostFirstAt !== null && hostFirstPort !== null) {
-    readings.push({ order: "host_first", proxy: proxyOf(scheme, schemeGiven, { host: hostFirstAt, port: hostFirstPort }, { username: parts[2]!, password: parts.slice(3).join(":") }), strong: hostFirstAt.strong });
-  }
-  const userFirstAt = hostOf(parts[n - 2]!);
-  const userFirstPort = portOf(parts[n - 1]!);
-  if (userFirstAt !== null && userFirstPort !== null) {
-    readings.push({ order: "user_first", proxy: proxyOf(scheme, schemeGiven, { host: userFirstAt, port: userFirstPort }, { username: parts[0]!, password: parts.slice(1, n - 2).join(":") }), strong: userFirstAt.strong });
-  }
-  const chosen = choose(readings, order);
-  if (chosen !== null) return chosen;
-  if (!rest.includes("[") && ipv6Of(rest.replace(/:\d{1,5}$/, "")) !== null) {
-    return invalid("IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:1080");
-  }
-  return invalid("Не понять, где адрес и порт: ожидается адрес:порт:логин:пароль или логин:пароль:адрес:порт");
+  const parts = colonParts(rest);
+  if (parts !== null && parts.some((part) => part.length === 0)) return "Пустая часть между двоеточиями";
+  if (parts === null || parts.length === 1) return "Нет порта: нужно адрес:порт";
+  if (parts.length === 2) return hostPortProblem(rest);
+  if (parts.length === 3) return "Три части через двоеточие: не хватает логина или пароля (адрес:порт:логин:пароль)";
+  if (!rest.includes("[") && ipv6Of(rest.replace(/:\d{1,5}$/, "")) !== null) return "IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:1080";
+  return "Не понять, где адрес и порт: ожидается адрес:порт:логин:пароль или логин:пароль:адрес:порт; адрес — IP или полное имя";
 }
 
 function hostPortProblem(text: string): string {
@@ -331,7 +348,8 @@ function hostPortProblem(text: string): string {
       : "Лишнее двоеточие в адресе";
   }
   // The parts are never echoed: a misplaced one may be the password.
-  if (hostOf(parts[0]!) === null) return "Адрес прокси не читается: нужно имя или IP-адрес, затем порт";
+  const host = hostOf(parts[0]!);
+  if (host === null || !host.strong) return "Адрес прокси не читается: нужен IP-адрес или полное имя (с точкой), затем порт";
   return "После адреса не порт: нужно число от 1 до 65535";
 }
 
