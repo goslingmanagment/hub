@@ -1,7 +1,22 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type * as Util from "../apps/page-browser/src/shared/util.ts";
+
+// The operator's clock (CLOCK_MONOTONIC, counted from the machine's boot)
+// as on a host up for a day. A fresh CI machine is minutes old: Chrome's
+// clock an hour behind it would read below zero — no Chrome's does, and a
+// calibration from such a reading is refused (chrome-clock.ts) — and "five
+// minutes ago" would come before its boot. Every clock here moves with it:
+// the operator's, the proxy's and the fakes' (Chrome's is the operator's
+// plus its shift).
+vi.mock("../apps/page-browser/src/shared/util.ts", async (importOriginal) => {
+  const util = await importOriginal<typeof Util>();
+  const UP_A_DAY_MS = 86_400_000;
+  return { ...util, monoMs: () => util.monoMs() + UP_A_DAY_MS };
+});
 
 import { EventBuffer, type Appended, type BufferOptions } from "../apps/page-browser/src/buffer/buffer.ts";
 import { chromeToOperator, tightestOf } from "../apps/page-browser/src/cdp/chrome-clock.ts";

@@ -1245,8 +1245,15 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
     expect(stopped).toMatchObject({ exitOpen: false, step: "exit_closed", buffer: { bytes: 0, open: null } });
     await held.close();
     await until(() => s.operator.buffer.unavailable === null, 5000, "the open");
-    const opened = await s.engine.waitFor("state", (state) => (state.buffer as { open?: unknown }).open !== null);
-    expect(opened.buffer).toMatchObject({ open: { id: held.id, lastSeq: s.operator.buffer.lastSeq, outcomes: 0, pending: expect.any(Number) } });
+    // What it holds once its writes settle — the state sent at the open may
+    // come before the operator's start gap is committed (a later one says it).
+    await until(() => s.operator.buffer.stats().lastSeq === 1 && s.operator.buffer.stats().pending === 0, 5000, "the operator's start gap committed");
+    const holds = s.operator.buffer.stats();
+    const opened = await s.engine.waitFor("state", (state) => {
+      const buffer = state.buffer as { bytes: number; open: { lastSeq: number; pending: number } | null };
+      return buffer.open !== null && buffer.open.lastSeq === holds.lastSeq && buffer.open.pending === 0 && buffer.bytes === holds.bytes;
+    });
+    expect(opened.buffer).toEqual({ bytes: holds.bytes, oldestAgeMs: expect.any(Number), open: { id: held.id, lastSeq: 1, outcomes: 0, pending: 0 } });
   });
 
   it("a locked buffer is opened again once the lock goes: the page then stands as usual and starts on the engine's word", async () => {
@@ -1423,9 +1430,12 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     s.engine.send(sendOf(s.engine, 9100));
     const result = await s.engine.waitFor("result", (message) => message.attemptId === 9100, 10_000);
     const outcome = result.outcome as { kind: string; status: number; headers: Record<string, string>; body: { bodyId: string; decodedBytes: number; sha256: string }; source: string; sentMono: number; sendMark: string };
-    // Chrome's moment of the send, never earlier than the gate's.
+    // The moment of the send is the gate's — the request's first bytes, on
+    // this process's clock — never Chrome's timing (another clock's; Astra's
+    // review of PR 15, round 5).
     const gateSent = s.engine.of("sent")[0]!.sentMono as number;
-    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { "content-type": "application/json", "content-length": String(s.model.hubBody.length) }, source: "network", sentMono: Math.max(777_125 + 1.5, gateSent), sendMark: "transport_reported" });
+    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { "content-type": "application/json", "content-length": String(s.model.hubBody.length) }, source: "network", sentMono: gateSent, sendMark: "transport_reported" });
+    expect(gateSent).toBe(s.operator.egress.gate.lastSend!.mono);
     expect(outcome.headers).not.toHaveProperty("set-cookie");
     expect(s.engine.of("check")).toEqual([{ type: "check", attemptId: 9100, pausedMono: expect.any(Number), liveSessionFingerprint: FINGERPRINT }]);
     // `sent`: the gate saw the request's first bytes, on a new connection.
@@ -1519,8 +1529,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
       siteRequestId: ask.siteRequestId,
       attemptId: 8100,
       sent: true,
-      // Chrome's moment of the send, never earlier than the gate's.
-      sentMono: Math.max(888_250 + 2.5, s.operator.egress.gate.lastSend!.mono),
+      // The gate's moment of the send — the request's first bytes, on this
+      // process's clock — never Chrome's timing (another clock's).
+      sentMono: s.operator.egress.gate.lastSend!.mono,
       sentWall: expect.any(Number),
       connectionReused: false,
       status: 200,
