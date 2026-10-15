@@ -4,7 +4,7 @@
  * tabs, the side navigation of Settings and System and the breadcrumbs all
  * read these tables, so a screen is named the same everywhere.
  */
-import type { SettingsTab } from "./navigation.js";
+import { buildPageRoute, buildPageSectionRoute, type SettingsTab } from "./navigation.js";
 
 export type Role = "owner" | "team_lead" | string;
 
@@ -69,6 +69,25 @@ export function sectionOfPath(pathname: string): TabbedSection["id"] | null {
     }
   }
   return null;
+}
+
+/** The views of one page, as its tabs show them. Followers are a Fansly
+ *  notion; an OnlyFans page has subscribers only. */
+const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: readonly string[] }[] = [
+  { section: null, label: "Обзор" },
+  { section: "subscribers", label: "Подписчики" },
+  { section: "followers", label: "Фолловеры", platforms: ["fansly"] },
+  { section: "top-supporters", label: "Топ фанов" },
+  { section: "deleted-fans", label: "Удалённые фаны" },
+];
+
+export function pageViews(page: { label: string; platform: string }): SectionLink[] {
+  return PAGE_VIEWS
+    .filter((view) => !view.platforms || view.platforms.includes(page.platform))
+    .map((view) => ({
+      to: view.section ? buildPageSectionRoute(page.label, view.section) : buildPageRoute(page.label),
+      label: view.label,
+    }));
 }
 
 export interface SideNavGroup {

@@ -1,15 +1,17 @@
 import { Link, useLocation } from "react-router";
-import { ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
 import { PlatformTag } from "@/components/shared/PlatformBadge";
 import { buildAnalyticsRoute, buildPageRoute, decodeRouteSegment } from "@/lib/navigation";
 import { SYSTEM_HOME, TABBED_SECTIONS, isSystemPath, sectionHome, sectionOfPath } from "@/lib/sections";
+import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT } from "./CommandPalette.js";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
   user: { username: string; role: string };
+  onOpenPalette?: (() => void) | undefined;
 }
 
 function prefetchAnalyticsCatalog() {
@@ -50,7 +52,7 @@ function NavItem({ to, icon: Icon, active, children, trailing, onPointerEnter }:
   );
 }
 
-export function Sidebar({ user }: SidebarProps) {
+export function Sidebar({ user, onOpenPalette }: SidebarProps) {
   const { pages, pageCatalogState } = useDashboardShell();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(readCollapsed);
@@ -104,6 +106,13 @@ export function Sidebar({ user }: SidebarProps) {
       </Link>
 
       <div className="flex-1 overflow-y-auto px-3 pb-4">
+        {onOpenPalette && (
+          <button type="button" className="palette-trigger mb-3" onClick={onOpenPalette} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT}>
+            <Search size={16} aria-hidden="true" />
+            <span>Поиск</span>
+            <kbd className="kbd" aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
+          </button>
+        )}
         <div className="space-y-0.5">
           <NavItem to="/" icon={LayoutDashboard} active={pathname === "/" || pathname === "/transactions"}>Обзор</NavItem>
           {owner && (

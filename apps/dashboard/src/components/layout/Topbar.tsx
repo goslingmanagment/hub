@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
-import { LogOut, ChevronDown, ChevronRight, Menu } from "lucide-react";
+import { LogOut, ChevronDown, ChevronRight, Menu, Search } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
@@ -16,10 +16,11 @@ const ROLE_LABELS: Record<string, string> = {
 
 interface TopbarProps {
   onOpenNavigation?: () => void;
+  onOpenPalette?: (() => void) | undefined;
   user: { username: string; role: string };
 }
 
-export function Topbar({ user, onOpenNavigation }: TopbarProps) {
+export function Topbar({ user, onOpenNavigation, onOpenPalette }: TopbarProps) {
   const location = useLocation();
   const logout = useLogout();
   const { pages } = useDashboardShell();
@@ -84,6 +85,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
       </nav>
 
       <div className="flex shrink-0 items-center gap-2">
+        {onOpenPalette && <button type="button" className="btn btn-ghost btn-icon md:hidden" aria-label="Поиск" onClick={onOpenPalette}><Search size={19} /></button>}
         {periodSelectorMode && <PeriodSelector mode={periodSelectorMode} />}
 
         <div className="relative ml-1 sm:ml-2.5" ref={menuRef}>

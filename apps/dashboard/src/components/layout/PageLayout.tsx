@@ -3,8 +3,9 @@ import { useAuthMe, useOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind, syncStateLabel, syncTone } from "@/components/shared/syncUxDisplay";
-import { SectionTabs, type SectionTabItem } from "@/components/ui/SectionTabs";
-import { buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
+import { SectionTabs } from "@/components/ui/SectionTabs";
+import { buildPageSyncRoute } from "@/lib/navigation";
+import { pageViews } from "@/lib/sections";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 const TONE_BADGE = { ok: "badge-success", warn: "badge-warning", error: "badge-danger", muted: "" } as const;
@@ -23,20 +24,10 @@ export function PageLayout() {
   return (
     <div className="min-w-0">
       <PageIdentity page={page} />
-      <SectionTabs label="Разделы страницы" items={pageTabs(page)} />
+      <SectionTabs label="Разделы страницы" items={pageViews(page)} />
       <Outlet />
     </div>
   );
-}
-
-function pageTabs(page: { label: string; platform: "fansly" | "onlyfans" }): SectionTabItem[] {
-  return [
-    { to: buildPageRoute(page.label), label: "Обзор" },
-    { to: buildPageSectionRoute(page.label, "subscribers"), label: "Подписчики" },
-    ...(page.platform === "fansly" ? [{ to: buildPageSectionRoute(page.label, "followers"), label: "Фолловеры" }] : []),
-    { to: buildPageSectionRoute(page.label, "top-supporters"), label: "Топ фанов" },
-    { to: buildPageSectionRoute(page.label, "deleted-fans"), label: "Удалённые фаны" },
-  ];
 }
 
 function exceptionMessage(kind: "attention" | "off") {

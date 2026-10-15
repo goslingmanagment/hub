@@ -49,9 +49,13 @@ body {
   font-feature-settings: "cv11", "ss01";
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+/* In the base layer, so a field that draws its own focus ring (.input, the
+   palette's field) replaces this one instead of getting both. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 .tabular-nums {
