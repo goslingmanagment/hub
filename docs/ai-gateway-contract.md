@@ -826,8 +826,7 @@ costs from input, output, cache-write, and cache-read tokens. Aggregate cache-wr
 5m/1h provider breakdown is recorded as approximate. Unsupported models fail closed instead of
 being silently underpriced.
 
-Text features use Opus 5.5 with high effort, full Recap included; fan-notes-fill
-keeps its own default (Sonnet 5.5, low).
+Text features use Opus 5.5 with high effort, full Recap and fan-notes-fill included.
 Short Recap uses low effort and a 4096-token total cap for thinking plus text;
 models that can disable thinking retain the 2048-token cap. Opus 5.5 always uses
 adaptive thinking, so an `off` preference is mapped to low effort. Explicit
@@ -1387,7 +1386,7 @@ chat. The client sends the labels; the hub assembles the prompt
   fact taken from the bio or the spending data. The prompt asks; the
   hub does not check the answer: the client parses it, locates each quote in
   the transcript it sent and shows rewrites of filled fields as suggestions.
-- Model: `anthropic:claude-sonnet-5-5` at `low` reasoning by default
+- Model: `anthropic:claude-opus-5-5` at `high` reasoning by default
   (`DEFAULT_FEATURE_MODELS` / `DEFAULT_FEATURE_REASONING`); a request's `model`
   and `reasoningEffort` override it. Prompt blocks are sent uncached.
 
