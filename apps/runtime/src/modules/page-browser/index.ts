@@ -457,11 +457,11 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   /** A step of the form: its fact and result audited, never what was typed. */
-  async function step(target: Target, principal: Awaited<ReturnType<typeof requirePrincipal>>, what: LoginCall & { type: "login.submit" | "login.code" }): Promise<PageBrowserLoginStepResponse> {
+  async function step(target: Target, principal: Awaited<ReturnType<typeof requirePrincipal>>, what: LoginCall & { type: "login.open" | "login.submit" | "login.code" }): Promise<PageBrowserLoginStepResponse> {
     const { browser } = await openLoginOf(target);
     const answer = stepOf(await call(browser, what, STEP_CALL_MS));
     const fact = {
-      step: what.type === "login.submit" ? "submit" : "code",
+      step: what.type === "login.open" ? "open_dialog" : what.type === "login.submit" ? "submit" : "code",
       screen: answer.screen?.screen ?? null,
       // The code the screen asks for is the e-mail one of a new device.
       ...(answer.screen?.codeFrom === "email" ? { codeFrom: "email" } : {}),
@@ -473,6 +473,17 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       : { ...auditCtx(principal), eventType: PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, metadata: { profileId: target.profileId, ...fact } });
     return answer;
   }
+
+  server.post("/api/v1/page-browser/pages/:pageLabel/login/open", {
+    schema: routeSchemas.pageBrowserLoginOpen,
+    config: { rateLimit: { max: 20, timeWindow: 60_000 } },
+  }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const target = pageTarget(await pageOf(request.params.pageLabel));
+    return step(target, principal, { type: "login.open" });
+  });
 
   server.post("/api/v1/page-browser/pages/:pageLabel/login/submit", {
     schema: routeSchemas.pageBrowserLoginSubmit,
@@ -742,6 +753,17 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return changeOnboarding(request.params.profileId, principal, "closing");
+  });
+
+  server.post("/api/v1/page-browser/profiles/:profileId/login/open", {
+    schema: routeSchemas.pageBrowserProfileLoginOpen,
+    config: { rateLimit: { max: 20, timeWindow: 60_000 } },
+  }, async (request): Promise<PageBrowserLoginStepResponse> => {
+    requireThisOrigin(request.headers);
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await profileOf(request.params.profileId);
+    return step(profileTarget(request.params.profileId), principal, { type: "login.open" });
   });
 
   server.post("/api/v1/page-browser/profiles/:profileId/login/submit", {

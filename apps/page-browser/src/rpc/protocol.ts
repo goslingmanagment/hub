@@ -461,9 +461,10 @@ export interface Alarm {
   kind: AlarmKind;
 }
 // ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
-export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
 export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string }
@@ -783,6 +784,7 @@ export function parseLoginRequest(value: unknown): ParsedLogin {
     };
     switch (m.type) {
       case "login.state":
+      case "login.open":
       case "login.screenshot":
         return { ok: true, request: { type: m.type, callId, token } };
       case "login.submit":

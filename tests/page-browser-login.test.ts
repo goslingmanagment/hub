@@ -89,7 +89,7 @@ describe("the screens (spec §7; signs fansly-login/2)", () => {
   });
 
   it("the code form of a login from a new device asks for the code Fansly e-mailed — on its screen and its error; nothing else does (owner decision 2026-10-15)", () => {
-    expect(SCREEN_VERSION).toBe("fansly-login/2");
+    expect(SCREEN_VERSION).toBe("fansly-login/3");
     expect(recognize(page([form({ code: 1, newDevice: true })]), none)).toEqual({ screen: "code", fields: ["code"], siteError: null, codeFrom: "email", why: "the code form of a login from a new device" });
     expect(recognize(page([form({ code: 1, newDevice: true, error: "2FA code is invalid or already used." })]), none))
       .toMatchObject({ screen: "error", fields: ["code"], siteError: "2FA code is invalid or already used.", codeFrom: "email" });
@@ -233,7 +233,7 @@ describe("the calls (spec §6.1 `login.*`)", () => {
 
 class DeskChrome implements CdpPort {
   readonly commands: Array<{ method: string; params: Record<string, unknown> }> = [];
-  screen: "login" | "code" | "other" | "none" = "login";
+  screen: "landing" | "login" | "code" | "other" | "none" = "login";
   hit = true;
   /** The field focused is the one the desk focused. */
   focused = true;
@@ -254,6 +254,7 @@ class DeskChrome implements CdpPort {
         case "Runtime.evaluate": {
           const expression = String(params.expression);
           if (expression.includes("pbLoginProbe")) {
+            if (this.screen === "landing") return { result: { value: page([], { landing: { roots: 1, login: 1, windows: 0 } }) } };
             if (this.screen === "login") return { result: { value: page([form({ password: 1, login: 1 })]) } };
             if (this.screen === "code") return { result: { value: page([form({ code: 1 })]) } };
             if (this.screen === "none") return { result: { value: page([]) } };
@@ -736,7 +737,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     // site answer.
     const fingerprint = sessionFingerprint(SITE_TOKEN, SITE_CLIENT);
     await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint, WAIT_MS);
-    const readAsk = s.engine.of("siteAdmit").find((ask) => ask.path === "/api/v1/account/me")!;
+    const readAsk = await s.engine.waitFor("siteAdmit", (ask) => ask.path === "/api/v1/account/me", WAIT_MS);
     expect(readAsk).toMatchObject({ method: "GET", route: "account.me", operation: "read", sessionFingerprint: fingerprint });
     const readDone = await s.engine.waitFor("siteDone", (done) => done.siteRequestId === readAsk.siteRequestId, WAIT_MS);
     expect(readDone).toMatchObject({ sent: true, status: 200 });
@@ -1172,4 +1173,85 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
       for (const message of s.engine.messages) expect(JSON.stringify(message), marker).not.toContain(marker);
     }
   });
+});
+
+
+describe("the landing before the login modal (pilot F5)", () => {
+  const landing = page([], { landing: { roots: 1, login: 1, windows: 0 } });
+  it("recognizes one landing Login action, but refuses ambiguous, challenged or other screens", () => {
+    expect(recognize(landing, { live: null, atStart: null })).toMatchObject({ screen: "landing", fields: [] });
+    for (const marks of [
+      { ...landing, captcha: true }, { ...landing, outside: true }, { ...landing, path: "/settings" },
+      { ...landing, landing: { roots: 2, login: 1, windows: 0 } },
+      { ...landing, landing: { roots: 1, login: 2, windows: 0 } },
+      { ...landing, landing: { roots: 1, login: 1, windows: 1 } },
+      { ...landing, readyState: "loading" },
+    ]) expect(recognize(marks, { live: null, atStart: null }).screen).toBe("unknown");
+  });
+  it("opens by a guarded physical click, reads the next screen, and enters no credentials", async () => {
+    const chrome = new DeskChrome(); chrome.screen = "landing";
+    chrome.react = (method, params) => { if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") chrome.screen = "login"; };
+    expect(await desk(chrome).open(acting)).toMatchObject({ kind: "state", screen: "login", fields: ["login", "password"] });
+    expect(chrome.of("Input.insertText")).toEqual([]);
+    expect(chrome.of("DOM.focus")).toEqual([]);
+    expect(chrome.of("Input.dispatchMouseEvent").map((c) => c.params.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    expect(chrome.of("Runtime.evaluate").filter((c) => String(c.params.expression).includes("pbLoginProbe")).length).toBeGreaterThan(2);
+  });
+  it("rechecks the landing after moving the pointer, and obeys a lost manual-login guard", async () => {
+    for (const change of ["screen", "guard"]) {
+      const chrome = new DeskChrome(); chrome.screen = "landing"; let active = true;
+      chrome.react = (method, params) => {
+        if (method === "Input.dispatchMouseEvent" && params.type === "mouseMoved") {
+          if (change === "screen") chrome.screen = "other"; else active = false;
+        }
+      };
+      expect(await desk(chrome).open(() => active ? null : "manual login ended")).toMatchObject({ kind: "refused", reason: change === "screen" ? "screen_changed" : "not_manual_login" });
+      expect(chrome.of("Input.dispatchMouseEvent").some((c) => c.params.type === "mousePressed")).toBe(false);
+    }
+  });
+  it("journals why and safe counters on every returned login state, with no site error or field values", async () => {
+    const chrome = new DeskChrome(); chrome.screen = "landing"; const lines: unknown[] = [];
+    const d = new LoginDesk({ cdp: chrome, tab: () => "S1", world: () => Promise.resolve(7), session: () => null, discard: discarding(chrome), log: (e, fields) => lines.push({ e, ...fields }) });
+    await d.state(); chrome.screen = "login"; await d.state();
+    expect(lines).toHaveLength(2);
+    expect(lines).toContainEqual(expect.objectContaining({ e: "login.state", screen: "landing", why: expect.any(String), marks: expect.objectContaining({ landing: { roots: 1, login: 1, windows: 0 }, forms: [] }) }));
+    expect(lines).toContainEqual(expect.objectContaining({ screen: "login", marks: expect.objectContaining({ forms: [expect.objectContaining({ password: 1, login: 1, hasError: false })] }) }));
+    const text = JSON.stringify(lines);
+    for (const marker of [LOGIN_MARKER, PASSWORD_MARKER, CODE_MARKER, "siteError", "path", "origin"]) expect(text).not.toContain(marker);
+  });
+  it("the full operator permits the landing action only in manual login and re-probes after the click", async () => {
+    const s = await setUp();
+    await started(s); const api = await Caller.open(s.rpcPort); cleanups.push(() => api.close()); s.site.screen = "landing";
+    expect(await api.call("login.open")).toMatchObject({ type: "login.refused", reason: "not_manual_login" });
+    const loads = s.model.navigations.length;
+    await command(s.engine, { kind: "setMode", mode: "manual_login" });
+    await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the manual-login document");
+    s.site.setTab(s.operator.control.workTab!.sessionId);
+    expect(await api.call("login.state")).toMatchObject({ screen: "landing" });
+    expect(await api.call("login.open")).toMatchObject({ type: "login.stateResult", screen: "login" });
+    expect(s.site.inserted).toEqual([]); expect(s.site.posts).toEqual([]);
+  });
+});
+
+
+it("keeps probe exceptions and site error text out of login-state diagnostics", async () => {
+  const lines: Array<Record<string, unknown>> = [];
+  const chrome = new DeskChrome(); let throws = false;
+  const cdp: CdpPort = {
+    ...chrome,
+    send: <T>(method: string, params: Record<string, unknown> = {}) => {
+      if (method === "Runtime.evaluate" && String(params.expression).includes("pbLoginProbe")) {
+        return Promise.resolve((throws ? { exceptionDetails: { text: PASSWORD_MARKER } } : { result: { value: page([form({ password: 1, login: 1, error: PASSWORD_MARKER })], { path: "/private-marker" }) } }) as T);
+      }
+      return chrome.send<T>(method, params);
+    }, on: () => undefined, ack: () => undefined, holdAcks: () => undefined,
+  };
+  const d = new LoginDesk({ cdp, tab: () => "S1", world: async () => 7, session: () => null, discard: async () => undefined, log: (e, fields) => lines.push({ e, ...fields }) });
+  expect(await d.state()).toMatchObject({ kind: "state", screen: "error" });
+  throws = true;
+  expect(await d.state()).toMatchObject({ kind: "state", screen: "unknown" });
+  expect(lines.filter((line) => line.e === "login.state")).toHaveLength(2);
+  expect(JSON.stringify(lines)).not.toContain(PASSWORD_MARKER);
+  expect(JSON.stringify(lines)).not.toContain("private-marker");
+  expect(lines).toContainEqual(expect.objectContaining({ e: "read.failed", why: "the login probe threw in the page" }));
 });
