@@ -12,8 +12,9 @@ import {
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { buildSettingsRoute, decodeRouteSegment } from "@/lib/navigation";
-import { Card, Chip, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN } from "./loginParts.js";
+import { Card, Chip, LiveScreenshot, LoginForm } from "./loginParts.js";
 import { loginViewOf, stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // The owner logs a page's server browser in (Project Browser plan §4.8,
@@ -29,12 +30,12 @@ function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view:
   const [problem, setProblem] = useState<string | null>(null);
   const failure = (error: unknown) => setProblem(error instanceof KernelApiError ? error.message : "Не удалось. Повторите попытку.");
   const screenLink = (
-    <a href={data.screenUrl} target="_blank" rel="noreferrer" className={PLAIN}>
+    <a href={data.screenUrl} target="_blank" rel="noreferrer" className="btn">
       <ExternalLink size={14} aria-hidden /> Открыть экран браузера
     </a>
   );
   const finishButton = (label: string, primary = false) => (
-    <button type="button" className={primary ? PRIMARY : PLAIN} disabled={finish.isPending}
+    <button type="button" className={primary ? "btn btn-primary w-full" : "btn"} disabled={finish.isPending}
       onClick={() => finish.mutate(undefined, { onError: failure })}>
       {finish.isPending ? "Завершаем…" : label}
     </button>
@@ -48,7 +49,7 @@ function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view:
             Браузер страницы работает сам. Откройте вход, если Fansly разлогинил браузер или страницу подключают заново: на время входа страница встанет на паузу.
           </p>
           {view.problem !== null && <p role="alert" className="text-sm text-danger">Браузер страницы не готов: {view.problem}.</p>}
-          <button type="button" className={PRIMARY} disabled={view.problem !== null || start.isPending}
+          <button type="button" className="btn btn-primary w-full" disabled={view.problem !== null || start.isPending}
             onClick={() => start.mutate(undefined, { onError: failure })}>
             {start.isPending ? "Открываем…" : "Начать вход"}
           </button>
@@ -111,7 +112,7 @@ function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view:
           <div className="flex flex-col gap-2">
             {view.kind !== "unknown" && screenLink}
             {view.kind !== "success" && finishButton("Завершить вход без входа")}
-            <p className="text-xs text-text-muted">Пока вход открыт, страница стоит на паузе.</p>
+            <p className="text-xs text-text-secondary">Пока вход открыт, страница стоит на паузе.</p>
           </div>
         </Card>
       )}
@@ -124,24 +125,24 @@ export function PageBrowserLoginPage() {
   const pageLabel = decodeRouteSegment(raw);
   const login = usePageBrowserLogin(pageLabel);
   const header = (
-    <div className="mb-5">
-      <Link to={buildSettingsRoute("engine", pageLabel)} className="text-xs font-medium text-accent hover:underline">&larr; Синк страницы</Link>
-      <h1 className="mt-1 text-xl font-extrabold text-text-primary">Вход в браузер · {pageLabel}</h1>
-      <p className="mt-1 text-sm text-text-muted">Серверный браузер страницы входит в Fansly со своего устройства и IP. Пароль и код проходят через Hub и нигде не сохраняются.</p>
-    </div>
+    <PageHeader
+      title={`Вход в браузер · ${pageLabel}`}
+      description="Браузер страницы входит в Fansly со своего устройства и IP; пароль и код проходят через Hub и нигде не сохраняются."
+      actions={<Link to={buildSettingsRoute("engine", pageLabel)} className="btn">Сбор данных страницы</Link>}
+    />
   );
   if (login.isPending) {
-    return <div className={SCREEN}>{header}<p role="status" className="text-sm text-text-muted">Загружаем…</p></div>;
+    return <div className="min-w-0">{header}<p role="status" className="text-sm text-text-secondary">Загружаем…</p></div>;
   }
   if (login.isError || login.data === undefined) {
     const notFound = login.error instanceof KernelApiError && login.error.status === 404;
     return (
-      <div className={SCREEN}>
+      <div className="min-w-0">
         {header}
         {notFound
           ? <StatusPanel tone="error" title="Такой страницы нет" />
           : <StatusPanel tone="error" title="Не удалось загрузить вход" description="Повторите попытку через несколько секунд."
-              action={<button type="button" className={PLAIN} onClick={() => void login.refetch()}>Повторить</button>} />}
+              action={<button type="button" className="btn btn-sm" onClick={() => void login.refetch()}>Повторить</button>} />}
       </div>
     );
   }
@@ -149,10 +150,10 @@ export function PageBrowserLoginPage() {
   const view = loginViewOf(data);
   const live = data.login.state === "wanted" && view.kind !== "unreachable";
   return (
-    <div className={SCREEN}>
+    <div className="min-w-0">
       {header}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Card title="Экран браузера" aside={<span className="text-xs text-text-muted">{live ? "обновляется раз в секунду" : "не показывается, пока вход закрыт"}</span>}>
+        <Card title="Экран браузера" aside={<span className="text-xs text-text-secondary">{live ? "обновляется раз в секунду" : "не показывается, пока вход закрыт"}</span>}>
           <LiveScreenshot urlFor={(tick) => pageBrowserScreenshotUrl(pageLabel, tick)} live={live} />
         </Card>
         <Body data={data} view={view} pageLabel={pageLabel} />

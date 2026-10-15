@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { AdminUser } from "@agency_hub_core/contracts";
 
 import { useAdminPages, useAdminUsers, type useCreateInvite } from "@/api/queries";
@@ -11,7 +12,6 @@ import {
   INVITE_DEFAULT_DAYS,
   INVITE_MAX_DAYS,
   isValidUsername,
-  PLATFORM_DOT_CLASS,
 } from "./teamView.js";
 import type { RevealedLink } from "./LinkRevealModal.js";
 
@@ -108,31 +108,31 @@ export function InviteModal({
 
   return (
     <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть">
-      <form className="space-y-4" onSubmit={handleSubmit}>
-        <Field label="Логин">
+      <form className="space-y-5" onSubmit={handleSubmit}>
+        <Field
+          label="Логин"
+          hint="С этим логином человек будет входить в расширение и в приложение. Пароль он придумает сам, открыв ссылку."
+        >
           <input
             value={username}
             maxLength={100}
             autoComplete="off"
+            spellCheck={false}
             disabled={create.isPending}
             onChange={(event) => {
               setUsername(event.target.value);
               setSubmissionFailed(false);
             }}
             placeholder="например, grisha"
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+            className="input"
           />
-          <p className="mt-1 text-xs text-text-muted">
-            С этим логином человек будет входить в расширение и в приложение.
-            Пароль он придумает сам, открыв ссылку.
-          </p>
-          {nameLooksWrong && (
-            <p role="alert" className="mt-1 text-xs text-danger">
-              Логин может состоять из латинских букв, цифр, точки, дефиса и подчёркивания
-              и должен начинаться с буквы или цифры.
-            </p>
-          )}
         </Field>
+        {nameLooksWrong && (
+          <p role="alert" className="-mt-3 text-xs text-danger">
+            Логин может состоять из латинских букв, цифр, точки, дефиса и подчёркивания
+            и должен начинаться с буквы или цифры.
+          </p>
+        )}
 
         {existing && (
           <ExistingMemberNotice
@@ -142,86 +142,79 @@ export function InviteModal({
           />
         )}
         {(!users || usersError) && (
-          <div role="alert" className="text-sm text-text-secondary">
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
             {usersError ? "Не удалось проверить, свободен ли логин." : "Проверяем список участников…"}
             {usersError && (
-              <button type="button" disabled={usersFetching} onClick={() => void refetchUsers()} className="ml-2 underline disabled:opacity-50">
+              <button type="button" disabled={usersFetching} onClick={() => void refetchUsers()} className="btn btn-sm">
                 Повторить
               </button>
             )}
           </div>
         )}
         {submissionFailed && !existing && (
-          <p role="alert" className="text-sm text-danger">
+          <p role="alert" className="notice notice-danger">
             Не удалось создать приглашение. Проверьте соединение и попробуйте ещё раз.
           </p>
         )}
 
         {!existing && (
-          <fieldset disabled={create.isPending} className="space-y-4">
+          <fieldset disabled={create.isPending} className="space-y-5">
             <div>
-              <div className="mb-1 text-sm text-text-secondary">Страницы</div>
-              {pagesLoading && !pages && <p className="text-sm text-text-muted">Загружаем страницы…</p>}
+              <div className="field-label">Страницы</div>
+              {pagesLoading && !pages && <p className="text-sm text-text-secondary">Загружаем страницы…</p>}
               {pagesError && (
-                <div role="alert" className="mb-2 text-sm text-danger">
-                  Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.
-                  <button
-                    type="button"
-                    disabled={pagesFetching}
-                    onClick={() => void refetchPages()}
-                    className="ml-2 underline disabled:opacity-50"
-                  >
+                <div role="alert" className="notice notice-danger mb-2 flex-wrap items-center">
+                  <span className="min-w-0 flex-1">Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.</span>
+                  <button type="button" disabled={pagesFetching} onClick={() => void refetchPages()} className="btn btn-sm">
                     Повторить
                   </button>
                 </div>
               )}
               {pages && pages.length === 0 && (
-                <p className="text-sm text-text-muted">Страниц пока нет — их можно назначить позже.</p>
+                <p className="text-sm text-text-secondary">Страниц пока нет — их можно назначить позже.</p>
               )}
-              <div className="max-h-48 space-y-3 overflow-y-auto">
-                {groups.map((group) => (
-                  <div key={group.platform}>
-                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-text-muted">
-                      <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT_CLASS[group.platform]}`} />
-                      {group.label}
+              {groups.length > 0 && (
+                <div className="max-h-56 space-y-3 overflow-y-auto rounded-lg border border-border px-3 py-2.5">
+                  {groups.map((group) => (
+                    <div key={group.platform}>
+                      <div className="mb-1 text-xs font-medium text-text-secondary">{group.label}</div>
+                      <div className="space-y-1">
+                        {group.pages.map((page) => (
+                          <label key={page.id} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm text-text-primary">
+                            <input
+                              type="checkbox"
+                              checked={pageLabels.includes(page.label)}
+                              onChange={() => togglePage(page.label)}
+                              className="accent-accent"
+                            />
+                            <span>{page.label}</span>
+                            <span className="text-xs text-text-secondary">{page.modelName}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                    <div className="space-y-1">
-                      {group.pages.map((page) => (
-                        <label key={page.id} className="flex items-center gap-2 text-sm text-text-primary">
-                          <input
-                            type="checkbox"
-                            checked={pageLabels.includes(page.label)}
-                            onChange={() => togglePage(page.label)}
-                          />
-                          <span>{page.label}</span>
-                          <span className="text-xs text-text-muted">{page.modelName}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="rounded-lg border border-border bg-bg">
+            <div>
               <button
                 type="button"
                 aria-expanded={advancedOpen}
                 onClick={() => setAdvancedOpen((open) => !open)}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-sm font-medium text-text-secondary"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-text-primary"
               >
-                <span className={`inline-block text-xs transition-transform ${advancedOpen ? "rotate-90" : ""}`}>
-                  {"▸"}
-                </span>
+                <ChevronRight size={14} aria-hidden className={`transition-transform ${advancedOpen ? "rotate-90" : ""}`} />
                 Дополнительно
               </button>
               {advancedOpen && (
-                <div className="grid gap-3 px-3 pb-3 sm:grid-cols-2">
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <Field label="Роль">
                     <select
                       value={role}
                       onChange={(event) => setRole(event.target.value === "team_lead" ? "team_lead" : "chatter")}
-                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                      className="select"
                     >
                       <option value="chatter">чаттер</option>
                       <option value="team_lead">тимлид</option>
@@ -234,12 +227,12 @@ export function InviteModal({
                       max={INVITE_MAX_DAYS}
                       value={days}
                       onChange={(event) => setDays(Number(event.target.value))}
-                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                      className="input"
                     />
                     {!daysValid && (
-                      <p role="alert" className="mt-1 text-xs text-danger">
+                      <span role="alert" className="field-hint block text-danger">
                         От 1 до {INVITE_MAX_DAYS} дней.
-                      </p>
+                      </span>
                     )}
                   </Field>
                 </div>
@@ -248,21 +241,12 @@ export function InviteModal({
           </fieldset>
         )}
 
-        <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={closeUnlessPending}
-            disabled={create.isPending}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={closeUnlessPending} disabled={create.isPending} className="btn">
             Отмена
           </button>
           {!existing && (
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-            >
+            <button type="submit" disabled={!canSubmit} className="btn btn-primary">
               {create.isPending ? "Создаём…" : "Создать приглашение"}
             </button>
           )}
@@ -272,18 +256,18 @@ export function InviteModal({
   );
 }
 
-export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user: AdminUser; onOpen: () => void; disabled?: boolean }) {
+export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user: AdminUser; onOpen: () => void; disabled?: boolean | undefined }) {
   return (
-    <div role="status" className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-sm text-text-secondary">
-      <p className="font-semibold text-text-primary">Логин «{user.username}» уже занят</p>
+    <div role="status" className="notice notice-warning flex-col">
+      <p className="font-semibold">Логин «{user.username}» уже занят</p>
       <p>
         {user.disabledAt
-          ? "У этого участника отключён доступ. Его логин и история сохранены. Если возвращается тот же человек, восстановите его доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
+          ? "У этого участника отключён доступ, логин и история сохранены — если возвращается тот же человек, восстановите доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
           : user.registrationState === "invited"
             ? "Участник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
             : "Этот участник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}
       </p>
-      <button type="button" disabled={disabled} onClick={onOpen} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+      <button type="button" disabled={disabled} onClick={onOpen} className="btn btn-sm self-start">
         {user.disabledAt ? "Перейти к восстановлению" : "Открыть участника"}
       </button>
     </div>

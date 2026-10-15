@@ -74,7 +74,7 @@ function selectOnlyFans() {
 }
 
 function verify() {
-  return (button("Verify Credentials").onClick as () => Promise<void>)();
+  return (button("Проверить данные").onClick as () => Promise<void>)();
 }
 
 function deferred() {
@@ -92,7 +92,7 @@ describe("page onboarding credentials", () => {
     hooks.cursor = 0;
     queries.verify.mockReset();
     queries.create.mockReset();
-    const label = find(renderForm(), element => element.type === "input" && element.props.placeholder === "e.g. alice-fansly");
+    const label = find(renderForm(), element => element.type === "input" && element.props.placeholder === "например, lora-fansly");
     (label.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "alice-page" } });
     changeCredential("authorization", "token-a");
     changeCredential("proxyRaw", "socks5://proxy.example:1080");
@@ -101,11 +101,11 @@ describe("page onboarding credentials", () => {
   it("verifies an OFAPI account by username, with no token or hidden Fansly proxy", async () => {
     changeCredential("proxyRaw", "invalid-hidden-proxy");
     selectOnlyFans();
-    expect(button("Verify Credentials").disabled).toBe(false);
+    expect(button("Проверить данные").disabled).toBe(false);
     queries.verify.mockResolvedValue({ ...verified, platform: "onlyfans" });
     await verify();
     expect(queries.verify).toHaveBeenCalledWith({ platform: "onlyfans", username: "alice" });
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it.each(["credentials", "platform"])("discards a pending verification after changing %s", async (change) => {
@@ -116,10 +116,10 @@ describe("page onboarding credentials", () => {
     else changeCredential("authorization", "token-b");
     first.resolve(verified);
     await pending;
-    expect(button("Create Page").disabled).toBe(true);
+    expect(button("Создать страницу").disabled).toBe(true);
     queries.verify.mockResolvedValue({ ...verified, platform: change === "platform" ? "onlyfans" : "fansly" });
     await verify();
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it("does not replace a newer successful verification with an older failure", async () => {
@@ -131,7 +131,7 @@ describe("page onboarding credentials", () => {
     await verify();
     first.reject(new Error("Old credential rejected"));
     await pending;
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it("uses the existing OnlyFans contract without forwarding obsolete secrets", () => {

@@ -5,7 +5,7 @@ import type { PastedProxyOrder } from "@agency_hub_core/shared";
 
 import { checkPageBrowserProxy } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { INPUT, PLAIN, TONES } from "./loginParts.js";
+import { TONE_NOTICE } from "./loginParts.js";
 import { checkViewOf, envLine, maskedRows, proxyPreviewOf, type EnvFields } from "./proxyEntryView.js";
 
 // The parts of the one proxy field of a page's server browser (Project
@@ -30,23 +30,23 @@ export function ProxyPasteField({ id, label, text, onText, order, onOrder, disab
   const ambiguous = proxyPreviewOf(text, null);
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor={id} className="text-sm text-text-secondary">{label}</label>
+      <label htmlFor={id} className="field-label mb-0">{label}</label>
       <textarea
         id={id}
         value={text}
         onChange={(event) => { onText(event.target.value); onOrder(null); }}
         rows={2}
         placeholder="host:port:login:password или login:password@host:port"
-        className={`${INPUT} resize-y font-mono`}
+        className="textarea resize-y font-mono"
         spellCheck={false}
         autoComplete="off"
         autoCapitalize="off"
         disabled={disabled}
         data-proxy-field
       />
-      <p className="text-xs text-text-muted">Вставьте прокси целиком, как её дал поставщик: Hub поймёт адрес, порт, логин и пароль в любом привычном виде.</p>
+      <p className="text-xs text-text-secondary">Вставьте прокси целиком, как её дал поставщик, — Hub сам разберёт адрес, порт, логин и пароль.</p>
       {ambiguous.kind === "ambiguous" && (
-        <fieldset className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2" data-proxy-ambiguous>
+        <fieldset className="rounded-lg border border-border bg-warning-soft px-3 py-2" data-proxy-ambiguous>
           <legend className="px-1 text-xs font-semibold text-warning-dark">Строку можно прочитать двумя способами — как правильно?</legend>
           {ambiguous.options.map((option) => (
             <label key={option.order} className="mt-1 flex items-center gap-2 text-sm text-text-secondary">
@@ -62,7 +62,7 @@ export function ProxyPasteField({ id, label, text, onText, order, onOrder, disab
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
             {maskedRows(preview.masked).map((row) => (
               <div key={row.label} className="contents">
-                <dt className="text-text-muted">{row.label}</dt>
+                <dt className="text-text-secondary">{row.label}</dt>
                 <dd className="truncate font-mono text-text-primary">{row.value}</dd>
               </div>
             ))}
@@ -111,10 +111,10 @@ export function ProxyCheckPanel({ check, onCheck, disabled = false, onUseAsSocks
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={PLAIN} disabled={disabled || check.pending} onClick={onCheck} data-proxy-check>
+        <button type="button" className="btn" disabled={disabled || check.pending} onClick={onCheck} data-proxy-check>
           {check.pending ? <><RefreshCw size={14} className="animate-spin" aria-hidden /> Проверяем… до 30 с</> : "Проверить прокси"}
         </button>
-        <span className="text-xs text-text-muted">Hub подключится через прокси и спросит, где её выход. Fansly не трогается.</span>
+        <span className="text-xs text-text-secondary">Hub подключится через прокси и узнает её выходной IP; Fansly при этом не открывается.</span>
       </div>
       {check.failure !== null && <p role="alert" className="text-sm text-danger">{check.failure}</p>}
       {check.result !== null && <ProxyCheckResult result={check.result} onUseAsSocks5={onUseAsSocks5} />}
@@ -126,24 +126,24 @@ export function ProxyCheckResult({ result, onUseAsSocks5 }: { result: PageBrowse
   const view = checkViewOf(result);
   const Icon = view.tone === "good" ? CheckCircle2 : view.tone === "warning" ? TriangleAlert : CircleAlert;
   return (
-    <section className={`rounded-lg border px-3 py-3 ${TONES[view.tone]}`} data-proxy-check-result={result.ok ? "ok" : result.problem?.code ?? "failed"} aria-live="polite">
+    <section className={`${TONE_NOTICE[view.tone]} flex-col gap-1`} data-proxy-check-result={result.ok ? "ok" : result.problem?.code ?? "failed"} aria-live="polite">
       <p className="flex items-center gap-2 text-sm font-semibold"><Icon size={16} aria-hidden /> {view.title}</p>
-      {view.reason !== null && <p className="mt-1 text-sm">{view.reason}</p>}
+      {view.reason !== null && <p className="text-sm">{view.reason}</p>}
       {view.rows.length > 0 && (
-        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-secondary">
+        <dl className="mt-1 grid w-full grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-text-secondary">
           {view.rows.map((row) => (
             <div key={row.label} className="contents">
-              <dt className="text-text-muted">{row.label}</dt>
+              <dt className="text-text-secondary">{row.label}</dt>
               <dd className="min-w-0 break-words font-mono text-text-primary">{row.value}</dd>
             </div>
           ))}
         </dl>
       )}
       {view.offerSocks5 && onUseAsSocks5 !== undefined && (
-        <button type="button" className={`${PLAIN} mt-2`} onClick={onUseAsSocks5}>Использовать как SOCKS5</button>
+        <button type="button" className="btn btn-sm mt-1" onClick={onUseAsSocks5}>Использовать как SOCKS5</button>
       )}
       {result.exit !== null && (
-        <p className="mt-2 text-xs text-text-muted">IP проверки — предварительный: браузер сам проверит свой выходной IP перед тем, как выйти в сеть.</p>
+        <p className="mt-1 text-xs">IP проверки — предварительный: браузер сам проверит свой выходной IP перед тем, как выйти в сеть.</p>
       )}
     </section>
   );
@@ -160,17 +160,17 @@ export function EnvForm({ fields, onFields, proposal, onTake, problem }: {
 }) {
   const field = (key: keyof EnvFields, label: string, placeholder: string, inputMode?: "decimal") => (
     <div className="flex min-w-0 flex-col gap-1">
-      <label htmlFor={`pb-env-${key}`} className="text-xs text-text-secondary">{label}</label>
+      <label htmlFor={`pb-env-${key}`} className="field-label mb-0">{label}</label>
       <input id={`pb-env-${key}`} value={fields[key]} placeholder={placeholder} inputMode={inputMode} spellCheck={false}
-        onChange={(event) => onFields({ ...fields, [key]: event.target.value })} className={`${INPUT} font-mono`} />
+        onChange={(event) => onFields({ ...fields, [key]: event.target.value })} className="input" />
     </div>
   );
   return (
     <div className="flex flex-col gap-3" data-env-form>
       {proposal !== null && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-secondary">
-          <span className="min-w-0 flex-1">По выходу прокси: <span className="font-mono text-text-primary">{envLine(proposal)}</span></span>
-          {onTake !== undefined && <button type="button" className={PLAIN} onClick={onTake}>Подставить</button>}
+        <div className="notice flex-wrap items-center">
+          <span className="min-w-0 flex-1">По выходу прокси: <span className="text-text-primary">{envLine(proposal)}</span></span>
+          {onTake !== undefined && <button type="button" className="btn btn-sm" onClick={onTake}>Подставить</button>}
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -183,7 +183,7 @@ export function EnvForm({ fields, onFields, proposal, onTake, problem }: {
         {field("accuracyM", "Точность, м", "1000", "decimal")}
       </div>
       {problem !== null && <p role="alert" className="text-xs text-danger">{problem}</p>}
-      <p className="text-xs text-text-muted">Как в антидетект-браузерах: часовой пояс, языки и геопозиция браузера совпадают с местом выхода прокси. Браузер сверит их при каждом запуске.</p>
+      <p className="text-xs text-text-secondary">Часовой пояс, языки и геопозиция браузера должны совпадать с местом выхода прокси — Hub предложит их после проверки прокси, а браузер сверит при каждом запуске.</p>
     </div>
   );
 }

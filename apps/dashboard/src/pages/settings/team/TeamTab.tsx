@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { UserPlus } from "lucide-react";
 import type { AdminUser } from "@agency_hub_core/contracts";
 
 import { useAdminUsers, useCreateAccountLink, useCreateInvite } from "@/api/queries";
@@ -11,7 +12,6 @@ import { UserDetailModal } from "./UserDetailModal.js";
 import {
   findTeamMember,
   formatRelativeRu,
-  PLATFORM_DOT_CLASS,
   PLATFORM_LABEL,
   ROLE_LABEL,
   sortTeamByActivity,
@@ -43,14 +43,10 @@ type ModalState =
   | { type: "reveal"; link: RevealedLink; returnTo: number | null };
 
 const STATUS_DOT_CLASS: Readonly<Record<TeamStatus, string>> = {
-  invited: "bg-warning",
-  active: "bg-green",
-  disabled: "bg-text-muted/40",
+  invited: "status-dot-warn",
+  active: "status-dot-ok",
+  disabled: "",
 };
-
-const thClass =
-  "whitespace-nowrap px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
-const tdClass = "px-4 py-3 text-sm";
 
 export function TeamTab() {
   const { data: users, isLoading, isError, error, isFetching, refetch } = useAdminUsers();
@@ -60,7 +56,7 @@ export function TeamTab() {
   const createLink = useCreateAccountLink();
 
   if (isLoading && !users) {
-    return <div className="py-12 text-center text-sm text-text-muted">Загружаем команду…</div>;
+    return <div role="status" className="py-12 text-center text-sm text-text-secondary">Загружаем команду…</div>;
   }
 
   if (isError && !users) {
@@ -73,12 +69,7 @@ export function TeamTab() {
             : "Список участников недоступен. Попробуйте загрузить его снова."}
           tone="error"
           action={(
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              disabled={isFetching}
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-            >
+            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">
               {isFetching ? "Обновляем…" : "Повторить"}
             </button>
           )}
@@ -97,95 +88,65 @@ export function TeamTab() {
 
   return (
     <>
-      {isError && users && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <StaleDataNotice title="Показан последний загруженный список" error={error} className="flex-1" />
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
-            {isFetching ? "Обновляем…" : "Повторить"}
-          </button>
-        </div>
-      )}
+      <div className="space-y-5">
+        {isError && users && (
+          <div className="flex flex-wrap items-center gap-2">
+            <StaleDataNotice title="Показан последний загруженный список" error={error} className="flex-1" />
+            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">
+              {isFetching ? "Обновляем…" : "Повторить"}
+            </button>
+          </div>
+        )}
 
-      <div className="space-y-8">
-        <div>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-bold text-text-primary">
+        <section className="card" aria-labelledby="team-present-title">
+          <div className="card-header">
+            <h3 id="team-present-title" className="card-title">
               В команде
-              {present.length > 0 && (
-                <span className="ml-1.5 font-normal text-text-muted">{present.length}</span>
-              )}
-            </h2>
-            <div className="flex items-center gap-4">
-              <span className="hidden items-center gap-3 text-[11px] text-text-muted sm:inline-flex">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT_CLASS.fansly}`} />
-                  {PLATFORM_LABEL.fansly}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT_CLASS.onlyfans}`} />
-                  {PLATFORM_LABEL.onlyfans}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setModal({ type: "invite" })}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
-              >
-                Пригласить
-              </button>
-            </div>
+              {present.length > 0 && <span className="ml-1.5 font-normal text-text-muted">{present.length}</span>}
+            </h3>
+            <button type="button" onClick={() => setModal({ type: "invite" })} className="btn btn-primary">
+              <UserPlus size={16} aria-hidden /> Пригласить
+            </button>
           </div>
 
           {present.length === 0 ? (
-            <p className="text-sm text-text-muted">В команде пока никого. Пригласите первого человека.</p>
+            <div className="empty">
+              <p className="empty-title">В команде пока никого</p>
+              <p className="empty-text">Пригласите первого человека: он получит ссылку и сам придумает пароль.</p>
+            </div>
           ) : (
-            <section className="overflow-x-auto rounded-xl border border-border bg-card">
-              <table className="w-full border-collapse">
+            <div className="overflow-x-auto">
+              <table className="data-table">
                 <thead>
-                  <tr className="bg-hover-alt">
-                    {["Логин", "Роль", "Статус", "Последняя активность", "Страницы", ""].map((column, index) => (
-                      <th key={column || `actions-${index}`} className={thClass}>{column}</th>
-                    ))}
+                  <tr>
+                    <th>Логин</th>
+                    <th>Роль</th>
+                    <th>Статус</th>
+                    <th>Активность</th>
+                    <th>Страницы</th>
+                    <th aria-label="Действия" />
                   </tr>
                 </thead>
                 <tbody>
                   {present.map((user) => (
-                    <tr
-                      key={user.id}
-                      onClick={() => openDetail(user.id)}
-                      className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
-                    >
-                      <td className={`${tdClass} font-medium text-text-primary`}>
+                    <tr key={user.id} onClick={() => openDetail(user.id)} className="cursor-pointer">
+                      <td className="font-medium">
                         <span title={user.username} className="block max-w-[200px] truncate">
                           {user.username}
                         </span>
                       </td>
-                      <td className={`${tdClass} whitespace-nowrap text-text-secondary`}>
-                        {ROLE_LABEL[user.role]}
-                      </td>
-                      <td className={`${tdClass} whitespace-nowrap`}>
+                      <td className="muted whitespace-nowrap">{ROLE_LABEL[user.role]}</td>
+                      <td className="whitespace-nowrap">
                         <StatusCell user={user} />
                       </td>
-                      <td
-                        className={`${tdClass} whitespace-nowrap text-text-muted`}
-                        title={user.lastActiveAt ?? undefined}
-                      >
+                      <td className="muted whitespace-nowrap" title={user.lastActiveAt ?? undefined}>
                         {user.lastActiveAt ? formatRelativeRu(user.lastActiveAt) : "ещё не работал"}
                       </td>
-                      <td className={tdClass}>
+                      <td>
                         <PageChips pages={user.assignedPages} />
                       </td>
-                      <td className={`${tdClass} text-right`} onClick={(event) => event.stopPropagation()}>
-                        <button
-                          type="button"
-                          onClick={() => openDetail(user.id)}
-                          className="whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
-                        >
+                      <td className="text-right" onClick={(event) => event.stopPropagation()}>
+                        <button type="button" onClick={() => openDetail(user.id)} className="btn btn-sm">
                           Открыть
                         </button>
                       </td>
@@ -193,9 +154,9 @@ export function TeamTab() {
                   ))}
                 </tbody>
               </table>
-            </section>
+            </div>
           )}
-        </div>
+        </section>
 
         {deactivated.length > 0 && (
           <DeactivatedSection users={deactivated} onOpen={openDetail} />
@@ -264,9 +225,9 @@ export function TeamMemberDetail({ users, userId, createLink, onClose, onLinkCre
 function StatusCell({ user }: { user: AdminUser }) {
   const status = teamStatus(user);
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT_CLASS[status]}`} />
-      <span className={status === "active" ? "text-text-secondary" : "text-text-muted"}>
+    <span className="inline-flex items-center gap-2">
+      <span className={`status-dot ${STATUS_DOT_CLASS[status]}`} aria-hidden="true" />
+      <span className={status === "active" ? "text-text-primary" : "text-text-secondary"}>
         {TEAM_STATUS_LABEL[status]}
       </span>
     </span>
@@ -274,7 +235,7 @@ function StatusCell({ user }: { user: AdminUser }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  PageChips — compact assignment chips; platform reads as a dot      */
+/*  PageChips — compact assignment chips; the platform is in the title */
 /* ------------------------------------------------------------------ */
 
 const PAGE_CHIP_LIMIT = 5;
@@ -290,20 +251,12 @@ function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {visible.map((page) => (
-        <span
-          key={page.id}
-          title={`${page.label} — ${PLATFORM_LABEL[page.platform]} / ${page.modelName}`}
-          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-secondary"
-        >
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${PLATFORM_DOT_CLASS[page.platform]}`} />
+        <span key={page.id} title={`${page.label} — ${PLATFORM_LABEL[page.platform]} / ${page.modelName}`} className="badge">
           {page.label}
         </span>
       ))}
       {overflow.length > 0 && (
-        <span
-          title={overflow.map((page) => page.label).join(", ")}
-          className="inline-flex items-center rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-muted"
-        >
+        <span title={overflow.map((page) => page.label).join(", ")} className="badge">
           +{overflow.length}
         </span>
       )}
@@ -315,6 +268,8 @@ function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
 /*  Deactivated (#126: tombstoned, never deleted)                      */
 /* ------------------------------------------------------------------ */
 
+/** Collapsed by default, but always in the page: the people stay findable
+ *  and their cards one click away. */
 function DeactivatedSection({
   users,
   onOpen,
@@ -322,57 +277,40 @@ function DeactivatedSection({
   users: AdminUser[];
   onOpen: (userId: number) => void;
 }) {
-  const [open, setOpen] = useState(true);
-
   return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="mb-3 flex items-center gap-1.5 text-sm font-bold text-text-muted transition-colors hover:text-text-primary"
-      >
-        <span className={`inline-block text-xs transition-transform ${open ? "rotate-90" : ""}`}>{"▸"}</span>
-        Отключённые участники ({users.length})
-      </button>
-
-      <p className="mb-3 text-xs text-text-muted">
-        Логины и история сохранены. Чтобы вернуть того же человека, откройте его карточку.
-      </p>
-
-      {open && (
-        <section className="overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full border-collapse">
+    <details className="help">
+      <summary>Отключённые участники ({users.length})</summary>
+      <div className="mt-3 space-y-3">
+        <p>Логины и история сохранены. Восстановить доступ можно в карточке участника.</p>
+        <div className="table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="bg-hover-alt">
-                {["Логин", "Роль", "Доступ отключён", ""].map((column, index) => (
-                  <th key={column || `actions-${index}`} className={thClass}>{column}</th>
-                ))}
+              <tr>
+                <th>Логин</th>
+                <th>Роль</th>
+                <th>Доступ отключён</th>
+                <th aria-label="Действия" />
               </tr>
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.id} className="border-t border-border">
-                  <td className={`${tdClass} font-medium text-text-muted`}>{user.username}</td>
-                  <td className={`${tdClass} text-text-muted`}>{ROLE_LABEL[user.role]}</td>
-                  <td className={`${tdClass} text-text-muted`}>
+                <tr key={user.id}>
+                  <td className="muted font-medium">{user.username}</td>
+                  <td className="muted">{ROLE_LABEL[user.role]}</td>
+                  <td className="muted whitespace-nowrap">
                     {user.disabledAt ? formatRelativeRu(user.disabledAt) : "—"}
                   </td>
-                  <td className={`${tdClass} text-right`}>
-                    <button
-                      type="button"
-                      onClick={() => onOpen(user.id)}
-                      className="whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
-                    >
-                      Восстановить доступ
+                  <td className="text-right">
+                    <button type="button" onClick={() => onOpen(user.id)} className="btn btn-sm">
+                      Открыть
                     </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </section>
-      )}
-    </div>
+        </div>
+      </div>
+    </details>
   );
 }

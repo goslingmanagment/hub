@@ -365,14 +365,14 @@ function PageRow({
           <Link to={buildPageRoute(page.label)} className="font-medium text-text-primary hover:text-accent">{page.label}</Link>
           <PlatformBadge platform={page.platform} />
         </div>
-        <div className="text-[12px] text-text-secondary">@{page.username ?? page.displayName ?? "неизвестно"}</div>
+        <div className="text-xs text-text-secondary">@{page.username ?? page.displayName ?? "неизвестно"}</div>
       </td>
       <td>
         <span className="inline-flex items-center gap-2" title={access.hint}>
           <span className={`status-dot ${TONE_DOT[access.tone]}`} aria-hidden="true" />
           <span className={access.tone === "error" ? "font-medium text-danger" : undefined}>{access.label}</span>
         </span>
-        {page.platform === "onlyfans" && <div className="text-[12px] text-text-secondary">доступ через OFAPI</div>}
+        {page.platform === "onlyfans" && <div className="text-xs text-text-secondary">доступ через OnlyFans API</div>}
       </td>
       <td className="num">{formatPageMetric(page.subscriberCount)}</td>
       <td className="num">{page.platform === "fansly" ? formatPageMetric(page.followerCount) : "—"}</td>
@@ -412,7 +412,7 @@ function AddPageChooser({ onClose, onChoose }: { onClose: () => void; onChoose: 
     },
     {
       title: "OnlyFans",
-      text: "Подключите аккаунт в OFAPI, затем укажите здесь его имя на OnlyFans.",
+      text: "Подключите аккаунт в OnlyFans API, затем укажите здесь его имя на OnlyFans.",
       action: () => onChoose("onlyfans"),
     },
   ];

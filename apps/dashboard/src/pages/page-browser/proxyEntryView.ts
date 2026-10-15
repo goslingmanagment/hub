@@ -215,5 +215,5 @@ export function envLine(env: PageBrowserEnvBody): string {
 export function draftChipOf(draft: PageBrowserDraftView): { label: string; tone: Tone } {
   if (draft.page !== null && draft.proxy === null) return { label: "У страницы нет прокси", tone: "danger" };
   if (draft.env === null) return { label: "Нет окружения", tone: "warning" };
-  return { label: "Ждёт add-profile", tone: "progress" };
+  return { label: "Ждёт создания на сервере", tone: "progress" };
 }

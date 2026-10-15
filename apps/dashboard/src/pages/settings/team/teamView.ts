@@ -61,10 +61,12 @@ export function restoreTeamMemberMessage(user: AdminUser): string {
   // Decision 370 retired must_change_password: there is no "must change first"
   // state left to branch on, so a restored account either has a password or
   // has never finished its registration.
-  const access = user.registrationState === "invited"
-    ? "Пароль ещё не задан. После возвращения создайте новое приглашение в разделе «Ссылки»."
-    : "Человек сможет снова войти с прежним паролем. Если пароль забыт, создайте ссылку для сброса.";
-  return `Вернётся тот же участник с сохранённой историей, ролью и назначенными страницами. ${access} Прежние входы и ссылки останутся недействительными.`;
+  if (user.registrationState === "invited") {
+    return "Вернётся тот же участник с историей, ролью и назначенными страницами; прежние ссылки не заработают. "
+      + "Пароль ещё не задан — после восстановления создайте новое приглашение в этой карточке.";
+  }
+  return "Вернётся тот же участник с историей, ролью и назначенными страницами и сможет войти с прежним паролем "
+    + "(если забыл — сбросьте его ссылкой). Прежние входы и ссылки останутся недействительными.";
 }
 
 /** Working people float up (freshest device activity first); never-active
@@ -279,13 +281,12 @@ export function formatRelativeRu(iso: string, now: number = Date.now()): string 
 /*  Pages                                                              */
 /* ------------------------------------------------------------------ */
 
-/** The shared page-assignment editor ships English copy for the screens that
- * have always used it; inside the Team card it speaks the owner's language. */
+/** The page-assignment editor's words inside the Team card. */
 export const TEAM_PAGE_LABELS = {
   assigned: "Страницы",
   empty: "Страниц пока нет.",
   unassign: "Снять",
   assignHeading: "Назначить страницу",
-  select: "Выбери страницу…",
+  select: "Выберите страницу…",
   assign: "Назначить",
 } as const;

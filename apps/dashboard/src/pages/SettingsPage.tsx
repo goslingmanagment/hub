@@ -33,7 +33,7 @@ const sections: Record<SettingsTab, { title: string; description: string }> = {
   },
   personas: {
     title: "AI-персоны",
-    description: "Образы и стили общения, из которых выбирают приложения чаттеров.",
+    description: "Образы и стили общения для AI: здесь их пишут и правят, а чаттеры выбирают их в своих приложениях.",
   },
   collection: {
     title: "Сбор OnlyFans",

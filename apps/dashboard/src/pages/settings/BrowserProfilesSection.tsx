@@ -2,19 +2,18 @@ import { Link } from "react-router";
 import { FilePenLine, MonitorSmartphone, Plus } from "lucide-react";
 
 import { useDeletePageBrowserDraft, usePageBrowserDrafts, usePageBrowserProfiles } from "@/api/queries";
-import { ToneChip } from "../page-browser/loginParts.js";
+import { RowMenu } from "@/components/ui/RowMenu";
+import { formatDateTime } from "@/lib/format";
+import { ServerAdminCommand, ToneChip } from "../page-browser/loginParts.js";
 import { browserStatusOf, onboardingChipOf } from "../page-browser/pageBrowserOnboardingView.js";
-import { draftChipOf, envLine, maskedLine } from "../page-browser/proxyEntryView.js";
+import { draftChipOf } from "../page-browser/proxyEntryView.js";
 
 // New pages connected through their own server browser (Project Browser PR
 // 16; owner decision 2026-10-15): a browser starts here — its proxy pasted
-// and checked, its environment confirmed (a draft); then `scripts/
-// deploy-page-browser.sh add-profile` makes it from the draft, and the
-// profiles it made that no page has yet are listed with where their
-// onboarding stands.
-
-/** A small button of a list row, as the row's link. */
-const SMALL = "rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-50";
+// and checked, its environment confirmed (a draft); then the server's
+// administrator makes it from the draft (`scripts/deploy-page-browser.sh
+// add-profile`, the command kept in a collapsed disclosure), and the profiles
+// it made that no page has yet are listed with where their onboarding stands.
 
 export function browserProfileRoute(profileId: string): string {
   return `/browser-profiles/${encodeURIComponent(profileId)}`;
@@ -32,37 +31,45 @@ export function BrowserProfilesSection() {
   const draftItems = drafts.data?.drafts ?? [];
   const empty = !profiles.isError && !drafts.isError && items.length === 0 && draftItems.length === 0 && !profiles.isPending && !drafts.isPending;
   return (
-    <section className="mt-6" aria-label="Новые страницы через браузер">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-bold text-text-primary">Новые страницы через серверный браузер</h2>
-        <Link to={browserDraftRoute()} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90" data-new-browser>
-          <Plus size={14} aria-hidden /> Новый браузер страницы
+    <section className="card" aria-labelledby="browser-profiles-title">
+      <div className="card-header">
+        <div className="min-w-0">
+          <h3 id="browser-profiles-title" className="card-title">Браузеры страниц</h3>
+          <p className="card-description">Страницы Fansly, которые входят через собственный серверный браузер.</p>
+        </div>
+        <Link to={browserDraftRoute()} className="btn" data-new-browser>
+          <Plus size={16} aria-hidden /> Новый браузер страницы
         </Link>
       </div>
-      {(profiles.isError || drafts.isError) && <p className="text-sm text-danger">Список браузеров не загрузился.</p>}
-      {empty && (
-        <div className="rounded-xl border border-dashed border-border bg-card px-4 py-3 text-sm text-text-muted">
-          <p>Браузеров без страницы нет. Чтобы подключить страницу через её серверный браузер, нажмите «Новый браузер страницы»: вставьте прокси, проверьте её и подтвердите окружение.</p>
-          <p className="mt-2">Потом на рабочей машине <span className="font-mono text-xs text-text-secondary">scripts/deploy-page-browser.sh add-profile &lt;host&gt; --page &lt;название&gt; --image &lt;образ&gt;</span> создаст браузер по этому черновику — прокси и окружение вводить не нужно.</p>
+      {(profiles.isError || drafts.isError) && (
+        <div className="card-body">
+          <p role="alert" className="notice notice-danger">Список браузеров не загрузился.</p>
         </div>
       )}
+      {empty && (
+        <p className="card-body text-sm text-text-secondary">
+          Пока ни одного. Нажмите «Новый браузер страницы»: вставьте прокси, проверьте её и подтвердите
+          окружение — по этому черновику сервер создаст браузер.
+        </p>
+      )}
       {draftItems.length > 0 && (
-        <ul className="mb-2 flex flex-col gap-2" aria-label="Черновики браузеров">
+        <ul className="divide-y divide-border-light" aria-label="Черновики браузеров">
           {draftItems.map((draft) => {
             const chip = draftChipOf(draft);
             return (
-              <li key={draft.name} className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-border bg-card px-4 py-3" data-browser-draft={draft.name}>
-                <FilePenLine size={18} className="shrink-0 text-text-muted" aria-hidden />
-                <div className="min-w-[12rem] flex-1">
-                  <p className="text-sm font-semibold text-text-primary">{draft.name}{draft.page !== null && <span className="ml-2 text-xs font-normal text-text-muted">существующая страница</span>}</p>
-                  <p className="truncate text-xs text-text-muted">{draft.proxy === null ? "прокси нет" : maskedLine(draft.proxy)}</p>
-                  {draft.env !== null && <p className="truncate text-xs text-text-muted">{envLine(draft.env)}</p>}
-                  <p className="mt-1 break-all font-mono text-[11px] text-text-secondary" data-draft-command>{draft.command}</p>
+              <li key={draft.name} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3" data-browser-draft={draft.name}>
+                <FilePenLine size={18} className="shrink-0 text-text-secondary" aria-hidden />
+                <div className="min-w-[9rem] flex-1">
+                  <p className="text-sm font-medium text-text-primary">{draft.name}</p>
+                  <p className="text-xs text-text-secondary">Черновик{draft.page !== null ? " · существующая страница" : ""}</p>
                 </div>
                 <ToneChip label={chip.label} tone={chip.tone} />
-                <div className="flex gap-2">
-                  <Link to={browserDraftRoute(draft.name)} className={SMALL}>Изменить</Link>
-                  <button type="button" className={SMALL} disabled={remove.isPending} onClick={() => remove.mutate(draft.name)}>Удалить</button>
+                <div className="flex items-center gap-1">
+                  <Link to={browserDraftRoute(draft.name)} className="btn btn-sm">Изменить</Link>
+                  <RowMenu
+                    label={`Действия с черновиком ${draft.name}`}
+                    items={[{ label: "Удалить черновик", danger: true, disabled: remove.isPending, onSelect: () => remove.mutate(draft.name) }]}
+                  />
                 </div>
               </li>
             );
@@ -70,28 +77,33 @@ export function BrowserProfilesSection() {
         </ul>
       )}
       {items.length > 0 && (
-        <ul className="flex flex-col gap-2">
+        <ul className={`divide-y divide-border-light ${draftItems.length > 0 ? "border-t border-border-light" : ""}`} aria-label="Браузеры без страницы">
           {items.map((profile) => {
             const chip = onboardingChipOf(profile);
             const browser = browserStatusOf(profile);
             return (
-              <li key={profile.profileId} className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3" data-browser-profile={profile.name}>
-                <MonitorSmartphone size={18} className="shrink-0 text-text-muted" aria-hidden />
-                {/* On a phone the chip and the link go under it: the details stay readable. */}
-                <div className="min-w-[12rem] flex-1">
-                  <p className="text-sm font-semibold text-text-primary">{profile.name}</p>
-                  <p className="truncate text-xs text-text-muted">
-                    {browser.label} · создан {new Date(profile.createdAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · <span className="font-mono">{profile.profileId.slice(0, 8)}</span>
-                  </p>
+              <li key={profile.profileId} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3" data-browser-profile={profile.name}>
+                <MonitorSmartphone size={18} className="shrink-0 text-text-secondary" aria-hidden />
+                <div className="min-w-[9rem] flex-1">
+                  <p className="text-sm font-medium text-text-primary">{profile.name}</p>
+                  <p className="text-xs text-text-secondary">{browser.label} · создан {formatDateTime(profile.createdAt)}</p>
                 </div>
                 <ToneChip label={chip.label} tone={chip.tone} />
-                <Link to={browserProfileRoute(profile.profileId)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90">
+                <Link to={browserProfileRoute(profile.profileId)} className="btn btn-sm">
                   Подключить
                 </Link>
               </li>
             );
           })}
         </ul>
+      )}
+      {draftItems.length > 0 && (
+        <div className="border-t border-border-light px-5 py-3">
+          <ServerAdminCommand
+            text="Браузер по черновику создаёт администратор на рабочей машине — прокси и окружение вводить не нужно:"
+            command={draftItems.map((draft) => draft.command)}
+          />
+        </div>
       )}
     </section>
   );

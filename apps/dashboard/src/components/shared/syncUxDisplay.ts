@@ -60,7 +60,7 @@ export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>>
 /** An OnlyFans page is reached through OFAPI, so "needs action" there means
  *  the OFAPI connection, not a login the owner can renew in Hub. */
 export function syncStateLabel(summary: SyncUxSummary, platform?: "fansly" | "onlyfans"): string {
-  if (summary.requiresAction) return platform === "onlyfans" ? "Проверьте OFAPI" : "Нужен вход";
+  if (summary.requiresAction) return platform === "onlyfans" ? "Проверьте OnlyFans API" : "Нужен вход";
   return SYNC_STATE_LABELS[summary.state];
 }
 

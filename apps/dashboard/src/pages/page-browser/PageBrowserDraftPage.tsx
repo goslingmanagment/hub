@@ -7,8 +7,9 @@ import type { PastedProxyOrder } from "@agency_hub_core/shared";
 
 import { savePageBrowserDraft, usePageBrowserDrafts } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { buildSettingsRoute } from "@/lib/navigation";
-import { Card, INPUT, PLAIN, PRIMARY, SCREEN } from "./loginParts.js";
+import { Card, ServerAdminCommand } from "./loginParts.js";
 import { EnvForm, ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
 import {
   asSocks5Text,
@@ -125,27 +126,28 @@ export function PageBrowserDraftPage() {
       .finally(() => setPending(false));
   };
 
-  const back = <Link to={buildSettingsRoute("pages")} className="text-xs font-medium text-accent hover:underline">&larr; Страницы</Link>;
   if (saved !== null) {
     return (
-      <div className={SCREEN}>
-        <div className="mb-5">{back}<h1 className="mt-1 text-xl font-extrabold text-text-primary">Браузер {saved.name}: черновик сохранён</h1></div>
+      <div className="min-w-0">
+        <PageHeader title={`Браузер ${saved.name}: черновик сохранён`} />
         <div className="flex max-w-3xl flex-col gap-4">
           <Card title={<span className="inline-flex items-center gap-2"><CheckCircle2 size={16} className="text-green" aria-hidden /> Что дальше</span>}>
-            <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm text-text-secondary">
+            <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-text-secondary">
               <li>
-                На рабочей машине создать браузер — прокси и окружение он возьмёт из этого черновика:
-                <pre className="mt-1 overflow-x-auto rounded-lg bg-hover-alt px-3 py-2 font-mono text-xs text-text-primary" data-draft-command>{saved.command}</pre>
+                <p>Администратор сервера создаёт браузер по этому черновику — прокси и окружение он возьмёт отсюда.</p>
+                <div className="mt-2">
+                  <ServerAdminCommand text="Команда на рабочей машине — прокси и окружение вводить не нужно:" command={saved.command} />
+                </div>
               </li>
               {saved.page === null
-                ? <li>Браузер появится в «Настройки → Страницы»: там выходной IP, вход в Fansly, проверка аккаунта и создание страницы.</li>
+                ? <li>Браузер появится в «Настройки → Модели и страницы» в блоке «Браузеры страниц»: там выходной IP, вход в Fansly, проверка аккаунта и создание страницы.</li>
                 : <li>Браузер сразу привяжется к странице {saved.page.label}; дальше — её выходной IP и переход на браузер.</li>}
             </ol>
-            {saved.proxy !== null && <p className="mt-3 text-xs text-text-muted">Прокси: <span className="font-mono">{maskedLine(saved.proxy)}</span>. Пароль хранится зашифрованным и сюда не возвращается.</p>}
+            {saved.proxy !== null && <p className="mt-4 text-xs text-text-secondary">Прокси: <span className="font-mono">{maskedLine(saved.proxy)}</span>. Пароль хранится зашифрованным и сюда не возвращается.</p>}
           </Card>
           <div className="flex flex-wrap gap-2">
-            <Link to={buildSettingsRoute("pages")} className={PLAIN}>К страницам</Link>
-            <button type="button" className={PLAIN} onClick={() => setSaved(null)}>Изменить черновик</button>
+            <Link to={buildSettingsRoute("pages")} className="btn btn-primary">К страницам</Link>
+            <button type="button" className="btn" onClick={() => setSaved(null)}>Изменить черновик</button>
           </div>
         </div>
       </div>
@@ -153,31 +155,30 @@ export function PageBrowserDraftPage() {
   }
 
   return (
-    <div className={SCREEN}>
-      <div className="mb-5">
-        {back}
-        <h1 className="mt-1 text-xl font-extrabold text-text-primary">{editing === null ? "Новый браузер страницы" : `Браузер ${editing}`}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">
-          Вставьте прокси, проверьте её и подтвердите окружение браузера — как в антидетект-браузерах. Сервер потом создаст браузер по этому черновику: на сервере ничего вводить не нужно.
-        </p>
-      </div>
+    <div className="min-w-0">
+      <PageHeader
+        title={editing === null ? "Новый браузер страницы" : `Браузер ${editing}`}
+        description="Вставьте и проверьте прокси, подтвердите окружение — по этому черновику сервер создаст браузер страницы."
+      />
       <form onSubmit={submit} autoComplete="off" className="flex max-w-3xl flex-col gap-4">
         <Card title="1. Чей браузер">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-text-secondary" role="radiogroup">
-              <label className="flex items-center gap-2"><input type="radio" checked={kind === "new"} onChange={() => { setKind("new"); check.reset(); }} disabled={editing !== null} /> Новая страница</label>
-              <label className="flex items-center gap-2"><input type="radio" checked={kind === "existing"} onChange={() => { setKind("existing"); check.reset(); }} disabled={editing !== null} /> Существующая страница переходит на браузер</label>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-text-primary" role="radiogroup" aria-label="Чей браузер">
+              <label className="flex items-center gap-2"><input type="radio" className="accent-accent" checked={kind === "new"} onChange={() => { setKind("new"); check.reset(); }} disabled={editing !== null} /> Новая страница</label>
+              <label className="flex items-center gap-2"><input type="radio" className="accent-accent" checked={kind === "existing"} onChange={() => { setKind("existing"); check.reset(); }} disabled={editing !== null} /> Существующая страница переходит на браузер</label>
             </div>
             {kind === "new" ? (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="pb-draft-name" className="text-sm text-text-secondary">Название страницы — оно же имя браузера на сервере</label>
-                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="ari-2" className={`${INPUT} font-mono`} disabled={editing !== null} spellCheck={false} />
-                {nameProblem !== null && <p className="text-xs text-danger">{nameProblem}</p>}
+              <div>
+                <label htmlFor="pb-draft-name" className="field-label">Название страницы</label>
+                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="ari-2" className="input" disabled={editing !== null} spellCheck={false} />
+                {nameProblem !== null
+                  ? <p className="field-hint text-danger">{nameProblem}</p>
+                  : <p className="field-hint">Так же будет называться браузер на сервере.</p>}
               </div>
             ) : (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="pb-draft-page" className="text-sm text-text-secondary">Страница</label>
-                <select id="pb-draft-page" value={pageLabel} onChange={(event) => { setPageLabel(event.target.value); check.reset(); }} className={INPUT} disabled={editing !== null}>
+              <div>
+                <label htmlFor="pb-draft-page" className="field-label">Страница</label>
+                <select id="pb-draft-page" value={pageLabel} onChange={(event) => { setPageLabel(event.target.value); check.reset(); }} className="select" disabled={editing !== null}>
                   <option value="">— выберите —</option>
                   {pages.map((page) => <option key={page.pageId} value={page.label}>{page.label}</option>)}
                 </select>
@@ -190,7 +191,7 @@ export function PageBrowserDraftPage() {
           <div className="flex flex-col gap-3">
             {kind === "existing" ? (
               chosenPage === null ? (
-                <p className="text-sm text-text-muted">Выберите страницу: браузер выйдет через её собственную прокси.</p>
+                <p className="text-sm text-text-secondary">Выберите страницу: браузер выйдет через её собственную прокси.</p>
               ) : chosenPage.proxy == null ? (
                 <p role="alert" className="text-sm text-danger">У страницы {chosenPage.label} нет прокси: сначала задайте её в настройках страницы.</p>
               ) : (
@@ -203,7 +204,7 @@ export function PageBrowserDraftPage() {
                 {storedProxy !== null && (
                   <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
                     <span>Сохранена: <span className="font-mono text-text-primary">{maskedLine(storedProxy)}</span></span>
-                    <button type="button" className={PLAIN} onClick={() => { setReplacing(!replacing); setText(""); check.reset(); }}>{replacing ? "Оставить сохранённую" : "Заменить"}</button>
+                    <button type="button" className="btn btn-sm" onClick={() => { setReplacing(!replacing); setText(""); check.reset(); }}>{replacing ? "Оставить сохранённую" : "Заменить"}</button>
                   </div>
                 )}
                 {pasting && (
@@ -236,12 +237,12 @@ export function PageBrowserDraftPage() {
           />
         </Card>
 
-        <div className="flex flex-col gap-2">
-          <button type="submit" className={PRIMARY} disabled={!canSave} data-draft-save>
+        <div className="flex flex-col items-start gap-2">
+          <button type="submit" className="btn btn-primary" disabled={!canSave} data-draft-save>
             {pending ? "Сохраняем…" : "Сохранить черновик"}
           </button>
           {checkId === null && <p className="text-xs text-text-secondary" data-draft-needs-check>Сохранить можно после успешной проверки прокси: сохраняется адрес, к которому подключилась проверка.</p>}
-          <p className="text-xs text-text-muted">Пароль прокси уйдёт в Hub один раз и будет храниться зашифрованным; на эту страницу он не возвращается.</p>
+          <p className="text-xs text-text-secondary">Пароль прокси уйдёт в Hub один раз и будет храниться зашифрованным; на эту страницу он не возвращается.</p>
           {problem !== null && <p role="alert" className="text-sm text-danger">{problem}</p>}
         </div>
       </form>
