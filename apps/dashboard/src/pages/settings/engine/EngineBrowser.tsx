@@ -21,28 +21,26 @@ import {
   type EngineBrowser,
 } from "./engineBrowserDisplay.js";
 
-// The «Браузер» block of a Fansly page on the «Синк» tab (Project Browser
+// The «Браузер» block of a Fansly page on the Fansly screen (Project Browser
 // plan §4.11; PR 17): only a page with a browser has one. On the page's card
 // of the list it is a line with what holds; on the page's detail, the whole
 // of it — the transport, the operator's last word and its start, the owner's
 // stop, the login, the exit IP, the buffer, the delivery of events, the
-// versions, the last self-test and alarm — and the commands of the owner's
-// CLI. The browser's alerts that hold come first, in the warning colour.
+// versions, the last self-test and alarm. The browser's alerts that hold
+// come first, in the warning colour; the console's commands are in the
+// screen's «Для разработчика».
 
 const HEADLINE_TONES: Record<BrowserHeadline["tone"], string> = {
-  ok: "border-green/30 bg-green/10 text-green",
-  quiet: "border-border bg-hover-alt text-text-secondary",
-  warn: "border-warning/30 bg-warning/10 text-warning-dark",
-  danger: "border-danger/30 bg-danger/[0.06] text-danger",
+  ok: "badge badge-success",
+  quiet: "badge",
+  warn: "badge badge-warning",
+  danger: "badge badge-danger",
 };
 
 export function EngineBrowserChip({ browser }: { browser: EngineBrowser }) {
   const headline = browserHeadline(browser);
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${HEADLINE_TONES[headline.tone]}`}
-      data-browser-state={headline.kind}
-    >
+    <span className={HEADLINE_TONES[headline.tone]} data-browser-state={headline.kind}>
       {headline.text}
     </span>
   );
@@ -58,6 +56,10 @@ function Row({ label, children, warn = false, testId }: { label: string; childre
     </>
   );
 }
+
+/** How a stop the owner decides is lifted: the browser is started again from
+ *  the server console. */
+const START_AGAIN = "запуск — командой из «Для разработчика»";
 
 /**
  * A page's browser. `compact`: the card of the list — the headline, the
@@ -86,8 +88,8 @@ export function EngineBrowserBlock({
   const onBrowser = browser.transport === "browser";
   if (compact) {
     return (
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs" data-engine-browser={pageLabel} data-browser-compact="true">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Браузер</span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm" data-engine-browser={pageLabel} data-browser-compact="true">
+        <span className="font-medium text-text-secondary">Браузер</span>
         <EngineBrowserChip browser={browser} />
         {onBrowser && <span className="text-text-secondary">{browserLinkText(browser, now)}</span>}
         {bufferTrouble.map((line) => (
@@ -100,60 +102,61 @@ export function EngineBrowserBlock({
     );
   }
   return (
-    <section className="rounded-xl border border-border bg-card px-5 py-4" aria-label="Браузер" data-engine-browser={pageLabel}>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold text-text-primary">Браузер</h3>
-        <EngineBrowserChip browser={browser} />
-      </div>
-      {alerts.length > 0 && (
-        <div className="mb-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 space-y-0.5" data-browser-alerts="true">
-          {alerts.map((line) => (
-            <p key={line} className="break-words text-xs font-medium text-warning-dark" data-browser-alert="true">Тревога — {line}</p>
-          ))}
+    <section className="card" aria-label="Браузер" data-engine-browser={pageLabel}>
+      <div className="card-header">
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="card-title">Браузер</h4>
+          <EngineBrowserChip browser={browser} />
         </div>
-      )}
-      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
-        <Row label="Транспорт" testId="transport">{browserTransportText(browser, now)}</Row>
-        <Row label="Связь" warn={onBrowser && silent} testId="link">{browserLinkText(browser, now)}</Row>
-        <Row label="Состояние" warn={onBrowser && browser.state.stopReason !== null && browser.state.stopReason !== "owner_stop"} testId="state">
-          {browserStateText(browser, now)}
-        </Row>
-        {ownerStop !== null && (
-          <Row label="Остановка" warn testId="owner-stop">
-            {ownerStop} · pnpm cli sync browser start {pageLabel}
-          </Row>
-        )}
-        {halt !== null && (
-          <Row label="Решение" warn testId="halt">
-            {/* Fansly signed the browser out: the owner's login decides it (PR 15). */}
-            {browser.halt?.reason === "login_required" ? `${halt} · решается входом в браузер` : `${halt} · pnpm cli sync browser start ${pageLabel}`}
-          </Row>
-        )}
-        <Row label="Вход" warn={browser.login.needed} testId="login">
-          {/* PR 15's «Войти в браузер» (the page's detail passes it): beside
-              the line, or under it from its start when it does not fit. */}
-          <span className="flex flex-wrap items-baseline gap-x-2">
-            <span>{browserLoginText(browser)}</span>
-            {loginAction}
-          </span>
-        </Row>
-        <Row label="Выходной IP" warn={browser.proxy.problem !== null || browser.proxy.matches === false || browser.proxy.pinnedExitIp === null} testId="exit-ip">
-          {browserExitIpText(browser)}
-        </Row>
-        <Row label="Буфер" warn={bufferTrouble.length > 0} testId="buffer">
-          {browserBufferText(browser)}
-          {bufferTrouble.map((line) => <span key={line} className="block">{line}</span>)}
-        </Row>
-        <Row label="Доставка событий" testId="delivery">{browserDeliveryText(browser, now)}</Row>
-        <Row label="Версии" testId="versions">{browserVersionsText(browser)}</Row>
-        <Row label="Самопроверка" warn={browser.selfTest.ok === false} testId="selftest">{browserSelfTestText(browser, now)}</Row>
-        {browser.alarm !== null && (
-          <Row label="Тревога оператора" testId="alarm">{browserAlarmText(browser, now)}</Row>
-        )}
       </div>
-      <p className="mt-3 text-[11px] text-text-muted">
-        pnpm cli sync browser status --page {pageLabel} · stop {pageLabel} · start {pageLabel} · selftest {pageLabel}
-      </p>
+      <div className="card-body space-y-3">
+        {alerts.length > 0 && (
+          <div className="notice notice-warning flex-col gap-0.5" data-browser-alerts="true">
+            {alerts.map((line) => (
+              <p key={line} className="break-words font-medium" data-browser-alert="true">Тревога — {line}</p>
+            ))}
+          </div>
+        )}
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+          <Row label="Транспорт" testId="transport">{browserTransportText(browser, now)}</Row>
+          <Row label="Связь" warn={onBrowser && silent} testId="link">{browserLinkText(browser, now)}</Row>
+          <Row label="Состояние" warn={onBrowser && browser.state.stopReason !== null && browser.state.stopReason !== "owner_stop"} testId="state">
+            {browserStateText(browser, now)}
+          </Row>
+          {ownerStop !== null && (
+            <Row label="Остановка" warn testId="owner-stop">
+              {ownerStop} · {START_AGAIN}
+            </Row>
+          )}
+          {halt !== null && (
+            <Row label="Решение" warn testId="halt">
+              {/* Fansly signed the browser out: the owner's login decides it (PR 15). */}
+              {browser.halt?.reason === "login_required" ? `${halt} · решается входом в браузер` : `${halt} · ${START_AGAIN}`}
+            </Row>
+          )}
+          <Row label="Вход" warn={browser.login.needed} testId="login">
+            {/* PR 15's «Войти в браузер» (the page's detail passes it): beside
+                the line, or under it from its start when it does not fit. */}
+            <span className="flex flex-wrap items-baseline gap-x-2">
+              <span>{browserLoginText(browser)}</span>
+              {loginAction}
+            </span>
+          </Row>
+          <Row label="Выходной IP" warn={browser.proxy.problem !== null || browser.proxy.matches === false || browser.proxy.pinnedExitIp === null} testId="exit-ip">
+            {browserExitIpText(browser)}
+          </Row>
+          <Row label="Буфер" warn={bufferTrouble.length > 0} testId="buffer">
+            {browserBufferText(browser)}
+            {bufferTrouble.map((line) => <span key={line} className="block">{line}</span>)}
+          </Row>
+          <Row label="Доставка событий" testId="delivery">{browserDeliveryText(browser, now)}</Row>
+          <Row label="Версии" testId="versions">{browserVersionsText(browser)}</Row>
+          <Row label="Самопроверка" warn={browser.selfTest.ok === false} testId="selftest">{browserSelfTestText(browser, now)}</Row>
+          {browser.alarm !== null && (
+            <Row label="Тревога оператора" testId="alarm">{browserAlarmText(browser, now)}</Row>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

@@ -11,6 +11,7 @@ import { buildFanProfileNavigation } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
 import { listOffset, safeBackTo, subscriberFilter } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
@@ -21,6 +22,10 @@ function isNewWithin24Hours(iso: string | null) {
   if (!iso) return false;
   const age = Date.now() - new Date(iso).getTime();
   return age >= 0 && age < 86_400_000;
+}
+
+function subscribersCount(count: number) {
+  return `${count} ${ruPlural(count, "подписчик", "подписчика", "подписчиков")}`;
 }
 
 export function SubscribersPage() {
@@ -62,43 +67,43 @@ export function SubscribersPage() {
 
   if (isLoading || !data) {
     if (isLoading) {
-      return <TableSkeleton rows={6} columns={7} />;
+      return <TableSkeleton rows={6} columns={6} />;
     }
     if (isError) {
       return (
         <StatusPanel
-          title="Subscribers failed to load"
-          description="The subscriber list could not be fetched for this page."
+          title="Не удалось загрузить подписчиков"
+          description="Список подписчиков этой страницы сейчас недоступен."
           tone="error"
-          action={<><button onClick={() => void refetch()}>Повторить</button> · <Link to={safeBackTo(search)}>К дашборду</Link></>}
+          action={<><button type="button" onClick={() => void refetch()}>Повторить</button><Link to={safeBackTo(search)}>К обзору</Link></>}
         />
       );
     }
-    return <TableSkeleton rows={6} columns={7} />;
+    return <TableSkeleton rows={6} columns={6} />;
   }
 
   const platform = data.page.platform;
   const items = data.items;
   const total = data.total;
   const filters = [
-    { key: "all", label: "All", count: allCount?.total },
-    { key: "expiring7d", label: "Expiring ≤7d", count: expiringCount?.total },
-    { key: "new24h", label: "New 24h", count: newCount?.total },
-    { key: "norenew", label: "Auto-renew Off", count: noRenewCount?.total },
+    { key: "all", label: "Все", count: allCount?.total },
+    { key: "expiring7d", label: "Истекают ≤7 дн", count: expiringCount?.total },
+    { key: "new24h", label: "Новые за 24 ч", count: newCount?.total },
+    { key: "norenew", label: "Без автопродления", count: noRenewCount?.total },
   ];
+  const narrowed = filter !== "all" || searchQuery !== "";
+  // The population comes from its own unfiltered count; the main query's
+  // total is the match count of the active filter and search.
+  const countLine = !allCount
+    ? "Общее число недоступно"
+    : narrowed
+      ? (offset > 0 && items.length === 0 ? `Всего ${subscribersCount(allCount.total)}` : `Найдено ${total} из ${allCount.total}`)
+      : subscribersCount(allCount.total);
 
   return (
-    <div className="p-4 md:p-0">
-      {search.has("backTo") && <Link className="text-sm text-accent" to={safeBackTo(search)}>← К дашборду</Link>}
+    <div>
       <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">
-          Subscribers &mdash; {pageLabel}
-        </h1>
-        <p className="text-sm text-text-muted mt-1">{allCount ? `${allCount.total} total` : "Общее число недоступно"}</p>
-      </div>
-
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <FilterButtons
           filters={filters}
           active={filter}
@@ -107,110 +112,100 @@ export function SubscribersPage() {
         <SearchInput
           value={searchQuery}
           onChange={(value) => update("query", value)}
-          placeholder="Search subscriber..."
+          placeholder="Поиск подписчика"
         />
       </div>
 
-      <p className="text-xs text-text-muted mb-3">Текущие записи Hub, независимо от периода дохода. Истекают ≤7d — известная дата окончания; Auto-renew Off — явно выключенное продление.</p>
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {["Username", "Since", "Expires", "Remaining", "Renew", "Spent", "Last Txn"].map(
-                (col) => (
-                  <th
-                    key={col}
-                    className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                  >
-                    {col}
-                  </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
-                  {offset > 0 ? "На этой странице списка записей нет." : "No subscribers match the current filter."}
-                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
-                </td>
-              </tr>
-            )}
-            {items.map((sub) => {
-              const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
-              const isNew = isNewWithin24Hours(sub.startedAt);
-              const fanLabel = resolveFanLabelForScope(sub, "page");
-              const fanNavigation = buildFanProfileNavigation(
-                pageLabel!,
-                platform,
-                sub.platformUserId,
-                location.pathname + location.search,
-                fanLabel.label,
-              );
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-[13px] text-text-secondary">
+        <span className="tabular-nums">{countLine}</span>
+        {search.has("backTo") && <Link className="link" to={safeBackTo(search)}>← К обзору</Link>}
+      </div>
 
-              return (
-                <tr
-                  key={sub.platformSubscriptionId}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to={fanNavigation.to}
-                        state={fanNavigation.state}
-                        className="text-[15px] font-semibold text-text-primary hover:text-accent"
-                      >
-                        {fanLabel.label}
-                      </Link>
-                      {fanLabel.secondaryPlatformHandle && (
-                        <span className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
-                      )}
-                      {isNew && <Badge variant="new">NEW</Badge>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {sub.startedAt ? formatDate(sub.startedAt) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {sub.endsAt ? formatDate(sub.endsAt) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {days !== null ? (
-                      <RemainingBar days={days} />
-                    ) : (
-                      <span className="text-text-muted">&mdash;</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {sub.autoRenew === true && (
-                      <span className="text-green font-medium">On</span>
-                    )}
-                    {sub.autoRenew === false && (
-                      <span className="inline-flex flex-col">
-                        <span className="font-medium text-danger">Off</span>
-                        {sub.autoRenewOffDetectedAt && (
-                          <span className="text-[11px] text-warning-dark">
-                            detected {formatDate(sub.autoRenewOffDetectedAt, { includeYear: true })}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {sub.autoRenew == null && (
-                      <span className="text-text-muted">&mdash;</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                    {sub.totalSpentCents != null ? formatUsdFromCents(sub.totalSpentCents) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {sub.lastTransactionAt ? formatDateTime(sub.lastTransactionAt) : "\u2014"}
+      <section className="card overflow-hidden" aria-label="Подписчики">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Фан</th>
+                <th>С нами с</th>
+                <th>Осталось</th>
+                <th>Автопродление</th>
+                <th className="num">Потратил</th>
+                <th>Последняя операция</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-text-secondary">
+                    {offset > 0 ? "На этой странице списка записей нет." : (narrowed ? "Под этот фильтр подписчиков нет." : "Подписчиков пока нет.")}
+                    {offset > 0 && <button type="button" className="link ml-2" onClick={() => update("offset", "")}>К началу списка</button>}
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {items.map((sub) => {
+                const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
+                const isNew = isNewWithin24Hours(sub.startedAt);
+                const fanLabel = resolveFanLabelForScope(sub, "page");
+                const fanNavigation = buildFanProfileNavigation(
+                  pageLabel!,
+                  platform,
+                  sub.platformUserId,
+                  location.pathname + location.search,
+                  fanLabel.label,
+                );
+
+                return (
+                  <tr key={sub.platformSubscriptionId}>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <Link
+                            to={fanNavigation.to}
+                            state={fanNavigation.state}
+                            className="font-medium text-text-primary hover:text-accent hover:underline underline-offset-2"
+                          >
+                            {fanLabel.label}
+                          </Link>
+                          {fanLabel.secondaryPlatformHandle && (
+                            <div className="text-xs text-text-secondary">@{fanLabel.secondaryPlatformHandle}</div>
+                          )}
+                        </div>
+                        {isNew && <Badge variant="new">Новый</Badge>}
+                      </div>
+                    </td>
+                    <td className="muted">
+                      {sub.startedAt ? formatDate(sub.startedAt) : "—"}
+                    </td>
+                    <td title={sub.endsAt ? `до ${formatDate(sub.endsAt, { includeYear: true })}` : undefined}>
+                      {days !== null ? <RemainingBar days={days} /> : <span className="text-text-muted">&mdash;</span>}
+                    </td>
+                    <td>
+                      {sub.autoRenew === true && <span className="font-medium text-green">Вкл.</span>}
+                      {sub.autoRenew === false && (
+                        <span className="inline-flex flex-col">
+                          <span className="font-medium text-danger">Выкл.</span>
+                          {sub.autoRenewOffDetectedAt && (
+                            <span className="text-xs text-text-secondary">
+                              с {formatDate(sub.autoRenewOffDetectedAt, { includeYear: true })}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      {sub.autoRenew == null && <span className="text-text-muted">&mdash;</span>}
+                    </td>
+                    <td className="num">
+                      {sub.totalSpentCents != null ? formatUsdFromCents(sub.totalSpentCents) : "—"}
+                    </td>
+                    <td className="muted">
+                      {sub.lastTransactionAt ? formatDateTime(sub.lastTransactionAt) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination
           offset={offset}
@@ -219,6 +214,14 @@ export function SubscribersPage() {
           onPageChange={(value) => update("offset", String(value))}
         />
       </section>
+
+      <details className="help mt-4">
+        <summary>Как это работает</summary>
+        <div className="help-body">
+          <p>Список — текущие подписки, которые сохранил Hub; он не зависит от периода дохода.</p>
+          <p>«Истекают ≤7 дн» — подписки с известной датой окончания в ближайшие 7 дней. «Без автопродления» — фан явно выключил продление.</p>
+        </div>
+      </details>
     </div>
   );
 }

@@ -16,7 +16,7 @@ import {
   type EngineHistoryRequest,
 } from "./engineDisplay.js";
 
-// History requests of a page (plan §4.3): how many fans are ready, the reads
+// History requests of a Fansly page (plan §4.3): how many fans are ready, the reads
 // made and still needed, and the time left — always the lower bound and the
 // estimate, with a hold or a slowdown shown apart from them.
 
@@ -37,8 +37,8 @@ export function HistoryRequestCard({ request, now = Date.now() }: { request: Eng
   const waiting = historyWaitingText(request, now);
   const filed = engineAgeText(request.createdAt, now);
   return (
-    <li className="rounded-lg border border-border px-3 py-2.5" data-history-request={request.ref}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
+    <li className="rounded-lg border border-border px-3 py-2.5 text-sm" data-history-request={request.ref}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <span className="font-medium text-text-primary">
           {historyDepthText(request.depth)}
           <span className="font-normal text-text-secondary">
@@ -46,7 +46,7 @@ export function HistoryRequestCard({ request, now = Date.now() }: { request: Eng
             {" · "}подана {filed} назад
             {" · "}
             {/* The start of its ref: `pnpm cli sync history status <ref>` takes the whole one. */}
-            <code className="text-[11px] text-text-muted" title={request.ref}>{request.ref.slice(0, 8)}</code>
+            <code className="font-mono text-xs text-text-muted" title={request.ref}>{request.ref.slice(0, 8)}</code>
           </span>
         </span>
         <span className="text-text-muted">
@@ -56,7 +56,7 @@ export function HistoryRequestCard({ request, now = Date.now() }: { request: Eng
         </span>
       </div>
       <div
-        className="mt-2 h-1.5 max-w-[320px] rounded-full bg-hover-alt overflow-hidden"
+        className="mt-2 h-1.5 max-w-[320px] overflow-hidden rounded-full bg-hover"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={request.counts.total}
@@ -68,16 +68,14 @@ export function HistoryRequestCard({ request, now = Date.now() }: { request: Eng
           style={{ width: `${historyReadyPercent(request)}%` }}
         />
       </div>
-      <p className="mt-1 text-[11px] text-text-secondary">{historyFansText(request)}</p>
-      <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+      <p className="mt-1 text-xs text-text-secondary">{historyFansText(request)}</p>
+      <div className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-0.5">
         <Row label="Чтения">{historyReadsText(request)}</Row>
         {open && (
           <>
             <Row label="Время">
               {historyEtaText(request)}
-              <span className="ml-1.5 rounded border border-border px-1 text-[10px] uppercase tracking-wide text-text-muted">
-                оценка
-              </span>
+              <span className="badge ml-1.5">оценка</span>
             </Row>
             <Row label="Темп">{historyRateText(request)}</Row>
             {waiting !== null && <Row label="Ждёт">{waiting}</Row>}
@@ -85,11 +83,9 @@ export function HistoryRequestCard({ request, now = Date.now() }: { request: Eng
         )}
       </div>
       {open && hold !== null && (
-        <p className="mt-2 rounded-md border border-warning/25 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning-dark">
-          {hold}
-        </p>
+        <p className="notice notice-warning mt-2 font-medium">{hold}</p>
       )}
-      {open && slowdown !== null && <p className="mt-1.5 text-[11px] text-warning-dark">{slowdown}</p>}
+      {open && slowdown !== null && <p className="mt-1.5 text-xs text-warning-dark">{slowdown}</p>}
     </li>
   );
 }
@@ -124,33 +120,31 @@ export function HistoryRequestsBlock({
   const hidden = open.length - shown.length;
   return (
     <section aria-label="Заявки на историю">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
+      <p className="mb-1.5 text-sm font-semibold text-text-primary">
         Заявки на историю{open.length > 0 ? ` · открыто ${open.length}` : ""}
       </p>
       {state.requests === undefined
         ? (
-          <p className="text-xs text-text-muted">
+          <p className="text-sm text-text-muted">
             {state.isLoading ? "Загружаем заявки…" : state.isError ? "Заявки не загрузились." : "Заявки недоступны."}
           </p>
         )
         : (
           <>
-            {open.length === 0 && <p className="text-xs text-text-muted">Открытых заявок нет.</p>}
+            {open.length === 0 && <p className="text-sm text-text-muted">Открытых заявок нет.</p>}
             {shown.length > 0 && (
               <ul className="space-y-2">
                 {shown.map((request) => <HistoryRequestCard key={request.ref} request={request} now={now} />)}
               </ul>
             )}
             {hidden > 0 && (
-              <p className="mt-1.5 text-xs text-text-muted">
+              <p className="mt-1.5 text-sm text-text-muted">
                 Ещё {hidden}{more ? <> — {more}</> : null}
               </p>
             )}
             {closed.length > 0 && (
               <>
-                <p className="mt-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                  Последние закрытые
-                </p>
+                <p className="mb-1.5 mt-4 text-sm font-semibold text-text-primary">Последние закрытые</p>
                 <ul className="space-y-2">
                   {closed.map((request) => <HistoryRequestCard key={request.ref} request={request} now={now} />)}
                 </ul>

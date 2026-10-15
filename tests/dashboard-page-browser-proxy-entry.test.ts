@@ -177,7 +177,7 @@ describe("the draft page and the Settings section rendered", () => {
     expect(html).toContain('data-browser-draft="ari-2"');
     expect(html).toContain("scripts/deploy-page-browser.sh add-profile &lt;host&gt; --page ari-2 --image &lt;образ&gt;");
     expect(html).toContain("--page lilly-1 --image &lt;образ&gt; --existing");
-    expect(html).toContain("Ждёт add-profile");
+    expect(html).toContain("Ждёт создания на сервере");
     expect(draftChipOf(draft({ page: { pageId: 7, label: "lilly-1" }, proxy: null }))).toEqual({ label: "У страницы нет прокси", tone: "danger" });
   });
 });

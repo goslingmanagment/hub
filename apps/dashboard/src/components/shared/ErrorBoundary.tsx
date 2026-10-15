@@ -28,14 +28,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return (
         <div className="flex min-h-screen items-center justify-center p-6">
           <div role="alert" className="max-w-sm rounded-xl border border-border bg-card p-6 text-center">
-            <h1 className="text-lg font-bold text-text-primary">Не удалось открыть страницу</h1>
-            <p className="mt-2 text-sm text-text-muted">
+            <h1 className="text-lg font-semibold text-text-primary">Не удалось открыть страницу</h1>
+            <p className="mt-2 text-sm text-text-secondary">
               Произошла ошибка интерфейса. Попробуйте загрузить страницу заново.
             </p>
             <button
               type="button"
               onClick={this.handleReload}
-              className="mt-4 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:opacity-90"
+              className="btn btn-primary mt-4"
             >
               Перезагрузить
             </button>

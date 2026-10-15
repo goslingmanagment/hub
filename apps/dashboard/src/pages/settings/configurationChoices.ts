@@ -10,6 +10,10 @@ export const CONFIG_MODE_CHOICES: Record<string, readonly { value: string; label
   agentHydrationMode: [{ value: "off", label: "Выключена" }, { value: "request_only", label: "Только заявки, без исполнения" }, { value: "dispatch", label: "Исполнять одобренные заявки" }],
   fanslyReplayMode: [{ value: "off", label: "Выключена" }, { value: "shadow", label: "Проверить без записи результатов" }, { value: "on", label: "Обработать и записать результаты" }],
   captureCasReadMode: [{ value: "inline", label: "Прежняя копия" }, { value: "shadow", label: "Прежняя копия с проверкой общей" }, { value: "serve", label: "Общая копия с запасным чтением" }],
+  egressPacerMode: [{ value: "off", label: "Выключен" }, { value: "shadow", label: "Только записывать решения" }, { value: "enforce", label: "Пропускать запросы сотрудников вперёд" }],
+  aiMediaDescribeModel: [{ value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5" }, { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5" }],
+  aiMediaDescribeModelMedia: [{ value: "teasers", label: "Только превью платных медиа" }, { value: "teasers+free", label: "Превью и бесплатные медиа" }],
+  logLevel: [{ value: "fatal", label: "Только критические сбои" }, { value: "error", label: "Ошибки" }, { value: "warn", label: "Предупреждения" }, { value: "info", label: "Обычный" }, { value: "debug", label: "Отладка" }, { value: "trace", label: "Подробная трассировка" }],
 };
 
 export function configPageScope(key: string) {

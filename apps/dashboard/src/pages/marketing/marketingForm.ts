@@ -17,6 +17,10 @@ export const eventLabels: Record<string, string> = {
   fan_sent_1_message: "Первое сообщение", fan_sent_3_messages: "Три сообщения",
 };
 export const conversionTypes = ["new_subscriber", "new_transaction", "message_received", "fan_sent_1_message", "fan_sent_3_messages"] as const;
+export const platformLabels: Record<string, string> = { meta: "Meta", snapchat: "Snapchat", tiktok: "TikTok", creatortraffic: "CreatorTraffic" };
+/** How a revenue figure was counted, in the owner's words. */
+export const revenueBasisLabels: Record<string, string> = { net: "чистыми", gross: "до комиссии", unspecified: "основа не указана" };
+export const smartLinkTypeLabels: Record<string, string> = { tracking_link: "Отслеживаемая ссылка", free_trial: "Бесплатный пробный период" };
 export interface MarketingForm {
   action: OfapiMarketingAction["action"]; pageId: number; linkId: string; resourceId: string;
   name: string; linkType: "tracking_link" | "free_trial"; trialDays: string; tags: string;
@@ -100,5 +104,6 @@ export function marketingPreviewValue(item:OfapiMarketingPreviewValue) {
   if(Array.isArray(item.value)) return item.value.join(", ");
   if(item.field==="link_type") return item.value==="free_trial" ? "Бесплатный пробный период" : "Обычная отслеживаемая ссылка";
   if(item.field==="event_type") return eventLabels[String(item.value)] ?? String(item.value);
+  if(item.field==="platform") return platformLabels[String(item.value)] ?? String(item.value);
   return String(item.value);
 }

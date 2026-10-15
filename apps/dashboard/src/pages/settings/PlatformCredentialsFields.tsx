@@ -1,7 +1,7 @@
 import { buildProxyConfig, getProxyStringError } from "@agency_hub_core/shared";
 import type { UpdateCredentialsBody, VerifyCredentialsBody } from "@agency_hub_core/contracts";
 import { Field } from "@/components/shared/Field";
-import { ProxyInput } from "@/components/shared/ProxyInput";
+import { ProxyInput, proxyErrorText } from "@/components/shared/ProxyInput";
 
 export type Platform = "fansly" | "onlyfans";
 
@@ -19,8 +19,15 @@ interface PlatformCredentialsFieldsProps {
   platform: Platform;
   values: PlatformCredentialsValues;
   onChange: <K extends keyof PlatformCredentialsValues>(field: K, value: PlatformCredentialsValues[K]) => void;
-  initialStoredProxy?: { url: string; hasAuth: boolean } | null;
+  initialStoredProxy?: { url: string; hasAuth: boolean } | null | undefined;
 }
+
+/** The three optional Fansly headers, by the name the browser shows them. */
+const OPTIONAL_FANSLY_HEADERS = [
+  { field: "fanslyClientId", header: "fansly-client-id" },
+  { field: "fanslyClientCheck", header: "fansly-client-check" },
+  { field: "fanslySessionId", header: "fansly-session-id" },
+] as const;
 
 export function PlatformCredentialsFields({
   platform,
@@ -28,65 +35,62 @@ export function PlatformCredentialsFields({
   onChange,
   initialStoredProxy,
 }: PlatformCredentialsFieldsProps) {
-  return (
-    <>
-      {platform === "fansly" ? (
-        <>
-          <Field label="Authorization">
-            <textarea
-              value={values.authorization}
-              onChange={(event) => onChange("authorization", event.target.value)}
-              rows={4}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="fansly-client-id (optional)">
-            <input
-              value={values.fanslyClientId}
-              onChange={(event) => onChange("fanslyClientId", event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="fansly-client-check (optional)">
-            <input
-              value={values.fanslyClientCheck}
-              onChange={(event) => onChange("fanslyClientCheck", event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="fansly-session-id (optional)">
-            <input
-              value={values.fanslySessionId}
-              onChange={(event) => onChange("fanslySessionId", event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-        </>
-      ) : (
-        <>
-          <p className="text-sm text-text-muted">
-            Connect the account in OFAPI first, then enter its OnlyFans username.
-            OFAPI manages access and the connection; no token or proxy is needed here.
-          </p>
-          <Field label="OnlyFans username">
-            <input
-              value={values.onlyFansUsername}
-              onChange={(event) => onChange("onlyFansUsername", event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-        </>
-      )}
-
-      {platform === "fansly" && (
-        <ProxyInput
-          value={values.proxyRaw}
-          onChange={(value) => onChange("proxyRaw", value)}
-          initialStoredProxy={initialStoredProxy ?? null}
-          required
+  if (platform === "onlyfans") {
+    return (
+      <Field
+        label="Имя пользователя на OnlyFans"
+        hint="Сначала подключите этот аккаунт в OnlyFans API — Hub читает страницу через него, прокси и пароль здесь не нужны."
+      >
+        <input
+          value={values.onlyFansUsername}
+          onChange={(event) => onChange("onlyFansUsername", event.target.value)}
+          placeholder="например, devlora"
+          autoComplete="off"
+          spellCheck={false}
+          className="input"
         />
-      )}
-    </>
+      </Field>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Field
+        label="Заголовок Authorization"
+        hint="Из браузера, где вы уже вошли в Fansly: инструменты разработчика → «Сеть» → любой запрос к apiv3.fansly.com."
+      >
+        <textarea
+          value={values.authorization}
+          onChange={(event) => onChange("authorization", event.target.value)}
+          rows={3}
+          spellCheck={false}
+          className="textarea"
+        />
+      </Field>
+      <details className="help">
+        <summary>Другие заголовки (необязательно)</summary>
+        <div className="help-body">
+          {OPTIONAL_FANSLY_HEADERS.map(({ field, header }) => (
+            <Field key={field} label={header}>
+              <input
+                value={values[field]}
+                onChange={(event) => onChange(field, event.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                className="input"
+              />
+            </Field>
+          ))}
+        </div>
+      </details>
+      <ProxyInput
+        label="Прокси страницы"
+        value={values.proxyRaw}
+        onChange={(value) => onChange("proxyRaw", value)}
+        initialStoredProxy={initialStoredProxy ?? null}
+        required
+      />
+    </div>
   );
 }
 
@@ -119,23 +123,23 @@ export function buildCredentialsBody({
 }): VerifyCredentialsBody | UpdateCredentialsBody {
   if (platform === "onlyfans") {
     if (!requireCredentials) {
-      throw new Error("OnlyFans access is managed in OFAPI. Use Sync settings for connection diagnostics.");
+      throw new Error("Доступ к OnlyFans настраивается в OnlyFans API, а не здесь.");
     }
     return { platform: "onlyfans", username: values.onlyFansUsername.trim() };
   }
 
   const proxyError = getProxyStringError(values.proxyRaw);
   if (proxyError) {
-    throw new Error(proxyError);
+    throw new Error(proxyErrorText(proxyError));
   }
 
   const proxyConfig = buildProxyConfig(values.proxyRaw);
   if (requireCredentials && !proxyConfig) {
-    throw new Error("Proxy is required for Fansly");
+    throw new Error("Для страницы Fansly нужен прокси");
   }
   if (!requireCredentials && hadStoredProxy && values.proxyRaw.trim().length === 0) {
     throw new Error(
-      "Proxy removal is a separate operation; credentials update cannot clear it",
+      "Прокси нельзя удалить, обновляя данные входа: оставьте поле прокси заполненным",
     );
   }
   const preserveStoredProxyAuth = Boolean(

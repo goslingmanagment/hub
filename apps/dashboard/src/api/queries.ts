@@ -18,3 +18,4 @@ export * from "./pages.js";
 export * from "./pageBrowser.js";
 export * from "./pageBrowserOnboarding.js";
 export * from "./pageBrowserDrafts.js";
+export * from "./attention.js";

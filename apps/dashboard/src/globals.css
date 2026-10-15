@@ -1,35 +1,173 @@
 @import "tailwindcss";
+@import "./styles/ui.css";
 @import "./pages/overview.css";
 @import "./pages/settings/settings-ui.css";
 
+/* Colour tokens. Text colours clear WCAG AA (4.5:1) on white; the accent
+   carries white text at the same ratio. Every colour on screen comes from
+   here, so the dark theme below is these same names with other values. */
 @theme {
-  --color-bg: #f9f8f6;
+  --color-bg: #f6f5f3;
   --color-card: #ffffff;
-  --color-border: #e8e5e0;
-  --color-accent: #c96442;
-  --color-green: #4ead6b;
-  --color-warning: #f59e0b;
-  --color-warning-dark: #b5711a;
-  --color-danger: #d14343;
-  --color-text-primary: #1a1a1a;
-  --color-text-secondary: #78716c;
-  --color-text-muted: #a8a29e;
-  --color-fansly: #3b6fc4;
-  --color-onlyfans: #c27a1a;
-  --color-hover: #f4f1ec;
-  --color-hover-alt: #faf8f5;
-  --color-border-light: #f4f1ec;
-  --color-active-bg: #ede9e3;
+  --color-border: #e6e3de;
+  --color-border-light: #efede9;
+  --color-border-strong: #d3cec7;
+  --color-accent: #b4532f;
+  --color-accent-hover: #9d4627;
+  --color-accent-soft: #f8ebe5;
+  --color-green: #15803d;
+  --color-success-soft: #e8f5ec;
+  --color-warning: #d97706;
+  --color-warning-dark: #a15c07;
+  --color-warning-soft: #fdf3e2;
+  --color-danger: #c53a3a;
+  --color-danger-soft: #fbeaea;
+  --color-text-primary: #1c1917;
+  --color-text-secondary: #57534e;
+  --color-text-muted: #78716c;
+  --color-fansly: #2f5fb3;
+  --color-fansly-soft: #e9f0fb;
+  --color-onlyfans: #9a5d0e;
+  --color-onlyfans-soft: #fcf1e1;
+  --color-hover: #f1efec;
+  --color-hover-alt: #faf9f7;
+  --color-active-bg: #ebe8e3;
+  /* A surface raised above its track: the picked segment of a control. */
+  --color-raised: #ffffff;
+  /* Text and icons on a filled accent or danger button. */
+  --color-on-accent: #ffffff;
+  --color-on-danger: #ffffff;
+  --color-danger-hover: #a92f2f;
+  /* A notice's border and text, darker than the badge colour it shares. */
+  --color-warning-border: #f1d9b5;
+  --color-warning-text: #7a4708;
+  --color-danger-border: #f1c4c4;
+  --color-danger-text: #8f2525;
+  --color-success-border: #bfe3cc;
+  --color-success-text: #14532d;
+  /* Chart hues after the named ones, chosen to stay apart for colour-blind
+     readers as neighbours in a stack. */
+  --color-chart-teal: #1baf7a;
+  --color-chart-violet: #6250d6;
+  --color-chart-pink: #e87ba4;
+  /* The dimmed page behind a dialog. */
+  --color-backdrop: rgb(28 25 23 / 0.32);
   --radius-card: 12px;
   --radius-button: 8px;
 }
 
+/* The dark theme: the system's choice unless the account menu set one. The
+   values clear the same 4.5:1 on the dark card; the accent turns light and
+   carries dark text. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: #141211;
+    --color-card: #1c1a18;
+    --color-border: #2f2b28;
+    --color-border-light: #262321;
+    --color-border-strong: #403b37;
+    --color-accent: #e8875f;
+    --color-accent-hover: #f09a76;
+    --color-accent-soft: #3a2419;
+    --color-green: #5bc98a;
+    --color-success-soft: #16301f;
+    --color-warning: #f0a33a;
+    --color-warning-dark: #f5bd6e;
+    --color-warning-soft: #33240f;
+    --color-danger: #f27c7c;
+    --color-danger-soft: #3a1d1d;
+    --color-text-primary: #f2efeb;
+    --color-text-secondary: #b4ada5;
+    --color-text-muted: #948c84;
+    --color-fansly: #82a8ec;
+    --color-fansly-soft: #1b2638;
+    --color-onlyfans: #e2a95c;
+    --color-onlyfans-soft: #33260f;
+    --color-hover: #262321;
+    --color-hover-alt: #191715;
+    --color-active-bg: #2e2a27;
+    --color-raised: #3a3532;
+    --color-on-accent: #1a0f0a;
+    --color-on-danger: #1a0a0a;
+    --color-danger-hover: #f59696;
+    --color-warning-border: #5a4020;
+    --color-warning-text: #f5bd6e;
+    --color-danger-border: #5c2b2b;
+    --color-danger-text: #f6a0a0;
+    --color-success-border: #24503a;
+    --color-success-text: #86dca9;
+    --color-chart-teal: #3cc994;
+    --color-chart-violet: #8f80f0;
+    --color-chart-pink: #ef94b7;
+    --color-backdrop: rgb(0 0 0 / 0.6);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #141211;
+  --color-card: #1c1a18;
+  --color-border: #2f2b28;
+  --color-border-light: #262321;
+  --color-border-strong: #403b37;
+  --color-accent: #e8875f;
+  --color-accent-hover: #f09a76;
+  --color-accent-soft: #3a2419;
+  --color-green: #5bc98a;
+  --color-success-soft: #16301f;
+  --color-warning: #f0a33a;
+  --color-warning-dark: #f5bd6e;
+  --color-warning-soft: #33240f;
+  --color-danger: #f27c7c;
+  --color-danger-soft: #3a1d1d;
+  --color-text-primary: #f2efeb;
+  --color-text-secondary: #b4ada5;
+  --color-text-muted: #948c84;
+  --color-fansly: #82a8ec;
+  --color-fansly-soft: #1b2638;
+  --color-onlyfans: #e2a95c;
+  --color-onlyfans-soft: #33260f;
+  --color-hover: #262321;
+  --color-hover-alt: #191715;
+  --color-active-bg: #2e2a27;
+  --color-raised: #3a3532;
+  --color-on-accent: #1a0f0a;
+  --color-on-danger: #1a0a0a;
+  --color-danger-hover: #f59696;
+  --color-warning-border: #5a4020;
+  --color-warning-text: #f5bd6e;
+  --color-danger-border: #5c2b2b;
+  --color-danger-text: #f6a0a0;
+  --color-success-border: #24503a;
+  --color-success-text: #86dca9;
+  --color-chart-teal: #3cc994;
+  --color-chart-violet: #8f80f0;
+  --color-chart-pink: #ef94b7;
+  --color-backdrop: rgb(0 0 0 / 0.6);
+}
+:root { color-scheme: light; }
+
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
   background: var(--color-bg);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* In the base layer, so a field that draws its own focus ring (.input, the
+   palette's field) replaces this one instead of getting both. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 .tabular-nums {

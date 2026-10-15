@@ -2,6 +2,8 @@ import type { AdminSyncBlockResponse, SyncBlockStatus } from "@agency_hub_core/c
 
 import { ruPlural } from "@/lib/plural";
 
+import { SYNC_BLOCK_LABELS, SYNC_LEVER_LABELS, syncStreamLabel } from "../sync/syncVocabulary.js";
+
 import {
   engineAgeText,
   engineClockText,
@@ -18,9 +20,11 @@ import {
   type EngineStop,
 } from "./engineDisplay.js";
 
-// The five blocks of a Fansly page on the «Синк» tab, in the tab's language:
+// The five blocks of a Fansly page on the Fansly screen, in its language:
 // what each block is, what is true of it now — read, paused, held, without an
-// owner, in need of the owner — what its buttons do, and what a button did.
+// processing host, in need of the owner — what its buttons do, and what a
+// button did. The block names, stream names and verbs are the ones the
+// OnlyFans screen uses too (`sync/syncVocabulary.ts`).
 // Every fact is the server's (`SyncBlockStatus.engine`: the keys the block's
 // buttons move, what stops them by the engine's own hold evaluator, the work
 // in quarantine); this file only words them.
@@ -41,35 +45,16 @@ export function engineBlockOrder(): readonly EngineBlockKey[] {
   return BLOCK_ORDER;
 }
 
-const BLOCK_LABELS: Record<EngineBlockKey, string> = {
-  connection: "Подключение",
-  financials: "Финансы",
-  audience: "Аудитория",
-  messages_live: "Список чатов",
-  messages_history: "Сообщения чатов",
-};
-
 const BLOCK_DESCRIPTIONS: Record<EngineBlockKey, string> = {
-  connection: "Проверяет, что аккаунт страницы подключён и авторизован.",
-  financials: "Транзакции и рейтинг топ-спендеров.",
+  connection: "Проверяет, что аккаунт страницы подключён и вход действует.",
+  financials: "Операции и рейтинг топ фанов.",
   audience: "Подписчики и фолловеры страницы, профили фанов.",
   messages_live: "Список чатов: новые чаты, последнее сообщение каждого, профили собеседников.",
   messages_history: "Сообщения чатов: новые сообщения и история по заявкам.",
 };
 
-const STREAM_LABELS: Record<string, string> = {
-  light: "подключение",
-  transactions: "транзакции",
-  top_spenders: "топ-спендеры",
-  subscribers: "подписчики",
-  followers: "фолловеры",
-  followers_reconcile: "сверка фолловеров",
-  dm_conversations: "список чатов",
-  dm_messages: "сообщения чатов",
-};
-
 export function engineBlockLabel(block: EngineBlockKey): string {
-  return BLOCK_LABELS[block];
+  return SYNC_BLOCK_LABELS[block];
 }
 
 export function engineBlockDescription(block: EngineBlockKey): string {
@@ -77,12 +62,12 @@ export function engineBlockDescription(block: EngineBlockKey): string {
 }
 
 export function engineStreamLabel(stream: string): string {
-  return STREAM_LABELS[stream] ?? stream.replaceAll("_", " ");
+  return syncStreamLabel(stream);
 }
 
 /** What a block of a Fansly page the engine does not own says (the server's
  *  reason `fansly_sync_engine_off`). */
-export const ENGINE_BLOCK_NOT_READ = "Fansly Sync Engine не ведёт эту страницу: блок никто не читает.";
+export const ENGINE_BLOCK_NOT_READ = "Сбор Fansly эту страницу не ведёт: блок никто не читает.";
 
 // ── what is true of a block and of its streams ───────────────────────────────
 
@@ -119,9 +104,9 @@ export interface EngineTone {
 }
 
 const TONES: Record<EngineReadingTone, EngineTone> = {
-  ok: { badge: "border-green/30 bg-green/10 text-green", dot: "bg-green", text: "text-text-secondary" },
-  quiet: { badge: "border-border bg-hover-alt text-text-secondary", dot: "bg-text-muted", text: "text-text-secondary" },
-  warn: { badge: "border-warning/30 bg-warning/10 text-warning-dark", dot: "bg-warning-dark", text: "text-warning-dark" },
+  ok: { badge: "badge badge-success", dot: "status-dot status-dot-ok", text: "text-text-secondary" },
+  quiet: { badge: "badge", dot: "status-dot", text: "text-text-secondary" },
+  warn: { badge: "badge badge-warning", dot: "status-dot status-dot-warn", text: "text-warning-dark" },
 };
 
 export function engineStateTone(state: EngineReadingState): EngineTone {
@@ -170,10 +155,11 @@ export function engineChatsUnavailableText(info: Pick<EngineBlockInfo, "chatsUna
   return chats > 0 ? `чатов, которые Fansly не отдаёт: ${engineCount(chats)}` : null;
 }
 
-/** The block card's line of those chats, with the command that lists them. */
-export function engineChatsUnavailableLine(block: EngineBlock, pageLabel: string): string | null {
+/** The block card's line of those chats (the command that lists them is in
+ *  the screen's «Для разработчика»). */
+export function engineChatsUnavailableLine(block: EngineBlock): string | null {
   const text = engineChatsUnavailableText(block.engine);
-  return text === null ? null : `${text.charAt(0).toUpperCase()}${text.slice(1)} · pnpm cli sync chats unavailable --page ${pageLabel}`;
+  return text === null ? null : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
 /** A block's quarantined and refused work: "в карантине 1, Fansly отказывает 2". */
@@ -235,18 +221,16 @@ export function engineSubstreamStateText(block: EngineBlock, substream: EngineSu
   return engineStateLabel(state);
 }
 
-/** The commands that list work a block needs the owner for: quarantined rows
- *  are a state of their own; rows Fansly refuses stay open, so those are
- *  listed by their key. */
-export function engineAttentionLines(block: EngineBlock, pageLabel: string): string[] {
-  const list = `pnpm cli sync work list --page ${pageLabel}`;
+/** The work of a block that needs the owner: its quarantined rows, and the
+ *  keys whose rows Fansly refuses. The commands that list them are in the
+ *  screen's «Для разработчика» (`engineDevCommands`). */
+export function engineAttentionLines(block: EngineBlock): string[] {
   const { quarantined, blockedByVendor } = block.engine;
   return [
     ...(quarantined.count > 0
-      ? [`В карантине: ${engineCount(quarantined.count)} (${quarantined.resources.join(", ")}) · ${list} --state quarantined`]
+      ? [`В карантине: ${engineCount(quarantined.count)} (${quarantined.resources.join(", ")})`]
       : []),
-    ...blockedByVendor.resources.map((resource) =>
-      `Fansly отказывает: ${resource} · ${list} --state open --resource ${resource}`),
+    ...blockedByVendor.resources.map((resource) => `Fansly отказывает: ${resource}`),
   ];
 }
 
@@ -283,9 +267,13 @@ export function engineBlockButtons(block: EngineBlock): EngineBlockButtons {
   const partial = paused > 0 && free > 0;
   return {
     trigger: live && !pausedAll && pollKeys.some((key) => !pausedKeys.includes(key)),
-    pause: free === 0 ? null : { label: partial ? `Пауза для остальных (${free})` : "Пауза" },
-    resume: paused === 0 ? null : { label: partial ? `Снять паузу (${paused} из ${keys.length})` : "Снять паузу" },
-    requeue: live && quarantined.count > 0 ? { label: `Вернуть из карантина (${engineCount(quarantined.count)})` } : null,
+    pause: free === 0 ? null : { label: partial ? `${SYNC_LEVER_LABELS.pause} для остальных (${free})` : SYNC_LEVER_LABELS.pause },
+    resume: paused === 0
+      ? null
+      : { label: partial ? `${SYNC_LEVER_LABELS.resume} (${paused} из ${keys.length})` : SYNC_LEVER_LABELS.resume },
+    requeue: live && quarantined.count > 0
+      ? { label: `${SYNC_LEVER_LABELS.reset} карантин (${engineCount(quarantined.count)})` }
+      : null,
   };
 }
 
@@ -319,7 +307,7 @@ function stopOfEveryKey(block: EngineBlock, after: "now" | "resume"): EngineStop
  *  stop takes every key. Null: something of it can be sent. */
 function nothingSentBecause(block: EngineBlock, after: "now" | "resume", now: number): string | null {
   if (!block.engine.ownerRunning) {
-    return block.engine.mode === "handover" ? "страница переключается на движок" : "страницу не ведёт ни один sync-хост";
+    return block.engine.mode === "handover" ? "страница переключается на новый сбор" : "страницу не ведёт ни один обработчик сбора";
   }
   const stop = stopOfEveryKey(block, after);
   return stop === null ? null : lowerFirst(engineBlockStopText(stop, now));
@@ -354,13 +342,13 @@ export function engineLeverNotice(
       );
     case "pause":
       return affected === 0
-        ? { kind: "message", text: `${label}: ключи блока уже на паузе` }
-        : { kind: "success", text: `${label}: на паузе ${engineCount(affected)} ${ruPlural(affected, "ключ", "ключа", "ключей")}` };
+        ? { kind: "message", text: `${label}: задачи блока уже на паузе` }
+        : { kind: "success", text: `${label}: на паузе ${engineCount(affected)} ${ruPlural(affected, "задача", "задачи", "задач")}` };
     case "resume":
       return affected === 0
         ? { kind: "message", text: `${label}: на паузе ничего не было` }
         : but(
-          `пауза снята с ${engineCount(affected)} ${ruPlural(affected, "ключа", "ключей", "ключей")}`,
+          `пауза снята с ${engineCount(affected)} ${ruPlural(affected, "задачи", "задач", "задач")}`,
           nothingSentBecause(block, "resume", now),
           true,
         );
@@ -375,7 +363,7 @@ export function engineLeverNotice(
   }
 }
 
-/** A period as the tab writes it: "раз в 5 мин". */
+/** A period as the screen writes it: "раз в 5 мин". */
 export function engineCadenceText(seconds: number): string {
   return `раз в ${engineDurationText(seconds)}`;
 }

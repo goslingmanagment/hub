@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { Search, RefreshCw, X, ChevronRight } from "lucide-react";
+import { Search, RefreshCw, X } from "lucide-react";
 import { Link, useInRouterContext, useLocation } from "react-router";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 import {
@@ -8,11 +8,13 @@ import {
   useStagedConfig,
 } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
+import { FilterButtons } from "@/components/shared/FilterButtons";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { formatDateTime } from "@/lib/format";
 import { buildSettingsSectionRoute } from "@/lib/navigation";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
-import { humanConfigValue } from "./configurationChoices.js";
+import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js";
 
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
 import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
@@ -61,16 +63,16 @@ function formatScalar(value: string | number | boolean | null): string {
 }
 
 function formatSeen(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "?" : date.toLocaleTimeString("ru-RU");
+  return formatDateTime(iso, { yearUnlessCurrent: true });
 }
 
 function settingTitle(item: ConfigItem): string {
   return CONFIG_COPY_RU[item.key]?.title ?? item.label;
 }
 
-const ROLE_LABELS: Record<string, string> = { api: "Интерфейс", worker: "Обработка данных", scheduler: "Расписание" };
+const ROLE_LABELS: Record<string, string> = { api: "Интерфейс", worker: "Обработка данных", scheduler: "Расписание", sync: "Сбор данных" };
 
+/** `tone` is a ui.css badge modifier ("badge-warning", …) or "" for neutral. */
 function Badge({
   tone,
   title,
@@ -81,10 +83,7 @@ function Badge({
   children: ReactNode;
 }) {
   return (
-    <span
-      title={title}
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ${tone}`}
-    >
+    <span title={title} className={`badge ${tone}`}>
       {children}
     </span>
   );
@@ -108,13 +107,16 @@ function rowRank(item: ConfigItem): number {
 }
 
 function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
+  // Mode keys read as words everywhere; page lists only in a feature's view
+  // (the full list keeps the raw CSV the expert editor writes).
+  const human = friendly || Boolean(CONFIG_MODE_CHOICES[item.key]);
   if (item.running.length === 0) {
     return <span className="text-text-muted">Нет сигнала от процессов</span>;
   }
 
   if (item.secret || item.running[0]?.masked) {
     const stateTone = (state: string | null) =>
-      state === "set" ? "bg-emerald-500/15 text-emerald-600" : state === "unknown" ? "bg-amber-500/15 text-amber-600" : "bg-zinc-500/15 text-zinc-500";
+      state === "set" ? "badge-success" : state === "unknown" ? "badge-warning" : "";
     // When live processes disagree on set/unset, show each one — a key set in api
     // but unset in worker is an operationally important drift.
     if (item.drift || item.running.some((running) => running.state === "unknown")) {
@@ -141,12 +143,12 @@ function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: 
     return (
       <div className="flex flex-col gap-0.5">
         {item.running.map((r) => (
-          <span key={`${r.role}:${r.instanceId}`} className="font-mono text-xs">
+          <span key={`${r.role}:${r.instanceId}`} className="text-xs">
             <span className="text-text-muted">{ROLE_LABELS[r.role] ?? r.role}:</span>{" "}
             {r.state === "unknown" ? (
-              <span className="text-amber-600">Нет актуального значения</span>
+              <span className="text-warning-dark">Нет актуального значения</span>
             ) : (
-              formatScalar(r.value)
+              <span className="font-mono">{formatScalar(r.value)}</span>
             )}
           </span>
         ))}
@@ -154,7 +156,10 @@ function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: 
     );
   }
 
-  return <span className={`${friendly ? "" : "font-mono "}text-text-primary`}>{friendly ? humanConfigValue(item.key, item.running[0]!.value) : formatScalar(item.running[0]!.value)}</span>;
+  const value = item.running[0]!.value;
+  return human
+    ? <span className="font-medium text-text-primary" title={formatScalar(value)}>{humanConfigValue(item.key, value)}</span>
+    : <span className="font-mono text-text-primary">{formatScalar(value)}</span>;
 }
 
 function errorMessage(err: unknown): string {
@@ -166,35 +171,35 @@ function SettingLabel({ item }: { item: ConfigItem }) {
   return (
     <>
       <div className="break-words text-sm font-semibold leading-6 text-text-primary">{settingTitle(item)}</div>
-      {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-[13px] leading-[1.65] text-text-secondary">{copy.short}</p>}
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
-          {item.drift && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Запущенные процессы сообщают разные значения">
-              значения различаются
-            </Badge>
-          )}
-          {item.costWarning && (
-            <Badge tone="bg-amber-500/15 text-amber-600" title={CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}>
-              влияет на расходы
-            </Badge>
-          )}
-          {item.destructive && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Снижение или очистка безвозвратно удаляет данные">
-              может удалить данные
-            </Badge>
-          )}
-        </div>
-      <details className="config-help">
-        <summary aria-label={`Подробнее: ${settingTitle(item)}`}><ChevronRight size={13} aria-hidden="true" />Подробнее</summary>
-        <div className="config-help-body">
+      {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-[13px] leading-relaxed text-text-secondary">{copy.short}</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
+        {item.drift && (
+          <Badge tone="badge-danger" title="Запущенные процессы сообщают разные значения">
+            значения различаются
+          </Badge>
+        )}
+        {item.costWarning && (
+          <Badge tone="badge-warning" title={CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}>
+            влияет на расходы
+          </Badge>
+        )}
+        {item.destructive && (
+          <Badge tone="badge-danger" title="Снижение или очистка безвозвратно удаляет данные">
+            может удалить данные
+          </Badge>
+        )}
+      </div>
+      <details className="help mt-2">
+        <summary aria-label={`Подробнее: ${settingTitle(item)}`}>Подробнее</summary>
+        <div className="help-body">
           {copy?.long && <p>{copy.long}</p>}
-          {item.costWarning && <p className="text-amber-700">{copy?.warning ?? item.costWarning}</p>}
-          <details>
-            <summary className="w-fit cursor-pointer text-xs text-text-muted">Технические сведения</summary>
-            <div className="mt-2 space-y-2 text-xs">
+          {item.costWarning && <p className="text-warning-dark">{copy?.warning ?? item.costWarning}</p>}
+          <details className="help">
+            <summary>Технические детали</summary>
+            <div className="help-body text-xs">
               <p>{item.label}</p>
               {item.note && <p>{item.note}</p>}
-              <div className="break-all font-mono text-[11px]">{item.envName}</div>
+              <div className="break-all font-mono">{item.envName}</div>
               {runningDiffersFromDefault(item) && <p>Исходное значение программы: <span className="font-mono">{item.default}</span>. Настройка сервера может отличаться.</p>}
             </div>
           </details>
@@ -275,13 +280,11 @@ function transitiveDependents(key: string, items: ItemMap, all: ConfigItem[]): s
 function RUNNING_STATE_TONE(state: RunningFlagState): string {
   switch (state) {
     case "on":
-      return "bg-emerald-500/15 text-emerald-600";
+      return "badge-success";
     case "off":
-      return "bg-zinc-500/15 text-zinc-500";
-    case "partial":
-      return "bg-amber-500/15 text-amber-600";
+      return "";
     default:
-      return "bg-amber-500/15 text-amber-600";
+      return "badge-warning";
   }
 }
 
@@ -360,64 +363,63 @@ function StagedConfirmModal({
     >
       <div className="space-y-4 text-sm">
         {CONFIG_COPY_RU[item.key]?.short && <p className="leading-relaxed text-text-secondary">{CONFIG_COPY_RU[item.key]?.short}</p>}
-        <div className="space-y-2 rounded-lg border border-border bg-hover px-3 py-3 text-[13px] leading-relaxed text-text-secondary">
+        <div className="space-y-2 rounded-lg bg-hover-alt px-3 py-3 text-[13px] leading-relaxed text-text-secondary">
           <p className="font-medium text-text-primary">Перед применением</p>
           {CONFIG_COPY_RU[item.key]?.long && <p>{CONFIG_COPY_RU[item.key]?.long}</p>}
           {item.note && <p className="break-words text-xs"><span className="font-medium">Условия сервера: </span>{item.note}</p>}
         </div>
 
-        <div className="rounded-lg border border-border bg-hover px-3 py-2">
-          <div className="mb-2 text-xs font-medium text-text-secondary">Сейчас задано → Будет задано</div>
-          {prepared.map((patch) => <div key={patch.key} className="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-xs"><span>{CONFIG_COPY_RU[patch.key]?.title ?? items.get(patch.key)?.label ?? patch.key}</span><span className="shrink-0 font-medium">{formatScalar(patch.previous)} → {patch.desired === null ? "настройка сервера" : formatScalar(patch.desired)}</span></div>)}
+        <div className="rounded-lg border border-border px-3 py-2">
+          <div className="mb-1 text-xs font-medium text-text-secondary">Сейчас задано → Будет задано</div>
+          {prepared.map((patch) => <div key={patch.key} className="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-[13px]"><span>{CONFIG_COPY_RU[patch.key]?.title ?? items.get(patch.key)?.label ?? patch.key}</span><span className="shrink-0 font-medium">{formatScalar(patch.previous)} → {patch.desired === null ? "настройка сервера" : formatScalar(patch.desired)}</span></div>)}
           {item.pendingApply && <p className="mt-2 border-t border-border pt-2 text-xs text-text-secondary">Предыдущее изменение ещё не применилось. Сейчас работает: {RUNNING_STATE_LABEL(item.runningState)}.</p>}
         </div>
         {changed && <p role="alert" className="text-sm text-danger">Настройки изменились после открытия окна. Закройте его и проверьте изменения заново.</p>}
 
         {target === true && warning && (
-          <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700">
-            {warning}
-          </div>
+          <div className="notice notice-warning">{warning}</div>
         )}
 
         {alsoKeys.length > 0 && (
-          <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700">
-            Заодно выключатся функции, которым нужна эта настройка ({alsoKeys.length}):{" "}
+          <div className="notice notice-warning">
             <span>
-              {alsoKeys.map((k) => CONFIG_COPY_RU[k.key]?.title ?? items.get(k.key)?.label ?? k.key).join(", ")}
+              Заодно выключатся функции, которым нужна эта настройка ({alsoKeys.length}):{" "}
+              {alsoKeys.map((k) => CONFIG_COPY_RU[k.key]?.title ?? items.get(k.key)?.label ?? k.key).join(", ")}.
             </span>
-            .
           </div>
         )}
 
         {target === null && (
-          <div className="rounded border border-border bg-hover px-3 py-2 text-[13px] text-text-secondary">
+          <div className="notice">
             Уберём ваше ручное значение. После перезапуска Hub возьмёт настройку сервера. Она может отличаться от исходного значения программы.
           </div>
         )}
 
         {target === true && isStream && (
-          <div className="rounded border border-border bg-hover px-3 py-2 text-[13px] text-text-secondary">
-            После перезапуска откройте{" "}
-            <Link to="/settings?tab=sync" className="text-accent underline hover:opacity-90">
-              «Синхронизация»
-            </Link>
-            {" "}и возобновите нужные потоки данных.
+          <div className="notice">
+            <span>
+              После перезапуска откройте{" "}
+              <Link to="/settings?tab=sync" className="link">
+                «Система → Сбор данных → OnlyFans»
+              </Link>
+              {" "}и возобновите нужные потоки данных.
+            </span>
           </div>
         )}
 
-        <div className="rounded border border-border bg-card px-3 py-2 text-[13px] text-text-secondary">
+        <p className="text-[13px] text-text-secondary">
           Сохраним ваш выбор сейчас. Настройка начнёт работать{" "}
           <span className="font-medium text-text-primary">после перезапуска Hub</span> — его нужно выполнить отдельно.
-        </div>
+        </p>
 
-        <label htmlFor={ackId} className="flex items-start gap-2 text-text-secondary">
+        <label htmlFor={ackId} className="flex items-start gap-2 text-text-primary">
           <input
             id={ackId}
             type="checkbox"
             checked={ack}
             disabled={staged.isPending || changed}
             onChange={(e) => setAck(e.target.checked)}
-            className="mt-0.5"
+            className="mt-1 accent-accent"
           />
           <span>
             Изменения проверены. Понимаю, что нужен перезапуск Hub.
@@ -425,7 +427,7 @@ function StagedConfirmModal({
         </label>
 
         <div>
-          <label htmlFor={noteId} className="mb-1 block text-[12px] text-text-muted">
+          <label htmlFor={noteId} className="field-label">
             Комментарий к изменению · необязательно
           </label>
           <input
@@ -434,12 +436,12 @@ function StagedConfirmModal({
             value={note}
             disabled={staged.isPending}
             onChange={(e) => setNote(e.target.value)}
-            className="settings-input"
+            className="input"
           />
         </div>
 
         {error && (
-          <div role="alert" className="text-[12px] text-red-600">
+          <div role="alert" className="text-[13px] text-danger">
             {isConflict
               ? "Настройки изменились. Закройте окно и проверьте актуальные значения перед повтором."
               : errorMessage(error)}
@@ -452,7 +454,7 @@ function StagedConfirmModal({
           type="button"
           onClick={onClose}
           disabled={staged.isPending}
-          className="settings-button"
+          className="btn"
         >
           Отмена
         </button>
@@ -460,9 +462,7 @@ function StagedConfirmModal({
           type="button"
           onClick={submit}
           disabled={!ack || changed || isConflict || staged.isPending}
-          className={`settings-button ${
-            target === false ? "settings-button-danger" : "settings-button-primary"
-          }`}
+          className={`btn ${target === false ? "btn-danger" : "btn-primary"}`}
         >
           {staged.isPending ? "Сохраняем…" : verb}
         </button>
@@ -554,8 +554,8 @@ function StagedFlagRow({
           <span>{item.source === "override" ? "Задано вручную:" : "Задано на сервере:"}</span>
           <span className="font-medium text-text-primary">{desiredOn ? "вкл." : "выкл."}</span>
         </div>
-        {item.pendingApply && <p className="text-xs leading-relaxed text-amber-700">Сохранено. Начнёт работать после перезапуска Hub.</p>}
-        {item.costWarning && <p className="text-xs text-amber-700">{CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}</p>}
+        {item.pendingApply && <p className="text-xs leading-relaxed text-warning-dark">Сохранено. Начнёт работать после перезапуска Hub.</p>}
+        {item.costWarning && <p className="text-xs text-warning-dark">{CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}</p>}
         {(clientState === "partial" || clientState === "unknown") && item.running.length > 0 && (
           <div className="flex flex-col gap-1">
             {item.running.map((r) => (
@@ -567,16 +567,16 @@ function StagedFlagRow({
         )}
         <div className="flex flex-wrap items-center gap-2">
           {desiredOn ? (
-            <button type="button" onClick={() => onOpen({ item, target: false, keys: disableKeys })} title={disableTooltip} className="settings-button">
+            <button type="button" onClick={() => onOpen({ item, target: false, keys: disableKeys })} title={disableTooltip} className="btn">
               Выключить
             </button>
           ) : (
-            <button type="button" onClick={() => onOpen({ item, target: true, keys: [{ key: item.key, desired: true }] })} disabled={enableLocked} title={enableTooltip} className="settings-button settings-button-primary">
+            <button type="button" onClick={() => onOpen({ item, target: true, keys: [{ key: item.key, desired: true }] })} disabled={enableLocked} title={enableTooltip} className="btn btn-primary">
               Включить
             </button>
           )}
           {item.source === "override" && (
-            <button type="button" onClick={() => onOpen({ item, target: null, keys: [{ key: item.key, desired: null }] })} title="Убрать ручное значение. Настройка сервера применится после перезапуска." className="settings-button">
+            <button type="button" onClick={() => onOpen({ item, target: null, keys: [{ key: item.key, desired: null }] })} title="Убрать ручное значение. Настройка сервера применится после перезапуска." className="btn">
               Вернуть настройку сервера
             </button>
           )}
@@ -584,7 +584,7 @@ function StagedFlagRow({
         {enableLocked && !desiredOn && enableTooltip && (
           <p className="text-xs leading-relaxed text-text-muted">
             {enableTooltip}{" "}
-            {unsatisfiedPrereq && <a href={`#config-${unsatisfiedPrereq}`} onClick={() => onReveal(unsatisfiedPrereq)} className="text-accent underline underline-offset-2">Перейти к настройке</a>}
+            {unsatisfiedPrereq && <a href={`#config-${unsatisfiedPrereq}`} onClick={() => onReveal(unsatisfiedPrereq)} className="link">Перейти к настройке</a>}
           </p>
         )}
         {desiredOn && disableTooltip && <p className="text-xs leading-relaxed text-text-muted">{disableTooltip}</p>}
@@ -608,23 +608,36 @@ function StagedPendingBanner({ data, onReveal }: { data: ConfigViewResponse; onR
   return (
     <div className="space-y-2">
       {pendingStaged.length > 0 && (
-        <div className="config-notice">
-          <div className="font-medium">Сохранено — нужен перезапуск: {pendingStaged.length}</div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-            {pendingStaged.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="text-xs underline underline-offset-2">{settingTitle(item)}</a>)}
+        <div className="notice notice-warning">
+          <div className="min-w-0">
+            <div className="font-medium">Сохранено — нужен перезапуск Hub: {pendingStaged.length}</div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+              {pendingStaged.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="underline underline-offset-2">{settingTitle(item)}</a>)}
+            </div>
           </div>
         </div>
       )}
       {skipped.length > 0 && (
-        <div className="rounded border border-red-500/40 bg-danger/10 px-3 py-2 text-sm text-red-600">
-          <div className="font-semibold">Некоторые настройки не удалось применить при запуске:</div>
-          <ul className="mt-1 list-disc pl-5">
-            {skipped.map((s) => (
-              <li key={`${s.role}:${s.key}`} className="break-all font-mono text-[12px]">
-                {s.role}: {s.key} — {s.reason}
-              </li>
-            ))}
-          </ul>
+        <div className="notice notice-danger">
+          <div className="min-w-0">
+            <div className="font-semibold">Некоторые настройки не удалось применить при запуске:</div>
+            <ul className="mt-1 list-disc pl-5">
+              {skipped.map((s) => {
+                const skippedItem = allItems.find((it) => it.key === s.key);
+                return (
+                  <li key={`${s.role}:${s.key}`}>
+                    {skippedItem ? settingTitle(skippedItem) : s.key} · {ROLE_LABELS[s.role] ?? s.role}
+                  </li>
+                );
+              })}
+            </ul>
+            <details className="help mt-2">
+              <summary>Технические детали</summary>
+              <ul className="help-body break-all font-mono text-xs">
+                {skipped.map((s) => <li key={`${s.role}:${s.key}`}>{s.role}: {s.key} — {s.reason}</li>)}
+              </ul>
+            </details>
+          </div>
         </div>
       )}
     </div>
@@ -666,7 +679,8 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
   const modalRestoreFocusRef = useRef<HTMLElement>(null);
   const [query, setQuery] = useState("");
   const [subsystem, setSubsystem] = useState("");
-  const [filter, setFilter] = useState<ConfigFilter>(feature ? "all" : "live");
+  // The full list opens on every setting; "Без перезапуска" is one filter among others.
+  const [filter, setFilter] = useState<ConfigFilter>("all");
   const [scopeExpanded, setScopeExpanded] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
   const [stagedModal, setStagedModal] = useState<StagedModalRequest | null>(null);
@@ -679,14 +693,14 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
     && (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem, feature, scopeExpanded]);
   const visibleKeys = useMemo(() => new Set(searchMatches.filter((item) => matchesConfigFilter(item, filter)).map((item) => item.key)), [searchMatches, filter]);
 
-  function resetFilters() { setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "live"); setScopeExpanded(false); }
+  function resetFilters() { setQuery(""); setSubsystem(""); setFilter("all"); setScopeExpanded(false); }
   function reveal(key: string) {
     setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key);
     if (feature && !feature.keys.includes(key)) setScopeExpanded(true);
   }
 
   useEffect(() => {
-    setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "live");
+    setQuery(""); setSubsystem(""); setFilter("all");
     setScopeExpanded(false); setPendingAnchor(null);
   }, [feature]);
 
@@ -713,126 +727,130 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
   }, [pendingAnchor, visibleKeys]);
 
   if (!data) {
-    return <div role={isError ? "alert" : "status"} className="rounded-xl border border-border bg-card p-6 text-sm text-text-secondary">
-      {isLoading ? "Загружаем настройки…" : "Не удалось загрузить настройки."}
-      {isError && <button type="button" onClick={() => void refetch()} className="ml-3 text-accent underline">Повторить</button>}
+    return <div role={isError ? "alert" : "status"} className="card empty">
+      <p className="empty-title">{isLoading ? "Загружаем настройки…" : "Не удалось загрузить настройки."}</p>
+      {isError && <div className="empty-actions"><button type="button" onClick={() => void refetch()} className="btn">Повторить</button></div>}
     </div>;
   }
 
+  const filterCounts = Object.fromEntries(CONFIG_FILTERS.map((entry) => [entry.key, searchMatches.filter((item) => matchesConfigFilter(item, entry.key)).length]));
+  const offline = data.roleStatuses.filter((role) => role.status !== "active");
+
   return (
-    <div className="space-y-5">
+    <div className="config-screen space-y-5">
       {feature && (
-        <div className="rounded-xl border border-border bg-card p-5">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <div className="card card-body">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
             <Link
               ref={featureBackRef}
-              className="text-sm text-accent underline underline-offset-4"
+              className="link"
               to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}
             >
               ← К возможностям
             </Link>
             <Link
-              className="text-sm text-accent underline underline-offset-4"
+              className="link"
               to={allSettingsHref ?? "/settings?tab=configuration"}
               state={navigationState}
             >
               Все настройки
             </Link>
           </div>
-          <h3 className="mt-3 text-xl font-semibold text-text-primary">{feature.title}</h3>
-          <p className="mt-2 text-base leading-relaxed text-text-secondary">
-            <strong>Если отключить:</strong> {feature.consequence}
+          <h3 className="section-title mt-3">{feature.title}</h3>
+          <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+            <strong className="font-medium text-text-primary">Если отключить:</strong> {feature.consequence}
           </p>
-          <p className="mt-2 text-sm text-text-secondary">
+          <p className="mt-2 text-[13px] text-text-muted">
             {scopeExpanded
               ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
               : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}
           </p>
         </div>
       )}
-      {isError && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">Не удалось обновить настройки. Показаны последние полученные значения — {formatSeen(data.generatedAt)}. <button type="button" className="underline" disabled={isFetching} onClick={() => void refetch()}>Повторить</button></div>}
+      {isError && (
+        <div role="alert" className="notice notice-danger flex-wrap items-center justify-between">
+          <span>Не удалось обновить настройки. Показаны значения на {formatSeen(data.generatedAt)}.</span>
+          <button type="button" className="btn btn-sm" disabled={isFetching} onClick={() => void refetch()}>Повторить</button>
+        </div>
+      )}
 
-      {data.roleStatuses.some((role) => role.status !== "active") && (
-        <div role="status" className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-dark">
-          {data.roleStatuses.filter((role) => role.status !== "active").map((role) => `${ROLE_LABELS[role.role] ?? role.role}: ${ROLE_STATUS_RU[role.status] ?? role.status}`).join(" · ")}
-          {". Часть Hub давно не выходила на связь. Её значения пока нельзя подтвердить."}
+      {offline.length > 0 && (
+        <div role="status" className="notice notice-warning">
+          {offline.map((role) => `${ROLE_LABELS[role.role] ?? role.role}: ${ROLE_STATUS_RU[role.status] ?? role.status}`).join(" · ")}
+          {". Часть Hub давно не выходила на связь, её значения пока нельзя подтвердить."}
         </div>
       )}
       <div className="space-y-3" hidden={feature !== null && !scopeExpanded}>
-        <div className="config-searchbar">
-          <label className="config-search-field relative min-w-0">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="relative min-w-0 flex-1 basis-64">
             <span className="sr-only">Поиск настроек</span>
-            <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-3 text-text-muted" />
+            <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               ref={searchRef}
               type="search"
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
-                setFilter(event.target.value ? "all" : "live");
+                if (event.target.value) setFilter("all");
               }}
               placeholder={subsystem ? "Поиск в выбранном разделе" : "Найти настройку…"}
-              className="settings-input"
-              style={{ paddingLeft: 36 }}
+              className="input pl-9"
             />
           </label>
-          <label>
-            <span className="sr-only">Подсистема</span>
-            <select value={subsystem} onChange={(event) => setSubsystem(event.target.value)} className="settings-input">
+          <label className="w-full sm:w-56">
+            <span className="sr-only">Раздел</span>
+            <select value={subsystem} onChange={(event) => setSubsystem(event.target.value)} className="select">
               <option value="">Все разделы</option>
               {groups.map((group) => <option key={group.subsystem} value={group.subsystem}>{CONFIG_SUBSYSTEM_LABELS[group.subsystem] ?? group.subsystem}</option>)}
             </select>
           </label>
-          <label className="config-mobile-filter">
-            <span className="sr-only">Показать настройки</span>
-            <select value={filter} onChange={(event) => setFilter(event.target.value as ConfigFilter)} className="settings-input">
-              {CONFIG_FILTERS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
-            </select>
-          </label>
         </div>
-        <div className="config-filters" role="group" aria-label="Фильтр настроек">
-          {CONFIG_FILTERS.map((entry) => (
-            <button key={entry.key} type="button" aria-pressed={filter === entry.key} onClick={() => setFilter(entry.key)}>
-              {entry.label} <span className="config-filter-count">{searchMatches.filter((item) => matchesConfigFilter(item, entry.key)).length}</span>
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center justify-between gap-3 text-xs text-text-muted">
-          <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            {(query || subsystem || filter !== "live") && <button type="button" onClick={resetFilters} className="inline-flex min-h-9 items-center gap-1 text-accent hover:underline"><X size={13} aria-hidden="true" />Сбросить фильтры</button>}
-            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="inline-flex min-h-9 shrink-0 items-center gap-1.5 text-text-secondary hover:text-accent disabled:opacity-50">
-              <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} aria-hidden="true" />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <FilterButtons
+            filters={CONFIG_FILTERS.map((entry) => ({ key: entry.key, label: entry.label, count: filterCounts[entry.key] }))}
+            active={filter}
+            onChange={(key) => setFilter(key as ConfigFilter)}
+          />
+          <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+            <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
+            {(query || subsystem || filter !== "all") && <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm"><X size={14} aria-hidden="true" />Сбросить фильтры</button>}
+            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-ghost btn-sm">
+              <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} aria-hidden="true" />
               {isFetching ? "Обновляем…" : "Обновить"}
             </button>
           </div>
         </div>
-        {!query && filter === "live" && <p className="hidden text-xs sm:block leading-relaxed text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
+        {!query && filter === "live" && <p className="text-[13px] text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
+        {!query && filter === "staged" && <p className="text-[13px] text-text-muted">Эти настройки сохраняются сразу, а начинают работать после перезапуска Hub.</p>}
       </div>
 
       <StagedPendingBanner data={data} onReveal={reveal} />
 
       {visibleKeys.size === 0 && (
-        <div className="config-empty">
-          <p className="text-sm font-semibold text-text-primary">{query ? "По этому запросу ничего не нашлось" : filter === "attention" ? "Всё в порядке" : "Здесь пока нет таких настроек"}</p>
-          <p className="mt-2 text-sm leading-relaxed text-text-secondary">{query ? "Попробуйте более короткое название или ключ настройки." : filter === "attention" ? "Среди выбранных настроек нет ожидающих применения или требующих проверки." : filter === "live" ? "Посмотрите настройки, для которых нужен перезапуск или доступ к серверу." : "Выберите другой раздел или откройте полный список."}</p>
-          {query && subsystem ? <button type="button" onClick={() => { setSubsystem(""); setFilter("all"); }} className="settings-button mt-4">Искать во всех разделах</button>
-            : filter !== "all" && <button type="button" onClick={() => setFilter("all")} className="settings-button mt-4">Показать все настройки</button>}
+        <div className="card empty">
+          <p className="empty-title">{query ? "По этому запросу ничего не нашлось" : filter === "attention" ? "Всё в порядке" : "Здесь пока нет таких настроек"}</p>
+          <p className="empty-text">{query ? "Попробуйте более короткое название или ключ настройки." : filter === "attention" ? "Среди выбранных настроек нет ожидающих применения или требующих проверки." : filter === "live" ? "Посмотрите настройки, для которых нужен перезапуск или доступ к серверу." : "Выберите другой раздел или откройте полный список."}</p>
+          <div className="empty-actions empty:hidden">
+            {query && subsystem ? <button type="button" onClick={() => { setSubsystem(""); setFilter("all"); }} className="btn btn-sm">Искать во всех разделах</button>
+              : filter !== "all" && <button type="button" onClick={() => setFilter("all")} className="btn btn-sm">Показать все настройки</button>}
+          </div>
         </div>
       )}
 
       {/* Hide rather than unmount: searching and filtering must not discard a draft. */}
       <div className="space-y-5">
         {groups.map((group) => (
-          <section className="config-group" key={group.subsystem} hidden={!group.items.some((item) => visibleKeys.has(item.key))}>
-            <div className="config-group-heading">
-              <h3 className="text-sm font-semibold text-text-primary">
-                {CONFIG_SUBSYSTEM_LABELS[group.subsystem] ?? group.subsystem}
-                <span className="ml-2 text-xs font-normal tabular-nums text-text-muted">
-                  {group.items.filter((item) => visibleKeys.has(item.key)).length}
-                </span>
-              </h3>
-              {SUBSYSTEM_COPY_RU[group.subsystem] && <p className="mt-1 text-xs leading-relaxed text-text-secondary">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>}
+          <section className="card overflow-clip" key={group.subsystem} hidden={!group.items.some((item) => visibleKeys.has(item.key))}>
+            <div className="card-header bg-hover-alt">
+              <div className="min-w-0">
+                <h3 className="card-title">
+                  {CONFIG_SUBSYSTEM_LABELS[group.subsystem] ?? group.subsystem}
+                  <span className="ml-2 text-xs font-normal tabular-nums text-text-muted">
+                    {group.items.filter((item) => visibleKeys.has(item.key)).length}
+                  </span>
+                </h3>
+                {SUBSYSTEM_COPY_RU[group.subsystem] && <p className="card-description">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>}
+              </div>
             </div>
             <div className="config-group-items">
               {[...group.items]
@@ -869,23 +887,33 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           restoreFocusRef={modalRestoreFocusRef}
         />
       )}
-      <details className="config-status-strip">
-        <summary className="w-fit cursor-pointer py-2 text-xs text-text-secondary">
-          <span className="font-medium text-text-primary">Связь с сервером</span>
-          <span className="ml-2">{data.roleStatuses.length > 0 && data.roleStatuses.every((role) => role.status === "active") ? "Все на связи" : "Требует проверки"}</span>
+      <details className="help">
+        <summary>
+          Связь с сервером · {data.roleStatuses.length > 0 && data.roleStatuses.every((role) => role.status === "active") ? "все части Hub на связи" : "требует проверки"}
         </summary>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {data.instances.map((instance) => (
-            <span key={`${instance.role}:${instance.instanceId}`} className="min-w-0 break-all rounded-md border border-border px-2 py-1 text-xs text-text-secondary">
-              <span className="font-medium text-text-primary">{ROLE_LABELS[instance.role] ?? instance.role}</span> · {ROLE_STATUS_RU[instance.status] ?? instance.status} · сигнал {formatSeen(instance.lastSeenAt)}
-              {instance.imageTag && ` · ${instance.imageTag}`}
-              <span className="block text-text-muted">{instance.instanceId}</span>
-            </span>
-          ))}
-          {data.instances.length === 0 && <p className="text-xs text-text-muted">Процессы ещё не сообщили свои значения.</p>}
+        <div className="help-body">
+          {data.instances.length === 0 && <p>Процессы ещё не сообщили свои значения.</p>}
+          {data.instances.length > 0 && (
+            <ul className="space-y-1">
+              {data.instances.map((instance) => (
+                <li key={`${instance.role}:${instance.instanceId}`}>
+                  <span className="font-medium text-text-primary">{ROLE_LABELS[instance.role] ?? instance.role}</span> · {ROLE_STATUS_RU[instance.status] ?? instance.status} · сигнал {formatSeen(instance.lastSeenAt)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.instances.length > 0 && (
+            <details className="help">
+              <summary>Технические детали</summary>
+              <ul className="help-body break-all font-mono text-xs">
+                {data.instances.map((instance) => (
+                  <li key={`${instance.role}:${instance.instanceId}`}>{instance.role} · {instance.instanceId}{instance.imageTag ? ` · ${instance.imageTag}` : ""}</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       </details>
-
     </div>
   );
 }

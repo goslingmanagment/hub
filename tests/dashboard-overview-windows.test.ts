@@ -23,11 +23,11 @@ const onlyFansWindow = {
 
 describe("describeMixedRevenueWindows", () => {
   it("describes differing window widths with platform display names", () => {
-    const note = describeMixedRevenueWindows([fanslyWindow, onlyFansWindow], "7 Days");
+    const note = describeMixedRevenueWindows([fanslyWindow, onlyFansWindow], "7 дней");
 
-    expect(note).toContain("7 Days");
-    expect(note).toContain("7 days on Fansly");
-    expect(note).toContain("8 days on OnlyFans");
+    expect(note).toContain("«7 дней»");
+    expect(note).toContain("7 дней у Fansly");
+    expect(note).toContain("8 дней у OnlyFans");
   });
 
   it("stays silent for a single platform", () => {

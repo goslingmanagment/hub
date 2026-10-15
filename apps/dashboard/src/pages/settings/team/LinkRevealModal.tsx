@@ -58,56 +58,45 @@ export function LinkRevealModal({
 
   return (
     <ModalShell title={title} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly>
-      <div className="space-y-4">
-        <p className="text-sm font-medium text-warning">
+      <div className="space-y-5">
+        <p className="notice notice-warning">
           Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку
           в Telegram — заново её не посмотреть, можно только создать новую.
         </p>
 
         <div>
-          <div className="mb-1 text-sm text-text-secondary">Ссылка</div>
-          <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 select-all break-all rounded-lg border border-border bg-bg px-3 py-2.5 font-mono text-sm text-text-primary">
+          <div className="field-label">Ссылка</div>
+          <div className="flex flex-wrap items-stretch gap-2">
+            <code className="min-w-0 flex-1 select-all break-all rounded-lg border border-border bg-hover-alt px-3 py-2 font-mono text-sm text-text-primary">
               {joinLink}
             </code>
-            <button
-              type="button"
-              onClick={() => void copy(joinLink, "link")}
-              className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
-            >
+            <button type="button" onClick={() => void copy(joinLink, "link")} className="btn btn-primary">
               {copied === "link" ? "Скопировано" : "Скопировать"}
             </button>
           </div>
-          <p className="mt-1 text-xs text-text-muted">
+          <p className="field-hint">
             Действует до {formatDateTime(link.expiresAt)}. Открыть её можно один раз.
           </p>
         </div>
 
         <div>
-          <div className="mb-1 text-sm text-text-secondary">Сообщение для Telegram</div>
+          <label htmlFor="link-reveal-message" className="field-label">Сообщение для Telegram</label>
           <textarea
+            id="link-reveal-message"
             readOnly
             rows={4}
             aria-label="Сообщение для Telegram"
             value={message}
-            className="w-full resize-none rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
+            className="textarea resize-none"
           />
-          <button
-            type="button"
-            onClick={() => void copy(message, "message")}
-            className="mt-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-          >
+          <button type="button" onClick={() => void copy(message, "message")} className="btn mt-2">
             {copied === "message" ? "Скопировано" : "Скопировать сообщение"}
           </button>
         </div>
       </div>
 
       <div className="mt-6 flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
+        <button type="button" onClick={onClose} className="btn">
           Готово
         </button>
       </div>

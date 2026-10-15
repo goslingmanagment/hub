@@ -15,11 +15,15 @@ import {
 } from "@/pages/analytics-query-state";
 
 import {
+  ANALYTICS_TABLE_WRAP,
   AnalyticsEmpty,
   AnalyticsError,
   AnalyticsLoading,
   AnalyticsPanel,
+  CachedBadge,
+  CoverageBadge,
 } from "./AnalyticsPanel.js";
+import { formatCompactCount, formatCount, formatPercent } from "./analytics-words.js";
 import {
   coverageBadgeVerdict,
   coverageRequestVerdict,
@@ -31,7 +35,13 @@ import {
 
 /** `—` rather than `0`: an unserved metric is not a measurement of nothing. */
 function metric(value: number | null): string {
-  return value === null ? "—" : value.toLocaleString("en-US");
+  return value === null ? "—" : formatCount(value);
+}
+
+/** A platform-wide counter: compact on screen, exact on hover. */
+function GlobalCount({ value }: { value: number | null }) {
+  if (value === null) return <>—</>;
+  return <span title={formatCount(value)}>{formatCompactCount(value)}</span>;
 }
 
 function money(value: number | null): string {
@@ -75,23 +85,30 @@ export function TopMediaPanel({
       ...entry,
       series: seriesByMedia.get(entry.mediaOfferRef) ?? [],
       missingSeriesLabel: !mediaWithHeads.has(entry.mediaOfferRef)
-        ? "catalogue head unavailable"
+        ? "нет в каталоге"
         : data?.bucketsTruncated === true
-          ? "series omitted by response limit"
-          : "no captured buckets in range",
+          ? "не вошло в ответ"
+          : "нет данных за период",
     }));
   }, [data]);
 
   return (
     <AnalyticsPanel
-      title="Top media"
+      title="Топ медиа"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
-      footnote={
-        "Rank comes from the window Fansly itself ranked; the sparkline comes from our "
-        + "own per-media buckets. A missing series says whether its catalogue head is "
-        + "absent, the response budget truncated buckets, or no bucket exists in this range."
-      }
+      help={(
+        <>
+          <p>
+            Место в рейтинге — из окна, которое ранжировал сам Fansly. График рядом —
+            из данных Hub по каждому медиа за выбранный период.
+          </p>
+          <p>
+            Если графика нет, указано почему: медиа нет в каталоге Hub, данные не вошли
+            в ответ из-за его размера, или за период данных нет.
+          </p>
+        </>
+      )}
     >
       {state.status === "loading" ? (
         <AnalyticsLoading />
@@ -99,33 +116,31 @@ export function TopMediaPanel({
         <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : rows.length === 0 ? (
         <AnalyticsEmpty
-          reason={emptyPanelReason(verdict, "No top-media window captured for this range.")}
+          reason={emptyPanelReason(verdict, "Рейтинг медиа за этот период не собран.")}
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[13px]">
+        <div className={ANALYTICS_TABLE_WRAP}>
+          <table className="data-table">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-                <th className="pb-2 font-semibold">#</th>
-                <th className="pb-2 font-semibold">Media</th>
-                <th className="pb-2 text-right font-semibold">Views</th>
-                <th className="pb-2 text-right font-semibold">Preview views</th>
-                <th className="pb-2 pl-4 font-semibold">Our series</th>
+              <tr>
+                <th className="num">#</th>
+                <th>Медиа</th>
+                <th className="num">Просмотры</th>
+                <th className="num">Превью</th>
+                <th>Динамика</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={`${row.plane}:${row.requestedEnd}:${row.mediaOfferRef}`} className="border-t border-border">
-                  <td className="py-2 text-text-muted">{row.rank}</td>
-                  <td className="py-2 font-mono text-[12px] text-text-secondary">
-                    {row.mediaOfferRef}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">{metric(row.views)}</td>
-                  <td className="py-2 text-right tabular-nums">{metric(row.previewViews)}</td>
-                  <td className="py-2 pl-4">
+                <tr key={`${row.plane}:${row.requestedEnd}:${row.mediaOfferRef}`}>
+                  <td className="num muted">{row.rank}</td>
+                  <td className="muted font-mono text-xs">{row.mediaOfferRef}</td>
+                  <td className="num">{metric(row.views)}</td>
+                  <td className="num">{metric(row.previewViews)}</td>
+                  <td>
                     {row.series.length > 0
-                      ? <TrendSparkline values={row.series} />
-                      : <span className="text-[11px] text-text-muted">{row.missingSeriesLabel}</span>}
+                      ? <TrendSparkline values={row.series} width={120} height={32} />
+                      : <span className="text-xs text-text-muted">{row.missingSeriesLabel}</span>}
                   </td>
                 </tr>
               ))}
@@ -175,14 +190,21 @@ export function TopTagsPanel({
 
   return (
     <AnalyticsPanel
-      title="Top FYP tags"
+      title="Топ тегов FYP"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
-      footnote={
-        "A blank name is a tag whose name the response's own `tags[]` sidecar did not "
-        + "carry. It is left blank rather than reconstructed from the id — a fabricated "
-        + "name is indistinguishable from a real one a year from now."
-      }
+      help={(
+        <>
+          <p>
+            «Просмотры» — просмотры этой страницы из ленты FYP по тегу. Столбцы
+            «Fansly» — общие цифры тега по всей платформе (точное число — при наведении).
+          </p>
+          <p>
+            «Без названия» — тег, название которого Fansly не прислал. Hub не подставляет
+            название по номеру, чтобы не выдумывать данные.
+          </p>
+        </>
+      )}
     >
       {state.status === "loading" ? (
         <AnalyticsLoading />
@@ -190,40 +212,36 @@ export function TopTagsPanel({
         <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : tags.length === 0 ? (
         <AnalyticsEmpty
-          reason={emptyPanelReason(verdict, "No tag window captured for this range.")}
+          reason={emptyPanelReason(verdict, "Рейтинг тегов за этот период не собран.")}
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[13px]">
+        <div className={ANALYTICS_TABLE_WRAP}>
+          <table className="data-table">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-                <th className="pb-2 font-semibold">#</th>
-                <th className="pb-2 font-semibold">Tag</th>
-                <th className="pb-2 text-right font-semibold">Page views</th>
-                <th className="pb-2 text-right font-semibold">Platform views</th>
-                <th className="pb-2 text-right font-semibold">Platform posts</th>
+              <tr>
+                <th className="num">#</th>
+                <th>Тег</th>
+                <th className="num">Просмотры</th>
+                <th className="num">Fansly: просмотры</th>
+                <th className="num">Fansly: посты</th>
               </tr>
             </thead>
             <tbody>
               {tags.map((tag) => {
                 const global = globalByTag.get(tag.tagRef);
                 return (
-                  <tr key={`${tag.requestedEnd}:${tag.tagRef}`} className="border-t border-border">
-                    <td className="py-2 text-text-muted">{tag.rank}</td>
-                    <td className="py-2">
+                  <tr key={`${tag.requestedEnd}:${tag.tagRef}`}>
+                    <td className="num muted">{tag.rank}</td>
+                    <td>
                       {tag.tagName ?? (
-                        <span className="font-mono text-[12px] text-text-muted">
-                          {tag.tagRef} <span className="italic">(name not served)</span>
+                        <span className="whitespace-nowrap text-text-muted" title={`Номер тега: ${tag.tagRef}`}>
+                          Без названия
                         </span>
                       )}
                     </td>
-                    <td className="py-2 text-right tabular-nums">{metric(tag.views)}</td>
-                    <td className="py-2 text-right tabular-nums">
-                      {metric(global?.viewCount ?? null)}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">
-                      {metric(global?.postCount ?? null)}
-                    </td>
+                    <td className="num">{metric(tag.views)}</td>
+                    <td className="num muted"><GlobalCount value={global?.viewCount ?? null} /></td>
+                    <td className="num muted"><GlobalCount value={global?.postCount ?? null} /></td>
                   </tr>
                 );
               })}
@@ -248,7 +266,7 @@ export function TopTagsPanel({
  * card, where its components actually exist.
  */
 /** Appended to anything read off a response whose refresh failed. */
-const CACHED_SUFFIX = " (cached — refresh failed)";
+const CACHED_SUFFIX = " (из кэша — не удалось обновить)";
 
 /**
  * What the average-watch header says in each state of ITS query.
@@ -263,16 +281,16 @@ const CACHED_SUFFIX = " (cached — refresh failed)";
  */
 function accountWatchLabel(state: AnalyticsPanelState<number | null>): string {
   if (state.status === "loading") {
-    return "loading…";
+    return "загружаем…";
   }
   if (state.status === "error") {
-    return "unavailable";
+    return "недоступно";
   }
   const suffix = state.refreshFailed ? CACHED_SUFFIX : "";
   if (state.data === null) {
-    return `not served${suffix}`;
+    return `Fansly не передаёт${suffix}`;
   }
-  return `${state.data.toFixed(1)}%${suffix}`;
+  return `${formatPercent(state.data)}${suffix}`;
 }
 
 export function ContentPerformancePanel({
@@ -316,30 +334,38 @@ export function ContentPerformancePanel({
 
   return (
     <AnalyticsPanel
-      title="Content performance"
+      title="Эффективность контента"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      wide
       headerExtra={(
-        <span className="text-[12px] text-text-secondary">
-          Avg. watch{" "}
+        <span className="text-[13px] text-text-secondary">
+          Средний досмотр{" "}
           <span
             className={
               accountWatch.status === "error"
                 ? "font-semibold text-warning-dark"
-                : "font-semibold text-text-primary"
+                : "font-semibold tabular-nums text-text-primary"
             }
           >
             {accountWatchLabel(accountWatch)}
           </span>
-          <span className="ml-1 text-text-muted">· account level, Hub-derived</span>
+          <span className="ml-1 text-text-muted">· по аккаунту, рассчитано Hub</span>
         </span>
       )}
-      footnote={
-        "Gross is DERIVED from net (Fansly keeps 20%), never stored and never summed "
-        + "with a net figure. Average watch is shown at ACCOUNT level only: the "
-        + "per-media statistics route serves no video fields at all ([E5]), so a "
-        + "per-media watch number would be invented rather than measured."
-      }
+      help={(
+        <>
+          <p>
+            «Доход» — сумма после комиссии, как её отдаёт Fansly. «До комиссии»
+            рассчитана в Hub из неё (Fansly берёт 20&nbsp;%): она не хранится и никогда
+            не складывается с суммой после комиссии.
+          </p>
+          <p>
+            Средний досмотр — только по аккаунту в целом. По отдельным медиа Fansly
+            не отдаёт данных о видео, поэтому число на каждое медиа было бы выдумкой.
+          </p>
+        </>
+      )}
     >
       {state.status === "loading" ? (
         <AnalyticsLoading />
@@ -347,34 +373,30 @@ export function ContentPerformancePanel({
         <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : rows.length === 0 ? (
         <AnalyticsEmpty
-          reason={emptyPanelReason(verdict, "No media captured for this page yet.")}
+          reason={emptyPanelReason(verdict, "Медиа этой страницы ещё не собраны.")}
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[13px]">
+        <div className={ANALYTICS_TABLE_WRAP}>
+          <table className="data-table">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-                <th className="pb-2 font-semibold">Media</th>
-                <th className="pb-2 text-right font-semibold">Price</th>
-                <th className="pb-2 text-right font-semibold">Sales</th>
-                <th className="pb-2 text-right font-semibold">Net (served)</th>
-                <th className="pb-2 text-right font-semibold">Gross (derived)</th>
-                <th className="pb-2 text-right font-semibold">Views in window</th>
+              <tr>
+                <th>Медиа</th>
+                <th className="num">Цена</th>
+                <th className="num">Продажи</th>
+                <th className="num">Доход после комиссии</th>
+                <th className="num">До комиссии (расчёт)</th>
+                <th className="num">Просмотры за период</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(({ media, views }) => (
-                <tr key={media.mediaOfferRef} className="border-t border-border">
-                  <td className="py-2 font-mono text-[12px] text-text-secondary">
-                    {media.mediaOfferRef}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">{money(media.priceMills)}</td>
-                  <td className="py-2 text-right tabular-nums">{metric(media.sales.count)}</td>
-                  <td className="py-2 text-right tabular-nums">{money(media.sales.netMills)}</td>
-                  <td className="py-2 text-right tabular-nums text-text-secondary">
-                    {money(media.sales.grossMills?.value ?? null)}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">{metric(views)}</td>
+                <tr key={media.mediaOfferRef}>
+                  <td className="muted font-mono text-xs">{media.mediaOfferRef}</td>
+                  <td className="num">{money(media.priceMills)}</td>
+                  <td className="num">{metric(media.sales.count)}</td>
+                  <td className="num">{money(media.sales.netMills)}</td>
+                  <td className="num muted">{money(media.sales.grossMills?.value ?? null)}</td>
+                  <td className="num">{metric(views)}</td>
                 </tr>
               ))}
             </tbody>
@@ -386,22 +408,13 @@ export function ContentPerformancePanel({
 }
 
 /**
- * Panel 7 — comments per post, and the liker panel that is honestly empty.
+ * Panel 7 — comments per post.
  *
  * `possiblyTruncated` is carried per post rather than summarised away: the
  * comment route has no established pagination, so a full page means the WINDOW
  * was captured, never the whole surface, and the doubt belongs to the row that
  * outlives the sweep that created it.
  */
-/** [E4]: no Fansly like code is live-confirmed, so nothing reads likers. */
-const LIKERS_VERDICT: CoverageVerdict = {
-  state: "not_started",
-  label: "not started",
-  detail:
-    "No Fansly like code is live-confirmed ([E4]), so nothing reads likers. "
-    + "The panel is shown empty rather than hidden.",
-};
-
 export function CommentsPanel({
   state,
   coverage,
@@ -414,99 +427,124 @@ export function CommentsPanel({
   onRetry: () => void;
 }) {
   const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
+  const data = panelData(state);
+  const perPost = (data?.perPost ?? []).slice(0, 20);
+
+  return (
+    <AnalyticsPanel
+      title="Комментарии к постам"
+      verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
+      help={(
+        <>
+          <p>
+            «Возможно, не все» — у поста была подозрительно полная страница ответов,
+            а надёжного способа листать дальше у Fansly нет. Полнота таких постов
+            неизвестна, а не подтверждена.
+          </p>
+          <p>
+            «Пропали» — комментарии, которых больше нет на Fansly. Пустые ответы тоже
+            считаются: фан, ответивший только вложением, всё равно ответил.
+          </p>
+        </>
+      )}
+    >
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
+      ) : perPost.length === 0 ? (
+        <AnalyticsEmpty
+          reason={emptyPanelReason(verdict, "За этот период комментариев не собрано.")}
+        />
+      ) : (
+        <div className={ANALYTICS_TABLE_WRAP}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Пост</th>
+                <th className="num">Комментарии</th>
+                <th className="num">Пропали</th>
+                <th>Полнота</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perPost.map((row) => (
+                <tr key={row.postRef}>
+                  <td className="muted font-mono text-xs">{row.postRef}</td>
+                  <td className="num">{formatCount(row.commentCount)}</td>
+                  <td className="num">{formatCount(row.missingCount)}</td>
+                  <td>
+                    {row.possiblyTruncatedCount > 0 ? (
+                      <span className="badge badge-warning">
+                        Возможно, не все ({formatCount(row.possiblyTruncatedCount)})
+                      </span>
+                    ) : (
+                      <span className="text-xs text-text-muted">собрано</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </AnalyticsPanel>
+  );
+}
+
+/** No Fansly like code is live-confirmed, so nothing reads likers. */
+const LIKERS_VERDICT: CoverageVerdict = {
+  state: "not_started",
+  label: "Сбор не начат",
+  detail:
+    "Fansly не подтверждает способ получать лайки, поэтому Hub их не собирает. "
+    + "Это известный пробел, а не страница без лайков.",
+};
+
+/**
+ * Likers — a few lines inside the coverage card, not a panel: the list is
+ * empty by design, and a permanently empty chart in the grid says nothing.
+ *
+ * It reads the SAME request as the comments panel. "Not collected" is a claim
+ * about Fansly, and it may only be made once that request has answered — a
+ * failed comments request rendering it would turn a network error into a
+ * statement about the platform.
+ */
+export function LikersNote({
+  state,
+  coverage,
+  onRetry,
+}: {
+  state: AnalyticsPanelState<ContentCommentsResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
+  onRetry: () => void;
+}) {
   // The likers' verdict is a CONSTANT — no capture-coverage row proves it
   // — but it is still a definitive claim about Fansly, and stating it under a
   // coverage request that is pending or failed is the same lie as a chart that
   // quietly reads "complete". So it goes through the same wrapper as every
   // other badge on the page.
   const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_VERDICT);
-  const data = panelData(state);
-  const cached = state.status === "ready" && state.refreshFailed;
-  const perPost = (data?.perPost ?? []).slice(0, 20);
-
   return (
-    <>
-      <AnalyticsPanel
-        title="Comments per post"
-        verdict={verdict}
-        cached={cached}
-        footnote={
-          "A post marked “pagination unproven” had at least one suspiciously full page: "
-          + "the reply route has no confirmed cursor, so its completeness is unknown, not "
-          + "confirmed. Empty replies are stored and counted — a fan who answered with "
-          + "only an attachment still answered."
-        }
-      >
-        {state.status === "loading" ? (
-          <AnalyticsLoading />
-        ) : state.status === "error" ? (
-          <AnalyticsError message={state.message} onRetry={onRetry} />
-        ) : perPost.length === 0 ? (
-          <AnalyticsEmpty
-            reason={emptyPanelReason(verdict, "No comments captured in this window.")}
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-                  <th className="pb-2 font-semibold">Post</th>
-                  <th className="pb-2 text-right font-semibold">Comments</th>
-                  <th className="pb-2 text-right font-semibold">Marked missing</th>
-                  <th className="pb-2 pl-4 font-semibold">Completeness</th>
-                </tr>
-              </thead>
-              <tbody>
-                {perPost.map((row) => (
-                  <tr key={row.postRef} className="border-t border-border">
-                    <td className="py-2 font-mono text-[12px] text-text-secondary">
-                      {row.postRef}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">{row.commentCount}</td>
-                    <td className="py-2 text-right tabular-nums">{row.missingCount}</td>
-                    <td className="py-2 pl-4">
-                      {row.possiblyTruncatedCount > 0 ? (
-                        <span className="rounded-full border border-warning-dark/60 px-2 py-0.5 text-[11px] text-warning-dark">
-                          pagination unproven ({row.possiblyTruncatedCount})
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-text-muted">window captured</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </AnalyticsPanel>
-
-      {/*
-        * The second card off the SAME request. "Empty by design" is a claim
-        * about Fansly, and it may only be made once this request has answered
-        * — a failed comments request rendering it would turn a network error
-        * into a statement about the platform.
-        */}
-      <AnalyticsPanel
-        title="Likers"
-        cached={cached}
-        verdict={likersVerdict}
-      >
-        {state.status === "loading" ? (
-          <AnalyticsLoading />
-        ) : state.status === "error" ? (
-          <AnalyticsError message={state.message} onRetry={onRetry} />
-        ) : (
-          <AnalyticsEmpty
-            reason={
-              state.data.likers.rows.length
-                ? `${state.data.likers.rows.length} liker rows (OnlyFans webhook origin).`
-                : "Empty by design: no Fansly like code is live-confirmed, so nothing is captured. "
-                  + "This is a hole we can name, not a page nobody likes."
-            }
-          />
-        )}
-      </AnalyticsPanel>
-    </>
+    <div className="space-y-2" data-likers>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="section-title">Лайки</h3>
+        <CoverageBadge verdict={likersVerdict} />
+        {state.status === "ready" && state.refreshFailed ? <CachedBadge /> : null}
+      </div>
+      {state.status === "loading" ? (
+        <p className="text-[13px] text-text-muted">Загружаем…</p>
+      ) : state.status === "error" ? (
+        <AnalyticsError compact message={state.message} onRetry={onRetry} />
+      ) : (
+        <p className="text-[13px] text-text-secondary">
+          {state.data.likers.rows.length
+            ? `Записей о лайках: ${formatCount(state.data.likers.rows.length)} (из вебхуков OnlyFans).`
+            : "Лайки не собираются: Fansly не подтверждает способ их получать, поэтому "
+              + "список лайкнувших всегда пуст. Это известный пробел, а не страница без лайков."}
+        </p>
+      )}
+    </div>
   );
 }

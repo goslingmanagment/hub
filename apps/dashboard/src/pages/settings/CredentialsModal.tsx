@@ -30,7 +30,7 @@ export function CredentialsModal({
   const hadStoredProxy = connection.proxyUrl != null;
   const proxyError = getProxyStringError(values.proxyRaw);
 
-  const title = `Update ${connection.label} credentials`;
+  const title = `Данные входа — ${connection.label}`;
 
   function updateField<K extends keyof PlatformCredentialsValues>(
     field: K,
@@ -52,26 +52,30 @@ export function CredentialsModal({
       // streams are still paused, so an all-clear toast would be a lie.
       if (result.syncUnblocked === false) {
         setSyncStillBlocked(true);
-        toast.warning("Credentials verified, but sync is still blocked");
+        toast.warning("Вход подтверждён, но сбор данных всё ещё остановлен");
         return;
       }
-      toast.success("Credentials updated");
+      toast.success("Данные входа обновлены");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update credentials");
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить данные входа");
     }
   }
 
   return (
     <ModalShell title={title} onClose={onClose}>
       {syncStillBlocked && (
-        <div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-          Credentials verified, but the sync block could not be cleared — streams are
-          still paused and the incident stays open. Retry verification; if this
-          persists, check the worker logs.
+        <div role="alert" className="notice notice-warning mb-4">
+          Вход подтверждён, но снять остановку сбора не удалось: сбор данных страницы всё ещё на паузе, инцидент
+          открыт. Сохраните ещё раз; если не поможет — загляните в «Система → Сбор данных → Fansly».
         </div>
       )}
       <div className="space-y-4">
+        {connection.platform === "fansly" && (
+          <p className="text-sm text-text-secondary">
+            Чтобы сменить только прокси, поля входа оставьте пустыми.
+          </p>
+        )}
         <PlatformCredentialsFields
           platform={connection.platform}
           values={values}
@@ -81,20 +85,16 @@ export function CredentialsModal({
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Cancel
+        <button type="button" onClick={onClose} className="btn">
+          Отмена
         </button>
         <button
           type="button"
           disabled={updateCredentials.isPending || Boolean(proxyError)}
           onClick={handleSubmit}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="btn btn-primary"
         >
-          Save
+          {updateCredentials.isPending ? "Сохраняем…" : "Сохранить"}
         </button>
       </div>
     </ModalShell>

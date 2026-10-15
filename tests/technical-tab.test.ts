@@ -69,15 +69,15 @@ describe("TechnicalTab", () => {
   it("carries both machine-facing surfaces under one roof", () => {
     mockAll();
     const markup = render(TechnicalTab);
-    expect(markup).toContain("Ключи агентов");
+    expect(markup).toContain("Ключи доступа");
     expect(markup).toContain("Привязка сбора данных");
-    expect(markup).toContain("Issue key");
+    expect(markup).toContain("Выпустить ключ");
   });
 
   it("keeps the agent-key list honest when its permissions are stale", () => {
     mockAll();
     queries.useAgentKeys.mockReturnValue(query([], { isError: true, error: new Error("offline") }));
-    expect(render(TechnicalTab)).toContain("Showing cached data");
+    expect(render(TechnicalTab)).toContain("показаны прежние данные");
   });
 });
 
@@ -104,8 +104,8 @@ describe("harvest binding", () => {
     const markup = render(HarvestBindingSection);
     expect(markup).toMatch(/<select[^>]*disabled=""/);
     // Nothing is bindable until both a person and a sign-in are selected.
-    expect(markup).not.toContain("Remove binding");
-    expect(markup).not.toContain('aria-label="machineId"');
+    expect(markup).not.toContain("Снять привязку");
+    expect(markup).not.toContain('aria-label="Идентификатор устройства"');
   });
 
   it("refuses a machineId that is not a UUID before any request is made", () => {

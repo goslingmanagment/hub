@@ -5,69 +5,52 @@ import {
   getBlockStateLabel,
   getBlockProgressFillClass,
   getBlockProgressBarMode,
+  getBlockProgressPercent,
   formatBlockSummary,
   formatBlockProgressCaption,
 } from "./syncBlockDisplay.js";
 
+/** A block's progress: a bar and what it counts. Nothing when there is none to show. */
+export function SyncBlockProgress({ block, width = "max-w-[200px]" }: { block: SyncBlockStatus; width?: string }) {
+  const mode = getBlockProgressBarMode(block);
+  if (mode === "hidden" || !block.progress) return null;
+  const caption = formatBlockProgressCaption(block) ?? block.progress.label;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <div className={`h-1.5 w-full flex-1 ${width} overflow-hidden rounded-full bg-hover`}>
+        {mode === "determinate"
+          ? (
+            <div
+              className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
+              style={{ width: `${getBlockProgressPercent(block)}%` }}
+            />
+          )
+          : <div className={`h-full w-[35%] animate-pulse rounded-full ${getBlockProgressFillClass(block)}`} />}
+      </div>
+      {caption && <span className="text-xs text-text-muted">{caption}</span>}
+    </div>
+  );
+}
+
+/** A block at a glance (a page's card of the list). */
 export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
   const tone = getBlockTone(block);
-  const label = getBlockLabel(block.block);
-  const summary = formatBlockSummary(block);
   const isNA = block.state === "not_available";
-  const progressCaption = formatBlockProgressCaption(block);
-  const progressBarMode = getBlockProgressBarMode(block);
 
   return (
-    <div className="grid grid-cols-[9rem_1fr] gap-x-3 py-1 items-baseline">
-      <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-        <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
-        {label}
+    <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-baseline gap-x-3 py-1 text-sm sm:grid-cols-[8.5rem_minmax(0,1fr)]" data-sync-block={block.block}>
+      <span className="flex items-center gap-2 font-medium text-text-secondary">
+        <span className={tone.dot} />
+        {getBlockLabel(block.block)}
       </span>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0">
-        <span className={`text-xs ${isNA ? "text-text-muted" : tone.text}`}>
-          {summary}
-        </span>
-        {progressBarMode !== "hidden" && block.progress && (
-          <div className="flex items-center gap-2 basis-full mt-0.5">
-            <div className="h-1.5 flex-1 max-w-[180px] rounded-full bg-hover-alt overflow-hidden">
-              {progressBarMode === "determinate"
-                ? (
-                  <div
-                    className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
-                    style={{
-                      width: `${Math.min(100, block.progress.percent ?? (
-                        block.progress.total && block.progress.total > 0
-                          ? (block.progress.current / block.progress.total) * 100
-                          : 0
-                      ))}%`,
-                    }}
-                  />
-                )
-                : (
-                  <div
-                    className={`h-full w-[35%] rounded-full animate-pulse ${getBlockProgressFillClass(block)}`}
-                  />
-                )}
-            </div>
-            <span className="text-[11px] text-text-muted">
-              {progressCaption ?? block.progress.label}
-            </span>
-          </div>
-        )}
+      <div className="min-w-0 space-y-1">
+        <span className={`break-words ${isNA ? "text-text-muted" : tone.text}`}>{formatBlockSummary(block)}</span>
+        <SyncBlockProgress block={block} width="max-w-[180px]" />
       </div>
     </div>
   );
 }
 
 export function SyncBlockBadge({ block }: { block: SyncBlockStatus }) {
-  const tone = getBlockTone(block);
-  const label = getBlockStateLabel(block);
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tone.badge}`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
-      {label}
-    </span>
-  );
+  return <span className={getBlockTone(block).badge} data-sync-state={block.state}>{getBlockStateLabel(block)}</span>;
 }

@@ -13,6 +13,16 @@ import { useSpenderSeries } from "@/api/queries";
 import { formatBusinessDateShort } from "@/lib/format";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
+const PERIOD_WORDS: Record<string, string> = {
+  today: "сегодня",
+  "7d": "за 7 дней",
+  "30d": "за 30 дней",
+  "90d": "за 90 дней",
+  "180d": "за 180 дней",
+  lifetime: "за всё время",
+  all: "за всё время",
+};
+
 interface SpenderTrendPanelProps {
   pageLabel: string;
   platform: string;
@@ -38,15 +48,15 @@ export function SpenderTrendPanel({
 
   if (isLoading) {
     return (
-      <div className="bg-hover/50 px-6 py-8 text-center text-sm text-text-muted">
-        Loading trend…
+      <div className="bg-hover-alt px-6 py-8 text-center text-sm text-text-secondary">
+        Загружаем динамику трат…
       </div>
     );
   }
   if (isError || !data) {
     return (
-      <div className="bg-hover/50 px-6 py-8 text-center text-sm text-text-muted">
-        Trend failed to load.
+      <div className="bg-hover-alt px-6 py-8 text-center text-sm text-danger">
+        Не удалось загрузить динамику трат.
       </div>
     );
   }
@@ -67,16 +77,16 @@ export function SpenderTrendPanel({
   );
 
   return (
-    <div className="bg-hover/50">
-      <div className="grid grid-cols-2 gap-3 px-6 py-4 sm:grid-cols-4">
-        <Stat label={`Spent · ${period}`} value={formatUsdFromMills(totalSpent)} />
-        <Stat label="Transactions" value={String(totalTxns)} />
+    <div className="border-t border-border bg-hover-alt">
+      <div className="grid grid-cols-2 gap-3 px-5 py-4 sm:grid-cols-4 sm:px-6">
+        <Stat label={`Потратил ${PERIOD_WORDS[period] ?? period}`} value={formatUsdFromMills(totalSpent)} />
+        <Stat label="Операций" value={String(totalTxns)} />
         <Stat
-          label="Avg / spend-day"
+          label="В среднем за день с тратами"
           value={nonZeroPoints.length > 0 ? formatUsdFromMills(avgPerSpendDay) : "—"}
         />
         <Stat
-          label="Biggest day"
+          label="Самый крупный день"
           value={largest && largest.value > 0
             ? `${formatUsdFromMills(largest.value)} · ${formatBusinessDateShort(largest.date)}`
             : "—"}
@@ -85,8 +95,8 @@ export function SpenderTrendPanel({
 
       <div className="px-3 pb-3" style={{ height: 220 }}>
         {points.length === 0 || totalSpent === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-text-muted">
-            No spending in this window.
+          <div className="flex h-full items-center justify-center text-sm text-text-secondary">
+            За этот период трат нет.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -100,29 +110,29 @@ export function SpenderTrendPanel({
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: "var(--color-text-muted)" }}
+                tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={formatBusinessDateShort}
                 interval="preserveStartEnd"
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "var(--color-text-muted)" }}
+                tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
                 axisLine={false}
                 tickLine={false}
-                width={50}
+                width={56}
                 tickFormatter={(v: number) => formatUsdFromMills(v)}
               />
               <ChartTooltip
                 contentStyle={{
-                  backgroundColor: "#1a1a1a",
-                  border: "none",
+                  backgroundColor: "var(--color-card)",
+                  border: "1px solid var(--color-border)",
                   borderRadius: 8,
                   fontSize: 12,
-                  color: "white",
+                  color: "var(--color-text-primary)",
                 }}
                 labelFormatter={(label) => formatBusinessDateShort(String(label))}
-                formatter={(value) => [formatUsdFromMills(Number(value)), "Spent"]}
+                formatter={(value) => [formatUsdFromMills(Number(value)), "Потратил"]}
               />
               <Area
                 type="monotone"
@@ -136,13 +146,13 @@ export function SpenderTrendPanel({
         )}
       </div>
 
-      <div className="flex items-center justify-end border-t border-border px-6 py-2">
+      <div className="flex items-center justify-end border-t border-border-light px-5 py-3 sm:px-6">
         <Link
           to={profileHref}
           onClick={(e) => e.stopPropagation()}
-          className="text-[12px] font-medium text-accent hover:underline"
+          className="link text-sm"
         >
-          View Full Profile
+          Открыть профиль
         </Link>
       </div>
     </div>
@@ -152,7 +162,7 @@ export function SpenderTrendPanel({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+      <div className="text-xs text-text-secondary">
         {label}
       </div>
       <div className="mt-0.5 text-sm font-semibold tabular-nums text-text-primary">

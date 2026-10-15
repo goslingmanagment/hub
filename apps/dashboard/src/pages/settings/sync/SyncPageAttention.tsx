@@ -1,5 +1,6 @@
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
+import { buildSettingsRoute } from "@/lib/navigation";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import {
   formatBlockSummary,
@@ -14,7 +15,7 @@ import {
  *  for attention. Nothing when the page is fine. */
 export function SyncPageAttention({ page }: { page: SyncBlocksPage }) {
   if (page.diagnosis) {
-    return <SyncDiagnosisNotice diagnosis={page.diagnosis} className="mt-3" />;
+    return <SyncDiagnosisNotice diagnosis={page.diagnosis} />;
   }
 
   const blocks = getBlockOrder().map((key) => page.blocks[key]);
@@ -24,48 +25,29 @@ export function SyncPageAttention({ page }: { page: SyncBlocksPage }) {
   const authFailed = attentionBlocks.find((b) => b.statusReason?.code === "credentials_invalid");
   if (authFailed) {
     return (
-      <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-          <span className="text-danger font-medium">
-            {getReasonSummary(authFailed) ?? "Credentials may have expired"}
-          </span>
-          <Link
-            to="/settings?tab=credentials"
-            className="font-semibold text-accent hover:underline"
-          >
-            Update credentials
+      <div className="notice notice-danger" data-sync-attention="credentials">
+        <p>
+          <span className="font-semibold">{getReasonSummary(authFailed) ?? "Данные входа, похоже, устарели"}</span>
+          <Link to={buildSettingsRoute("credentials")} className="link ml-2 font-semibold">
+            Обновить данные входа
           </Link>
-        </div>
+        </p>
       </div>
     );
   }
 
-  const failedBlock = attentionBlocks.find((block) => block.state === "failed");
-  const tone = failedBlock
-    ? {
-      container: "mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5",
-      text: "text-danger",
-    }
-    : {
-      container: "mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5",
-      text: "text-warning-dark",
-    };
+  const failed = attentionBlocks.some((block) => block.state === "failed");
 
   return (
-    <div className={tone.container}>
-      {attentionBlocks.map((b) => (
-        <div
-          key={b.block}
-          className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
-        >
-          <span className={`${tone.text} font-medium`}>
-            {getReasonSummary(b) ??
-              (b.state === "delayed"
-                ? formatBlockSummary(b)
-                : `${getBlockLabel(b.block)} needs attention`)}
-          </span>
-        </div>
-      ))}
+    <div className={`notice ${failed ? "notice-danger" : "notice-warning"}`} data-sync-attention="blocks">
+      <ul className="min-w-0 space-y-0.5">
+        {attentionBlocks.map((b) => (
+          <li key={b.block} className="break-words">
+            <span className="font-semibold">{getBlockLabel(b.block)}:</span>{" "}
+            {b.state === "delayed" ? formatBlockSummary(b) : getReasonSummary(b) ?? "Нужна проверка"}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

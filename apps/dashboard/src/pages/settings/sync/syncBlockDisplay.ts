@@ -1,5 +1,8 @@
-import type { SyncBlockStatus } from "@agency_hub_core/contracts";
+import type { SyncBlockStatus, SyncBlocksPage, SyncDiagnosis } from "@agency_hub_core/contracts";
 import { formatRelativeTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+import type { PageStatus } from "./SyncPageParts.js";
+import { SYNC_BLOCK_LABELS, syncCadenceText, syncStreamLabel } from "./syncVocabulary.js";
 
 type SyncBlockKey = SyncBlockStatus["block"];
 type SyncBlockState = SyncBlockStatus["state"];
@@ -9,112 +12,71 @@ type SyncReasonCarrier = Pick<SyncBlockStatus, "statusReason" | "error"> |
 
 export type { SyncBlockKey, SyncBlockState, SyncBlockSubstream };
 
+// The OnlyFans screen of System («Сбор данных → OnlyFans»): the pages the
+// legacy page-sync executor serves, in the console's language. The server
+// describes a block in English (its reasons, its diagnosis); the words here are
+// chosen from the codes, and only a reason with no code of ours falls back to
+// the server's own text.
+
 interface BlockTone {
   badge: string;
   dot: string;
   text: string;
 }
 
+const NEUTRAL: BlockTone = { badge: "badge", dot: "status-dot", text: "text-text-secondary" };
+const OK: BlockTone = { badge: "badge badge-success", dot: "status-dot status-dot-ok", text: "text-green" };
+const WORKING: BlockTone = { badge: "badge badge-info", dot: "status-dot status-dot-ok", text: "text-text-secondary" };
+const WARN: BlockTone = { badge: "badge badge-warning", dot: "status-dot status-dot-warn", text: "text-warning-dark" };
+const DANGER: BlockTone = { badge: "badge badge-danger", dot: "status-dot status-dot-error", text: "text-danger" };
+const QUIET: BlockTone = { badge: "badge", dot: "status-dot", text: "text-text-muted" };
+
 const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
-  not_started: {
-    badge: "border-border bg-hover-alt text-text-secondary",
-    dot: "bg-text-muted",
-    text: "text-text-secondary",
-  },
-  scheduled: {
-    badge: "border-border bg-hover-alt text-text-secondary",
-    dot: "bg-text-secondary",
-    text: "text-text-secondary",
-  },
-  up_to_date: {
-    badge: "border-green/30 bg-green/10 text-green",
-    dot: "bg-green",
-    text: "text-green",
-  },
-  syncing: {
-    badge: "border-[#bfdbfe] bg-[#dbeafe] text-[#1d4ed8]",
-    dot: "bg-[#2563eb]",
-    text: "text-[#1d4ed8]",
-  },
-  backfilling: {
-    badge: "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]",
-    dot: "bg-[#2563eb]",
-    text: "text-[#1d4ed8]",
-  },
-  retrying: {
-    badge: "border-warning/25 bg-warning/10 text-warning-dark",
-    dot: "bg-warning-dark",
-    text: "text-warning-dark",
-  },
-  delayed: {
-    badge: "border-warning/30 bg-warning/10 text-warning-dark",
-    dot: "bg-warning-dark",
-    text: "text-warning-dark",
-  },
-  failed: {
-    badge: "border-danger/30 bg-danger/10 text-danger",
-    dot: "bg-danger",
-    text: "text-danger",
-  },
-  paused: {
-    badge: "border-border bg-card text-text-muted",
-    dot: "bg-text-muted",
-    text: "text-text-muted",
-  },
-  not_available: {
-    badge: "border-border bg-hover-alt text-text-muted",
-    dot: "bg-text-muted/50",
-    text: "text-text-muted",
-  },
-  // A block of a Fansly page: «Синк» shows it with its own cards
+  not_started: NEUTRAL,
+  scheduled: NEUTRAL,
+  up_to_date: OK,
+  syncing: WORKING,
+  backfilling: WORKING,
+  retrying: WARN,
+  delayed: WARN,
+  failed: DANGER,
+  paused: QUIET,
+  not_available: QUIET,
+  // A block of a Fansly page: the Fansly screen shows it with its own cards
   // (`engine/EngineBlocks.tsx`); nothing here formats one.
-  engine: {
-    badge: "border-accent/30 bg-accent/10 text-accent",
-    dot: "bg-accent",
-    text: "text-text-secondary",
-  },
+  engine: { badge: "badge badge-accent", dot: "status-dot", text: "text-text-secondary" },
 };
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
-  not_started: "Not started",
-  scheduled: "Queued",
-  up_to_date: "Up to date",
-  syncing: "Syncing",
-  backfilling: "Backfilling",
-  retrying: "Retrying",
-  delayed: "Delayed",
-  failed: "Failed",
-  paused: "Paused",
-  not_available: "N/A",
-  engine: "Sync Engine",
+  not_started: "Не запускался",
+  scheduled: "В очереди",
+  up_to_date: "Актуально",
+  syncing: "Обновляется",
+  backfilling: "Догружает историю",
+  retrying: "Повторяет попытку",
+  delayed: "Отстаёт",
+  failed: "Ошибка",
+  paused: "На паузе",
+  not_available: "Недоступно",
+  engine: "Сбор Fansly",
 };
 
-const BLOCK_LABELS: Record<SyncBlockKey, string> = {
-  connection: "Connection",
-  financials: "Financials",
-  audience: "Audience",
-  messages_live: "Messages Live",
-  messages_history: "Messages History",
-};
-
-// A legacy block (any state but `engine`) belongs to a page the legacy
-// page-sync executor serves: OnlyFans. A Fansly page's blocks are the Fansly
-// Sync Engine's (`state: "engine"`), or not available when the engine does not
-// run the page: the «Синк» tab words them itself (`engine/engineBlockDisplay.ts`),
-// and nothing here formats a Fansly block or stream.
+// A legacy block (any state but the Fansly one) belongs to a page the legacy
+// page-sync executor serves: OnlyFans. A Fansly page's blocks are worded by
+// the Fansly screen itself (`engine/engineBlockDisplay.ts`), and nothing here
+// formats a Fansly block or stream.
 
 const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
-  connection: "Confirms this page's account is still connected and authorized.",
-  financials: "Earnings transactions and the top-spenders leaderboard.",
-  audience: "Followers and subscribers for this page.",
-  messages_live: "Keeps the conversation list current \u2014 new threads and the latest message in each.",
-  messages_history: "Backfills and stores the full message contents of each conversation.",
+  connection: "Проверяет, что аккаунт страницы подключён и вход действует.",
+  financials: "Операции и рейтинг топ фанов.",
+  audience: "Подписчики и фолловеры страницы.",
+  messages_live: "Список чатов: новые чаты и последнее сообщение каждого.",
+  messages_history: "Полный текст сообщений каждого чата.",
 };
 
-// The streams a block lists on a page of the legacy executor. The analytics
-// Coverage panel names every lever stream of a Fansly page by the same table;
-// a name that is its own words needs no row (`getStreamLabel`).
-const STREAM_LABELS: Record<string, string> = {
+// English: the analytics Coverage panel's words for a stream (it reads them
+// from here). This screen names streams in Russian (`syncStreamLabel`).
+const COVERAGE_STREAM_LABELS: Record<string, string> = {
   light: "connection",
   fan_identities: "fan identities",
   transactions: "transactions",
@@ -128,10 +90,43 @@ const STREAM_LABELS: Record<string, string> = {
   stats_snapshot: "account statistics",
 };
 
+/** The stream a block's progress belongs to, when it is not the block's own. */
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
-  fan_identities: "fan identity enrichment",
-  top_spenders: "top spenders enrichment",
-  dm_conversations: "conversation sync",
+  fan_identities: "профили фанов",
+  top_spenders: "рейтинг топ фанов",
+  dm_conversations: "список чатов",
+};
+
+/** What the server counts progress in, as "из N …" takes it: [one, many]. */
+const PROGRESS_UNITS: Record<string, readonly [string, string]> = {
+  conversations: ["чата", "чатов"],
+  identities: ["профиля", "профилей"],
+  items: ["элемента", "элементов"],
+  messages: ["сообщения", "сообщений"],
+  months: ["месяца", "месяцев"],
+  subscribers: ["подписчика", "подписчиков"],
+  followers: ["фолловера", "фолловеров"],
+  transactions: ["операции", "операций"],
+};
+
+/** The server's reasons in the screen's words, by their code. */
+const REASON_WORDS: Record<string, string> = {
+  credentials_invalid: "Данные входа больше не действуют",
+  progress_stalled: "Загрузка перестала продвигаться",
+  unmet_dependency: "Ждёт, пока закончатся другие потоки",
+  queue_waiting: "В очереди: начнётся после текущей загрузки",
+  queue_delayed: "Слишком долго в очереди, загрузка не идёт",
+  stale: "Последнее обновление старше нормы",
+  physical_attempt_stuck: "Запросы не завершились к сроку",
+  physical_attempts_without_success: "Запросы раз за разом без успеха",
+  webhook_live: "Новые сообщения приходят через вебхуки OnlyFans API",
+  webhook_waiting: "Ждём первое событие сообщений от OnlyFans API",
+  webhook_silent: "Давно не было событий сообщений от OnlyFans API",
+  ofapi_financials_live: "Операции приходят из OnlyFans API",
+  ofapi_financials_waiting: "Ждём первую операцию страницы из OnlyFans API",
+  ofapi_auth: "OnlyFans API сообщает, что аккаунту нужна проверка",
+  ofapi_auth_connected: "Вход через OnlyFans API подключён",
+  fansly_sync_engine_off: "Сбор Fansly эту страницу не ведёт",
 };
 
 const BLOCK_ORDER: SyncBlockKey[] = [
@@ -141,6 +136,23 @@ const BLOCK_ORDER: SyncBlockKey[] = [
   "messages_live",
   "messages_history",
 ];
+
+/** Counts the Russian way: 1 234 567. */
+function count(value: number): string {
+  return value.toLocaleString("ru-RU");
+}
+
+/** "из 1 чата", "из 5 чатов": the genitive after "из". */
+function ofUnit(total: number, unit: string): string {
+  const words = PROGRESS_UNITS[unit];
+  if (!words) return unit;
+  return total % 10 === 1 && total % 100 !== 11 ? words[0] : words[1];
+}
+
+function progressCounts(progress: NonNullable<SyncBlockStatus["progress"]>): string | null {
+  if (progress.total == null || progress.total <= 0) return null;
+  return `${count(progress.current)} из ${count(progress.total)} ${ofUnit(progress.total, progress.unit)}`;
+}
 
 function isHealthyQueueWaitingBlock(block: SyncBlockStatus): boolean {
   return block.state === "scheduled" && isQueueWaiting(block) && block.primaryFresh;
@@ -167,7 +179,7 @@ export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockStat
 }
 
 export function getBlockLabel(block: SyncBlockKey): string {
-  return BLOCK_LABELS[block];
+  return SYNC_BLOCK_LABELS[block];
 }
 
 export function getBlockDescription(block: SyncBlockKey): string {
@@ -178,31 +190,28 @@ export function getBlockOrder(): SyncBlockKey[] {
   return BLOCK_ORDER;
 }
 
+/** A stream in English, for the analytics Coverage panel (not this screen). */
 export function getStreamLabel(stream: string): string {
-  return STREAM_LABELS[stream] ?? stream.replaceAll("_", " ");
+  return COVERAGE_STREAM_LABELS[stream] ?? stream.replaceAll("_", " ");
 }
 
 function getProgressStreamLabel(stream: string | null): string | null {
   if (!stream) return null;
-  return PROGRESS_STREAM_LABELS[stream] ?? getStreamLabel(stream);
+  return PROGRESS_STREAM_LABELS[stream] ?? syncStreamLabel(stream);
 }
 
 export function formatCadence(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.round(seconds / 60);
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.round(mins / 60);
-  return `${hours}h`;
+  return syncCadenceText(seconds);
 }
 
 function formatRelativeFuture(iso: string): string {
   const diffMs = new Date(iso).getTime() - Date.now();
-  if (diffMs <= 0) return "now";
+  if (diffMs <= 0) return "сейчас";
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "in <1m";
-  if (mins < 60) return `in ${mins}m`;
+  if (mins < 1) return "меньше чем через минуту";
+  if (mins < 60) return `через ${mins} мин`;
   const hours = Math.floor(mins / 60);
-  return `in ${hours}h`;
+  return `через ${hours} ч`;
 }
 
 export function formatNextTime(iso: string | null): string | null {
@@ -222,7 +231,7 @@ function parseDependencyWait(summary: string | null | undefined): string[] {
 }
 
 function formatDependencyList(streams: string[]): string {
-  return streams.map((stream) => getStreamLabel(stream)).join(", ");
+  return streams.map((stream) => syncStreamLabel(stream)).join(", ");
 }
 
 function getWaitingStreams(item: SyncReasonCarrier): string[] {
@@ -230,7 +239,7 @@ function getWaitingStreams(item: SyncReasonCarrier): string[] {
     return item.statusReason.waitingFor;
   }
   if (item.statusReason?.code === "unmet_dependency") {
-    return parseDependencyWait(getReasonSummary(item));
+    return parseDependencyWait(item.statusReason.summary ?? item.error?.summary);
   }
   return [];
 }
@@ -239,7 +248,20 @@ function getReasonCode(item: SyncReasonCarrier): string | null {
   return item.statusReason?.code ?? item.error?.code ?? null;
 }
 
+/** The reason in the screen's words; the server's own text only for a code
+ *  this screen has no words for. */
 export function getReasonSummary(item: SyncReasonCarrier): string | null {
+  const code = getReasonCode(item);
+  const words = code === null ? undefined : REASON_WORDS[code];
+  if (words !== undefined) return words;
+  return item.statusReason?.summary ?? item.error?.summary ?? null;
+}
+
+/** The server's own text of a reason, when the screen's words replaced it
+ *  (shown as a secondary line). Null: nothing beyond the words. */
+export function getServerReasonText(item: SyncReasonCarrier): string | null {
+  const code = getReasonCode(item);
+  if (code === null || REASON_WORDS[code] === undefined) return null;
   return item.statusReason?.summary ?? item.error?.summary ?? null;
 }
 
@@ -284,13 +306,13 @@ function formatSupportingProgressSummary(block: SyncBlockStatus): string | null 
 
   if (block.block === "financials") {
     if (block.state === "backfilling") {
-      return `Transactions are current; ${label} is catching up`;
+      return `Операции актуальны; ${label} догружается`;
     }
     if (block.state === "scheduled") {
-      return `Transactions are current; ${label} is queued`;
+      return `Операции актуальны; ${label} в очереди`;
     }
     if (block.state === "retrying") {
-      return `Transactions are current; ${label} is retrying`;
+      return `Операции актуальны; ${label}: повторная попытка`;
     }
   }
 
@@ -301,11 +323,9 @@ export function formatBlockProgressCaption(block: SyncBlockStatus): string | nul
   if (!block.progress) return null;
 
   const source = getProgressStreamLabel(block.progressStream);
-  const counts = block.progress.total != null && block.progress.total > 0
-    ? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ${block.progress.unit}`
-    : block.progress.label;
+  const counts = progressCounts(block.progress) ?? block.progress.label;
   if (!counts) return source;
-  return source ? `${source} \u00b7 ${counts}` : counts;
+  return source ? `${source} · ${counts}` : counts;
 }
 
 export function getBlockProgressFillClass(block: SyncBlockStatus): string {
@@ -352,79 +372,87 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
   return getBlockProgressBarMode(block) !== "hidden";
 }
 
+/** The share of a block's progress that is done, for its bar. */
+export function getBlockProgressPercent(block: SyncBlockStatus): number {
+  const progress = block.progress;
+  if (!progress) return 0;
+  const percent = progress.percent ?? (progress.total && progress.total > 0 ? (progress.current / progress.total) * 100 : 0);
+  return Math.min(100, percent);
+}
+
 export function formatBlockSummary(block: SyncBlockStatus): string {
-  if (block.state === "not_available") return "Not available";
+  if (block.state === "not_available") return "Недоступно";
 
   if (block.block === "connection") {
     if (block.connectionStatus === "connected") {
       const checked = block.succeededAt
-        ? `checked ${formatRelativeTime(block.succeededAt)}`
+        ? `проверено ${formatRelativeTime(block.succeededAt)}`
         : "";
-      return `Connected${checked ? ` \u00b7 ${checked}` : ""}`;
+      return `Подключено${checked ? ` · ${checked}` : ""}`;
     }
     if (block.connectionStatus === "error" || block.state === "failed") {
-      const reason = getReasonSummary(block) ?? "connection error";
-      return `Connection failed: ${reason}`;
+      const reason = getReasonSummary(block) ?? "ошибка подключения";
+      return `Подключение не удалось: ${lowerFirst(reason)}`;
     }
     if (block.connectionStatus === "not_connected") {
-      return "Not connected";
+      return "Не подключено";
     }
   }
 
   if (block.state === "paused") {
-    const last = block.succeededAt
-      ? `paused \u00b7 last synced ${formatRelativeTime(block.succeededAt)}`
-      : "Paused";
-    return last;
+    return block.succeededAt
+      ? `На паузе · последнее обновление ${formatRelativeTime(block.succeededAt)}`
+      : "На паузе";
   }
 
   if (block.state === "not_started") {
-    return "Not started";
+    return "Ещё не запускался";
   }
 
   if (block.state === "failed") {
     if (getReasonCode(block) === "progress_stalled") {
-      if (block.progress?.total != null && block.progress.total > 0) {
-        return `Sync stalled at ${block.progress.current.toLocaleString()}/${block.progress.total.toLocaleString()} ${block.progress.unit}`;
+      const counts = block.progress ? progressCounts(block.progress) : null;
+      if (counts) {
+        return `Загрузка остановилась на ${counts}`;
       }
       if (block.progress?.label) {
-        return `Sync stalled at ${block.progress.label}`;
+        return `Загрузка остановилась: ${block.progress.label}`;
       }
-      return "Sync stalled";
+      return "Загрузка остановилась";
     }
-    const reason = getReasonSummary(block) ?? "sync error";
+    const reason = getReasonSummary(block) ?? "Ошибка сбора";
     const failures = block.error?.consecutiveFailures ?? 0;
-    return failures > 1 ? `${reason} (${failures} failures)` : reason;
+    return failures > 1 ? `${reason} (ошибок подряд: ${failures})` : reason;
   }
 
   if (block.state === "delayed") {
     if (isDependencyWait(block)) {
       const waitingOn = getDependencyStreams(block);
       if (waitingOn.length === 1) {
-        return `Waiting for ${getStreamLabel(waitingOn[0])} to finish first`;
+        return `Ждёт, пока закончится «${syncStreamLabel(waitingOn[0]!)}»`;
       }
-      return "Waiting for prerequisite syncs to finish first";
+      return "Ждёт, пока закончатся другие потоки";
     }
     if (getReasonCode(block) === "queue_delayed") {
-      return "Queued too long with no active sync making progress";
+      return "Слишком долго в очереди, загрузка не идёт";
     }
-    return getReasonSummary(block) ?? "Sync is delayed";
+    return getReasonSummary(block) ?? "Сбор отстаёт";
   }
 
   if (isHealthyQueueWaitingBlock(block)) {
     const waitingOn = getWaitingStreams(block);
     if (waitingOn.length === 1) {
-      return `Up to date \u00b7 waiting for ${getStreamLabel(waitingOn[0])} to finish`;
+      return `Актуально · ждёт, пока закончится «${syncStreamLabel(waitingOn[0]!)}»`;
     }
-    return "Up to date \u00b7 queued behind active sync work";
+    return "Актуально · в очереди за текущей загрузкой";
   }
 
   if (block.state === "scheduled" && isQueueWaiting(block)) {
     const waitingOn = getWaitingStreams(block);
     if (waitingOn.length === 1) {
-      return `Queued \u2014 ${getStreamLabel(waitingOn[0])} is running`;
+      return `В очереди — сейчас идёт «${syncStreamLabel(waitingOn[0]!)}»`;
     }
-    return "Queued \u2014 will start after current sync completes";
+    return "В очереди — начнётся после текущей загрузки";
   }
 
   const supportingProgressSummary = formatSupportingProgressSummary(block);
@@ -433,26 +461,26 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   }
 
   const progressPrefix = block.state === "backfilling"
-    ? "Backfilling\u2026"
+    ? "Догружает историю…"
     : block.state === "scheduled"
-      ? "Queued\u2026"
+      ? "В очереди…"
       : block.state === "retrying"
-      ? "Retrying\u2026"
-      : "Syncing\u2026";
+      ? "Повторяет попытку…"
+      : "Обновляется…";
 
   if (hasCompletedMessagesLiveProgress(block)) {
     if (block.state === "syncing") {
-      return "Finalizing conversation refresh\u2026";
+      return "Завершает обновление списка чатов…";
     }
     if (block.state === "backfilling") {
-      return "Scanning conversations\u2026";
+      return "Просматривает чаты…";
     }
     if (block.state === "scheduled") {
-      return "Conversation sync queued";
+      return "Обновление списка чатов в очереди";
     }
     if (block.state === "retrying") {
       const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
-      return nextRetry ? `Retrying conversation sync ${nextRetry}` : "Retrying conversation sync\u2026";
+      return nextRetry ? `Повторит обновление списка чатов ${nextRetry}` : "Повторяет обновление списка чатов…";
     }
   }
 
@@ -460,36 +488,38 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     (block.state === "syncing" || block.state === "backfilling" || block.state === "retrying" || block.state === "scheduled") &&
     block.progress
   ) {
-    const { current, total, unit, label } = block.progress;
-    if (total != null && total > 0) {
-      return `${progressPrefix} ${current.toLocaleString()}/${total.toLocaleString()} ${unit}`;
-    }
-    if (label) return `${progressPrefix} ${label}`;
+    const counts = progressCounts(block.progress);
+    if (counts) return `${progressPrefix} ${counts}`;
+    if (block.progress.label) return `${progressPrefix} ${block.progress.label}`;
     return progressPrefix;
   }
 
   if (block.state === "syncing") {
-    return "Syncing\u2026";
+    return "Обновляется…";
   }
 
   if (block.state === "backfilling") {
-    return "Backfilling\u2026";
+    return "Догружает историю…";
   }
 
   if (block.state === "scheduled") {
-    return "Queued to continue";
+    return "В очереди на продолжение";
   }
 
   if (block.state === "retrying") {
     const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
-    return nextRetry ? `Retrying ${nextRetry}` : "Retrying\u2026";
+    return nextRetry ? `Повторная попытка ${nextRetry}` : "Повторяет попытку…";
   }
 
   const metricCount = getMetricCount(block);
   const updated = block.succeededAt
-    ? `Updated ${formatRelativeTime(block.succeededAt)}`
-    : "Never synced";
-  return metricCount ? `${updated} \u00b7 ${metricCount}` : updated;
+    ? `Обновлено ${formatRelativeTime(block.succeededAt)}`
+    : "Ещё не обновлялось";
+  return metricCount ? `${updated} · ${metricCount}` : updated;
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 function getMetricCount(block: SyncBlockStatus): string | null {
@@ -498,19 +528,19 @@ function getMetricCount(block: SyncBlockStatus): string | null {
 
   const keys = BLOCK_METRIC_KEYS[block.block] ?? ["count"];
   for (const key of keys) {
-    const count = m[key as keyof typeof m];
-    if (typeof count === "number" && count >= 0) {
-      const label = METRIC_LABELS[block.block] ?? "";
-      return `${count.toLocaleString()}${label ? ` ${label}` : ""}`;
+    const value = m[key as keyof typeof m];
+    if (typeof value === "number" && value >= 0) {
+      const words = METRIC_WORDS[block.block];
+      return words ? `${count(value)} ${ruPlural(value, ...words)}` : count(value);
     }
   }
   return null;
 }
 
-const METRIC_LABELS: Partial<Record<SyncBlockKey, string>> = {
-  financials: "transactions",
-  audience: "subscribers",
-  messages_live: "conversations",
+const METRIC_WORDS: Partial<Record<SyncBlockKey, readonly [string, string, string]>> = {
+  financials: ["операция", "операции", "операций"],
+  audience: ["подписчик", "подписчика", "подписчиков"],
+  messages_live: ["чат", "чата", "чатов"],
 };
 
 const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
@@ -544,40 +574,39 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
   if (substream.state === "delayed") {
     if (code === "unmet_dependency") {
       const detail = getDependencyWaitDetail(substream);
-      return detail ? `Waiting \u00b7 ${detail}` : "Waiting";
+      return detail ? `Ждёт · ${detail}` : "Ждёт";
     }
     if (code === "queue_delayed") {
-      return "Delayed \u00b7 queue stalled";
+      return "Отстаёт · очередь стоит";
     }
     if (code === "progress_stalled") {
-      return "Stalled \u00b7 no progress";
+      return "Остановилось · нет движения";
     }
     if (code === "stale") {
-      return "Out of date";
+      return "Устарело";
     }
-    return "Delayed";
+    return "Отстаёт";
   }
 
   if (substream.state === "scheduled") {
     if (code === "queue_waiting") {
-      if (isHealthyQueueWaitingSubstream(substream)) {
-        const waitingOn = getWaitingStreams(substream);
-        if (waitingOn.length === 1) {
-          return `Up to date \u00b7 waiting for ${getStreamLabel(waitingOn[0])}`;
-        }
-        return "Up to date \u00b7 queued behind active sync work";
-      }
       const waitingOn = getWaitingStreams(substream);
-      if (waitingOn.length === 1) {
-        return `Waiting \u00b7 ${getStreamLabel(waitingOn[0])}`;
+      if (isHealthyQueueWaitingSubstream(substream)) {
+        if (waitingOn.length === 1) {
+          return `Актуально · ждёт «${syncStreamLabel(waitingOn[0]!)}»`;
+        }
+        return "Актуально · в очереди за текущей загрузкой";
       }
-      return "Waiting";
+      if (waitingOn.length === 1) {
+        return `Ждёт · ${syncStreamLabel(waitingOn[0]!)}`;
+      }
+      return "Ждёт";
     }
-    return "Queued";
+    return "В очереди";
   }
 
   if (substream.state === "failed") {
-    return code === "credentials_invalid" ? "Reconnect" : "Failed";
+    return code === "credentials_invalid" ? "Нужен вход" : "Ошибка";
   }
 
   return getBlockStateLabel(substream.state);
@@ -593,4 +622,105 @@ export function needsVisualAttention(block: SyncBlockStatus): boolean {
     block.state === "failed" ||
     block.state === "delayed"
   );
+}
+
+/** The server's HTTP attempts of a block over the day, in one secondary line;
+ *  null when it made none. */
+export function formatAttemptsLine(block: SyncBlockStatus): string | null {
+  const metric = (key: string) => {
+    const value = block.metrics[key as keyof typeof block.metrics];
+    return typeof value === "number" ? value : 0;
+  };
+  const attempts = metric("physicalAttemptCount24h");
+  const succeeded = metric("physicalSuccessCount24h");
+  const stuck = metric("stalePhysicalAttemptCount");
+  const withoutSuccess = metric("maxPhysicalAttemptsSinceLastSuccess");
+  const parts: string[] = [];
+  if (attempts > 0) {
+    parts.push(`HTTP-запросов за сутки: ${count(succeeded)} из ${count(attempts)} успешно (${Math.round((succeeded / attempts) * 100)} %)`);
+  }
+  if (stuck > 0) parts.push(`зависших: ${count(stuck)}`);
+  if (withoutSuccess > 0) parts.push(`подряд без успеха: ${count(withoutSuccess)}`);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/** Whether the day's HTTP attempts of a block are in trouble (the line is
+ *  then in the warning colour). */
+export function attemptsInTrouble(block: SyncBlockStatus): boolean {
+  const stuck = block.metrics.stalePhysicalAttemptCount;
+  const withoutSuccess = block.metrics.maxPhysicalAttemptsSinceLastSuccess;
+  return (typeof stuck === "number" && stuck > 0) || (typeof withoutSuccess === "number" && withoutSuccess > 0);
+}
+
+/** What the reset's confirmation says: the block is read again from the
+ *  start, and what else of it goes (the server's `resetSyncBlock`). */
+export function syncResetConfirmText(block: SyncBlockKey, pageLabel: string): string {
+  const label = getBlockLabel(block);
+  const base = `Hub забудет, докуда загружен блок «${label}» страницы ${pageLabel}, и загрузит его заново с самого начала.`;
+  if (block === "financials") return `${base} Рейтинг топ фанов страницы будет собран заново.`;
+  if (block === "messages_history") {
+    return `${base} Сейчас сервер отклоняет этот сброс: он удалил бы все сохранённые сообщения страницы.`;
+  }
+  return `${base} Уже загруженные данные остаются.`;
+}
+
+// ── a page in one line ───────────────────────────────────────────────────────
+
+const DIAGNOSIS_HEADLINES: Record<SyncDiagnosis["code"], string> = {
+  auth_blocked: "Нужно обновить данные входа",
+  stalled_run: "Загрузка остановилась и не продвигается",
+  worker_offline: "Сбор отстаёт: работа стоит в очереди, но не выполняется",
+};
+
+export function getDiagnosisHeadline(diagnosis: SyncDiagnosis): string {
+  return DIAGNOSIS_HEADLINES[diagnosis.code];
+}
+
+function blocksPhrase(labels: string[]): string {
+  const quoted = labels.map((label) => `«${label}»`);
+  return `${quoted.length === 1 ? "блок" : "блоки"} ${quoted.join(", ")}`;
+}
+
+/**
+ * What an OnlyFans page is now, in one line: it needs a login, a block has
+ * failed, it is paused, it lags, it is loading, it has not started, or it
+ * works. The same words as the Fansly screen where they mean the same.
+ */
+export function syncPageStatus(page: SyncBlocksPage): PageStatus {
+  const blocks = BLOCK_ORDER.map((key) => page.blocks[key]);
+  const live = blocks.filter((block) => block.state !== "not_available");
+  const credentials = page.diagnosis?.actionKind === "credentials"
+    || blocks.some((block) => block.statusReason?.code === "credentials_invalid" && needsVisualAttention(block));
+  if (credentials) {
+    return { kind: "login", label: "Нужен вход", tone: "danger", reason: "Данные входа больше не действуют" };
+  }
+  const failed = live.filter((block) => block.state === "failed");
+  if (failed.length > 0) {
+    return { kind: "failed", label: "Ошибка", tone: "danger", reason: blocksPhrase(failed.map((block) => getBlockLabel(block.block))) };
+  }
+  if (live.length > 0 && live.every((block) => block.state === "paused")) {
+    return { kind: "paused", label: "На паузе", tone: "neutral", reason: "пауза владельца" };
+  }
+  const lagging = live.filter((block) => needsVisualAttention(block) || block.state === "retrying");
+  if (page.diagnosis !== null || lagging.length > 0) {
+    return {
+      kind: "lagging",
+      label: "Отстаёт",
+      tone: "warning",
+      reason: lagging.length > 0 ? blocksPhrase(lagging.map((block) => getBlockLabel(block.block))) : null,
+    };
+  }
+  if (live.some((block) => block.state === "syncing" || block.state === "backfilling")) {
+    return { kind: "syncing", label: "Обновляется", tone: "info", reason: null };
+  }
+  if (live.length === 0 || live.every((block) => block.state === "not_started" || block.succeededAt === null)) {
+    return { kind: "not_started", label: "Ещё не запускался", tone: "neutral", reason: "данных пока нет" };
+  }
+  const paused = live.filter((block) => block.state === "paused");
+  return {
+    kind: "working",
+    label: "Работает",
+    tone: "success",
+    reason: paused.length > 0 ? `на паузе: ${blocksPhrase(paused.map((block) => getBlockLabel(block.block)))}` : null,
+  };
 }

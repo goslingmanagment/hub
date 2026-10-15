@@ -1,9 +1,7 @@
-import { OfapiContentEvidence } from "../OfapiContentEvidence.js";
-import { OfapiStoredReads } from "../OfapiStoredReads.js";
-import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
+import { ChevronRight } from "lucide-react";
 
 import {
   useAdminOfapiCollection,
@@ -44,6 +42,7 @@ import {
   PRICE_UNIT_LABELS_RU,
   prerequisiteLabel,
   sourceLabel,
+  webhookOperationLabel,
   webhookStateLabel,
 } from "./collectionCopyRu.js";
 import {
@@ -69,6 +68,7 @@ import {
   jobProgress,
   jobReasonText,
   jobsFor,
+  localDateTime,
   localDateTimeToIso,
   maskWebhookId,
   parseSelection,
@@ -95,6 +95,7 @@ import {
   type StaleEntry,
   CAP_LEVER_FIELD_RU,
 } from "./collectionModel.js";
+import { DisclosureCard } from "./DisclosureCard.js";
 
 // Settings › Collection (S-UI, decisions #250/#251). One screen: what the
 // kernel asks OnlyFans API for in the background, how often, under which
@@ -103,94 +104,50 @@ import {
 // a credit (the GET reads retained rows only). Supported modes come from the
 // registry in the GET — the UI decides nothing about what a category can do.
 
-const eyebrowClass = "text-[11px] font-bold uppercase tracking-wide text-text-secondary";
-const cardClass = "rounded-xl border border-border bg-card";
-const thClass = "px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-text-secondary bg-hover-alt border-y border-border-light first:pl-4 last:pr-4";
-const tdClass = "px-3 py-3 align-top text-[12.5px] text-text-secondary first:pl-4 last:pr-4";
-const buttonClass = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[13px] font-medium text-text-secondary hover:bg-hover disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
-const primaryButtonClass = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
-const dangerOutlineButtonClass = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/40 bg-card px-3 text-[13px] font-medium text-red-700 hover:bg-red-500/5 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
-const dangerButtonClass = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
-const smallButtonClass = "inline-flex h-[26px] items-center gap-1 rounded-lg border border-border bg-card px-2.5 text-[12px] font-medium text-text-secondary hover:bg-hover disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
-const inputClass = "h-8 w-full rounded-lg border border-border bg-card px-2.5 text-[13px] text-text-primary tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
-const fieldHintClass = "mt-1 text-[11px] leading-snug text-text-muted";
-
 const TONE_TEXT: Record<RowTone, string> = {
-  ok: "text-green-700",
-  warning: "text-amber-700",
-  danger: "text-red-700",
+  ok: "text-green",
+  warning: "text-warning-dark",
+  danger: "text-danger",
   accent: "text-accent",
   muted: "text-text-secondary",
   off: "text-text-muted",
 };
 
 const TONE_DOT: Record<RowTone, string> = {
-  ok: "bg-green",
-  warning: "bg-warning",
-  danger: "bg-danger",
-  accent: "bg-accent",
-  muted: "bg-text-muted",
-  off: "border border-text-muted bg-transparent",
+  ok: "status-dot status-dot-ok",
+  warning: "status-dot status-dot-warn",
+  danger: "status-dot status-dot-error",
+  accent: "status-dot bg-accent",
+  muted: "status-dot",
+  off: "status-dot border border-text-muted bg-transparent",
 };
 
+/** Job states that still need the server or a person: the jobs card opens for them. */
+const ACTIVE_JOB_STATES = new Set(["queued", "running", "paused", "blocked", "budget_exhausted"]);
+
 function Dot(props: { tone: RowTone }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${TONE_DOT[props.tone]}`}
-    />
-  );
+  return <span aria-hidden="true" className={TONE_DOT[props.tone]} />;
 }
 
 function StateLabel(props: { tone: RowTone; label: string; detail?: string | null }) {
   return (
     <div>
-      <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${TONE_TEXT[props.tone]}`}>
+      <span className={`inline-flex items-center gap-2 text-sm font-medium ${TONE_TEXT[props.tone]}`}>
         <Dot tone={props.tone} />
         {props.label}
       </span>
-      {props.detail && <div className="mt-0.5 text-[11px] leading-snug text-text-muted">{props.detail}</div>}
+      {props.detail && <div className="mt-0.5 text-xs leading-snug text-text-muted">{props.detail}</div>}
     </div>
   );
 }
 
-function Caret(props: { expanded: boolean }) {
+function ModeBadge(props: { mode: OfapiCollectionMode | "mixed"; draft?: boolean; job?: boolean; title?: string | undefined }) {
+  const text = props.job ? "Разовая задача" : props.mode === "mixed" ? "Различается" : modeLabel(props.mode);
+  const tone = props.job || props.mode === "off" ? "badge" : "badge badge-accent";
   return (
-    <svg
-      viewBox="0 0 12 12"
-      width="10"
-      height="10"
-      aria-hidden="true"
-      className={`transition-transform ${props.expanded ? "rotate-90" : ""}`}
-    >
-      <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ModeChip(props: { mode: OfapiCollectionMode | "mixed"; draft?: boolean; job?: boolean }) {
-  const text = props.mode === "mixed" ? "Различается" : modeLabel(props.mode);
-  const cls = props.job
-    ? "border border-dashed border-border text-text-secondary"
-    : props.mode === "off"
-      ? "bg-hover text-text-secondary"
-      : "bg-accent/10 text-accent";
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[12px] font-semibold ${cls}`}>
-      {props.draft && <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />}
-      {props.job ? "Разовая задача" : text}
-    </span>
-  );
-}
-
-function SourceTag(props: { unknown?: boolean; children: ReactNode }) {
-  return (
-    <span
-      className={`inline-block rounded-md border px-1.5 py-px text-[11px] leading-snug text-text-secondary ${
-        props.unknown ? "border-dashed border-border text-text-muted" : "border-border-light bg-hover-alt"
-      }`}
-    >
-      {props.children}
+    <span className={tone} title={props.title}>
+      {props.draft && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent" />}
+      {text}
     </span>
   );
 }
@@ -273,10 +230,10 @@ export function CollectionTab() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [size]);
 
-  // Readback: "применено" only once the GET reports the applied revision.
+  // "Применено" only once the GET reports the applied revision.
   useEffect(() => {
     if (applyPhase.kind === "saved" && snapshot && snapshot.revision >= applyPhase.revision) {
-      toast.success(`Политика v${applyPhase.revision} применена и подтверждена чтением.`);
+      toast.success("Изменения применены и подтверждены сервером.");
       setApplyPhase({ kind: "idle" });
     }
   }, [applyPhase, snapshot]);
@@ -291,7 +248,7 @@ export function CollectionTab() {
   const groups = useMemo(() => groupCategoryViews(views), [views]);
   const actorName = useCallback((userId: number) => {
     const user = usersQuery.data?.find((candidate) => candidate.id === userId);
-    return user ? user.username : `user #${userId}`;
+    return user ? user.username : `пользователь ${userId}`;
   }, [usersQuery.data]);
 
   const updateEntry = useCallback((view: CategoryView, patch: Partial<OfapiCollectionSettings>) => {
@@ -323,7 +280,7 @@ export function CollectionTab() {
 
   const handleMutationError = useCallback((error: unknown, phase: "preview" | "apply" | "job") => {
     if (isConflictError(error)) {
-      setConflictMessage(errorMessage(error, "Политика изменена в другом окне."));
+      setConflictMessage(errorMessage(error, "Настройки изменены в другом окне."));
       setModal(null);
       return;
     }
@@ -365,7 +322,7 @@ export function CollectionTab() {
         setApplyPhase({ kind: "saved", revision: result.revision });
         setConflictMessage(null);
         if (clearDraft) setDraft(null);
-        toast.message(`Сохранено как v${result.revision} · ждём подтверждения чтением`);
+        toast.message("Сохранено. Ждём подтверждения сервера.");
       },
       onError: (error) => handleMutationError(error, "apply"),
     });
@@ -373,9 +330,9 @@ export function CollectionTab() {
 
   const submitJob = useCallback((body: OfapiCollectionJobBody) => {
     jobCreate.mutate(body, {
-      onSuccess: (result) => {
+      onSuccess: () => {
         setModal(null);
-        toast.success(`Задача ${result.id.slice(0, 8)} поставлена в очередь.`);
+        toast.success("Задача поставлена в очередь.");
       },
       onError: (error) => handleMutationError(error, "job"),
     });
@@ -387,29 +344,21 @@ export function CollectionTab() {
   }, [snapshotQuery]);
 
   if (snapshotQuery.isLoading && !snapshot) {
-    return (
-      <div className="flex flex-col gap-4">
-        <PageHeading />
-        <TableSkeleton rows={6} columns={6} />
-      </div>
-    );
+    return <TableSkeleton rows={6} columns={6} />;
   }
 
   if (!snapshot) {
     return (
-      <div className="flex flex-col gap-4">
-        <PageHeading />
-        <StatusPanel
-          tone="error"
-          title="Настройки сбора недоступны"
-          description={errorMessage(snapshotQuery.error, "Сервер не ответил. Политика не читается, ручки недоступны.")}
-          action={(
-            <button type="button" className={buttonClass} onClick={() => void snapshotQuery.refetch()}>
-              Повторить
-            </button>
-          )}
-        />
-      </div>
+      <StatusPanel
+        tone="error"
+        title="Настройки сбора недоступны"
+        description={errorMessage(snapshotQuery.error, "Сервер не ответил. Настройки сбора не прочитаны.")}
+        action={(
+          <button type="button" className="btn" onClick={() => void snapshotQuery.refetch()}>
+            Повторить
+          </button>
+        )}
+      />
     );
   }
 
@@ -429,8 +378,8 @@ export function CollectionTab() {
   const busy = preview.isPending || apply.isPending;
 
   return (
-    <div className="flex flex-col gap-4 pb-24">
-      {snapshotQuery.isError && <StaleDataNotice title="Показана последняя загруженная политика" error={snapshotQuery.error} />}
+    <div className="space-y-5 pb-24">
+      {snapshotQuery.isError && <StaleDataNotice title="Показаны последние загруженные настройки" error={snapshotQuery.error} />}
       {snapshot.backgroundPaused && (
         <PausedBanner
           snapshot={snapshot}
@@ -442,80 +391,77 @@ export function CollectionTab() {
       )}
       {stale.length > 0 && <StaleBanner entries={stale} />}
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <PageHeading />
-        <div className="flex flex-col items-end gap-2.5">
-          <ScopeSelector snapshot={snapshot} scope={scope} onChange={setScope} />
-          <div className="flex flex-wrap items-center justify-end gap-2.5">
-            <span
-              data-testid="policy-pill"
-              className="inline-flex h-7 items-center gap-2 rounded-full border border-border bg-card px-3 text-[12px] text-text-secondary"
-            >
-              <Dot tone={pill.tone} />
-              <span className="font-medium text-text-primary">{pill.text}</span>
-            </span>
-            {conflict && (
-              <button type="button" className={buttonClass} onClick={refreshAndCompare}>
-                Обновить и сравнить
-              </button>
-            )}
-            {applyPhase.kind === "error" && (
-              <button
-                type="button"
-                className={buttonClass}
-                onClick={() => (draft && size > 0 ? openDraftPreview() : setApplyPhase({ kind: "idle" }))}
-              >
-                Повторить
-              </button>
-            )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ScopeSelect snapshot={snapshot} scope={scope} onChange={setScope} />
+        <div className="flex flex-wrap items-center gap-2">
+          <span data-testid="policy-pill" className="mr-1 inline-flex items-center gap-2 text-sm text-text-secondary">
+            <Dot tone={pill.tone} />
+            {pill.text}
+          </span>
+          {conflict && (
+            <button type="button" className="btn btn-sm" onClick={refreshAndCompare}>
+              Обновить и сравнить
+            </button>
+          )}
+          {applyPhase.kind === "error" && (
             <button
               type="button"
-              className={dangerOutlineButtonClass}
-              disabled={snapshot.backgroundPaused || busy}
-              onClick={() => openPausePreview(false)}
+              className="btn btn-sm"
+              onClick={() => (draft && size > 0 ? openDraftPreview() : setApplyPhase({ kind: "idle" }))}
             >
-              Остановить фоновый сбор
+              Повторить
             </button>
-          </div>
-          {applyPhase.kind === "error" && (
-            <p className="max-w-md text-right text-[12px] text-red-700">{applyPhase.message}</p>
           )}
-          {conflictMessage && (
-            <p className="max-w-md text-right text-[12px] text-text-secondary">
-              {conflictMessage} Черновик сохранён и не перетирает чужие изменения.
-            </p>
-          )}
+          <button
+            type="button"
+            className="btn btn-sm text-danger"
+            disabled={snapshot.backgroundPaused || busy}
+            onClick={() => openPausePreview(false)}
+          >
+            Остановить фоновый сбор
+          </button>
         </div>
       </div>
+      {applyPhase.kind === "error" && (
+        <div role="alert" className="notice notice-danger">{applyPhase.message}</div>
+      )}
+      {conflictMessage && (
+        <div role="status" className="notice">
+          {conflictMessage} Черновик сохранён и не перетирает чужие изменения.
+        </div>
+      )}
 
-      <UsageCard snapshot={snapshot} scope={scope} views={views} totals={totals} />
+      <UsageSummary views={views} totals={totals} />
 
-      <section className={cardClass} aria-labelledby="collection-categories-heading">
-        <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
-          <h3 id="collection-categories-heading" className={eyebrowClass}>Категории</h3>
-          <span className="text-[12px] text-text-secondary">
-            {scope.kind === "all"
-              ? `Показаны все OF-страницы · ${snapshot.pages.length} · внутри группы по расходу за 30 дней`
-              : `Показана страница ${scopeLabel(scope.pageId, snapshot.pages)}`}
-          </span>
+      <section className="card" aria-labelledby="collection-categories-heading">
+        <div className="card-header">
+          <div className="min-w-0">
+            <h3 id="collection-categories-heading" className="card-title">Категории</h3>
+            <p className="card-description">
+              {scope.kind === "all"
+                ? `Что Hub загружает в фоне для всех страниц (${snapshot.pages.length}). Нажмите на строку, чтобы изменить режим и лимиты.`
+                : `Что Hub загружает в фоне для страницы ${scopeLabel(scope.pageId, snapshot.pages)}. Нажмите на строку, чтобы изменить режим и лимиты.`}
+            </p>
+          </div>
         </div>
         {snapshot.pages.length === 0
           ? (
-            <p className="px-4 py-6 text-[13px] text-text-secondary">
-              OF-страниц нет: политика применяется только к страницам OnlyFans с привязкой OFAPI.
-            </p>
+            <div className="empty">
+              <p className="empty-title">Страниц OnlyFans нет</p>
+              <p className="empty-text">Настройки сбора действуют только для страниц OnlyFans, подключённых к OnlyFans API.</p>
+            </div>
           )
           : (
-            <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[900px] border-collapse">
+            <div className="overflow-x-auto">
+              <table className="data-table min-w-[720px]">
                 <thead>
                   <tr>
-                    <th className={`${thClass} w-[30%]`}>Категория</th>
-                    <th className={`${thClass} w-[17%]`}>Режим</th>
-                    <th className={`${thClass} w-[14%]`}>Свежесть</th>
-                    <th className={`${thClass} w-[13%] text-right`}>Сегодня · кр</th>
-                    <th className={`${thClass} w-[10%] text-right`}>30 дней</th>
-                    <th className={`${thClass} w-[16%]`}>Состояние</th>
+                    <th className="w-[36%]">Категория</th>
+                    <th className="w-[17%]">Режим</th>
+                    <th>Свежесть</th>
+                    <th className="num">Сегодня, кр</th>
+                    <th className="num">30 дней, кр</th>
+                    <th className="w-[18%]">Состояние</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -543,19 +489,41 @@ export function CollectionTab() {
               </table>
             </div>
           )}
-        <p className="px-4 pb-3.5 pt-3 text-[12px] text-text-muted">
-          Изменения на этом экране становятся черновиком и действуют после «Применить». Выключение категории останавливает
-          новые запросы; уже собранные данные остаются и читаются с их реальной свежестью. Лимиты проверяет сервер перед
-          каждым запросом, не форма.
-        </p>
       </section>
 
       <JobsCard snapshot={snapshot} scope={scope} />
-      <WebhookCard />
-      <OfapiWebhookRecovery />
-      <OfapiContentEvidence pages={snapshot.pages} />
-      <OfapiStoredReads pages={snapshot.pages} />
       <AuditCard snapshot={snapshot} actorName={actorName} />
+
+      <div className="space-y-2">
+        <details className="help">
+          <summary>Как это работает</summary>
+          <div className="help-body">
+            <p>
+              Изменения на этом экране сначала попадают в черновик. Они начинают действовать после «Проверить и применить»:
+              сервер показывает, что изменится и сколько это может стоить, и только потом сохраняет.
+            </p>
+            <p>
+              Выключение категории останавливает новые запросы; уже собранные данные остаются и показываются с их реальной
+              свежестью. Лимиты проверяет сервер перед каждым запросом, а не форма. Включать можно по одной категории за раз.
+            </p>
+            <p>
+              Расход вверху — только фоновые запросы этого экрана. События вебхука, действия чаттеров и внешние списания
+              того же доступа сюда не входят.
+            </p>
+            <p>
+              Сбор Fansly кредиты OnlyFans API не расходует. Пауза между его запросами задаётся в разделе{" "}
+              <Link className="link" to="/settings?tab=configuration#config-fanslyDefaultDelayMs">«Система → Все параметры»</Link>.
+            </p>
+          </div>
+        </details>
+        <details className="help">
+          <summary>Технические детали</summary>
+          <div className="help-body">
+            <p>Как сервер считает лимиты (текст сервера):</p>
+            <p lang="en">{snapshot.limitDescription}</p>
+          </div>
+        </details>
+      </div>
 
       {size > 0 && draft && (
         <DraftBar
@@ -610,11 +578,11 @@ export function CollectionTab() {
       )}
       {modal?.kind === "conflict" && !draft && (
         <ModalShell title="Изменения в другом окне" onClose={() => setModal(null)}>
-          <p className="text-[13px] text-text-secondary">
-            Черновика нет; экран обновлён до v{snapshot.revision}.
+          <p className="text-sm text-text-secondary">
+            Черновика нет; экран показывает актуальные настройки.
           </p>
           <div className="mt-5 flex justify-end">
-            <button type="button" className={buttonClass} onClick={() => { setConflictMessage(null); setModal(null); }}>
+            <button type="button" className="btn" onClick={() => { setConflictMessage(null); setModal(null); }}>
               Понятно
             </button>
           </div>
@@ -634,47 +602,31 @@ export function CollectionTab() {
   );
 }
 
-function PageHeading() {
-  return (
-    <div className="min-w-0">
-      <h2 className="text-[17px] font-bold tracking-tight text-text-primary">Сбор данных OFAPI</h2>
-      <p className="mt-1 max-w-[62ch] text-[13px] text-text-secondary">
-        Фоновые запросы Hub к OnlyFans API: что собираем, как часто и под каким лимитом кредитов. Выключение
-        останавливает новые запросы и не удаляет собранное. Fansly настраивается в разделе «Возможности»; кредиты OFAPI на него не расходуются.
-      </p>
-    </div>
-  );
-}
-
-function ScopeSelector(props: {
+/** Which pages the table shows and edits: all of them (the shared setting)
+ *  or one page's own. A select scales to any number of pages. */
+function ScopeSelect(props: {
   snapshot: OfapiCollectionSnapshot;
   scope: CollectionScope;
   onChange: (scope: CollectionScope) => void;
 }) {
-  const options: Array<{ key: string; label: string; scope: CollectionScope }> = [
-    { key: "all", label: "Все OF-страницы", scope: { kind: "all" } },
-    ...props.snapshot.pages.map((page) => ({
-      key: `page:${page.id}`,
-      label: page.label,
-      scope: { kind: "page", pageId: page.id } as CollectionScope,
-    })),
-  ];
-  const activeKey = props.scope.kind === "all" ? "all" : `page:${props.scope.pageId}`;
+  const id = useId();
+  const value = props.scope.kind === "all" ? "all" : String(props.scope.pageId);
   return (
-    <div role="group" aria-label="Охват" className="inline-flex rounded-lg border border-border bg-card p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.key}
-          type="button"
-          aria-pressed={option.key === activeKey}
-          onClick={() => props.onChange(option.scope)}
-          className={`rounded-md px-2.5 py-1 text-[12.5px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
-            option.key === activeKey ? "bg-hover font-semibold text-text-primary" : "text-text-secondary hover:text-text-primary"
-          }`}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="flex min-w-0 items-center gap-2">
+      <label htmlFor={id} className="shrink-0 text-sm font-medium text-text-secondary">Страница</label>
+      <select
+        id={id}
+        className="select w-auto min-w-[200px] max-w-full"
+        value={value}
+        onChange={(event) => props.onChange(
+          event.target.value === "all" ? { kind: "all" } : { kind: "page", pageId: Number(event.target.value) },
+        )}
+      >
+        <option value="all">Все страницы</option>
+        {props.snapshot.pages.map((page) => (
+          <option key={page.id} value={String(page.id)}>{page.label}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -688,25 +640,22 @@ function PausedBanner(props: {
 }) {
   const latest = props.snapshot.audit.find((row) => row.revision === props.snapshot.revision);
   return (
-    <div
-      role="status"
-      className="flex items-start justify-between gap-4 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3"
-    >
-      <div>
-        <p className="text-[13.5px] font-semibold text-red-700">
+    <div role="status" className="notice notice-danger flex-wrap justify-between">
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">
           Фоновый сбор остановлен
-          {latest ? ` · ${props.actorName(latest.actorUserId)} · ${utcDateTime(latest.createdAt)}` : ""}
+          {latest ? ` · ${props.actorName(latest.actorUserId)} · ${localDateTime(latest.createdAt)}` : ""}
         </p>
-        <p className="mt-0.5 text-[12.5px] leading-relaxed text-text-secondary">
-          Новых фоновых запросов и разовых задач нет. Продолжают: события вебхука, интерактивные действия чаттеров,
-          бесплатные чтения.{" "}
+        <p className="mt-0.5">
+          Новых фоновых запросов и разовых задач нет. Продолжают работать события вебхука, действия чаттеров и бесплатные
+          чтения.{" "}
           {props.inFlight > 0
-            ? <strong className="font-semibold text-text-primary">{props.inFlight} {ruPlural(props.inFlight, "запрос", "запроса", "запросов")} ещё в полёте — списание кредитов возможно.</strong>
+            ? <strong className="font-semibold">{props.inFlight} {ruPlural(props.inFlight, "запрос", "запроса", "запросов")} ещё в полёте — списание кредитов возможно.</strong>
             : "Запросов в полёте нет."}{" "}
-          Категории ниже показаны с сохранёнными режимами.
+          Режимы категорий сохранены.
         </p>
       </div>
-      <button type="button" className={primaryButtonClass} disabled={props.busy} onClick={props.onResume}>
+      <button type="button" className="btn btn-primary btn-sm" disabled={props.busy} onClick={props.onResume}>
         Возобновить сбор
       </button>
     </div>
@@ -720,114 +669,85 @@ export function StaleBanner(props: { entries: StaleEntry[] }) {
   const outgrows = props.entries.some((entry) => entry.outgrowsRun);
   const levers = (["calls", "credits"] as const).filter((lever) => props.entries.some((entry) => entry.lever === lever));
   return (
-    <div role="status" data-testid="collection-stale-banner" className="rounded-xl border border-warning/30 bg-warning/[0.06] px-4 py-3">
-      <p className="text-[13.5px] font-semibold text-amber-700">
-        Сбор по расписанию отстаёт: {n} {ruPlural(n, "категория не завершалась", "категории не завершались", "категорий не завершались")} успешно
-        дольше двух интервалов
-      </p>
-      <ul className="mt-1.5 flex flex-col gap-1 text-[12.5px] leading-relaxed text-text-secondary">
-        {props.entries.map((entry) => (
-          <li key={`${entry.pageId}:${entry.category}`}>
-            <span className="font-semibold text-text-primary">{categoryLabel(entry.category)}</span>
-            {" · "}{entry.pageLabel}{" — "}{entry.cause}
-            <span className="text-text-muted">
-              {" · "}
-              {entry.policy.scheduleHealth.lastCompletedAt
-                ? `последний успешный проход ${utcDateTime(entry.policy.scheduleHealth.lastCompletedAt)}`
-                : "успешных проходов не было"}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {outgrows && (
-        <p className="mt-1.5 text-[12px] leading-relaxed text-text-secondary">
-          Проход начинается каждый интервал и тратит потолок задачи, но до конца списка не доходит.
-          {levers.length > 0 && <>
-            {" "}Поднять потолок: раскройте категорию и увеличьте {levers.map((lever) => CAP_LEVER_FIELD_RU[lever]).join(" или ")}.
-          </>}
-          {" "}Сохранённые настройки сами не меняются.
+    <div role="status" data-testid="collection-stale-banner" className="notice notice-warning">
+      <div className="min-w-0">
+        <p className="font-semibold">
+          Сбор по расписанию отстаёт: {n} {ruPlural(n, "категория не завершалась", "категории не завершались", "категорий не завершались")} успешно
+          дольше двух интервалов
         </p>
-      )}
+        <ul className="mt-1.5 space-y-1">
+          {props.entries.map((entry) => (
+            <li key={`${entry.pageId}:${entry.category}`}>
+              <span className="font-semibold">{categoryLabel(entry.category)}</span>
+              {" · "}{entry.pageLabel}{" — "}{entry.cause}
+              <span className="opacity-80">
+                {" · "}
+                {entry.policy.scheduleHealth.lastCompletedAt
+                  ? `последний успешный проход ${localDateTime(entry.policy.scheduleHealth.lastCompletedAt)}`
+                  : "успешных проходов не было"}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {outgrows && (
+          <p className="mt-1.5">
+            Проход начинается каждый интервал и тратит потолок задачи, но до конца списка не доходит.
+            {levers.length > 0 && <>
+              {" "}Поднять потолок: раскройте категорию и увеличьте {levers.map((lever) => CAP_LEVER_FIELD_RU[lever]).join(" или ")}.
+            </>}
+            {" "}Сохранённые настройки сами не меняются.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
 
-function UsageCard(props: {
-  snapshot: OfapiCollectionSnapshot;
-  scope: CollectionScope;
+function UsageSummary(props: {
   views: CategoryView[];
   totals: ReturnType<typeof usageTotals>;
 }) {
-  const { totals, snapshot } = props;
-  const managed = props.views.flatMap((view) => view.policies).filter(
-    (policy) => policy.mode !== "off" && policy.source !== "legacy_baseline",
-  );
-  const legacy = props.views.flatMap((view) => view.policies).filter(
-    (policy) => policy.mode !== "off" && policy.source === "legacy_baseline",
-  );
+  const { totals } = props;
+  const policies = props.views.flatMap((view) => view.policies);
+  const managed = policies.filter((policy) => policy.mode !== "off" && policy.source !== "legacy_baseline");
+  const legacy = policies.filter((policy) => policy.mode !== "off" && policy.source === "legacy_baseline");
   const managedLimit = managed.reduce((sum, policy) => sum + policy.dailyCreditLimit, 0);
   const legacyCategories = new Set(legacy.map((policy) => policy.category)).size;
-  const today = new Date().toISOString().slice(0, 10);
 
   return (
-    <section className={cardClass} aria-labelledby="collection-usage-heading">
-      <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
-        <h3 id="collection-usage-heading" className={eyebrowClass}>Управляемые запросы · {today} UTC</h3>
-        <span className="text-[12px] text-text-secondary">
-          Полная картина списаний — в{" "}
-          <Link to="/ofapi-credits" className="font-medium text-accent underline-offset-2 hover:underline">OFAPI Credits</Link>
-        </span>
-      </div>
-      <div className="grid gap-4 px-4 pb-4 pt-3 lg:grid-cols-[1fr_300px]">
-        <div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-[26px] font-bold tracking-tight text-text-primary tabular-nums">
-              {fmtCredits(totals.reservedCreditsToday)}
-            </span>
-            <span className="text-[12.5px] text-text-secondary">кр зарезервировано сегодня под фоновый сбор</span>
+    <section aria-labelledby="collection-usage-heading" className="space-y-2">
+      <h3 id="collection-usage-heading" className="sr-only">Расход кредитов на фоновый сбор</h3>
+      <div className="stat-grid grid-cols-2 lg:grid-cols-4">
+        <div className="stat">
+          <div className="stat-label">Зарезервировано сегодня</div>
+          <div className="stat-value">{fmtCredits(totals.reservedCreditsToday)} кр</div>
+          <div className="stat-meta">
+            {totals.actualCreditsToday === null ? "факт не подтверждён" : `фактически списано ${fmtCredits(totals.actualCreditsToday)} кр`}
           </div>
-          <dl className="mt-2 grid gap-x-6 gap-y-1 text-[12px] text-text-secondary sm:grid-cols-2">
-            <div className="flex justify-between gap-3 border-t border-border-light pt-1.5">
-              <dt>Фактически списано</dt>
-              <dd className="tabular-nums text-text-primary">
-                {totals.actualCreditsToday === null ? "факт не подтверждён" : `${fmtCredits(totals.actualCreditsToday)} кр`}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3 border-t border-border-light pt-1.5">
-              <dt>Запросов сегодня</dt>
-              <dd className="tabular-nums text-text-primary">{fmtCredits(totals.callsToday)}</dd>
-            </div>
-            <div className="flex justify-between gap-3 border-t border-border-light pt-1.5">
-              <dt>За 30 дней</dt>
-              <dd className="tabular-nums text-text-primary">{fmtCredits(totals.credits30d)} кр</dd>
-            </div>
-            <div className="flex justify-between gap-3 border-t border-border-light pt-1.5">
-              <dt>В полёте</dt>
-              <dd className="tabular-nums text-text-primary">{totals.inFlight}</dd>
-            </div>
-          </dl>
-          <p className="mt-2.5 text-[11.5px] leading-snug text-text-muted">
-            Только запросы под управлением этого экрана. События вебхука, действия чаттеров и внешние списания того же
-            ключа сюда не входят; баланс команды — не бюджет одного коллектора.
-          </p>
         </div>
-        <div className="border-t border-border-light pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
-          <div className="flex justify-between text-[12px] text-text-secondary">
-            <span>Предел новых управляемых запросов</span>
-            <span className="font-semibold text-text-primary tabular-nums">
-              {managed.length === 0 ? "нет включённых" : `${fmtCredits(managedLimit)} кр/сутки`}
-            </span>
-          </div>
-          <p className="mt-1 text-[11.5px] leading-snug text-text-muted">
-            Сумма дневных лимитов включённых категорий в этом охвате.
+        <div className="stat">
+          <div className="stat-label">Запросов сегодня</div>
+          <div className="stat-value">{fmtCredits(totals.callsToday)}</div>
+          <div className="stat-meta">{totals.inFlight > 0 ? `в полёте: ${totals.inFlight}` : "в полёте нет"}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">За 30 дней</div>
+          <div className="stat-value">{fmtCredits(totals.credits30d)} кр</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Дневной предел</div>
+          <div className="stat-value">{managed.length === 0 ? "—" : `${fmtCredits(managedLimit)} кр`}</div>
+          <div className="stat-meta">
+            {managed.length === 0 ? "нет включённых категорий" : "сумма лимитов включённых категорий"}
             {legacyCategories > 0
-              ? ` Ещё ${legacyCategories} ${ruPlural(legacyCategories, "категория", "категории", "категорий")} зависят от прежних настроек и бюджетов до первого применения.`
+              ? ` · ещё ${legacyCategories} ${ruPlural(legacyCategories, "категория", "категории", "категорий")} на прежних настройках`
               : ""}
-          </p>
-          <p className="mt-2 text-[11px] leading-snug text-text-muted" lang="en">
-            {snapshot.limitDescription}
-          </p>
+          </div>
         </div>
+      </div>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 text-xs text-text-secondary">
+        <p>Только фоновые запросы этого экрана; сутки считаются по UTC.</p>
+        <Link to="/ofapi-credits" className="link shrink-0">Полная картина списаний →</Link>
       </div>
     </section>
   );
@@ -836,8 +756,8 @@ function UsageCard(props: {
 const GROUP_COPY: Record<CategoryGroup, { title: string; hint: string; pausedHint?: string }> = {
   running: {
     title: "Действующая конфигурация",
-    hint: "действующая конфигурация, не меняется автоматически",
-    pausedHint: "действующая конфигурация, остановлена глобальной паузой",
+    hint: "не меняется автоматически",
+    pausedHint: "остановлена глобальной паузой",
   },
   available: {
     title: "Доступно к включению",
@@ -845,11 +765,11 @@ const GROUP_COPY: Record<CategoryGroup, { title: string; hint: string; pausedHin
   },
   one_off: {
     title: "Только разовые задачи",
-    hint: "без тумблера: период, выбор и потолок задаются на каждую задачу",
+    hint: "период, выбор и потолок задаются на каждую задачу",
   },
   unavailable: {
     title: "Ещё не реализовано",
-    hint: "категории из плана без работающего кода — тумблера нет",
+    hint: "категории из плана без работающего кода",
   },
 };
 
@@ -857,9 +777,9 @@ function GroupRow(props: { group: CategoryGroup; paused: boolean }) {
   const copyEntry = GROUP_COPY[props.group];
   return (
     <tr>
-      <td colSpan={6} className="px-4 pb-1.5 pt-3.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-        {copyEntry.title}
-        <span className="ml-2 font-normal normal-case tracking-normal">
+      <td colSpan={6} className="bg-hover-alt py-2 text-xs whitespace-normal">
+        <span className="font-semibold text-text-primary">{copyEntry.title}</span>
+        <span className="ml-2 text-text-muted">
           {props.paused && copyEntry.pausedHint ? copyEntry.pausedHint : copyEntry.hint}
         </span>
       </td>
@@ -881,28 +801,33 @@ function CategoryRow(props: {
   const detailId = useId();
   const state = rowState(view, snapshot.backgroundPaused);
   const expandable = view.group !== "unavailable";
+  const legacy = !draftEntry && view.sources.includes("legacy_baseline");
   const shownSettings = draftEntry?.settings ?? view.settings;
-  const modeForChip: OfapiCollectionMode | "mixed" = draftEntry ? draftEntry.settings.mode : view.mode;
+  const modeForBadge: OfapiCollectionMode | "mixed" = draftEntry ? draftEntry.settings.mode : view.mode;
   const subline = draftEntry
     ? `черновик · было: ${draftEntry.base ? modeLabel(draftEntry.base.mode) : "различалось"}`
-    : !draftEntry && view.sources.includes("legacy_baseline")
-      ? "Режим и лимиты задаёт прежний сборщик"
-    : shownSettings && shownSettings.mode !== "off"
-      ? describeSettings(shownSettings).split(" · ").slice(1).join(" · ")
-      : view.group === "available" && view.supportsToggle
-        ? `доступно: ${view.entry.modes.filter((mode) => mode !== "off").map((mode) => modeLabel(mode).toLowerCase()).join(", ")}`
+    : legacy
+      ? ""
+      : shownSettings && shownSettings.mode !== "off"
+        ? describeSettings(shownSettings).split(" · ").slice(1).join(" · ")
         : "";
-  const sourceLine = view.sources.length === 1 && view.sources[0] ? sourceLabel(view.sources[0]) : "источники различаются";
+  const available = view.group === "available" && view.supportsToggle && !draftEntry
+    ? ` · доступно: ${view.entry.modes.filter((mode) => mode !== "off").map((mode) => modeLabel(mode).toLowerCase()).join(", ")}`
+    : "";
+  const sourceTitle = `Источник настройки: ${view.sources.length === 1 && view.sources[0] ? sourceLabel(view.sources[0]) : "различается по страницам"}${available}`;
+  const consumers = view.entry.consumers.map(consumerLabel);
+  const label = categoryLabel(view.entry.id, view.entry.label);
+  const why = categoryWhy(view.entry.id);
   const jobs = jobsFor(snapshot, props.scope, view.entry.id);
   const latestJob = jobs[0];
 
   return (
     <Fragment>
       <tr
-        className={`border-t border-border-light ${expandable ? "cursor-pointer hover:bg-hover" : ""}`}
+        className={expandable ? "cursor-pointer" : ""}
         onClick={expandable ? props.onToggle : undefined}
       >
-        <td className={`${tdClass} text-text-primary`}>
+        <td className="min-w-[240px] whitespace-normal align-top">
           <div className="flex items-start gap-2">
             {expandable
               ? (
@@ -910,87 +835,81 @@ function CategoryRow(props: {
                   type="button"
                   aria-expanded={props.expanded}
                   aria-controls={detailId}
-                  aria-label={`${props.expanded ? "Свернуть" : "Раскрыть"} настройки: ${categoryLabel(view.entry.id, view.entry.label)}`}
+                  aria-label={`${props.expanded ? "Свернуть" : "Раскрыть"} настройки: ${label}`}
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onToggle();
                   }}
-                  className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  className="-ml-1 mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted hover:text-text-primary"
                 >
-                  <Caret expanded={props.expanded} />
+                  <ChevronRight size={16} aria-hidden="true" className={`transition-transform ${props.expanded ? "rotate-90" : ""}`} />
                 </button>
               )
-              : <span className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />}
+              : <span className="h-5 w-5 shrink-0" aria-hidden="true" />}
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold">{categoryLabel(view.entry.id, view.entry.label)}</div>
-              {categoryWhy(view.entry.id) && <div className="mt-0.5 text-[12px] text-text-secondary">{categoryWhy(view.entry.id)}</div>}
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {view.entry.consumers.map((consumer) => (
-                  <span key={consumer} className="rounded-md bg-hover px-1.5 py-px text-[10.5px] font-medium text-text-secondary">
-                    {consumerLabel(consumer)}
-                  </span>
-                ))}
-              </div>
+              <div className="font-medium" title={consumers.length > 0 ? `Кто использует: ${consumers.join(", ")}` : undefined}>{label}</div>
+              {why && <div className="mt-0.5 text-[13px] leading-snug text-text-secondary">{why}</div>}
             </div>
           </div>
         </td>
-        <td className={tdClass}>
+        <td className="min-w-[150px] whitespace-normal align-top">
           {view.group === "one_off"
-            ? <ModeChip mode="off" job />
+            ? <ModeBadge mode="off" job />
             : view.group === "unavailable"
-              ? <span className="text-[12px] text-text-muted">ещё не реализовано</span>
-              : !draftEntry && view.sources.includes("legacy_baseline") ? <span className="text-[12px] text-text-secondary">Прежние настройки</span> : <ModeChip mode={modeForChip} draft={draftEntry !== null} />}
-          {subline && <div className="mt-1 text-[11.5px] leading-snug text-text-muted">{subline}</div>}
-          {view.group !== "one_off" && view.group !== "unavailable" && (
-            <div className="mt-0.5 text-[11px] text-text-muted">{sourceLine}</div>
-          )}
+              ? <span className="text-sm text-text-muted">ещё не реализовано</span>
+              : legacy
+                ? <span className="text-sm text-text-secondary" title={sourceTitle}>Прежние настройки</span>
+                : <ModeBadge mode={modeForBadge} draft={draftEntry !== null} title={sourceTitle} />}
+          {subline && <div className="mt-1 text-xs leading-snug text-text-muted">{subline}</div>}
         </td>
-        <td className={tdClass}>
-          <div className="text-[13px] font-semibold text-text-primary">{relativeAge(view.lastCapturedAt)}</div>
-          <div className="mt-0.5 text-[11.5px] text-text-muted">
-            {props.scope.kind === "all"
-              ? `${view.policies.length} ${ruPlural(view.policies.length, "страница", "страницы", "страниц")}`
-              : view.lastCapturedAt ? utcDateTime(view.lastCapturedAt) : "запросов не было"}
-          </div>
+        <td className="whitespace-nowrap align-top">
+          <div title={view.lastCapturedAt ? localDateTime(view.lastCapturedAt) : undefined}>{relativeAge(view.lastCapturedAt)}</div>
         </td>
-        <td className={`${tdClass} text-right tabular-nums`}>
-          <div className="text-[13px] font-semibold text-text-primary">{fmtCredits(view.usage.reservedCreditsToday)}</div>
-          <div className="mt-0.5 text-[11.5px] text-text-muted">
-            {view.usage.actualCreditsToday === null ? "резерв · факт не подтверждён" : `факт ${fmtCredits(view.usage.actualCreditsToday)}`}
-          </div>
+        <td
+          className="num align-top"
+          title={view.usage.actualCreditsToday === null ? "Зарезервировано; факт не подтверждён" : `Зарезервировано; фактически списано ${fmtCredits(view.usage.actualCreditsToday)} кр`}
+        >
+          {fmtCredits(view.usage.reservedCreditsToday)}
         </td>
-        <td className={`${tdClass} text-right tabular-nums`}>
-          <div className="text-[13px] font-semibold text-text-primary">{fmtCredits(view.usage.credits30d)}</div>
-          <div className="mt-0.5 text-[11.5px] text-text-muted">{fmtCredits(view.usage.callsToday)} запр. сегодня</div>
-        </td>
-        <td className={tdClass}>
+        <td className="num align-top">{fmtCredits(view.usage.credits30d)}</td>
+        <td className="min-w-[170px] whitespace-normal align-top">
           {view.group === "one_off"
             ? (
               <div>
-                {view.entry.id === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media" onClick={event => event.stopPropagation()}>Загрузить свой файл…</Link> : <button
-                  type="button"
-                  className={smallButtonClass}
-                  disabled={snapshot.backgroundPaused}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onCreateJob();
-                  }}
-                >
-                  Создать задачу…
-                </button>}
-                <div className="mt-1 text-[11px] text-text-muted">
+                {view.entry.id === "vault_files"
+                  ? <Link className="btn btn-sm" to="/ofapi-media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
+                  : (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={snapshot.backgroundPaused}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        props.onCreateJob();
+                      }}
+                    >
+                      Создать задачу…
+                    </button>
+                  )}
+                <div className="mt-1 text-xs text-text-muted">
                   {latestJob
-                    ? `последняя: ${jobStateLabel(latestJob.state)} · ${utcDateTime(latestJob.createdAt)}`
+                    ? `последняя: ${jobStateLabel(latestJob.state)} · ${localDateTime(latestJob.createdAt)}`
                     : "задач не было"}
                 </div>
               </div>
             )
-            : <StateLabel tone={state.tone} label={state.label} detail={state.detail} />}
+            : (
+              // A legacy row already says "Прежние настройки" in its mode cell;
+              // the explanation of the state moves to a tooltip.
+              <div title={legacy && state.label === "прежняя конфигурация" ? state.detail ?? undefined : undefined}>
+                <StateLabel tone={state.tone} label={state.label} detail={legacy && state.label === "прежняя конфигурация" ? null : state.detail} />
+              </div>
+            )}
         </td>
       </tr>
       {props.expanded && expandable && (
-        <tr id={detailId} className="border-t border-border-light bg-hover-alt/60">
-          <td colSpan={6} className="px-4 pb-4 pt-4">
+        <tr id={detailId}>
+          <td colSpan={6} className="bg-hover-alt px-5 py-5 whitespace-normal">
             <CategoryEditor
               snapshot={snapshot}
               scope={props.scope}
@@ -1032,16 +951,16 @@ export function CategoryEditor(props: {
     : [...INTERVAL_OPTIONS_MINUTES, settings.intervalMinutes].sort((a, b) => a - b);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.35fr_1fr]">
-      <div>
+    <div className="grid gap-6 text-sm lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+      <div className="min-w-0">
         {view.supportsToggle
           ? (
             <fieldset disabled={!editable} className="min-w-0">
-              <legend id={legendId} className="mb-2 text-[12px] font-semibold text-text-primary">
+              <legend id={legendId} className="mb-2 font-semibold text-text-primary">
                 Режим · {scopeLabel(pageId, snapshot.pages)}
               </legend>
               {snapshot.backgroundPaused && (
-                <p className="mb-2 text-[12px] text-red-700">Глобальная пауза: режимы сохранены, правки откроются после возобновления.</p>
+                <p className="mb-2 text-danger">Глобальная пауза: режимы сохранены, правки откроются после возобновления.</p>
               )}
               {modes.map((mode) => (
                 <label key={mode} className="grid cursor-pointer grid-cols-[16px_1fr] gap-2.5 py-1.5 text-text-primary">
@@ -1051,67 +970,67 @@ export function CategoryEditor(props: {
                     value={mode}
                     checked={settings.mode === mode}
                     onChange={() => props.onChange({ mode })}
-                    className="mt-0.5 accent-accent"
+                    className="mt-1 accent-accent"
                   />
                   <span>
-                    <span className="block text-[13px] font-medium">{modeLabel(mode)}</span>
-                    <span className="block text-[12px] text-text-secondary">{MODE_DESCRIPTIONS_RU[mode]}</span>
+                    <span className="block font-medium">{modeLabel(mode)}</span>
+                    <span className="block text-[13px] text-text-secondary">{MODE_DESCRIPTIONS_RU[mode]}</span>
                   </span>
                 </label>
               ))}
               {settings.mode !== "off" && (
-                <div className="ml-[26px] mt-1.5 grid gap-3 rounded-[10px] border border-border-light bg-card p-3 sm:grid-cols-2">
+                <div className="mt-3 grid gap-4 pl-[26px] sm:grid-cols-2">
                   {settings.mode === "scheduled" && (
                     <label className="block">
-                      <span className="mb-1 block text-[12px] text-text-secondary">Интервал</span>
+                      <span className="field-label">Интервал</span>
                       <select
                         value={settings.intervalMinutes}
                         onChange={(event) => props.onChange({ intervalMinutes: Number(event.target.value) })}
-                        className={inputClass}
+                        className="select"
                       >
                         {intervalOptions.map((minutes) => (
                           <option key={minutes} value={minutes}>каждые {intervalLabel(minutes)}</option>
                         ))}
                       </select>
-                      <span className={fieldHintClass}>Частота умножает цену одного обхода; окно и overlap ограничивает сервер.</span>
+                      <span className="field-hint block">Чем чаще запуск, тем больше запросов за сутки.</span>
                     </label>
                   )}
                   {settings.mode === "scheduled" && (
                     <label className="block">
-                      <span className="mb-1 block text-[12px] text-text-secondary">Запросов за запуск, не более</span>
+                      <span className="field-label">Запросов за запуск, не более</span>
                       <input
                         type="number"
                         min={1}
                         max={1000}
                         value={settings.maxCallsPerRun}
                         onChange={(event) => props.onChange({ maxCallsPerRun: clampInt(event.target.value, 1, 1000) })}
-                        className={inputClass}
+                        className="input tabular-nums"
                       />
-                      <span className={fieldHintClass}>Глубина одного обхода: число физических запросов в интервале.</span>
+                      <span className="field-hint block">Сколько запросов может сделать один запуск.</span>
                     </label>
                   )}
                   <label className="block">
-                    <span className="mb-1 block text-[12px] text-text-secondary">Дневной лимит категории, кр</span>
+                    <span className="field-label">Дневной лимит категории, кр</span>
                     <input
                       type="number"
                       min={1}
                       max={100000}
                       value={settings.dailyCreditLimit}
                       onChange={(event) => props.onChange({ dailyCreditLimit: clampInt(event.target.value, 1, 100000) })}
-                      className={inputClass}
+                      className="input tabular-nums"
                     />
-                    <span className={fieldHintClass}>Сервер остановит новые запросы категории при достижении; ответы в полёте сохранятся.</span>
+                    <span className="field-hint block">На лимите сервер остановит новые запросы; ответы в полёте сохранятся.</span>
                   </label>
-                  <label className="flex items-start gap-2 pt-5 text-[13px] text-text-primary">
+                  <label className="flex items-start gap-2 text-text-primary sm:pt-6">
                     <input
                       type="checkbox"
                       checked={settings.includeDetails}
                       onChange={(event) => props.onChange({ includeDetails: event.target.checked })}
-                      className="mt-0.5 accent-accent"
+                      className="mt-1 accent-accent"
                     />
                     <span>
-                      Вложенные detail-запросы
-                      <span className="block text-[11px] text-text-muted">Отдельный запрос на каждый объект: дороже обхода списком.</span>
+                      Подробные запросы по каждому объекту
+                      <span className="field-hint block mt-0.5">Отдельный запрос на объект — дороже, чем обход списком.</span>
                     </span>
                   </label>
                 </div>
@@ -1120,20 +1039,20 @@ export function CategoryEditor(props: {
           )
           : view.entry.id === "vault_files" ? (
             <div>
-              <div className="mb-2 text-[12px] font-semibold text-text-primary">Загрузка своего файла</div>
-              <p className="text-[12.5px] text-text-secondary">Выберите свой файл, страницу и назначение в отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
-              <Link className={`${buttonClass} mt-3 inline-block`} to="/ofapi-media">Загрузить свой файл…</Link>
+              <div className="mb-1 font-semibold text-text-primary">Загрузка своего файла</div>
+              <p className="text-text-secondary">Файл, страницу и назначение выбирают на отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
+              <Link className="btn btn-sm mt-3" to="/ofapi-media">Загрузить свой файл…</Link>
             </div>
           ) : (
             <div>
-              <div className="mb-2 text-[12px] font-semibold text-text-primary">Только разовые задачи</div>
-              <p className="text-[12.5px] text-text-secondary">
-                Реестр не предлагает для этой категории ни расписания, ни режима «по запросу». Каждая задача ограничена
-                потолком кредитов, запросов и байт и утверждается отдельно.
+              <div className="mb-1 font-semibold text-text-primary">Только разовые задачи</div>
+              <p className="text-text-secondary">
+                Для этой категории нет ни расписания, ни режима «по запросу». Каждая задача ограничена потолком кредитов,
+                запросов и объёма и подтверждается отдельно.
               </p>
               <button
                 type="button"
-                className={`${buttonClass} mt-3`}
+                className="btn btn-sm mt-3"
                 disabled={snapshot.backgroundPaused}
                 onClick={props.onCreateJob}
               >
@@ -1142,31 +1061,31 @@ export function CategoryEditor(props: {
             </div>
           )}
         {view.entry.noScheduledReads && (
-          <div className="mt-3 text-[12px] leading-snug">
+          <div className="mt-4 space-y-1 text-[13px]">
             <p className="text-text-secondary">{noScheduledReadsNote(view.entry.id).text}</p>
             {noScheduledReadsNote(view.entry.id).keep && (
-              <p className="mt-1 text-amber-700">{noScheduledReadsNote(view.entry.id).keep}</p>
+              <p className="text-warning-dark">{noScheduledReadsNote(view.entry.id).keep}</p>
             )}
           </div>
         )}
         {legacy && view.supportsToggle && (
-          <p className="mt-3 text-[12px] leading-snug text-amber-700">
-            Категория работает по прежней конфигурации (baseline). Первое применение переведёт её под новую политику с
-            указанными лимитами; прежний конфиг перестанет быть управляющей записью.
+          <p className="mt-4 text-[13px] text-warning-dark">
+            Категория работает по прежней конфигурации. Первое применение переведёт её на лимиты этого экрана; прежняя
+            настройка перестанет управлять сбором.
           </p>
         )}
         {props.scope.kind === "all" && overrideLabels.length > 0 && (
-          <p className="mt-3 text-[12px] leading-snug text-text-secondary">
-            Своя настройка есть у: {overrideLabels.join(", ")}. Общее изменение её не перекроет — переключите охват на
-            страницу, чтобы изменить её отдельно.
+          <p className="mt-4 text-[13px] text-text-secondary">
+            Своя настройка есть у: {overrideLabels.join(", ")}. Общее изменение её не перекроет — выберите эту страницу
+            вверху, чтобы изменить её отдельно.
           </p>
         )}
         {!view.uniform && view.policies.length > 1 && (
-          <div className="mt-3 text-[12px] text-text-secondary">
+          <div className="mt-4 text-[13px] text-text-secondary">
             <div className="font-medium text-text-primary">Сейчас по страницам</div>
             <ul className="mt-1 space-y-0.5">
               {view.policies.map((policy) => (
-                <li key={policy.pageId ?? "default"} className="flex justify-between gap-3">
+                <li key={policy.pageId ?? "default"} className="flex flex-wrap justify-between gap-x-3">
                   <span>{scopeLabel(policy.pageId, snapshot.pages)}</span>
                   <span className="text-text-muted">{describeSettings(policy)} · {sourceLabel(policy.source)}</span>
                 </li>
@@ -1175,78 +1094,71 @@ export function CategoryEditor(props: {
           </div>
         )}
       </div>
-      <div className="grid content-start gap-3">
-        <SideBox title="Оценка">
-          <div className="text-[13px] text-text-primary">
-            {settings.mode === "off"
-              ? "Новых запросов не будет."
-              : <>
-                <SourceTag unknown>не измерена</SourceTag>{" "}
-                <span className="text-text-secondary">
-                  Сервер не даёт прогноза по этой категории; единица цены — {PRICE_UNIT_LABELS_RU[view.entry.priceUnit] ?? view.entry.priceUnit}.
-                </span>
-              </>}
-          </div>
-          {settings.mode !== "off" && (
-            <p className="mt-1.5 text-[12px] leading-snug text-text-secondary">
-              Ограничитель — дневной лимит {fmtCredits(settings.dailyCreditLimit)} кр
-              {settings.mode === "scheduled" ? ` и не более ${settings.maxCallsPerRun} запросов за запуск` : ""}. Неизвестная
-              цена не означает «бесплатно».
-            </p>
-          )}
-        </SideBox>
-        <SideBox title="Кто использует">
-          {consumers.length > 0
-            ? (
-              <ul className="text-[12.5px] text-text-primary">
-                {consumers.map((consumer) => <li key={consumer} className="py-0.5">{consumer}</li>)}
-              </ul>
-            )
-            : <p className="text-[12.5px] text-text-secondary">Потребители в реестре не указаны.</p>}
+      <dl className="grid content-start gap-3 border-t border-border pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+        <InfoItem title="Оценка расхода">
+          {settings.mode === "off"
+            ? "Новых запросов не будет."
+            : <>
+              <span className="badge mr-1.5">не измерена</span>
+              <span className="text-text-secondary">
+                Сервер не даёт прогноза по этой категории; цена — {PRICE_UNIT_LABELS_RU[view.entry.priceUnit] ?? view.entry.priceUnit}.
+                Ограничитель — дневной лимит {fmtCredits(settings.dailyCreditLimit)} кр
+                {settings.mode === "scheduled" ? ` и не более ${settings.maxCallsPerRun} запросов за запуск` : ""}. Неизвестная
+                цена не означает «бесплатно».
+              </span>
+            </>}
+        </InfoItem>
+        <InfoItem title="Кто использует">
+          {consumers.length > 0 ? consumers.join(", ") : <span className="text-text-secondary">Не указано.</span>}
           {view.entry.prerequisites.length > 0 && (
-            <p className="mt-1.5 text-[11.5px] text-text-muted">
+            <span className="mt-0.5 block text-xs text-text-muted">
               Требуется: {view.entry.prerequisites.map(prerequisiteLabel).join(", ")}.
-            </p>
+            </span>
           )}
-        </SideBox>
-        <SideBox title="Если выключить">
-          <p className="text-[12.5px] text-text-primary">
-            {view.mode === "off"
-              ? "Ничего не перестанет обновляться: категория сейчас не собирается."
-              : `Перестанут обновляться: ${consumers.join(", ") || "потребители не указаны"}. Сохранённое остаётся и читается с реальной свежестью; чекпоинты не стираются.`}
-          </p>
-        </SideBox>
-        <SideBox title="Последние запуски">
-          <p className="text-[12.5px] text-text-primary">
-            {view.lastCapturedAt ? `Последний ответ ${utcDateTime(view.lastCapturedAt)}` : "Запусков ещё не было"}
-            {view.usage.callsToday > 0 ? ` · сегодня ${view.usage.callsToday} ${ruPlural(view.usage.callsToday, "запрос", "запроса", "запросов")}` : ""}
-            {view.usage.inFlight > 0 ? ` · ${view.usage.inFlight} в полёте` : ""}
-          </p>
-        </SideBox>
+        </InfoItem>
+        <InfoItem title="Если выключить">
+          {view.mode === "off"
+            ? "Ничего не перестанет обновляться: категория сейчас не собирается."
+            : `Перестанут обновляться: ${consumers.join(", ") || "потребители не указаны"}. Собранное остаётся и показывается с реальной свежестью.`}
+        </InfoItem>
+        <InfoItem title="Последние запуски">
+          {view.lastCapturedAt ? `Последний ответ ${localDateTime(view.lastCapturedAt)}` : "Запусков ещё не было"}
+          {view.usage.callsToday > 0 ? ` · сегодня ${view.usage.callsToday} ${ruPlural(view.usage.callsToday, "запрос", "запроса", "запросов")}` : ""}
+          {view.usage.inFlight > 0 ? ` · ${view.usage.inFlight} в полёте` : ""}
+        </InfoItem>
         {view.entry.supportsOneOff && view.supportsToggle && (
-          <SideBox title="Разовые задачи">
+          <InfoItem title="Разовые задачи">
             {props.jobs.length === 0
-              ? <p className="text-[12.5px] text-text-secondary">Задач не было.</p>
+              ? <span className="text-text-secondary">Задач не было.</span>
               : (
-                <ul className="space-y-1 text-[12px] text-text-primary">
+                <ul className="space-y-1">
                   {props.jobs.slice(0, 3).map((job) => (
                     <li key={job.id}>
-                      <span className="font-medium">{jobStateLabel(job.state)}</span> · {utcDateTime(job.createdAt)} · {jobProgress(job)}
+                      <span className="font-medium">{jobStateLabel(job.state)}</span> · {localDateTime(job.createdAt)} · {jobProgress(job)}
                     </li>
                   ))}
                 </ul>
               )}
             <button
               type="button"
-              className={`${smallButtonClass} mt-2`}
+              className="btn btn-sm mt-2"
               disabled={snapshot.backgroundPaused}
               onClick={props.onCreateJob}
             >
               Создать задачу…
             </button>
-          </SideBox>
+          </InfoItem>
         )}
-      </div>
+      </dl>
+    </div>
+  );
+}
+
+function InfoItem(props: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium text-text-secondary">{props.title}</dt>
+      <dd className="mt-0.5 text-[13px] text-text-primary">{props.children}</dd>
     </div>
   );
 }
@@ -1255,15 +1167,6 @@ function clampInt(raw: string, min: number, max: number) {
   const value = Math.trunc(Number(raw));
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
-}
-
-function SideBox(props: { title: string; children: ReactNode }) {
-  return (
-    <div className="rounded-[10px] border border-border-light bg-card px-3.5 py-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">{props.title}</div>
-      {props.children}
-    </div>
-  );
 }
 
 export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionScope }) {
@@ -1282,57 +1185,89 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
   const jobs = source ? jobsFor(source, props.scope) : [];
   const total = source?.jobsTotal ?? jobs.length;
   if (stateFilter === null && jobs.length === 0) return null;
+  const active = jobs.filter((job) => ACTIVE_JOB_STATES.has(job.state)).length;
+  const countText = own && filtered.isPending
+    ? "загружаем…"
+    : total > jobs.length
+      ? `показаны ${jobs.length} из ${total}`
+      : `${jobs.length} ${ruPlural(jobs.length, "задача", "задачи", "задач")}`;
   return (
-    <section className={cardClass} aria-labelledby="collection-jobs-heading">
-      <div className="flex flex-wrap items-baseline justify-between gap-3 px-4 pt-3.5">
-        <h3 id="collection-jobs-heading" className={eyebrowClass}>Проходы сбора и разовые задачи</h3>
-        {resume.isError && <p role="alert" className="text-[12px] text-red-700">{errorMessage(resume.error, "Не удалось продолжить задачу")}</p>}
-        <div className="flex items-center gap-2.5">
-          <label className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary">
-            <span>Показать</span>
-            <select
-              aria-label="Фильтр задач по состоянию"
-              value={stateFilter ?? ""}
-              onChange={(event) => setStateFilter(event.target.value === "" ? null : event.target.value as NonNullable<OfapiCollectionJobStateFilter>)}
-              className="h-7 rounded-lg border border-border bg-card px-2 text-[12px] text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              {JOB_STATE_FILTER_OPTIONS_RU.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          <span className="text-[12px] text-text-secondary">
-            {own && filtered.isPending ? "загрузка…" : `${total > jobs.length ? `показаны ${jobs.length} из ${total}` : `${jobs.length} ${ruPlural(jobs.length, "задача", "задачи", "задач")}`} · потолки на каждую`}
-          </span>
-        </div>
+    <DisclosureCard
+      title="Проходы сбора и разовые задачи"
+      description={active > 0
+        ? `Незавершённых: ${active}. У каждой задачи свой потолок кредитов, запросов и объёма.`
+        : "Незавершённых задач нет. У каждой задачи свой потолок кредитов, запросов и объёма."}
+      meta={countText}
+      defaultOpen={active > 0}
+      headingId="collection-jobs-heading"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+        <label className="inline-flex items-center gap-2 text-sm text-text-secondary">
+          <span>Показать</span>
+          <select
+            aria-label="Фильтр задач по состоянию"
+            value={stateFilter ?? ""}
+            onChange={(event) => setStateFilter(event.target.value === "" ? null : event.target.value as NonNullable<OfapiCollectionJobStateFilter>)}
+            className="select w-auto"
+          >
+            {JOB_STATE_FILTER_OPTIONS_RU.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <span className="text-sm text-text-secondary">{countText}</span>
       </div>
-      {own && filtered.isError && <p role="alert" className="px-4 pt-2 text-[12px] text-red-700">{errorMessage(filtered.error, "Не удалось загрузить задачи")}</p>}
-      {own && !filtered.isPending && jobs.length === 0 && <p className="px-4 py-4 text-[13px] text-text-secondary">Задач в этом состоянии нет.</p>}
-      {jobs.length > 0 && <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse">
+      {resume.isError && <p role="alert" className="px-5 pb-3 text-sm text-danger">{errorMessage(resume.error, "Не удалось продолжить задачу")}</p>}
+      {own && filtered.isError && <p role="alert" className="px-5 pb-3 text-sm text-danger">{errorMessage(filtered.error, "Не удалось загрузить задачи")}</p>}
+      {own && !filtered.isPending && jobs.length === 0 && <p className="px-5 pb-5 text-sm text-text-secondary">Задач в этом состоянии нет.</p>}
+      {jobs.length > 0 && <div className="overflow-x-auto border-t border-border">
+        <table className="data-table min-w-[720px]">
           <thead>
             <tr>
-              <th className={thClass}>Категория</th>
-              <th className={thClass}>Страница</th>
-              <th className={thClass}>Состояние</th>
-              <th className={thClass}>Использовано</th>
-              <th className={thClass}>Создана</th>
+              <th>Категория</th>
+              <th>Страница</th>
+              <th>Состояние</th>
+              <th>Использовано</th>
+              <th>Создана</th>
             </tr>
           </thead>
           <tbody>
             {jobs.map((job) => (
-              <tr key={job.id} className="border-t border-border-light">
-                <td className={`${tdClass} text-text-primary`}>{categoryLabel(job.category)}</td>
-                <td className={tdClass}>{scopeLabel(job.pageId, props.snapshot.pages)}</td>
-                <td className={tdClass}>
-                  <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
-                  {jobReasonText(job) && <div className="mt-0.5 text-[11px] text-text-muted">{jobReasonText(job)}</div>}
-                  {job.category === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media">Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
-                  {job.canFinishIncomplete && <button type="button" className={smallButtonClass} disabled={resume.isPending || finish.isPending} onClick={() => {
-                    finish.reset();
-                    setFinishPreview({ job, revision: props.snapshot.revision });
-                  }}>Завершить неполный проход</button>}
+              <tr key={job.id}>
+                <td className="align-top">{categoryLabel(job.category)}</td>
+                <td className="muted align-top">{scopeLabel(job.pageId, props.snapshot.pages)}</td>
+                <td className="min-w-[220px] whitespace-normal align-top">
+                  <span className="font-medium">{jobStateLabel(job.state)}</span>
+                  {jobReasonText(job) && <div className="mt-0.5 text-xs text-text-muted">{jobReasonText(job)}</div>}
+                  <div className="mt-1.5 flex flex-wrap gap-2 empty:hidden">
+                    {job.category === "vault_files"
+                      ? <Link className="btn btn-sm" to="/ofapi-media">Открыть загрузку</Link>
+                      : ["paused", "blocked", "budget_exhausted"].includes(job.state) && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          title="Продолжить с места, где задача остановилась"
+                          disabled={resume.isPending || props.snapshot.backgroundPaused}
+                          onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}
+                        >
+                          Продолжить
+                        </button>
+                      )}
+                    {job.canFinishIncomplete && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={resume.isPending || finish.isPending}
+                        onClick={() => {
+                          finish.reset();
+                          setFinishPreview({ job, revision: props.snapshot.revision });
+                        }}
+                      >
+                        Завершить неполный проход
+                      </button>
+                    )}
+                  </div>
                 </td>
-                <td className={`${tdClass} tabular-nums`}>{jobProgress(job)}</td>
-                <td className={`${tdClass} tabular-nums`}>{utcDateTime(job.createdAt)}</td>
+                <td className="muted min-w-[200px] whitespace-normal align-top text-[13px] tabular-nums">{jobProgress(job)}</td>
+                <td className="muted align-top whitespace-nowrap tabular-nums">{localDateTime(job.createdAt)}</td>
               </tr>
             ))}
           </tbody>
@@ -1348,7 +1283,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
           setFinishPreview(null);
           toast.success("Неполный проход завершён. Данные и учёт списаний сохранены.");
         } })} />}
-    </section>
+    </DisclosureCard>
   );
 }
 
@@ -1359,144 +1294,151 @@ export function FinishIncompleteRunModal(props: {
   return <ModalShell title="Завершить неполный проход?" onClose={props.onClose}>
     <p className="text-sm text-text-primary">{categoryLabel(props.job.category)} · {props.pageLabel}</p>
     <p className="mt-3 text-sm text-text-secondary">Сохранённые данные, курсор и учёт неподтверждённых списаний останутся. Этот проход завершится как неполный. Новых запросов сейчас не будет; следующий проход начнётся по штатному расписанию, если сбор включён.</p>
-    {props.error && <p role="alert" className="mt-3 text-sm text-red-700">{props.error}</p>}
-    <div className="mt-5 flex justify-end gap-2">
-      <button type="button" className={buttonClass} disabled={props.pending} onClick={props.onClose}>Оставить на паузе</button>
-      <button type="button" className={primaryButtonClass} disabled={props.pending} onClick={props.onConfirm}>{props.pending ? "Завершаем…" : "Завершить неполный проход"}</button>
+    {props.error && <p role="alert" className="mt-3 text-sm text-danger">{props.error}</p>}
+    <div className="mt-5 flex flex-wrap justify-end gap-2">
+      <button type="button" className="btn" disabled={props.pending} onClick={props.onClose}>Оставить на паузе</button>
+      <button type="button" className="btn btn-primary" disabled={props.pending} onClick={props.onConfirm}>{props.pending ? "Завершаем…" : "Завершить неполный проход"}</button>
     </div>
   </ModalShell>;
 }
 
-function WebhookCard() {
+/** The single OnlyFans API webhook registration, read-only: its state at a
+ *  glance, the event groups and the technical facts behind a disclosure. */
+export function WebhookCard() {
   const query = useAdminOfapiWebhookStatus();
   const status = query.data;
   const groupsList = status ? groupWebhookEvents(status.events) : [];
-  const tone: RowTone = !status
-    ? "muted"
+  const tone = !status
+    ? "badge"
     : status.registrationState === "stable"
-      ? "ok"
+      ? "badge badge-success"
       : status.registrationState === null
-        ? "off"
+        ? "badge"
         : /failed|indeterminate/.test(status.registrationState)
-          ? "danger"
-          : "warning";
+          ? "badge badge-danger"
+          : "badge badge-warning";
+  const stateText = status ? webhookStateLabel(status.registrationState) : "";
+  const linked = status ? status.pages.filter((page) => page.ofapiAccountId).length : 0;
 
   return (
-    <section className={cardClass} aria-labelledby="collection-webhook-heading">
-      <div className="flex flex-wrap items-baseline justify-between gap-3 px-4 pt-3.5">
-        <h3 id="collection-webhook-heading" className={eyebrowClass}>
-          События вебхука · одна регистрация на все OF-страницы
-        </h3>
+    <section className="card" aria-labelledby="collection-webhook-heading">
+      <div className="card-header items-start">
+        <div className="min-w-0 flex-1 basis-64">
+          <h3 id="collection-webhook-heading" className="card-title">Вебхук</h3>
+          <p className="card-description">
+            Одна регистрация на все страницы OnlyFans: через неё события приходят в Hub сами, без платных запросов.
+          </p>
+        </div>
         {status && (
-          <span className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary">
-            <Dot tone={tone} />
-            {webhookStateLabel(status.registrationState)}
-            {status.externalWebhookId && <> · <span className="font-mono text-[11px]">{maskWebhookId(status.externalWebhookId)}</span></>}
-            {status.updatedAt && <> · проверена {utcDateTime(status.updatedAt)}</>}
+          <span className={tone} title={status.registrationState ?? undefined}>
+            {stateText.charAt(0).toUpperCase() + stateText.slice(1)}
           </span>
         )}
       </div>
-      <p className="max-w-[80ch] px-4 pt-2 text-[12.5px] text-text-secondary">
-        Набор типов общий для всех страниц{status?.accountScope ? ` (область: ${status.accountScope})` : ""}.
-        Здесь показана текущая регистрация. Управление дополнительными событиями и восстановление доставок — ниже.
-      </p>
-      {query.isLoading && <p className="px-4 py-3 text-[12px] text-text-muted">Читаем регистрацию…</p>}
-      {query.isError && (
-        <p className="px-4 py-3 text-[12px] text-red-700">
-          Регистрация не прочитана: {errorMessage(query.error, "сервер не ответил")}.
-        </p>
-      )}
-      {status && (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[640px] border-collapse">
-            <thead>
-              <tr>
-                <th className={thClass}>Группа</th>
-                <th className={thClass}>Типы событий</th>
-                <th className={`${thClass} text-right`}>Подписка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groupsList.length === 0 && (
-                <tr className="border-t border-border-light">
-                  <td colSpan={3} className={`${tdClass} text-text-muted`}>
-                    {status.configured ? "Типы событий не перечислены в регистрации." : "Вебхук не зарегистрирован."}
-                  </td>
-                </tr>
-              )}
-              {groupsList.map((group) => (
-                <tr key={group.group} className="border-t border-border-light">
-                  <td className={`${tdClass} text-text-primary`}>{group.label}</td>
-                  <td className={`${tdClass} font-mono text-[11px]`}>{group.events.join(" · ")}</td>
-                  <td className={`${tdClass} text-right`}>
-                    <span className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary">
-                      <Dot tone="ok" />
-                      в текущем наборе
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border-light px-4 py-2.5 text-[12px] text-text-secondary">
-            {status.endpointUrl && <span>цель <span className="font-mono text-[11px]">{status.endpointUrl}</span></span>}
-            <span>страниц с привязкой: <strong className="font-semibold text-text-primary">{status.pages.filter((page) => page.ofapiAccountId).length}</strong> из {status.pages.length}</span>
-            {status.registrationError && <span className="text-red-700">ошибка регистрации: {status.registrationError}</span>}
-            {status.pendingRegistration && (
-              <span className="text-amber-700">
-                ожидает readback: {status.pendingRegistration.operation} · подготовлено {utcDateTime(status.pendingRegistration.preparedAt)}
-              </span>
-            )}
+      <div className="card-body space-y-4">
+        {query.isLoading && <p className="text-sm text-text-secondary">Читаем регистрацию…</p>}
+        {query.isError && (
+          <div role="alert" className="notice notice-danger">
+            Регистрация не прочитана: {errorMessage(query.error, "сервер не ответил")}.
           </div>
-        </div>
-      )}
+        )}
+        {status && (
+          <>
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <div>
+                <dt className="text-xs font-medium text-text-secondary">Страниц подключено</dt>
+                <dd className="mt-0.5 text-base font-semibold tabular-nums">{linked} из {status.pages.length}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-text-secondary">Групп событий</dt>
+                <dd className="mt-0.5 text-base font-semibold tabular-nums">{groupsList.length}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-text-secondary">Последняя проверка</dt>
+                <dd className="mt-0.5 text-base font-semibold">{status.updatedAt ? localDateTime(status.updatedAt) : "—"}</dd>
+              </div>
+            </dl>
+            {status.registrationError && (
+              <div role="alert" className="notice notice-danger">Ошибка регистрации: {status.registrationError}</div>
+            )}
+            {status.pendingRegistration && (
+              <div role="status" className="notice notice-warning">
+                Ждёт подтверждения: {webhookOperationLabel(status.pendingRegistration.operation)} регистрации, подготовлено{" "}
+                {localDateTime(status.pendingRegistration.preparedAt)}.
+              </div>
+            )}
+            <details className="help">
+              <summary>События и технические детали</summary>
+              <div className="help-body max-w-none">
+                {groupsList.length === 0
+                  ? <p>{status.configured ? "Типы событий не перечислены в регистрации." : "Вебхук не зарегистрирован."}</p>
+                  : (
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <caption className="sr-only">Группы событий в текущем наборе</caption>
+                        <thead>
+                          <tr>
+                            <th>Группа</th>
+                            <th>Типы событий</th>
+                            <th>Подписка</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupsList.map((group) => (
+                            <tr key={group.group}>
+                              <td>{group.label}</td>
+                              <td className="muted font-mono text-xs">{group.events.join(" · ")}</td>
+                              <td><span className="badge badge-success">в текущем наборе</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                <dl className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-[160px_1fr]">
+                  <dt>ID регистрации</dt>
+                  <dd className="font-mono">{maskWebhookId(status.externalWebhookId)}</dd>
+                  {status.endpointUrl && <><dt>Адрес доставки</dt><dd className="break-all font-mono">{status.endpointUrl}</dd></>}
+                  {status.accountScope && <><dt>Область</dt><dd className="font-mono">{status.accountScope}</dd></>}
+                  {status.updatedAt && <><dt>Проверена (UTC)</dt><dd>{utcDateTime(status.updatedAt)}</dd></>}
+                </dl>
+              </div>
+            </details>
+          </>
+        )}
+      </div>
     </section>
   );
 }
 
 function AuditCard(props: { snapshot: OfapiCollectionSnapshot; actorName: (userId: number) => string }) {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
   const rows = props.snapshot.audit;
   const latest = rows[0];
   return (
-    <section className={cardClass}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2.5 rounded-xl px-4 py-3 text-left hover:bg-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        <span className="text-text-muted"><Caret expanded={open} /></span>
-        <span className={eyebrowClass}>Журнал изменений</span>
-        <span className="text-[12px] text-text-secondary">
-          {rows.length === 0
-            ? "записей нет · политика ещё не применялась"
-            : `${rows.length} ${ruPlural(rows.length, "запись", "записи", "записей")} · последняя: v${latest!.revision}, ${utcDateTime(latest!.createdAt)}, ${props.actorName(latest!.actorUserId)}`}
-        </span>
-      </button>
-      {open && (
-        <div id={bodyId} className="border-t border-border-light">
-          {rows.length === 0
-            ? <p className="px-4 py-3 text-[12px] text-text-muted">Пока пусто.</p>
-            : (
-              <ul className="divide-y divide-border-light">
-                {rows.map((row) => (
-                  <li key={row.revision} className="grid gap-1 px-4 py-2.5 text-[12.5px] sm:grid-cols-[120px_1fr]">
-                    <div className="text-text-secondary tabular-nums">
-                      <span className="font-semibold text-text-primary">v{row.revision}</span>
-                      <div className="text-[11px]">{utcDateTime(row.createdAt)}</div>
-                      <div className="text-[11px]">{props.actorName(row.actorUserId)}</div>
-                    </div>
-                    <div className="text-text-primary">{summarizeAudit(row, props.snapshot.pages)}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-        </div>
-      )}
-    </section>
+    <DisclosureCard
+      title="Журнал изменений"
+      description="Кто и когда менял настройки сбора. Номер версии связывает черновик с записью журнала."
+      meta={rows.length === 0 || !latest
+        ? "записей нет"
+        : `${rows.length} ${ruPlural(rows.length, "запись", "записи", "записей")} · последняя ${localDateTime(latest.createdAt)} · ${props.actorName(latest.actorUserId)}`}
+    >
+      {rows.length === 0
+        ? <p className="px-5 py-4 text-sm text-text-secondary">Записей нет: настройки сбора ещё не менялись (версия {props.snapshot.revision}).</p>
+        : (
+          <ul className="divide-y divide-border-light">
+            {rows.map((row) => (
+              <li key={row.revision} className="grid gap-1 px-5 py-3 text-sm sm:grid-cols-[160px_1fr]">
+                <div className="text-xs text-text-secondary tabular-nums">
+                  <div className="font-semibold text-text-primary">Версия {row.revision}</div>
+                  <div>{localDateTime(row.createdAt)}</div>
+                  <div>{props.actorName(row.actorUserId)}</div>
+                </div>
+                <div className="text-text-primary">{summarizeAudit(row, props.snapshot.pages)}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+    </DisclosureCard>
   );
 }
 
@@ -1516,16 +1458,16 @@ export function DraftBar(props: {
     <div
       role="region"
       aria-label="Черновик изменений"
-      className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3.5 py-2.5 shadow-[0_10px_30px_rgba(40,30,20,0.14),0_1px_2px_rgba(0,0,0,0.06)]"
+      className="card sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 px-4 py-3 shadow-lg"
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-text-primary">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-primary">
         <strong className="whitespace-nowrap font-semibold">
           {count} {ruPlural(count, "изменение", "изменения", "изменений")} в черновике
         </strong>
         {entries.map((entry) => (
           <span
             key={draftKey(entry.settings.pageId, entry.settings.category)}
-            className="max-w-[420px] truncate rounded-md border border-border-light bg-hover-alt px-2 py-0.5 text-[12px] text-text-secondary"
+            className="max-w-full truncate rounded-md bg-hover px-2 py-0.5 text-xs text-text-secondary sm:max-w-[420px]"
             title={`${categoryLabel(entry.settings.category)} · ${scopeLabel(entry.settings.pageId, props.snapshot.pages)}`}
           >
             <strong className="font-semibold text-text-primary">{categoryLabel(entry.settings.category)}</strong>
@@ -1534,27 +1476,27 @@ export function DraftBar(props: {
             {entry.settings.pageId === null ? " · все страницы" : ` · ${scopeLabel(entry.settings.pageId, props.snapshot.pages)}`}
           </span>
         ))}
-        {props.blockReason && <span className="basis-full text-[12px] text-amber-700">{props.blockReason}</span>}
+        {props.blockReason && <span className="basis-full text-[13px] text-warning-dark">{props.blockReason}</span>}
         {props.conflict && (
-          <span className="basis-full text-[12px] text-accent">
+          <span className="basis-full text-[13px] text-accent">
             Черновик собран против v{props.draft.revision}, сервер уже на v{props.snapshot.revision}. Сравните перед применением.
           </span>
         )}
       </div>
       <div className="flex items-center gap-2">
-        <button type="button" className={`${buttonClass} border-transparent bg-transparent`} onClick={props.onReset} disabled={props.busy}>
+        <button type="button" className="btn btn-ghost" onClick={props.onReset} disabled={props.busy}>
           Сбросить
         </button>
         {props.conflict
           ? (
-            <button type="button" className={primaryButtonClass} onClick={props.onCompare} disabled={props.busy}>
+            <button type="button" className="btn btn-primary" onClick={props.onCompare} disabled={props.busy}>
               Обновить и сравнить
             </button>
           )
           : (
             <button
               type="button"
-              className={primaryButtonClass}
+              className="btn btn-primary"
               onClick={props.onPreview}
               disabled={props.busy || props.blockReason !== null}
             >
@@ -1569,7 +1511,7 @@ export function DraftBar(props: {
 function ModalSection(props: { title: string; children: ReactNode }) {
   return (
     <div className="border-t border-border-light py-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">{props.title}</div>
+      <div className="mb-1.5 text-xs font-semibold text-text-secondary">{props.title}</div>
       {props.children}
     </div>
   );
@@ -1579,11 +1521,11 @@ function CostSection(props: { preview: OfapiCollectionPreview; enabling: boolean
   const { preview } = props;
   return (
     <ModalSection title="Расход">
-      <dl className="grid gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-[200px_1fr]">
+      <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
         <dt className="text-text-secondary">Периодический</dt>
         <dd className="text-text-primary">
           {preview.cost.maximumNewCreditsPerDay > 0
-            ? <>не более <strong className="font-semibold">{fmtCredits(preview.cost.maximumNewCreditsPerDay)} кр в сутки</strong> новых управляемых запросов по расписанию (сумма дневных лимитов)</>
+            ? <>не более <strong className="font-semibold">{fmtCredits(preview.cost.maximumNewCreditsPerDay)} кр в сутки</strong> новых запросов по расписанию (сумма дневных лимитов)</>
             : props.enabling
               ? "по расписанию ничего не добавляется; режим «по запросу» тратит только по явному действию в пределах своего лимита"
               : "новых периодических запросов нет"}
@@ -1591,7 +1533,7 @@ function CostSection(props: { preview: OfapiCollectionPreview; enabling: boolean
         <dt className="text-text-secondary">Оценка</dt>
         <dd className="text-text-primary">
           {preview.cost.estimatedCredits === null
-            ? <><SourceTag unknown>не измерена</SourceTag> <span className="text-text-secondary">— сервер не даёт прогноза; пустая оценка не означает «0»</span></>
+            ? <><span className="badge">не измерена</span> <span className="text-text-secondary">— сервер не даёт прогноза; пустая оценка не означает «0»</span></>
             : `≈ ${fmtCredits(preview.cost.estimatedCredits)} кр`}
         </dd>
         <dt className="text-text-secondary">Источник оценки</dt>
@@ -1604,7 +1546,7 @@ function CostSection(props: { preview: OfapiCollectionPreview; enabling: boolean
 function InFlightSection(props: { inFlight: number }) {
   return (
     <ModalSection title="Сейчас у провайдера">
-      <p className="text-[13px] text-text-primary">
+      <p className="text-sm text-text-primary">
         {props.inFlight > 0
           ? `В полёте ${props.inFlight} ${ruPlural(props.inFlight, "запрос", "запроса", "запросов")}. Они завершатся и могут списать кредиты независимо от этого изменения.`
           : "Запросов в полёте нет. Уже принятые провайдером экспорты и загрузки всё равно могут завершиться и списать кредиты."}
@@ -1613,14 +1555,18 @@ function InFlightSection(props: { inFlight: number }) {
   );
 }
 
+/** The server's own consequence lines (English) — kept verbatim, behind a disclosure. */
 function ServerNotesSection(props: { consequences: string[] }) {
   if (props.consequences.length === 0) return null;
   return (
-    <ModalSection title="Сервер сообщает">
-      <ul className="list-disc space-y-0.5 pl-5 text-[12.5px] text-text-secondary" lang="en">
-        {props.consequences.map((line) => <li key={line}>{line}</li>)}
-      </ul>
-    </ModalSection>
+    <div className="border-t border-border-light py-3">
+      <details className="help">
+        <summary>Технические детали: ответ сервера</summary>
+        <ul className="help-body list-disc pl-5" lang="en">
+          {props.consequences.map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      </details>
+    </div>
   );
 }
 
@@ -1647,14 +1593,14 @@ export function PreviewModal(props: {
           {preview.changes.map((change) => {
             const base = baseFor(change);
             return (
-              <li key={draftKey(change.pageId, change.category)} className="text-[13px]">
+              <li key={draftKey(change.pageId, change.category)} className="text-sm">
                 <div className="font-medium text-text-primary">{categoryLabel(change.category)}</div>
                 <div className="text-text-secondary">
                   {base ? describeSettings(base) : "различалось по страницам"}
                   <span className="mx-2 text-text-muted">→</span>
                   <span className="text-text-primary">{describeSettings(change)}</span>
                 </div>
-                <div className="text-[12px] text-text-muted">
+                <div className="text-xs text-text-muted">
                   {scopeLabel(change.pageId, snapshot.pages)} · вебхук не меняется
                 </div>
               </li>
@@ -1664,9 +1610,9 @@ export function PreviewModal(props: {
       </ModalSection>
       <ModalSection title="Перестанет обновляться">
         {turnedOff.length === 0
-          ? <p className="text-[13px] text-text-secondary">Ничего: категории включаются или меняют лимиты, а не выключаются.</p>
+          ? <p className="text-sm text-text-secondary">Ничего: категории включаются или меняют лимиты, а не выключаются.</p>
           : (
-            <ul className="space-y-1 text-[13px] text-text-primary">
+            <ul className="space-y-1 text-sm text-text-primary">
               {turnedOff.map((change) => {
                 const entry = snapshot.catalog.find((candidate) => candidate.id === change.category);
                 return (
@@ -1674,7 +1620,7 @@ export function PreviewModal(props: {
                     <span className="font-medium">{categoryLabel(change.category)}</span>
                     {": "}
                     {entry && entry.consumers.length > 0 ? entry.consumers.map(consumerLabel).join(", ") : "потребители не указаны"}
-                    <span className="text-text-secondary"> — сохранённое остаётся и читается с реальной свежестью</span>
+                    <span className="text-text-secondary"> — собранное остаётся и показывается с реальной свежестью</span>
                   </li>
                 );
               })}
@@ -1684,11 +1630,11 @@ export function PreviewModal(props: {
       <CostSection preview={preview} enabling={enabling} />
       <InFlightSection inFlight={preview.inFlight} />
       <ServerNotesSection consequences={preview.consequences} />
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-3.5">
-        <span className="text-[12px] text-text-muted">Политика v{preview.revision} → v{preview.revision + 1}</span>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-4">
+        <span className="text-xs text-text-muted">Политика v{preview.revision} → v{preview.revision + 1}</span>
         <div className="flex gap-2">
-          <button type="button" className={buttonClass} onClick={props.onClose} disabled={props.pending}>Назад</button>
-          <button type="button" className={primaryButtonClass} onClick={props.onApply} disabled={props.pending}>
+          <button type="button" className="btn" onClick={props.onClose} disabled={props.pending}>Назад</button>
+          <button type="button" className="btn btn-primary" onClick={props.onApply} disabled={props.pending}>
             {props.pending ? "Применяем…" : "Применить"}
           </button>
         </div>
@@ -1714,7 +1660,7 @@ export function PauseModal(props: {
   return (
     <ModalShell title={props.resume ? "Возобновить фоновый сбор?" : "Остановить фоновый сбор?"} onClose={props.onClose}>
       <ModalSection title={props.resume ? "Возобновится" : "Остановится"}>
-        <dl className="grid gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-[200px_1fr]">
+        <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
           <dt className="text-text-secondary">Категории по расписанию</dt>
           <dd className="text-text-primary">{list(summary.scheduled)}</dd>
           <dt className="text-text-secondary">Категории по запросу</dt>
@@ -1726,7 +1672,7 @@ export function PauseModal(props: {
         </dl>
       </ModalSection>
       <ModalSection title="Продолжит работать и списывать">
-        <dl className="grid gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-[200px_1fr]">
+        <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
           <dt className="text-text-secondary">События вебхука</dt>
           <dd className="text-text-primary">приходят и учитываются как прежде; отписка — отдельное действие, здесь не выполняется</dd>
           <dt className="text-text-secondary">Действия чаттеров</dt>
@@ -1738,17 +1684,17 @@ export function PauseModal(props: {
         </dl>
       </ModalSection>
       <ServerNotesSection consequences={props.preview.consequences} />
-      <p className="border-t border-border-light pt-3 text-[12.5px] text-text-secondary">
-        Собранные данные остаются. Возобновление продолжает с чекпоинтов и не догружает пропущенное автоматически. Пауза
-        хранится на сервере и переживает рестарт и переподключение аккаунтов.
+      <p className="border-t border-border-light pt-3 text-[13px] text-text-secondary">
+        Собранные данные остаются. Возобновление продолжает с места остановки и не догружает пропущенное автоматически.
+        Пауза хранится на сервере и переживает перезапуск и переподключение аккаунтов.
       </p>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-3.5">
-        <span className="text-[12px] text-text-muted">Политика v{props.preview.revision} → v{props.preview.revision + 1} · запись в журнал</span>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-4">
+        <span className="text-xs text-text-muted">Политика v{props.preview.revision} → v{props.preview.revision + 1} · запись в журнал</span>
         <div className="flex gap-2">
-          <button type="button" className={buttonClass} onClick={props.onClose} disabled={props.pending}>Отмена</button>
+          <button type="button" className="btn" onClick={props.onClose} disabled={props.pending}>Отмена</button>
           <button
             type="button"
-            className={props.resume ? primaryButtonClass : dangerButtonClass}
+            className={props.resume ? "btn btn-primary" : "btn btn-danger"}
             onClick={props.onApply}
             disabled={props.pending}
           >
@@ -1772,17 +1718,17 @@ export function ConflictModal(props: {
   const changedElsewhere = rows.filter((row) => row.changedElsewhere);
   return (
     <ModalShell title="Изменения в другом окне" onClose={props.onClose}>
-      <p className="text-[13px] text-text-secondary">
+      <p className="text-sm text-text-secondary">
         Черновик собран против v{props.draft.revision}; сервер сейчас на v{props.snapshot.revision}
         {props.refreshing ? " (обновляем…)" : ""}. Ничего не перетёрто: ниже «было», «сейчас на сервере» и ваш черновик.
       </p>
       <ModalSection title={`Сравнение · ${rows.length}`}>
-        <ul className="space-y-2.5">
+        <ul className="space-y-3">
           {rows.map((row) => (
-            <li key={row.key} className="text-[12.5px]">
+            <li key={row.key} className="text-[13px]">
               <div className="font-medium text-text-primary">
                 {categoryLabel(row.category)} · {scopeLabel(row.pageId, props.snapshot.pages)}
-                {row.changedElsewhere && <span className="ml-2 rounded-md bg-accent/10 px-1.5 py-px text-[10.5px] font-semibold uppercase tracking-wide text-accent">изменено там</span>}
+                {row.changedElsewhere && <span className="badge badge-accent ml-2">изменено там</span>}
               </div>
               <dl className="mt-1 grid gap-x-3 gap-y-0.5 sm:grid-cols-[140px_1fr]">
                 <dt className="text-text-muted">было</dt>
@@ -1796,15 +1742,15 @@ export function ConflictModal(props: {
           ))}
         </ul>
       </ModalSection>
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-3.5">
-        <span className="text-[12px] text-text-muted">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border-light pt-4">
+        <span className="text-xs text-text-muted">
           {changedElsewhere.length > 0
             ? `Изменено другим окном: ${changedElsewhere.length} из ${rows.length}`
             : "затронутые строки на сервере не менялись"}
         </span>
         <div className="flex gap-2">
-          <button type="button" className={buttonClass} onClick={props.onDiscard}>Сбросить черновик</button>
-          <button type="button" className={primaryButtonClass} onClick={props.onRebase} disabled={props.refreshing}>
+          <button type="button" className="btn" onClick={props.onDiscard}>Сбросить черновик</button>
+          <button type="button" className="btn btn-primary" onClick={props.onRebase} disabled={props.refreshing}>
             Продолжить с v{props.snapshot.revision}
           </button>
         </div>
@@ -1856,55 +1802,55 @@ export function JobModal(props: {
   if (props.category === "vault_files" || !entry?.supportsOneOff) return (
     <ModalShell title={categoryLabel(props.category, entry?.label)} onClose={props.onClose}>
       {props.category === "vault_files"
-        ? <Link className={buttonClass} to="/ofapi-media">Загрузить свой файл…</Link>
+        ? <Link className="btn" to="/ofapi-media">Загрузить свой файл…</Link>
         : <p className="text-sm text-text-secondary">Для этой категории настройте действующий сбор. Разовые задачи недоступны.</p>}
     </ModalShell>
   );
   return (
     <ModalShell title={`Разовая задача · ${categoryLabel(props.category, entry?.label)}`} onClose={props.onClose}>
-      <p className="text-[13px] text-text-secondary">
-        Одна ограниченная задача: сервер не отправит ни одного запроса сверх потолков ниже. Задача привязана к политике
-        v{snapshot.revision}; она не включает категорию и не меняет расписание.
+      <p className="text-sm text-text-secondary">
+        Одна ограниченная задача: сервер не отправит ни одного запроса сверх потолков ниже. Задача привязана к текущей
+        версии настроек; она не включает категорию и не меняет расписание.
         {entry && entry.prerequisites.length > 0 ? ` Требуется: ${entry.prerequisites.map(prerequisiteLabel).join(", ")}.` : ""}
       </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <label className="block sm:col-span-2">
-          <span className="mb-1 block text-[12px] text-text-secondary">Страница</span>
+          <span className="field-label">Страница</span>
           <select
             value={pageId ?? ""}
             onChange={(event) => setPageId(event.target.value ? Number(event.target.value) : null)}
-            className={inputClass}
+            className="select"
           >
-            {snapshot.pages.length === 0 && <option value="">OF-страниц нет</option>}
+            {snapshot.pages.length === 0 && <option value="">Страниц OnlyFans нет</option>}
             {snapshot.pages.map((page) => <option key={page.id} value={page.id}>{page.label}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className="mb-1 block text-[12px] text-text-secondary">Потолок кредитов</span>
-          <input type="number" min={1} max={100000} value={maxCredits} onChange={(event) => setMaxCredits(clampInt(event.target.value, 1, 100000))} className={inputClass} />
+          <span className="field-label">Потолок кредитов</span>
+          <input type="number" min={1} max={100000} value={maxCredits} onChange={(event) => setMaxCredits(clampInt(event.target.value, 1, 100000))} className="input tabular-nums" />
         </label>
         <label className="block">
-          <span className="mb-1 block text-[12px] text-text-secondary">Потолок запросов</span>
-          <input type="number" min={1} max={1000} value={maxCalls} onChange={(event) => setMaxCalls(clampInt(event.target.value, 1, 1000))} className={inputClass} />
+          <span className="field-label">Потолок запросов</span>
+          <input type="number" min={1} max={1000} value={maxCalls} onChange={(event) => setMaxCalls(clampInt(event.target.value, 1, 1000))} className="input tabular-nums" />
         </label>
         <label className="block">
-          <span className="mb-1 block text-[12px] text-text-secondary">Потолок объёма, МБ</span>
-          <input type="number" min={1} max={10240} value={maxMegabytes} onChange={(event) => setMaxMegabytes(clampInt(event.target.value, 1, 10240))} className={inputClass} />
-          <span className={fieldHintClass}>= {formatBytes(Math.round(maxMegabytes * 1024 * 1024))}; учитывает сохранённые ответы и файлы.</span>
+          <span className="field-label">Потолок объёма, МБ</span>
+          <input type="number" min={1} max={10240} value={maxMegabytes} onChange={(event) => setMaxMegabytes(clampInt(event.target.value, 1, 10240))} className="input tabular-nums" />
+          <span className="field-hint block">= {formatBytes(Math.round(maxMegabytes * 1024 * 1024))}; учитывает сохранённые ответы и файлы.</span>
         </label>
-        <div className="grid gap-3 sm:grid-cols-2 sm:col-span-2">
+        <div className="grid gap-4 sm:col-span-2 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1 block text-[12px] text-text-secondary">Период с (необязательно)</span>
-            <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className={inputClass} />
+            <span className="field-label">Период с (необязательно)</span>
+            <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className="input" />
           </label>
           <label className="block">
-            <span className="mb-1 block text-[12px] text-text-secondary">Период по (необязательно)</span>
-            <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className={inputClass} />
-            {windowInvalid && <span className="mt-1 block text-[11px] text-red-700">Начало периода должно быть раньше конца.</span>}
+            <span className="field-label">Период по (необязательно)</span>
+            <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className="input" />
+            {windowInvalid && <span className="field-hint block text-danger">Начало периода должно быть раньше конца.</span>}
           </label>
         </div>
         <label className="block sm:col-span-2">
-          <span className="mb-1 block text-[12px] text-text-secondary">
+          <span className="field-label">
             {selectionRequired
               ? "Выбор (обязательно: плановых чтений нет; идентификаторы чтений, по одному в строке)"
               : "Выбор (необязательно: идентификаторы, по одному в строке)"}
@@ -1913,15 +1859,15 @@ export function JobModal(props: {
             value={selectionRaw}
             onChange={(event) => setSelectionRaw(event.target.value)}
             rows={3}
-            className="w-full rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[12px] text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="textarea font-mono text-[13px]"
           />
-          <span className={fieldHintClass}>{selection.length} из 100 элементов.</span>
+          <span className="field-hint block">{selection.length} из 100 элементов.</span>
         </label>
       </div>
-      <div className="mt-4 flex items-center justify-end gap-2 border-t border-border-light pt-3.5">
-        <button type="button" className={buttonClass} onClick={props.onClose} disabled={props.pending}>Отмена</button>
-        <Tooltip focusable content="Сервер проверит потолки и версию политики; задача попадёт в очередь только при совпадении версии.">
-          <button type="button" className={primaryButtonClass} onClick={submit} disabled={!canSubmit}>
+      <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t border-border-light pt-4">
+        <button type="button" className="btn" onClick={props.onClose} disabled={props.pending}>Отмена</button>
+        <Tooltip focusable content="Сервер проверит потолки и версию настроек; задача попадёт в очередь только при совпадении версии.">
+          <button type="button" className="btn btn-primary" onClick={submit} disabled={!canSubmit}>
             {props.pending ? "Отправляем…" : "Поставить задачу в очередь"}
           </button>
         </Tooltip>

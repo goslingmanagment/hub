@@ -37,6 +37,9 @@ const kindTitles = { tracking: "Tracking-ссылки", trial: "Trial-ссылк
 
 export type Tone = "ok" | "muted" | "warn";
 
+/** The badge class of a tone. */
+export const toneBadge: Record<Tone, string> = { ok: "badge badge-success", muted: "badge", warn: "badge badge-warning" };
+
 export function linkStateView(link: Pick<OfLink, "state" | "linkEndsAt">): { label: string; detail: string; tone: Tone } {
   if (link.state === "expired") {
     return { label: "Истекла", detail: link.linkEndsAt ? moscowShortDate(link.linkEndsAt) : "", tone: "muted" };
@@ -59,7 +62,7 @@ export interface RecalculationView {
   when: string;
   /** "$992.00 → $728.00" */
   change: string;
-  /** Whether it came with, or after, a change of the page's OFAPI account. */
+  /** Whether it came with, or after, a change of the page's OnlyFans API account. */
   account: string | null;
 }
 
@@ -70,11 +73,11 @@ export function vendorMoneyView(link: Pick<OfLink, "vendorMoney">): { amount: st
     when: `пересчёт ${moscowShortDate(last.observedAt)}`,
     change: `${money(last.fromMills)} → ${money(last.toMills)}`,
     account: last.bindingChanged
-      ? "вместе со сменой аккаунта OFAPI"
+      ? "вместе со сменой аккаунта OnlyFans API"
       : last.accountChangedAt ? `после смены аккаунта ${moscowShortDate(last.accountChangedAt)}` : null,
   };
   if (vendor.netMills === null) {
-    return { amount: null, note: vendor.isLoading ? "OFAPI ещё считает" : "OFAPI не сообщил", recalculation };
+    return { amount: null, note: vendor.isLoading ? "OnlyFans ещё считает" : "OnlyFans не сообщил", recalculation };
   }
   return {
     amount: money(vendor.netMills),
@@ -85,7 +88,7 @@ export function vendorMoneyView(link: Pick<OfLink, "vendorMoney">): { amount: st
 
 const hubReasons = {
   not_computed: "Hub пока не считает",
-  no_completed_walk: "нет полного прохода",
+  no_completed_walk: "подсчёт Hub не завершён",
   before_floor: "до начала счёта Hub",
 } as const;
 
@@ -114,8 +117,8 @@ export interface DifferenceView {
   /** Over which stretch: the difference is of the money in it, never of the
    *  totals shown beside it. "за период с 08.10.26" */
   period: string;
-  /** What is compared: "OFAPI $52.50 · Hub $52.50" (OFAPI's increase over the
-   *  period, Hub's figure over the same period). */
+  /** What is compared: "OnlyFans $52.50 · Hub $52.50" (the OnlyFans figure's
+   *  increase over the period, Hub's figure over the same period). */
   figures: string;
   /** The comparison's state, in the owner's words. */
   note: string;
@@ -129,14 +132,14 @@ export function differenceView(link: Pick<OfLink, "comparison">): DifferenceView
   const since = comparison.fromAt ? moscowShortDate(comparison.fromAt) : null;
   const figures = comparison.vendorDeltaMills === null || comparison.hubNetMills === null
     ? ""
-    : `OFAPI ${money(comparison.vendorDeltaMills)} · Hub ${money(comparison.hubNetMills)}`;
+    : `OnlyFans ${money(comparison.vendorDeltaMills)} · Hub ${money(comparison.hubNetMills)}`;
   if (comparison.state === "incomplete") {
     return { amount: null, period: "", figures: "", note: `${comparisonLabels.incomplete} — сравнивать рано` };
   }
   if (comparison.state === "different_history") {
     return {
       amount: null,
-      period: since ? `OFAPI за всё время, Hub с ${since}` : "",
+      period: since ? `OnlyFans за всё время, Hub с ${since}` : "",
       figures,
       note: `${comparisonLabels.different_history} — не сравнимы`,
     };
@@ -179,14 +182,14 @@ const runStatusLabels = {
 } as const;
 
 const reasonLabels: Record<string, string> = {
-  page_unmapped: "у страницы нет аккаунта OFAPI",
-  page_auth_dead: "сессия страницы в OFAPI не действует",
-  ofapi_mapping_changed: "аккаунт OFAPI сменился",
-  ofapi_client_not_configured: "OFAPI не настроен",
+  page_unmapped: "у страницы нет аккаунта OnlyFans API",
+  page_auth_dead: "сессия страницы в OnlyFans API не действует",
+  ofapi_mapping_changed: "аккаунт OnlyFans API сменился",
+  ofapi_client_not_configured: "OnlyFans API не настроен",
   window_missed: "окно прошло без попытки",
   empty_unverified: "пустой ответ ещё не подтверждён",
   inventory_vanished: "ссылки пропали из ответа, ждём подтверждения",
-  binding_changed: "первое чтение под новым аккаунтом OFAPI",
+  binding_changed: "первое чтение под новым аккаунтом OnlyFans API",
   walk_truncated: "обход прерван",
 };
 
@@ -200,7 +203,7 @@ export function attemptText(attempt: NonNullable<OfLinksPageKind["lastAttempt"]>
 export function pageWarnings(page: OfLinksPage, staleAfterHours: number): string[] {
   const lines: string[] = [];
   if (!page.ofapiMapped) {
-    lines.push("Страница не привязана к аккаунту OFAPI: ссылки не собираются.");
+    lines.push("Страница не привязана к аккаунту OnlyFans API: ссылки не собираются.");
   }
   for (const kind of page.kinds) {
     const title = kindTitles[kind.linkKind];

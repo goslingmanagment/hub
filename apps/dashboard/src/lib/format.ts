@@ -20,21 +20,21 @@ export function formatDate(iso: string, options?: { includeYear?: boolean }): st
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-US", {
+  return d.toLocaleDateString("ru-RU", {
     month: "short",
     day: "numeric",
     year: options?.includeYear ? "numeric" : undefined,
   });
 }
 
-/** "Oct 4, 12:01". `yearUnlessCurrent`: an instant of another year carries it
- *  ("Aug 30, 2025, 11:59") — a date without one reads as this year's. */
+/** "4 окт., 12:01". `yearUnlessCurrent`: an instant of another year carries it
+ *  ("30 авг. 2025 г., 11:59") — a date without one reads as this year's. */
 export function formatDateTime(iso: string, options?: { yearUnlessCurrent?: boolean }): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   const withYear = options?.yearUnlessCurrent === true && d.getFullYear() !== new Date().getFullYear();
-  return d.toLocaleDateString("en-US", {
+  return d.toLocaleDateString("ru-RU", {
     month: "short",
     day: "numeric",
     year: withYear ? "numeric" : undefined,
@@ -47,23 +47,23 @@ export function formatDateTime(iso: string, options?: { yearUnlessCurrent?: bool
 export function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return "только что";
+  if (mins < 60) return `${mins} мин назад`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return `${hours} ч назад`;
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return `${days} дн назад`;
 }
 
 export function formatRelativeTimeCompact(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
+  if (mins < 1) return "сейчас";
+  if (mins < 60) return `${mins} мин`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return `${hours} ч`;
   const days = Math.floor(hours / 24);
-  return `${days}d`;
+  return `${days} дн`;
 }
 
 export function daysAgo(iso: string): number {
@@ -71,16 +71,27 @@ export function daysAgo(iso: string): number {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  subscription: "Subscription",
-  tip: "Tip",
-  message_purchase: "Message",
-  post_purchase: "Post Purchase",
-  stream_tip: "Stream Tip",
-  chargeback: "Chargeback",
-  refund: "Refund",
-  payout_reversal: "Payout Reversal",
-  other: "Other",
+  subscription: "Подписка",
+  tip: "Чаевые",
+  message_purchase: "Платное сообщение",
+  post_purchase: "Платный пост",
+  stream_tip: "Чаевые в эфире",
+  chargeback: "Чарджбэк",
+  refund: "Возврат",
+  payout_reversal: "Отмена выплаты",
+  other: "Прочее",
 };
+
+const STATE_LABELS: Record<string, string> = {
+  posted: "Проведена",
+  pending: "Ожидает",
+  unknown: "Неизвестно",
+};
+
+/** A transaction's state in words. */
+export function transactionStateLabel(state: string): string {
+  return STATE_LABELS[state] ?? state;
+}
 
 export function transactionTypeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type;
@@ -91,11 +102,11 @@ export function daysRemaining(expiresIso: string): number {
   return Math.max(0, Math.ceil(diff / 86_400_000));
 }
 
-const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 export function formatBusinessDateShort(bd: string): string {
   const { month, day } = parseBusinessDate(bd);
-  return `${MONTH_SHORT[month - 1]} ${day}`;
+  return `${day} ${MONTH_SHORT[month - 1]}`;
 }
 
 export function formatBusinessDateMonth(bd: string): string {
@@ -182,8 +193,8 @@ export function shiftAnchor(anchor: string, mode: UsagePeriod, direction: -1 | 1
 }
 
 const MONTH_FULL = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+  "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 ];
 
 /** Human-readable label for the current date/range based on period mode. */
@@ -191,19 +202,19 @@ export function usageDateLabel(anchor: string, mode: UsagePeriod): string {
   const { year, month, day } = parseBusinessDate(anchor);
   switch (mode) {
     case "day":
-      return `${MONTH_SHORT[month - 1]} ${day}, ${year}`;
+      return `${day} ${MONTH_SHORT[month - 1]} ${year}`;
     case "week": {
       const ws = weekStart(anchor);
       const we = weekEnd(anchor);
       const f = parseBusinessDate(ws);
       const t = parseBusinessDate(we);
       if (f.year === t.year && f.month === t.month) {
-        return `${MONTH_SHORT[f.month - 1]} ${f.day} – ${t.day}, ${f.year}`;
+        return `${f.day}–${t.day} ${MONTH_SHORT[f.month - 1]} ${f.year}`;
       }
       if (f.year === t.year) {
-        return `${MONTH_SHORT[f.month - 1]} ${f.day} – ${MONTH_SHORT[t.month - 1]} ${t.day}, ${f.year}`;
+        return `${f.day} ${MONTH_SHORT[f.month - 1]} – ${t.day} ${MONTH_SHORT[t.month - 1]} ${f.year}`;
       }
-      return `${MONTH_SHORT[f.month - 1]} ${f.day}, ${f.year} – ${MONTH_SHORT[t.month - 1]} ${t.day}, ${t.year}`;
+      return `${f.day} ${MONTH_SHORT[f.month - 1]} ${f.year} – ${t.day} ${MONTH_SHORT[t.month - 1]} ${t.year}`;
     }
     case "month":
       return `${MONTH_FULL[month - 1]} ${year}`;

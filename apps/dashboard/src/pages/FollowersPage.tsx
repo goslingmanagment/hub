@@ -18,6 +18,7 @@ import {
   formatRelativeTime,
   formatUsdFromCents,
 } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
 type Filter = "all" | "new24h" | "unmessaged" | "active" | "subscribers";
 
@@ -65,8 +66,8 @@ export function FollowersPage() {
     if (isError) {
       return (
         <StatusPanel
-          title="Followers failed to load"
-          description="The follower list could not be fetched for this page."
+          title="Не удалось загрузить фолловеров"
+          description="Список фолловеров этой страницы сейчас недоступен."
           tone="error"
           action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
@@ -79,11 +80,11 @@ export function FollowersPage() {
   const items = data.items;
   const total = data.total;
   const filters = [
-    { key: "all", label: "All" },
-    { key: "new24h", label: "New 24h" },
-    { key: "unmessaged", label: "Unmessaged" },
-    { key: "active", label: "Active" },
-    { key: "subscribers", label: "Subscribers" },
+    { key: "all", label: "Все" },
+    { key: "new24h", label: "Новые за 24 ч" },
+    { key: "unmessaged", label: "Без переписки" },
+    { key: "active", label: "Онлайн за 2 ч" },
+    { key: "subscribers", label: "Подписчики" },
   ];
   const enrichmentFilterActive = filter === "unmessaged" || filter === "active" || filter === "subscribers";
   const hasFollowerEnrichment = items.length === 0 || items.every((follower) => (
@@ -93,18 +94,17 @@ export function FollowersPage() {
     follower.presence != null
   ));
   const showEnrichmentUnavailable = enrichmentFilterActive && !hasFollowerEnrichment;
+  const narrowed = filter !== "all" || searchQuery !== "";
+  const countLine = offset > 0 && items.length === 0
+    ? "Число записей в фильтре пока недоступно"
+    : narrowed
+      ? `Найдено: ${total}`
+      : `${total} ${ruPlural(total, "фолловер", "фолловера", "фолловеров")}`;
 
   return (
     <div>
       <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">
-          Followers &mdash; {pageLabel}
-        </h1>
-        <p className="text-sm text-text-muted mt-1">{offset > 0 && items.length === 0 ? "Число записей в фильтре пока недоступно" : `${total} в текущем фильтре`}</p>
-      </div>
-
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <FilterButtons
           filters={filters}
           active={filter}
@@ -113,185 +113,186 @@ export function FollowersPage() {
         <SearchInput
           value={searchQuery}
           onChange={(value) => update("query", value)}
-          placeholder="Search follower..."
+          placeholder="Поиск фолловера"
         />
       </div>
 
-      <p className="mb-3 text-xs text-text-muted">Сохранённые записи Hub. Unmessaged означает, что диалог не записан; Active — сигнал активности за последние 120 минут.</p>
+      <p className="mb-3 text-[13px] text-text-secondary tabular-nums">{countLine}</p>
+
       {showEnrichmentUnavailable ? (
         <StatusPanel
-          title="Follower details are not available yet"
-          description="The API returned the older follower list shape, so subscriber, DM, and activity filters cannot be applied safely."
+          title="Этот фильтр пока недоступен"
+          description="Сервер ещё не присылает подписку, переписку и активность фолловеров, поэтому отобрать их нельзя. Выберите «Все» или «Новые за 24 ч»."
         />
       ) : (
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full min-w-[980px] border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {["Follower", "Followed", "Subscriber", "Spent", "DM", "Activity"].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && (
+      <section className="card overflow-hidden" aria-label="Фолловеры">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-text-muted">
-                  {offset > 0 ? "На этой странице списка записей нет." : "No followers match the current filter."}
-                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
-                </td>
+                <th>Фолловер</th>
+                <th>Подписан с</th>
+                <th>Подписка</th>
+                <th className="num">Потратил</th>
+                <th>Переписка</th>
+                <th>Активность</th>
               </tr>
-            )}
-            {items.map((follower) => {
-              const recentFollow = isNew24h(follower.followedAt);
-              const fanLabel = resolveFanLabelForScope(follower, "page");
-              const fanNavigation = buildFanProfileNavigation(
-                pageLabel!,
-                platform,
-                follower.platformUserId,
-                location.pathname + location.search,
-                fanLabel.label,
-              );
-              const subscriberKnown = typeof follower.isSubscriber === "boolean";
-              const totalSpentCents = typeof follower.totalSpentCents === "number"
-                ? follower.totalSpentCents
-                : null;
-              const dmKnown = follower.dm != null;
-              const dm = follower.dm ?? {
-                hasConversation: false,
-                platformConversationId: null,
-                unreadCount: 0,
-                lastMessageAt: null,
-                lastFanMessageAt: null,
-                lastModelMessageAt: null,
-                lastMessagePreview: null,
-              };
-              const presenceKnown = follower.presence != null;
-              const presence = follower.presence ?? {
-                status: "offline" as const,
-                lastSeenAt: null,
-                observedAt: null,
-              };
-
-              return (
-                <tr
-                  key={follower.platformUserId}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to={fanNavigation.to}
-                        state={fanNavigation.state}
-                        className="text-[15px] font-semibold text-text-primary hover:text-accent"
-                      >
-                        {fanLabel.label}
-                      </Link>
-                      {fanLabel.secondaryPlatformHandle && (
-                        <span className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
-                      )}
-                      {recentFollow && <Badge variant="new">NEW</Badge>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {recentFollow
-                      ? formatDateTime(follower.followedAt)
-                      : formatDate(follower.followedAt)}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {!subscriberKnown ? (
-                      <span className="text-text-muted">Unknown</span>
-                    ) : follower.isSubscriber ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="subscriber">Subscriber</Badge>
-                          {follower.autoRenew === false && (
-                            <span className="text-xs font-medium text-warning-dark">
-                              No renew
-                              {follower.autoRenewOffDetectedAt
-                                ? ` · ${formatDate(follower.autoRenewOffDetectedAt, { includeYear: true })}`
-                                : ""}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-text-muted">
-                          {follower.subscriptionExpiresAt
-                            ? `${daysRemaining(follower.subscriptionExpiresAt)}d left`
-                            : "Active"}
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-text-muted">Follower only</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {totalSpentCents === null ? (
-                      <span className="text-text-muted">Unknown</span>
-                    ) : totalSpentCents > 0 ? (
-                      <div className="space-y-1">
-                        <div className="font-semibold text-text-primary">
-                          {formatUsdFromCents(totalSpentCents)}
-                        </div>
-                        {follower.lastTransactionAt && (
-                          <div className="text-xs text-text-muted">
-                            {formatRelativeTime(follower.lastTransactionAt)}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-text-muted">$0.00</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {!dmKnown ? (
-                      <span className="text-text-muted">Not synced</span>
-                    ) : dm.hasConversation ? (
-                      <div className="max-w-[260px] space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-text-primary">
-                            {dm.unreadCount > 0 ? `${dm.unreadCount} unread` : "DM open"}
-                          </span>
-                          {dm.lastMessageAt && (
-                            <span className="text-xs text-text-muted">
-                              {formatRelativeTime(dm.lastMessageAt)}
-                            </span>
-                          )}
-                        </div>
-                        {dm.lastMessagePreview && (
-                          <div className="truncate text-xs text-text-muted">
-                            {dm.lastMessagePreview}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-text-muted">Нет записанного диалога</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {!presenceKnown ? (
-                      <span className="text-text-muted">Not synced</span>
-                    ) : presence.status === "active_now" ? (
-                      <span className="font-semibold text-green">Active now</span>
-                    ) : presence.status === "recently_active" ? (
-                      <span className="font-medium text-text-primary">Recently active</span>
-                    ) : presence.lastSeenAt ? (
-                      <span className="text-text-secondary">
-                        {formatRelativeTime(presence.lastSeenAt)}
-                      </span>
-                    ) : (
-                      <span className="text-text-muted">No recent signal</span>
-                    )}
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-text-secondary">
+                    {offset > 0 ? "На этой странице списка записей нет." : (narrowed ? "Под этот фильтр фолловеров нет." : "Фолловеров пока нет.")}
+                    {offset > 0 && <button type="button" className="link ml-2" onClick={() => update("offset", "")}>К началу списка</button>}
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {items.map((follower) => {
+                const recentFollow = isNew24h(follower.followedAt);
+                const fanLabel = resolveFanLabelForScope(follower, "page");
+                const fanNavigation = buildFanProfileNavigation(
+                  pageLabel!,
+                  platform,
+                  follower.platformUserId,
+                  location.pathname + location.search,
+                  fanLabel.label,
+                );
+                const subscriberKnown = typeof follower.isSubscriber === "boolean";
+                const totalSpentCents = typeof follower.totalSpentCents === "number"
+                  ? follower.totalSpentCents
+                  : null;
+                const dmKnown = follower.dm != null;
+                const dm = follower.dm ?? {
+                  hasConversation: false,
+                  platformConversationId: null,
+                  unreadCount: 0,
+                  lastMessageAt: null,
+                  lastFanMessageAt: null,
+                  lastModelMessageAt: null,
+                  lastMessagePreview: null,
+                };
+                const presenceKnown = follower.presence != null;
+                const presence = follower.presence ?? {
+                  status: "offline" as const,
+                  lastSeenAt: null,
+                  observedAt: null,
+                };
+
+                return (
+                  <tr key={follower.platformUserId}>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <Link
+                            to={fanNavigation.to}
+                            state={fanNavigation.state}
+                            className="font-medium text-text-primary hover:text-accent hover:underline underline-offset-2"
+                          >
+                            {fanLabel.label}
+                          </Link>
+                          {fanLabel.secondaryPlatformHandle && (
+                            <div className="text-xs text-text-secondary">@{fanLabel.secondaryPlatformHandle}</div>
+                          )}
+                        </div>
+                        {recentFollow && <Badge variant="new">Новый</Badge>}
+                      </div>
+                    </td>
+                    <td className="muted">
+                      {recentFollow
+                        ? formatDateTime(follower.followedAt)
+                        : formatDate(follower.followedAt)}
+                    </td>
+                    <td>
+                      {!subscriberKnown ? (
+                        <span className="text-text-muted">Неизвестно</span>
+                      ) : follower.isSubscriber ? (
+                        <div className="space-y-0.5">
+                          <Badge variant="subscriber">Подписчик</Badge>
+                          <div className="text-xs text-text-secondary">
+                            {follower.subscriptionExpiresAt
+                              ? `осталось ${daysRemaining(follower.subscriptionExpiresAt)} дн`
+                              : "без даты окончания"}
+                            {follower.autoRenew === false && (
+                              <span
+                                className="text-warning-dark"
+                                title={follower.autoRenewOffDetectedAt
+                                  ? `Замечено ${formatDate(follower.autoRenewOffDetectedAt, { includeYear: true })}`
+                                  : undefined}
+                              >
+                                {" · без автопродления"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-text-muted">Не подписан</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      {totalSpentCents === null ? (
+                        <span className="text-text-muted">Неизвестно</span>
+                      ) : totalSpentCents > 0 ? (
+                        <div>
+                          <div className="font-medium">{formatUsdFromCents(totalSpentCents)}</div>
+                          {follower.lastTransactionAt && (
+                            <div className="text-xs text-text-secondary">
+                              {formatRelativeTime(follower.lastTransactionAt)}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-text-muted">$0.00</span>
+                      )}
+                    </td>
+                    <td>
+                      {!dmKnown ? (
+                        <span className="text-text-muted">Неизвестно</span>
+                      ) : dm.hasConversation ? (
+                        <div className="max-w-[260px]">
+                          <div className="flex items-center gap-2">
+                            {dm.unreadCount > 0
+                              ? <span className="badge badge-accent">{dm.unreadCount} непрочит.</span>
+                              : <span>Есть переписка</span>}
+                            {dm.lastMessageAt && (
+                              <span className="text-xs text-text-secondary">
+                                {formatRelativeTime(dm.lastMessageAt)}
+                              </span>
+                            )}
+                          </div>
+                          {dm.lastMessagePreview && (
+                            <div className="truncate text-xs text-text-secondary" title={dm.lastMessagePreview}>
+                              {dm.lastMessagePreview}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-text-muted">Нет переписки</span>
+                      )}
+                    </td>
+                    <td>
+                      {!presenceKnown ? (
+                        <span className="text-text-muted">Неизвестно</span>
+                      ) : presence.status === "active_now" ? (
+                        <span className="inline-flex items-center gap-1.5 font-medium text-green">
+                          <span className="status-dot status-dot-ok" aria-hidden="true" />
+                          Онлайн
+                        </span>
+                      ) : presence.status === "recently_active" ? (
+                        <span>Недавно</span>
+                      ) : presence.lastSeenAt ? (
+                        <span className="text-text-secondary">
+                          {formatRelativeTime(presence.lastSeenAt)}
+                        </span>
+                      ) : (
+                        <span className="text-text-muted">Нет данных</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination
           offset={offset}
@@ -301,6 +302,14 @@ export function FollowersPage() {
         />
       </section>
       )}
+
+      <details className="help mt-4">
+        <summary>Как это работает</summary>
+        <div className="help-body">
+          <p>Список — фолловеры, которых сохранил Hub.</p>
+          <p>«Без переписки» — в Hub нет записанного диалога с фаном. «Онлайн за 2 ч» — у фана был сигнал активности в последние 120 минут.</p>
+        </div>
+      </details>
     </div>
   );
 }

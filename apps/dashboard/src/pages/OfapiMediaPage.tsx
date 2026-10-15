@@ -1,14 +1,55 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
+import { Check } from "lucide-react";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
 import { ofapiMediaActions, useOfapiMedia } from "@/api/ofapiMedia";
-const field =
-  "rounded border border-border bg-card px-3 py-2 text-sm text-text-primary";
-const button =
-  "rounded border border-border px-3 py-2 text-sm text-text-primary hover:bg-hover disabled:opacity-40";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { formatDateTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+
 const ready = (value: boolean | null) =>
-  value === true ? "Ready" : value === false ? "Still processing" : "Unknown";
+  value === true ? "Готово" : value === false ? "Обрабатывается" : "Неизвестно";
+const readyBadge = (value: boolean | null) =>
+  value === true ? "badge badge-success" : value === false ? "badge badge-warning" : "badge";
+const credits = (count: number) => `${count} ${ruPlural(count, "кредит", "кредита", "кредитов")}`;
+/** Decimal units, as the upload price is counted: 3 credits per 1 000 000 bytes. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1000) return `${bytes} Б`;
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1000).toLocaleString("ru-RU")} КБ`;
+  return `${(bytes / 1_000_000).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`;
+}
+const destinationLabels = { vault: "Медиатека", cdn: "Вложение для одного сообщения" } as const;
+const uploadStatusLabels: Record<string, string> = {
+  ready: "В очереди", leased: "Выполняется", awaiting_parse: "Обрабатывается", retry_wait: "Ждёт повтора",
+  blocked: "Остановлена", complete: "Готово", completed: "Готово", cancelled: "Отменена",
+  pending: "Ждёт OnlyFans", processing: "Обрабатывается", in_progress: "Обрабатывается", failed: "Ошибка",
+};
+const uploadStatusBadges: Record<string, string> = {
+  complete: "badge badge-success", completed: "badge badge-success", failed: "badge badge-danger",
+  blocked: "badge badge-warning", retry_wait: "badge badge-warning",
+};
+const reasonLabels: Record<string, string> = {
+  background_paused: "Фоновый сбор на паузе", job_unavailable: "Задача недоступна", collection_off: "Сбор выключен",
+  on_demand_only: "Сбор только по запросу", upload_status_retry: "OnlyFans не ответил, проверка повторится",
+  upload_status_contract_rejected: "Ответ OnlyFans не прошёл проверку", indeterminate: "Результат неизвестен — нужна проверка",
+};
+const inventoryLabels: Record<string, string> = { never: "Ещё не собиралась", partial: "Собрана частично", complete: "Собрана полностью" };
+const providerTypeLabels: Record<string, string> = { photo: "фото", video: "видео", audio: "аудио", gif: "GIF" };
+const releaseFormStatusLabels: Record<string, string> = { approved: "одобрено", pending: "на проверке", rejected: "отклонено", expired: "истекло" };
+
+/** One numbered step of the upload: the number, its title, its controls. */
+function Step({ number, title, state, children }: { number: number; title: string; state: "done" | "current" | "todo"; children: ReactNode }) {
+  const mark = state === "done" ? "bg-accent-soft text-accent" : state === "current" ? "bg-accent text-on-accent" : "bg-hover text-text-muted";
+  return <li className="flex gap-4">
+    <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${mark}`}>{state === "done" ? <Check size={15} /> : number}</span>
+    <div className="min-w-0 flex-1 space-y-3">
+      <h3 className={`text-sm font-semibold leading-7 ${state === "todo" ? "text-text-secondary" : "text-text-primary"}`}><span className="sr-only">Шаг {number}. </span>{title}</h3>
+      {children}
+    </div>
+  </li>;
+}
+
 export function OfapiMediaPage() {
   const auth = useAuthMe(),
     owner = auth.data?.user.role === "owner",
@@ -50,7 +91,7 @@ export function OfapiMediaPage() {
       await action();
       const results = await Promise.all([saved.refetch(), pages.refetch()]);
       if (results.some((result) => result.isError)) {
-        setError("Saved data could not be refreshed. Any action result above is retained; use Reload saved data to check it.");
+        setError("Не удалось обновить сохранённые данные. Результат действия сохранён; нажмите «Обновить», чтобы проверить.");
       } else if (refreshedNotice) setNotice(refreshedNotice);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
@@ -68,7 +109,7 @@ export function OfapiMediaPage() {
     if (!file) return;
     await run(async () => {
       if (file.size > 100000000)
-        throw new Error("Choose a file up to 100 decimal MB.");
+        throw new Error("Выберите файл не больше 100 МБ.");
       const bytes = await file.arrayBuffer(),
         hash = await crypto.subtle.digest("SHA-256", bytes),
         expectedSha256 = Array.from(new Uint8Array(hash), (byte) =>
@@ -77,7 +118,7 @@ export function OfapiMediaPage() {
       const fileBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(",")[1]!);
-        reader.onerror = () => reject(new Error("File could not be read"));
+        reader.onerror = () => reject(new Error("Файл не удалось прочитать"));
         reader.readAsDataURL(file);
       });
       const source = await ofapiMediaActions.source({
@@ -88,9 +129,7 @@ export function OfapiMediaPage() {
       });
       setSourceId(source.id);
       setMaxCredits(Math.max(1, Math.ceil((source.bytes * 3) / 1000000)));
-      setNotice(
-        "Source saved and checksum verified. Upload awaits your approval.",
-      );
+      setNotice("Файл сохранён и проверен. Загрузка в OnlyFans ждёт вашего подтверждения.");
       setPreview(null);
     });
   }
@@ -107,7 +146,7 @@ export function OfapiMediaPage() {
       };
       const pageLabel =
         pages.data!.pages.find((page) => page.id === body.pageId)?.label ??
-        `Page ${body.pageId}`;
+        `Страница ${body.pageId}`;
       const sourceFilename =
         saved.data?.sources.find((source) => source.id === body.sourceId)
           ?.filename ?? body.sourceId;
@@ -128,36 +167,66 @@ export function OfapiMediaPage() {
       try {
         if (!navigator.clipboard) throw new Error("Clipboard unavailable");
         await navigator.clipboard.writeText(result.materialId);
-        setNotice(
-          "Verified media ID copied. Select this material in ChatGoose before sending.",
-        );
+        setNotice("ID скопирован. Выберите этот файл в ChatGoose перед отправкой.");
       } catch {
-        setNotice("Media ID verified. Clipboard copy was unavailable; copy the ID shown below.");
+        setNotice("ID проверен, но скопировать его не удалось — скопируйте ID ниже вручную.");
       }
     });
   }
   const source = saved.data?.sources.find((value) => value.id === sourceId);
-  return (
-    <div className="max-w-7xl space-y-6">
-      <div className="flex flex-wrap justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-extrabold text-text-primary">
-            OnlyFans media
-          </h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Owned sources, asynchronous uploads and saved vault metadata.
-          </p>
-        </div>
-        <Link className="text-accent text-sm" to="/settings?tab=collection">
-          Collection controls
-        </Link>
+  const pageInfo = pages.data?.pages.find((page) => page.id === pageId);
+  const pageLabel = pageInfo?.label ?? `Страница ${pageId}`;
+  // A page without an OnlyFans API account has no media to read: its read
+  // fails with "Mapped page not found", which is this state, not an error.
+  const unbound = pageInfo !== undefined && pageInfo.accountId === null;
+  const creditsValid = Number.isInteger(maxCredits) && maxCredits >= 1 && maxCredits <= 300;
+  const readError = unbound ? null : saved.error;
+  const collectionConfirm = collectionPreview && (
+    <div className="space-y-3 rounded-lg border border-border bg-hover-alt p-3 text-sm text-text-secondary">
+      <p>
+        {collectionPreview.pageLabel} · прочитать{" "}
+        {collectionPreview.selection.length === 1
+          ? "сведения об этом файле"
+          : "медиатеку, папки, согласия на публикацию и отмеченных пользователей"}
+        . Не больше 10 запросов, 10 кредитов и 4 МБ. Прерванный обход остаётся частичным; сами файлы не скачиваются.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              await ofapiMediaActions.collect({
+                pageId: collectionPreview.pageId,
+                category: "vault_catalog",
+                expectedRevision: collectionPreview.revision,
+                maxCredits: 10,
+                maxCalls: 10,
+                maxBytes: 4 * 1024 * 1024,
+                from: null,
+                to: null,
+                selection: collectionPreview.selection,
+              });
+              setCollectionPreview(null);
+              setNotice("Сбор сведений поставлен в очередь. Для большой медиатеки может понадобиться отдельный сбор в «Настройки сбора».");
+            })
+          }
+        >
+          Подтвердить сбор · до 10 кредитов
+        </button>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setCollectionPreview(null)}>Отмена</button>
       </div>
-      <div className="flex flex-wrap gap-3 items-end">
-        <label className="grid gap-1 text-sm text-text-muted">
-          Page
+    </div>
+  );
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+        <label className="w-full sm:w-64">
+          <span className="field-label">Страница</span>
           <select
             disabled={busy || !pages.data}
-            className={field}
+            className="select"
             value={pageId}
             onChange={(event) => {
               setSelectedPage(Number(event.target.value));
@@ -175,468 +244,472 @@ export function OfapiMediaPage() {
           </select>
         </label>
         <button
-          className={button}
+          type="button"
+          className="btn"
           disabled={busy || !pageId}
           onClick={() =>
-            void run(async () => {}, "Reloaded saved media.")
+            void run(async () => {}, "Данные обновлены.")
           }
         >
-          Reload saved data
+          Обновить
         </button>
+        {owner && !unbound && <Link className="link ml-auto pb-2 text-sm" to="/settings?tab=collection">Настройки сбора</Link>}
       </div>
-      {(error || saved.error || pages.error) && (
-        <p
-          role="alert"
-          className="rounded border border-red-500/40 p-3 text-red-400 text-sm"
-        >
-          {error || String(saved.error || pages.error)}
+      {(error || readError || pages.error) && (
+        <p role="alert" className="notice notice-danger">
+          {error || (readError ?? pages.error)?.message}
         </p>
       )}
-      {pages.isError && !pages.data && <button type="button" className={button} disabled={pages.isFetching} onClick={() => void pages.refetch()}>Retry page list</button>}
-      {saved.isError && saved.data && <p className="text-sm text-warning-dark">The saved snapshot is still shown; its current state could not be checked.</p>}
+      {pages.isError && !pages.data && <button type="button" className="btn" disabled={pages.isFetching} onClick={() => void pages.refetch()}>Повторить загрузку страниц</button>}
+      {saved.isError && saved.data && !unbound && <p className="notice notice-warning">Показаны прежние данные: текущее состояние проверить не удалось.</p>}
       {notice && (
-        <p
-          role="status"
-          className="rounded bg-hover p-3 text-sm text-text-primary"
-        >
+        <p role="status" className="notice">
           {notice}
         </p>
       )}
-      {(pages.isPending || (pageId > 0 && saved.isPending)) && <p role="status" className="text-sm text-text-muted">Loading saved media…</p>}
-      {pages.data && !pages.isError && pages.data.pages.length === 0 && <p className="text-sm text-text-muted">No OnlyFans pages are available. Add or bind a page in Collection controls.</p>}
+      {(pages.isPending || (pageId > 0 && saved.isPending && !unbound)) && <p role="status" className="text-sm text-text-muted">Загружаем медиа…</p>}
+      {pages.data && !pages.isError && pages.data.pages.length === 0 && <StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в настройках сбора." : "Страницы OnlyFans пока не добавлены."} />}
       {busy && (
         <p role="status" className="text-sm text-text-muted">
-          Saving the reviewed action…
+          Ждём ответа сервера…
         </p>
       )}
-      {owner && (
-        <section className="rounded-xl border border-border bg-card p-5 space-y-4">
-          <h2 className="font-semibold text-text-primary">
-            Upload owned media
-          </h2>
-          <p className="text-sm text-text-muted">
-            Files up to 100 MB. Save a source once; reuse it for an explicitly
-            approved upload. The server checks its type, size and checksum.
-            Uploads cost 3 credits per decimal MB, minimum 1.
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="grid gap-1 text-sm text-text-muted">
-              Owned image, video or audio
-              <input
-                disabled={busy}
-                className={field}
-                type="file"
-                accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/wav,audio/mp4"
-                onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null);
-                  reset();
-                }}
-              />
-            </label>
-            <button
-              className={button}
-              disabled={busy || !file || !pageId}
-              onClick={() => void saveSource()}
-            >
-              Save source
-            </button>
-            {file && (
-              <span className="text-text-muted text-sm">
-                {file.name} · {(file.size / 1000000).toFixed(2)} MB
-              </span>
-            )}
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="grid gap-1 text-sm text-text-muted">
-              Saved source
-              <select
-                disabled={busy}
-                className={field}
-                value={sourceId}
-                onChange={(event) => {
-                  setSourceId(event.target.value);
-                  const row = saved.data?.sources.find(
-                    (source) => source.id === event.target.value,
-                  );
-                  if (row)
-                    setMaxCredits(
-                      Math.max(1, Math.ceil((row.bytes * 3) / 1000000)),
-                    );
-                  reset();
-                }}
-              >
-                <option value="">Choose a source</option>
-                {saved.data?.sources.map((source) => (
-                  <option key={source.id} value={source.id}>
-                    {source.filename} · {(source.bytes / 1000000).toFixed(2)} MB
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm text-text-muted">
-              Destination
-              <select
-                disabled={busy}
-                className={field}
-                value={destination}
-                onChange={(event) => {
-                  setDestination(event.target.value as "vault" | "cdn");
-                  reset();
-                }}
-              >
-                <option value="vault">Reusable vault media</option>
-                <option value="cdn">One-use message attachment</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm text-text-muted">
-              Maximum credits
-              <input
-                disabled={busy}
-                className={field}
-                type="number"
-                min={1}
-                max={300}
-                value={maxCredits}
-                onChange={(event) => {
-                  setMaxCredits(Number(event.target.value));
-                  reset();
-                }}
-              />
-            </label>
-            <button
-              className={button}
-              disabled={busy || !source || !pages.data || pages.isError || !Number.isInteger(maxCredits) || maxCredits < 1 || maxCredits > 300}
-              onClick={() => void previewUpload()}
-            >
-              Preview upload
-            </button>
-          </div>
-          {(!Number.isInteger(maxCredits) || maxCredits < 1 || maxCredits > 300) && <p role="alert" className="text-sm text-red-400">Maximum credits must be a whole number from 1 to 300.</p>}
-          {source && (
-            <p className="text-xs text-text-muted break-all">
-              Verified {source.mimeType} · SHA256 {source.sha256}
-            </p>
-          )}
-          {preview && (
-            <div className="rounded border border-border p-3 text-sm text-text-secondary">
-              <p className="font-medium">
-                {preview.pageLabel} (page {preview.body.pageId}) ·{" "}
-                {preview.sourceFilename}
-              </p>
-              <p className="break-all text-xs text-text-muted">
-                Source {preview.body.sourceId} · SHA256 {preview.receipt.sha256}
-              </p>
-              <p>
-                {preview.receipt.destination === "vault"
-                  ? "Reusable vault"
-                  : "One-use CDN"}{" "}
-                upload · {(preview.receipt.bytes / 1000000).toFixed(2)} MB ·
-                estimate {preview.receipt.estimatedCredits} credits · approved
-                ceiling {preview.receipt.maxCredits}. Status checks are bounded
-                to 99 calls.
-              </p>
-              <button
-                className={`${button} mt-3`}
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await ofapiMediaActions.upload({
-                      ...preview.body,
-                      dryRun: false,
-                    });
-                    setPreview(null);
-                    setNotice("Upload queued. Its progress appears below.");
-                  })
-                }
-              >
-                Approve one upload
-              </button>
-            </div>
-          )}
-        </section>
+      {unbound && (
+        <StatusPanel
+          title="Страница не привязана к OnlyFans API"
+          description="Загрузка файлов и медиатека доступны только для страницы с привязанным аккаунтом OnlyFans API."
+          action={owner ? <Link to="/settings?tab=collection">Настройки сбора</Link> : undefined}
+        />
       )}
-      <section className="space-y-3">
-        <h2 className="font-semibold text-text-primary">Uploads</h2>
-        {saved.data && !saved.isError && !saved.data.uploads.length && (
-          <p className="text-sm text-text-muted">
-            No upload tasks for this page.
-          </p>
-        )}
-        {saved.data?.uploads.map((job) => (
-          <div
-            key={job.id}
-            className="rounded-xl border border-border bg-card p-4 space-y-2 text-sm"
-          >
-            <div className="flex flex-wrap justify-between">
-              <strong className="text-text-primary">
-                {job.destination === "vault" ? "Vault" : "One-use attachment"} ·{" "}
-                {job.reason === "indeterminate"
-                  ? "Outcome unknown · review required"
-                  : (job.uploadStatus ?? job.state)}
-              </strong>
-              <span className="text-text-muted">
-                {new Date(job.createdAt).toLocaleString()}
-              </span>
+      {owner && !unbound && (
+        <section className="card" aria-labelledby="media-upload-title">
+          <div className="card-header">
+            <div className="min-w-0">
+              <h2 id="media-upload-title" className="card-title">Загрузить файл в OnlyFans</h2>
+              <p className="card-description">Фото, видео или аудио до 100 МБ. Загрузка стоит 3 кредита за каждый МБ, минимум 1 кредит.</p>
             </div>
-            <p className="text-text-secondary">
-              Transcoding: {ready(job.isReady)} · Vendor charge:{" "}
-              {job.actualCredits === null
-                ? "not established"
-                : `${job.actualCredits} credits`}{" "}
-              · Recorded allowance/spend: {job.spentCredits}
-            </p>
-            {job.reason && job.reason !== "upload_processing" && (
-              <p className="text-text-muted">
-                {job.reason.replaceAll("_", " ")}
-              </p>
-            )}
-            {owner &&
-              job.state === "blocked" &&
-              [
-                "background_paused",
-                "job_unavailable",
-                "collection_off",
-                "on_demand_only",
-              ].includes(job.reason ?? "") && (
+          </div>
+          <ol className="card-body space-y-6">
+            <Step number={1} title="Файл" state={source ? "done" : "current"}>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="w-full min-w-0 sm:w-auto sm:max-w-sm sm:flex-1">
+                  <span className="field-label">Новый файл</span>
+                  <input
+                    disabled={busy}
+                    className="input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/wav,audio/mp4"
+                    onChange={(event) => {
+                      setFile(event.target.files?.[0] ?? null);
+                      reset();
+                    }}
+                  />
+                </label>
                 <button
-                  className={button}
-                  disabled={busy || !pages.data || pages.data.backgroundPaused}
-                  onClick={() =>
-                    void run(async () => {
-                      await ofapiMediaActions.resume(job.id, {
-                        expectedRowVersion: job.rowVersion,
-                        expectedPolicyRevision: pages.data!.revision,
-                        reason:
-                          "Resume reviewed upload with original allowance",
-                      });
-                      setNotice(
-                        "Upload resumed with the same source and allowance.",
-                      );
-                    })
-                  }
+                  type="button"
+                  className="btn"
+                  disabled={busy || !file || !pageId}
+                  onClick={() => void saveSource()}
                 >
-                  Resume approved upload
+                  Сохранить файл
                 </button>
+              </div>
+              {file && (
+                <p className="field-hint">
+                  {file.name} · {formatSize(file.size)}
+                </p>
               )}
-            {owner && job.state === "complete" && (
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  className={button}
+              <label className="block max-w-xl">
+                <span className="field-label">Или сохранённый ранее</span>
+                <select
                   disabled={busy}
-                  onClick={() =>
-                    void copyMaterial({
-                      pageId,
-                      jobId: job.id,
-                      expectedRowVersion: job.rowVersion,
-                      reason: "Owner reviewed upload handoff",
-                    })
-                  }
+                  className="select"
+                  value={sourceId}
+                  onChange={(event) => {
+                    setSourceId(event.target.value);
+                    const row = saved.data?.sources.find(
+                      (source) => source.id === event.target.value,
+                    );
+                    if (row)
+                      setMaxCredits(
+                        Math.max(1, Math.ceil((row.bytes * 3) / 1000000)),
+                      );
+                    reset();
+                  }}
                 >
-                  Copy verified media ID
-                </button>
-                {job.destination === "vault" && job.mediaRef && (
+                  <option value="">Выберите файл</option>
+                  {saved.data?.sources.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.filename} · {formatSize(source.bytes)}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint block">Сервер проверяет тип, размер и целостность файла. Сохранённый файл можно загрузить снова без повторной передачи.</span>
+              </label>
+            </Step>
+            <Step number={2} title="Куда загрузить" state={preview ? "done" : source ? "current" : "todo"}>
+              <div className="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
+                <label className="block min-w-0">
+                  <span className="field-label">Назначение</span>
+                  <select
+                    disabled={busy}
+                    className="select"
+                    value={destination}
+                    onChange={(event) => {
+                      setDestination(event.target.value as "vault" | "cdn");
+                      reset();
+                    }}
+                  >
+                    <option value="vault">Медиатека</option>
+                    <option value="cdn">Вложение для одного сообщения</option>
+                  </select>
+                  <span className="field-hint block">Файл медиатеки можно отправлять много раз, вложение — один раз.</span>
+                </label>
+                <label className="block min-w-0">
+                  <span className="field-label">Не больше, кредитов</span>
+                  <input
+                    disabled={busy}
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={300}
+                    value={maxCredits}
+                    onChange={(event) => {
+                      setMaxCredits(Number(event.target.value));
+                      reset();
+                    }}
+                  />
+                  <span className="field-hint block">Подставлено по размеру файла.</span>
+                </label>
+              </div>
+              {!creditsValid && <p role="alert" className="notice notice-danger">Лимит — целое число от 1 до 300 кредитов.</p>}
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !source || !pages.data || pages.isError || !creditsValid}
+                onClick={() => void previewUpload()}
+              >
+                Показать цену
+              </button>
+            </Step>
+            <Step number={3} title="Подтверждение с ценой" state={preview ? "current" : "todo"}>
+              {preview ? (
+                <div className="space-y-3">
+                  <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:max-w-2xl">
+                    <div><dt className="text-xs text-text-muted">Страница</dt><dd className="text-text-primary">{preview.pageLabel}</dd></div>
+                    <div><dt className="text-xs text-text-muted">Файл</dt><dd className="break-all text-text-primary">{preview.sourceFilename} · {formatSize(preview.receipt.bytes)}</dd></div>
+                    <div><dt className="text-xs text-text-muted">Куда</dt><dd className="text-text-primary">{destinationLabels[preview.receipt.destination]}</dd></div>
+                    <div><dt className="text-xs text-text-muted">Цена</dt><dd className="text-text-primary">около {credits(preview.receipt.estimatedCredits)} · не больше {credits(preview.receipt.maxCredits)}</dd></div>
+                  </dl>
+                  <p className="field-hint">Статус загрузки проверяется не больше 99 раз.</p>
                   <button
-                    className={button}
-                    disabled={busy || !pages.data}
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
                     onClick={() =>
-                      setCollectionPreview({
-                        selection: [`vault_item:${job.mediaRef}`],
-                        revision: pages.data!.revision,
-                        pageId,
-                        pageLabel:
-                          pages.data!.pages.find((page) => page.id === pageId)
-                            ?.label ?? `Page ${pageId}`,
+                      void run(async () => {
+                        await ofapiMediaActions.upload({
+                          ...preview.body,
+                          dryRun: false,
+                        });
+                        setPreview(null);
+                        setNotice("Загрузка поставлена в очередь. Её ход — в списке загрузок ниже.");
                       })
                     }
                   >
-                    Preview readiness refresh
+                    Загрузить · до {credits(preview.receipt.maxCredits)}
                   </button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </section>
-      {handoff && (
-        <section className="rounded border border-border p-4 space-y-2">
-          <p className="text-sm text-text-secondary">{handoff.note}</p>
-          <input
-            disabled={busy}
-            aria-label="Verified media ID"
-            className={`${field} w-full font-mono`}
-            readOnly
-            value={handoff.materialId}
-          />
-          <button className={button} onClick={() => setHandoff(null)}>
-            Hide ID
-          </button>
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">Цена появится здесь после шага 2. Без подтверждения ничего не загружается.</p>
+              )}
+            </Step>
+          </ol>
+          {(source || preview) && (
+            <div className="border-t border-border-light px-5 py-3">
+              <details className="help">
+                <summary>Технические детали</summary>
+                <div className="help-body break-all text-xs">
+                  {source && <p>Файл: {source.mimeType} · {source.bytes} байт · SHA256 {source.sha256}</p>}
+                  {source && <p>ID сохранённого файла: {source.id}</p>}
+                  {preview && <p>Подтверждаемая загрузка: страница {preview.body.pageId} · файл {preview.body.sourceId} · SHA256 {preview.receipt.sha256}</p>}
+                </div>
+              </details>
+            </div>
+          )}
         </section>
       )}
-      <section className="space-y-3">
-        <div className="flex flex-wrap justify-between gap-3">
-          <h2 className="font-semibold text-text-primary">
-            Saved vault catalog ·{" "}
-            {saved.data?.inventory.state ?? (saved.isError ? "unavailable" : pageId ? "loading…" : "select a page")}
-          </h2>
-          {owner && (
-            <button
-              className={button}
-              disabled={busy || !pageId || !pages.data}
-              onClick={() =>
-                setCollectionPreview({
-                  selection: [
-                    "vault_inventory",
-                    "vault_lists",
-                    "release_forms",
-                    "taggable_users",
-                  ],
-                  revision: pages.data!.revision,
-                  pageId,
-                  pageLabel:
-                    pages.data!.pages.find((page) => page.id === pageId)
-                      ?.label ?? `Page ${pageId}`,
-                })
-              }
-            >
-              Preview bounded catalog refresh
-            </button>
+      {!unbound && (
+        <section className="card" aria-labelledby="media-uploads-title">
+          <div className="card-header">
+            <h2 id="media-uploads-title" className="card-title">Загрузки</h2>
+          </div>
+          {saved.data && !saved.isError && !saved.data.uploads.length && (
+            <div className="empty">
+              <p className="empty-title">Загрузок для этой страницы пока нет</p>
+            </div>
           )}
-        </div>
-        <p className="text-sm text-text-muted">{saved.data?.inventory.note}</p>
-        {collectionPreview && (
-          <div className="rounded border border-border p-3 text-sm text-text-secondary">
-            <p>
-              {collectionPreview.pageLabel} (page {collectionPreview.pageId}) ·
-              Read{" "}
-              {collectionPreview.selection.length === 1
-                ? "one selected item"
-                : "vault media, lists, release forms and taggable users"}
-              . Maximum 10 calls, 10 credits and 4 MiB. An interrupted traversal
-              stays partial. Sources and binary media are not downloaded.
+          {saved.data && saved.data.uploads.length > 0 && <ul className="divide-y divide-border-light">
+            {saved.data.uploads.map((job) => {
+              const status = job.reason === "indeterminate" ? "indeterminate" : job.uploadStatus ?? job.state;
+              const filename = saved.data?.sources.find((row) => row.id === job.sourceId)?.filename;
+              const canResume = owner && job.state === "blocked" && ["background_paused", "job_unavailable", "collection_off", "on_demand_only"].includes(job.reason ?? "");
+              const readiness = collectionPreview?.selection.length === 1 && collectionPreview.selection[0] === `vault_item:${job.mediaRef}`;
+              return (
+                <li key={job.id} className="space-y-2 px-5 py-4 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-text-primary">{filename ?? destinationLabels[job.destination]}</span>
+                        <span className={status === "indeterminate" ? "badge badge-warning" : uploadStatusBadges[status] ?? "badge"} title={status}>
+                          {status === "indeterminate" ? "Результат неизвестен — нужна проверка" : uploadStatusLabels[status] ?? status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-text-muted">{filename ? `${destinationLabels[job.destination]} · ` : ""}{formatDateTime(job.createdAt)}</p>
+                    </div>
+                    {(canResume || (owner && job.state === "complete")) && (
+                      <div className="flex flex-wrap gap-2">
+                        {canResume && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            disabled={busy || !pages.data || pages.data.backgroundPaused}
+                            onClick={() =>
+                              void run(async () => {
+                                await ofapiMediaActions.resume(job.id, {
+                                  expectedRowVersion: job.rowVersion,
+                                  expectedPolicyRevision: pages.data!.revision,
+                                  reason:
+                                    "Resume reviewed upload with original allowance",
+                                });
+                                setNotice("Загрузка продолжена с тем же файлом и лимитом.");
+                              })
+                            }
+                          >
+                            Продолжить загрузку
+                          </button>
+                        )}
+                        {owner && job.state === "complete" && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              disabled={busy}
+                              onClick={() =>
+                                void copyMaterial({
+                                  pageId,
+                                  jobId: job.id,
+                                  expectedRowVersion: job.rowVersion,
+                                  reason: "Owner reviewed upload handoff",
+                                })
+                              }
+                            >
+                              Скопировать ID
+                            </button>
+                            {job.destination === "vault" && job.mediaRef && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                disabled={busy || !pages.data}
+                                onClick={() =>
+                                  setCollectionPreview({
+                                    selection: [`vault_item:${job.mediaRef}`],
+                                    revision: pages.data!.revision,
+                                    pageId,
+                                    pageLabel,
+                                  })
+                                }
+                              >
+                                Проверить готовность
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-text-secondary">
+                    Обработка: {ready(job.isReady)} · Списано OnlyFans API:{" "}
+                    {job.actualCredits === null ? "ещё неизвестно" : credits(job.actualCredits)}
+                    {" "}· Учтено: {credits(job.spentCredits)}
+                  </p>
+                  {job.reason && job.reason !== "upload_processing" && job.reason !== "indeterminate" && (
+                    <p className="text-xs text-text-muted" title={job.reason}>
+                      {reasonLabels[job.reason] ?? job.reason.replaceAll("_", " ")}
+                    </p>
+                  )}
+                  {readiness && collectionConfirm}
+                </li>
+              );
+            })}
+          </ul>}
+        </section>
+      )}
+      {handoff && (
+        <section className="card" aria-label="ID для ChatGoose">
+          <div className="card-body space-y-3">
+            <p className="text-sm text-text-secondary" title={handoff.note}>
+              {handoff.materialKind === "vault"
+                ? "Файл медиатеки: этот ID можно использовать повторно — файл заново не загружается."
+                : "Вложение для одного сообщения: используйте ID один раз. Готовность превью может остаться неизвестной; если отправка закончится неизвестным результатом, ID останется заблокированным."}
             </p>
-            <button
-              className={`${button} mt-2`}
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await ofapiMediaActions.collect({
-                    pageId: collectionPreview.pageId,
-                    category: "vault_catalog",
-                    expectedRevision: collectionPreview.revision,
-                    maxCredits: 10,
-                    maxCalls: 10,
-                    maxBytes: 4 * 1024 * 1024,
-                    from: null,
-                    to: null,
-                    selection: collectionPreview.selection,
-                  });
-                  setCollectionPreview(null);
-                  setNotice(
-                    "Bounded metadata collection queued. Large inventories may require a larger reviewed task in Collection controls.",
-                  );
-                })
-              }
-            >
-              Approve metadata collection
+            <label className="block">
+              <span className="field-label">ID для ChatGoose</span>
+              <input
+                disabled={busy}
+                className="input font-mono"
+                readOnly
+                value={handoff.materialId}
+              />
+            </label>
+            <button type="button" className="btn btn-sm" onClick={() => setHandoff(null)}>
+              Скрыть ID
             </button>
           </div>
-        )}
-        <div className="overflow-x-auto rounded border border-border">
-          <table className="min-w-full text-sm text-left">
-            <thead className="text-text-muted">
-              <tr>
-                <th className="p-3">Media</th>
-                <th className="p-3">Readiness</th>
-                <th className="p-3">Metadata</th>
-                <th className="p-3">Release forms</th>
-                <th className="p-3">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {saved.data && !saved.isError && saved.data.media.length === 0 && <tr><td colSpan={5} className="p-3 text-text-muted">{offset > 0 ? "No saved media at this position. Return to the previous page." : "No media in the saved catalog. This does not establish that the provider vault is empty."}</td></tr>}
-              {saved.data?.media.map((media) => (
-                <tr
-                  key={`${media.materialKind}:${media.mediaRef}`}
-                  className="border-t border-border text-text-secondary"
-                >
-                  <td className="p-3">
-                    {media.materialKind === "cdn"
-                      ? "One-use attachment"
-                      : media.mediaRef}
-                    <p className="text-xs text-text-muted">
-                      {media.filename ??
-                        media.providerType ??
-                        "No type observed"}
-                    </p>
-                  </td>
-                  <td className="p-3">
-                    {ready(media.isReady)}
-                    {media.hasError && " · provider error"}
-                  </td>
-                  <td className="p-3">
-                    {media.width ?? "?"}×{media.height ?? "?"} ·{" "}
-                    {media.bytes === null
-                      ? "size unknown"
-                      : `${media.bytes} bytes`}
-                  </td>
-                  <td className="p-3">
-                    {media.releaseForms.length
-                      ? media.releaseForms
-                          .map(
-                            (form) =>
-                              `${form.name ?? form.id}${form.status ? ` (${form.status})` : ""}`,
-                          )
-                          .join(", ")
-                      : "None observed"}
-                  </td>
-                  <td className="p-3">
-                    {owner && media.materialKind === "vault" && (
-                      <button
-                        className={button}
-                        disabled={
-                          busy ||
-                          media.isReady !== true ||
-                          media.hasError === true ||
-                          media.canView === false
-                        }
-                        onClick={() =>
-                          void copyMaterial({
-                            pageId,
-                            mediaRef: media.mediaRef,
-                            expectedObservationId: media.observationId,
-                            reason: "Owner reviewed vault material handoff",
-                          })
-                        }
-                      >
-                        Copy verified ID
-                      </button>
-                    )}
-                  </td>
+        </section>
+      )}
+      {!unbound && (
+        <section className="card" aria-labelledby="media-catalog-title">
+          <div className="card-header">
+            <div className="min-w-0">
+              <h2 id="media-catalog-title" className="card-title">Медиатека</h2>
+              <p className="card-description">
+                {saved.data
+                  ? `${inventoryLabels[saved.data.inventory.state] ?? "Полнота неизвестна"}${saved.data.inventory.completedAt ? ` · ${formatDateTime(saved.data.inventory.completedAt)}` : ""}`
+                  : saved.isError ? "Недоступна" : pageId ? "Загружаем…" : "Выберите страницу"}
+              </p>
+            </div>
+            {owner && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || !pageId || !pages.data}
+                onClick={() =>
+                  setCollectionPreview({
+                    selection: [
+                      "vault_inventory",
+                      "vault_lists",
+                      "release_forms",
+                      "taggable_users",
+                    ],
+                    revision: pages.data!.revision,
+                    pageId,
+                    pageLabel,
+                  })
+                }
+              >
+                Обновить каталог
+              </button>
+            )}
+          </div>
+          {collectionPreview && collectionPreview.selection.length > 1 && <div className="px-5 pt-4">{collectionConfirm}</div>}
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Файл</th>
+                  <th>Готовность</th>
+                  <th>Размер</th>
+                  <th>Согласия</th>
+                  <th><span className="sr-only">Действие</span></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-          <button
-            className={button}
-            disabled={busy || offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - 50))}
-          >
-            Previous
-          </button>
-          <span>
-            {saved.data ? saved.data.totalMedia === 0 ? "0 items" : offset >= saved.data.totalMedia ? `No items at this position · ${saved.data.totalMedia} total` : `${offset + 1}–${Math.min(offset + 50, saved.data.totalMedia)} of ${saved.data.totalMedia}` : "Item count unavailable"}
-          </span>
-          <button
-            className={button}
-            disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
-            onClick={() => setOffset(offset + 50)}
-          >
-            Next
-          </button>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {saved.data && !saved.isError && saved.data.media.length === 0 && <tr><td colSpan={5} className="muted">{offset > 0 ? "На этой позиции файлов нет. Вернитесь на предыдущую страницу." : "В сохранённом каталоге нет файлов. Это не значит, что медиатека в OnlyFans пуста."}</td></tr>}
+                {saved.data?.media.map((media) => (
+                  <tr key={`${media.materialKind}:${media.mediaRef}`}>
+                    <td title={`ID ${media.mediaRef}`}>
+                      <span className="block text-text-primary">
+                        {media.filename ?? (media.materialKind === "cdn" ? "Вложение для сообщения" : `Файл ${media.mediaRef}`)}
+                      </span>
+                      <span className="block text-xs text-text-muted">
+                        {media.materialKind === "cdn" ? "Для одного сообщения" : "Медиатека"}
+                        {media.providerType ? ` · ${providerTypeLabels[media.providerType] ?? media.providerType}` : ""}
+                      </span>
+                    </td>
+                    <td>
+                      {media.hasError
+                        ? <span className="badge badge-danger">Ошибка у OnlyFans</span>
+                        : <span className={readyBadge(media.isReady)}>{ready(media.isReady)}</span>}
+                    </td>
+                    <td className="muted">
+                      {media.width !== null && media.height !== null ? `${media.width}×${media.height} · ` : ""}
+                      {media.bytes === null ? "размер неизвестен" : formatSize(media.bytes)}
+                    </td>
+                    <td className="muted">
+                      {media.releaseForms.length
+                        ? media.releaseForms
+                            .map(
+                              (form) =>
+                                `${form.name ?? form.id}${form.status ? ` (${releaseFormStatusLabels[form.status] ?? form.status})` : ""}`,
+                            )
+                            .join(", ")
+                        : "Нет"}
+                    </td>
+                    <td className="text-right">
+                      {owner && media.materialKind === "vault" && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={
+                            busy ||
+                            media.isReady !== true ||
+                            media.hasError === true ||
+                            media.canView === false
+                          }
+                          onClick={() =>
+                            void copyMaterial({
+                              pageId,
+                              mediaRef: media.mediaRef,
+                              expectedObservationId: media.observationId,
+                              reason: "Owner reviewed vault material handoff",
+                            })
+                          }
+                        >
+                          Скопировать ID
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="card-footer flex-wrap">
+            <span>
+              {saved.data ? saved.data.totalMedia === 0 ? "0 файлов" : offset >= saved.data.totalMedia ? `На этой позиции файлов нет · всего ${saved.data.totalMedia}` : `${offset + 1}–${Math.min(offset + 50, saved.data.totalMedia)} из ${saved.data.totalMedia}` : "Количество неизвестно"}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - 50))}
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
+                onClick={() => setOffset(offset + 50)}
+              >
+                Далее
+              </button>
+            </div>
+          </div>
+          {saved.data?.inventory.note && (
+            <div className="border-t border-border-light px-5 py-3">
+              <details className="help">
+                <summary>Технические детали</summary>
+                <div className="help-body text-xs">
+                  <p>{saved.data.inventory.note}</p>
+                </div>
+              </details>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

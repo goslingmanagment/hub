@@ -42,7 +42,7 @@ export function ChatterLayout() {
             type="button"
             disabled={isFetching}
             onClick={() => void refetch()}
-            className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-white disabled:opacity-50"
+            className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-on-accent disabled:opacity-50"
           >
             {isFetching ? "Проверяем…" : "Повторить"}
           </button>

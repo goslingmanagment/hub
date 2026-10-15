@@ -11,25 +11,27 @@ import { loginChipOf, wantsCode, wantsEmailCode, type LoginView, type Tone } fro
 // fields Fansly asks for. What is typed goes through `send` only and is
 // cleared at once.
 
-/** The page's own gutter on a phone (the layout gives none below md), as
- *  the settings screen has it. */
-export const SCREEN = "min-w-0 p-4 md:p-0";
-
-export const TONES: Record<Tone, string> = {
-  neutral: "border-border bg-hover-alt text-text-secondary",
-  progress: "border-accent/30 bg-accent/10 text-accent",
-  good: "border-green/30 bg-green/10 text-green",
-  warning: "border-warning/30 bg-warning/10 text-warning-dark",
-  danger: "border-danger/30 bg-danger/10 text-danger",
+/** A tone as a status badge (a chip in a card's header or a list row). */
+export const TONE_BADGE: Record<Tone, string> = {
+  neutral: "badge",
+  progress: "badge badge-info",
+  good: "badge badge-success",
+  warning: "badge badge-warning",
+  danger: "badge badge-danger",
 };
 
-export const INPUT = "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-accent disabled:opacity-60";
-export const PRIMARY = "w-full rounded-lg bg-accent py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50";
-export const PLAIN = "inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-text-secondary hover:bg-hover disabled:opacity-50";
+/** A tone as a notice (an answer under a button). */
+export const TONE_NOTICE: Record<Tone, string> = {
+  neutral: "notice",
+  progress: "notice",
+  good: "notice notice-success",
+  warning: "notice notice-warning",
+  danger: "notice notice-danger",
+};
 
-export function ToneChip({ label, tone, data }: { label: string; tone: Tone; data?: Record<string, string> }) {
+export function ToneChip({ label, tone, data }: { label: string; tone: Tone; data?: Record<string, string> | undefined }) {
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${TONES[tone]}`} {...data}>
+    <span className={TONE_BADGE[tone]} {...data}>
       {label}
     </span>
   );
@@ -40,15 +42,46 @@ export function Chip({ view }: { view: LoginView }) {
   return <ToneChip label={chip.label} tone={chip.tone} data={{ "data-login-view": view.kind }} />;
 }
 
-export function Card({ title, children, aside, muted = false }: { title: ReactNode; children: ReactNode; aside?: ReactNode; muted?: boolean }) {
+export function Card({ title, children, aside, muted = false }: { title: ReactNode; children: ReactNode; aside?: ReactNode; muted?: boolean | undefined }) {
   return (
-    <section className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${muted ? "opacity-70" : ""}`}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
+    <section className={`card ${muted ? "opacity-70" : ""}`}>
+      <div className="card-header">
+        <h2 className="card-title">{title}</h2>
         {aside}
       </div>
-      {children}
+      <div className="card-body">{children}</div>
     </section>
+  );
+}
+
+/** Commands for whoever runs the server, kept out of the owner's way: a
+ *  collapsed disclosure, each command with its own copy button. */
+export function ServerAdminCommand({ text, command }: { text: ReactNode; command: string | readonly string[] }) {
+  const commands = typeof command === "string" ? [command] : command;
+  return (
+    <details className="help">
+      <summary>Для администратора сервера</summary>
+      <div className="help-body">
+        <p>{text}</p>
+        {commands.map((line) => <CommandLine key={line} command={line} />)}
+      </div>
+    </details>
+  );
+}
+
+function CommandLine({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2_000);
+    }, () => undefined);
+  };
+  return (
+    <div className="flex flex-wrap items-start gap-2">
+      <pre className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-border bg-hover-alt px-3 py-2 font-mono text-xs text-text-primary" data-draft-command>{command}</pre>
+      <button type="button" className="btn btn-sm" onClick={copy}>{copied ? "Скопировано" : "Скопировать"}</button>
+    </div>
   );
 }
 
@@ -110,7 +143,7 @@ export function LiveScreenshot({ urlFor, live }: { urlFor: (tick: number) => str
 
 export function SiteError({ text }: { text: string }) {
   return (
-    <p role="alert" className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">
+    <p role="alert" className="notice notice-danger block">
       <span className="font-semibold">Fansly:</span> {text}
     </p>
   );
@@ -151,34 +184,34 @@ export function LoginForm({
       {emailCode && (
         // A login from a new device (owner decision 2026-10-15): Fansly sent
         // a code to the account's e-mail; the browser types it in as a 2FA code.
-        <p className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-sm text-text-secondary" data-email-code>
+        <p className="notice" data-email-code>
           Fansly видит вход с нового устройства и отправил код на почту аккаунта. Найдите письмо от Fansly (проверьте и «Спам») и введите код сюда.
         </p>
       )}
       {codeStep ? (
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="pb-code" className="text-sm text-text-secondary">{emailCode ? "Код из письма" : "Код 2FA"}</label>
+        <div>
+          <label htmlFor="pb-code" className="field-label">{emailCode ? "Код из письма" : "Код 2FA"}</label>
           <input id="pb-code" inputMode="numeric" autoComplete="one-time-code" spellCheck={false} value={code} disabled={pending}
-            onChange={(event) => setCode(event.target.value)} placeholder={emailCode ? "Код из письма Fansly" : "Код из приложения"} className={`${INPUT} tracking-widest`} required maxLength={32} />
+            onChange={(event) => setCode(event.target.value)} placeholder={emailCode ? "Код из письма Fansly" : "Код из приложения"} className="input tracking-widest" required maxLength={32} />
         </div>
       ) : (
         <>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="pb-login" className="text-sm text-text-secondary">Логин или e-mail Fansly</label>
+          <div>
+            <label htmlFor="pb-login" className="field-label">Логин или e-mail Fansly</label>
             <input id="pb-login" type="text" autoComplete="off" autoCapitalize="none" spellCheck={false} value={login} disabled={pending}
-              onChange={(event) => setLogin(event.target.value)} placeholder="username или почта" className={INPUT} required maxLength={320} />
+              onChange={(event) => setLogin(event.target.value)} placeholder="имя пользователя или почта" className="input" required maxLength={320} />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="pb-password" className="text-sm text-text-secondary">Пароль</label>
+          <div>
+            <label htmlFor="pb-password" className="field-label">Пароль</label>
             <input id="pb-password" type="password" autoComplete="new-password" value={password} disabled={pending}
-              onChange={(event) => setPassword(event.target.value)} placeholder="Можно вставить из 1Password" className={INPUT} required maxLength={1024} />
+              onChange={(event) => setPassword(event.target.value)} placeholder="Можно вставить из менеджера паролей" className="input" required maxLength={1024} />
           </div>
         </>
       )}
-      <button type="submit" className={PRIMARY} disabled={pending || (codeStep ? code.trim() === "" : login.trim() === "" || password === "")}>
+      <button type="submit" className="btn btn-primary w-full" disabled={pending || (codeStep ? code.trim() === "" : login.trim() === "" || password === "")}>
         {pending ? "Передаём в браузер…" : codeStep ? "Подтвердить код" : "Войти"}
       </button>
-      <p className="text-xs text-text-muted">
+      <p className="text-xs text-text-secondary">
         Браузер сам вставит {codeStep ? "код" : "логин и пароль"} в форму Fansly и нажмёт кнопку. Hub {codeStep ? "его" : "их"} не сохраняет.
       </p>
     </form>

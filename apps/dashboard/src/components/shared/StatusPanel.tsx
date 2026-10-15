@@ -14,16 +14,16 @@ export function StatusPanel({
   tone = "default",
 }: StatusPanelProps) {
   const toneClasses = tone === "error"
-    ? "border-danger/20 bg-danger/5"
+    ? "border-danger/25 bg-danger-soft"
     : "border-border bg-card";
 
   return (
-    <div className={`rounded-xl border px-5 py-8 text-center ${toneClasses}`}>
-      <p className="text-sm font-semibold text-text-primary">{title}</p>
+    <div className={`rounded-xl border px-5 py-10 text-center ${toneClasses}`}>
+      <p className="empty-title">{title}</p>
       {description && (
-        <p className="mx-auto mt-1 max-w-xl text-sm text-text-muted">{description}</p>
+        <p className="empty-text">{description}</p>
       )}
-      {action && <div className="mt-4">{action}</div>}
+      {action && <div className="empty-actions">{action}</div>}
     </div>
   );
 }

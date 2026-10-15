@@ -1,55 +1,47 @@
-import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
-import { useSpenderPeriodStore, type SpenderPeriodOption } from "@/stores/spenderPeriodStore";
+import { usePeriodStore, type Period } from "@/stores/periodStore";
 import { useLocation, useSearchParams } from "react-router";
 import { overviewSearch, parseOverviewState } from "@/lib/overviewNavigation";
-import { resolveDashboardPeriod, resolveSpenderPeriod } from "@/lib/navigation";
+import { resolveDashboardPeriod, resolveSpenderPeriod, revenuePeriod } from "@/lib/navigation";
 
-const dashboardOptions: { key: PeriodOption; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7D" },
-  { key: "30d", label: "30D" },
-  { key: "all", label: "All" },
-];
+const PERIOD_LABELS: Record<Period, string> = {
+  today: "Сегодня",
+  "7d": "7 дней",
+  "30d": "30 дней",
+  "90d": "90 дней",
+  "180d": "180 дней",
+  all: "Всё время",
+};
 
-const spenderOptions: { key: SpenderPeriodOption; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7D" },
-  { key: "30d", label: "30D" },
-  { key: "90d", label: "90D" },
-  { key: "180d", label: "180D" },
-  { key: "all", label: "All" },
-];
+// Revenue is computed for these four; the spender reports go back further.
+const OPTIONS = {
+  dashboard: ["today", "7d", "30d", "all"],
+  spender: ["today", "7d", "30d", "90d", "180d", "all"],
+} as const satisfies Record<string, readonly Period[]>;
 
-type PeriodSelectorMode = "dashboard" | "spender" | "topSupporters";
+type PeriodSelectorMode = keyof typeof OPTIONS;
 
 interface PeriodSelectorProps {
   mode?: PeriodSelectorMode;
 }
 
+/** The console's one period control. Whatever is picked here holds on every
+ *  screen that reports over a period; the URL keeps it for the screen it is
+ *  on, so a shared link opens what its sender saw. */
 export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
-  const dashboardPeriod = usePeriodStore();
-  const spenderPeriod = useSpenderPeriodStore();
+  const { period, setPeriod } = usePeriodStore();
   const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const isOverview = location.pathname === "/";
-  const overview = parseOverviewState(search, dashboardPeriod.period);
+  const overview = parseOverviewState(search, period);
 
-  const selectedKey = mode === "topSupporters"
-    ? resolveSpenderPeriod(search.get("period"), spenderPeriod.topSupportersPeriod)
-    : mode === "spender"
-      ? resolveSpenderPeriod(search.get("period"), spenderPeriod.period)
-      : isOverview ? overview.period : resolveDashboardPeriod(search.get("period"), dashboardPeriod.period);
-  const options = mode === "dashboard" ? dashboardOptions : spenderOptions;
+  const selectedKey: Period = mode === "spender"
+    ? resolveSpenderPeriod(search.get("period"), period)
+    : isOverview ? overview.period : resolveDashboardPeriod(search.get("period"), period);
+  const options = OPTIONS[mode];
 
-  function handleSelect(key: PeriodOption | SpenderPeriodOption) {
-    if (mode === "topSupporters") {
-      spenderPeriod.setTopSupportersPeriod(key as SpenderPeriodOption);
-    } else if (mode === "spender") {
-      spenderPeriod.setPeriod(key as SpenderPeriodOption);
-    } else {
-      dashboardPeriod.setPeriod(key as PeriodOption);
-    }
-    if (isOverview) setSearch(overviewSearch({ ...overview, period: key as PeriodOption }), { state: location.state });
+  function handleSelect(key: Period) {
+    setPeriod(key);
+    if (isOverview) setSearch(overviewSearch({ ...overview, period: revenuePeriod(key) }), { state: location.state });
     else {
       const next = new URLSearchParams(search);
       next.set("period", key);
@@ -61,27 +53,22 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
 
   return (
     <div>
-      <select aria-label="Период отчёта" className="min-h-11 max-w-32 rounded-lg border border-border bg-card px-2 text-sm sm:hidden" value={selectedKey} onChange={(event) => handleSelect(event.target.value as PeriodOption | SpenderPeriodOption)}>
-        {options.map((opt) => <option key={opt.key} value={opt.key}>{opt.key === "today" ? "Сегодня" : opt.key === "all" ? "Всё время" : `${opt.key.slice(0, -1)} дней`}</option>)}
+      <select aria-label="Период отчёта" className="select min-h-9 max-w-36 sm:hidden" value={selectedKey} onChange={(event) => handleSelect(event.target.value as Period)}>
+        {options.map((key) => <option key={key} value={key}>{PERIOD_LABELS[key]}</option>)}
       </select>
-      <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Reporting period">{options.map((opt) => {
-        const isActive = selectedKey === opt.key;
-        return (
+      <div className="segmented hidden sm:inline-flex" role="group" aria-label="Период отчёта">
+        {options.map((key) => (
           <button
-            key={opt.key}
+            key={key}
             type="button"
-            aria-pressed={isActive}
-            onClick={() => handleSelect(opt.key)}
-            className={`rounded-button px-2 sm:px-3 py-1.5 text-[13px] font-medium transition-colors ${
-              isActive
-                ? "bg-accent text-white"
-                : "border border-border bg-card text-text-secondary hover:bg-hover"
-            }`}
+            aria-pressed={selectedKey === key}
+            onClick={() => handleSelect(key)}
+            className="segment"
           >
-            {opt.label}
+            {PERIOD_LABELS[key]}
           </button>
-        );
-      })}</div>
+        ))}
+      </div>
     </div>
   );
 }

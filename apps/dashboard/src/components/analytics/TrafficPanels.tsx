@@ -25,6 +25,12 @@ import {
   AnalyticsPanel,
 } from "./AnalyticsPanel.js";
 import {
+  formatBucketDay,
+  formatCount,
+  formatDurationMs,
+  formatPercent,
+} from "./analytics-words.js";
+import {
   SUGGESTIONS_DENOMINATOR_NOTE,
   coverageBadgeVerdict,
   emptyPanelReason,
@@ -35,21 +41,35 @@ import { buildFypMediaViewSummary } from "./traffic-metrics.js";
 
 type TrafficRow = StatsTrafficResponse["rows"][number];
 
+/** The chart chrome: recessive grid and axes in the theme's own colours. */
 const gridProps = {
   strokeDasharray: "3 3",
   vertical: false,
-  stroke: "var(--color-border, #333)",
+  stroke: "var(--color-border)",
 } as const;
+
+const axisTick = { fontSize: 12, fill: "var(--color-text-muted)" };
 
 const tooltipProps = {
   contentStyle: {
-    backgroundColor: "var(--color-card, #1a1a2e)",
-    border: "1px solid var(--color-border, #333)",
+    backgroundColor: "var(--color-card)",
+    border: "1px solid var(--color-border)",
     borderRadius: 8,
     fontSize: 13,
+    color: "var(--color-text-primary)",
   },
   wrapperStyle: { zIndex: 20 },
 };
+
+/** Legend text wears the text colour; the swatch beside it carries identity. */
+function legendText(value: unknown) {
+  return <span style={{ color: "var(--color-text-secondary)" }}>{String(value)}</span>;
+}
+
+/** Legend and tooltip keep the series' own order (recharts sorts by name). */
+function inOrder(keys: readonly string[]) {
+  return (item: { dataKey?: unknown }) => keys.indexOf(String(item.dataKey));
+}
 
 /**
  * The four profile families, in the order the §2.1 census lists them, plus a
@@ -60,23 +80,33 @@ const tooltipProps = {
  * family — or omitting it from the chart — would make a platform change look
  * like a dip in traffic.
  */
+/* Colours: the theme's Fansly blue and green, then two hues that pass the
+ * colour-blind separation check against them; the unnamed source is grey. */
 const FAMILY_SERIES = [
-  { key: "10000", label: "Direct / timeline", color: "#5b8def" },
-  { key: "44000", label: "FYP promotion", color: "#4ead6b" },
-  { key: "44010", label: "Suggestions", color: "#e0a14f" },
-  { key: "44030", label: "Search", color: "#9b7ede" },
-  { key: "unknown", label: "Unknown code", color: "#8b8b9e" },
+  { key: "10000", label: "Прямые и лента", color: "var(--color-fansly)" },
+  { key: "44000", label: "Продвижение FYP", color: "var(--color-green)" },
+  { key: "44010", label: "Рекомендации", color: "var(--color-chart-violet)" },
+  { key: "44030", label: "Поиск", color: "var(--color-warning)" },
+  { key: "unknown", label: "Неизвестный источник", color: "var(--color-text-muted)" },
 ] as const;
+
+const FAMILY_ORDER = inOrder(FAMILY_SERIES.map((entry) => entry.key));
+const FYP_ORDER = inOrder(["fyp", "direct"]);
 
 type Measure = "visits" | "dwell";
 
-const MEASURE_LABEL: Readonly<Record<Measure, string>> = {
-  visits: "Visits (member 1 — the counter Fansly's widget shows)",
-  dwell: "Dwell (member 0 — the interaction-time series)",
+const MEASURE_OPTIONS: readonly { value: Measure; label: string }[] = [
+  { value: "visits", label: "Визиты" },
+  { value: "dwell", label: "Время" },
+];
+
+const MEASURE_DESCRIPTION: Readonly<Record<Measure, string>> = {
+  visits: "Визиты профиля по источникам — тот же счётчик, что в виджете Fansly.",
+  dwell: "Время на профиле по источникам.",
 };
 
-function bucketLabel(iso: string): string {
-  return iso.slice(5, 10);
+function bucketLabel(value: unknown): string {
+  return formatBucketDay(String(value));
 }
 
 /**
@@ -131,27 +161,40 @@ export function TrafficBySourcePanel({
       String(left.bucketStart).localeCompare(String(right.bucketStart)));
   }, [data, measure]);
 
+  const formatValue = measure === "visits" ? formatCount : formatDurationMs;
+
   return (
     <AnalyticsPanel
-      title="Traffic by source"
-      subtitle={MEASURE_LABEL[measure]}
+      title="Трафик по источникам"
+      description={MEASURE_DESCRIPTION[measure]}
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
-      {...(showDenominatorNote ? { footnote: SUGGESTIONS_DENOMINATOR_NOTE } : {})}
+      wide
+      help={(
+        <>
+          <p>
+            Визиты и время — два разных ряда Fansly. Они не складываются: у времени
+            свой счётчик просмотров, и сумма дала бы число, которого нет.
+          </p>
+          <p>
+            «Неизвестный источник» — новый код Fansly, который Hub пока не умеет
+            называть. Он показан отдельно, а не спрятан, чтобы изменение на стороне
+            Fansly не выглядело как падение трафика.
+          </p>
+          {showDenominatorNote ? <p>{SUGGESTIONS_DENOMINATOR_NOTE}</p> : null}
+        </>
+      )}
       headerExtra={(
-        <div className="flex gap-1 rounded-lg border border-border p-0.5">
-          {(["visits", "dwell"] as const).map((option) => (
+        <div className="segmented" role="group" aria-label="Показатель">
+          {MEASURE_OPTIONS.map((option) => (
             <button
-              key={option}
+              key={option.value}
               type="button"
-              onClick={() => setMeasure(option)}
-              className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
-                measure === option
-                  ? "bg-hover text-text-primary"
-                  : "text-text-muted hover:text-text-secondary"
-              }`}
+              className="segment"
+              aria-pressed={measure === option.value}
+              onClick={() => setMeasure(option.value)}
             >
-              {option === "visits" ? "Visits" : "Dwell"}
+              {option.label}
             </button>
           ))}
         </div>
@@ -165,43 +208,53 @@ export function TrafficBySourcePanel({
         <AnalyticsEmpty
           reason={emptyPanelReason(
             verdict,
-            "No statistics bucket is held for this window.",
+            "За этот период статистики нет.",
           )}
         />
       ) : (
-        <ResponsiveContainer width="100%" height={280}>
-          <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-            <CartesianGrid {...gridProps} />
-            <XAxis
-              dataKey="bucketStart"
-              tickFormatter={bucketLabel}
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-              axisLine={false}
-              tickLine={false}
-              width="auto"
-            />
-            <Tooltip {...tooltipProps} labelFormatter={(label) => bucketLabel(String(label))} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            {FAMILY_SERIES.map((entry) => (
-              <Area
-                key={entry.key}
-                type="monotone"
-                dataKey={entry.key}
-                name={entry.label}
-                stackId="traffic"
-                stroke={entry.color}
-                fill={entry.color}
-                fillOpacity={0.25}
+        <div className="card-body">
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis
+                dataKey="bucketStart"
+                tickFormatter={bucketLabel}
+                tick={axisTick}
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={24}
               />
-            ))}
-          </AreaChart>
-        </ResponsiveContainer>
+              <YAxis
+                tick={axisTick}
+                tickFormatter={(value: number) => formatValue(value)}
+                axisLine={false}
+                tickLine={false}
+                width="auto"
+              />
+              <Tooltip
+                {...tooltipProps}
+                labelFormatter={bucketLabel}
+                itemSorter={FAMILY_ORDER}
+                formatter={(value: unknown, name: unknown) => [formatValue(Number(value ?? 0)), String(name ?? "")]}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendText} itemSorter={FAMILY_ORDER} />
+              {FAMILY_SERIES.map((entry) => (
+                <Area
+                  key={entry.key}
+                  type="monotone"
+                  dataKey={entry.key}
+                  name={entry.label}
+                  stackId="traffic"
+                  stroke={entry.color}
+                  strokeWidth={1.5}
+                  fill={entry.color}
+                  fillOpacity={0.2}
+                />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       )}
     </AnalyticsPanel>
   );
@@ -235,20 +288,22 @@ export function FypSharePanel({
 
   return (
     <AnalyticsPanel
-      title="FYP vs direct media views"
+      title="Просмотры: FYP и прямые"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
       headerExtra={share === null ? null : (
-        <span className="text-[12px] text-text-secondary">
-          FYP share{" "}
-          <span className="font-semibold text-text-primary">{share.toFixed(1)}%</span>
-          <span className="ml-1 text-text-muted">· Hub-derived</span>
+        <span className="text-[13px] text-text-secondary">
+          Доля FYP{" "}
+          <span className="font-semibold tabular-nums text-text-primary">{formatPercent(share)}</span>
+          <span className="ml-1 text-text-muted">· рассчитано Hub</span>
         </span>
       )}
-      footnote={
-        "The share is computed here from served full and preview views — Fansly sends no share "
-        + "and no average anywhere in this payload. It is labelled Hub-derived for that reason."
-      }
+      help={(
+        <p>
+          Просмотры медиа — полные плюс просмотры превью, как в виджете Fansly. Доля FYP
+          рассчитана в Hub из этих чисел: готовой доли или среднего Fansly не присылает.
+        </p>
+      )}
     >
       {state.status === "loading" ? (
         <AnalyticsLoading />
@@ -258,49 +313,60 @@ export function FypSharePanel({
         <AnalyticsEmpty
           reason={emptyPanelReason(
             verdict,
-            "No account-level media datapoints in this window.",
+            "За этот период нет данных о просмотрах медиа.",
           )}
         />
       ) : (
-        <ResponsiveContainer width="100%" height={240}>
-          <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-            <CartesianGrid {...gridProps} />
-            <XAxis
-              dataKey="bucketStart"
-              tickFormatter={bucketLabel}
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-              axisLine={false}
-              tickLine={false}
-              width="auto"
-            />
-            <Tooltip {...tooltipProps} labelFormatter={(label) => bucketLabel(String(label))} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Area
-              type="monotone"
-              dataKey="fyp"
-              name="FYP"
-              stackId="media"
-              stroke="#4ead6b"
-              fill="#4ead6b"
-              fillOpacity={0.25}
-            />
-            <Area
-              type="monotone"
-              dataKey="direct"
-              name="Direct"
-              stackId="media"
-              stroke="#5b8def"
-              fill="#5b8def"
-              fillOpacity={0.25}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        <div className="card-body">
+          <ResponsiveContainer width="100%" height={240}>
+            <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis
+                dataKey="bucketStart"
+                tickFormatter={bucketLabel}
+                tick={axisTick}
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={24}
+              />
+              <YAxis
+                tick={axisTick}
+                tickFormatter={(value: number) => formatCount(value)}
+                axisLine={false}
+                tickLine={false}
+                width="auto"
+              />
+              <Tooltip
+                {...tooltipProps}
+                labelFormatter={bucketLabel}
+                itemSorter={FYP_ORDER}
+                formatter={(value: unknown, name: unknown) => [formatCount(Number(value ?? 0)), String(name ?? "")]}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendText} itemSorter={FYP_ORDER} />
+              <Area
+                type="monotone"
+                dataKey="fyp"
+                name="FYP"
+                stackId="media"
+                stroke="var(--color-green)"
+                strokeWidth={1.5}
+                fill="var(--color-green)"
+                fillOpacity={0.2}
+              />
+              <Area
+                type="monotone"
+                dataKey="direct"
+                name="Прямые"
+                stackId="media"
+                stroke="var(--color-fansly)"
+                strokeWidth={1.5}
+                fill="var(--color-fansly)"
+                fillOpacity={0.2}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       )}
     </AnalyticsPanel>
   );

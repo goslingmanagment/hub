@@ -1,286 +1,191 @@
-import { NavLink, useLocation, Link } from "react-router";
-import { Activity, BarChart3, Bell, Coins, LineChart, Link2, MailQuestion, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
-import { useState } from "react";
-import { useAdminConnections } from "@/api/queries";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
+import { Link, useLocation } from "react-router";
+import { ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildAnalyticsRoute, buildPageRoute, buildPageSectionRoute, decodeRouteSegment } from "@/lib/navigation";
+import { PlatformTag } from "@/components/shared/PlatformBadge";
+import { buildAnalyticsRoute, buildPageRoute, decodeRouteSegment } from "@/lib/navigation";
+import { SYSTEM_HOME, TABBED_SECTIONS, isSystemPath, sectionHome, sectionOfPath } from "@/lib/sections";
+import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT } from "./CommandPalette.js";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
   user: { username: string; role: string };
+  onOpenPalette?: (() => void) | undefined;
 }
-
-const devLinks = [
-  { to: "/dev/log", label: "Log", icon: Terminal },
-  { to: "/dev/queue", label: "Queue", icon: ListTodo },
-  { to: "/dev/db-stats", label: "DB Stats", icon: Database },
-  { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
-  // The chat extension's health reports by version; no person in them (H-11c).
-  { to: "/dev/client-health", label: "Client health", icon: Activity },
-  // Slice C: the owner approval queue. It lives under Dev because it is an
-  // operator surface, not a daily one — an empty queue is the normal state.
-  { to: "/agent-hydration", label: "Hydration", icon: Droplets },
-] as const;
 
 function prefetchAnalyticsCatalog() {
   void import("@/api/pages").then((module) => module.prefetchPages());
 }
 
-export function Sidebar({ user }: SidebarProps) {
+const COLLAPSED_KEY = "hub-sidebar-collapsed-models";
+
+function readCollapsed(): Set<string> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    return new Set(Array.isArray(saved) ? saved.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function NavItem({ to, icon: Icon, active, children, trailing, onPointerEnter }: {
+  to: string;
+  icon: LucideIcon;
+  active: boolean;
+  children: ReactNode;
+  trailing?: ReactNode;
+  onPointerEnter?: () => void;
+}) {
+  return (
+    <Link
+      to={to}
+      className="nav-item"
+      aria-current={active ? "page" : undefined}
+      onMouseEnter={onPointerEnter}
+      onFocus={onPointerEnter}
+    >
+      <Icon size={17} strokeWidth={1.8} />
+      <span className="min-w-0 truncate">{children}</span>
+      {trailing}
+    </Link>
+  );
+}
+
+export function Sidebar({ user, onOpenPalette }: SidebarProps) {
   const { pages, pageCatalogState } = useDashboardShell();
   const location = useLocation();
-  const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
-  const { data: connections } = useAdminConnections({ enabled: user.role === "owner" });
-  const hasSyncWarning = user.role === "owner" && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const owner = user.role === "owner";
+  const { data: connections } = useAdminConnections({ enabled: owner });
+  const hasSyncWarning = owner && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
+  const attention = useAttentionCounts(user.role);
 
   type PageItem = (typeof pages)[number];
   const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
   for (const page of pages) {
     const existing = modelPages.get(page.modelSlug);
-    if (existing) {
-      existing.pages.push(page);
-    } else {
-      modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
-    }
+    if (existing) existing.pages.push(page);
+    else modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
   }
 
+  const { pathname, search } = location;
   const activePageLabel = (() => {
-    const parts = location.pathname.split("/").filter(Boolean);
+    const parts = pathname.split("/").filter(Boolean);
     return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
   })();
-  const activeFanslyPageLabel = pages.some(
-    (page) => page.platform === "fansly" && page.label === activePageLabel,
-  )
+  const activeFanslyPageLabel = pages.some((page) => page.platform === "fansly" && page.label === activePageLabel)
     ? activePageLabel
     : null;
   // The Analytics link carries the Fansly page already in view: landing on
   // someone else's page is a worse default than landing on the first one.
   const analyticsRoute = buildAnalyticsRoute(activeFanslyPageLabel);
+  const section = sectionOfPath(pathname);
+  const system = isSystemPath(pathname, search);
+  const onlyFansHome = sectionHome(TABBED_SECTIONS.onlyfans, user.role);
+  const attentionHome = sectionHome(TABBED_SECTIONS.attention, user.role);
+
+  function toggleModel(slug: string) {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        /* Remembering a collapsed model is a convenience only. */
+      }
+      return next;
+    });
+  }
 
   return (
-    <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
-      <Link to="/" className="block px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
+    <nav aria-label="Разделы" className="fixed top-0 bottom-0 z-20 flex w-[248px] flex-col border-r border-border bg-card">
+      <Link to="/" className="flex h-[56px] shrink-0 items-center px-5 text-[17px] font-bold tracking-[-0.03em] text-text-primary">
         <span className="text-accent">Agency</span>Hub
       </Link>
 
-      <div className="flex-1 p-3 overflow-y-auto">
-        <NavLink
-          to="/"
-          end
-          className={({ isActive }) =>
-            `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-            }`
-          }
-        >
-          <BarChart3 size={16} />
-          Overview
-        </NavLink>
-
-        {user.role === "owner" && <NavLink to="/ofapi-marketing" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Link2 size={16} /> Ссылки OnlyFans</NavLink>}
-        {user.role === "owner" && <NavLink to="/ofapi-actions" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Управление OnlyFans</NavLink>}
-        {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
-        {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
-        {/* chat-extension H-7e: sends from the preview whose outcome the hub
-            never learned, for the owner and team leads to resolve by hand. */}
-        {(user.role === "owner" || user.role === "team_lead") && (
-          <NavLink
-            to="/held-sends"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <MailQuestion size={16} /> Зависшие отправки
-          </NavLink>
-        )}
-
-        {pageCatalogState === "loading" && <p role="status" className="px-3.5 py-4 text-sm text-text-muted">Загружаем страницы…</p>}
-        {pageCatalogState === "error" && <p className="px-3.5 py-4 text-sm text-text-muted">Список страниц недоступен.</p>}
-        {pageCatalogState === "ready" && pages.length === 0 && <p className="px-3.5 py-4 text-sm text-text-muted">Нет доступных страниц.{user.role === "owner" && <> <Link className="text-accent underline" to="/settings?tab=pages">Подключить страницу</Link></>}</p>}
-        {modelPages.size > 0 && (
-          <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
-            Models
-          </div>
-        )}
-
-        {[...modelPages.entries()].map(([slug, { modelName, pages }]) => (
-          <div key={slug}>
-            <div className="px-3.5 py-2 text-[13px] text-text-secondary flex items-center gap-2 mt-1 font-semibold">
-              <span className="text-accent">{modelName}</span>
-              <span className="text-[12px] text-text-muted font-normal">{pages.length} {pages.length === 1 ? "page" : "pages"}</span>
-            </div>
-            {pages.map((page) => {
-              const active = activePageLabel === page.label;
-              return (
-                <div key={page.id}>
-                  <NavLink
-                    to={buildPageRoute(page.label)}
-                    className={`px-3.5 py-2 pl-9 text-[13px] rounded-md transition-colors flex items-center gap-2 font-[450] ${
-                      active ? "bg-active-bg text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-                    }`}
-                  >
-                    {page.label}
-                    <PlatformBadge platform={page.platform} />
-                  </NavLink>
-                  {active && (
-                    <div className="ml-9 mt-0.5">
-                      <NavLink
-                        to={buildPageSectionRoute(page.label, "subscribers")}
-                        className={({ isActive }) =>
-                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
-                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                          }`
-                        }
-                      >
-                        <Users size={12} /> Subscribers
-                      </NavLink>
-                      {page.platform === "fansly" && (
-                        <NavLink
-                          to={buildPageSectionRoute(page.label, "followers")}
-                          className={({ isActive }) =>
-                            `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
-                              isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                            }`
-                          }
-                        >
-                          <Heart size={12} /> Followers
-                        </NavLink>
-                      )}
-                      <NavLink
-                        to={buildPageSectionRoute(page.label, "top-supporters")}
-                        className={({ isActive }) =>
-                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
-                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                          }`
-                        }
-                      >
-                        <Trophy size={12} /> Top Supporters
-                      </NavLink>
-                      <NavLink
-                        to={buildPageSectionRoute(page.label, "deleted-fans")}
-                        className={({ isActive }) =>
-                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
-                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                          }`
-                        }
-                      >
-                        <UserX size={12} /> Deleted Fans
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-
-      {user.role === "owner" && (
-        <div className="p-3 border-t border-border space-y-0.5">
-          <button
-            type="button"
-            onClick={() => setDevOpen((o) => !o)}
-            aria-expanded={devOpen}
-            className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              location.pathname.startsWith("/dev")
-                ? "bg-hover text-text-primary font-semibold"
-                : "text-text-secondary hover:bg-hover hover:text-text-primary"
-            }`}
-          >
-            <Code2 size={16} />
-            Dev
-            <ChevronDown
-              size={14}
-              className={`ml-auto text-text-muted transition-transform ${devOpen ? "rotate-180" : ""}`}
-            />
+      <div className="flex-1 overflow-y-auto px-3 pb-4">
+        {onOpenPalette && (
+          <button type="button" className="palette-trigger mb-3" onClick={onOpenPalette} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT}>
+            <Search size={16} aria-hidden="true" />
+            <span>Поиск</span>
+            <kbd className="kbd" aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
           </button>
-          {devOpen && (
-            <div className="ml-4 space-y-0.5">
-              {devLinks.map(({ to, label, icon: Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  className={({ isActive }) =>
-                    `flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md transition-colors ${
-                      isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                    }`
-                  }
+        )}
+        <div className="space-y-0.5">
+          <NavItem to="/" icon={LayoutDashboard} active={pathname === "/" || pathname === "/transactions"}>Обзор</NavItem>
+          {owner && (
+            <NavItem to={analyticsRoute} icon={LineChart} active={pathname === "/analytics"} onPointerEnter={prefetchAnalyticsCatalog}>
+              Аналитика
+            </NavItem>
+          )}
+          {onlyFansHome && (
+            <NavItem to={onlyFansHome} icon={Layers} active={section === "onlyfans"}>OnlyFans</NavItem>
+          )}
+          {attentionHome && (
+            <NavItem
+              to={attentionHome}
+              icon={Inbox}
+              active={section === "attention"}
+              trailing={attention.total > 0 ? <span className="nav-count" aria-label={`ждут: ${attention.total}`}>{attention.total}</span> : undefined}
+            >
+              Требует внимания
+            </NavItem>
+          )}
+        </div>
+
+        <div className="nav-group-label">Модели</div>
+        {pageCatalogState === "loading" && <p role="status" className="px-2.5 py-2 text-sm text-text-muted">Загружаем страницы…</p>}
+        {pageCatalogState === "error" && <p className="px-2.5 py-2 text-sm text-text-muted">Список страниц недоступен.</p>}
+        {pageCatalogState === "ready" && pages.length === 0 && (
+          <p className="px-2.5 py-2 text-sm text-text-muted">
+            Нет доступных страниц.
+            {owner && <> <Link className="link" to="/settings?tab=pages">Подключить страницу</Link></>}
+          </p>
+        )}
+        {[...modelPages.entries()].map(([slug, model]) => {
+          const isCollapsed = collapsed.has(slug) && !model.pages.some((page) => page.label === activePageLabel);
+          return (
+            <div key={slug} className="mb-1">
+              <button
+                type="button"
+                className="nav-model"
+                aria-expanded={!isCollapsed}
+                onClick={() => toggleModel(slug)}
+              >
+                <ChevronRight size={14} className={`text-text-muted transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
+                <span className="min-w-0 truncate">{model.modelName}</span>
+                <span className="nav-model-count">{model.pages.length}</span>
+              </button>
+              {!isCollapsed && model.pages.map((page) => (
+                <Link
+                  key={page.id}
+                  to={buildPageRoute(page.label)}
+                  className="nav-page"
+                  aria-current={activePageLabel === page.label ? "page" : undefined}
                 >
-                  <Icon size={13} />
-                  {label}
-                </NavLink>
+                  <span className="nav-page-label">{page.label}</span>
+                  <PlatformTag platform={page.platform} />
+                </Link>
               ))}
             </div>
-          )}
-          <NavLink
-            to="/usage"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <BarChart3 size={16} />
-            Usage
-          </NavLink>
-          <NavLink
-            to="/ofapi-credits"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <Coins size={16} />
-            OFAPI Credits
-          </NavLink>
-          <NavLink
-            to={analyticsRoute}
-            // Hover/focus is the earliest honest signal that Analytics is
-            // about to be opened, and it buys the catalog request the time the
-            // lazy route chunk spends downloading. The import is dynamic so
-            // this module keeps its current, api-free import graph.
-            onMouseEnter={prefetchAnalyticsCatalog}
-            onFocus={prefetchAnalyticsCatalog}
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <LineChart size={16} />
-            Analytics
-          </NavLink>
-          <NavLink
-            to="/notifications"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <Bell size={16} />
-            Notifications
-          </NavLink>
-          <NavLink
+          );
+        })}
+      </div>
+
+      {owner && (
+        <div className="shrink-0 space-y-0.5 border-t border-border p-3">
+          <NavItem to="/ofapi-credits" icon={Coins} active={section === "costs"}>Расходы</NavItem>
+          <NavItem
             to="/settings"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
+            icon={Settings}
+            active={pathname === "/settings" && !system}
+            trailing={hasSyncWarning ? <span className="nav-dot" role="img" aria-label="Нужна проверка подключения" /> : undefined}
           >
-            <div className="relative">
-              <Settings size={16} />
-              {hasSyncWarning && (
-                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-warning-dark" />
-              )}
-            </div>
-            Settings
-          </NavLink>
+            Настройки
+          </NavItem>
+          <NavItem to={SYSTEM_HOME} icon={Wrench} active={system}>Система</NavItem>
         </div>
       )}
     </nav>

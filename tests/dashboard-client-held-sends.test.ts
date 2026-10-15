@@ -556,7 +556,10 @@ describe("held-sends page", () => {
     queryMocks.useClientHeldSends.mockReturnValue(loaded(answer([REPLY, item(), BY_HAND], { total: 28 })));
     const html = renderPage();
 
-    expect(html).toContain("Зависшие отправки расширения");
+    // The section layout names the screen; the page opens with one sentence and «Как это работает».
+    expect(html).not.toContain("Зависшие отправки расширения");
+    expect(html).toContain("Отправки из превью, о которых расширение не сообщило, ушли ли они");
+    expect(html).toContain("<summary>Как это работает</summary>");
     expect(html).toContain("На этой странице текста нет: Hub не знает, какой текст ушёл.");
     // It does not claim the hub holds no text at all: the generation's draft is the owner's to read elsewhere.
     expect(html).not.toMatch(/Hub его не хранит|в Hub нет/);
@@ -590,7 +593,7 @@ describe("held-sends page", () => {
     expect(html).toContain("<option value=\"lora-of\">lora-of</option>");
     expect(html).not.toContain("lora-fansly");
     expect(html).toContain("1–25 из 28");
-    expect(html).toContain(">Дальше</button>");
+    expect(html).toContain(">Далее</button>");
     expect(html).not.toMatch(/>Previous<|>Next<| of \d/);
     // No dialog until a row is opened.
     expect(html).not.toContain('role="dialog"');
@@ -677,7 +680,7 @@ describe("held-sends page", () => {
       const html = dialog({ initialDraft: { outcome: "sent", platformMessageId: "", note: "видел в чате" } });
       expect(html).toContain("ID сообщения в OnlyFans, если вы его знаете (необязательно)");
       expect(html).not.toContain("Проверьте, прежде чем записать");
-      expect(html).toMatch(/<button type="submit" class="[^"]*bg-accent[^"]*">Записать: сообщение ушло<\/button>/);
+      expect(html).toMatch(/<button type="submit" class="[^"]*btn-primary[^"]*">Записать: сообщение ушло<\/button>/);
       const bad = dialog({ initialDraft: { outcome: "sent", platformMessageId: "12 34", note: "видел" } });
       expect(bad).toContain("ID сообщения — только цифры");
       expect(bad).toMatch(/<button type="submit" disabled=""/);
@@ -689,7 +692,7 @@ describe("held-sends page", () => {
       expect(html).toContain("После этого фана снова можно будет поприветствовать");
       expect(html).toContain("Правила «в архиве Hub нет — значит не ушло» не существует");
       expect(html.indexOf("Проверьте, прежде чем записать")).toBeLessThan(html.indexOf("Записать: сообщение не ушло"));
-      expect(html).toMatch(/<button type="submit" class="[^"]*bg-danger[^"]*">Записать: сообщение не ушло<\/button>/);
+      expect(html).toMatch(/<button type="submit" class="[^"]*btn-danger[^"]*">Записать: сообщение не ушло<\/button>/);
       expect(html).not.toContain("ID сообщения в OnlyFans");
       // A reply's dialog speaks of the part and never of a greeting: no line, no clause, no warning about one.
       const reply = dialog({ item: REPLY, initialDraft: { outcome: "not_sent", platformMessageId: "", note: "пусто" } });

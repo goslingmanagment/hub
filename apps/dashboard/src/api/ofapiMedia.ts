@@ -22,5 +22,8 @@ export function useOfapiMedia(pageId: number, offset: number) {
     queryFn: () =>
       kernel.ofapiMediaGet({ query: { pageId, offset, limit: 50 } }),
     refetchInterval: 15000,
+    // The screen says in Russian when a page is not bound to OnlyFans API;
+    // the hub's English toast on every 15-second poll would only repeat it.
+    meta: { suppressGlobalError: true },
   });
 }

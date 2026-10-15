@@ -14,12 +14,10 @@ const mocks = vi.hoisted(() => ({
     useSpenderBatch: vi.fn(),
     usePageSpenderAutoList: vi.fn(),
   },
-  store: { period: "all", topSupportersPeriod: "all" },
+  store: { period: "all" },
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks.queries);
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: (selector?: (state: typeof mocks.store) => unknown) => selector ? selector(mocks.store) : mocks.store,
-}));
+vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => mocks.store }));
 
 import { describeFanNotVisible } from "../apps/dashboard/src/components/shared/FanNotVisibleMark.tsx";
 import { PageSpendersSection } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
@@ -133,10 +131,10 @@ function rowsByFan(html: string) {
 
 function expectMarkOnlyOnHiddenFan(html: string) {
   const rows = rowsByFan(html);
-  expect(rows.get("festerpenis")).toContain("Not visible");
-  expect(rows.get("seenbuyer")).not.toContain("Not visible");
-  expect(rows.get("oldserver")).not.toContain("Not visible");
-  expect(html.split("Not visible")).toHaveLength(2);
+  expect(rows.get("festerpenis")).toContain("Не виден");
+  expect(rows.get("seenbuyer")).not.toContain("Не виден");
+  expect(rows.get("oldserver")).not.toContain("Не виден");
+  expect(html.split("Не виден")).toHaveLength(2);
 }
 
 describe("the page's 'not visible' mark on its spender lists", () => {
@@ -151,8 +149,8 @@ describe("the page's 'not visible' mark on its spender lists", () => {
     const html = renderRoute(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lora-1/top-supporters");
     expectMarkOnlyOnHiddenFan(html);
     // Listing and totals are untouched: every payer stays, the footer sums all three.
-    expect(html).toContain("3 total");
-    expect(html).toContain("3 visible of 3");
+    expect(html).toContain("3 фана");
+    expect(html).toContain("Показано 3 из 3");
   });
 
   it("marks only the payer this page cannot see in the page's Spenders tab", () => {
@@ -170,18 +168,18 @@ describe("the page's 'not visible' mark on its spender lists", () => {
     mocks.queries.usePageSpenderAutoList.mockReturnValue(read(autoList()));
     const html = renderRoute(SpenderAutoListPage, "/pages/:pageLabel/auto-lists/:bucketKey", "/pages/lora-1/auto-lists/25-plus");
     expectMarkOnlyOnHiddenFan(html);
-    expect(html).toContain("3 entries");
+    expect(html).toContain("3 фана");
   });
 
   it("is reachable from the keyboard and says 'probably' with the answer's date", () => {
     mocks.queries.useSpenders.mockReturnValue(read(spenderList()));
     const html = renderRoute(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lora-1/top-supporters");
     const markRow = rowsByFan(html).get("festerpenis")!;
-    expect(markRow).toMatch(/tabindex="0"[^>]*>(?:(?!<\/span>).)*Not visible/s);
+    expect(markRow).toMatch(/tabindex="0"[^>]*>(?:(?!<\/span>).)*Не виден/s);
 
     const copy = describeFanNotVisible(MISS_AT);
-    expect(copy).toContain("This page can't see the fan's account");
-    expect(copy).toContain("probably blocked the page or deleted the account");
-    expect(copy).toContain("Oct 6");
+    expect(copy).toContain("Страница не видит аккаунт фана");
+    expect(copy).toContain("скорее всего, фан заблокировал страницу или удалил аккаунт");
+    expect(copy).toContain("6 окт.");
   });
 });

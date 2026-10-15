@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
-import { BarChart3 } from "lucide-react";
 
 import {
   useContentComments,
@@ -14,6 +13,7 @@ import { usePages } from "@/api/pages";
 import {
   CommentsPanel,
   ContentPerformancePanel,
+  LikersNote,
   TopMediaPanel,
   TopTagsPanel,
 } from "@/components/analytics/CatalogPanels";
@@ -24,6 +24,8 @@ import {
   TrafficBySourcePanel,
   accountWatchAverage,
 } from "@/components/analytics/TrafficPanels";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { analyticsRange, resolveAnalyticsRange, type AnalyticsRange } from "@/lib/navigation";
 
 import {
@@ -60,9 +62,20 @@ import {
  * lot. Each panel now waits only on the queries it actually reads — the map is
  * in `analytics-query-state.ts`, written down because it is not one-to-one and
  * every hidden edge in it (media traffic feeding Content Performance's average
- * watch; comments feeding the Likers card; coverage feeding every badge) is a
+ * watch; comments feeding the likers note; coverage feeding every badge) is a
  * place where a pending request could have been rendered as a fact.
+ *
+ * LAYOUT. One grid of cards: two columns from 1280px, one below. The wide
+ * panels (traffic, content performance, coverage) span both columns; the rest
+ * pair up — FYP with tags, top media with comments, revenue with its months.
+ * How each panel counts sits behind its "?"; coverage is collapsed at the end.
  */
+const RANGE_OPTIONS: readonly { value: AnalyticsRange; label: string }[] = [
+  { value: "7d", label: "7 дней" },
+  { value: "30d", label: "30 дней" },
+  { value: "90d", label: "90 дней" },
+];
+
 export function AnalyticsPage() {
   const pagesQuery = usePages();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -121,163 +134,171 @@ export function AnalyticsPage() {
   ];
   const failedSurfaces = analyticsFailureBanner(queryEntries);
 
-  return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary">
-            <BarChart3 size={18} className="text-accent" />
-            Analytics
-          </h1>
-          <p className="text-[13px] text-text-secondary">
-            Traffic, content, tags and money — with what was captured, and what was not.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {fanslyPages.length > 0 ? (
-            <label className="flex items-center gap-2 text-[12px] text-text-secondary">
-              Page
-              <select
-                value={activeLabel}
-                onChange={(event) => setParam("page", event.target.value)}
-                className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
-              >
-                {fanslyPages.map((page) => (
-                  <option key={page.id} value={page.label}>{page.label}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <div className="flex gap-1 rounded-lg border border-border p-0.5">
-            {(["7d", "30d", "90d"] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={range === option}
-                onClick={() => setParam("range", option)}
-                className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
-                  range === option
-                    ? "bg-hover text-text-primary"
-                    : "text-text-muted hover:text-text-secondary"
-                }`}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
-      {pagesQuery.isError && pagesQuery.data && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3 text-[12px] text-text-secondary"><p>The page list could not be refreshed. The previous list is still shown.</p><button type="button" disabled={pagesQuery.isFetching} onClick={() => void pagesQuery.refetch()} className="rounded-md border border-border px-3 py-1.5">Retry page list</button></div>}
-
-      {pagesQuery.isPending && !pagesQuery.data ? (
-        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
-          Loading pages…
-        </div>
-      ) : pagesQuery.isError && !pagesQuery.data ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
+  const headerActions = fanslyPages.length > 0 ? (
+    <>
+      <label className="flex items-center">
+        <span className="sr-only">Страница</span>
+        <select
+          value={activeLabel}
+          onChange={(event) => setParam("page", event.target.value)}
+          className="select w-auto min-w-[160px] max-w-[240px]"
         >
-          <p className="text-[13px] font-medium text-text-primary">
-            The page list could not be loaded.
-          </p>
-          <p className="mt-1 text-[12px] text-text-muted">
-            Without it there is nothing to analyse — this is a failed request, not an empty agency.
-          </p>
+          {fanslyPages.map((page) => (
+            <option key={page.id} value={page.label}>{page.label}</option>
+          ))}
+        </select>
+      </label>
+      <div className="segmented" role="group" aria-label="Период">
+        {RANGE_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className="segment"
+            aria-pressed={range === option.value}
+            onClick={() => setParam("range", option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </>
+  ) : null;
+
+  return (
+    <div>
+      <PageHeader
+        title="Аналитика"
+        description="Трафик, контент, теги и доход страницы Fansly."
+        actions={headerActions}
+      />
+      {pagesQuery.isError && pagesQuery.data ? (
+        <div role="alert" className="notice notice-warning mb-4 items-center">
+          <span className="min-w-0 flex-1">
+            Не удалось обновить список страниц. Показан прежний список.
+          </span>
           <button
             type="button"
+            className="btn btn-sm"
+            disabled={pagesQuery.isFetching}
             onClick={() => void pagesQuery.refetch()}
-            className="mt-3 rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
           >
-            Retry
+            Повторить
           </button>
         </div>
-      ) : fanslyPages.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
-          No Fansly pages to analyse.
+      ) : null}
+
+      {pagesQuery.isPending && !pagesQuery.data ? (
+        <StatusPanel title="Загружаем страницы…" />
+      ) : pagesQuery.isError && !pagesQuery.data ? (
+        <div role="alert">
+          <StatusPanel
+            tone="error"
+            title="Не удалось загрузить список страниц"
+            description="Это ошибка загрузки, а не отсутствие страниц: без списка анализировать нечего."
+            action={(
+              <button type="button" className="btn btn-sm" onClick={() => void pagesQuery.refetch()}>
+                Повторить
+              </button>
+            )}
+          />
         </div>
+      ) : fanslyPages.length === 0 ? (
+        <StatusPanel
+          title="Нет страниц Fansly для аналитики"
+          description="Аналитика строится только по страницам Fansly. Когда в Hub появится страница Fansly, её данные будут здесь."
+        />
       ) : (
       <div className="space-y-4">
-        {requestedPage && requestedPage !== activeLabel && <p role="status" className="text-[12px] text-warning-dark">Page “{requestedPage}” is unavailable in this list. Showing {activeLabel}.</p>}
+        {requestedPage && requestedPage !== activeLabel ? (
+          <p role="status" className="notice notice-warning">
+            Страница «{requestedPage}» недоступна в этом списке. Показана «{activeLabel}».
+          </p>
+        ) : null}
         {/*
           * The compact banner: one line naming the SURFACES behind the failed
           * requests, and one retry that fires each failed query exactly once —
-          * `media` feeds two panels and `comments` feeds two cards, and a
+          * `media` feeds two panels and `comments` feeds two surfaces, and a
           * per-consumer retry would double the load on the box that was
           * already too slow to answer. Panels that failed say so themselves;
           * this is the summary, not the report.
           */}
         {failedSurfaces.length > 0 ? (
-          <div
-            role="alert"
-            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3"
-          >
-            <p className="text-[12px] text-text-secondary">
-              <span className="font-medium text-text-primary">Some requests failed.</span>{" "}
-              Not shown: {failedSurfaces.join(", ")}. Other panels show their own loading and coverage state.
+          <div role="alert" className="notice notice-warning flex-wrap items-center">
+            <p className="min-w-0 flex-1">
+              <span className="font-medium">Часть данных не загрузилась.</span>{" "}
+              Не показано: {failedSurfaces.join(", ")}.
             </p>
             <button
               type="button"
               onClick={() => retryFailedAnalytics(queryEntries)}
-              className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
+              className="btn btn-sm"
             >
-              Retry failed requests
+              Повторить
             </button>
           </div>
         ) : null}
 
-        <TrafficBySourcePanel
-          state={profileTrafficState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          // A8: the Suggestions-denominator warning is a property of Fansly's
-          // 30-DAY widget. On any other range there is nothing to reconcile,
-          // and a permanent footnote is a footnote nobody reads.
-          showDenominatorNote={range === "30d"}
-          onRetry={() => void profileTraffic.refetch()}
-        />
-        <FypSharePanel
-          state={mediaTrafficState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          onRetry={() => void mediaTraffic.refetch()}
-        />
-        <TopMediaPanel
-          state={mediaState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          onRetry={() => void media.refetch()}
-        />
-        <TopTagsPanel
-          state={tagsState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          onRetry={() => void tags.refetch()}
-        />
-        <RevenueMixPanel
-          state={revenueState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          onRetry={() => void revenue.refetch()}
-        />
-        <ContentPerformancePanel
-          state={mediaState}
-          coverage={coverageRows}
-          accountWatch={accountWatch}
-          selectedWindow={window}
-          onRetry={() => void media.refetch()}
-        />
-        <CommentsPanel
-          state={commentsState}
-          coverage={coverageRows}
-          selectedWindow={window}
-          onRetry={() => void comments.refetch()}
-        />
-        <CoveragePanel
-          state={coverageState}
-          pageId={fanslyPages.find((page) => page.label === activeLabel)?.id ?? null}
-          onRetry={() => void coverage.refetch()}
-        />
+        <div className="grid gap-4 xl:grid-cols-2">
+          <TrafficBySourcePanel
+            state={profileTrafficState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            // A8: the Suggestions-denominator note is a property of Fansly's
+            // 30-DAY widget. On any other range there is nothing to reconcile,
+            // and a permanent note is a note nobody reads.
+            showDenominatorNote={range === "30d"}
+            onRetry={() => void profileTraffic.refetch()}
+          />
+          <FypSharePanel
+            state={mediaTrafficState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            onRetry={() => void mediaTraffic.refetch()}
+          />
+          <TopTagsPanel
+            state={tagsState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            onRetry={() => void tags.refetch()}
+          />
+          <TopMediaPanel
+            state={mediaState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            onRetry={() => void media.refetch()}
+          />
+          <CommentsPanel
+            state={commentsState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            onRetry={() => void comments.refetch()}
+          />
+          <ContentPerformancePanel
+            state={mediaState}
+            coverage={coverageRows}
+            accountWatch={accountWatch}
+            selectedWindow={window}
+            onRetry={() => void media.refetch()}
+          />
+          <RevenueMixPanel
+            state={revenueState}
+            coverage={coverageRows}
+            selectedWindow={window}
+            onRetry={() => void revenue.refetch()}
+          />
+          <CoveragePanel
+            state={coverageState}
+            pageId={fanslyPages.find((page) => page.label === activeLabel)?.id ?? null}
+            onRetry={() => void coverage.refetch()}
+            likers={(
+              <LikersNote
+                state={commentsState}
+                coverage={coverageRows}
+                onRetry={() => void comments.refetch()}
+              />
+            )}
+          />
+        </div>
       </div>
       )}
     </div>

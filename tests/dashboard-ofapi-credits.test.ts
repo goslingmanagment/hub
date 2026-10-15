@@ -87,14 +87,16 @@ describe("OfapiCreditsPage", () => {
     withSummary();
 
     const markup = renderPage();
-    expect(markup).toContain("Кредиты OFAPI");
+    // The section layout titles the screen; the page opens with its one-line intro.
+    expect(markup).not.toContain("Кредиты OFAPI");
+    expect(markup).toContain("Баланс кредитов OnlyFans API");
     expect(markup).toContain("Баланс");
     expect(markup).toContain(`23${NBSP}950`);
     expect(markup).toContain("проверен 12:41 UTC");
     expect(markup).toContain("Хватит на");
     expect(markup).toContain("~31");
     expect(markup).toContain("закончатся ~13 июля");
-    expect(markup).toContain("212 кр/день");
+    expect(markup).toContain("212 кредитов в день");
     // No refill recommendation in the payload → the top-up slot explains itself.
     expect(markup).toContain("Пополнение");
     expect(markup).toContain("появится после нескольких дней истории трат");
@@ -126,7 +128,7 @@ describe("OfapiCreditsPage", () => {
     withSummary();
 
     const markup = renderPage();
-    expect(markup).toContain("Учтено сегодня · 2026-06-12");
+    expect(markup).toContain("Учтено сегодня, 12 июня");
     expect(markup).toContain("137");
     // Only non-zero sources are listed (adjustment 0 is omitted).
     expect(markup).toContain("Приложение");
@@ -134,11 +136,11 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("Сверка баланса");
     // Budget meters use plain-language stream names.
     expect(markup).toContain("Синк сообщений");
-    expect(markup).toContain("84 из 500 кр");
+    expect(markup).toContain("84 из 500 кредитов");
     expect(markup).toContain('role="progressbar"');
     expect(markup).toContain("дневной бюджет: 84 из 500 кредитов");
     // The floor reads as what it does, not "floor 500 OK".
-    expect(markup).toContain("Порог автостопа: 500 кр");
+    expect(markup).toContain("Порог автостопа: 500 кредитов");
     expect(markup).toContain("остановятся");
   });
 
@@ -158,7 +160,7 @@ describe("OfapiCreditsPage", () => {
       stream: "dm", spentToday: -25, dailyCeiling: 500, state: "ok", retryAt: null,
     }] });
     const markup = renderPage();
-    expect(markup).toContain("-25 из 500 кр");
+    expect(markup).toContain("-25 из 500 кредитов");
     expect(markup).toContain('aria-valuenow="0"');
     expect(markup).toContain('style="width:0%"');
     expect(markup).not.toContain('style="width:-');
@@ -201,18 +203,18 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("~45 кр за");
+    expect(markup).toContain("~45 кредитов за");
     expect(markup).toContain(`4${NBSP}464`);
     expect(markup).toContain("ещё не проведены");
   });
 
-  it("shows the disabled notice pointing at Settings > Configuration", () => {
+  it("shows the disabled notice pointing at System > All parameters", () => {
     withSummary({ enabled: false });
 
     const markup = renderPage();
     expect(markup).toContain("Журнал кредитов выключен");
-    expect(markup).toContain("Настройки → Конфигурация");
-    expect(markup).toContain("Открыть конфигурацию");
+    expect(markup).toContain("Система → Все параметры");
+    expect(markup).toContain("Открыть параметры");
     expect(markup).toContain("config-ofapiCreditLedgerEnabled");
     expect(markup).not.toContain("OFAPI_CREDIT_LEDGER_ENABLED");
     // Ledger-derived sections are hidden with the flag off.
@@ -242,12 +244,14 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Кредиты сгорают необычно быстро");
     expect(markup).toContain("OFAPI spent 400 credits in the trailing hour");
-    // The exhausted budget reads as paused with a resume time on its meter.
-    expect(markup).toContain("дневной бюджет исчерпан");
+    // The exhausted budget reads as paused with a resume time on its meter —
+    // the one place a paused stream is told.
+    expect(markup).toContain("На паузе — дневной бюджет исчерпан");
     expect(markup).toContain("Продолжит в 2026-06-13 00:00 UTC");
-    // System health opens itself and reports the paused stream.
+    expect(markup.match(/дневной бюджет исчерпан/g)).toHaveLength(1);
+    // System health opens itself and flags the problem.
     expect(markup).toContain("Требует внимания");
-    expect(markup).toContain("Синк сообщений на паузе");
+    expect(markup).toContain('aria-expanded="true"');
   });
 
   it("names the webhook auto-redelivery cap apart from the burn-rate alarm", () => {
@@ -275,7 +279,7 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("Траты остановлены");
     expect(markup).toContain("порога автостопа");
     // A sub-3-day runway uses the danger tone.
-    expect(markup).toContain("text-red-700");
+    expect(markup).toContain("text-danger");
     expect(markup).toContain("~2");
   });
 
@@ -310,7 +314,8 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('title="ofapi_chats"');
     expect(markup).toContain("Приложение");
     expect(markup).toContain("lora-of");
-    expect(markup).toContain("2026-06-12 10:30 UTC");
+    // The column header says UTC once; the cells do not repeat it.
+    expect(markup).toContain(">2026-06-12 10:30<");
     // Spend renders as its balance impact.
     expect(markup).toContain("-2");
     // The expander is a real button, not a bare clickable row.
@@ -397,7 +402,7 @@ describe("OfapiCreditsPage", () => {
 
     const markup = renderPage();
     expect(markup).toContain("Сверен с провайдером 2026-06-12 12:00 UTC");
-    expect(markup).toContain("расхождение 20 кр");
+    expect(markup).toContain("расхождение 20 кредитов");
     expect(markup).toContain("Проведены по 2026-06-11.");
     expect(markup).toContain("Вебхуки замолчали");
     // The projection diagnostic lives inside health, collapsed until opened.
@@ -442,7 +447,7 @@ describe("OfapiCreditsPage", () => {
     // $0.01/credit: balance 23,950 = $239.50, spent 137 = $1.37, avg 212/day = $2.12.
     expect(markup).toContain("≈ $239.50");
     expect(markup).toContain("≈ $1.37");
-    expect(markup).toContain("$2.12/день");
+    expect(markup).toContain("(≈ $2.12)");
     // Per-page cost-vs-revenue: 100 cr costs $1.00, earned $2.50, ROI 2.5×.
     expect(markup).toContain("$1.00");
     expect(markup).toContain("$2.50");
@@ -561,9 +566,9 @@ describe("OfapiCreditsPage", () => {
     const markup = renderPage();
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Журнал показывает расход или разницу баланса");
-    expect(markup).toContain("450 кр за последние");
-    expect(markup).toContain("Синк чатов (300 кр)");
-    expect(markup).toContain("lora-of (150 кр)");
+    expect(markup).toContain("450 кредитов за последние");
+    expect(markup).toContain("Синк чатов (300)");
+    expect(markup).toContain("lora-of (150)");
   });
 
   it("keeps a quiet burn window out of the alarms", () => {
@@ -582,7 +587,7 @@ describe("OfapiCreditsPage", () => {
     expect(markup).not.toContain('role="alert"');
     expect(markup).toContain("Всё в порядке");
     // The quiet window stays inside the collapsed health section.
-    expect(markup).not.toContain("120 кр за последние");
+    expect(markup).not.toContain("120 кредитов за последние");
   });
 
   it("recommends a top-up and reports the month trajectory", () => {
@@ -602,8 +607,8 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain(`+1${NBSP}500`);
     expect(markup).toContain("чтобы хватило на 30 дней");
     expect(markup).toContain("≈ $15.00");
-    expect(markup).toContain("Потрачено за месяц: 800 кр");
-    expect(markup).toContain(`к концу месяца выйдет ~2${NBSP}000 кр`);
+    expect(markup).toContain("Потрачено за месяц: 800 кредитов");
+    expect(markup).toContain(`к концу месяца выйдет ~2${NBSP}000 кредитов`);
   });
 
   it("shows the runway as covered when no top-up is needed", () => {
@@ -631,6 +636,6 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Не удалось загрузить кредиты OFAPI");
+    expect(markup).toContain("Не удалось загрузить кредиты OnlyFans API");
   });
 });

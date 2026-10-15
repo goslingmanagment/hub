@@ -28,47 +28,46 @@ export function EditModelModal({
 
     try {
       await updateModel.mutateAsync(body);
-      toast.success("Model updated");
+      toast.success("Модель сохранена");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update model");
+      toast.error(error instanceof Error ? error.message : "Не удалось сохранить модель");
     }
   }
 
   return (
-    <ModalShell title={`Edit model: ${model.slug}`} onClose={onClose}>
+    <ModalShell title={`Изменить модель «${model.name}»`} onClose={onClose}>
       <div className="space-y-4">
-        <Field label="Slug">
-          <input
-            value={slug}
-            onChange={(event) => setSlug(event.target.value)}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-        <Field label="Name">
+        <Field label="Имя модели">
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            autoComplete="off"
+            className="input"
+          />
+        </Field>
+        <Field label="Короткое имя" hint="Внутреннее имя модели в Hub. Обычно его не меняют.">
+          <input
+            value={slug}
+            onChange={(event) => setSlug(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="input"
           />
         </Field>
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Cancel
+        <button type="button" onClick={onClose} className="btn">
+          Отмена
         </button>
         <button
           type="button"
           disabled={updateModel.isPending || !slug.trim() || !name.trim()}
           onClick={handleSubmit}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="btn btn-primary"
         >
-          Save
+          {updateModel.isPending ? "Сохраняем…" : "Сохранить"}
         </button>
       </div>
     </ModalShell>

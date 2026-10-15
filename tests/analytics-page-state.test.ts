@@ -192,7 +192,7 @@ function panelMarkup(html: string, title: string): string {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
-const PANEL_FAILED = "This request failed — nothing is shown for it.";
+const PANEL_FAILED = "Запрос не выполнен — данные не показаны.";
 
 beforeEach(() => {
   pagesMocks.usePages.mockReset();
@@ -244,11 +244,11 @@ describe("AnalyticsPage catalog states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("Loading pages…");
-    expect(html).not.toContain("No Fansly pages to analyse.");
+    expect(html).toContain("Загружаем страницы…");
+    expect(html).not.toContain("Нет страниц Fansly для аналитики");
     // The header renders through the wait: a blank frame is what made the old
     // page feel broken rather than slow.
-    expect(html).toContain("Analytics");
+    expect(html).toContain("Аналитика");
   });
 
   it("reports a failed catalog as a failure, not as an empty agency", () => {
@@ -261,9 +261,9 @@ describe("AnalyticsPage catalog states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("The page list could not be loaded.");
+    expect(html).toContain("Не удалось загрузить список страниц");
     expect(html).toContain('role="alert"');
-    expect(html).not.toContain("No Fansly pages to analyse.");
+    expect(html).not.toContain("Нет страниц Fansly для аналитики");
   });
 
   it("claims the empty state ONLY once the catalog succeeded with no Fansly page", () => {
@@ -278,8 +278,8 @@ describe("AnalyticsPage catalog states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("No Fansly pages to analyse.");
-    expect(html).not.toContain("Loading pages…");
+    expect(html).toContain("Нет страниц Fansly для аналитики");
+    expect(html).not.toContain("Загружаем страницы…");
   });
 
   it("fires the seven analytics requests off the catalog, without waiting for /overview", () => {
@@ -317,11 +317,11 @@ describe("AnalyticsPage per-panel states", () => {
     const html = renderAnalyticsPage();
 
     // The answered panel is on screen…
-    expect(html).toContain("No top-media window captured for this range.");
+    expect(html).toContain("Рейтинг медиа за этот период не собран.");
     // …and the one still in flight says so rather than claiming a result.
-    expect(html).toContain("Top FYP tags");
-    expect(html).not.toContain("No tag window captured for this range.");
-    expect(html).toContain("Loading…");
+    expect(html).toContain("Топ тегов FYP");
+    expect(html).not.toContain("Рейтинг тегов за этот период не собран.");
+    expect(html).toContain("Загружаем…");
     // The old page-wide gate is gone.
     expect(html).not.toContain("Loading analytics and capture coverage…");
   });
@@ -332,13 +332,13 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).not.toContain("No tag window captured for this range.");
+    expect(html).not.toContain("Рейтинг тегов за этот период не собран.");
     expect(html).toContain(PANEL_FAILED);
     expect(html).toContain("502 Bad Gateway");
-    expect(html).toContain("Not shown: Top FYP tags.");
+    expect(html).toContain("Не показано: Топ тегов FYP.");
     // Everything else still rendered — one failure no longer blanks the page.
-    expect(html).toContain("No top-media window captured for this range.");
-    expect(html).toContain("No comments captured in this window.");
+    expect(html).toContain("Рейтинг медиа за этот период не собран.");
+    expect(html).toContain("За этот период комментариев не собрано.");
   });
 
   it("confines a media failure to Top Media and Content Performance", () => {
@@ -349,11 +349,11 @@ describe("AnalyticsPage per-panel states", () => {
 
     // Exactly the two panels that read `media`, and no others.
     expect(occurrences(html, PANEL_FAILED)).toBe(2);
-    expect(html).toContain("Not shown: Top media, Content performance.");
-    expect(html).not.toContain("No top-media window captured for this range.");
-    expect(html).not.toContain("No media captured for this page yet.");
-    expect(html).toContain("No tag window captured for this range.");
-    expect(html).toContain("No earnings breakdown captured for this range.");
+    expect(html).toContain("Не показано: Топ медиа, Эффективность контента.");
+    expect(html).not.toContain("Рейтинг медиа за этот период не собран.");
+    expect(html).not.toContain("Медиа этой страницы ещё не собраны.");
+    expect(html).toContain("Рейтинг тегов за этот период не собран.");
+    expect(html).toContain("Структура дохода за этот период не собрана.");
   });
 
   it("never says Avg. watch is “not served” while its own request is pending", () => {
@@ -364,11 +364,11 @@ describe("AnalyticsPage per-panel states", () => {
 
     // "not served" is a verdict about Fansly's payload ([E5]); the request has
     // not answered, so it is not available to be made.
-    expect(html).toContain("Avg. watch");
-    expect(html).not.toContain("not served");
-    expect(html).toContain("loading…");
+    expect(html).toContain("Средний досмотр");
+    expect(html).not.toContain("Fansly не передаёт");
+    expect(html).toContain("загружаем…");
     // Content Performance's own table is fed by `media`, which succeeded.
-    expect(html).toContain("No media captured for this page yet.");
+    expect(html).toContain("Медиа этой страницы ещё не собраны.");
   });
 
   it("never says Avg. watch is “not served” when its request failed", () => {
@@ -377,9 +377,9 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).not.toContain("not served");
-    expect(html).toContain("unavailable");
-    expect(html).toContain("Not shown: FYP vs direct media views, Content performance · Avg. watch.");
+    expect(html).not.toContain("Fansly не передаёт");
+    expect(html).toContain("недоступно");
+    expect(html).toContain("Не показано: Просмотры: FYP и прямые, Эффективность контента · средний досмотр.");
   });
 
   it("says “not served” only about a SUCCEEDED request that carried no components", () => {
@@ -388,8 +388,8 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("not served");
-    expect(html).not.toContain("not served (cached");
+    expect(html).toContain("Fansly не передаёт");
+    expect(html).not.toContain("Fansly не передаёт (из кэша");
   });
 
   it("qualifies a cached “not served” whose refresh failed — it is not Fansly's verdict", () => {
@@ -401,10 +401,10 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("not served (cached — refresh failed)");
+    expect(html).toContain("Fansly не передаёт (из кэша — не удалось обновить)");
     // …and no UNQUALIFIED "not served" anywhere: the qualified string is the
     // only occurrence.
-    expect(occurrences(html, "not served")).toBe(1);
+    expect(occurrences(html, "Fansly не передаёт")).toBe(1);
   });
 
   it("labels a cached average-watch figure as cached", () => {
@@ -413,7 +413,7 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("45.0% (cached — refresh failed)");
+    expect(html).toContain("45,0 % (из кэша — не удалось обновить)");
   });
 
   it("serves the account-level average when both components arrived", () => {
@@ -422,8 +422,8 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("45.0%");
-    expect(html).not.toContain("not served");
+    expect(html).toContain("45,0 %");
+    expect(html).not.toContain("Fansly не передаёт");
   });
 
   it("cannot turn a failed comments request into an empty Likers card", () => {
@@ -432,11 +432,11 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    // "Empty by design" is a claim about Fansly, not about our request.
-    expect(html).not.toContain("Empty by design");
-    expect(html).not.toContain("No comments captured in this window.");
+    // "Not collected by design" is a claim about Fansly, not about our request.
+    expect(html).not.toContain("Лайки не собираются");
+    expect(html).not.toContain("За этот период комментариев не собрано.");
     expect(occurrences(html, PANEL_FAILED)).toBe(2);
-    expect(html).toContain("Not shown: Comments per post, Likers.");
+    expect(html).toContain("Не показано: Комментарии к постам, Лайки.");
   });
 
   it("keeps cached data on screen and labels it cached when the refresh fails", () => {
@@ -445,10 +445,10 @@ describe("AnalyticsPage per-panel states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("cached — refresh failed");
+    expect(html).toContain("Не удалось обновить");
     // Stale data is still data: the panel renders, and it is not in the banner.
-    expect(html).toContain("No top-media window captured for this range.");
-    expect(html).not.toContain("Some requests failed.");
+    expect(html).toContain("Рейтинг медиа за этот период не собран.");
+    expect(html).not.toContain("Часть данных не загрузилась.");
   });
 });
 
@@ -464,8 +464,8 @@ describe("AnalyticsPage coverage states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("coverage pending");
-    expect(html).toContain("Loading coverage…");
+    expect(html).toContain("Проверяем полноту");
+    expect(html).toContain("Загружаем сведения о сборе…");
     expect(html).not.toContain("No coverage data for this page.");
   });
 
@@ -475,14 +475,14 @@ describe("AnalyticsPage coverage states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("coverage unavailable");
+    expect(html).toContain("Полнота не проверена");
     // The old panel mapped `!data` to this sentence, turning a failed request
     // into a verdict about the page.
     expect(html).not.toContain("No coverage data for this page.");
     expect(html).toContain(PANEL_FAILED);
-    expect(html).toContain("Not shown: Coverage, every coverage badge.");
+    expect(html).toContain("Не показано: Покрытие данных, отметки полноты на всех панелях.");
     // The other panels' data is not in doubt — only its completeness is.
-    expect(html).toContain("No top-media window captured for this range.");
+    expect(html).toContain("Рейтинг медиа за этот период не собран.");
   });
 
   it("does not let an old “complete” verdict remove the badge after a failed refresh", () => {
@@ -491,8 +491,8 @@ describe("AnalyticsPage coverage states", () => {
 
     const html = renderAnalyticsPage();
 
-    expect(html).toContain("coverage refresh failed");
-    expect(html).not.toContain("Some requests failed.");
+    expect(html).toContain("Полнота: не удалось обновить");
+    expect(html).not.toContain("Часть данных не загрузилась.");
   });
 
   it("does not let the Likers card state its lane verdict over a pending coverage request", () => {
@@ -502,43 +502,43 @@ describe("AnalyticsPage coverage states", () => {
     withCatalog({ useStatsCoverage: loading() });
     withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
 
-    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+    const likers = panelMarkup(renderAnalyticsPage(), "Лайки");
 
-    expect(likers).toContain("coverage pending");
-    expect(likers).not.toContain(">not started<");
+    expect(likers).toContain("Проверяем полноту");
+    expect(likers).not.toContain(">Сбор не начат<");
   });
 
   it("does not let the Likers card state its lane verdict over a FAILED coverage request", () => {
     withCatalog({ useStatsCoverage: failed() });
     withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
 
-    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+    const likers = panelMarkup(renderAnalyticsPage(), "Лайки");
 
-    expect(likers).toContain("coverage unavailable");
-    expect(likers).not.toContain(">not started<");
+    expect(likers).toContain("Полнота не проверена");
+    expect(likers).not.toContain(">Сбор не начат<");
   });
 
   it("marks the Likers verdict as cached when the coverage refresh failed", () => {
     withCatalog({ useStatsCoverage: cached(COVERED) });
     withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
 
-    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+    const likers = panelMarkup(renderAnalyticsPage(), "Лайки");
 
-    expect(likers).toContain("coverage refresh failed");
-    expect(likers).not.toContain(">not started<");
+    expect(likers).toContain("Полнота: не удалось обновить");
+    expect(likers).not.toContain(">Сбор не начат<");
     // The cached verdict is still reported — in the badge's tooltip, WITH the
     // failure beside it. Losing it would be losing a fact.
-    expect(likers).toContain("Cached verdict: not started.");
+    expect(likers).toContain("Последняя известная оценка: Сбор не начат.");
   });
 
   it("states the Likers lane verdict once coverage has actually answered", () => {
     withCatalog();
     withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
 
-    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+    const likers = panelMarkup(renderAnalyticsPage(), "Лайки");
 
-    expect(likers).toContain(">not started<");
-    expect(likers).toContain("Empty by design");
+    expect(likers).toContain(">Сбор не начат<");
+    expect(likers).toContain("Лайки не собираются");
   });
 
   it("falls through to the real capture verdict once coverage answered", () => {
@@ -550,12 +550,12 @@ describe("AnalyticsPage coverage states", () => {
     // A SUCCEEDED coverage request with no row for a required plane is a
     // capture verdict ("coverage unknown"), not a request state — and none of
     // the request-state badges may stand in for it.
-    expect(html).toContain("coverage unknown");
-    expect(html).not.toContain("coverage pending");
-    expect(html).not.toContain("coverage unavailable");
-    expect(html).not.toContain("coverage refresh failed");
+    expect(html).toContain("Полнота неизвестна");
+    expect(html).not.toContain("Проверяем полноту");
+    expect(html).not.toContain("Полнота не проверена");
+    expect(html).not.toContain("Полнота: не удалось обновить");
     // …and an empty panel under an unknown verdict does not claim the world
     // was empty.
-    expect(html).toContain("Nothing captured for this window");
+    expect(html).toContain("За этот период ничего не собрано");
   });
 });

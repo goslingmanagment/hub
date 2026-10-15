@@ -9,7 +9,11 @@ import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
 import { CoveragePanel, engineStreamBadge } from "../apps/dashboard/src/components/analytics/CoveragePanel.tsx";
 import { formatDateTime } from "../apps/dashboard/src/lib/format.ts";
-import { engineWaitLabel } from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
+import {
+  engineReadingWords,
+  engineWaitLabel,
+  type EngineReadingState,
+} from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
 import { getStreamLabel } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 import { WAITING_REASONS } from "../apps/runtime/src/sync/engine/status.ts";
 import { FANSLY_LEVER_STREAMS } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -98,8 +102,14 @@ function card(html: string, name: string): string {
   const start = html.indexOf(`data-engine-stream="${name}"`);
   expect(start, name).toBeGreaterThan(-1);
   const next = html.indexOf("data-engine-stream=", start + 1);
-  return text(html.slice(start, next === -1 ? html.indexOf("Rows held") : next));
+  return text(html.slice(start, next === -1 ? html.indexOf("Глубина собранных данных") : next));
 }
+
+/** A stream badge's words: the engine dictionary's Russian for that state —
+ *  the panel speaks the same words as the «Сбор данных» screens. */
+const said = (state: EngineReadingState): string => engineReadingWords(state, "ru").text;
+/** Why work waits, in the same dictionary. */
+const waits = (reason: string): string => engineWaitLabel(reason, "ru");
 
 const badge = (html: string, name: string): string => card(html, name).split("\n")[2]!;
 
@@ -114,13 +124,13 @@ describe("the coverage panel's engine section", () => {
         waiting: { resource: "media-stats.walk", reason: "not_due", until: "2026-10-03T09:05:00.000Z" },
       })]),
     });
-    expect(html).toContain("Fansly Sync Engine — what it reads");
+    expect(html).toContain("Что сейчас собирается");
     const media = card(html, "media_stats");
-    expect(media).toContain("Last read");
-    expect(media).toContain("Next due");
-    expect(media).toContain(`media-stats.walk: not due until ${panelTime("2026-10-03T09:05:00.000Z")}`);
+    expect(media).toContain("Последний сбор");
+    expect(media).toContain("Следующий сбор");
+    expect(media).toContain(`media-stats.walk: ${waits("not_due")} до ${panelTime("2026-10-03T09:05:00.000Z")}`);
     expect(media).toContain("media-stats.walk");
-    expect(badge(html, "media_stats")).toBe("reading");
+    expect(badge(html, "media_stats")).toBe(said("reading"));
     // The retired lanes' vocabulary is gone.
     expect(html).not.toContain("Budget today");
     expect(html).not.toContain("ramped");
@@ -146,16 +156,19 @@ describe("the coverage panel's engine section", () => {
         }),
       ]),
     });
-    expect(badge(html, "notifications")).toBe("paused");
-    expect(badge(html, "catalog")).toBe("needs attention");
+    expect(badge(html, "notifications")).toBe(said("paused"));
+    expect(badge(html, "catalog")).toBe(said("attention"));
     const catalog = card(html, "catalog");
-    expect(catalog).toContain("Failures");
-    expect(catalog).toContain("1 quarantined (catalog.fixed); pnpm cli sync work list --page lilly-1 --state quarantined");
-    expect(catalog).not.toContain("catalog.vault: not due");
+    expect(catalog).toContain("Ошибок подряд");
+    expect(catalog).toContain("1 quarantined (catalog.fixed)");
+    // The server's sentence is said; the terminal command it ends with is not
+    // something this page asks the owner to run.
+    expect(catalog).not.toContain("pnpm");
+    expect(catalog).not.toContain(`catalog.vault: ${waits("not_due")}`);
   });
 
   it("says nothing reads the page when the engine does not own it", () => {
-    expect(render({ engine: null })).toContain("The Fansly Sync Engine does not own this page: nothing reads its data.");
+    expect(render({ engine: null })).toContain("Сбор данных Fansly не ведёт эту страницу: её данные никто не читает.");
   });
 });
 
@@ -170,13 +183,13 @@ describe("the badge of a stream says what is true of it", () => {
         stream({ stream: "followers_reconcile", activeWork: 0, succeededAt: null, nextDueAt: null }),
       ]),
     });
-    expect(badge(html, "transactions")).toBe("reading");
-    expect(badge(html, "top_spenders")).toBe("reading");
-    expect(badge(html, "purchase_history")).toBe("idle");
-    expect(badge(html, "followers_reconcile")).toBe("nothing asked yet");
+    expect(badge(html, "transactions")).toBe(said("reading"));
+    expect(badge(html, "top_spenders")).toBe(said("reading"));
+    expect(badge(html, "purchase_history")).toBe(said("idle"));
+    expect(badge(html, "followers_reconcile")).toBe(said("never_read"));
     // The card that used to read "reading" over two dashes.
     const never = card(html, "followers_reconcile");
-    expect(never).not.toContain("reading");
+    expect(never).not.toContain(said("reading"));
     expect(never.split("\n").filter((line) => line === "—")).toHaveLength(2);
     expect(html).not.toContain("data-engine-not-running");
   });
@@ -194,17 +207,17 @@ describe("the badge of a stream says what is true of it", () => {
       }),
     ];
     const html = render({ engine: engine(streams, { ownerRunning: false }) });
-    for (const row of streams) expect(badge(html, row.stream), row.stream).toBe("not running: no owner");
-    expect(text(html)).not.toContain("\nreading\n");
+    for (const row of streams) expect(badge(html, row.stream), row.stream).toBe(said("no_owner"));
+    expect(text(html)).not.toContain(`\n${said("reading")}\n`);
     expect(html).toContain("data-engine-not-running");
-    expect(html).toContain("No sync host owns this page: none of the streams below is being read");
+    expect(html).toContain("Страницу не ведёт ни один обработчик сбора: ни один поток ниже сейчас не читается");
     // What a stream waits for and what needs the owner are still said.
-    expect(card(html, "light")).toContain("account.poll: no owner");
+    expect(card(html, "light")).toContain(`account.poll: ${waits("ownership_unconfirmed")}`);
     expect(card(html, "subscribers")).toContain("1 quarantined (subscribers.poll)");
 
     const handover = render({ engine: engine(streams, { mode: "handover", ownerRunning: false }) });
-    for (const row of streams) expect(badge(handover, row.stream), row.stream).toBe("not running: switching");
-    expect(handover).toContain("The page is switching to the engine (handover)");
+    for (const row of streams) expect(badge(handover, row.stream), row.stream).toBe(said("switching"));
+    expect(handover).toContain("Страница переключается на новый сбор данных");
   });
 
   it("puts the owner first, then what stops every key, then attention, then a partial stop, then the work", () => {
@@ -213,14 +226,14 @@ describe("the badge of a stream says what is true of it", () => {
     type Stopped = Pick<EngineStream, "paused" | "stopped" | "stops">;
     const free: Stopped = { paused: false, stopped: "none", stops: [] };
     const partly: Stopped = { paused: false, stopped: "some", stops: [stop("resource_hold", ["followers"], ["followers.head"])] };
-    expect(engineStreamBadge({ mode: "live", ownerRunning: false }, all)).toMatchObject({ text: "not running: no owner", tone: "off" });
-    expect(engineStreamBadge(owned, all)).toMatchObject({ text: "paused", tone: "off" });
-    expect(engineStreamBadge(owned, { ...all, ...free })).toMatchObject({ text: "needs attention", tone: "off" });
+    expect(engineStreamBadge({ mode: "live", ownerRunning: false }, all)).toMatchObject({ text: said("no_owner"), tone: "off" });
+    expect(engineStreamBadge(owned, all)).toMatchObject({ text: said("paused"), tone: "off" });
+    expect(engineStreamBadge(owned, { ...all, ...free })).toMatchObject({ text: said("attention"), tone: "off" });
     // Work that needs the owner is said before a stop of some of the keys.
-    expect(engineStreamBadge(owned, { ...all, ...partly })).toMatchObject({ text: "needs attention", tone: "off" });
-    expect(engineStreamBadge(owned, { ...all, ...partly, needsAttention: false })).toMatchObject({ text: "partly held", tone: "off" });
-    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false })).toMatchObject({ text: "reading", tone: "on" });
-    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false, activeWork: 0 })).toMatchObject({ text: "idle", tone: "on" });
+    expect(engineStreamBadge(owned, { ...all, ...partly })).toMatchObject({ text: said("attention"), tone: "off" });
+    expect(engineStreamBadge(owned, { ...all, ...partly, needsAttention: false })).toMatchObject({ text: said("partly_held"), tone: "off" });
+    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false })).toMatchObject({ text: said("reading"), tone: "on" });
+    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false, activeWork: 0 })).toMatchObject({ text: said("idle"), tone: "on" });
   });
 });
 
@@ -249,13 +262,13 @@ describe("held is not reading", () => {
     ];
     const html = render({ engine: engine(streams) });
     for (const row of streams) {
-      expect(badge(html, row.stream), row.stream).toBe("page held");
-      expect(card(html, row.stream), row.stream).toContain("Page held: Fansly refuses its credentials — until new ones are saved");
+      expect(badge(html, row.stream), row.stream).toBe(said("page_held"));
+      expect(card(html, row.stream), row.stream).toContain("Удержание страницы: Fansly не принимает данные входа — до новых данных входа");
     }
-    expect(text(html)).not.toContain("\nreading\n");
+    expect(text(html)).not.toContain(`\n${said("reading")}\n`);
     // The stop says it for every key: the one row's "page held" is not repeated.
-    expect(card(html, "light")).not.toContain("account.poll: page held");
-    expect(engineStreamBadge(owned, streams[1]!)).toMatchObject({ text: "page held", tone: "off" });
+    expect(card(html, "light")).not.toContain(`account.poll: ${waits("page_hold")}`);
+    expect(engineStreamBadge(owned, streams[1]!)).toMatchObject({ text: said("page_held"), tone: "off" });
   });
 
   it("a stream whose only route a 429 holds is held until the hold's end, not reading", () => {
@@ -269,11 +282,11 @@ describe("held is not reading", () => {
       stops: [stop("route_hold", ["messages.page"], ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"], until)],
     });
     const html = render({ engine: engine([history]) });
-    expect(badge(html, "dm_messages")).toBe("held");
+    expect(badge(html, "dm_messages")).toBe(said("held"));
     const read = card(html, "dm_messages");
-    expect(read).toContain(`\nEndpoint messages.page held (429) until ${panelTime(until)}\n`);
+    expect(read).toContain(`\nУдержание эндпоинта messages.page (429) до ${panelTime(until)}\n`);
     // Open work that is held has no next read.
-    expect(read.split("\n").slice(read.split("\n").indexOf("Next due"))[1]).toBe("—");
+    expect(read.split("\n").slice(read.split("\n").indexOf("Следующий сбор"))[1]).toBe("—");
     expect(read).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -312,21 +325,21 @@ describe("held is not reading", () => {
       waiting: { resource: "fan-earnings.roster", reason: "route_hold", until },
     });
     const html = render({ engine: engine([posts, reconcile, earnings]) });
-    expect(text(html)).not.toContain("\nreading\n");
-    expect(badge(html, "posts")).toBe("partly held");
-    expect(badge(html, "followers_reconcile")).toBe("partly held");
-    expect(badge(html, "fan_earnings")).toBe("held");
+    expect(text(html)).not.toContain(`\n${said("reading")}\n`);
+    expect(badge(html, "posts")).toBe(said("partly_held"));
+    expect(badge(html, "followers_reconcile")).toBe(said("partly_held"));
+    expect(badge(html, "fan_earnings")).toBe(said("held"));
     for (const row of [posts, reconcile, earnings]) expect(engineStreamBadge(owned, row).tone, row.stream).toBe("off");
     const read = card(html, "posts");
-    expect(read).toContain(`\nEndpoint posts.timeline held (429) until ${panelTime(until)}: posts.refresh, posts.backfill\n`);
-    expect(card(html, "followers_reconcile")).toContain(`\nEndpoint followers.page held (429) until ${panelTime(until)}: followers.reconcile\n`);
-    expect(card(html, "fan_earnings")).toContain(`\nEndpoint earnings.monthly_accounts held (429) until ${panelTime(until)}\n`);
+    expect(read).toContain(`\nУдержание эндпоинта posts.timeline (429) до ${panelTime(until)}: posts.refresh, posts.backfill\n`);
+    expect(card(html, "followers_reconcile")).toContain(`\nУдержание эндпоинта followers.page (429) до ${panelTime(until)}: followers.reconcile\n`);
+    expect(card(html, "fan_earnings")).toContain(`\nУдержание эндпоинта earnings.monthly_accounts (429) до ${panelTime(until)}\n`);
     // The row's own wait would only repeat the stop for one of its keys, and
     // held work has no next read.
-    expect(text(html)).not.toContain(": endpoint held (429)");
+    expect(text(html)).not.toContain(`: ${waits("route_hold")}`);
     for (const name of ["posts", "followers_reconcile", "fan_earnings"]) {
       const lines = card(html, name).split("\n");
-      expect(lines[lines.indexOf("Next due") + 1], name).toBe("—");
+      expect(lines[lines.indexOf("Следующий сбор") + 1], name).toBe("—");
     }
     expect(html.match(/data-engine-stop/g)).toHaveLength(3);
   });
@@ -341,10 +354,10 @@ describe("held is not reading", () => {
       waiting: { resource: "followers.head", reason: "resource_hold", until },
     });
     const html = render({ engine: engine([followers]) });
-    expect(badge(html, "followers")).toBe("partly held");
+    expect(badge(html, "followers")).toBe(said("partly_held"));
     const read = card(html, "followers");
-    expect(read).toContain(`\nResource followers held after errors until ${panelTime(until)}: followers.head\n`);
-    expect(read).not.toContain("followers.head: resource held");
+    expect(read).toContain(`\nУдержание ресурса followers после ошибок до ${panelTime(until)}: followers.head\n`);
+    expect(read).not.toContain(`followers.head: ${waits("resource_hold")}`);
   });
 
   it("a pause of some keys is a partial pause; of the page, a pause that names the page", () => {
@@ -361,14 +374,14 @@ describe("held is not reading", () => {
       stops: [stop("paused", ["requests"], ["dm-messages.history"])],
     });
     const html = render({ engine: engine([some, whole, requests]) });
-    expect(badge(html, "dm_conversations")).toBe("partly paused");
-    expect(card(html, "dm_conversations")).toContain("\nPaused by the owner: dm-conversations.full, fan-profiles.probe\n");
+    expect(badge(html, "dm_conversations")).toBe(said("partly_paused"));
+    expect(card(html, "dm_conversations")).toContain("\nПауза владельца: dm-conversations.full, fan-profiles.probe\n");
     // Why the keys that are read wait is still said.
-    expect(card(html, "dm_conversations")).toContain("\ndm-conversations.head: not due\n");
-    expect(badge(html, "posts")).toBe("paused");
-    expect(card(html, "posts")).toContain("\nPaused by the owner: the whole page\n");
-    expect(badge(html, "dm_messages")).toBe("partly paused");
-    expect(card(html, "dm_messages")).toContain("\nPaused by the owner: history requests (dm-messages.history)\n");
+    expect(card(html, "dm_conversations")).toContain(`\ndm-conversations.head: ${waits("not_due")}\n`);
+    expect(badge(html, "posts")).toBe(said("paused"));
+    expect(card(html, "posts")).toContain("\nПауза владельца: вся страница\n");
+    expect(badge(html, "dm_messages")).toBe(said("partly_paused"));
+    expect(card(html, "dm_messages")).toContain("\nПауза владельца: заявки на историю (dm-messages.history)\n");
   });
 
   it("says every stop of a stream, the pause before the hold it would leave", () => {
@@ -384,11 +397,11 @@ describe("held is not reading", () => {
       ],
     });
     const html = render({ engine: engine([both]) });
-    expect(badge(html, "followers")).toBe("page held");
+    expect(badge(html, "followers")).toBe(said("page_held"));
     const lines = card(html, "followers").split("\n");
-    const paused = lines.indexOf("Paused by the owner: followers.head");
+    const paused = lines.indexOf("Пауза владельца: followers.head");
     expect(paused).toBeGreaterThan(-1);
-    expect(lines[paused + 1]).toBe(`Page held: network errors until ${panelTime(until)}`);
+    expect(lines[paused + 1]).toBe(`Удержание страницы: сеть до ${panelTime(until)}`);
     expect(html.match(/data-engine-stop/g)).toHaveLength(2);
   });
 
@@ -396,15 +409,15 @@ describe("held is not reading", () => {
     const html = render({
       engine: engine([stream({ stream: "light", resources: ["account.poll"], stopped: "all", stops: [pageHold(["account.poll"])] })], { ownerRunning: false }),
     });
-    expect(badge(html, "light")).toBe("not running: no owner");
-    expect(card(html, "light")).toContain("Page held: Fansly refuses its credentials");
+    expect(badge(html, "light")).toBe(said("no_owner"));
+    expect(card(html, "light")).toContain("Удержание страницы: Fansly не принимает данные входа");
   });
 });
 
 describe("why a stream waits, in the sync tabs' dictionary and the panel's time", () => {
   it("names every reason of the engine in words, never by its code", () => {
     for (const reason of WAITING_REASONS) {
-      const words = engineWaitLabel(reason, "en");
+      const words = engineWaitLabel(reason, "ru");
       expect(words, reason).not.toMatch(/_/);
       const html = text(render({
         engine: engine([stream({ waiting: { resource: "media-stats.walk", reason, until: null } })]),
@@ -442,7 +455,7 @@ describe("why a stream waits, in the sync tabs' dictionary and the panel's time"
       }));
       const local = panelTime(until);
       expect(local.includes("2026")).toBe(withYear);
-      expect(html).toContain(`\naccount.poll: not due until ${local}\n`);
+      expect(html).toContain(`\naccount.poll: ${waits("not_due")} до ${local}\n`);
       // "Next due" beside it reads the same instant the same way.
       expect(html.split(local)).toHaveLength(3);
       expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
@@ -504,8 +517,8 @@ describe("the capture floors", () => {
     }));
     expect(html).not.toContain("\n4\n");
     // Two floors, each in the table and in the phone's list.
-    expect(html.split("\nthis page\n")).toHaveLength(5);
-    expect(html).toContain("\nsteady\n");
+    expect(html.split("\nэта страница\n")).toHaveLength(5);
+    expect(html).toContain("\nсвежие данные\n");
     expect(html).toContain("\n40\n");
     // Without the page's id nothing is guessed.
     expect(text(render({ planes: [floor({ scopeRef: "4" })] }))).toContain("\n4\n");
@@ -516,25 +529,26 @@ describe("the capture floors", () => {
       planes: [floor({ plane: "stats_account_hourly", scopeRef: "steady", status: "sampled", observedUniqueCount: 25 })],
     });
     const table = html.slice(html.indexOf('data-floors="table"'), html.indexOf('data-floors="list"'));
-    const list = html.slice(html.indexOf('data-floors="list"'), html.indexOf("Fansly Sync Engine — what it reads"));
+    const list = html.slice(html.indexOf('data-floors="list"'), html.indexOf("Хранится в Hub"));
     // One of the two shows at any width of the panel.
     expect(html).toMatch(/<table class="hidden [^"]*@2xl:table[^"]*" data-floors="table"/);
     expect(html).toMatch(/<ul class="[^"]*@2xl:hidden[^"]*" data-floors="list"/);
     expect(html).toContain('class="@container');
     for (const part of [table, list]) {
       const read = text(part);
-      for (const cell of ["stats_account_hourly", "steady", "sampled", "none", "25 / —"]) expect(read).toContain(`\n${cell}\n`);
+      for (const cell of ["Статистика аккаунта по часам", "свежие данные", "выборочно", "нет", "25 / —"]) expect(read).toContain(`\n${cell}\n`);
     }
-    // The table keeps its columns apart; the list labels each value.
-    expect(table).toMatch(/<td class="py-2 pr-4 [^"]*whitespace-nowrap">stats_account_hourly<\/td>/);
-    for (const label of ["Status", "Proof", "Reaches back to", "Seen / expected"]) {
+    // The table keeps its columns apart; the list labels each value. The raw
+    // plane name is left to the hover title.
+    expect(table).toMatch(/<td class="[^"]*whitespace-nowrap[^"]*" title="stats_account_hourly">Статистика аккаунта по часам<\/td>/);
+    for (const label of ["Статус", "Подтверждение", "Собрано с", "Получено / ожидалось"]) {
       expect(text(list)).toContain(`\n${label}\n`);
     }
   });
 
   it("says the engine has recorded no floor, not that a lane claimed none", () => {
     const html = render({ engine: null });
-    expect(html).toContain("No capture floors: the engine has recorded none for this page yet.");
+    expect(html).toContain("Сведений о глубине сбора для этой страницы пока нет.");
     expect(html).not.toMatch(/\blanes?\b/i);
   });
 });

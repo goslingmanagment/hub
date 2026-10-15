@@ -13,14 +13,11 @@ const mocks = vi.hoisted(() => ({
     "usePageFanDetail", "usePageFanProfile", "usePageFanProfileVersion", "usePageFanProfileVersions",
     "usePageFanTransactions", "useCreateFanNote", "useSpenderDetail", "useSpenderBatch",
   ].map((key) => [key, vi.fn()])),
-  store: { period: "7d", topSupportersPeriod: "all" },
+  store: { period: "7d" },
   fanNavigation: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks.queries);
 vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => ({ period: mocks.store.period }) }));
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: (selector?: (state: typeof mocks.store) => unknown) => selector ? selector(mocks.store) : mocks.store,
-}));
 vi.mock("@/lib/navigation", async (original) => {
   const module = await original<typeof Navigation>();
   return { ...module, buildFanProfileNavigation: (...args: Parameters<typeof module.buildFanProfileNavigation>) => {
@@ -42,6 +39,7 @@ import { DeletedFansPage } from "../apps/dashboard/src/pages/DeletedFansPage.tsx
 import { TopSupportersPage } from "../apps/dashboard/src/pages/TopSupportersPage.tsx";
 import { FanProfilePage } from "../apps/dashboard/src/pages/FanProfilePage.tsx";
 import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+import { PageLayout } from "../apps/dashboard/src/components/layout/PageLayout.tsx";
 import { ReadSection } from "../apps/dashboard/src/pages/daily/ReadSection.tsx";
 
 const fan = { platform: "fansly", platformUserId: "fan-1", username: "buyer", displayName: "Buyer", pageAlias: null, createdAtExternal: null };
@@ -52,6 +50,12 @@ const failure = () => read(undefined, { isLoading: false, isError: true });
 function renderPage(component: () => ReturnType<typeof createElement> | null, route: string, url: string) {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [url] },
     createElement(Routes, undefined, createElement(Route, { path: route, element: createElement(component) }))));
+}
+// A page's views render under PageLayout, which owns the page's header.
+function renderPageView(component: () => ReturnType<typeof createElement> | null, url: string) {
+  return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [url] },
+    createElement(Routes, undefined, createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+      createElement(Route, { index: true, element: createElement(component) })))));
 }
 function supporterItem(): SpenderListResponse["items"][number] {
   return {
@@ -66,7 +70,6 @@ beforeEach(() => {
   for (const mock of Object.values(mocks.queries)) mock.mockReset().mockReturnValue(read(undefined));
   mocks.fanNavigation.mockClear();
   mocks.store.period = "7d";
-  mocks.store.topSupportersPeriod = "all";
   mocks.queries.useAuthMe!.mockReturnValue(read({ user: { role: "owner" } }));
   mocks.queries.useCreateFanNote!.mockReturnValue({ isPending: false, mutateAsync: vi.fn() });
 });
@@ -89,7 +92,7 @@ describe("daily-page independent reads", () => {
     mocks.queries.usePageSubscribers!.mockReturnValue(failure());
     mocks.queries.usePageSpenderAutoLists!.mockReturnValue(failure());
     mocks.queries.usePageTransactions!.mockReturnValue(failure());
-    const html = renderPage(PageDetailPage, "/pages/:pageLabel", "/pages/lana?period=30d&type=tip&txOffset=50");
+    const html = renderPageView(PageDetailPage, "/pages/lana?period=30d&type=tip&txOffset=50");
     expect(html).toContain("$123.45");
     expect(html).toContain("Состояние сбора недоступно");
     expect(html).toContain("Подписчики: не удалось загрузить");
@@ -117,7 +120,7 @@ describe("daily-page independent reads", () => {
   it("shows a retryable TopSupporters failure instead of an endless skeleton", () => {
     mocks.queries.useSpenders!.mockReturnValue(failure());
     const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters");
-    expect(html).toContain("Top Supporters: не удалось загрузить");
+    expect(html).toContain("Топ фанов: не удалось загрузить");
     expect(html).toContain("Повторить");
     expect(html).not.toContain("animate-pulse");
   });
@@ -125,7 +128,7 @@ describe("daily-page independent reads", () => {
   it("preserves supporter totals but marks failed batch enrichment unavailable", () => {
     mocks.queries.useSpenders!.mockReturnValue(read({ scope: { page }, items: [supporterItem()], total: 1 }));
     mocks.queries.useSpenderBatch!.mockReturnValue(failure());
-    const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters");
+    const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters?period=all");
     expect(html).toContain("$100.00");
     expect(html).toContain("Детали подписок и разбивка расходов");
     expect(html).toContain("Недоступно");

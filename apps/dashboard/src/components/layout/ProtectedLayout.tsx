@@ -6,12 +6,14 @@ import { CHATTER_HOME, buildLoginRoute, chatterExit } from "@/lib/navigation";
 import { isChatterSite } from "@/lib/sites";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
+import { CommandPalette, isPaletteShortcut } from "./CommandPalette.js";
 import { Sidebar } from "./Sidebar.js";
 import { Topbar } from "./Topbar.js";
 
-function MobileNavigation({ user, close }: {
+function MobileNavigation({ user, close, onOpenPalette }: {
   user: { username: string; role: string };
   close: () => void;
+  onOpenPalette: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -45,11 +47,11 @@ function MobileNavigation({ user, close }: {
         ) close();
       }}
     >
-      <Sidebar user={user} />
+      <Sidebar user={user} onOpenPalette={onOpenPalette} />
       <button
         type="button"
         aria-label="Закрыть навигацию"
-        className="fixed left-[216px] top-2 z-30 rounded bg-card p-2 text-text-secondary"
+        className="btn btn-ghost btn-icon fixed left-[204px] top-3 z-30"
         onClick={close}
       >
         ×
@@ -73,6 +75,22 @@ function ConsoleLayout() {
   const [navigationOpen, setNavigationOpen] = useState(false);
   const closeNavigation = useCallback(() => setNavigationOpen(false), []);
   useEffect(() => setNavigationOpen(false), [location.key]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => {
+    setNavigationOpen(false);
+    setPaletteOpen(true);
+  }, []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isPaletteShortcut(event)) return;
+      event.preventDefault();
+      setNavigationOpen(false);
+      setPaletteOpen((open) => !open);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const { data, isLoading, isError, error, refetch, isFetching } = useAuthMe();
   const {
     data: pages,
@@ -97,7 +115,7 @@ function ConsoleLayout() {
     <div role="alert" className="max-w-md rounded-xl border border-border bg-card p-6">
       <h1 className="font-semibold text-text-primary">Не удалось проверить вход</h1>
       <p className="mt-2 text-sm text-text-secondary">Hub не подтвердил состояние сессии. Повторите запрос, когда связь восстановится.</p>
-      <button type="button" disabled={isFetching} onClick={() => void refetch()} className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-white disabled:opacity-50">{isFetching ? "Проверяем…" : "Повторить"}</button>
+      <button type="button" disabled={isFetching} onClick={() => void refetch()} className="btn btn-primary mt-4">{isFetching ? "Проверяем…" : "Повторить"}</button>
     </div>
   </div>;
 
@@ -122,12 +140,13 @@ function ConsoleLayout() {
   return (
     <DashboardShellProvider value={shellValue}>
       <div className="flex min-h-screen bg-bg">
-        {navigationOpen && <MobileNavigation user={data.user} close={closeNavigation} />}
-        <div className="hidden md:block"><Sidebar user={data.user} /></div>
+        {navigationOpen && <MobileNavigation user={data.user} close={closeNavigation} onOpenPalette={openPalette} />}
+        {paletteOpen && <CommandPalette role={data.user.role} onClose={closePalette} />}
+        <div className="hidden md:block"><Sidebar user={data.user} onOpenPalette={openPalette} /></div>
         <div className="min-w-0 flex-1 md:ml-[248px]">
-          <Topbar user={data.user} onOpenNavigation={() => setNavigationOpen(true)} />
-          <main className="mt-[56px] min-w-0 p-0 md:p-8 max-w-[1200px]">
-            {isPageCatalogError && <div className="p-4 md:p-0"><p className="mb-1 text-sm font-semibold text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}
+          <Topbar user={data.user} onOpenNavigation={() => setNavigationOpen(true)} onOpenPalette={openPalette} />
+          <main className="mx-auto mt-[56px] w-full min-w-0 max-w-[1280px] px-4 py-6 md:px-8 md:py-8">
+            {isPageCatalogError && <div><p className="mb-1 text-sm font-semibold text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}
             <Outlet />
           </main>
         </div>

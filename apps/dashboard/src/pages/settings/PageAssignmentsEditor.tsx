@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 
 interface AssignedPageLike {
@@ -23,13 +24,15 @@ export interface PageAssignmentsLabels {
   assign: string;
 }
 
+const PLATFORM_NAME = { fansly: "Fansly", onlyfans: "OnlyFans" } as const;
+
 const DEFAULT_LABELS: PageAssignmentsLabels = {
-  assigned: "Assigned Pages",
-  empty: "No pages assigned.",
-  unassign: "Unassign",
-  assignHeading: "Assign a Page",
-  select: "Select a page...",
-  assign: "Assign",
+  assigned: "Страницы",
+  empty: "Страниц пока нет.",
+  unassign: "Снять",
+  assignHeading: "Назначить страницу",
+  select: "Выберите страницу…",
+  assign: "Назначить",
 };
 
 export function PageAssignmentsEditor({
@@ -54,62 +57,62 @@ export function PageAssignmentsEditor({
   onUnassign: (pageLabel: string) => void;
   assignPending: boolean;
   unassignPending: boolean;
-  pagesLoading?: boolean;
-  pagesError?: boolean;
-  onRetryPages?: () => void;
-  labels?: PageAssignmentsLabels;
+  pagesLoading?: boolean | undefined;
+  pagesError?: boolean | undefined;
+  onRetryPages?: (() => void) | undefined;
+  labels?: PageAssignmentsLabels | undefined;
 }) {
+  const selectId = useId();
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">{labels.assigned}</h3>
+      <h3 className="card-title mb-2">{labels.assigned}</h3>
       {assignedPages.length === 0 ? (
-        <p className="text-sm text-text-muted">{labels.empty}</p>
+        <p className="text-sm text-text-secondary">{labels.empty}</p>
       ) : (
-        <div className="space-y-1.5">
+        <ul className="divide-y divide-border-light rounded-lg border border-border">
           {assignedPages.map((page) => (
-            <div
-              key={page.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-bg px-3 py-2"
-            >
+            <li key={page.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-primary">
-                {page.label}
+                <span className="font-medium">{page.label}</span>
                 <PlatformBadge platform={page.platform} />
-                <span className="text-text-muted">{page.modelName}</span>
+                <span className="text-text-secondary">{page.modelName}</span>
               </div>
               <button
                 type="button"
                 disabled={unassignPending || assignPending}
                 onClick={() => onUnassign(page.label)}
-                className="rounded px-2 py-0.5 text-xs font-medium text-danger hover:bg-hover disabled:opacity-50"
+                className="btn btn-ghost btn-sm"
               >
                 {labels.unassign}
               </button>
-            </div>
+            </li>
           ))}
+        </ul>
+      )}
+
+      {pagesLoading && <p role="status" className="mt-3 text-sm text-text-secondary">Загружаем страницы…</p>}
+      {pagesError && (
+        <div role="alert" className="notice notice-danger mt-3 flex-wrap items-center">
+          <span className="min-w-0 flex-1">Список страниц не обновился. Выбор сохранён — обновите список перед назначением.</span>
+          {onRetryPages && <button type="button" onClick={onRetryPages} className="btn btn-sm">Повторить</button>}
         </div>
       )}
 
-      {pagesLoading && <p className="mt-3 text-sm text-text-muted">Loading available pages…</p>}
-      {pagesError && <p role="alert" className="mt-3 text-sm text-danger">
-        Available pages could not be refreshed. Your selection is kept; retry before assigning.
-        {onRetryPages && <button type="button" onClick={onRetryPages} className="ml-2 underline">Retry</button>}
-      </p>}
-
       {availablePages.length > 0 && (
-        <div className="mt-3">
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">{labels.assignHeading}</h3>
-          <div className="flex items-center gap-2">
+        <div className="mt-4">
+          <label htmlFor={selectId} className="field-label">{labels.assignHeading}</label>
+          <div className="flex gap-2">
             <select
-              aria-label="Page to assign"
+              id={selectId}
               value={selectedLabel}
               disabled={pagesLoading || pagesError || assignPending || unassignPending}
               onChange={(event) => onSelectedLabelChange(event.target.value)}
-              className="min-w-0 flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+              className="select flex-1"
             >
               <option value="">{labels.select}</option>
               {availablePages.map((page) => (
                 <option key={page.id} value={page.label}>
-                  {page.label} ({page.platform} / {page.modelName})
+                  {page.label} · {PLATFORM_NAME[page.platform]} · {page.modelName}
                 </option>
               ))}
             </select>
@@ -117,7 +120,7 @@ export function PageAssignmentsEditor({
               type="button"
               disabled={!selectedLabel || !availablePages.some((page) => page.label === selectedLabel) || assignPending || unassignPending || pagesLoading || pagesError}
               onClick={onAssign}
-              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              className="btn"
             >
               {labels.assign}
             </button>

@@ -11,6 +11,8 @@ import {
   getSubstreamTone,
   needsVisualAttention,
   shouldShowBlockProgressBar,
+  syncPageStatus,
+  syncResetConfirmText,
 } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 
 describe("sync block display", () => {
@@ -35,7 +37,7 @@ describe("sync block display", () => {
       metrics: { transactionCount: 12 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 1h ago · 12 transactions");
+    } as never)).toBe("Обновлено 1 ч назад · 12 операций");
 
     expect(formatBlockSummary({
       block: "audience",
@@ -51,7 +53,7 @@ describe("sync block display", () => {
       metrics: { subscriberCount: 5 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 30m ago · 5 subscribers");
+    } as never)).toBe("Обновлено 30 мин назад · 5 подписчиков");
 
     expect(formatBlockSummary({
       block: "messages_live",
@@ -66,7 +68,7 @@ describe("sync block display", () => {
       metrics: { visibleConversationCount: 4 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 2h ago · 4 conversations");
+    } as never)).toBe("Обновлено 2 ч назад · 4 чата");
   });
 
   it("renders stalled blocks with the point they got stuck at", () => {
@@ -96,7 +98,7 @@ describe("sync block display", () => {
       metrics: { subscriberCount: 1 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Sync stalled at 1/697 subscribers");
+    } as never)).toBe("Загрузка остановилась на 1 из 697 подписчиков");
   });
 
   it("renders backfilling blocks without the active syncing copy", () => {
@@ -120,7 +122,7 @@ describe("sync block display", () => {
       metrics: { subscriberCount: 1 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Backfilling… 1/697 subscribers");
+    } as never)).toBe("Догружает историю… 1 из 697 подписчиков");
   });
 
   it("describes supporting financial enrichment separately from current transactions", () => {
@@ -148,7 +150,7 @@ describe("sync block display", () => {
       metrics: { transactionCount: 120 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Transactions are current; top spenders enrichment is catching up");
+    } as never)).toBe("Операции актуальны; рейтинг топ фанов догружается");
   });
 
   it("hides completed progress bars once a block is up to date", () => {
@@ -198,7 +200,7 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Finalizing conversation refresh…");
+    expect(formatBlockSummary(block)).toBe("Завершает обновление списка чатов…");
     expect(shouldShowBlockProgressBar(block)).toBe(false);
   });
 
@@ -225,7 +227,7 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Syncing… 200/5,000 conversations");
+    expect(formatBlockSummary(block)).toBe("Обновляется… 200 из 5\u00a0000 чатов");
     expect(shouldShowBlockProgressBar(block)).toBe(true);
   });
 
@@ -259,8 +261,8 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Waiting for transactions to finish first");
-    expect(getDependencyWaitDetail(block)).toBe("transactions");
+    expect(formatBlockSummary(block)).toBe("Ждёт, пока закончится «операции»");
+    expect(getDependencyWaitDetail(block)).toBe("операции");
   });
 
   it("collapses long dependency waits into a generic summary", () => {
@@ -293,9 +295,9 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Waiting for prerequisite syncs to finish first");
+    expect(formatBlockSummary(block)).toBe("Ждёт, пока закончатся другие потоки");
     expect(getDependencyWaitDetail(block)).toBe(
-      "connection, top spenders, transactions, subscribers, followers",
+      "подключение, топ фанов, операции, подписчики, фолловеры",
     );
     expect(needsVisualAttention(block)).toBe(false);
   });
@@ -317,7 +319,7 @@ describe("sync block display", () => {
         waitingFor: null,
       },
       error: null,
-    } as never)).toBe("Delayed · queue stalled");
+    } as never)).toBe("Отстаёт · очередь стоит");
 
     expect(formatSubstreamStateLabel({
       stream: "followers_reconcile",
@@ -335,7 +337,7 @@ describe("sync block display", () => {
         waitingFor: ["followers"],
       },
       error: null,
-    } as never)).toBe("Waiting · followers");
+    } as never)).toBe("Ждёт · фолловеры");
   });
 
   it("describes expected queue waits without warning copy", () => {
@@ -369,8 +371,8 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Up to date · waiting for message history to finish");
-    expect(getBlockStateLabel(block)).toBe("Up to date");
+    expect(formatBlockSummary(block)).toBe("Актуально · ждёт, пока закончится «сообщения»");
+    expect(getBlockStateLabel(block)).toBe("Актуально");
     expect(getBlockTone(block).text).toBe("text-green");
     expect(shouldShowBlockProgressBar(block)).toBe(false);
 
@@ -392,7 +394,7 @@ describe("sync block display", () => {
       error: null,
     } as never;
 
-    expect(formatSubstreamStateLabel(substream)).toBe("Up to date · waiting for message history");
+    expect(formatSubstreamStateLabel(substream)).toBe("Актуально · ждёт «сообщения»");
     expect(getSubstreamTone(substream).text).toBe("text-green");
   });
 
@@ -427,8 +429,8 @@ describe("sync block display", () => {
       substreams: [],
     } as never;
 
-    expect(formatBlockSummary(block)).toBe("Queued — message history is running");
-    expect(getBlockStateLabel(block)).toBe("Queued");
+    expect(formatBlockSummary(block)).toBe("В очереди — сейчас идёт «сообщения»");
+    expect(getBlockStateLabel(block)).toBe("В очереди");
     expect(getBlockTone(block).text).toBe("text-text-secondary");
     expect(shouldShowBlockProgressBar(block)).toBe(true);
   });
@@ -464,6 +466,46 @@ describe("sync block display", () => {
 
     expect(shouldShowBlockProgressBar(block)).toBe(false);
     expect(getBlockProgressFillClass(block)).toBe("bg-accent");
-    expect(formatBlockProgressCaption(block)).toBe("conversation sync · 203 / 3,669 conversations");
+    expect(formatBlockProgressCaption(block)).toBe("список чатов · 203 из 3\u00a0669 чатов");
+  });
+
+  // The OnlyFans screen opens a page with one status line, in the words the
+  // Fansly screen uses where they mean the same.
+  it("says what an OnlyFans page is now, in one line", () => {
+    const block = (key: string, overrides: Record<string, unknown> = {}) => ({
+      block: key, state: "up_to_date", succeededAt: "2026-03-24T11:55:00.000Z", progress: null, progressStream: null,
+      progressRole: null, error: null, statusReason: null, primaryFresh: true, needsAttention: false, nextDueAt: null,
+      nextRetryAt: null, intervals: [], metrics: {}, connectionStatus: null, substreams: [], ...overrides,
+    });
+    const page = (overrides: Record<string, Record<string, unknown>> = {}, diagnosis: unknown = null) => ({
+      pageId: 1, pageLabel: "lora-of", platform: "onlyfans", modelSlug: "lora", modelName: "Lora", username: "lora",
+      displayName: null, diagnosis,
+      blocks: Object.fromEntries(["connection", "financials", "audience", "messages_live", "messages_history"]
+        .map((key) => [key, block(key, overrides[key])])),
+    }) as never;
+    expect(syncPageStatus(page())).toMatchObject({ kind: "working", label: "Работает", tone: "success" });
+    expect(syncPageStatus(page({ financials: { state: "paused" } })))
+      .toMatchObject({ kind: "working", reason: "на паузе: блок «Финансы»" });
+    const paused = { state: "paused" };
+    expect(syncPageStatus(page({ connection: paused, financials: paused, audience: paused, messages_live: paused, messages_history: paused })))
+      .toMatchObject({ kind: "paused", label: "На паузе" });
+    expect(syncPageStatus(page({ messages_history: { state: "delayed", needsAttention: true } })))
+      .toMatchObject({ kind: "lagging", label: "Отстаёт", reason: "блок «Сообщения»" });
+    expect(syncPageStatus(page({ audience: { state: "failed" } }))).toMatchObject({ kind: "failed", label: "Ошибка", tone: "danger" });
+    expect(syncPageStatus(page({ connection: {
+      state: "failed", needsAttention: true, statusReason: { code: "credentials_invalid", summary: "Session expired", waitingFor: null },
+    } }))).toMatchObject({ kind: "login", label: "Нужен вход" });
+    expect(syncPageStatus(page({ financials: { state: "syncing" } }))).toMatchObject({ kind: "syncing", label: "Обновляется" });
+    const fresh = { state: "not_started", succeededAt: null };
+    expect(syncPageStatus(page({ connection: fresh, financials: fresh, audience: fresh, messages_live: fresh, messages_history: fresh })))
+      .toMatchObject({ kind: "not_started", label: "Ещё не запускался" });
+  });
+
+  it("an honest reset confirmation: what it forgets, and what else of the block goes", () => {
+    expect(syncResetConfirmText("audience", "lora-of")).toBe(
+      "Hub забудет, докуда загружен блок «Аудитория» страницы lora-of, и загрузит его заново с самого начала. Уже загруженные данные остаются.",
+    );
+    expect(syncResetConfirmText("financials", "lora-of")).toContain("Рейтинг топ фанов страницы будет собран заново.");
+    expect(syncResetConfirmText("messages_history", "lora-of")).toContain("Сейчас сервер отклоняет этот сброс");
   });
 });

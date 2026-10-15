@@ -12,6 +12,7 @@ import type {
   OfapiCollectionSettings,
   OfapiCollectionSnapshot,
 } from "@/api/adminOfapiCollection";
+import { formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { categoryLabel, modeLabel, noScheduledReadsState } from "./collectionCopyRu.js";
 
@@ -365,9 +366,15 @@ export function fmtCredits(value: number) {
 
 export { ruPlural };
 
-/** All timestamps on the screen are UTC (budgets reset at UTC midnight). */
+/** An instant as the server wrote it, in UTC — for tooltips and the journal. */
 export function utcDateTime(iso: string) {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+/** An instant in the viewer's local time. Only the budget day is UTC, and
+ *  the screen says so once. */
+export function localDateTime(iso: string) {
+  return formatDateTime(iso, { yearUnlessCurrent: true });
 }
 
 export function relativeAge(iso: string | null, now: Date = new Date()): string {
@@ -420,13 +427,13 @@ export function describeSettings(settings: OfapiCollectionSettings) {
   }
   if (settings.mode !== "off") {
     parts.push(`лимит ${fmtCredits(settings.dailyCreditLimit)} кр/сутки`);
-    if (settings.includeDetails) parts.push("с detail-запросами");
+    if (settings.includeDetails) parts.push("с подробными запросами");
   }
   return parts.join(" · ");
 }
 
 export function scopeLabel(pageId: number | null, pages: Array<{ id: number; label: string }>) {
-  if (pageId === null) return "все OF-страницы (общая настройка)";
+  if (pageId === null) return "все страницы (общая настройка)";
   return pages.find((page) => page.id === pageId)?.label ?? `страница #${pageId}`;
 }
 
@@ -673,7 +680,8 @@ export function jobsFor(
 }
 
 // ---------------------------------------------------------------------------
-// Policy pill (single "what is in force" indicator)
+// Policy pill (single "what is in force" indicator). The revision number is
+// the journal's business; the pill says when and by whom, in local time.
 
 export type ApplyPhase =
   | { kind: "idle" }
@@ -693,27 +701,27 @@ export function describePolicyPill(input: {
 }): PolicyPill {
   const { snapshot, applyPhase } = input;
   if (input.conflict) {
-    return { tone: "accent", text: "изменено в другом окне" };
+    return { tone: "accent", text: "Изменено в другом окне" };
   }
   if (applyPhase.kind === "error") {
-    return { tone: "danger", text: `v${snapshot.revision} · ошибка применения` };
+    return { tone: "danger", text: "Не удалось применить" };
   }
   if (applyPhase.kind === "saved" && snapshot.revision < applyPhase.revision) {
-    return { tone: "warning", text: `v${applyPhase.revision} · применяется · ждём readback` };
+    return { tone: "warning", text: "Применяем — ждём подтверждения сервера" };
   }
   if (snapshot.backgroundPaused) {
-    return { tone: "danger", text: `Политика v${snapshot.revision} · глобальная пауза` };
+    return { tone: "danger", text: "Фоновый сбор на паузе" };
   }
   const latest = snapshot.audit.find((row) => row.revision === snapshot.revision);
   if (snapshot.revision === 0) {
-    return { tone: "muted", text: "Политика v0 · baseline, изменений не было" };
+    return { tone: "muted", text: "Настройки ещё не менялись" };
   }
   if (!latest) {
-    return { tone: "ok", text: `Политика v${snapshot.revision} · применена` };
+    return { tone: "ok", text: "Изменения применены" };
   }
   return {
     tone: "ok",
-    text: `Политика v${snapshot.revision} · применена ${utcDateTime(latest.createdAt)}${input.actorName ? ` · ${input.actorName}` : ""}`,
+    text: `Изменено ${localDateTime(latest.createdAt)}${input.actorName ? ` · ${input.actorName}` : ""}`,
   };
 }
 

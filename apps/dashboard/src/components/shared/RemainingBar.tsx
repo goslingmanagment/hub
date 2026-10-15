@@ -1,21 +1,19 @@
-import { Badge } from "./Badge.js";
-
 interface RemainingBarProps {
   days: number;
   maxDays?: number;
 }
 
 function barColor(days: number): string {
-  if (days <= 1) return "#d14343";
-  if (days <= 3) return "#b5711a";
-  if (days <= 7) return "#f59e0b";
-  return "#4ead6b";
+  if (days <= 1) return "var(--color-danger)";
+  if (days <= 3) return "var(--color-warning-dark)";
+  if (days <= 7) return "var(--color-warning)";
+  return "var(--color-green)";
 }
 
 function textClass(days: number): string {
   if (days <= 1) return "text-danger";
   if (days <= 3) return "text-warning-dark";
-  if (days <= 7) return "text-warning";
+  if (days <= 7) return "text-warning-dark";
   return "text-green";
 }
 
@@ -35,9 +33,7 @@ export function RemainingBar({ days, maxDays = 30 }: RemainingBarProps) {
         />
       </div>
 
-      <span className={`text-[12px] tabular-nums ${textClass(days)}`}>{days}d</span>
-
-      {days <= 7 && <Badge variant="exp">EXP</Badge>}
+      <span className={`text-[13px] tabular-nums ${textClass(days)}`}>{days} дн</span>
     </div>
   );
 }

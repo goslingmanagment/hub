@@ -1,18 +1,56 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
-import { LogOut, ChevronDown, Menu } from "lucide-react";
+import { LogOut, ChevronDown, ChevronRight, Menu, Monitor, Moon, Search, Sun, type LucideIcon } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
-import { buildPageRoute, decodeRouteSegment, isSafeInAppPath, resolveFanLabelFromState, resolveFanProfileBackTarget } from "@/lib/navigation";
+import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@/lib/theme";
+import { buildPageRoute, decodeRouteSegment, isSafeInAppPath, resolveFanLabelFromState, resolveFanProfileBackTarget, resolveSettingsTab } from "@/lib/navigation";
+import { SETTINGS_GROUPS, SYSTEM_GROUPS, SYSTEM_HOME, TABBED_SECTIONS, currentSideLink, isSystemPath, sectionOfPath } from "@/lib/sections";
 import { useDashboardShell } from "./DashboardShellContext.js";
+
+const THEME_ICONS: Record<ThemePreference, LucideIcon> = { system: Monitor, light: Sun, dark: Moon };
+
+function ThemeSwitch() {
+  const { theme, setTheme } = useThemeStore();
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 border-b border-border-light px-3 py-2">
+      <span className="text-sm text-text-secondary" id="theme-switch-label">Тема</span>
+      <div className="segmented" role="group" aria-labelledby="theme-switch-label">
+        {THEME_OPTIONS.map((option) => {
+          const Icon = THEME_ICONS[option.value];
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className="segment px-2"
+              aria-pressed={theme === option.value}
+              aria-label={option.label}
+              title={option.label}
+              onClick={() => setTheme(option.value)}
+            >
+              <Icon size={15} aria-hidden="true" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  owner: "Владелец",
+  team_lead: "Тимлид",
+  chatter: "Чаттер",
+};
 
 interface TopbarProps {
   onOpenNavigation?: () => void;
+  onOpenPalette?: (() => void) | undefined;
   user: { username: string; role: string };
 }
 
-export function Topbar({ user, onOpenNavigation }: TopbarProps) {
+export function Topbar({ user, onOpenNavigation, onOpenPalette }: TopbarProps) {
   const location = useLocation();
   const logout = useLogout();
   const { pages } = useDashboardShell();
@@ -22,7 +60,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
 
   const backTo = new URLSearchParams(location.search).get("backTo") ?? resolveFanProfileBackTarget(location.state, undefined);
   const overviewBack = backTo && isSafeInAppPath(backTo) && (backTo === "/" || backTo.startsWith("/?")) ? backTo : "/";
-  const breadcrumbs = buildBreadcrumbs(location.pathname, pages, location.state).map((crumb) => crumb.href === "/" ? { ...crumb, href: overviewBack } : crumb);
+  const breadcrumbs = buildBreadcrumbs(location.pathname, location.search, pages, location.state).map((crumb) => crumb.href === "/" ? { ...crumb, href: overviewBack } : crumb);
   const periodSelectorMode = getPeriodSelectorMode(location.pathname);
 
   useEffect(() => {
@@ -57,26 +95,27 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   }
 
   return (
-    <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-3 md:px-7 fixed top-0 left-0 md:left-[248px] right-0 z-10">
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-        <button type="button" className="shrink-0 rounded p-1 md:hidden" aria-label="Открыть навигацию" onClick={onOpenNavigation}><Menu size={20} /></button>
+    <div className="fixed top-0 right-0 left-0 z-10 flex h-[56px] items-center justify-between gap-3 border-b border-border bg-card/95 px-3 backdrop-blur md:left-[248px] md:px-8">
+      <nav aria-label="Где вы находитесь" className="flex min-w-0 items-center gap-1.5 overflow-hidden text-sm">
+        <button type="button" className="btn btn-ghost btn-icon mr-1 shrink-0 md:hidden" aria-label="Открыть навигацию" onClick={onOpenNavigation}><Menu size={20} /></button>
         {breadcrumbs.map((crumb, i) => (
-          <span key={i} className="flex min-w-0 items-center gap-2">
-            {i > 0 && <span className="text-text-muted/60 text-sm">›</span>}
-            {crumb.href ? (
-              <Link to={crumb.href} className="truncate text-sm text-text-muted hover:text-text-secondary cursor-pointer">
+          <span key={i} className="flex min-w-0 items-center gap-1.5">
+            {i > 0 && <ChevronRight size={14} className="shrink-0 text-text-muted" aria-hidden="true" />}
+            {crumb.href && i < breadcrumbs.length - 1 ? (
+              <Link to={crumb.href} className="truncate text-text-secondary hover:text-text-primary">
                 {crumb.label}
               </Link>
             ) : (
-              <span className="truncate text-base font-semibold text-text-primary tracking-[-0.02em]">
+              <span className="truncate font-semibold text-text-primary" aria-current="page">
                 {crumb.label}
               </span>
             )}
           </span>
         ))}
-      </div>
+      </nav>
 
       <div className="flex shrink-0 items-center gap-2">
+        {onOpenPalette && <button type="button" className="btn btn-ghost btn-icon md:hidden" aria-label="Поиск" onClick={onOpenPalette}><Search size={19} /></button>}
         {periodSelectorMode && <PeriodSelector mode={periodSelectorMode} />}
 
         <div className="relative ml-1 sm:ml-2.5" ref={menuRef}>
@@ -86,9 +125,9 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
             onClick={() => setMenuOpen((open) => !open)}
             aria-label="Меню аккаунта"
             aria-expanded={menuOpen}
-            className="flex items-center gap-2 rounded-full border border-border bg-card px-2 py-1 hover:bg-hover-alt"
+            className="flex items-center gap-1.5 rounded-full p-1 hover:bg-hover"
           >
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-hover flex items-center justify-center text-[13px] text-text-secondary font-semibold">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-soft text-[13px] font-semibold text-accent">
               {user.username.charAt(0).toUpperCase()}
             </div>
             <ChevronDown size={14} className="hidden sm:block text-text-muted" />
@@ -98,13 +137,14 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
             <div className="absolute right-0 mt-2 w-56 rounded-xl border border-border bg-card p-2 shadow-lg">
               <div className="px-3 py-2 border-b border-border-light">
                 <div className="text-sm font-semibold text-text-primary">{user.username}</div>
-                <div className="text-xs capitalize text-text-muted">{user.role.replaceAll("_", " ")}</div>
+                <div className="text-xs text-text-muted">{ROLE_LABELS[user.role] ?? user.role}</div>
               </div>
+              <ThemeSwitch />
               <button
                 type="button"
                 onClick={handleLogout}
                 disabled={logout.isPending}
-                className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary disabled:opacity-50"
+                className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary disabled:opacity-50"
               >
                 <LogOut size={14} />
                 {logout.isPending ? "Выходим…" : "Выйти"}
@@ -118,12 +158,12 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   );
 }
 
-function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | "topSupporters" | null {
+function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | null {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length === 0) return "dashboard";
   if (parts[0] === "pages" && parts[1]) {
     if (!parts[2]) return "dashboard"; // PageDetail
-    if (parts[2] === "top-supporters") return "topSupporters";
+    if (parts[2] === "top-supporters") return "spender";
     if (parts[2] === "spender-autolists") return "spender";
     if (parts[2] === "fans" && parts[3] && parts[4]) return "spender";
     return null;
@@ -132,85 +172,69 @@ function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | "top
   return null;
 }
 
+const PAGE_SECTION_LABELS: Record<string, string> = {
+  subscribers: "Подписчики",
+  followers: "Фолловеры",
+  "top-supporters": "Топ фанов",
+  "deleted-fans": "Удалённые фаны",
+  "spender-autolists": "Список спендеров",
+  "browser-login": "Вход в браузер",
+};
+
 function buildBreadcrumbs(
   pathname: string,
+  search: string,
   pages: Array<{ label: string }>,
   locationState?: unknown,
 ): { label: string; href?: string }[] {
   const parts = pathname.split("/").filter(Boolean);
 
-  if (parts.length === 0) return [{ label: "Overview" }];
+  if (parts.length === 0) return [{ label: "Обзор" }];
+  if (parts[0] === "transactions") return [{ label: "Обзор", href: "/" }, { label: "Операции" }];
+  if (parts[0] === "analytics") return [{ label: "Аналитика" }];
 
-  if (parts[0] === "ofapi-actions") return [{ label: "Управление OnlyFans" }];
-  if (parts[0] === "ofapi-marketing") return [{ label: "Ссылки OnlyFans" }];
-
-  if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
-  if (parts[0] === "browser-profiles") {
-    return [{ label: "Overview", href: "/" }, { label: "Settings", href: "/settings?tab=pages" }, { label: "Подключение страницы" }];
+  const sectionId = sectionOfPath(pathname);
+  if (sectionId) {
+    const section = TABBED_SECTIONS[sectionId];
+    const tab = section.tabs.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+    const home = section.tabs[0]?.to;
+    return [home ? { label: section.title, href: home } : { label: section.title }, ...(tab ? [{ label: tab.label }] : [])];
   }
 
-  if (parts[0] === "usage") return [{ label: "Overview", href: "/" }, { label: "Usage" }];
-  if (parts[0] === "transactions") return [{ label: "Overview", href: "/" }, { label: "Операции" }];
-
-  if (parts[0] === "ofapi-credits") return [{ label: "Overview", href: "/" }, { label: "OFAPI Credits" }];
-
-  if (parts[0] === "held-sends") return [{ label: "Overview", href: "/" }, { label: "Зависшие отправки" }];
-
-  if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
-
-  if (parts[0] === "agent-hydration") {
-    return [{ label: "Overview", href: "/" }, { label: "Hydration requests" }];
-  }
-
-  if (parts[0] === "dev") {
-    const devLabels: Record<string, string> = {
-      log: "Log",
-      "sync-status": "Sync Status",
-      queue: "Queue",
-      "db-stats": "DB Stats",
-      incidents: "Incidents",
-      "client-health": "Client health",
-    };
-    const crumbs: { label: string; href?: string }[] = [
-      { label: "Overview", href: "/" },
-      parts[1] ? { label: "Dev", href: "/dev/log" } : { label: "Dev" },
-    ];
-    if (parts[1] && devLabels[parts[1]]) {
-      crumbs.push({ label: devLabels[parts[1]] });
+  if (parts[0] === "settings" || parts[0] === "dev") {
+    const system = isSystemPath(pathname, search);
+    const groups = system ? SYSTEM_GROUPS : SETTINGS_GROUPS;
+    const root = system ? { label: "Система", href: SYSTEM_HOME } : { label: "Настройки", href: "/settings" };
+    if (pathname === "/dev/sync-status") {
+      return [root, { label: "Журнал", href: "/dev/log" }, { label: "Запуск синка" }];
     }
-    return crumbs;
+    const tab = parts[0] === "settings" ? resolveSettingsTab(new URLSearchParams(search).get("tab")) : null;
+    const link = currentSideLink(groups, pathname, tab === "models" || tab === "credentials" ? "?tab=pages" : search);
+    return link ? [root, { label: link.label }] : [root];
+  }
+
+  if (parts[0] === "browser-profiles") {
+    return [
+      { label: "Настройки", href: "/settings" },
+      { label: "Модели и страницы", href: "/settings?tab=pages" },
+      { label: parts[1] === "new" ? "Новый браузер страницы" : "Подключение страницы" },
+    ];
   }
 
   if (parts[0] === "pages" && parts[1]) {
     const pageLabel = decodeRouteSegment(parts[1]);
     const page = pages.find((item) => item.label === pageLabel);
     const pageTitle = page?.label ?? pageLabel;
-    const crumbs: { label: string; href?: string }[] = [
-      { label: "Overview", href: "/" },
-      parts.length > 2
-        ? { label: pageTitle, href: buildPageRoute(pageLabel) }
-        : { label: pageTitle },
-    ];
-
-    if (parts[2] === "subscribers") {
-      crumbs.push({ label: "Subscribers" });
-    } else if (parts[2] === "followers") {
-      crumbs.push({ label: "Followers" });
-    } else if (parts[2] === "top-supporters") {
-      crumbs.push({ label: "Top Supporters" });
-    } else if (parts[2] === "deleted-fans") {
-      crumbs.push({ label: "Deleted Fans" });
-    } else if (parts[2] === "spender-autolists") {
-      crumbs.push({ label: "Auto List" });
-    } else if (parts[2] === "browser-login") {
-      crumbs.push({ label: "Вход в браузер" });
-    } else if (parts[2] === "fans" && parts[3] && parts[4]) {
-      const fanLabel = resolveFanLabelFromState(locationState) ?? decodeRouteSegment(parts[4]);
-      crumbs.push({ label: fanLabel });
+    if (parts.length === 2) return [{ label: pageTitle }];
+    const crumbs: { label: string; href?: string }[] = [{ label: pageTitle, href: buildPageRoute(pageLabel) }];
+    if (parts[2] === "fans" && parts[3] && parts[4]) {
+      crumbs.push({ label: resolveFanLabelFromState(locationState) ?? "Профиль фана" });
+    } else {
+      const section = parts[2] ? PAGE_SECTION_LABELS[parts[2]] : undefined;
+      if (section) crumbs.push({ label: section });
     }
-
     return crumbs;
   }
 
-  return [{ label: "Overview" }];
+  return [{ label: "Обзор" }];
 }

@@ -2,15 +2,23 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
 import { ArrowUpRight, ChevronDown, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 import { useAdminConfig } from "@/api/adminConfig";
+import { FilterButtons } from "@/components/shared/FilterButtons";
+import { formatDateTime } from "@/lib/format";
 import { HUB_FEATURES, featureSettingsHref, type FeatureAdvice } from "./featureCatalog.js";
-import { featureState } from "./featuresView.js";
-import "./features.css";
+import { featureState, featureStatus, type FeatureStatusTone } from "./featuresView.js";
 
-const adviceCopy: Record<FeatureAdvice, { label: string; short: string }> = {
-  keep: { label: "Оставить", short: "Основа работы" },
-  optional: { label: "По потребности", short: "Проверить пользу" },
-  diagnostic: { label: "На время проверки", short: "Завершить проверку" },
-  off: { label: "Держать выключенным", short: "Убрать лишнее" },
+/** The short form of the catalog's advice; it leads the expanded explanation. */
+const adviceShort: Record<FeatureAdvice, string> = {
+  keep: "Основа работы",
+  optional: "Проверить пользу",
+  diagnostic: "Завершить проверку",
+  off: "Убрать лишнее",
+};
+const toneClass: Record<FeatureStatusTone, string> = {
+  success: "badge badge-success",
+  warning: "badge badge-warning",
+  info: "badge badge-info",
+  neutral: "badge",
 };
 const filters = [
   { id: "review", label: "С чего начать" },
@@ -40,61 +48,94 @@ export function FeaturesTab() {
     }
     setParams(next, { replace });
   }
-  if (!query.data) return <div className="feature-empty" role={query.isError ? "alert" : "status"}>
-    <p>{query.isLoading ? "Загружаем возможности Hub…" : "Не удалось получить настройки Hub."}</p>
-    {query.isError && <button className="settings-button" type="button" onClick={() => void query.refetch()}>Повторить</button>}
+  if (!query.data) return <div className="card empty" role={query.isError ? "alert" : "status"}>
+    <p className="empty-title">{query.isLoading ? "Загружаем возможности Hub…" : "Не удалось получить настройки Hub."}</p>
+    {query.isError && <div className="empty-actions"><button className="btn" type="button" onClick={() => void query.refetch()}>Повторить</button></div>}
   </div>;
 
-  const observedAt = new Date(query.data.generatedAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
-  return <div className="features-workspace">
-    <div className="feature-intro">
-      <div>
-        <h3>Что оставить в Hub</h3>
-        <p>Начните с дополнений. У каждой возможности — польза, последствия отключения и её настройки.</p>
-      </div>
-      <Link className="settings-button" to="/settings?tab=configuration"><SlidersHorizontal size={16} aria-hidden="true" />Все параметры</Link>
+  const observedAt = formatDateTime(query.data.generatedAt, { yearUnlessCurrent: true });
+  const counts: Record<(typeof filters)[number]["id"], number> = {
+    review: needsDecision.length,
+    all: rows.length,
+    keep: rows.filter(({ feature }) => feature.advice === "keep").length,
+    attention: needsAttention.length,
+  };
+  return <div className="space-y-4">
+    {query.isError && <div className="notice notice-warning" role="alert">Обновление не удалось. Показан сохранённый срез от {observedAt}; текущее состояние может отличаться.</div>}
+
+    <div className="flex flex-wrap items-center gap-3">
+      <FilterButtons
+        filters={filters
+          .filter((entry) => entry.id !== "attention" || needsAttention.length > 0 || filter === "attention")
+          .map((entry) => ({ key: entry.id, label: entry.label, count: counts[entry.id] }))}
+        active={search.trim() ? "" : filter}
+        onChange={(key) => change({ view: key, q: null, feature: null })}
+      />
+      <label className="relative w-full min-w-0 sm:ml-auto sm:w-64">
+        <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+        <input type="search" aria-label="Поиск возможностей" placeholder="Найти возможность" className="input pl-9" value={search} onChange={(event) => change({ q: event.target.value, feature: null }, true)} />
+      </label>
     </div>
 
-    {query.isError && <div className="feature-alert" role="alert">Обновление не удалось. Показан сохранённый срез от {observedAt} МСК; текущее состояние может отличаться.</div>}
-    {!query.isError && needsAttention.length > 0 && <div className="feature-alert" role="status">Ожидают применения или проверки: {needsAttention.length}. <button type="button" className="font-semibold underline" onClick={() => change({ view: "attention", q: null, feature: null })}>Показать</button></div>}
-
-    <p className="feature-basis">Рекомендации по назначению и связям функций; бизнес-эффект ещё не измерен. «Включено» означает разрешение в настройках.</p>
-
-    <div className="feature-toolbar">
-      <div className="feature-filters" role="group" aria-label="Показать возможности">
-        {filters.filter((entry) => entry.id !== "attention" || needsAttention.length > 0 || filter === "attention").map((entry) => <button key={entry.id} type="button" aria-pressed={filter === entry.id && !search.trim()} onClick={() => change({ view: entry.id, q: null, feature: null })}>{entry.label}<span className="ml-2 tabular-nums opacity-65">{entry.id === "review" ? needsDecision.length : entry.id === "keep" ? rows.filter(({ feature }) => feature.advice === "keep").length : entry.id === "attention" ? needsAttention.length : rows.length}</span></button>)}
-      </div>
-      <label className="feature-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Поиск возможностей" placeholder="Найти возможность" value={search} onChange={(event) => change({ q: event.target.value, feature: null }, true)} /></label>
-    </div>
-
-    <div className="feature-list">
+    <div className="card overflow-hidden">
       {visible.map(({ feature, state }) => {
         const isExpanded = expanded === feature.id;
-        return <article className={`feature-row${isExpanded ? " feature-row-open" : ""}`} key={feature.id}>
-          <button className="feature-summary" type="button" aria-expanded={isExpanded} aria-controls={`feature-detail-${feature.id}`} onClick={() => change({ feature: isExpanded ? null : feature.id })}>
-            <span className="feature-name"><span className="feature-group">{feature.group}</span><strong>{feature.title}</strong><span>{feature.summary}</span></span>
-            <span className="feature-decision"><span className={`feature-advice feature-advice-${feature.advice}`}>{adviceCopy[feature.advice].label}</span><span className={`feature-state feature-state-${state.kind}`}>{state.label}</span></span>
-            <ChevronDown size={18} aria-hidden="true" className="feature-chevron" />
+        const status = featureStatus(feature, state);
+        return <article className="border-t border-border-light first:border-t-0" key={feature.id}>
+          <button className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-5 py-4 text-left hover:bg-hover-alt sm:grid-cols-[minmax(0,1fr)_220px_auto] ${isExpanded ? "bg-hover-alt" : ""}`} type="button" aria-expanded={isExpanded} aria-controls={`feature-detail-${feature.id}`} onClick={() => change({ feature: isExpanded ? null : feature.id })}>
+            <span className="min-w-0">
+              <span className="block font-medium text-text-primary">{feature.title}</span>
+              <span className="mt-0.5 block text-[13px] text-text-secondary">{feature.summary}</span>
+            </span>
+            <span className="col-start-1 row-start-2 flex flex-wrap items-center gap-x-2 gap-y-1 sm:col-start-2 sm:row-start-1 sm:flex-col sm:items-start">
+              <span className={toneClass[status.tone]}>{status.label}</span>
+              <span className="text-xs text-text-muted">{status.note}</span>
+            </span>
+            <ChevronDown size={18} aria-hidden="true" className={`col-start-2 row-span-2 row-start-1 text-text-muted transition-transform sm:col-start-3 sm:row-span-1 ${isExpanded ? "rotate-180" : ""}`} />
           </button>
-          {isExpanded && <div id={`feature-detail-${feature.id}`} className="feature-detail">
-            <div className="feature-reason"><h4>{adviceCopy[feature.advice].short}</h4><p>{feature.reason}</p></div>
-            <div className="feature-detail-grid">
-              <div><h4>Если отключить</h4><p>{feature.consequence}</p></div>
-              <div><h4>Как принять решение</h4><p>{feature.check}</p></div>
+          {isExpanded && <div id={`feature-detail-${feature.id}`} className="space-y-4 bg-hover-alt px-5 pb-5 pt-1 text-sm">
+            <p className="max-w-3xl text-text-secondary"><strong className="font-semibold text-text-primary">{adviceShort[feature.advice]}.</strong> {feature.reason}</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="field-label">Если отключить</p>
+                <p className="text-text-secondary">{feature.consequence}</p>
+              </div>
+              <div>
+                <p className="field-label">Как решить</p>
+                <p className="text-text-secondary">{feature.check}</p>
+                {feature.limitation && <p className="field-hint">{feature.limitation}</p>}
+              </div>
             </div>
-            <div className="feature-current"><strong>{state.label}</strong><span>{state.detail}</span></div>
-            {feature.limitation && <p className="mb-4 text-sm">{feature.limitation}</p>}
-            <div className="feature-actions">
-              <Link className="settings-button settings-button-primary" to={featureSettingsHref(feature, params)}>Настроить<ArrowUpRight size={16} aria-hidden="true" /></Link>
-              <Link className="feature-evidence-link" to={feature.evidenceHref}>{feature.evidenceLabel}<ArrowUpRight size={14} aria-hidden="true" /></Link>
+            <p className="text-[13px] text-text-secondary">Сейчас: <strong className="font-medium text-text-primary">{state.label}</strong> — {state.detail}</p>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <Link className="btn btn-primary btn-sm" to={featureSettingsHref(feature, params)}>Настроить<ArrowUpRight size={15} aria-hidden="true" /></Link>
+              <Link className="link inline-flex items-center gap-1 text-sm" to={feature.evidenceHref}>{feature.evidenceLabel}<ArrowUpRight size={14} aria-hidden="true" /></Link>
             </div>
           </div>}
         </article>;
       })}
-      {visible.length === 0 && <div className="feature-empty"><strong>{search ? "Ничего не найдено" : "В этом списке ничего нет"}</strong><p>{search ? "Попробуйте название функции или площадки." : "Остальные возможности доступны в полном списке."}</p><button type="button" className="settings-button" onClick={() => change({ view: "all", q: null, feature: null })}>Показать все</button></div>}
+      {visible.length === 0 && <div className="empty">
+        <p className="empty-title">{search ? "Ничего не найдено" : "В этом списке ничего нет"}</p>
+        <p className="empty-text">{search ? "Попробуйте название функции или площадки." : "Остальные возможности доступны в полном списке."}</p>
+        <div className="empty-actions"><button type="button" className="btn btn-sm" onClick={() => change({ view: "all", q: null, feature: null })}>Показать все</button></div>
+      </div>}
     </div>
 
-    <div className="feature-footer"><span>Срез настроек: {observedAt} МСК · Выключено: {rows.filter(({ state }) => state.kind === "off").length}</span><button type="button" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={14} aria-hidden="true" className={query.isFetching ? "animate-spin" : ""} />{query.isFetching ? "Обновляем…" : "Обновить"}</button></div>
-    <p className="feature-basis">Расписания и платные запросы OnlyFans дополнительно регулируются в разделе <Link to="/settings?tab=collection">«Сбор OnlyFans»</Link>. Настройки персон, команды и страниц остаются в своих разделах.</p>
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-text-muted">
+      <span>Настройки на {observedAt} · выключено: {rows.filter(({ state }) => state.kind === "off").length}</span>
+      <div className="flex flex-wrap items-center gap-1">
+        <button type="button" className="btn btn-ghost btn-sm" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={14} aria-hidden="true" className={query.isFetching ? "animate-spin" : ""} />{query.isFetching ? "Обновляем…" : "Обновить"}</button>
+        <Link className="btn btn-ghost btn-sm" to="/settings?tab=configuration"><SlidersHorizontal size={14} aria-hidden="true" />Все параметры</Link>
+      </div>
+    </div>
+
+    <details className="help">
+      <summary>Как это работает</summary>
+      <div className="help-body">
+        <p>Рекомендации по назначению и связям функций; бизнес-эффект ещё не измерен. «Включено» означает разрешение в настройках, а не то, что функция используется.</p>
+        <p>У каждой строки один статус: текущее состояние или, если оно расходится с рекомендацией, что стоит сделать. Под ним — рекомендация или текущее состояние.</p>
+        <p>Расписания и платные запросы OnlyFans дополнительно регулируются в разделе <Link className="link" to="/settings?tab=collection">«Сбор OnlyFans»</Link>. Настройки персон, команды и страниц остаются в своих разделах.</p>
+      </div>
+    </details>
   </div>;
 }
