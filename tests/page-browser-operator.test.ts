@@ -179,7 +179,7 @@ async function setUp(
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
+  engine.send(hello({ protocol: { majors: [1], minor: 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
@@ -1688,11 +1688,20 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => closed.outcome === "failed", 3000, "the closed write");
     expect(s.operator.site.failures).toBe(2);
     // The engine's identity read: the session is confirmed, the engine admits.
+    const pendingSocket = s.operator.sockets.admit("wsv3.fansly.com", 443);
+    if (typeof pendingSocket === "string") throw new Error(pendingSocket);
+    const socketAsk = await s.engine.waitFor("wsAdmit");
     admitting = true;
     s.model.hubBody = account("123456789");
     s.engine.send(identity(9501, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9501, 10_000);
     await until(() => s.operator.page.step === "ready", START_MS, "the page ready");
+    expect(await s.engine.waitFor("admissionCancel", (m) => m.id === socketAsk.connectionId, 1_000)).toMatchObject({ kind: "ws", reason: "document_replaced" });
+    expect(await pendingSocket.granted).toBeNull();
+    // The old document's late grant cannot open a tunnel in the new one.
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: socketAsk.connectionId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9599 });
+    expect(await s.engine.waitFor("wsDone", (m) => m.attemptId === 9599)).toMatchObject({ sent: false });
+    expect(s.operator.sockets.busy).toBe(false);
     // Loaded anew, once: the navigation of step 8, and this one.
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
     await expect.poll(() => stateNotes(s), SETTLED).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");

@@ -702,13 +702,24 @@ export class Operator {
     this.sockets = new SiteSockets({
       cdp: this.cdp,
       buffer: this.buffer,
-      link: { send: (message) => this.rpc.send(message) },
+      link: { send: (message) => this.rpc.send(message), epoch: () => this.rpc.epoch },
       // The site's socket is not of the manual login (spec §2.4).
       notAdmitting: () => (this.#mode === "manual_login" ? "the manual login: no socket of the site" : this.admissionsOpen() ? null : this.#noAdmissionWhy()),
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
       socketHost: (host) => this.#classify(host) === "ws",
+      workTab: () => this.control.workTab,
+      isWorkDocumentTarget: (sessionId) => {
+        const targets = this.control.targets;
+        let target = targets.find((t) => t.sessionId === sessionId);
+        if (target === undefined || (target.type !== "page" && target.type !== "iframe")) return false;
+        while (target !== undefined) {
+          if (target.sessionId === this.control.workTab?.sessionId) return true;
+          target = targets.find((t) => t.sessionId === target?.parentSessionId);
+        }
+        return false;
+      },
       cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
       alarm: (kind, detail) => this.#alarm(kind, detail),
@@ -1223,8 +1234,9 @@ export class Operator {
         return;
       }
       this.#siteReloaded = true;
+      const socketsRevoked = this.sockets.documentChanging();
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
-      this.#log("site.reload", { failed });
+      this.#log("site.reload", { failed, socketsRevoked });
       this.page.back("exit_open", `the session is confirmed; ${failed} API request${failed === 1 ? "" : "s"} of the site failed before it, none sent: the work tab is loaded anew, once`);
       // From here it is a load like step 8's: confirmed again when it is in.
       this.#reloadPending = false;

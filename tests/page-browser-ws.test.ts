@@ -137,6 +137,8 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
     authorizationBytes: () => (session.token === null ? null : authorizationBytes(session.token)),
     targetType: (sessionId) => (sessionId === null ? null : (types.get(sessionId) ?? null)),
     socketHost: (host) => classifyFanslyHost(host) === "ws",
+    workTab: () => ({ sessionId: "S1", mainFrameId: "F1" }),
+    isWorkDocumentTarget: (sessionId) => sessionId === "S1" || sessionId === "S2",
     cutTunnel: (connectionId, reason) => egress.cutSocket(connectionId, reason),
     journal: (line) => journal.push(line),
     alarm: (kind, detail) => alarms.push({ kind, detail }),
@@ -231,9 +233,9 @@ describe("admission before connection (condition №3; amendment 8)", () => {
       requestedMono: expect.any(Number),
       waitDeadlineMono: expect.any(Number),
     });
-    // 60 s from the CONNECT.
-    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeGreaterThan(59_000);
-    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeLessThanOrEqual(60_000);
+    // Stage-1 rule 31: 2.5 s from CONNECT, even if HTTP may wait 60 s.
+    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeGreaterThan(1_500);
+    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeLessThanOrEqual(2_500);
     await new Promise((resolve) => setTimeout(resolve, 150));
     // Waiting: no SOCKS5 connection, no byte to the socket host.
     expect(w.socks.connects).toEqual([]);
@@ -1764,6 +1766,101 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
       { kind: "gap", reason: "chrome_restart", fromSeq: last.seq, fromWall: last.atWall },
       { kind: "ws.close", connectionId },
     ]);
+  });
+});
+
+describe("document boundaries of socket admissions (lilly-1)", () => {
+  it("a grant whose durable write outlives the CONNECT deadline never opens a tunnel", async () => {
+    let release: () => void = () => undefined;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const w = await world({ timings: { admitWaitMs: 100 }, buffer: (inner) => {
+      const port = failingCommits(inner, { failing: false, full: false, pending: [] });
+      return { ...port, changeConnection: (change) => {
+        const kept = port.changeConnection(change);
+        if ("admitted" in change && kept.ok) return { ok: true, durable: kept.durable.then(async (durable) => { await delayed; return durable; }) };
+        return kept;
+      } };
+    } });
+    try {
+      const connecting = siteOpens(w, "slow-durable");
+      await until(() => w.link.of("wsAdmit").length === 1);
+      w.answer({ admit: true, attemptId: 9005 });
+      expect((await connecting).status).toBe(403);
+      await until(() => w.outcome(9005) !== null);
+      expect(w.outcome(9005)).toMatchObject({ sent: false });
+      expect(w.socks.connects).toEqual([]);
+    } finally { release(); }
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(w.socks.connects).toEqual([]);
+  });
+
+  it("a replayed navigation does not retire the current document or its waiting admission", async () => {
+    const w = await world();
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    const connecting = siteOpens(w, "live");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "old-loader" } }, "S1", true);
+    expect(w.link.of("admissionCancel")).toEqual([]);
+    expect(w.sockets.pending).toBe(1);
+    w.answer({ admit: false });
+    expect((await connecting).status).toBe(403);
+  });
+
+  it("revokes a pending CONNECT on navigation; its late grant and handshake cannot steal the new document's tunnel", async () => {
+    const w = await world();
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    const old = siteOpens(w, "old");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    const id = String(w.link.of("wsAdmit")[0]!.connectionId);
+    w.sockets.documentChanging();
+    // Intent to navigate is not proof of destruction. With no current
+    // tunnel and all new admissions closed, the old intent cannot send or
+    // be bound to the next document's connection.
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "old" }, "S1");
+    expect(w.stops).toEqual([]);
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
+    expect((await old).status).toBe(403);
+    expect(w.link.of("admissionCancel")).toContainEqual({ type: "admissionCancel", kind: "ws", id, reason: "document_replaced" });
+    w.answer({ admit: true, attemptId: 9001 }, id);
+    await until(() => w.outcome(9001) !== null);
+    expect(w.outcome(9001)).toMatchObject({ sent: false });
+    const live = await opened(w, "new", 9002);
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "old" }, "S1");
+    expect(w.stops).toEqual([]);
+    expect(w.sockets.openConnections).toBe(1);
+    live.destroy();
+  });
+
+  it("navigation is not evidence that a worker ended: its old handshake cannot bind to a new tunnel", async () => {
+    const w = await world();
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "worker-old", url: URL_WS }, "W1");
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
+    const connecting = siteOpens(w, "new");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 9003 });
+    const tunnel = await connecting;
+    await tunnel.tls();
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "worker-old" }, "W1");
+    expect(w.stops).toContainEqual(expect.objectContaining({ reason: "ws_unaccounted" }));
+    expect(w.events().some((event) => event.kind === "ws.open")).toBe(false);
+    tunnel.destroy();
+  });
+
+  it("a document boundary cannot account for an opened unbound tunnel by guessing its CDP socket", async () => {
+    const w = await world({ timings: { accountWaitMs: 100 } });
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    const connecting = siteOpens(w, "unbound");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 9004, deadlineMono: monoMs() + 150 });
+    const tunnel = await connecting;
+    await tunnel.tls();
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
+    expect(w.sockets.busy).toBe(true);
+    tunnel.socket.resume();
+    await until(() => w.stops.length === 1, 2_000, "the unchanged fail-closed accounting bound");
+    expect(w.stops[0]).toMatchObject({ reason: "ws_unaccounted" });
+    tunnel.destroy();
   });
 });
 

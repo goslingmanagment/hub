@@ -1186,8 +1186,8 @@ export class FakeCdpPort implements CdpPort {
     this.heldAcks.add(method);
   }
 
-  emit(method: string, params: Record<string, unknown>, sessionId?: string): void {
-    const event: CdpEvent = { method, params, seq: ++this.#seq, replayed: false };
+  emit(method: string, params: Record<string, unknown>, sessionId?: string, replayed = false): void {
+    const event: CdpEvent = { method, params, seq: ++this.#seq, replayed };
     if (sessionId !== undefined) event.sessionId = sessionId;
     for (const handler of this.#listeners.get(method) ?? []) handler(event);
   }
@@ -1719,6 +1719,7 @@ export class SocketTunnelClient {
 /** The engine's end, as the site socket's path sees it: what the operator
  *  sent it. */
 export class FakeSocketLink {
+  epoch(): number { return 1; }
   readonly messages: Array<Record<string, unknown>> = [];
 
   send(message: object): boolean {
