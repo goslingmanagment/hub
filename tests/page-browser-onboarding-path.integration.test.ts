@@ -142,7 +142,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
     const chrome = new FakeChrome();
     await chrome.boot();
     await chrome.shutdown();
-    cleanups.push(() => chrome.shutdown());
+    cleanups.push(() => chrome.close());
     const model = new BrowserModel(chrome);
     model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: ACCOUNT, username: "ari2", displayName: "Ari Two", createdAt: 0, followCount: 3, subscriberCount: 5 } } }));
     const site = new FakeLoginSite(model, { login: LOGIN_MARKER, password: PASSWORD_MARKER, code: CODE_MARKER, token: SITE_TOKEN, clientId: SITE_CLIENT, readsOnLoad: true });

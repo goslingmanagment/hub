@@ -74,7 +74,7 @@ async function setUp(options: { sessionShowWaitMs?: number } = {}): Promise<SetU
   const chrome = new FakeChrome();
   await chrome.boot();
   await chrome.shutdown();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const model = new BrowserModel(chrome);
   const navigate = chrome.handlers.get("Page.navigate")!;
   const s: Partial<SetUp> & { loaders: string[]; beforeNavigate: SetUp["beforeNavigate"]; afterNavigate: SetUp["afterNavigate"] } = { loaders: [], beforeNavigate: null, afterNavigate: null };

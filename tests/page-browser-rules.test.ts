@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
 import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, isLocalHost, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
@@ -12,6 +12,11 @@ import { dnrBlocks, dnrMatches, dnrRule, type DnrRequest } from "./helpers/page-
 // closes leaves the browser, without the operator too. The model of Chrome's
 // matching is tests/helpers/page-browser-dnr.ts; the real Chrome is asked on
 // the stand (apps/page-browser/stand/rules-check.mjs).
+
+/** A hang guard, not a speed check: the identity tests compare the two
+ *  layers over tens of thousands of requests — about 6 s of CPU on an idle
+ *  machine, past the default 30 s on a loaded CI one (the owner's PC). */
+vi.setConfig({ testTimeout: 120_000 });
 
 const rules = buildRules();
 const level = (priority: number) => rules.filter((rule) => rule.priority === priority);

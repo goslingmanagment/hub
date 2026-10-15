@@ -203,7 +203,7 @@ async function rig(): Promise<Rig> {
   const chrome = new FakeChrome();
   await chrome.boot();
   await chrome.shutdown();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const model = new BrowserModel(chrome);
   const site = new FakeLoginSite(model, { login: LOGIN_MARKER, password: PASSWORD_MARKER, code: CODE_MARKER, token: SITE_TOKEN, clientId: SITE_CLIENT });
   const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);

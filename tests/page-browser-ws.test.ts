@@ -1248,7 +1248,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     setLogSink(() => undefined);
     const chrome = new FakeChrome();
     await chrome.boot();
-    cleanups.push(() => chrome.shutdown());
+    cleanups.push(() => chrome.close());
     const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
     await holder.start();
     cleanups.push(() => holder.stop());

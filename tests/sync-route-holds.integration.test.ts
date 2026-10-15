@@ -5,6 +5,7 @@ import type { FanslyWireId, FanslyWireOutcome } from "@agency_hub_core/fansly";
 
 import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { ROUTE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { intervalMsOf, routePolicyVersion, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { explainSyncWork, readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
@@ -226,10 +227,16 @@ describe("a route's 429 through the actor", () => {
     expect(entry).toMatchObject({
       ladderStep: 1, effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups"), last429AttemptId: refusal!.id, revision: 1,
     });
-    // The ladder's first step, stretched by the actor's jitter draw (0.5 → 10 %).
+    // The ladder's first step, stretched by the actor's jitter draw (0.5 → 10 %),
+    // from the moment the actor took the answer, on its own clock (the
+    // entry's last429At) — after the refusal went out. Not from completed_at:
+    // the database stamps it (clock_timestamp(), another clock) inside the
+    // capture's transaction, after the actor read its clock — under load
+    // tens of ms after (a 2 s hold measured 1946 ms from it).
     const holdUntil = new Date(entry.holdUntil!).getTime();
-    expect(holdUntil - refusal!.completed_at!.getTime()).toBeGreaterThanOrEqual(5_500 - 50);
-    expect(holdUntil - refusal!.completed_at!.getTime()).toBeLessThan(5_500 + 1_000);
+    const answeredAt = new Date(entry.last429At!).getTime();
+    expect(holdUntil - answeredAt).toBe(5_500);
+    expect(answeredAt).toBeGreaterThanOrEqual(refusal!.sent_at.getTime());
     // Nothing on the route before the hold ended; then the halved rate (6/min, here 500 ms).
     expect(after[0]!.sent_at.getTime()).toBeGreaterThanOrEqual(holdUntil);
     for (let i = 1; i < after.length; i += 1) {
@@ -259,8 +266,9 @@ describe("a route's 429 through the actor", () => {
     expect(second).toMatchObject({ http_status: 429, retry_after_ms: 1_000 });
     const next = (await entryOf(pageId, "messaging.groups"))!;
     expect(next).toMatchObject({ ladderStep: 2, effectivePerMin: 3, last429AttemptId: second.id, revision: 2 });
-    expect(new Date(next.holdUntil!).getTime() - second.completed_at!.getTime()).toBeGreaterThanOrEqual(1_000 - 50);
-    expect(new Date(next.holdUntil!).getTime() - second.completed_at!.getTime()).toBeLessThan(2_000);
+    // The Retry-After to the letter, from the moment the actor took the answer.
+    expect(new Date(next.holdUntil!).getTime() - new Date(next.last429At!).getTime()).toBe(1_000);
+    expect(new Date(next.last429At!).getTime()).toBeGreaterThanOrEqual(second.sent_at.getTime());
     // Before the second 429: the restarted actor at 6/min; after it, 3/min.
     expect(all[4]!.sent_at.getTime() - all[3]!.sent_at.getTime()).toBeGreaterThanOrEqual(scaled(6, SCALE));
     expect(all[5]!.sent_at.getTime()).toBeGreaterThanOrEqual(new Date(next.holdUntil!).getTime());
@@ -279,9 +287,15 @@ describe("a route's 429 through the actor", () => {
     const reg = createEngineRegistry([busySpec("money.read", "transactions.page"), busySpec("polls.read", "polls")]);
     for (const key of ["money.read", "polls.read"]) await demand(pageId, reg, key);
     let money = 0;
+    // When the 503 was answered, on the actor's clock (a 5xx keeps no
+    // last429At): the actor takes it, and its hold's start, after this.
+    let answeredAt = Number.NaN;
     const transport = new ScriptedLiveTransport();
     transport.respond = (req) => {
-      if (req.spec === "transactions.page" && (money += 1) === 1) return refused(503, "2");
+      if (req.spec === "transactions.page" && (money += 1) === 1) {
+        answeredAt = Date.now();
+        return refused(503, "2");
+      }
       return answerOf(req.spec);
     };
     const alerts = new RecordingAlerts();
@@ -291,11 +305,20 @@ describe("a route's 429 through the actor", () => {
     expect(refusal).toMatchObject({ http_status: 503, error_class: "rate_limit", retry_after_ms: 2_000 });
     const entry = (await entryOf(pageId, "transactions.page"))!;
     expect(entry).toMatchObject({ ladderStep: 0, effectivePerMin: null, last429AttemptId: null, last429At: null, revision: 1 });
+    // The Retry-After to the letter from the answer, on the actor's clock
+    // (completed_at is the database's: see the 429's test) — no ladder step,
+    // whose first is 5 s.
     const holdUntil = new Date(entry.holdUntil!).getTime();
-    expect(holdUntil - refusal!.completed_at!.getTime()).toBeGreaterThanOrEqual(2_000 - 50);
+    expect(holdUntil - answeredAt).toBeGreaterThanOrEqual(2_000);
+    expect(holdUntil - answeredAt).toBeLessThan(ROUTE_HOLD_LADDER_MS[0]!);
     expect(next!.sent_at.getTime()).toBeGreaterThanOrEqual(holdUntil);
+    // The page went on while its route was held: polls went out after the
+    // refusal and before the hold's end. The actor sends one request of a
+    // page at a time, so none was in flight from before the refusal, and a
+    // page hold would have left none. How many fit in the 2 s is the
+    // machine's speed, not the rule (3 on a loaded one where 4 was asked).
     expect((await sends(pageId)).filter((attempt) => attempt.operation === "polls"
-      && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(3);
+      && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(0);
     expect(pageHoldKindOf((await getSyncPage(db(), pageId))!)).toBeNull();
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["transactions.page", "unavailable"]]);

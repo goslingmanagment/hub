@@ -73,39 +73,58 @@ export class FakeChrome {
   /** Accepting connections (the browser runs). */
   running = false;
 
+  /** The browser starts. Its DevTools port is taken at the first boot and
+   *  kept until `close()`: a Chrome that goes and comes back has the same
+   *  port, and nothing else can take it meanwhile. A port given back and
+   *  listened on again was another socket's on a loaded CI machine
+   *  (EADDRINUSE: that Chrome never came up, the start timed out). */
   async boot(): Promise<void> {
     if (this.running) return;
-    const server = createHttpServer((req, res) => {
-      if (req.url === "/json/version") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ Browser: "Chrome/155.0.8059.39", webSocketDebuggerUrl: `ws://127.0.0.1:${this.port}/devtools/browser/fake` }));
-        return;
-      }
-      res.writeHead(404).end();
-    });
-    server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      const ws = acceptWebSocket(req, socket, head, 64 * 1024 * 1024);
-      if (!ws) return;
-      this.connections.push(ws);
-      ws.onText = (payload) => void this.#onCommand(ws, JSON.parse(payload.toString("utf8")) as CdpCommand);
-    });
-    await new Promise<void>((resolve) => server.listen(this.port, "127.0.0.1", () => resolve()));
-    const address = server.address();
-    if (typeof address === "object" && address) this.port = address.port;
-    this.#server = server;
+    if (this.#server === null) {
+      const server = createHttpServer((req, res) => {
+        if (req.url === "/json/version") {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ Browser: "Chrome/155.0.8059.39", webSocketDebuggerUrl: `ws://127.0.0.1:${this.port}/devtools/browser/fake` }));
+          return;
+        }
+        res.writeHead(404).end();
+      });
+      // A Chrome that is down takes no connection: each is cut at once.
+      server.on("connection", (socket: Socket) => {
+        if (!this.running) socket.destroy();
+      });
+      server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+        if (!this.running) {
+          socket.destroy();
+          return;
+        }
+        const ws = acceptWebSocket(req, socket, head, 64 * 1024 * 1024);
+        if (!ws) return;
+        this.connections.push(ws);
+        ws.onText = (payload) => void this.#onCommand(ws, JSON.parse(payload.toString("utf8")) as CdpCommand);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const address = server.address();
+      if (typeof address === "object" && address) this.port = address.port;
+      this.#server = server;
+    }
     this.running = true;
   }
 
-  /** The browser goes: its connections close, its port refuses. */
+  /** The browser goes: its connections close, and its port takes none
+   *  until it boots again. */
   async shutdown(): Promise<void> {
     this.running = false;
     for (const ws of this.connections.splice(0)) ws.destroy("chrome gone");
+    this.#server?.closeAllConnections();
+  }
+
+  /** The test's end: the browser goes and its port is given back. */
+  async close(): Promise<void> {
+    await this.shutdown();
     const server = this.#server;
     this.#server = null;
-    if (server) {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
   get live(): WsConnection | undefined {

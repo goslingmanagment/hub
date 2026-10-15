@@ -250,6 +250,18 @@ describe("notifications dashboard", () => {
     appContext.config.serviceEgressProxyUsername = null;
     appContext.config.serviceEgressProxyPassword = null;
     appContext.config.telegramProxyPageLabel = null;
+    // The attempt counts only made after the credentials were saved: Hub's
+    // clock stamped the save (credentials_updated_at), the database's stamps
+    // the attempt (created_at). The test container's clock runs behind Hub's
+    // under load (Docker Desktop's VM, ~10 ms measured), so a test sent
+    // within those ms read as made before the save ("untested"). As the owner
+    // does, the test is sent after the save — on the clock that stamps it.
+    await vi.waitFor(async () => {
+      const saved = await testDb!.pool.query<{ after: boolean }>(
+        "select clock_timestamp() > credentials_updated_at as after from telegram_settings where id = 1",
+      );
+      expect(saved.rows[0]?.after).toBe(true);
+    }, { timeout: 10_000, interval: 5 });
 
     const testResponse = await server.inject({
       method: "POST",

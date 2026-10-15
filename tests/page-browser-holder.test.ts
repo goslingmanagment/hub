@@ -39,7 +39,7 @@ async function setUp(maxBytes = 128 * 1024 * 1024, options: { stopGraceMs?: numb
   cleanups.push(temp.remove);
   const chrome = new FakeChrome();
   await chrome.boot();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const exits: number[] = [];
   let kills = 0;
   const holder = new Holder({
@@ -60,7 +60,10 @@ async function setUp(maxBytes = 128 * 1024 * 1024, options: { stopGraceMs?: numb
   });
   await holder.start();
   cleanups.push(() => holder.close());
-  await until(() => chrome.live !== undefined, 3000, "the holder's DevTools connection");
+  // The holder's side of the connection, not Chrome's: Chrome accepts it
+  // before the holder has read the handshake's answer, and a holder without
+  // CDP up has no Chrome to stop (a loaded machine stopped it in between).
+  await until(() => holder.stats.cdpUp, 3000, "the holder's DevTools connection");
   return { chrome, holder, exits, socketPath: join(temp.dir, "holder.sock"), kills: () => kills };
 }
 
