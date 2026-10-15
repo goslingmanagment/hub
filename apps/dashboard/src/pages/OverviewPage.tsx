@@ -5,23 +5,43 @@ import {
   useNavigationType,
   useSearchParams,
 } from "react-router";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronRight,
+  RefreshCw,
+} from "lucide-react";
+import type { OverviewRevenueResponse } from "@agency_hub_core/contracts";
 import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
-import { usePeriodStore } from "@/stores/periodStore";
+import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { isAlertState } from "@/components/shared/syncUxDisplay";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import {
+  isAlertState,
+  syncStateLabel,
+  syncTone,
+} from "@/components/shared/syncUxDisplay";
 import { buildPageRoute } from "@/lib/navigation";
-import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import {
   buildRevenueTransactionsRoute,
   overviewSearch,
   parseOverviewState,
   PERIOD_LABELS,
   type OverviewState,
+  type PageSort,
 } from "@/lib/overviewNavigation";
 import {
+  biggestMovers,
+  describeMixedRevenueWindows,
+  describeWindows,
+  formatPct,
   groupRevenue,
   money,
-  describeWindows,
+  plural,
+  signedMoney,
   type PageRow,
 } from "./overview/presentation.js";
 import { AudienceLink, PageSources } from "./overview/PageSources.js";
@@ -58,6 +78,129 @@ function readPosition(search: string): { y: number; focus: string } | null {
   return null;
 }
 
+/** Three states of one header: the server's order, then decline first, then
+ *  growth first. Pages are sorted inside their model. */
+const NEXT_SORT: Record<PageSort, PageSort> = {
+  source: "decline",
+  decline: "growth",
+  growth: "source",
+};
+const SORT_TEXT: Record<PageSort, string> = {
+  source: "без сортировки",
+  decline: "сначала падение",
+  growth: "сначала рост",
+};
+
+function Delta({ mills, pct }: { mills: number; pct: number | null | undefined }) {
+  return (
+    <>
+      <span className={mills < 0 ? "text-danger" : mills > 0 ? "text-green" : ""}>
+        {signedMoney(mills)}
+      </span>
+      {pct != null && ` (${formatPct(pct)})`}
+    </>
+  );
+}
+
+/** KPI tiles built only from the report: no figure here is computed in the
+ *  browser beyond picking the pages with the largest server-side change. */
+function OverviewKpis({
+  report,
+  period,
+}: {
+  report: OverviewRevenueResponse;
+  period: PeriodOption;
+}) {
+  const comparison = report.comparison;
+  const movers = biggestMovers(report.pages);
+  const noComparison =
+    period === "all" ? "Для «Всё время» сравнения нет" : "Сравнение недоступно";
+  return (
+    <div className="stat-grid max-sm:grid-cols-2">
+      <div className="stat">
+        <p className="stat-label">
+          Доход · {PERIOD_LABELS[period].toLowerCase()}
+        </p>
+        <p className="stat-value">{money(report.netEarningsMills)}</p>
+        <p className="stat-meta">
+          {comparison ? (
+            <>
+              <Delta mills={comparison.deltaNetMills} pct={comparison.deltaPct} />{" "}
+              к прошлому периоду
+            </>
+          ) : (
+            noComparison
+          )}
+        </p>
+      </div>
+      <div className="stat">
+        <p className="stat-label">Прошлый период</p>
+        <p className="stat-value">{money(comparison?.netEarningsMills)}</p>
+        {comparison && (
+          <p className="stat-meta">
+            {describeWindows(report.platformWindows, true)}
+          </p>
+        )}
+      </div>
+      <div className="stat">
+        <p className="stat-label">Больше всего выросла</p>
+        <p className="stat-value text-lg leading-8 max-sm:text-base">
+          {movers.growth?.pageLabel ?? "—"}
+        </p>
+        {(movers.growth || comparison) && (
+          <p className="stat-meta">
+            {movers.growth ? (
+              <Delta
+                mills={movers.growth.deltaNetMills!}
+                pct={movers.growth.deltaPct}
+              />
+            ) : (
+              "Роста нет"
+            )}
+          </p>
+        )}
+      </div>
+      <div className="stat">
+        <p className="stat-label">Больше всего снизилась</p>
+        <p className="stat-value text-lg leading-8 max-sm:text-base">
+          {movers.decline?.pageLabel ?? "—"}
+        </p>
+        {(movers.decline || comparison) && (
+          <p className="stat-meta">
+            {movers.decline ? (
+              <Delta
+                mills={movers.decline.deltaNetMills!}
+                pct={movers.decline.deltaPct}
+              />
+            ) : (
+              "Снижения нет"
+            )}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoadingReport() {
+  return (
+    <div role="status" className="space-y-6">
+      <span className="sr-only">Загружаем доход…</span>
+      <div className="stat-grid max-sm:grid-cols-2" aria-hidden="true">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div key={index} className="stat">
+            <div className="h-3 w-24 animate-pulse rounded bg-hover" />
+            <div className="mt-3 h-7 w-28 animate-pulse rounded bg-hover" />
+          </div>
+        ))}
+      </div>
+      <div aria-hidden="true">
+        <TableSkeleton rows={4} columns={5} />
+      </div>
+    </div>
+  );
+}
+
 export function OverviewPage() {
   const [search, setSearch] = useSearchParams();
   const location = useLocation();
@@ -76,11 +219,11 @@ export function OverviewPage() {
   const lastFocus = useRef("");
   const restored = useRef<string | null>(null);
   const entryKey = useRef(location.key);
-  const chartRequested = useRef(false);
   const ready = Boolean(report);
   const expandedPageId = report?.pages.find(
     (page) => page.pageLabel === state.row,
   )?.pageId;
+  const refreshing = Boolean(revenue.isFetching || catalog.isFetching);
 
   useEffect(() => {
     if (!report?.windowAt || state.period === "all") return;
@@ -133,16 +276,6 @@ export function OverviewPage() {
   useEffect(() => {
     if (!ready || restored.current === location.key) return;
     restored.current = location.key;
-    if (chartRequested.current) {
-      chartRequested.current = false;
-      document
-        .getElementById("overview-chart")
-        ?.scrollIntoView({ block: "start", behavior: "instant" });
-      document
-        .getElementById("overview-chart-scope")
-        ?.focus({ preventScroll: true });
-      return;
-    }
     if (navigationType !== "POP" && location.key !== entryKey.current) return;
     const saved = readPosition(location.search);
     if (saved) {
@@ -176,18 +309,6 @@ export function OverviewPage() {
   function update(patch: Partial<OverviewState>) {
     setSearch(overviewSearch({ ...state, ...patch }));
   }
-  function showChart(scope: string, scroll = true) {
-    chartRequested.current = scroll;
-    if (scope === state.chart && scroll) {
-      document
-        .getElementById("overview-chart")
-        ?.scrollIntoView({ block: "start", behavior: "instant" });
-      document
-        .getElementById("overview-chart-scope")
-        ?.focus({ preventScroll: true });
-      chartRequested.current = false;
-    } else update({ chart: scope });
-  }
   function amount(page: PageRow, previous = false) {
     const value = previous
       ? page.previousNetEarningsMills
@@ -206,58 +327,70 @@ export function OverviewPage() {
     return (
       <Link
         id={`${previous ? "previous" : "current"}-money-${page.pageId}`}
-        className="v1-audience-link"
+        className="ov-money-link"
         to={to}
-        title="Операции за это окно и итог по всему списку"
+        title="Открыть операции за этот период"
       >
         {money(value)}
       </Link>
     );
   }
 
+  const mixedWindows = report
+    ? describeMixedRevenueWindows(
+        report.platformWindows,
+        PERIOD_LABELS[state.period],
+      )
+    : null;
+
   return (
     <div
       ref={root}
-      className="v1-overview"
+      className="space-y-6"
       onFocusCapture={(event) => {
         if (event.target.id) lastFocus.current = event.target.id;
       }}
     >
-      <div className="v1-toolbar">
-        <span className="text-text-muted">По сохранённым операциям Hub</span>
-        <button
-          id="overview-refresh"
-          type="button"
-          className="v1-text-button"
-          disabled={revenue.isFetching || catalog.isFetching}
-          onClick={() =>
-            void Promise.all([revenue.refetch(), catalog.refetch()])
-          }
-        >
-          Обновить
-        </button>
-      </div>
-      <QueryNotice
-        error={catalog.isError}
-        stale={Boolean(catalog.data)}
-        retry={catalog.refetch}
+      <PageHeader
+        title="Обзор"
+        description="Доход агентства после комиссии платформ"
+        actions={
+          <button
+            id="overview-refresh"
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={refreshing}
+            onClick={() =>
+              void Promise.all([revenue.refetch(), catalog.refetch()])
+            }
+          >
+            <RefreshCw
+              size={14}
+              aria-hidden="true"
+              className={refreshing ? "animate-spin" : ""}
+            />
+            {refreshing && report ? "Обновляем…" : "Обновить"}
+          </button>
+        }
       />
       {catalog.isError && (
-        <p className="v1-zero-note">
-          Метаданные аудитории и сбора недоступны или устарели. Доход
-          загружается отдельно.
-        </p>
+        <div>
+          <p className="mb-1 text-[13px] font-medium text-text-secondary">
+            Подписчики и состояние сбора данных
+          </p>
+          <QueryNotice
+            error
+            stale={Boolean(catalog.data)}
+            retry={catalog.refetch}
+          />
+        </div>
       )}
       <QueryNotice
-        error={revenue.isError}
+        error={Boolean(revenue.isError)}
         stale={Boolean(report)}
         retry={revenue.refetch}
       />
-      {revenue.isFetching && (
-        <p className="v1-loading-note" role="status">
-          {report ? "Обновляем выбранное окно…" : "Загружаем доход…"}
-        </p>
-      )}
+      {!report && revenue.isFetching && <LoadingReport />}
       {report && report.pages.length === 0 && (
         <StatusPanel
           title="Нет страниц в доступной области"
@@ -266,250 +399,232 @@ export function OverviewPage() {
       )}
       {report && report.pages.length > 0 && (
         <>
+          <OverviewKpis report={report} period={state.period} />
           {state.row &&
             !report.pages.some((page) => page.pageLabel === state.row) && (
-              <p className="v1-query-error" role="status">
-                Страница из ссылки недоступна в текущей области.{" "}
+              <div className="notice" role="status">
+                <span className="min-w-0 flex-1">
+                  Страница из ссылки недоступна в текущей области.
+                </span>
                 <button
-                  className="v1-text-button"
+                  type="button"
+                  className="link shrink-0"
                   onClick={() => update({ row: null })}
                 >
-                  Закрыть раскрытие
+                  Закрыть
                 </button>
-              </p>
+              </div>
             )}
-          <div className="v1-table-wrap">
-            <table
-              className="v1-table"
-              aria-label={`Страницы агентства, доход за период ${PERIOD_LABELS[state.period]}`}
-            >
-              <colgroup>
-                <col className="v1-page-col" />
-                <col className="v1-money-col" />
-                <col className="v1-money-col v1-previous-col" />
-                <col className="v1-change-col" />
-                <col className="v1-access-col" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th scope="col">Страница</th>
-                  <th scope="col">
-                    Доход
-                    <br />
-                    {PERIOD_LABELS[state.period]}
-                  </th>
-                  <th scope="col" className="v1-previous">
-                    Предыдущее
-                    <br />
-                    окно
-                  </th>
-                  <th
-                    scope="col"
-                    aria-sort={
-                      state.sort === "source"
-                        ? "none"
-                        : state.sort === "decline"
-                          ? "ascending"
-                          : "descending"
-                    }
-                  >
-                    <button
-                      id="overview-sort"
-                      type="button"
-                      className="v1-sort-button"
-                      title="Сортировать страницы внутри модели по изменению суммы"
-                      onClick={() =>
-                        update({
-                          sort:
-                            state.sort === "source"
-                              ? "decline"
-                              : state.sort === "decline"
-                                ? "growth"
-                                : "source",
-                        })
+          <div className="space-y-3">
+            <div className="table-wrap">
+              <table
+                className="data-table ov-table"
+                aria-label={`Страницы агентства, доход за период ${PERIOD_LABELS[state.period]}`}
+              >
+                <thead>
+                  <tr>
+                    <th scope="col">Страница</th>
+                    <th scope="col" className="num">
+                      Доход
+                    </th>
+                    <th scope="col" className="num ov-wide">
+                      Прошлый период
+                    </th>
+                    <th
+                      scope="col"
+                      className="num"
+                      aria-sort={
+                        state.sort === "source"
+                          ? "none"
+                          : state.sort === "decline"
+                            ? "ascending"
+                            : "descending"
                       }
                     >
-                      Изменение{" "}
-                      {state.sort === "source"
-                        ? "↕"
-                        : state.sort === "decline"
-                          ? "↑"
-                          : "↓"}
-                    </button>
-                  </th>
-                  <th scope="col" className="v1-access">
-                    Подписчики
-                    <br />
-                    страницы
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map(({ model, pages }) => (
-                  <Fragment key={model.modelSlug}>
-                    <tr className="v1-group-row">
-                      <td>
-                        <span className="v1-model-name">{model.modelName}</span>
-                        <span className="v1-page-count">
-                          {model.pageCount} стр.
-                          {model.status === "retired" ? " · архив" : ""}
-                        </span>
-                      </td>
-                      <td className="v1-number">
-                        {money(model.netEarningsMills)}
-                      </td>
-                      <td className="v1-number v1-previous">
-                        {money(model.previousNetEarningsMills)}
-                      </td>
-                      <td className="v1-number">
-                        <RevenueDelta {...model} />
-                      </td>
-                      <td className="v1-number v1-access v1-audience-total">
-                        —
-                      </td>
-                    </tr>
-                    {pages.map((page) => {
-                      const expanded = state.row === page.pageLabel;
-                      const platform = page.platform ?? page.catalog?.platform;
-                      const sync = page.catalog?.syncUx;
-                      return (
-                        <Fragment key={page.pageId}>
-                          <tr
-                            className={`v1-page-row${expanded ? " v1-expanded" : ""}`}
-                          >
-                            <td>
-                              <div className="v1-page-cell">
-                                <button
-                                  id={`expand-${page.pageId}`}
-                                  type="button"
-                                  className="v1-expander"
-                                  aria-label={`${expanded ? "Свернуть" : "Раскрыть"} источники дохода ${page.pageLabel}`}
-                                  aria-expanded={expanded}
-                                  aria-controls={
-                                    expanded
-                                      ? `sources-${page.pageId}`
-                                      : undefined
-                                  }
-                                  onClick={() =>
-                                    update({
-                                      row: expanded ? null : page.pageLabel,
-                                    })
-                                  }
-                                >
-                                  <span aria-hidden="true">
-                                    {expanded ? "⌄" : "›"}
-                                  </span>
-                                </button>
-                                <span
-                                  className={`v1-sync-dot ${sync && isAlertState(sync) ? "v1-sync-attention" : sync?.state === "healthy" ? "v1-sync-ok" : "v1-sync-off"}`}
-                                  role="img"
-                                  aria-label={`Сбор: ${sync?.label ?? "неизвестно"}`}
-                                  title={`Сбор: ${sync?.label ?? "неизвестно"}. Не подтверждает полноту дохода.`}
-                                />
-                                <div className="v1-page-identity">
-                                  {page.status === "deleted" ? (
-                                    <span className="v1-page-link">
-                                      {page.pageLabel} · архив
-                                    </span>
-                                  ) : (
-                                    <Link
-                                      className="v1-page-link"
-                                      to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period: state.period })}`}
-                                      state={{ backTo }}
-                                    >
-                                      {page.pageLabel}
-                                    </Link>
-                                  )}
-                                  {platform && (
-                                    <span
-                                      className={`v1-platform v1-${platform}`}
-                                    >
-                                      {PLATFORM_DISPLAY_NAME[platform]}
-                                    </span>
-                                  )}
+                      <button
+                        id="overview-sort"
+                        type="button"
+                        className="ov-sort"
+                        data-active={state.sort !== "source"}
+                        title={`Порядок страниц внутри модели: ${SORT_TEXT[state.sort]}. Нажмите — ${SORT_TEXT[NEXT_SORT[state.sort]]}.`}
+                        onClick={() => update({ sort: NEXT_SORT[state.sort] })}
+                      >
+                        Изменение
+                        {state.sort === "source" ? (
+                          <ArrowUpDown size={13} aria-hidden="true" />
+                        ) : state.sort === "decline" ? (
+                          <ArrowUp size={13} aria-hidden="true" />
+                        ) : (
+                          <ArrowDown size={13} aria-hidden="true" />
+                        )}
+                        <span className="sr-only">, {SORT_TEXT[state.sort]}</span>
+                      </button>
+                    </th>
+                    <th scope="col" className="num ov-wide">
+                      Подписчики
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map(({ model, pages }) => (
+                    <Fragment key={model.modelSlug}>
+                      <tr className="ov-model-row">
+                        <td>
+                          <span className="ov-model-name">{model.modelName}</span>
+                          <span className="ov-model-meta">
+                            {model.pageCount}{" "}
+                            {plural(model.pageCount, "страница", "страницы", "страниц")}
+                            {model.status === "retired" ? " · в архиве" : ""}
+                          </span>
+                        </td>
+                        <td className="num">{money(model.netEarningsMills)}</td>
+                        <td className="num ov-wide">
+                          {money(model.previousNetEarningsMills)}
+                        </td>
+                        <td className="num">
+                          <RevenueDelta {...model} />
+                        </td>
+                        <td className="ov-wide" />
+                      </tr>
+                      {pages.map((page) => {
+                        const expanded = state.row === page.pageLabel;
+                        const platform = page.platform ?? page.catalog?.platform;
+                        const sync = page.catalog?.syncUx;
+                        return (
+                          <Fragment key={page.pageId}>
+                            <tr
+                              className={`ov-page-row${expanded ? " ov-expanded" : ""}`}
+                            >
+                              <td>
+                                <div className="ov-page-cell">
+                                  <button
+                                    id={`expand-${page.pageId}`}
+                                    type="button"
+                                    className="ov-expander"
+                                    aria-label={`${expanded ? "Свернуть" : "Раскрыть"} источники дохода ${page.pageLabel}`}
+                                    aria-expanded={expanded}
+                                    aria-controls={
+                                      expanded
+                                        ? `sources-${page.pageId}`
+                                        : undefined
+                                    }
+                                    onClick={() =>
+                                      update({
+                                        row: expanded ? null : page.pageLabel,
+                                      })
+                                    }
+                                  >
+                                    <ChevronRight size={16} aria-hidden="true" />
+                                  </button>
+                                  <div className="ov-page-name">
+                                    {page.status === "deleted" ? (
+                                      <>
+                                        <span className="text-text-secondary">
+                                          {page.pageLabel}
+                                        </span>
+                                        <span className="badge">Архив</span>
+                                      </>
+                                    ) : (
+                                      <Link
+                                        className="ov-page-link"
+                                        to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period: state.period })}`}
+                                        state={{ backTo }}
+                                      >
+                                        {page.pageLabel}
+                                      </Link>
+                                    )}
+                                    {platform && <PlatformBadge platform={platform} />}
+                                    {sync && isAlertState(sync) && (
+                                      <span
+                                        className={`badge ${syncTone(sync) === "error" ? "badge-danger" : "badge-warning"}`}
+                                        title={sync.detail ?? undefined}
+                                      >
+                                        {syncStateLabel(sync, platform)}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            </td>
-                            <td className="v1-number v1-money-current">
-                              {amount(page)}
-                            </td>
-                            <td className="v1-number v1-money-previous v1-previous">
-                              {amount(page, true)}
-                            </td>
-                            <td className="v1-number">
-                              <RevenueDelta {...page} />
-                            </td>
-                            <td className="v1-number v1-access">
-                              <AudienceLink page={page} backTo={backTo} />
-                            </td>
-                          </tr>
-                          {expanded && (
-                            <PageSources
-                              page={page}
-                              period={state.period}
-                              windowAt={report.windowAt}
-                              windows={report.platformWindows}
-                              backTo={backTo}
-                              showChart={showChart}
-                              isOwner={user.data?.user.role === "owner"}
-                            />
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  </Fragment>
-                ))}
-                <tr className="v1-total-row">
-                  <td className="v1-total-label">Всего по агентству</td>
-                  <td className="v1-number">
-                    {money(report.netEarningsMills)}
-                  </td>
-                  <td className="v1-number v1-previous">
-                    {money(report.comparison?.netEarningsMills)}
-                  </td>
-                  <td className="v1-number">
-                    <RevenueDelta
-                      deltaNetMills={report.comparison?.deltaNetMills}
-                      deltaPct={report.comparison?.deltaPct}
-                    />
-                  </td>
-                  <td className="v1-number v1-access v1-audience-total">—</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div className="v1-under-table">
-            <p>
-              <strong>Доход после комиссии платформ</strong>, включая pending,
-              корректировки и неклассифицированные суммы. Не прибыль агентства и
-              не сумма к выплате.
+                              </td>
+                              <td className="num">{amount(page)}</td>
+                              <td className="num muted ov-wide">
+                                {amount(page, true)}
+                              </td>
+                              <td className="num">
+                                <RevenueDelta {...page} />
+                              </td>
+                              <td className="num ov-wide">
+                                <AudienceLink page={page} backTo={backTo} />
+                              </td>
+                            </tr>
+                            {expanded && (
+                              <PageSources
+                                page={page}
+                                period={state.period}
+                                windowAt={report.windowAt}
+                                windows={report.platformWindows}
+                                backTo={backTo}
+                                isOwner={user.data?.user.role === "owner"}
+                              />
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+                  <tr className="ov-total-row">
+                    <td>Всего по агентству</td>
+                    <td className="num">{money(report.netEarningsMills)}</td>
+                    <td className="num ov-wide">
+                      {money(report.comparison?.netEarningsMills)}
+                    </td>
+                    <td className="num">
+                      <RevenueDelta
+                        deltaNetMills={report.comparison?.deltaNetMills}
+                        deltaPct={report.comparison?.deltaPct}
+                      />
+                    </td>
+                    <td className="ov-wide" />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="ov-footnote">
+              {state.period === "all"
+                ? "Вся сохранённая история"
+                : `${describeWindows(report.platformWindows)} (UTC)`}
+              . Суммы включают ожидающие подтверждения операции и корректировки.
             </p>
-            <p>
-              {describeWindows(report.platformWindows)}. Даты UTC; текущий день
-              не завершён.
-            </p>
-            <details>
-              <summary>О данных и подписках</summary>
-              <p>
-                Суммы и сравнения — по сохранённым операциям Hub, без гарантии
-                полноты захвата. Прочерк означает недоступное значение.
-                Подписчики — текущий доступ к странице, включая бесплатный и
-                пробный; число не зависит от выбранного периода. Аудитория
-                разных страниц не складывается.
-              </p>
-              <p>
-                У Fansly 7/30 дат, у OnlyFans 8/31; предыдущие окна имеют ту же
-                длину для каждой платформы. Таблица, источники и графики
-                загружаются отдельно и могут обновляться в разное время. Дата
-                окна не является временем последнего сбора.
-              </p>
+            <details className="help">
+              <summary>О данных</summary>
+              <div className="help-body">
+                <p>
+                  Это доход после комиссии платформ — не прибыль агентства и не
+                  сумма к выплате. В него входят ожидающие подтверждения
+                  операции, возвраты, чарджбэки и суммы без классификации.
+                </p>
+                <p>
+                  Суммы считаются по операциям, которые сохранил Hub; полноту
+                  сбора с платформы это не подтверждает. Даты — по UTC, текущий
+                  день ещё идёт.
+                </p>
+                <p>
+                  Прошлый период — столько же дней непосредственно перед
+                  выбранными.{mixedWindows ? ` ${mixedWindows}` : ""}
+                </p>
+                <p>
+                  Подписчики — текущий доступ к странице, включая бесплатный и
+                  пробный; от выбранного периода не зависят. Аудитория разных
+                  страниц не складывается.
+                </p>
+                <p>Прочерк означает, что значение недоступно.</p>
+              </div>
             </details>
           </div>
           <RevenueCharts
             report={report}
             period={state.period}
             scope={state.chart}
-            selectScope={(scope, scroll = false) => showChart(scope, scroll)}
+            selectScope={(scope) => update({ chart: scope })}
           />
         </>
       )}

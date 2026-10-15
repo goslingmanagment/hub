@@ -290,9 +290,11 @@ describe("dashboard sync product surfaces", () => {
 
   it("shows independent chart errors with retries while keeping the table", () => {
     queryMocks.useRevenueChart.mockReturnValue({ isError: true });
+    // The per-model list (and its query) left Overview: the table's model rows carry those totals.
     queryMocks.useOverviewRevenueByModel.mockReturnValue({ isError: true });
     const html = renderWithRouter(createElement(OverviewPage));
-    expect(html.match(/Данные не удалось загрузить/g)).toHaveLength(2);
+    expect(queryMocks.useOverviewRevenueByModel).not.toHaveBeenCalled();
+    expect(html.match(/Данные не удалось загрузить/g)).toHaveLength(1);
     expect(html).toContain("Повторить");
     expect(html).toContain('href="/pages/lana?period=7d"');
   });
@@ -314,7 +316,7 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("-$20.00");
     expect(html).toContain("Без классификации");
     expect(html).toContain("$5.00");
-    expect(html).toContain("включая pending");
+    expect(html).toContain("включают ожидающие подтверждения операции и корректировки");
     expect(html).toContain("type=refund");
     expect(html).toContain("reportableOnly=true");
   });
@@ -329,8 +331,8 @@ describe("dashboard sync product surfaces", () => {
     expect(html).not.toContain((4383).toLocaleString("ru-RU"));
     expect(html).toContain("/pages/of-page/subscribers?filter=all");
     expect(html).not.toContain("/pages/of-page/followers");
-    expect(html).toContain("filter=norenew");
-    expect(html).toContain("filter=expiring7d");
+    // The expanded row keeps one way on, to the page; audience filters live on Subscribers.
+    expect(html).toContain("Открыть страницу");
   });
 
   it("retains historical earnings without linking to a deleted page or inventing old-server deltas", () => {
@@ -341,7 +343,7 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("-$200.00");
     expect(html).toContain("-100.0%");
     expect(html).toContain("retired");
-    expect(html).toContain("архив");
+    expect(html).toContain("Архив");
     expect(html).toContain("pageLabel=retired");
     expect(html).not.toContain('href="/pages/retired"');
     expect(html).toContain("нет сравнения");
