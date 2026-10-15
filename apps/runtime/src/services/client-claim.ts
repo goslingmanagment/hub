@@ -62,8 +62,8 @@ import {
  * WHICH SWITCH AN ACTION WAITS FOR (what a platform takes is the admission
  * table, client-claim-admission.ts: R20 architecture §11.1)
  * - `claim`, `renew`: the `newcomers` feature, like every flagged client route.
- * - `dispatch`: the platform's admission of its purpose and group, then the
- *   flags that admission names (OnlyFans: `previewSend`, and `newcomers` too
+ * - `dispatch`: the master switch, the platform's admission of its purpose and
+ *   group, then the flags that admission names (OnlyFans: `previewSend`, and `newcomers` too
  *   for a greeting; Fansly: a greeting only, under `newcomers` without
  *   `previewSend`), all read INSIDE the dispatch's transaction from rows held
  *   locked (loadClientSwitchesForSend), after the repeat check: a repeat of an
@@ -231,8 +231,9 @@ export function clientClaimActionInput(
 
 /**
  * The admission and the switches of one dispatch, decided inside its
- * transaction after the repeat check: the platform's admission of the send
- * (`platform_unsupported`, which no switch lifts), then each flag it names
+ * transaction after the repeat check: the master switch (`disabled` on every
+ * platform), the platform's admission of the send (`platform_unsupported`),
+ * then each flag it names
  * (OnlyFans: `previewSend`, and `newcomers` too for a greeting; Fansly:
  * `newcomers`), then the extension's version. Throws 409
  * `client_feature_disabled`; the transaction rolls back and no attempt is
@@ -245,11 +246,11 @@ async function requireDispatchSwitches(
   page: ClientBootstrapPageRow,
   admission: ClientSendAdmission,
 ): Promise<void> {
+  const switches = await loadClientSwitchesForSend(app, tx);
   if (!admission.admitted) {
-    throw new ClientFeatureDisabledError(admission.feature, admission.reason);
+    throw new ClientFeatureDisabledError(admission.feature, switches.settings.enabled ? admission.reason : "disabled");
   }
   const { flags } = admission.rule;
-  const switches = await loadClientSwitchesForSend(app, tx);
   for (const flag of flags) {
     const reason = clientFeatureRefusal(switches, page, flag);
     if (reason !== null) {

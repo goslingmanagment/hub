@@ -68,11 +68,11 @@ const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
   !(on === "onlyfans" ? FANSLY_FLAGS : ONLYFANS_FLAGS).includes(flag)
 );
 /** Every flag off on a page of platform `on`: for `reason` where the flag
- *  exists, `platform_unsupported` where it does not. */
+ *  exists, `platform_unsupported` where it does not. Master off is always `disabled`. */
 const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") => Object.fromEntries(
   CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, {
     available: false,
-    reason: flagExistsOn(flag, on) ? reason : "platform_unsupported",
+    reason: reason === "disabled" || flagExistsOn(flag, on) ? reason : "platform_unsupported",
   }]),
 );
 

@@ -12,7 +12,7 @@ import { loadClientSwitches } from "./client-switches.ts";
  * Split for the features that never split for a released client (Ping, Hi and
  * Coach drafts) is served only when the request advertises `split-all-v1` AND
  * this answers true for the page. It is the same evaluation the bootstrap and
- * every client route run: platform, master switch, the flag, the binding, what
+ * every client route run: master switch, platform, the flag, the binding, what
  * the hub serves.
  *
  * Unlike requireClientFeature it never refuses. With the flag off the

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { CLIENT_SEND_PURPOSES } from "@agency_hub_core/contracts";
+import { CLIENT_FEATURE_FLAG_NAMES, CLIENT_SEND_PURPOSES } from "@agency_hub_core/contracts";
 
 import { OPERATION_FEATURES } from "../apps/runtime/src/modules/ai/index.ts";
 import { clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
@@ -27,8 +27,12 @@ import {
 // 8b73ab9fc (before HF-2), with only the flags that existed there. HF-2 adds
 // Fansly to the requirement table, three Fansly flags and the rule that a
 // Fansly page does not take the owner's "*" row: none of it may move one
-// OnlyFans answer. The flags HF-2 adds read `platform_unsupported` on every
-// OnlyFans page (asserted apart, below the digest).
+// OnlyFans answer while the master is on. HF-15 intentionally changes the
+// master-off answers: every flag now reads `disabled`, regardless of platform.
+// The master-on subset digest was captured on 736cdb6b6389 before that fix;
+// the original mixed digest was 5b86eef5596215b316a15af1ac938a9e09c37a957ff89ee8993e8e4d5ae7e8bc.
+// The flags HF-2 adds remain `platform_unsupported` while the master is on
+// (asserted apart, below the digest).
 //
 // The inputs are literals, not the hub's live lists, so a later PR that
 // serves a new capability does not move this proof.
@@ -94,9 +98,9 @@ function pick(record: Record<string, unknown>, keys: readonly string[]): unknown
 }
 
 /** Every OnlyFans answer of the matrix, one line each, in a fixed order. */
-function onlyFansAnswers(): string[] {
+function onlyFansAnswers(masterStates: readonly boolean[]): string[] {
   const lines: string[] = [];
-  for (const enabled of [true, false]) {
+  for (const enabled of masterStates) {
     for (const features of FEATURE_ROWS) {
       for (const hostBindings of HOST_BINDINGS) {
         const settings: ClientFeatureSettings = { enabled, features, hostBindings };
@@ -128,14 +132,35 @@ function onlyFansAnswers(): string[] {
 }
 
 describe("[R20 HF-2] OnlyFans byte for byte", () => {
-  it("every admission answer about an OnlyFans page is the one hub origin/main 8b73ab9fc gave", () => {
-    const lines = onlyFansAnswers();
-    expect(lines).toHaveLength(7885);
+  it("[R20 HF-15] master-on answers retain their pre-fix digest", () => {
+    const lines = onlyFansAnswers([true]);
     const digest = createHash("sha256").update(lines.join("\n")).digest("hex");
-    expect(digest).toBe("5b86eef5596215b316a15af1ac938a9e09c37a957ff89ee8993e8e4d5ae7e8bc");
+    expect(lines).toHaveLength(3961);
+    expect(digest).toBe("f894f458261dd166488e3905f07499a3a82eced5cf0fe28211498fc1377028a1");
   });
 
-  it("what HF-2 adds to an OnlyFans answer: three keys after the older ones, each platform_unsupported", () => {
+  it("[R20 HF-15] master off: every flag on both platforms is disabled across the matrix", () => {
+    const disabled = Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, { available: false, reason: "disabled" }]));
+    const off = Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, false]));
+    for (const features of FEATURE_ROWS) {
+      for (const hostBindings of HOST_BINDINGS) {
+        const settings: ClientFeatureSettings = { enabled: false, features, hostBindings };
+        expect(clientBootstrapFlags(settings)).toEqual(off);
+        for (const source of PAGES) {
+          for (const platform of ["onlyfans", "fansly"] as const) {
+            const page = { ...source, platform };
+            for (const served of SERVED) {
+              for (const lanes of LANES) {
+                expect(evaluateClientPageFeatures({ settings, page, served, lanes })).toEqual(disabled);
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("what HF-2 adds to an OnlyFans answer: three keys after the older ones, disabled with master off and otherwise platform_unsupported", () => {
     const keys = [...FLAGS_BEFORE_HF2, ...FLAGS_OF_HF2];
     for (const enabled of [true, false]) {
       for (const features of FEATURE_ROWS) {
@@ -153,7 +178,7 @@ describe("[R20 HF-2] OnlyFans byte for byte", () => {
               // The older keys keep their places: the new ones follow them.
               expect(Object.keys(answer)).toEqual(keys);
               for (const flag of FLAGS_OF_HF2) {
-                expect(answer[flag], `${page.label} ${flag}`).toEqual({ available: false, reason: "platform_unsupported" });
+                expect(answer[flag], `${page.label} ${flag}`).toEqual({ available: false, reason: enabled ? "platform_unsupported" : "disabled" });
               }
             }
           }

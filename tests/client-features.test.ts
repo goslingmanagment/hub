@@ -78,30 +78,28 @@ describe("chat-extension feature evaluation", () => {
     }
   });
 
-  it("with the code defaults every feature is off: disabled where it exists, platform_unsupported elsewhere", () => {
+  it("with the code defaults every feature on every platform reads disabled", () => {
     const served = SERVED_CLIENT_CAPABILITIES;
     const onlyFans = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: OF_PAGE, served, lanes: VOICE_LANE });
     const fansly = evaluateClientPageFeatures({ settings: CLIENT_FEATURE_CODE_DEFAULTS, page: FANSLY_PAGE, served, lanes: VOICE_LANE });
     for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
-      const onOnlyFans = !FANSLY_ONLY_FLAGS.includes(flag);
-      const onFansly = !ONLYFANS_ONLY_FLAGS.includes(flag);
-      expect(onlyFans[flag], flag).toEqual({ available: false, reason: onOnlyFans ? "disabled" : "platform_unsupported" });
-      expect(fansly[flag], flag).toEqual({ available: false, reason: onFansly ? "disabled" : "platform_unsupported" });
+      expect(onlyFans[flag], flag).toEqual({ available: false, reason: "disabled" });
+      expect(fansly[flag], flag).toEqual({ available: false, reason: "disabled" });
     }
     expect(Object.values(clientBootstrapFlags(CLIENT_FEATURE_CODE_DEFAULTS))).toEqual(
       CLIENT_FEATURE_FLAG_NAMES.map(() => false),
     );
   });
 
-  it("checks platform, master switch, the flag, the binding, then what the hub serves", () => {
+  it("checks master switch, platform, the flag, the binding, then what the hub serves", () => {
     const on = settings({ features: { "*": { recap: true, coach: true } } });
     const evaluate = (input: ClientFeatureSettings, page: ClientFeaturePage, served: readonly string[]) =>
       evaluateClientFeature({ settings: input, page, flag: "recap", served });
 
-    // The platform first: sending from the preview does not exist on Fansly, whatever the switches say.
+    // The master first: an unsupported feature reads disabled too while it is off.
     for (const input of [on, { ...on, enabled: false }, settings({ features: { "lora-1": { previewSend: true } } })]) {
       expect(evaluateClientFeature({ settings: input, page: BOUND_FANSLY_PAGE, flag: "previewSend", served: EVERY_CAPABILITY }))
-        .toEqual({ available: false, reason: "platform_unsupported" });
+        .toEqual({ available: false, reason: input.enabled ? "platform_unsupported" : "disabled" });
     }
     expect(evaluate({ ...on, enabled: false }, OF_PAGE, EVERY_CAPABILITY)).toEqual({ available: false, reason: "disabled" });
     expect(evaluate(settings({}), OF_PAGE, EVERY_CAPABILITY)).toEqual({ available: false, reason: "flag_off" });
@@ -499,7 +497,7 @@ describe("[R20 HF-2] Fansly in the feature admission by platform", () => {
     }
     // The master switch is global: off, the page's row turns nothing on.
     const disabled = pageFeatures(settings({ enabled: false, features: { "lora-1": everyFlag } }));
-    for (const flag of FANSLY_FLAGS) {
+    for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
       expect(disabled[flag], flag).toEqual({ available: false, reason: "disabled" });
     }
   });

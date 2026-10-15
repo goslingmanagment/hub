@@ -25,7 +25,11 @@ import {
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
-import { requireClientFeature } from "../apps/runtime/src/services/client-switches.ts";
+import {
+  requireClientFeature,
+  requireClientFeatureOnLabel,
+  requireClientPage,
+} from "../apps/runtime/src/services/client-switches.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -145,11 +149,11 @@ const flagExistsOn = (flag: string, on: "onlyfans" | "fansly") => (
   !(on === "onlyfans" ? FANSLY_FLAGS : ONLYFANS_FLAGS).includes(flag)
 );
 /** Every flag off on a page of platform `on`: for `reason` where the flag
- *  exists, `platform_unsupported` where it does not. */
+ *  exists, `platform_unsupported` where it does not. Master off is always `disabled`. */
 const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") => Object.fromEntries(
   CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, {
     available: false,
-    reason: flagExistsOn(flag, on) ? reason : "platform_unsupported",
+    reason: reason === "disabled" || flagExistsOn(flag, on) ? reason : "platform_unsupported",
   }]),
 );
 
@@ -333,7 +337,9 @@ describe("owner switches of the chat extension", () => {
     const off = await bootstrapAs(chatterToken);
     expect(off.configRevision).toBeGreaterThan(bound.configRevision);
     expect(Object.values(off.flags).every((on) => on === false)).toBe(true);
-    expect(off.pages.find((page) => page.pageLabel === "lora-of")?.features).toEqual(everyFeature("disabled"));
+    for (const page of off.pages) {
+      expect(page.features, page.pageLabel).toEqual(everyFeature("disabled"));
+    }
 
     // Clearing an override restarts its config_settings version at 1; the
     // revision still grows, because it is an audit id.
@@ -512,6 +518,53 @@ describe("owner switches of the chat extension", () => {
     await patchOk([{ key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true }, "lora-of": { coach: false } }) }]);
     await expectRefused(await probe(chatterToken, "lora-of", "coach", current), "flag_off");
 
+    await trap!.assertNoOutbound();
+  });
+
+  it("[R20 HF-15] master off precedes platform support for every flag, route part and flag-less route", async (context) => {
+    if (!server) return context.skip();
+    const { principal } = await authenticateDeviceToken(app, chatterToken);
+    if (!principal) throw new Error("test token did not authenticate");
+    // Even an unreadable version, absent flags and missing bindings must not mask master off.
+    const request = { headers: {} };
+    const pages = [
+      { pageLabel: "lora-of", platform: "onlyfans", partReason: "flag_off", pageReason: "client_outdated" },
+      { pageLabel: "lora-fansly", platform: "fansly", partReason: "platform_unsupported", pageReason: "platform_unsupported" },
+    ] as const;
+    const platformsWithPreviewSend = new Set(["onlyfans"]);
+    for (const enabled of [true, false, true]) {
+      await patchOk([{ key: "chatExtensionEnabled", value: enabled }]);
+      for (const { pageLabel, platform, partReason, pageReason } of pages) {
+        const page = { id: pageIds[pageLabel]! };
+        for (const flag of CLIENT_FEATURE_FLAG_NAMES) {
+          const reason = !enabled ? "disabled" : flagExistsOn(flag, platform) ? "flag_off" : "platform_unsupported";
+          await expectRefused(await probe(chatterToken, pageLabel, flag), reason);
+          await expect(requireClientFeatureOnLabel(app, request, principal, pageLabel, flag)).rejects.toMatchObject({ reason });
+        }
+        // OnlyFans has this part of newcomers; Fansly has newcomers but no subscriber-list route.
+        await expect(requireClientFeature(app, request, principal, page, "newcomers", "audience-new-v1"))
+          .rejects.toMatchObject({ reason: enabled ? partReason : "disabled" });
+        // Both ways a flag-less route names its platform requirement.
+        for (const existsWith of ["previewSend" as const, (candidate: string) => platformsWithPreviewSend.has(candidate)]) {
+          await expect(requireClientPage(app, request, principal, page, "status", existsWith)).rejects.toMatchObject({
+            reason: enabled ? pageReason : "disabled",
+          });
+        }
+      }
+      // A missing or ungranted page keeps its refusal regardless of the master switch.
+      for (const pageLabel of ["mia-of", "ghost-of"]) {
+        await expectRefused(await probe(chatterToken, pageLabel, "drafts"), "not_granted");
+        await expect(requireClientFeatureOnLabel(app, request, principal, pageLabel, "drafts"))
+          .rejects.toMatchObject({ reason: "not_granted" });
+      }
+      if (!enabled) {
+        const bootstrap = await bootstrapAs(chatterToken);
+        const disabled = Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, { available: false, reason: "disabled" }]));
+        expect(bootstrap.pages.map((page) => page.platform)).toEqual(expect.arrayContaining(["onlyfans", "fansly"]));
+        for (const page of bootstrap.pages) expect(page.features, page.pageLabel).toEqual(disabled);
+        expect(bootstrap.flags).toEqual(Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, false])));
+      }
+    }
     await trap!.assertNoOutbound();
   });
 

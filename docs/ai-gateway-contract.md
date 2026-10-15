@@ -793,7 +793,11 @@ the same check of the page's `drafts` flag, `voice-script` of `voice` and `fan-n
 `notesFill`: three flags that exist on Fansly alone (`voice` also opens the voice-note routes the
 script feeds to the narrow token, R20 HF-4б). On OnlyFans those six, and `help-me`,
 need `chatExtensionEnabled` and an `x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or
-above `chatExtensionMinVersion`. `help-me` on Fansly is refused `platform_unsupported` (R20 HF-2: the
+above `chatExtensionMinVersion`. The master switch is checked before platform support (R20 HF-15):
+when off, every bootstrap feature of every page reads `disabled` and all top-level `flags` are
+`false`; the narrow token's AI switch also refuses with reason `disabled`. With the master on,
+the existing order stays: platform, flag, binding, served capabilities, then version (the page
+grant remains first for flagged calls). `help-me` on Fansly is then refused `platform_unsupported` (R20 HF-2: the
 extension has no Help on its Fansly site), so on Fansly every generation of the narrow token waits
 for a flag of the page. A page's flag is the page's own row of `chatExtensionFeatures`, else the
 `"*"` row on OnlyFans; a Fansly page reads its own row alone (R20 HF-2), so no Fansly generation
