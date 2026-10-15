@@ -1,9 +1,13 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, TO_CHROME, type Host } from "./helpers/page-browser-update.ts";
+
+// Each test runs the script in bash against a fake server that starts a
+// process per call: slower than a unit test, more so under a full parallel run.
+vi.setConfig({ testTimeout: 180_000 });
 
 // scripts/page-browser-update.sh — its rollbacks and its resumes (Project
 // Browser PR 18; plan §4.10, spec §10): a failure after the new image ran
@@ -26,7 +30,7 @@ const hubPage = (h: Host) => h.state().hub.pages[PAGE]!;
 const events = (h: Host) => h.journal().map((line) => line.event);
 
 /** Every write the update made, after its plan: nothing but its own. */
-const OUT_TO_IN = ["hub transport node", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"];
+const OUT_TO_IN = ["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"];
 
 describe("failures after the new image ran: a rollback — its previous image WITH its snapshot", () => {
   const rolledBack = (h: Host) => {
@@ -38,7 +42,8 @@ describe("failures after the new image ran: a rollback — its previous image WI
     expect(h.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed" });
     expect(events(h)).toEqual(expect.arrayContaining(["restored", "rolled_back"]));
   };
-  const ROLLBACK = ["docker stop", "profile restore", `page.sh up ${FROM}`, "profile-check", "hub transport browser"];
+  const ROLLBACK = ["docker stop", "profile restore", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"];
+  const RB_STOP = "hub sync browser snapshot";
 
   it("page.sh cannot bring the new image up", () => {
     host = makeHost((state) => {
@@ -46,7 +51,8 @@ describe("failures after the new image ran: a rollback — its previous image WI
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node", "docker stop", "profile snapshot", `page.sh up ${TO}`, ...ROLLBACK]);
+    // Still out from the update's own stop: no second one.
+    expect(run.ops).toEqual(["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${TO}`, ...ROLLBACK]);
     rolledBack(host);
   });
 
@@ -56,25 +62,24 @@ describe("failures after the new image ran: a rollback — its previous image WI
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", ...ROLLBACK]);
+    expect(run.ops).toEqual(["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", ...ROLLBACK]);
     expect(host.update().REASON).toBe(`host check on ${TO}: profile check failed: extension_installed_by_policy rules_enabled`);
     rolledBack(host);
   });
 
   // A stop that waiting does not cure fails at once, not at the deadline.
   for (const [why, outcome, reason] of [
-    ["the session did not survive (login required)", "login_required", "stopped: login_required"],
     ["a new login: another session fingerprint", "fingerprint", "ready, but: another session (a new login): the session did not survive"],
     ["the engine never reports it ready", "never", "not ready within 2 s (last: no state of the operator since the page was given back)"],
     ["the self-test failed", "selftest_failed", "stopped: selftest_failed"],
   ] as const) {
-    it(`engine check: ${why} — the page out again through the hand-over, then the rollback`, () => {
+    it(`engine check: ${why} — the browser stopped again by the lever, then the rollback`, () => {
       host = makeHost((state) => {
         state.behaviour.engine = { [TO_CHROME]: outcome };
       });
       const run = host.run(UPDATE);
       expect(run.status).toBe(1);
-      expect(run.ops).toEqual([...OUT_TO_IN, "hub transport node", ...ROLLBACK]);
+      expect(run.ops).toEqual([...OUT_TO_IN, RB_STOP, ...ROLLBACK]);
       expect(host.update().REASON).toBe(`engine checks on Chrome ${TO_CHROME}: ${reason}`);
       expect(events(host)).toContain("update_failed");
       rolledBack(host);
@@ -87,7 +92,7 @@ describe("failures after the new image ran: a rollback — its previous image WI
     });
     const run = host.run([...UPDATE, "--window", "4s"]);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual([...OUT_TO_IN, "hub transport node", ...ROLLBACK]);
+    expect(run.ops).toEqual([...OUT_TO_IN, RB_STOP, ...ROLLBACK]);
     expect(host.update().REASON).toContain("during the window: stopped: chrome_crashed");
     rolledBack(host);
   });
@@ -98,31 +103,51 @@ describe("failures after the new image ran: a rollback — its previous image WI
     });
     const run = host.run([...UPDATE, "--window", "2s"]);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual([...OUT_TO_IN, "hub sync check live-hour", "hub transport node", ...ROLLBACK]);
+    expect(run.ops).toEqual([...OUT_TO_IN, "hub sync check live-hour", RB_STOP, ...ROLLBACK]);
     expect(host.update().REASON).toContain("sync check live-hour over the window: exit 1");
     rolledBack(host);
   });
 
-  it("the new image's operator cannot confirm the leave: its container is removed first, then the Hub is told (--browser-stopped)", () => {
+  it("the new image's operator does not confirm the rollback's stop: nothing forced — the page is never killed, the rollback holds for the owner", () => {
     host = makeHost((state) => {
-      state.behaviour.engine = { [TO_CHROME]: "login_required" };
-      state.behaviour.leaveNeverOn = [TO];
+      state.behaviour.engine = { [TO_CHROME]: "selftest_failed" };
+      state.behaviour.stopOutcomeOn = { [TO]: "unknown" };
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual([
-      ...OUT_TO_IN,
-      "hub transport node",
-      "page.sh down",
-      "hub transport node --browser-stopped",
-      "profile restore",
-      `page.sh up ${FROM}`,
-      "profile-check",
-      "hub transport browser",
-    ]);
-    expect(host.update().RB_FORCED).toBe("1");
-    expect(events(host)).toContain("rollback_forced");
+    expect(run.ops).toEqual([...OUT_TO_IN, RB_STOP]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back" });
+    expect(host.update().HELD_WHY).toContain("a page is never killed");
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
+    expect(profile(host).restores ?? 0).toBe(0);
+    // Its operator answers after all: resume rolls it back.
+    host.edit((state) => {
+      delete state.behaviour.stopOutcomeOn;
+    });
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.ops).toEqual([RB_STOP, ...ROLLBACK]);
     rolledBack(host);
+  });
+
+  it("a halt the new browser holds for the owner's decision (Fansly signed it out): the update holds — it neither rolls back on it nor clears it", () => {
+    host = makeHost((state) => {
+      state.behaviour.engine = { [TO_CHROME]: "login_required" };
+    });
+    const run = host.run(UPDATE);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(OUT_TO_IN);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "given_back" });
+    expect(host.update().HELD_WHY).toContain("stands for the owner's decision (login_required");
+    expect(profile(host).restores ?? 0).toBe(0);
+    // The owner rolls back: the previous image with its snapshot — and the
+    // start that follows still clears no halt: it holds again for his start.
+    const back = host.run(["rollback", "--page", PAGE]);
+    expect(back.status).toBe(1);
+    expect(back.ops).toEqual([RB_STOP, "docker stop", "profile restore", `page.sh up ${FROM}`, "profile-check"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "host_checked" });
+    expect(host.update().HELD_WHY).toContain("rollback: the browser is not started on its previous image: its browser stands for the owner's decision (login_required");
+    expect((host.state().commands ?? []).filter((row) => row.kind === "restartBrowser").map((row) => row.haltId)).toEqual([null]);
+    expect(profile(host)).toMatchObject({ version: FROM_CHROME, marker: "before" });
   });
 
   it("a lost snapshot: the owner's rollback is refused before anything changes — the old Chrome never opens a profile the new one wrote", () => {
@@ -156,12 +181,26 @@ describe("failures after the new image ran: a rollback — its previous image WI
     expect(profile(host).version).toBe(TO_CHROME);
   });
 
+  it("a rollback target whose operator the engine refuses (protocol 1.0): refused before anything changes", () => {
+    host = makeHost();
+    expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
+    host.edit((state) => {
+      state.images[FROM]!.protocolLabel = "1.0";
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain(`${FROM}'s operator speaks protocol 1.0: the engine works with 1.1 or later of major 1: the engine would refuse the page on it`);
+    expect(run.ops).toEqual([]);
+    expect(host.update().STEP).toBe("done");
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
+  });
+
   it("the owner's rollback after a done update: out, snapshot, previous image, back", () => {
     host = makeHost();
     expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
     const run = host.run(["rollback", "--page", PAGE, "--reason", "the owner saw 429s"]);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node", ...ROLLBACK]);
+    expect(run.ops).toEqual([RB_STOP, ...ROLLBACK]);
     expect(host.update().REASON).toBe("the owner saw 429s");
     rolledBack(host);
   });
@@ -182,19 +221,19 @@ describe("failures after the new image ran: a rollback — its previous image WI
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "given_back" });
     expect(events(host).filter((event) => event === "update_held")).toHaveLength(2);
     const back = host.run(["rollback", "--page", PAGE]);
-    expect(back.ops).toEqual(["hub transport node", ...ROLLBACK]);
+    expect(back.ops).toEqual([RB_STOP, ...ROLLBACK]);
     rolledBack(host);
   });
 });
 
 describe("a crash at any step: `resume` goes on from there", () => {
   const steps: Array<[string, string[]]> = [
-    ["hub transport node", ["docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"]],
-    ["docker stop", ["profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"]],
-    ["profile snapshot", ["profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"]],
-    [`page.sh up ${TO}`, [`page.sh up ${TO}`, "profile-check", "hub transport browser"]],
-    ["profile-check", ["profile-check", "hub transport browser"]],
-    ["hub transport browser", []],
+    ["hub sync browser snapshot", ["docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"]],
+    ["docker stop", ["profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"]],
+    ["profile snapshot", ["profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"]],
+    [`page.sh up ${TO}`, [`page.sh up ${TO}`, "profile-check", "hub sync browser start"]],
+    ["profile-check", ["profile-check", "hub sync browser start"]],
+    ["hub sync browser start", []],
     ["hub sync check live-hour", ["hub sync check live-hour"]],
   ];
   for (const [crashOn, after] of steps) {
@@ -208,7 +247,7 @@ describe("a crash at any step: `resume` goes on from there", () => {
       expect(resumed.ops.filter((entry) => entry !== "hub sync check live-hour" || crashOn === "hub sync check live-hour")).toEqual(after);
       expect(host.update()).toMatchObject({ STEP: "done", ENGINE_CHECKS: "passed", WINDOW: "passed" });
       expect(containerOf(host)).toMatchObject({ image: TO, running: true });
-      expect(hubPage(host).transport).toBe("browser");
+      expect(hubPage(host)).toMatchObject({ transport: "browser", ownerStop: false });
       // One snapshot, whole: a cut-off one is never kept.
       expect(host.snapshots()).toHaveLength(2);
       expect(host.snapshots().filter((name) => name.endsWith(".part"))).toEqual([]);
@@ -225,7 +264,7 @@ describe("a crash at any step: `resume` goes on from there", () => {
     expect(host.update()).toMatchObject({ STEP: "rolling_back", RB_STEP: "stopped" });
     const resumed = host.run(["resume", "--page", PAGE]);
     expect(resumed.status).toBe(1);
-    expect(resumed.ops).toEqual(["profile restore", `page.sh up ${FROM}`, "profile-check", "hub transport browser"]);
+    expect(resumed.ops).toEqual(["profile restore", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"]);
     expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed" });
     expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
     expect(profile(host)).toMatchObject({ version: FROM_CHROME, marker: "before" });

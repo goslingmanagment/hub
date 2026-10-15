@@ -36,7 +36,7 @@ export interface FakePage {
 
 export interface FakeState {
   pbBase: string;
-  images: Record<string, { chrome: string; revision?: string; created?: string; label?: boolean }>;
+  images: Record<string, { chrome: string; revision?: string; created?: string; label?: boolean; protocolMinor?: number; protocolLabel?: string }>;
   containers: Record<string, { image: string; running: boolean; health?: string; chrome?: string; profile?: string }>;
   profiles: Record<string, { version: string; marker?: string; bytes?: number; restores?: number }>;
   hub: { pages: Record<string, FakePage> };
@@ -44,6 +44,10 @@ export interface FakeState {
   urls?: Record<string, string>;
   builds?: Array<{ tag: string; labels: Record<string, string>; vendorSha256: string }>;
   composeUps?: string[];
+  /** The halt each profile's operator holds on its buffer volume ("<reason> <id>"). */
+  operatorHalts?: Record<string, string>;
+  /** PR 17's owner commands, as the engine ran them. */
+  commands?: Array<{ id: number; page: string; kind: string; note: string; outcome: string; expired: boolean; detail: string; haltId: string | null }>;
   networks?: string[];
   crashSeen?: number;
 }

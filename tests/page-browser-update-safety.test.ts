@@ -1,9 +1,13 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, TO_CHROME, type Host } from "./helpers/page-browser-update.ts";
+
+// Each test runs the script in bash against a fake server that starts a
+// process per call: slower than a unit test, more so under a full parallel run.
+vi.setConfig({ testTimeout: 180_000 });
 
 // scripts/page-browser-update.sh — Astra's review of PR 18, each scenario
 // reproduced: what cannot be read is unknown and never "stopped" or
@@ -257,12 +261,41 @@ describe("6 · a standalone snapshot is an operation with its record", () => {
   });
 });
 
+describe("a halt held for the owner's decision is never the update's (PR 17)", () => {
+  it("one its new operator holds when the page is to be started again: held — no start asked, nothing cleared", () => {
+    host = makeHost();
+    expect(host.run(UPDATE, { crashOn: "profile-check" }).status).toBe(137);
+    host.edit((state) => {
+      state.operatorHalts = { [PROFILE]: "halt_unreadable 99999999-9999-4999-8999-999999999999" };
+    });
+    const run = host.run(["resume", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["profile-check"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "host_checked" });
+    expect(host.update().HELD_WHY).toContain("its operator holds a halt for the owner's decision (halt_unreadable 99999999");
+    expect((host.state().commands ?? []).filter((row) => row.kind === "restartBrowser")).toEqual([]);
+  });
+
+  it("one Hub mirrors when the page is to be started again: the lever's own refusal holds it too", () => {
+    host = makeHost();
+    expect(host.run(UPDATE, { crashOn: "profile-check" }).status).toBe(137);
+    host.edit((state) => {
+      Object.assign(state.hub.pages[PAGE]!.pb, { haltReason: "exit_ip_changed", haltId: "12121212-1212-4121-8121-121212121212" });
+    });
+    const run = host.run(["resume", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(host.update().HELD_WHY).toContain("its browser stands for the owner's decision (exit_ip_changed, halt 12121212");
+    expect((host.state().commands ?? []).filter((row) => row.kind === "restartBrowser")).toEqual([]);
+    expect(host.state().hub.pages[PAGE]!.pb.haltId).toBe("12121212-1212-4121-8121-121212121212");
+  });
+});
+
 describe("what the Hub cannot tell holds the update for the owner", () => {
   it("a rollback whose old image's start the Hub cannot tell: held at that step, not ended — resumed, it ends on the engine's word", () => {
     host = makeHost((state) => {
       state.behaviour.profileCheckFails = [TO];
     });
-    expect(host.run(UPDATE, { crashOn: "hub transport browser" }).status).toBe(137);
+    expect(host.run(UPDATE, { crashOn: "hub sync browser start" }).status).toBe(137);
     expect(host.update()).toMatchObject({ STEP: "rolling_back", RB_STEP: "host_checked" });
     // The Hub down: the page is not given back blind.
     host.edit((state) => {
@@ -270,11 +303,11 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
     });
     expect(host.run(["resume", "--page", PAGE]).status).toBe(1);
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "host_checked" });
-    expect(host.update().HELD_WHY).toContain("rollback: the Hub cannot be read: the page is not given back blind");
+    expect(host.update().HELD_WHY).toContain("rollback: the browser is not started on its previous image: the Hub cannot be read");
     // Given back, then the Hub stops answering: the old image's start unknown.
     host.edit((state) => {
       state.behaviour.hubDown = false;
-      state.behaviour.sqlFailAfter = 1;
+      state.behaviour.sqlFailAfter = 2;
       (state as { sqlReads?: number }).sqlReads = 0;
     });
     const blind = host.run(["resume", "--page", PAGE]);
@@ -298,7 +331,7 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub transport browser"]);
+    expect(run.ops).toEqual(["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"]);
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "given_back" });
     expect(host.update().HELD_WHY).toContain("the Hub cannot be read");
     expect(events(host)).not.toContain("rolled_back");
@@ -306,12 +339,13 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
 
   it("the Hub stops answering during the take-out: held, the container untouched", () => {
     host = makeHost((state) => {
-      state.behaviour.leaveNever = true;
+      state.behaviour.stopOutcome = "pending";
       state.behaviour.sqlFailAfter = 2;
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
-    expect(run.ops).toEqual(["hub transport node"]);
+    expect(run.ops).toEqual(["hub sync browser snapshot"]);
+    expect(host.update().HELD_WHY).toContain("the Hub cannot be read");
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "planned" });
     expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
   });

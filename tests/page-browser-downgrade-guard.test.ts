@@ -2,9 +2,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, REPO_ROOT, TO, TO_CHROME, writeExecutable, type Host } from "./helpers/page-browser-update.ts";
+
+// Each test runs the script in bash against a fake server that starts a
+// process per call: slower than a unit test, more so under a full parallel run.
+vi.setConfig({ testTimeout: 180_000 });
 
 // page.sh never starts an image whose Chrome is older than the one that last
 // opened the page's profile (Project Browser PR 18; plan §4.10, stage 1):

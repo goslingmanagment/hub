@@ -56,6 +56,9 @@ const now = () => Date.now();
 
 // ── the Hub ──────────────────────────────────────────────────────────────
 
+/** The stops PR 17's operator holds for the owner's decision. */
+const HALTS = new Set(["exit_ip_changed", "header_mismatch", "unknown_ws_message", "ws_guard_failed", "login_required", "halt_unreadable"]);
+
 function hubRead(label) {
   const page = state.hub?.pages?.[label];
   if (page === undefined) return "";
@@ -99,7 +102,11 @@ function hubRead(label) {
       };
       if (outcome === "ready") Object.assign(page.pb, ready);
       else if (outcome === "fingerprint") Object.assign(page.pb, ready, { fp: "e".repeat(64) });
-      else Object.assign(page.pb, { step: "exit_open", stop: outcome, exitOpen: false, stateAt: now() });
+      else {
+        Object.assign(page.pb, { step: "exit_open", stop: outcome, exitOpen: false, stateAt: now() });
+        // A stop only the owner decides: the operator holds it, Hub mirrors it.
+        if (HALTS.has(outcome)) Object.assign(page.pb, { haltReason: outcome, haltId: "66666666-6666-4666-8666-666666666666" });
+      }
     }
   } else if (page.transport === "browser" && page.pb.step === "ready" && container?.running) {
     // A running page says its state every few seconds; one may fail later.
@@ -113,10 +120,7 @@ function hubRead(label) {
   return [
     page.transport,
     page.leave ?? "",
-    page.leftBy ?? "",
-    page.leftGen ?? "",
     String(page.gen),
-    String(page.credentials),
     page.profile ?? "",
     pb.step ?? "",
     pb.stop ?? "",
@@ -132,10 +136,78 @@ function hubRead(label) {
     pb.stFailed ?? "",
     pb.stateAt === undefined ? "" : String(pb.stateAt),
     String(now()),
+    String(page.paused === true),
+    String(page.stopPaused === true),
+    String(page.ownerStop === true),
+    pb.haltReason ?? "",
+    pb.haltId ?? "",
   ].join("|");
 }
 
+function command(page, label, kind, note, outcome, extra = {}) {
+  state.commands ??= [];
+  const id = state.commands.length + 1;
+  state.commands.push({ id, page: label, kind, note, outcome: outcome === "pending" ? "" : outcome, expired: outcome === "expired", detail: extra.detail ?? "", haltId: extra.haltId ?? null });
+  return id;
+}
+
+/** PR 17's `sync browser snapshot|stop|start`, as the engine carries them out. */
+function browserLever(cli) {
+  const action = cli[2];
+  const label = cli[3];
+  const page = state.hub?.pages?.[label];
+  const note = cli.includes("--note") ? cli[cli.indexOf("--note") + 1] : "";
+  if (page === undefined) {
+    err(`${label}: no page\n`);
+    return 1;
+  }
+  if (listed(behaviour.cliFails, action)) {
+    err(`sync browser ${action}: ${label} has no browser\n`);
+    return 1;
+  }
+  const container = state.containers[`page-browser-${label}`];
+  if (action === "snapshot" || action === "stop") {
+    if (!page.paused) {
+      page.paused = true;
+      page.stopPaused = true;
+    }
+    page.ownerStop = true;
+    // An operator that is not there takes no command: it expires.
+    const outcome = behaviour.stopOutcomeOn?.[container?.image] ?? behaviour.stopOutcome ?? (container?.running ? "ok" : "expired");
+    command(page, label, "stopPage", note, outcome);
+    if (outcome === "ok") {
+      if (container !== undefined) container.chrome = behaviour.chromeUpAfterStop ? "up" : "down";
+      Object.assign(page.pb, { step: "exit_closed", stop: "owner_stop", exitOpen: false, stateAt: now() });
+    }
+    out(`${JSON.stringify({ page: label, operatorConfirmed: outcome === "ok" })}\n`);
+    return action === "snapshot" && outcome !== "ok" ? 1 : 0;
+  }
+  if (action === "start") {
+    if (cli.includes("--if-no-halt") && page.pb.haltReason) {
+      err(`${label}: its browser stands for the owner's decision (${page.pb.haltReason}): a start that clears no halt is refused, nothing changed\n`);
+      return 1;
+    }
+    const haltId = cli.includes("--if-no-halt") ? null : (page.pb.haltId ?? null);
+    page.ownerStop = false;
+    if (page.stopPaused) {
+      page.paused = false;
+      page.stopPaused = false;
+    }
+    const operatorHalt = state.operatorHalts?.[page.profile];
+    const outcome = operatorHalt ? "failed" : (behaviour.startOutcome ?? (container?.running ? "ok" : "expired"));
+    command(page, label, "restartBrowser", note, outcome, { haltId, detail: operatorHalt ? `the operator holds a halt (${operatorHalt})` : "" });
+    if (outcome === "ok") {
+      page.startPending = true;
+      page.startReads = 0;
+    }
+    out(`${JSON.stringify({ page: label, result: { outcome } })}\n`);
+    return 0;
+  }
+  return 2;
+}
+
 function hubCli(cli) {
+  if (cli[0] === "sync" && cli[1] === "browser") return browserLever(cli);
   if (cli[0] === "sync" && cli[1] === "page" && cli[2] === "transport") {
     const label = cli[3];
     const to = cli[4];
@@ -281,6 +353,13 @@ function docker(argv) {
           return 1;
         }
       }
+      const asked = /-- pb-update:command (\S+) (\S+)/.exec(input);
+      if (asked !== null && /BEGIN READ ONLY;/.test(input)) {
+        const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
+        const found = (state.commands ?? []).filter((row) => row.page === asked[1] && row.kind === asked[2] && row.note.startsWith(marker)).at(-1);
+        if (found !== undefined) out(`${found.id}|${found.outcome}|${String(found.expired)}|${found.detail}\n`);
+        return 0;
+      }
       const label = /-- pb-update:page (\S+)/.exec(input)?.[1];
       if (label === undefined || !/BEGIN READ ONLY;/.test(input)) {
         err("not a read-only query of the page\n");
@@ -327,6 +406,7 @@ function docker(argv) {
       if (!more.includes("--format") && more.some((name) => state.images[name] === undefined)) return 1;
       const format = more.includes("--format") ? more[more.indexOf("--format") + 1] : "";
       if (format.includes("chrome-version")) out(`${image.label === false ? "<no value>" : image.chrome}\n`);
+      else if (format.includes("page-browser.protocol")) out(`${image.protocolLabel ?? "<no value>"}\n`);
       else if (format.includes("revision")) {
         if (listed(behaviour.revisionUnreadableOn, tag)) {
           err("Error response from daemon: context deadline exceeded\n");
@@ -386,6 +466,18 @@ function docker(argv) {
   if (sub === "run") {
     const volumes = [];
     for (let i = 0; i < rest.length; i++) if (rest[i] === "-v") volumes.push(rest[i + 1]);
+    if (rest.includes("pb-halt")) {
+      const profileId = volumes.map((v) => /^pb-buffer-([0-9a-f-]+):\/data\/buffer:ro$/.exec(v)?.[1]).find(Boolean);
+      if (behaviour.haltUnreadable) return 1;
+      out(`halt=${state.operatorHalts?.[profileId] ?? ""}\n`);
+      return 0;
+    }
+    if (rest.includes("pb-protocol")) {
+      const image = state.images[rest[rest.indexOf("-c") - 1]];
+      if (image === undefined) return 125;
+      out(`PROTOCOL = { major: 1, minor: ${image.protocolMinor ?? 1}\n`);
+      return 0;
+    }
     if (rest.includes("pb-helper")) {
       const at = rest.indexOf("pb-helper");
       const image = rest[rest.indexOf("-c") - 1];

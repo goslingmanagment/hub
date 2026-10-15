@@ -31,6 +31,9 @@
 #     before, the profile Chrome's user's alone (700).
 #  5. An image that fails the profile check (<to> with another extension ID
 #     in its files): the update rolls itself back; the same checks as 4.
+#  6. A halt held for the owner's decision on the page's buffer volume
+#     (written by the image's own halt store, PR 17): the update refuses the
+#     page, nothing touched; the halt is cleared again by the same store.
 # What this run made goes at the end, and nothing else — its page, its
 # volumes (never a --profile's), its derived image, the networks if it made
 # them; --keep leaves it. Every name is this run's own: runs side by side,
@@ -198,6 +201,24 @@ if update --page "$PAGE" --image "$BAD"; then check "a failing image: the update
 check "a failing image: the update's end" "$(sed -n 's/^STEP=//p' "$BASE/update/pages/$PAGE/state")" "rolled_back"
 check "a failing image: why" "$(sed -n 's/^REASON=.*profile check failed: \(extension_installed_by_policy\).*/\1/p' "$BASE/update/pages/$PAGE/state")" "extension_installed_by_policy"
 on_from "automatic rollback"
+
+# 6. A halted page is not updated.
+halt_store() {
+  docker run --rm --network none --user 0 --entrypoint node -v "pb-buffer-$PROFILE:/data/buffer" "$FROM" --no-warnings --input-type=module -e "
+    const { HaltStore, newHalt } = await import('/opt/page-browser/src/state/halt-store.ts');
+    const store = new HaltStore('/data/buffer/operator/halt.json');
+    const held = store.read();
+    store.write($1);
+    console.log('ok');" pb-stand-halt >/dev/null
+}
+halt_store '{ halt: newHalt("exit_ip_changed"), lastClearedId: held.lastClearedId }'
+if update --page "$PAGE" --image "$TO" 2>"$BASE/halted"; then
+  check "a halted page: the update" "it went" "refused"
+else
+  check "a halted page: refused" "$(grep -c "its operator holds a halt for the owner's decision (exit_ip_changed" "$BASE/halted")" "1"
+fi
+check "a halted page: untouched" "$(docker inspect -f '{{.Config.Image}} {{.State.Health.Status}}' "$CONTAINER")" "$FROM healthy"
+halt_store '{ halt: null, lastClearedId: held.halt === null ? held.lastClearedId : held.halt.id }'
 
 if ((FAILED == 0)); then log "passed"; else log "FAILED"; fi
 exit "$FAILED"

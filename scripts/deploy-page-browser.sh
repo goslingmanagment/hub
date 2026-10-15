@@ -244,6 +244,11 @@ build() {
     *) fail "no build for $arch" ;;
   esac
   tag="hub-page-browser:${chrome_version}-${revision}"
+  # The protocol its operator speaks, as a label: the Chrome update refuses
+  # an image the engine would refuse (page-browser-update.sh, PR 17's 1.1).
+  local protocol
+  protocol="$(git -C "$ROOT_DIR" show "HEAD:$APP_DIR/src/rpc/protocol.ts" | sed -n 's/.*PROTOCOL = { major: \([0-9]*\), minor: \([0-9]*\) }.*/\1.\2/p' | head -n 1)"
+  [[ "$protocol" =~ ^[0-9]+\.[0-9]+$ ]] || fail "the operator's protocol cannot be read in $APP_DIR/src/rpc/protocol.ts"
   files=(
     "chrome/google-chrome-stable_${chrome_version}_${deb_arch}.deb"
     "kasmvnc/kasmvncserver_bookworm_${kasm_version}_${deb_arch}.deb"
@@ -268,7 +273,7 @@ build() {
     install -d -m 700 \"\$dir\"
     tar -xf - -C \"\$dir\"
     tar -xf \"\$dir/context.tar\" -C \"\$dir\"
-    docker build --build-context vendor=\"\$dir/vendor\" --label agency-hub.page-browser.revision=${revision} --label agency-hub.page-browser.chrome-version=${chrome_version} --build-arg OPERATOR_VERSION=${revision} -t ${tag} \"\$dir/context\"
+    docker build --build-context vendor=\"\$dir/vendor\" --label agency-hub.page-browser.revision=${revision} --label agency-hub.page-browser.chrome-version=${chrome_version} --label agency-hub.page-browser.protocol=${protocol} --build-arg OPERATOR_VERSION=${revision} -t ${tag} \"\$dir/context\"
     # What the Chrome update builds the next Chrome from, on this commit
     # (scripts/page-browser-update.sh build): the context, KasmVNC and
     # s6-overlay, and this Chrome in the archive with its checked SHA-256.
