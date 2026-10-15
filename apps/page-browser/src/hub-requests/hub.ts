@@ -1044,9 +1044,9 @@ export class HubRequests {
       this.#finish(attempt, { kind: "transport_error", sent: true, message: "the response could not be kept" });
       return;
     }
-    // Each physical request's moment is the later of Chrome's and the
-    // gate's: Chrome may write into the local socket while the operator
-    // stands, and the request leaves only when the proxy forwards it. The
+    // Each physical request's moment is the gate's first bytes on this
+    // process's clock (`sendMoment`): the request leaves only when the proxy
+    // forwards it, and Chrome's own timing never crosses the protocol. The
     // operation's is its first request's.
     const moments = [sendMoment(attempt.preflight), sendMoment(attempt.main)].filter((mono): mono is number => mono !== null);
     const sentMono = moments.length > 0 ? Math.min(...moments) : null;
