@@ -38,6 +38,18 @@
 //   the following email address: <the address>». The same field, the same
 //   button, the same request: what differs is where the owner finds the
 //   code, so the screen is the code with `codeFrom: "email"`.
+// - Only the login window counts (Astra's review of the e-mail code, P1):
+//   the host element of `app-login-modal`, which the site's modal service
+//   creates (`createComponent`, its selector's tag). Every screen of the
+//   login — the login, the code, the e-mail code, their errors — is in it;
+//   the landing page's own login form is never rendered (`ngIf false`), its
+//   «Login» opens this modal. Other windows ask for a password or a code
+//   too, with the same field and button — `app-twofa-session-create-modal`
+//   (2FA for account actions: `#fansly_twofa`, «Verify»),
+//   `app-email-change-new-modal` (the address change: the password, then
+//   codes) — and none of them is a login: a field outside the login window
+//   makes the screen unknown, and nothing outside it is located. The path
+//   proves nothing: the modal opens over any route.
 // - Fansly's buttons are `app-button`: its template is a `div` with the click
 //   handler, no `<button>`; the one shown while the site waits has the class
 //   `disabled`. The site's error at its form is `.auth-field-error`.
@@ -91,6 +103,9 @@ export interface PageMarks {
   readyState: string;
   /** A visible captcha or challenge frame anywhere on the page. */
   captcha: boolean;
+  /** A visible password or code field outside the login window (another
+   *  window asks for a secret: no screen of the login). */
+  outside: boolean;
   forms: FormMarks[];
 }
 
@@ -142,7 +157,15 @@ const SCAN = String.raw`
   const isPassword = (el) => el.tagName === "INPUT" && kind(el) === "password";
   const SUBMIT_TEXT = /^(log ?in|sign ?in|submit|verify|confirm|continue|next|войти|подтвердить|продолжить|отправить|далее)$/i;
   const text = (el) => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-  const containerOf = (el) => el.closest("form, [role=dialog], [role=alertdialog], .modal-content, .modal, mat-dialog-container") || doc.body;
+  // The login window (Fansly's login modal): no field outside it is a field
+  // of the login, no container of a form reaches out of it.
+  const windowOf = (el) => el.closest("app-login-modal");
+  const containerOf = (el) => {
+    const win = windowOf(el);
+    const near = el.closest("form, [role=dialog], [role=alertdialog], .modal-content, .modal, mat-dialog-container");
+    return near !== null && win.contains(near) ? near : win;
+  };
+  const secretFields = () => [...doc.querySelectorAll("input")].filter((el) => visible(el) && (isPassword(el) || isCode(el)));
   const fieldsIn = (root) => [...root.querySelectorAll("input, textarea, select")].filter((el) => !SKIPPED.includes(kind(el)) && visible(el));
   // Fansly's own button is an app-button: a div with the click handler in it.
   const submitsIn = (root) => [...root.querySelectorAll("button, input[type=submit], [role=button], app-button")].filter((el) => {
@@ -154,7 +177,8 @@ const SCAN = String.raw`
   const ERRORS = "[role=alert], .error, .error-message, .errors, .text-danger, .alert-danger, .invalid-feedback, .form-error, mat-error, .auth-field-error";
   const errorOf = (root) => {
     const near = [...root.querySelectorAll(ERRORS)];
-    if (root.parentElement) near.push(...[...root.parentElement.querySelectorAll(ERRORS)].filter((el) => !root.contains(el)));
+    const around = root.parentElement;
+    if (around && windowOf(root) !== root && windowOf(around) !== null) near.push(...[...around.querySelectorAll(ERRORS)].filter((el) => !root.contains(el)));
     const shown = near.filter(visible).map(text).filter((t) => t.length > 0);
     return shown.length === 0 ? null : shown.join(" ").slice(0, 300);
   };
@@ -162,10 +186,11 @@ const SCAN = String.raw`
   // (something@something), or its title as the site's en_US and ru say it.
   const NEW_DEVICE = /[^\s@]@[^\s@]|login from a new device|вход в систему с нового устройства/i;
   const newDevice = (root) => NEW_DEVICE.test(text(root));
+  const outside = () => secretFields().some((el) => windowOf(el) === null);
   const forms = () => {
     const roots = [];
-    for (const el of doc.querySelectorAll("input")) {
-      if (!visible(el) || !(isPassword(el) || isCode(el))) continue;
+    for (const el of secretFields()) {
+      if (windowOf(el) === null) continue;
       const root = containerOf(el);
       if (!roots.includes(root)) roots.push(root);
     }
@@ -195,6 +220,7 @@ ${SCAN}
     path: location.pathname,
     readyState: doc.readyState,
     captcha: captcha(),
+    outside: outside(),
     forms: forms().map((form) => ({
       password: form.password.length,
       login: form.login.length,
@@ -213,7 +239,7 @@ export function locateExpression(role: LoginField | "submit"): string {
   return `(function pbLoginLocate(role) {
 ${SCAN}
   const all = forms();
-  if (captcha() || all.length !== 1) return null;
+  if (captcha() || outside() || all.length !== 1) return null;
   const form = all[0];
   const one = (list) => (list.length === 1 ? list[0] : null);
   if (role === "submit") return one(form.submit);
@@ -248,6 +274,7 @@ export function recognize(marks: PageMarks | null, session: SessionMarks): Recog
   if (marks === null) return unknown("the work tab could not be read");
   if (marks.origin !== LOGIN_ORIGIN) return unknown("the work tab is not at the site");
   if (marks.captcha) return unknown("a captcha or a challenge is shown");
+  if (marks.outside) return unknown("a password or code field outside the login window is shown");
   if (marks.forms.length > 1) return unknown("more than one form of the login is shown");
   const form = marks.forms[0];
   if (form === undefined) {

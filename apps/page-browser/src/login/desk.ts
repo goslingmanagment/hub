@@ -387,7 +387,7 @@ function count(value: unknown): number {
 export function marksOf(value: unknown): PageMarks | null {
   if (value === null || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  if (typeof v.origin !== "string" || typeof v.path !== "string" || typeof v.readyState !== "string" || typeof v.captcha !== "boolean" || !Array.isArray(v.forms)) return null;
+  if (typeof v.origin !== "string" || typeof v.path !== "string" || typeof v.readyState !== "string" || typeof v.captcha !== "boolean" || typeof v.outside !== "boolean" || !Array.isArray(v.forms)) return null;
   const forms: PageMarks["forms"] = [];
   for (const raw of v.forms) {
     if (raw === null || typeof raw !== "object") return null;
@@ -397,5 +397,5 @@ export function marksOf(value: unknown): PageMarks | null {
     if ([form.password, form.login, form.code, form.other, form.submit].some((n) => n < 0)) return null;
     forms.push(form);
   }
-  return { origin: v.origin, path: v.path, readyState: v.readyState, captcha: v.captcha, forms };
+  return { origin: v.origin, path: v.path, readyState: v.readyState, captcha: v.captcha, outside: v.outside, forms };
 }

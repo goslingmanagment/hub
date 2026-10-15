@@ -67,7 +67,7 @@ const SITE_TOKEN = "fansly-token-AfTeRlOgIn0123456789";
 const SITE_CLIENT = "720167541418239001";
 
 const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: null, newDevice: false, ...marks });
-const page = (forms: FormMarks[], extra: Partial<PageMarks> = {}): PageMarks => ({ origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms, ...extra });
+const page = (forms: FormMarks[], extra: Partial<PageMarks> = {}): PageMarks => ({ origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, outside: false, forms, ...extra });
 
 describe("the screens (spec §7; signs fansly-login/2)", () => {
   const none: SessionMarks = { live: null, atStart: null };
@@ -102,7 +102,7 @@ describe("the screens (spec §7; signs fansly-login/2)", () => {
     expect(recognize(page([form({ code: 1, newDevice: true })], { captcha: true }), none)).toMatchObject({ screen: "unknown", codeFrom: null });
     expect(recognize(page([]), { live: null, atStart: null, codeAccepted: true })).toMatchObject({ screen: "success", codeFrom: null });
     // The probe's answer without the mark is no page at all.
-    const probed = { origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms: [{ password: 0, login: 0, code: 1, other: 0, submit: 1, error: null }] };
+    const probed = { origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, outside: false, forms: [{ password: 0, login: 0, code: 1, other: 0, submit: 1, error: null }] };
     expect(marksOf(probed)).toBeNull();
     expect(marksOf({ ...probed, forms: [{ ...probed.forms[0], newDevice: "yes" }] })).toBeNull();
     expect(marksOf({ ...probed, forms: [{ ...probed.forms[0], newDevice: true }] })?.forms[0]).toMatchObject({ code: 1, newDevice: true });
@@ -160,6 +160,12 @@ describe("the screens (spec §7; signs fansly-login/2)", () => {
     const unknown = (marks: PageMarks | null, session: SessionMarks = none) => recognize(marks, session).screen;
     expect(unknown(null)).toBe("unknown");
     expect(unknown(page([form({ password: 1, login: 1 })], { captcha: true }))).toBe("unknown");
+    // A password or code field of another window than the login's (Astra's
+    // review of the e-mail code, P1): whatever the login window shows.
+    expect(unknown(page([form({ code: 1 })], { outside: true }))).toBe("unknown");
+    expect(unknown(page([form({ password: 1, login: 1 })], { outside: true }))).toBe("unknown");
+    expect(unknown(page([], { outside: true }), { live: "b".repeat(64), atStart: null, codeAccepted: true })).toBe("unknown");
+    expect(marksOf({ origin: "https://fansly.com", path: "/", readyState: "complete", captcha: false, forms: [] })).toBeNull();
     expect(unknown(page([form({ password: 1, login: 1 })], { origin: "https://evil.example" }))).toBe("unknown");
     expect(unknown(page([form({ password: 1, login: 1 }), form({ code: 1 })]))).toBe("unknown");
     // A consent box, a second field, two buttons, no button, a code beside a password.

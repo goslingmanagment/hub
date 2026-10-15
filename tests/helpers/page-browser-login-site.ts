@@ -145,7 +145,7 @@ export class FakeLoginSite {
   /** What the probe reads now. */
   marks(): PageMarks {
     const form = (marks: Partial<FormMarks>): FormMarks => ({ password: 0, login: 0, code: 0, other: 0, submit: 1, error: this.error, newDevice: false, ...marks });
-    const base = { origin: "https://fansly.com", path: "/", readyState: "complete" };
+    const base = { origin: "https://fansly.com", path: "/", readyState: "complete", outside: false };
     switch (this.screen) {
       case "landing":
         return { ...base, captcha: false, forms: [] };
