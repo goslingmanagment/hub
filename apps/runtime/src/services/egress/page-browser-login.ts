@@ -210,12 +210,14 @@ export function proxyScreenRequest(input: { req: IncomingMessage; res: ServerRes
 
 /** The screen's WebSocket (an upgrade of the owner's request), passed to
  *  the page's KasmVNC as a TCP stream once the request line and its headers
- *  — the screen's password in, the owner's cookie out — went ahead. */
+ *  — the screen's password in, the owner's cookie out — went ahead. KasmVNC
+ *  refuses a WebSocket with no `Origin` (404, "missing Sec-WebSocket-Origin
+ *  header"): it gets the screen's own origin, never the owner's. */
 export function proxyScreenUpgrade(input: { req: IncomingMessage; socket: Duplex; head: Buffer; target: { host: string; port: number }; path: string; password: string; onClose?: () => void }): { close(): void } {
   const { req, socket } = input;
   socket.on("error", () => undefined);
   const upstream = tcpConnect({ host: input.target.host, port: input.target.port }, () => {
-    const headers: Record<string, string | string[]> = { ...forwardedHeaders(req.headers), host: `${input.target.host}:${input.target.port}`, authorization: basic(input.password), connection: "Upgrade", upgrade: String(req.headers.upgrade ?? "websocket") };
+    const headers: Record<string, string | string[]> = { ...forwardedHeaders(req.headers), host: `${input.target.host}:${input.target.port}`, authorization: basic(input.password), origin: `http://${input.target.host}:${input.target.port}`, connection: "Upgrade", upgrade: String(req.headers.upgrade ?? "websocket") };
     const lines = [`GET ${input.path} HTTP/1.1`];
     for (const [name, value] of Object.entries(headers)) for (const one of Array.isArray(value) ? value : [value]) lines.push(`${name}: ${one}`);
     upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
