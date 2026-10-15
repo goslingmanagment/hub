@@ -6,7 +6,7 @@ interface SearchInputProps {
   placeholder?: string;
 }
 
-export function SearchInput({ value, onChange, placeholder = "Search…" }: SearchInputProps) {
+export function SearchInput({ value, onChange, placeholder = "Поиск…" }: SearchInputProps) {
   const [local, setLocal] = useState(value);
 
   // Sync external value changes
@@ -31,7 +31,8 @@ export function SearchInput({ value, onChange, placeholder = "Search…" }: Sear
       value={local}
       onChange={(e) => setLocal(e.target.value)}
       placeholder={placeholder}
-      className="w-[220px] rounded-lg border border-border bg-card px-3 py-2 text-[13px] text-text-primary placeholder:text-text-muted outline-none transition-colors focus:border-accent"
+      aria-label={placeholder}
+      className="input w-full placeholder:text-text-muted sm:w-[240px]"
     />
   );
 }

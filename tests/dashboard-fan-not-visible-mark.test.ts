@@ -133,10 +133,10 @@ function rowsByFan(html: string) {
 
 function expectMarkOnlyOnHiddenFan(html: string) {
   const rows = rowsByFan(html);
-  expect(rows.get("festerpenis")).toContain("Not visible");
-  expect(rows.get("seenbuyer")).not.toContain("Not visible");
-  expect(rows.get("oldserver")).not.toContain("Not visible");
-  expect(html.split("Not visible")).toHaveLength(2);
+  expect(rows.get("festerpenis")).toContain("Не виден");
+  expect(rows.get("seenbuyer")).not.toContain("Не виден");
+  expect(rows.get("oldserver")).not.toContain("Не виден");
+  expect(html.split("Не виден")).toHaveLength(2);
 }
 
 describe("the page's 'not visible' mark on its spender lists", () => {
@@ -177,11 +177,11 @@ describe("the page's 'not visible' mark on its spender lists", () => {
     mocks.queries.useSpenders.mockReturnValue(read(spenderList()));
     const html = renderRoute(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lora-1/top-supporters");
     const markRow = rowsByFan(html).get("festerpenis")!;
-    expect(markRow).toMatch(/tabindex="0"[^>]*>(?:(?!<\/span>).)*Not visible/s);
+    expect(markRow).toMatch(/tabindex="0"[^>]*>(?:(?!<\/span>).)*Не виден/s);
 
     const copy = describeFanNotVisible(MISS_AT);
-    expect(copy).toContain("This page can't see the fan's account");
-    expect(copy).toContain("probably blocked the page or deleted the account");
-    expect(copy).toContain("Oct 6");
+    expect(copy).toContain("Страница не видит аккаунт фана");
+    expect(copy).toContain("скорее всего, фан заблокировал страницу или удалил аккаунт");
+    expect(copy).toContain("6 окт.");
   });
 });

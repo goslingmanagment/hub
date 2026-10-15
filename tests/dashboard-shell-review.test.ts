@@ -105,6 +105,6 @@ describe("period identity across pages", () => {
   it.each(["dashboard", "spender", "topSupporters"] as const)("shows the URL period in both wide and narrow %s controls", (mode) => {
     const html = renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ["/pages/test?period=30d"] }, createElement(PeriodSelector, { mode })));
     expect(html).toMatch(/<option value="30d" selected="">/);
-    expect(html).toMatch(/aria-pressed="true"[^>]*>30D<\/button>/);
+    expect(html).toMatch(/aria-pressed="true"[^>]*>30 дней<\/button>/);
   });
 });

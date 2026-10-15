@@ -1,7 +1,4 @@
 import { buildSettingsRoute } from "../lib/navigation.js";
-import { OfapiBannedWords } from "./settings/OfapiBannedWords.js";
-import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
-import { OfapiWebhookRecovery } from "./settings/OfapiWebhookRecovery.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
@@ -1143,7 +1140,6 @@ export function OfapiCreditsPage() {
 
       {summaryQuery.isError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3 text-sm text-text-secondary"><p>Сводку не удалось обновить. Баланс, прогноз и ограничения ниже относятся к предыдущему ответу.</p><RetryButton onClick={() => summaryQuery.refetch()} /></div>}
 
-      <details className="mb-5"><summary className="cursor-pointer py-2 text-sm font-medium text-text-primary">События OFAPI и история доставок</summary><OfapiWebhookRecovery /></details>
 
       {!summary.enabled ? (
         <StatusPanel
@@ -1765,9 +1761,6 @@ export function OfapiCreditsPage() {
               </>
             )}
           </section>
-
-          <OfapiVendorEvidence />
-      <OfapiBannedWords />
 
           <SystemHealthSection
             summary={summary}

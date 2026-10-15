@@ -207,7 +207,7 @@ describe("ChatPreviewPanel", () => {
       expect(html).toContain("Fansly no longer serves this chat to the page.");
       expect(html).toContain("The fan deleted their account or blocked the page.");
       expect(html).toContain("New messages still arrive over the socket, but they can&#x27;t be confirmed.");
-      expect(html).toContain("Since Oct 6");
+      expect(html).toContain("Since 6 окт.");
       expect(html).toContain("Owner&#x27;s note:</span> 06.10: the profile does not open from lora-1");
 
       mockPreview({ ...established, cause: "probably_blocked" }, [restMessage]);

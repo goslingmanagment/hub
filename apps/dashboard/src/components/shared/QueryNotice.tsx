@@ -5,13 +5,15 @@ export function QueryNotice({ error, stale, retry }: {
 }) {
   if (!error) return null;
   return (
-    <p className="mb-3 rounded-lg border border-warning bg-hover-alt px-3 py-2 text-xs text-text-secondary" role="alert">
-      {stale
-        ? "Обновление не удалось. Показаны ранее полученные данные."
-        : "Данные не удалось загрузить."}{" "}
+    <p className="notice notice-warning mb-3" role="alert">
+      <span className="min-w-0 flex-1">
+        {stale
+          ? "Обновление не удалось. Показаны ранее полученные данные."
+          : "Данные не удалось загрузить."}
+      </span>
       <button
         type="button"
-        className="font-semibold text-accent underline underline-offset-2 focus-visible:outline-2"
+        className="shrink-0 font-semibold underline underline-offset-2"
         onClick={() => void retry()}
       >
         Повторить

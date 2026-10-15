@@ -68,6 +68,7 @@ import {
   JobsCard,
   FinishIncompleteRunModal,
   JobModal,
+  WebhookCard,
 } from "../apps/dashboard/src/pages/settings/collection/CollectionTab.tsx";
 import {
   buildCategoryView,
@@ -433,10 +434,13 @@ describe("CollectionTab (static render)", () => {
     // Stop button is enabled (not paused) and the draft bar is absent.
     expect(markup).toContain("Остановить фоновый сбор");
     expect(markup).not.toContain("в черновике");
-    // Webhook card is read-only: no switches at all.
-    expect(markup).toContain("одна регистрация на все OF-страницы");
-    expect(markup).toContain("wh_43…24d");
-    expect(markup).toContain("в текущем наборе");
+    // The webhook card moved to «Система → OnlyFans API»; it is read-only there.
+    expect(markup).not.toContain("одна регистрация на все OF-страницы");
+    const webhook = withRouter(createElement(WebhookCard));
+    expect(webhook).toContain("одна регистрация на все OF-страницы");
+    expect(webhook).toContain("wh_43…24d");
+    expect(webhook).toContain("в текущем наборе");
+    expect(webhook).not.toContain('role="switch"');
     expect(markup).not.toContain('role="switch"');
     // Journal summary line.
     expect(markup).toContain("Журнал изменений");

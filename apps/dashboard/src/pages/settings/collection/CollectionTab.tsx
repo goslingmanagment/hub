@@ -1,6 +1,3 @@
-import { OfapiContentEvidence } from "../OfapiContentEvidence.js";
-import { OfapiStoredReads } from "../OfapiStoredReads.js";
-import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -551,10 +548,6 @@ export function CollectionTab() {
       </section>
 
       <JobsCard snapshot={snapshot} scope={scope} />
-      <WebhookCard />
-      <OfapiWebhookRecovery />
-      <OfapiContentEvidence pages={snapshot.pages} />
-      <OfapiStoredReads pages={snapshot.pages} />
       <AuditCard snapshot={snapshot} actorName={actorName} />
 
       {size > 0 && draft && (
@@ -1367,7 +1360,7 @@ export function FinishIncompleteRunModal(props: {
   </ModalShell>;
 }
 
-function WebhookCard() {
+export function WebhookCard() {
   const query = useAdminOfapiWebhookStatus();
   const status = query.data;
   const groupsList = status ? groupWebhookEvents(status.events) : [];

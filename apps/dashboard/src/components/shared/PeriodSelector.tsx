@@ -5,19 +5,19 @@ import { overviewSearch, parseOverviewState } from "@/lib/overviewNavigation";
 import { resolveDashboardPeriod, resolveSpenderPeriod } from "@/lib/navigation";
 
 const dashboardOptions: { key: PeriodOption; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7D" },
-  { key: "30d", label: "30D" },
-  { key: "all", label: "All" },
+  { key: "today", label: "Сегодня" },
+  { key: "7d", label: "7 дней" },
+  { key: "30d", label: "30 дней" },
+  { key: "all", label: "Всё время" },
 ];
 
 const spenderOptions: { key: SpenderPeriodOption; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7D" },
-  { key: "30d", label: "30D" },
-  { key: "90d", label: "90D" },
-  { key: "180d", label: "180D" },
-  { key: "all", label: "All" },
+  { key: "today", label: "Сегодня" },
+  { key: "7d", label: "7 дней" },
+  { key: "30d", label: "30 дней" },
+  { key: "90d", label: "90 дней" },
+  { key: "180d", label: "180 дней" },
+  { key: "all", label: "Всё время" },
 ];
 
 type PeriodSelectorMode = "dashboard" | "spender" | "topSupporters";
@@ -61,27 +61,22 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
 
   return (
     <div>
-      <select aria-label="Период отчёта" className="min-h-11 max-w-32 rounded-lg border border-border bg-card px-2 text-sm sm:hidden" value={selectedKey} onChange={(event) => handleSelect(event.target.value as PeriodOption | SpenderPeriodOption)}>
-        {options.map((opt) => <option key={opt.key} value={opt.key}>{opt.key === "today" ? "Сегодня" : opt.key === "all" ? "Всё время" : `${opt.key.slice(0, -1)} дней`}</option>)}
+      <select aria-label="Период отчёта" className="select min-h-9 max-w-36 sm:hidden" value={selectedKey} onChange={(event) => handleSelect(event.target.value as PeriodOption | SpenderPeriodOption)}>
+        {options.map((opt) => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
       </select>
-      <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Reporting period">{options.map((opt) => {
-        const isActive = selectedKey === opt.key;
-        return (
+      <div className="segmented hidden sm:inline-flex" role="group" aria-label="Период отчёта">
+        {options.map((opt) => (
           <button
             key={opt.key}
             type="button"
-            aria-pressed={isActive}
+            aria-pressed={selectedKey === opt.key}
             onClick={() => handleSelect(opt.key)}
-            className={`rounded-button px-2 sm:px-3 py-1.5 text-[13px] font-medium transition-colors ${
-              isActive
-                ? "bg-accent text-white"
-                : "border border-border bg-card text-text-secondary hover:bg-hover"
-            }`}
+            className="segment"
           >
             {opt.label}
           </button>
-        );
-      })}</div>
+        ))}
+      </div>
     </div>
   );
 }

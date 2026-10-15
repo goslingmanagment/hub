@@ -309,11 +309,11 @@ describe("where a page's sync is shown", () => {
 
   it("Settings has the «Синк» section, and «Синхронизация» says it is about OnlyFans", () => {
     const html = renderRouted(createElement(SettingsPage), ["/settings?tab=engine"]);
-    expect(html).toContain(">Синк</a>");
-    expect(html).toContain("как Fansly Sync Engine читает каждую страницу Fansly");
+    expect(html).toContain(">Fansly</a>");
+    expect(html).toContain("Как Hub читает каждую страницу Fansly");
     expect(html).toContain('data-engine-page="lilly-1"');
     const sync = renderRouted(createElement(SettingsPage), ["/settings?tab=sync"]);
-    expect(sync).toContain("какие данные OnlyFans обновляются");
+    expect(sync).toContain("Какие данные страниц OnlyFans обновляются");
     expect(sync).not.toContain("data-engine-page");
   });
 });

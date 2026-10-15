@@ -105,31 +105,25 @@ beforeEach(() => {
 });
 
 describe("daily URL controls retain the originating navigation state", () => {
-  it.each(["tab", "type", "transactions", "spenders"] as const)("preserves Overview after changing %s", (action) => {
-    if (action === "spenders") mocks.search.set("tab", "spenders");
+  // The page's Spenders and Followers tabs are gone (Top supporters and the
+  // Followers tab of the page header replace them); its two list controls remain.
+  it.each(["type", "transactions"] as const)("preserves Overview after changing %s", (action) => {
     const state = mocks.state;
     const tree = capture(PageDetailPage);
-    if (action === "tab") {
-      const control = findElement(tree, (element) => element.type === "button" && element.props.children === "Spenders");
-      (control.props.onClick as () => void)();
-    } else {
-      const prop = action === "type" ? "onTxTypeChange" : action === "transactions" ? "onTxPageChange" : "onPageChange";
-      const control = findElement(tree, (element) => typeof element.props[prop] === "function");
-      (control.props[prop] as (value: string | number) => void)(action === "type" ? "subscription" : 150);
-    }
+    const prop = action === "type" ? "onTxTypeChange" : "onTxPageChange";
+    const control = findElement(tree, (element) => typeof element.props[prop] === "function");
+    (control.props[prop] as (value: string | number) => void)(action === "type" ? "subscription" : 150);
     const search = applySearchChange();
     expect(mocks.state).toBe(state);
     expect(resolveFanProfileBackTarget(mocks.state, undefined)).toBe(overviewBackTo);
     expect(search.get("period")).toBe("30d");
     expect(search.get("query")).toBe("buyer");
-    if (action === "tab") expect(search.get("tab")).toBe("spenders");
     if (action === "type") {
       expect(search.get("type")).toBe("subscription");
       expect(search.has("txOffset")).toBe(false);
       expect(search.get("spendersOffset")).toBe("50");
     }
     if (action === "transactions") expect(search.get("txOffset")).toBe("150");
-    if (action === "spenders") expect(search.get("spendersOffset")).toBe("150");
   });
 
   it("retains nested return state while narrowing Followers", () => {

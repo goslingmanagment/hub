@@ -168,7 +168,7 @@ describe("TopSupportersPage", () => {
     expect(html).toContain("Last Chat");
     expect(html).toContain("Last Spend");
     expect(html).toContain("Unanswered");
-    expect(html).toContain("Tip");
+    expect(html).toContain("Чаевые");
     expect(html).not.toContain("Last Activity");
     expect(html).not.toContain("Last activity ");
   });

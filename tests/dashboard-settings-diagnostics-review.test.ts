@@ -31,7 +31,7 @@ import { SyncStatusPage } from "../apps/dashboard/src/pages/dev/SyncStatusPage.t
 import { NotificationsSettingsTab } from "../apps/dashboard/src/pages/notifications/NotificationsSettingsTab.tsx";
 import { NotificationsReportsTab } from "../apps/dashboard/src/pages/notifications/NotificationsReportsTab.tsx";
 import { NotificationsIncidentsTab } from "../apps/dashboard/src/pages/notifications/NotificationsIncidentsTab.tsx";
-import { NotificationsPage } from "../apps/dashboard/src/pages/NotificationsPage.tsx";
+import { notificationsRedirectTarget } from "../apps/dashboard/src/pages/NotificationsPage.tsx";
 
 function render(component: ComponentType, path = "/") {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(component)));
@@ -295,7 +295,7 @@ describe("settings and diagnostics error states", () => {
   ] as const)("keeps the %s snapshot with a visible refresh warning", (component, hook, data, path) => {
     queries[hook].mockReturnValue(query(data, true));
     const html = render(component, path);
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Refresh failed");
     expect(html).toContain("overflow-x-auto");
   });
@@ -339,22 +339,21 @@ describe("settings and diagnostics error states", () => {
     const html = render(NotificationsReportsTab);
     expect(html).toContain("Preview refresh failed");
     expect(html).toContain("Previous report text");
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Scheduled");
   });
 
   it("keeps filtered incident emptiness distinct from global system health", () => {
     queries.useNotificationIncidents.mockReturnValue(query({ items: [], total: 0 }, true));
     const html = render(NotificationsIncidentsTab);
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("No incidents match this view");
     expect(html).not.toContain("No incidents recorded");
   });
 
-  it("opens notification reports from a shareable tab URL", () => {
-    const html = render(NotificationsPage, "/notifications?tab=reports");
-    expect(html).toContain("Preview Next Report");
-    expect(html).not.toContain("Connect Telegram");
-    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+  it("sends old notification links to the screen that now holds their job", () => {
+    expect(notificationsRedirectTarget(new URLSearchParams("tab=incidents"))).toBe("/incidents");
+    expect(notificationsRedirectTarget(new URLSearchParams("tab=reports"))).toBe("/settings?tab=notifications");
+    expect(notificationsRedirectTarget(new URLSearchParams(""))).toBe("/settings?tab=notifications");
   });
 });

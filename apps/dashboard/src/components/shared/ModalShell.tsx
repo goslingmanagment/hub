@@ -4,7 +4,7 @@ export function ModalShell({
   children,
   title,
   onClose,
-  closeLabel = "Close",
+  closeLabel = "Закрыть",
   restoreFocusRef,
   // Decision 350: a dialog holding something the person cannot get back — a
   // one-time link shown once — refuses the casual dismissals. Escape and a
@@ -54,7 +54,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/20 p-6"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4 sm:p-6"
       // Parent space-y utilities must not leave an uncovered strip behind the dialog.
       style={{ margin: 0 }}
       onClick={explicitCloseOnly ? undefined : onClose}
@@ -65,17 +65,17 @@ export function ModalShell({
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[calc(100dvh-3rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 id={titleId} className="text-lg font-bold text-text-primary">
+          <h2 id={titleId} className="text-lg font-semibold tracking-[-0.01em] text-text-primary">
             {title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="min-h-8 shrink-0 text-sm text-text-muted hover:text-text-primary"
+            className="btn btn-ghost btn-sm shrink-0"
           >
             {closeLabel}
           </button>

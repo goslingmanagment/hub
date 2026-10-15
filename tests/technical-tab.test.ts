@@ -77,7 +77,7 @@ describe("TechnicalTab", () => {
   it("keeps the agent-key list honest when its permissions are stale", () => {
     mockAll();
     queries.useAgentKeys.mockReturnValue(query([], { isError: true, error: new Error("offline") }));
-    expect(render(TechnicalTab)).toContain("Showing cached data");
+    expect(render(TechnicalTab)).toContain("показаны прежние данные");
   });
 });
 

@@ -167,7 +167,7 @@ describe("WP-S1 Analytics: the sidebar entry", () => {
     const markup = renderWithShell(
       createElement(Sidebar, { user: { username: "owner", role: "owner" } }),
     );
-    expect(markup).toContain(">Analytics<");
+    expect(markup).toContain(">Аналитика<");
     expect(markup).toContain("/analytics");
   });
 
@@ -175,7 +175,7 @@ describe("WP-S1 Analytics: the sidebar entry", () => {
     const markup = renderWithShell(
       createElement(Sidebar, { user: { username: "lead", role: "team_lead" } }),
     );
-    expect(markup).not.toContain(">Analytics<");
+    expect(markup).not.toContain(">Аналитика<");
   });
 
   it("carries the Fansly page already in view into the link", () => {

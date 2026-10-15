@@ -35,7 +35,7 @@ describe("sync block display", () => {
       metrics: { transactionCount: 12 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 1h ago · 12 transactions");
+    } as never)).toBe("Updated 1 ч назад · 12 transactions");
 
     expect(formatBlockSummary({
       block: "audience",
@@ -51,7 +51,7 @@ describe("sync block display", () => {
       metrics: { subscriberCount: 5 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 30m ago · 5 subscribers");
+    } as never)).toBe("Updated 30 мин назад · 5 subscribers");
 
     expect(formatBlockSummary({
       block: "messages_live",
@@ -66,7 +66,7 @@ describe("sync block display", () => {
       metrics: { visibleConversationCount: 4 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 2h ago · 4 conversations");
+    } as never)).toBe("Updated 2 ч назад · 4 conversations");
   });
 
   it("renders stalled blocks with the point they got stuck at", () => {

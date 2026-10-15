@@ -42,6 +42,7 @@ import { DeletedFansPage } from "../apps/dashboard/src/pages/DeletedFansPage.tsx
 import { TopSupportersPage } from "../apps/dashboard/src/pages/TopSupportersPage.tsx";
 import { FanProfilePage } from "../apps/dashboard/src/pages/FanProfilePage.tsx";
 import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+import { PageLayout } from "../apps/dashboard/src/components/layout/PageLayout.tsx";
 import { ReadSection } from "../apps/dashboard/src/pages/daily/ReadSection.tsx";
 
 const fan = { platform: "fansly", platformUserId: "fan-1", username: "buyer", displayName: "Buyer", pageAlias: null, createdAtExternal: null };
@@ -52,6 +53,12 @@ const failure = () => read(undefined, { isLoading: false, isError: true });
 function renderPage(component: () => ReturnType<typeof createElement> | null, route: string, url: string) {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [url] },
     createElement(Routes, undefined, createElement(Route, { path: route, element: createElement(component) }))));
+}
+// A page's views render under PageLayout, which owns the page's header.
+function renderPageView(component: () => ReturnType<typeof createElement> | null, url: string) {
+  return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [url] },
+    createElement(Routes, undefined, createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+      createElement(Route, { index: true, element: createElement(component) })))));
 }
 function supporterItem(): SpenderListResponse["items"][number] {
   return {
@@ -89,7 +96,7 @@ describe("daily-page independent reads", () => {
     mocks.queries.usePageSubscribers!.mockReturnValue(failure());
     mocks.queries.usePageSpenderAutoLists!.mockReturnValue(failure());
     mocks.queries.usePageTransactions!.mockReturnValue(failure());
-    const html = renderPage(PageDetailPage, "/pages/:pageLabel", "/pages/lana?period=30d&type=tip&txOffset=50");
+    const html = renderPageView(PageDetailPage, "/pages/lana?period=30d&type=tip&txOffset=50");
     expect(html).toContain("$123.45");
     expect(html).toContain("Состояние сбора недоступно");
     expect(html).toContain("Подписчики: не удалось загрузить");

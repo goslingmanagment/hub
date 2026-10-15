@@ -5,7 +5,7 @@ interface StaleDataNoticeProps {
 }
 
 export function StaleDataNotice({
-  title = "Showing cached data",
+  title = "Не удалось обновить — показаны прежние данные",
   error,
   className = "",
 }: StaleDataNoticeProps) {
@@ -15,10 +15,12 @@ export function StaleDataNotice({
     <div
       role="status"
       aria-live="polite"
-      className={`rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-sm ${className}`}
+      className={`notice notice-warning ${className}`}
     >
-      <span className="font-semibold text-warning-dark">{title}</span>
-      {detail && <span className="ml-2 text-text-muted">{detail}</span>}
+      <span>
+        <span className="font-semibold">{title}</span>
+        {detail && <span className="ml-2 opacity-80">{detail}</span>}
+      </span>
     </div>
   );
 }

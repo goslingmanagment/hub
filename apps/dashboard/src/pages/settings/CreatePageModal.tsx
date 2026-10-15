@@ -16,16 +16,20 @@ type VerifyState = "idle" | "verifying" | "verified" | "verify-failed";
 export function CreatePageModal({
   models,
   onClose,
+  initialPlatform = "fansly",
+  initialModelSlug,
 }: {
   models: ModelListItem[];
   onClose: () => void;
+  initialPlatform?: Platform;
+  initialModelSlug?: string;
 }) {
   const createPage = useAdminCreatePage();
   const verifyCredentials = useAdminVerifyCredentials();
 
   // Common fields
-  const [platform, setPlatform] = useState<Platform>("fansly");
-  const [modelSlug, setModelSlug] = useState(models[0]?.slug ?? "");
+  const [platform, setPlatform] = useState<Platform>(initialPlatform);
+  const [modelSlug, setModelSlug] = useState(initialModelSlug ?? models[0]?.slug ?? "");
   const [label, setLabel] = useState("");
   const [credentials, setCredentials] = useState<PlatformCredentialsValues>({
     authorization: "",

@@ -386,9 +386,11 @@ describe("dashboard sync layout", () => {
 
     expect(html).not.toContain("Sync Monitor");
     expect(html).not.toContain("href=\"/sync\"");
-    expect(html).toContain("Usage");
-    expect(html).toContain("href=\"/usage\"");
-    expect(html).toContain("Settings");
+    expect(html).toContain("Расходы");
+    expect(html).toContain("href=\"/ofapi-credits\"");
+    expect(html).toContain("Настройки");
+    // Diagnostics live in one owner-only «Система» item, not in the main list.
+    expect(html).toContain("Система");
   });
 
   it("does not enable the owner-only connections query for non-owner sidebars", () => {
@@ -398,14 +400,22 @@ describe("dashboard sync layout", () => {
     );
 
     expect(queryMocks.useAdminConnections).toHaveBeenCalledWith({ enabled: false });
-    expect(html).not.toContain("href=\"/usage\"");
+    expect(html).not.toContain("href=\"/ofapi-credits\"");
+    expect(html).not.toContain("Система");
   });
 
-  it("defaults settings to credentials when the tab query is absent", () => {
+  it("opens «Модели и страницы» by default, with each page's access state in its row", () => {
+    queryMocks.useAdminPages.mockReturnValue({
+      data: [{ ...buildConnection(), modelSlug: "lana", modelName: "Lana", lastLightSyncAt: null }],
+      isLoading: false,
+    });
     const html = renderWithRouter(createElement(SettingsPage), ["/settings"]);
 
-    expect(html).toContain("Update Credentials");
-    expect(html).toContain("Credentials may need updating");
+    expect(html).toContain("Модели и страницы");
+    // A Fansly page without a proxy cannot be read: the row says so and
+    // offers the fix where the owner is looking.
+    expect(html).toContain("Нет прокси");
+    expect(html).toContain("Обновить вход");
     expect(html).not.toContain("Sync All Pages");
   });
 
@@ -419,9 +429,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=credentials"]);
 
-    expect(html).toContain("Connections failed to load");
+    expect(html).toContain("данные входа пока нельзя обновить");
     expect(html).toContain("Connections API unavailable");
-    expect(html).not.toContain("No connections configured");
+    expect(html).not.toContain("Не удалось загрузить страницы");
   });
 
   it("shows models catalog load errors", () => {
@@ -434,9 +444,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=models"]);
 
-    expect(html).toContain("Models failed to load");
+    expect(html).toContain("добавлять и изменять страницы пока нельзя");
     expect(html).toContain("Models API unavailable");
-    expect(html).not.toContain("No models configured");
+    expect(html).not.toContain("Моделей пока нет");
   });
 
   it("shows a stale-data warning when models refresh fails with cached data", () => {
@@ -451,10 +461,10 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("role=\"status\"");
     expect(html).toContain("aria-live=\"polite\"");
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("Не удалось обновить модели");
     expect(html).toContain("Models API timeout");
     expect(html).toContain("Lana");
-    expect(html).not.toContain("Models failed to load");
+    expect(html).not.toContain("добавлять и изменять страницы пока нельзя");
   });
 
   it("shows pages catalog load errors", () => {
@@ -467,9 +477,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
 
-    expect(html).toContain("Pages failed to load");
+    expect(html).toContain("Не удалось загрузить страницы");
     expect(html).toContain("Pages API unavailable");
-    expect(html).not.toContain("No pages configured");
+    expect(html).not.toContain("Моделей пока нет");
   });
 
   it("keeps the pages table visible when models fail to load", () => {
@@ -505,7 +515,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Models API unavailable");
     expect(html).toContain("lana");
-    expect(html).not.toContain("Models failed to load");
+    expect(html).not.toContain("Моделей пока нет");
   });
 
   it("keeps the pages table visible when connections fail to load", () => {
@@ -541,7 +551,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Connections API unavailable");
     expect(html).toContain("lana");
-    expect(html).not.toContain("Connections failed to load");
+    expect(html).not.toContain("Не удалось загрузить страницы");
   });
 
   it("uses loading copy for pending page dependencies", () => {
@@ -574,9 +584,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
 
-    expect(html).toContain("Loading models catalog");
+    expect(html).toContain("Загружаем модели");
     expect(html).toContain("lana");
-    expect(html).not.toContain("Models catalog is unavailable");
+    expect(html).not.toContain("добавлять и изменять страницы пока нельзя");
   });
 
   it("supports settings tab deep links for the sync workspace", () => {
@@ -675,7 +685,7 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Sync overview timeout");
     expect(html).toContain("Financials");
     expect(html).not.toContain("Sync status failed to load");
@@ -695,7 +705,7 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Sync overview timeout");
     expect(html).toContain("No pages configured");
     expect(html).not.toContain("Sync status failed to load");
@@ -860,8 +870,9 @@ describe("dashboard sync layout", () => {
       ["/dev/sync-status?runId=42"],
     );
 
-    expect(html).toContain(">Dev<");
-    expect(html).toContain(">Sync Status<");
+    expect(html).toContain(">Система<");
+    expect(html).toContain(">Журнал<");
+    expect(html).toContain(">Запуск синка<");
   });
 
   it("shows usage breadcrumbs in the owner workspace", () => {
@@ -870,7 +881,8 @@ describe("dashboard sync layout", () => {
       ["/usage"],
     );
 
-    expect(html).toContain(">Usage<");
-    expect(html).toContain("href=\"/\"");
+    expect(html).toContain(">Расходы<");
+    expect(html).toContain(">AI<");
+    expect(html).toContain("href=\"/ofapi-credits\"");
   });
 });

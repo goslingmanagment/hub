@@ -18,10 +18,10 @@ vi.mock("../apps/dashboard/src/api/adminConfig.ts", () => ({
   useClearConfig: vi.fn(), useStagedConfig: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ KernelApiError: class extends Error {} }));
-vi.mock("../apps/dashboard/src/pages/settings/CredentialsTab.tsx", () => ({ CredentialsTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/SyncTab.tsx", () => ({ SyncTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/CollectionTab.tsx", () => ({ CollectionTab: () => null }));
-vi.mock("../apps/dashboard/src/pages/settings/ModelsTab.tsx", () => ({ ModelsTab: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/NotificationsSettingsSection.tsx", () => ({ NotificationsSettingsSection: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/OfapiApiTab.tsx", () => ({ OfapiApiTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/PagesTab.tsx", () => ({ PagesTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/AiPersonasTab.tsx", () => ({ AiPersonasTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/team/TeamTab.tsx", () => ({ TeamTab: () => null }));
@@ -80,10 +80,13 @@ describe("configuration form lifetime across scope navigation", () => {
     expect(forms[3]!.props.feature).toBeNull();
   });
 
-  it("keeps the form mounted when the active Работа Hub section opens all parameters", () => {
+  it("keeps the form mounted when the active «Все параметры» section opens all parameters", () => {
     const focused = configurationForm("/settings?tab=configuration&feature=voice&view=all&q=voice&page=lora-1");
-    const activeLink = descendants(SettingsPage()).find((element) => element.props["aria-current"] === "page");
-    expect(activeLink?.props.children).toBe("Работа Hub");
+    // SettingsPage hands its navigation to the side-nav layout; render that too.
+    const page = asElement(SettingsPage());
+    const layout = (page.type as (props: Record<string, unknown>) => ReactNode)(page.props);
+    const activeLink = descendants(layout).find((element) => element.props["aria-current"] === "page");
+    expect(activeLink?.props.children).toBe("Все параметры");
     expect(activeLink?.props.to).toBe("/settings?tab=configuration&page=lora-1");
     const full = configurationForm(String(activeLink?.props.to));
     expect(full.type).toBe(focused.type);

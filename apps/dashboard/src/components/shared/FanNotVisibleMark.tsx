@@ -4,7 +4,7 @@ import { Tooltip } from "@/components/shared/Tooltip";
 
 /** The tooltip copy of the mark; `missAt` is the page's answer time. */
 export function describeFanNotVisible(missAt: string): string {
-  return `This page can't see the fan's account — the fan probably blocked the page or deleted the account. Checked ${formatDateTime(missAt, { yearUnlessCurrent: true })}.`;
+  return `Страница не видит аккаунт фана — скорее всего, фан заблокировал страницу или удалил аккаунт. Проверено ${formatDateTime(missAt, { yearUnlessCurrent: true })}.`;
 }
 
 /**
@@ -18,10 +18,10 @@ export function FanNotVisibleMark({ missAt, className = "" }: { missAt: string |
   return (
     <Tooltip content={describeFanNotVisible(missAt)} focusable className={`shrink-0 rounded-md ${className}`}>
       <span
-        className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-text-muted/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-text-muted"
+        className="badge"
       >
-        <EyeOff size={10} aria-hidden="true" />
-        Not visible
+        <EyeOff size={12} aria-hidden="true" />
+        Не виден
       </span>
     </Tooltip>
   );

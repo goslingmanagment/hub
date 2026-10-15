@@ -31,6 +31,7 @@ import {
   PageSpenderAutoListsSection,
   PageSpendersSection,
 } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+import { PageLayout } from "../apps/dashboard/src/components/layout/PageLayout.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = OverviewResponse["pages"][number];
@@ -360,17 +361,15 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
     );
 
-    expect(html).toContain("Data may be incomplete");
-    expect(html).toContain("check sync settings");
+    expect(html).toContain("Данные могут быть неполными");
+    expect(html).toContain("проверьте сбор данных");
     expect(html).toContain("href=\"/settings?tab=engine&amp;page=lana\"");
     expect(html).not.toContain("Sync needs attention");
   });
@@ -389,16 +388,14 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
     );
 
-    expect(html).toContain("Some data updates are paused \u2014 check sync settings");
+    expect(html).toContain("Часть данных не обновляется \u2014 проверьте сбор данных");
     expect(html).toContain("href=\"/settings?tab=engine&amp;page=lana\"");
   });
 
@@ -417,10 +414,8 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
@@ -443,17 +438,15 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
     );
 
-    expect(html).not.toContain("Data may be incomplete");
-    expect(html).not.toContain("Open Sync Settings");
+    expect(html).not.toContain("Данные могут быть неполными");
+    expect(html).not.toContain("Открыть сбор данных");
   });
 
   it("suppresses credentials exceptions on page detail", () => {
@@ -470,10 +463,8 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
@@ -486,16 +477,14 @@ describe("dashboard sync product surfaces", () => {
   it("keeps page-detail queries disabled for stale page routes until the not-found state is shown", () => {
     const html = renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/missing"],
       buildOverviewPage().pages,
     );
 
-    expect(html).toContain("Page not found");
+    expect(html).toContain("Страница не найдена");
     expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
@@ -511,17 +500,7 @@ describe("dashboard sync product surfaces", () => {
     }, {
       enabled: false,
     });
-    expect(queryMocks.useSpenders).toHaveBeenCalledWith({
-      scope: "page",
-      pageLabel: "missing",
-      period: "7d",
-      limit: 50,
-      offset: 0,
-      sortBy: "creatorNetAmountMills",
-      sortDir: "desc",
-    }, {
-      enabled: false,
-    });
+    expect(queryMocks.useSpenders).not.toHaveBeenCalled();
   });
 
   it("enables page-detail queries once the shell catalog resolves the page", () => {
@@ -529,10 +508,8 @@ describe("dashboard sync product surfaces", () => {
 
     renderWithRouter(
       createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement(PageDetailPage),
-        }),
+        createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageLayout) },
+          createElement(Route, { index: true, element: createElement(PageDetailPage) })),
       ),
       ["/pages/lana"],
       overview.pages,
@@ -553,17 +530,8 @@ describe("dashboard sync product surfaces", () => {
     }, {
       enabled: true,
     });
-    expect(queryMocks.useSpenders).toHaveBeenCalledWith({
-      scope: "page",
-      pageLabel: "lana",
-      period: "7d",
-      limit: 50,
-      offset: 0,
-      sortBy: "creatorNetAmountMills",
-      sortDir: "desc",
-    }, {
-      enabled: true,
-    });
+    // Page spenders live on «Топ фанов»; the page summary no longer reads them.
+    expect(queryMocks.useSpenders).not.toHaveBeenCalled();
   });
 
   it("renders all-time page spenders from lifetime metrics instead of zeroing window values", () => {
@@ -689,11 +657,9 @@ describe("dashboard sync product surfaces", () => {
       }),
     ));
 
-    expect(html).toContain("Spender Auto Lists");
+    expect(html).toContain("Списки спендеров");
     expect(html).toContain('href="/pages/lana/spender-autolists/0-25"');
-    expect(html).toContain("[FB] $0-$25 Spenders");
-    expect(html).toContain("2 Entries");
-    expect(html).toContain("[FB] $600+ Spenders");
-    expect(html).toContain("1 Entries");
+    expect(html).toMatch(/\[FB\] \$0-\$25 Spenders<\/span><span class="badge tabular-nums">2</);
+    expect(html).toMatch(/\[FB\] \$600\+ Spenders<\/span><span class="badge tabular-nums">1</);
   });
 });

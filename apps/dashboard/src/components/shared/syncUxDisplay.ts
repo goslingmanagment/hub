@@ -44,3 +44,28 @@ export function getSyncUxDisplayMode(
       return "home";
   }
 }
+
+/** The server describes a sync in English; the console speaks Russian. The
+ *  state is the contract, so the words are chosen here from it. */
+export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>> = {
+  healthy: "Данные обновляются",
+  syncing: "Идёт обновление",
+  catching_up: "Догоняет",
+  retrying: "Повторяет попытку",
+  attention: "Нужна проверка",
+  setup: "Первая загрузка",
+  off: "Не обновляется",
+};
+
+export function syncStateLabel(summary: SyncUxSummary): string {
+  return summary.requiresAction ? "Нужен вход" : SYNC_STATE_LABELS[summary.state];
+}
+
+export type SyncTone = "ok" | "warn" | "error" | "muted";
+
+export function syncTone(summary: SyncUxSummary): SyncTone {
+  if (summary.requiresAction || summary.state === "attention") return "error";
+  if (summary.state === "off") return "warn";
+  if (summary.state === "retrying" || summary.state === "setup" || summary.state === "catching_up") return "muted";
+  return "ok";
+}

@@ -27,7 +27,9 @@ export type SettingsTab =
   | "pages"
   | "users"
   | "agentKeys"
-  | "configuration";
+  | "configuration"
+  | "ofapi"
+  | "notifications";
 
 const SETTINGS_TABS = new Set<SettingsTab>([
   "features",
@@ -41,6 +43,8 @@ const SETTINGS_TABS = new Set<SettingsTab>([
   "users",
   "agentKeys",
   "configuration",
+  "ofapi",
+  "notifications",
 ]);
 
 export function buildPageRoute(pageLabel: string) {
@@ -205,7 +209,7 @@ export function buildSettingsSectionRoute(source: URLSearchParams, tab: Settings
 export function resolveSettingsTab(value: string | null | undefined): SettingsTab {
   return typeof value === "string" && SETTINGS_TABS.has(value as SettingsTab)
     ? value as SettingsTab
-    : "credentials";
+    : "pages";
 }
 
 export function isSafeInAppPath(value: string) {
