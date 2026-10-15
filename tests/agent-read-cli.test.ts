@@ -398,6 +398,8 @@ describe("hub CLI: credentials", () => {
     expect(resolved.token).toBe("from-file");
     expect(resolved.tokenSource).toBe("file");
     expect(resolved.baseUrl).toBe(HUB_DEFAULT_BASE_URL);
+    // Production's own name, not the bare domain that only forwards to it.
+    expect(HUB_DEFAULT_BASE_URL).toBe("https://hub.gosling-agency.ru");
   });
 
   it("takes HUB_BASE_URL from either source and strips the trailing slash", () => {

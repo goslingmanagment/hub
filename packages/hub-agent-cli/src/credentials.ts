@@ -23,7 +23,12 @@ import { join } from "node:path";
  * the remedy in the message.
  */
 
-export const HUB_DEFAULT_BASE_URL = "https://gosling-agency.ru";
+/**
+ * Production by its own name. The bare domain still resolves to the old server,
+ * which only forwards to production: one more hop and one more machine that can
+ * fail, and a forwarding timeout there turned a read into a 504 on 2026-10-15.
+ */
+export const HUB_DEFAULT_BASE_URL = "https://hub.gosling-agency.ru";
 
 export const HUB_CREDENTIALS_PATH = join(homedir(), ".config", "hub", "credentials");
 

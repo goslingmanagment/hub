@@ -518,7 +518,9 @@ hash that revision compiles to. The running revision is the
 
 Auth comes from `HUB_AGENT_KEY`, or from `HUB_AGENT_KEY=...` in
 `~/.config/hub/credentials`. The base URL comes from `HUB_BASE_URL` and defaults
-to production. The CLI stores nothing and creates nothing.
+to production, `https://hub.gosling-agency.ru`. The bare `gosling-agency.ru` still
+answers, but only by forwarding through the old server, so do not set it. The CLI
+stores nothing and creates nothing.
 
 If you use the credentials file, `chmod 600` it. The CLI refuses to run when that
 file is readable by anyone else, and tells you the command to fix it: the file
