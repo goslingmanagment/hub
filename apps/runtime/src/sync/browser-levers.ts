@@ -174,10 +174,16 @@ export interface BrowserCommandAsked {
  *  goes back to the login, which lifts it at its end), and a start asked:
  *  the engine clears the halt the operator holds — the one Hub mirrors now,
  *  named by its id (a newer one stays) — then starts the browser under the
- *  same guard as any start (during a login, the login starts it). */
+ *  same guard as any start (during a login, the login starts it).
+ *
+ *  `ifNoHalt` (`--if-no-halt`; the Chrome update's start, PR 18): a start
+ *  that never clears a halt — while Hub mirrors one for the owner's
+ *  decision it is refused in the same transaction, nothing changed (the
+ *  owner's stop and its pause stay); a halt the operator holds and Hub has
+ *  not mirrored yet refuses it at the operator, as any start. */
 export async function startPageBrowser(
   db: Database,
-  input: { pageLabel: string; actor: string; note?: string | null },
+  input: { pageLabel: string; actor: string; note?: string | null; ifNoHalt?: boolean },
 ): Promise<BrowserCommandAsked & { wasStopped: boolean; resumed: boolean; pauseToLogin: boolean; halt: { id: string | null; reason: string; at: string } | null }> {
   const page = await pageWithBrowser(db, input.pageLabel);
   return transaction(db, async (tx) => {
@@ -187,6 +193,12 @@ export async function startPageBrowser(
     const pauseToLogin = lifted === "to_login";
     const cleared = await clearPageBrowserOwnerStop(tx, { pageId: page.pageId });
     if (cleared === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
+    if (input.ifNoHalt === true && cleared.halt !== null) {
+      throw new SyncOwnerLeverError(
+        `${page.label}: its browser stands for the owner's decision (${cleared.halt.reason}${cleared.halt.id === null ? "" : `, halt ${cleared.halt.id}`}): `
+        + "a start that clears no halt is refused, nothing changed — the owner's own `sync browser start` decides it",
+      );
+    }
     const command = await insertPageBrowserCommand(tx, {
       pageId: page.pageId,
       kind: "restartBrowser",
@@ -202,6 +214,7 @@ export async function startPageBrowser(
       resumed,
       pauseToLogin,
       halt,
+      ...(input.ifNoHalt === true ? { ifNoHalt: true } : {}),
       commandId: command.id,
     });
     return {

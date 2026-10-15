@@ -652,10 +652,16 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .description("start a page's browser again: the owner's stop lifted (and the pause it put), the halt its operator holds for the owner's decision cleared by its id, the browser started (audited)")
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
+    .option("--if-no-halt", "clear no halt: refused, nothing changed, while one is held for the owner's decision (the Chrome update's start)", false)
     .option("--wait-ms <ms>", `how long to wait for the engine to run it (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
-    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoHalt: boolean }) => {
       await withContext(deps, async ({ db }) => {
-        const asked = await startPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
+        const asked = await startPageBrowser(db, {
+          pageLabel,
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+          ...(options.ifNoHalt ? { ifNoHalt: true } : {}),
+        });
         const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 5_000 });
         deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
       });
