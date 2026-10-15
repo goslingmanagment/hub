@@ -1719,6 +1719,7 @@ export class SocketTunnelClient {
 /** The engine's end, as the site socket's path sees it: what the operator
  *  sent it. */
 export class FakeSocketLink {
+  epoch = 1;
   readonly messages: Array<Record<string, unknown>> = [];
 
   send(message: object): boolean {

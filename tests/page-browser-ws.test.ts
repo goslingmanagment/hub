@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { createConnection } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -89,13 +90,14 @@ interface World {
   lines: string[];
   admitting: { why: string | null };
   session: { fingerprint: string | null; token: string | null };
+  tcpEpochs: number[];
   /** The engine's answer to the latest (or a given) wsAdmit. */
   answer: (fields: Partial<WsAdmitResult> & { admit: boolean }, connectionId?: string) => string;
   events: () => Array<Record<string, unknown>>;
   outcome: (attemptId: number) => Record<string, unknown> | null;
 }
 
-async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number } = {}): Promise<World> {
+async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number; soleDocument?: boolean } = {}): Promise<World> {
   const temp = tempDir("pb-ws-");
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -118,7 +120,8 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
   const admitting = { why: null as string | null };
   const session = { fingerprint: FINGERPRINT as string | null, token: SESSION_TOKEN as string | null };
   let sockets: SiteSockets | null = null;
-  const egress = new Egress({ classify: classifyFanslyHost, admitSocket: (host, port) => sockets!.admit(host, port), onRecord: (record) => records.push(record), log: makeLog("egress") });
+  const tcpEpochs: number[] = [];
+  const egress = new Egress({ classify: classifyFanslyHost, socketEpoch: () => { const epoch = sockets!.documentEpoch; tcpEpochs.push(epoch); return epoch; }, admitSocket: (host, port, epoch) => sockets!.admit(host, port, epoch), onRecord: (record) => records.push(record), log: makeLog("egress") });
   const proxyPort = await egress.listen(0);
   cleanups.push(() => egress.close());
   egress.setSocks({ ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD });
@@ -136,6 +139,7 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
     sessionFingerprint: () => session.fingerprint,
     authorizationBytes: () => (session.token === null ? null : authorizationBytes(session.token)),
     targetType: (sessionId) => (sessionId === null ? null : (types.get(sessionId) ?? null)),
+    documentOwner: () => options.soleDocument ? "S1" : null,
     socketHost: (host) => classifyFanslyHost(host) === "ws",
     cutTunnel: (connectionId, reason) => egress.cutSocket(connectionId, reason),
     journal: (line) => journal.push(line),
@@ -164,7 +168,7 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
     const stored = buffer.outcomes([attemptId])[0];
     return stored ? (JSON.parse(stored.json) as Record<string, unknown>) : null;
   };
-  return { cdp, egress, proxyPort, socks, server, buffer, sockets: created, link, records, journal, alarms, stops, lines, admitting, session, answer, events, outcome };
+  return { cdp, egress, proxyPort, socks, server, buffer, sockets: created, link, records, journal, alarms, stops, lines, admitting, session, tcpEpochs, answer, events, outcome };
 }
 
 /** The real buffer, its commits failing while `control.failing` (each
@@ -231,9 +235,9 @@ describe("admission before connection (condition №3; amendment 8)", () => {
       requestedMono: expect.any(Number),
       waitDeadlineMono: expect.any(Number),
     });
-    // 60 s from the CONNECT.
-    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeGreaterThan(59_000);
-    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeLessThanOrEqual(60_000);
+    // At most 2.5 s from the CONNECT, separately from HTTP's 60 s.
+    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeGreaterThan(2000);
+    expect((ask.waitDeadlineMono as number) - (ask.requestedMono as number)).toBeLessThanOrEqual(2500);
     await new Promise((resolve) => setTimeout(resolve, 150));
     // Waiting: no SOCKS5 connection, no byte to the socket host.
     expect(w.socks.connects).toEqual([]);
@@ -241,7 +245,7 @@ describe("admission before connection (condition №3; amendment 8)", () => {
     const client = await connecting;
     expect(client.status).toBe(200);
     expect(w.socks.connects).toEqual(["wsv3.fansly.com:443"]);
-    expect(w.journal.map((line) => line.event)).toEqual(["asked", "admitted"]);
+    expect(w.journal.map((line) => line.event)).toEqual(["cdp_created", "asked", "admitted"]);
   });
 
   it("refused by the engine: the CONNECT is refused, nothing goes, no outcome is owed", async () => {
@@ -299,6 +303,187 @@ describe("admission before connection (condition №3; amendment 8)", () => {
     expect(w.link.of("wsAdmit").map((message) => message.context)).toEqual(["frame", "worker"]);
     w.answer({ admit: false } as never);
     await worker;
+  });
+});
+
+describe("F2: the socket's document lifetime", () => {
+  const navigate = (w: World, loaderId: string, session = "S1") => w.cdp.emit("Page.frameNavigated", { frame: { id: `FRAME-${session}`, loaderId, url: "https://fansly.com/" } }, session);
+
+  it("withdraws both asked and queued CONNECTs before navigation, rejects the reload gap and returns a durable not-sent result to the old grant", async () => {
+    const w = await world();
+    navigate(w, "A");
+    const first = siteOpens(w, "OLD1");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    const id = String(w.link.of("wsAdmit")[0]!.connectionId);
+    const second = siteOpens(w, "OLD2");
+    await until(() => w.sockets.pending === 2);
+    w.sockets.reloading("S1");
+    expect((await first).status).toBe(403);
+    expect((await second).status).toBe(403);
+    expect(w.link.of("cancelAdmit")).toEqual([{ type: "cancelAdmit", kind: "ws", requestId: id, reason: "document_replaced" }]);
+    expect((await SocketTunnelClient.connect(w.proxyPort)).status).toBe(403);
+    w.answer({ admit: true, attemptId: 201 }, id);
+    await until(() => w.outcome(201) !== null);
+    expect(w.outcome(201)).toMatchObject({ sent: false, status: null });
+    expect(w.socks.connects).toEqual([]);
+    navigate(w, "B");
+    const client = await opened(w, "NEW", 202);
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "OLD1" }, "S1");
+    w.cdp.emit("Network.webSocketFrameError", { requestId: "OLD1", errorMessage: "old error" }, "S1");
+    await until(() => w.outcome(202) !== null);
+    expect(w.outcome(202)).toMatchObject({ sent: true, status: 101 });
+    expect(w.sockets.openConnections).toBe(1);
+    expect(w.stops).toEqual([]);
+    expect(w.journal).toContainEqual(expect.objectContaining({ event: "cdp_ended", requestId: "OLD1", documentEpoch: expect.any(Number) }));
+    client.destroy();
+  });
+
+  it("an old TCP connection whose CONNECT arrives after the new document is refused before any upstream connection", async () => {
+    const w = await world();
+    navigate(w, "A");
+    const client = createConnection({ host: "127.0.0.1", port: w.proxyPort });
+    cleanups.push(() => { client.destroy(); });
+    let response = "";
+    client.on("data", (data) => { response += data.toString("latin1"); });
+    await until(() => w.tcpEpochs.length === 1);
+    navigate(w, "B");
+    client.write("CONNECT wsv3.fansly.com:443 HTTP/1.1\r\nHost: wsv3.fansly.com:443\r\n\r\n");
+    await until(() => response.includes("\r\n\r\n"));
+    expect(response).toContain("403");
+    expect(w.link.of("wsAdmit")).toEqual([]);
+    expect(w.socks.connects).toEqual([]);
+    expect(w.records[0]?.result).toContain("replaced document epoch");
+  });
+
+  it("a committed document accounts for its unbound opened tunnel; a late old handshake cannot bind to the next tunnel", async () => {
+    const w = await world({ soleDocument: true, timings: { accountWaitMs: 100 } });
+    navigate(w, "A");
+    const connecting = siteOpens(w, "OLD");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 203 });
+    const old = await connecting;
+    await old.tls();
+    // Navigation intent alone is no proof: it has not committed yet.
+    w.sockets.reloading("S1");
+    expect(w.sockets.busy).toBe(true);
+    navigate(w, "B");
+    await until(() => !w.sockets.busy);
+    expect(w.outcome(203)).toMatchObject({ sent: false });
+    const next = siteOpens(w, "NEW");
+    await until(() => w.link.of("wsAdmit").length === 2);
+    w.answer({ admit: true, attemptId: 204 });
+    const client = await next;
+    await client.tls();
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "OLD" }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "NEW" }, "S1");
+    client.request();
+    await until(() => w.server.received().includes(SOCKET_FILL.request));
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "NEW", response: { status: 101 } }, "S1");
+    await until(() => w.outcome(204) !== null);
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(w.outcome(204)).toMatchObject({ status: 101 });
+    expect(w.stops).toEqual([]);
+    client.destroy();
+    old.destroy();
+  });
+
+  it("a document commit is not proof for an unbound CONNECT with an ambiguous owner: round-6 fail-closed remains", async () => {
+    const w = await world({ timings: { accountWaitMs: 80 } });
+    navigate(w, "A");
+    const connecting = siteOpens(w, "OLD");
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 205, deadlineMono: monoMs() + 100 });
+    const client = await connecting;
+    await client.tls();
+    client.socket.resume();
+    navigate(w, "B");
+    await until(() => w.stops.length === 1);
+    expect(w.stops[0]).toMatchObject({ reason: "ws_unaccounted" });
+    expect(w.outcome(205)).toMatchObject({ sent: false });
+    client.destroy();
+  });
+
+  it("the work tab's reload does not end a bound worker socket; losing its CDP target is not proof of a safe end", async () => {
+    const w = await world();
+    navigate(w, "A");
+    const worker = await opened(w, "WORKER", 206, "W1");
+    await until(() => w.outcome(206) !== null);
+    navigate(w, "B");
+    expect(w.sockets.openConnections).toBe(1);
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WORKER", response: { opcode: 1, payloadData: "kept" } }, "W1");
+    await until(() => w.events().some((event) => event.kind === "ws.in"));
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "W1" });
+    expect(w.stops).toMatchObject([{ reason: "ws_unaccounted", note: expect.stringContaining("target detached") }]);
+    w.sockets.endAll("the detached target cannot be observed");
+    worker.destroy();
+  });
+
+  it("expires from CONNECT and withdraws the ask; reconnect cancellation is never sent on the new RPC epoch", async () => {
+    const w = await world({ timings: { admitWaitMs: 80 } });
+    const waiting = siteOpens(w);
+    await until(() => w.link.of("wsAdmit").length === 1);
+    expect((await waiting).status).toBe(403);
+    expect(w.link.of("cancelAdmit")).toMatchObject([{ reason: "wait_expired", kind: "ws" }]);
+    w.sockets.setAdmitWait(60_000);
+    const next = siteOpens(w, "NEXT");
+    await until(() => w.link.of("wsAdmit").length === 2);
+    const ask = w.link.of("wsAdmit")[1]!;
+    expect(Number(ask.waitDeadlineMono) - Number(ask.requestedMono)).toBeLessThanOrEqual(2500);
+    w.link.epoch += 1;
+    w.sockets.linkChanged();
+    expect((await next).status).toBe(403);
+    expect(w.link.of("cancelAdmit")).toHaveLength(1);
+  });
+
+  it.each(["document", "deadline"])("a grant whose durable commit waits past the %s boundary never opens its CONNECT", async (boundary) => {
+    let release: () => void = () => undefined;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const w = await world({
+      timings: { admitWaitMs: boundary === "deadline" ? 100 : 2500 },
+      buffer: (inner) => {
+        const wrapped = failingCommits(inner, { failing: false, pending: [], full: false });
+        wrapped.changeConnection = (change) => {
+          const kept = inner.changeConnection(change);
+          return kept.ok ? { ...kept, durable: kept.durable.then(async (result) => { await blocked; return result; }) } : kept;
+        };
+        return wrapped;
+      },
+    });
+    navigate(w, "A");
+    const connecting = siteOpens(w);
+    await until(() => w.link.of("wsAdmit").length === 1);
+    w.answer({ admit: true, attemptId: 207 });
+    if (boundary === "document") {
+      w.sockets.reloading("S1");
+      navigate(w, "B");
+    } else await new Promise((resolve) => setTimeout(resolve, 150));
+    // Expiry must answer the CONNECT even if the durable callback never
+    // arrives. Rechecking only when that callback returns is unbounded.
+    const beforeRelease = await Promise.race([connecting.then((client) => client.status), new Promise<number>((resolve) => setTimeout(() => resolve(-1), 1000))]);
+    release();
+    expect(beforeRelease).toBe(403);
+    expect((await connecting).status).toBe(403);
+    await until(() => w.outcome(207) !== null);
+    expect(w.outcome(207)).toMatchObject({ sent: false });
+    expect(w.socks.connects).toEqual([]);
+  });
+
+  it("Chrome restart withdraws waits, keeps the late grant not sent and admits the new document", async () => {
+    const w = await world();
+    const connecting = siteOpens(w);
+    await until(() => w.link.of("wsAdmit").length === 1);
+    const id = String(w.link.of("wsAdmit")[0]!.connectionId);
+    w.sockets.endAll("Chrome restart");
+    expect((await connecting).status).toBe(403);
+    expect(w.link.of("cancelAdmit")).toEqual([{ type: "cancelAdmit", kind: "ws", requestId: id, reason: "operator_stopped" }]);
+    await w.sockets.chromeStarting();
+    navigate(w, "B");
+    w.answer({ admit: true, attemptId: 208 }, id);
+    await until(() => w.outcome(208) !== null);
+    expect(w.outcome(208)).toMatchObject({ sent: false });
+    const client = await opened(w, "FRESH", 209);
+    expect(w.stops).toEqual([]);
+    client.destroy();
   });
 });
 
@@ -1273,6 +1458,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
       sessionFingerprint: () => FINGERPRINT,
       authorizationBytes: () => authorizationBytes(SESSION_TOKEN),
       targetType: () => "page",
+      documentOwner: () => null,
       socketHost: (host) => classifyFanslyHost(host) === "ws",
       cutTunnel: () => false,
       journal: () => undefined,

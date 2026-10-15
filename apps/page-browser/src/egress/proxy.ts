@@ -91,7 +91,10 @@ export interface EgressOptions {
   classify: HostClassifier;
   /** A CONNECT to the socket host: its admission (a ticket), or why it is
    *  refused now. Without it every such CONNECT is refused. */
-  admitSocket?: (host: string, port: number) => SocketTicket | string;
+  admitSocket?: (host: string, port: number, epoch: number | undefined) => SocketTicket | string;
+  /** Captured when Chrome's TCP connection arrives, before its CONNECT.
+   *  A CONNECT read after a document boundary must keep the old epoch. */
+  socketEpoch?: () => number;
   gate?: ApiGate;
   /** Every refusal and every closed tunnel (the connection journal). */
   onRecord?: (record: TunnelRecord) => void;
@@ -159,6 +162,7 @@ export class Egress {
   #socks: SocksConfig | null = null;
   #exitOpen = false;
   readonly #tunnels = new Set<Tunnel>();
+  readonly #socketEpochs = new WeakMap<Socket, number>();
   #nextId = 1;
   readonly #recent: TunnelRecord[] = [];
 
@@ -230,6 +234,10 @@ export class Egress {
       }
       this.#log("plain.refused", { method: req.method ?? "", url: (req.url ?? "").startsWith("/") ? (req.url ?? "").split(/[?#]/)[0] : urlForLogLine(req.url ?? "") });
       res.writeHead(403, { "content-length": "0", connection: "close" }).end();
+    });
+    server.on("connection", (client: Socket) => {
+      const epoch = this.#options.socketEpoch?.();
+      if (epoch !== undefined) this.#socketEpochs.set(client, epoch);
     });
     server.on("connect", (req: IncomingMessage, client: Socket, head: Buffer) => this.#onConnect(req, client, head));
     server.on("clientError", (_error, socket) => socket.destroy());
@@ -528,7 +536,7 @@ export class Egress {
     if (cls === "ws") {
       let admission: SocketTicket | string;
       try {
-        admission = this.#options.admitSocket?.(host, record.port) ?? "no admitting path";
+        admission = this.#options.admitSocket?.(host, record.port, this.#socketEpochs.get(client)) ?? "no admitting path";
       } catch (error) {
         admission = `the admission failed: ${errorMessage(error)}`;
       }

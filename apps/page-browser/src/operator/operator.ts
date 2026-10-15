@@ -438,7 +438,8 @@ export class Operator {
       gate: new ApiGate({ slotLimitMs: this.#timings.slotLimitMs }),
       classify: this.#classify,
       serve: (req, res) => this.extension.serve(req, res),
-      admitSocket: (host, port) => this.sockets.admit(host, port),
+      socketEpoch: () => this.sockets.documentEpoch,
+      admitSocket: (host, port, epoch) => this.sockets.admit(host, port, epoch),
       onRecord: (record) =>
         this.journals.connection({
           id: record.id,
@@ -699,15 +700,25 @@ export class Operator {
       discard: (why) => this.#discardDocument(why),
       ...(deps.loginTimings ? { timings: deps.loginTimings } : {}),
     });
+    const rpc = this.rpc;
     this.sockets = new SiteSockets({
       cdp: this.cdp,
       buffer: this.buffer,
-      link: { send: (message) => this.rpc.send(message) },
+      link: { get epoch() { return rpc.epoch; }, send: (message) => this.rpc.send(message) },
       // The site's socket is not of the manual login (spec §2.4).
       notAdmitting: () => (this.#mode === "manual_login" ? "the manual login: no socket of the site" : this.admissionsOpen() ? null : this.#noAdmissionWhy()),
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
+      documentOwner: () => {
+        const tab = this.control.workTab;
+        // A CONNECT carries no frame/request id. Never infer ownership
+        // from the oldest CDP socket or from a URL when workers/other tabs
+        // could have made it. A bound handshake supplies its own proof.
+        if (tab === null) return null;
+        const web = this.control.targets.filter((target) => ["page", "iframe", "worker", "shared_worker", "service_worker"].includes(target.type));
+        return web.length === 1 && web[0] === tab ? tab.sessionId : null;
+      },
       socketHost: (host) => this.#classify(host) === "ws",
       cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
@@ -1223,6 +1234,7 @@ export class Operator {
         return;
       }
       this.#siteReloaded = true;
+      this.sockets.reloading(this.control.workTab?.sessionId ?? null);
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
       this.#log("site.reload", { failed });
       this.page.back("exit_open", `the session is confirmed; ${failed} API request${failed === 1 ? "" : "s"} of the site failed before it, none sent: the work tab is loaded anew, once`);
@@ -1902,6 +1914,7 @@ export class Operator {
         this.#log("site.mode_reload_waits", { released: this.site.released });
       }
       if (stale()) return;
+      this.sockets.reloading(this.control.workTab?.sessionId ?? null);
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
       this.page.back("exit_open", note);
       await this.#loadSite(run);
@@ -1924,6 +1937,7 @@ export class Operator {
     const up = !this.page.halted && this.egress.exitOpen && atLeast(this.page.step, "site_loaded");
     try {
       if (tab === null) throw new Error("no work tab known");
+      this.sockets.reloading(tab.sessionId);
       if (up) {
         this.site.reloading(tab.mainFrameId ?? null);
         this.page.back("exit_open", why);

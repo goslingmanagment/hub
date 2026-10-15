@@ -80,7 +80,12 @@ export interface SocketLine {
   /** The admission's connection id; null for a socket the operator could
    *  not tie to one. */
   connectionId: string | null;
-  event: "asked" | "refused" | "admitted" | "open" | "failed" | "closed" | "out" | "blocked" | "unkept";
+  event: "asked" | "refused" | "admitted" | "open" | "failed" | "closed" | "out" | "blocked" | "unkept" | "document" | "cdp_created" | "cdp_ended";
+  requestId?: string;
+  sessionId?: string;
+  documentEpoch?: number;
+  connectEpoch?: number;
+  atMono?: number;
   /** The engine's attempt, once admitted. */
   attemptId?: number | null;
   /** The handshake's status. */

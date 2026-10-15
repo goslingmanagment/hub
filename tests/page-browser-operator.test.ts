@@ -179,7 +179,7 @@ async function setUp(
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
+  engine.send(hello({ protocol: { majors: [1], minor: 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
@@ -1789,6 +1789,33 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.buffer.siteRequests().length === 0, 3000, "their ids to go");
   });
 
+  it("F2 pilot: confirmation reloads the document while its socket waits; the ask is withdrawn and a late grant opens no tunnel, leaving the page ready", async () => {
+    const s = await siteSetUp(() => ({ refuse: "held" }), { socketTimings: { accountWaitMs: 80, bindWaitMs: 80 } });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    const refused = read(s, ME);
+    await until(() => refused.outcome === "failed", 3000, "the failed site read");
+    s.chrome.event("Network.webSocketCreated", { requestId: "OLD-DOCUMENT-WS", url: "wss://wsv3.fansly.com/?v=3" }, s.tab);
+    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
+    const ask = await s.engine.waitFor("wsAdmit");
+    s.model.hubBody = account("123456789");
+    s.engine.send(identity(9970, FINGERPRINT));
+    await s.engine.waitFor("result", (message) => message.attemptId === 9970, 10_000);
+    await until(() => s.operator.page.step === "ready", START_MS, "ready after the confirmation reload");
+    expect(s.model.navigations).toHaveLength(2);
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: true, deadlineMono: monoMs() + 200, attemptId: 9971 });
+    const client = await connecting;
+    cleanups.push(() => client.destroy());
+    expect(client.status).toBe(403);
+    expect(s.engine.of("cancelAdmit")).toContainEqual({ type: "cancelAdmit", kind: "ws", requestId: ask.connectionId, reason: "document_replaced" });
+    expect(await s.engine.waitFor("wsDone", (message) => message.attemptId === 9971)).toMatchObject({ sent: false, status: null });
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(s.socks.connects).not.toContain("wsv3.fansly.com:443");
+    expect(s.operator.page.step).toBe("ready");
+    expect(s.engine.of("state").some((state) => state.stopReason === "ws_unaccounted")).toBe(false);
+  });
+
   it("one admitted request of the page at a time: the identity read admitted while a request of the site is in flight is not released (not sent, \"pace\", the gate's refusal logged); after that request's answer it confirms, and the reload cancels nothing and stops nothing", async () => {
     let attempt = 9800;
     const answers: Array<{ admit: number } | { refuse: string }> = [{ refuse: "held" }];
@@ -2076,8 +2103,10 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
     await s.operator.journals.close();
     const journals = readdirSync(s.logDir).map((name) => readFileSync(join(s.logDir, name), "utf8"));
-    expect(journal(s.logDir, "sockets").map((line) => line.event)).toEqual(["asked", "admitted", "open", "out"]);
-    expect(journal(s.logDir, "sockets")[3]).toMatchObject({ message: { kind: "auth", opcode: 1, bytes: AUTH.length } });
+    const socketLines = journal(s.logDir, "sockets");
+    expect(socketLines.filter((line) => !["document", "cdp_created", "cdp_ended"].includes(String(line.event))).map((line) => line.event)).toEqual(["asked", "admitted", "open", "out"]);
+    expect(socketLines.find((line) => line.event === "out")).toMatchObject({ message: { kind: "auth", opcode: 1, bytes: AUTH.length } });
+    expect(socketLines.find((line) => line.event === "cdp_created")).toMatchObject({ requestId: "WS1", sessionId: tab, documentEpoch: expect.any(Number), atMono: expect.any(Number), connectionId: null });
     const everything = [...journals, ...s.lines].join("\n");
     for (const secret of [TOKEN, SITE_TOKEN, FRAME_SECRET, "?v=3"]) expect(everything, secret).not.toContain(secret);
     client.destroy();
