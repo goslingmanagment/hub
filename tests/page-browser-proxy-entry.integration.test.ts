@@ -71,9 +71,20 @@ async function rig() {
   const lines: string[] = [];
   // The proxies' DNS, as a test sets it (every name: this machine by default).
   const dns = new Map<string, string[]>();
+  // Every name the API resolved, and the checks' clock (moved by a test).
+  const resolved: string[] = [];
+  const clock = { offset: 0 };
   const app = createTestAppContext(testDb!, {
     logger: createLogger("trace", new Writable({ write(chunk, _encoding, callback) { lines.push(String(chunk)); callback(); } })),
-    pageBrowserProxyCheck: { options: localCheckOptions(socks, ipinfo, geojs), resolve: async (host) => dns.get(host) ?? ["127.0.0.1"], allowAddresses: ALLOWED },
+    pageBrowserProxyCheck: {
+      options: localCheckOptions(socks, ipinfo, geojs),
+      resolve: async (host) => {
+        resolved.push(host);
+        return dns.get(host) ?? ["127.0.0.1"];
+      },
+      allowAddresses: ALLOWED,
+      now: () => Date.now() + clock.offset,
+    },
   });
   await createUserAccount(app, { username: "owner-entry", role: "owner", password: "synthetic-password" }, { source: "cli" });
   await createUserAccount(app, { username: "lead-entry", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
@@ -87,15 +98,40 @@ async function rig() {
   const cookie = await cookieOf("owner-entry");
   const lead = await cookieOf("lead-entry");
   const as = (who: string) => ({ cookie: who, host: HOST, origin: ORIGIN });
-  return { socks, ipinfo, app, server, lines, cookie, lead, as, dns };
+  return { socks, ipinfo, geojs, app, server, lines, cookie, lead, as, dns, resolved, clock };
 }
 
 type Rig = Awaited<ReturnType<typeof rig>>;
 
 const check = (r: Rig, source: Record<string, unknown>, who = r.cookie) =>
   r.server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: r.as(who), payload: { source } });
-const save = (r: Rig, name: string, body: Record<string, unknown>, headers: Record<string, string> = r.as(r.cookie)) =>
-  r.server.inject({ method: "PUT", url: `/api/v1/page-browser/drafts/${name}`, headers, payload: body });
+const NO_CHECK = "00000000-0000-4000-8000-000000000000";
+
+/** A draft's save as the dashboard sends it: the owner's check of the proxy
+ *  first (the pasted one, the page's own, or the draft's kept one) unless
+ *  the body names one, and the draft's revision as it stands unless the body
+ *  says which. A check that gave no id leaves a save that names none. */
+async function save(r: Rig, name: string, body: Record<string, unknown>, headers: Record<string, string> = r.as(r.cookie)) {
+  let checkId = body.checkId;
+  if (checkId === undefined) {
+    const source = body.proxy !== undefined ? { kind: "text", proxy: body.proxy } : body.existingPage === true ? { kind: "page", pageLabel: name } : { kind: "draft", name };
+    const checked = await check(r, source);
+    checkId = (checked.statusCode === 200 ? (checked.json() as { checkId: string | null }).checkId : null) ?? NO_CHECK;
+  }
+  const expectedRevision = body.expectedRevision !== undefined ? body.expectedRevision : (await findPageBrowserDraft(db(), name))?.revision ?? null;
+  return r.server.inject({ method: "PUT", url: `/api/v1/page-browser/drafts/${name}`, headers, payload: { ...body, checkId, expectedRevision } });
+}
+
+/** Another SOCKS5 on this machine, with a login of its own, routed to the
+ *  rig's IP-info services. */
+async function anotherSocks(r: Rig, username: string, password: string): Promise<FakeSocks> {
+  const socks = new FakeSocks(username, password);
+  await socks.start();
+  cleanups.push(() => socks.stop());
+  socks.routes.set("ipinfo.io:443", r.ipinfo.port);
+  socks.routes.set("get.geojs.io:443", r.geojs.port);
+  return socks;
+}
 
 /** A page Hub has, its proxy sealed as egress_endpoints keeps one. */
 async function pageWithProxy(label: string, url: string, auth: { username: string; password: string } | null): Promise<number> {
@@ -287,21 +323,26 @@ describe("Astra's review of PR #627: the proxy's address and the draft's identit
   it("item 2: a numeric password is never read as the port — not stored, not audited, not answered, not listed; a text that reads two ways is asked about, the order given is honoured", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    const saved = await save(r, "ari-2", { existingPage: false, proxy: { text: "203.0.113.10:1080@alice:54321" }, env: ENV });
-    expect(saved.json()).toMatchObject({ proxy: { scheme: "socks5", host: "203.0.113.10", port: 1080, username: "alice", passwordSet: true } });
+    const alice = await anotherSocks(r, "alice", "54321");
+    const saved = await save(r, "ari-2", { existingPage: false, proxy: { text: `127.0.0.1:${alice.port}@alice:54321` }, env: ENV });
+    expect(saved.json()).toMatchObject({ proxy: { scheme: "socks5", host: "127.0.0.1", port: alice.port, username: "alice", passwordSet: true } });
     expect(saved.body).not.toContain("54321");
     expect((await testDb.pool.query<{ proxy_url: string; socks_endpoint: string }>("select proxy_url, socks_endpoint from page_browser_drafts where name = 'ari-2'")).rows[0])
-      .toEqual({ proxy_url: "socks5://203.0.113.10:1080", socks_endpoint: "203.0.113.10:1080" });
+      .toEqual({ proxy_url: `socks5://127.0.0.1:${alice.port}`, socks_endpoint: `127.0.0.1:${alice.port}` });
     expect((await r.server.inject({ method: "GET", url: "/api/v1/page-browser/drafts", headers: { cookie: r.cookie } })).body).not.toContain("54321");
     expect(JSON.stringify((await testDb.pool.query("select metadata from audit_events")).rows)).not.toContain("54321");
     // Both ends plainly a host: asked; the order given is honoured.
-    const twoWays = "john.doe:5555@gate.example.com:1080";
+    const john = await anotherSocks(r, "john.doe", "5555");
+    const twoWays = `john.doe:5555@gate.example.com:${john.port}`;
     expect((await check(r, { kind: "text", proxy: { text: twoWays } })).json()).toMatchObject({ reason: "proxy_ambiguous" });
     expect((await save(r, "ari-3", { existingPage: false, proxy: { text: twoWays }, env: ENV })).json()).toMatchObject({ reason: "proxy_ambiguous" });
-    r.dns.set("gate.example.com", ["203.0.113.20"]);
-    const asked = await save(r, "ari-3", { existingPage: false, proxy: { text: twoWays, order: "user_first" }, env: ENV });
-    expect(asked.json()).toMatchObject({ proxy: { host: "gate.example.com", port: 1080, username: "john.doe" } });
+    const asked = await save(r, "ari-3", { existingPage: false, proxy: { text: twoWays, order: "login_at_host" }, env: ENV });
+    expect(asked.json()).toMatchObject({ proxy: { host: "gate.example.com", port: john.port, username: "john.doe" } });
     expect(asked.body).not.toContain("5555");
+    // An @ in the login, the colon form: every reading gathered — asked.
+    const atLogin = `127.0.0.1:${john.port}:alice@example.com:54321`;
+    expect((await check(r, { kind: "text", proxy: { text: atLogin } })).json()).toMatchObject({ reason: "proxy_ambiguous" });
+    expect((await save(r, "ari-4", { existingPage: false, proxy: { text: atLogin }, env: ENV })).json()).toMatchObject({ reason: "proxy_ambiguous" });
   }, 60_000);
 
   it("item 3: add-profile takes the address judged public at the draft's save — a DNS answer of later, pointing inside, never reaches the container; a non-public address is refused at every stage", async (context) => {
@@ -315,8 +356,11 @@ describe("Astra's review of PR #627: the proxy's address and the draft's identit
     r.dns.set("gate.provider.example", ["10.230.0.3"]);
     await cli(printed).parseAsync(["browser-profile", "draft", "--name", "ari-2"], { from: "user" });
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ socks: `127.0.0.1:${r.socks.port}` });
-    // A save now judges the answer of now: refused, the draft as it was.
-    expect((await save(r, "ari-2", { existingPage: false, env: ENV })).json()).toMatchObject({ reason: "proxy_unusable" });
+    // A check now meets the answer of now and refuses it, so there is no
+    // check to save with: the draft as it was.
+    expect((await check(r, { kind: "draft", name: "ari-2" })).json()).toMatchObject({ ok: false, problem: { code: "private_address" }, checkId: null });
+    expect((await save(r, "ari-2", { existingPage: false, env: ENV })).json()).toMatchObject({ reason: "check_missing" });
+    expect(await findPageBrowserDraft(db(), "ari-2")).toMatchObject({ socksEndpoint: `127.0.0.1:${r.socks.port}`, revision: 1 });
     // The container made for another address: refused (and an inside one in any case).
     await expect(addFrom(printed, randomUUID(), "ari-2", read, ["--new-page", "ari-2"], `10.230.0.3:${r.socks.port}`)).rejects.toThrow(/not a public address/);
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ outcome: "refused" });
@@ -345,7 +389,8 @@ describe("Astra's review of PR #627: the proxy's address and the draft's identit
     expect(await findPageBrowserDraft(db(), "lilly-1")).not.toBeNull();
     await expect(cli(printed).parseAsync(["browser-profile", "draft", "--name", "lilly-1"], { from: "user" })).rejects.toThrow(/changed since its draft was saved/);
     // Even a change that keeps the URL (a new login, a new key): the row moved.
-    await testDb.pool.query("update egress_endpoints set url = $2, updated_at = now() + interval '1 second' where platform_account_id = $1", [pageId, `socks5://127.0.0.1:${r.socks.port}`]);
+    await testDb.pool.query("update egress_endpoints set url = $2, encrypted_auth = $3, updated_at = now() + interval '1 second' where platform_account_id = $1",
+      [pageId, `socks5://127.0.0.1:${r.socks.port}`, JSON.stringify(encryptJson({ username: USER, password: PASSWORD }, config.encryptionKey, config.encryptionKeyVersion))]);
     await expect(addFrom(printed, randomUUID(), "lilly-1", read, ["--page", "lilly-1"])).rejects.toThrow(/changed since its draft was saved/);
     // Saved again: it binds.
     const again = await drafted(r, printed, "lilly-1", { existingPage: true, env: ENV });
@@ -360,11 +405,62 @@ describe("Astra's review of PR #627: the proxy's address and the draft's identit
     const read = await drafted(r, printed, "ari-2", { existingPage: false, proxy: { text: `a.proxy.example:${r.socks.port}:${USER}:${PASSWORD}` }, env: ENV });
     expect((await r.server.inject({ method: "DELETE", url: "/api/v1/page-browser/drafts/ari-2", headers: r.as(r.cookie) })).json()).toEqual({ deleted: true });
     // Made again with another proxy at the same address: revision 1 again.
-    expect((await save(r, "ari-2", { existingPage: false, proxy: { text: `b.proxy.example:${r.socks.port}:other:other-password` }, env: ENV })).json()).toMatchObject({ revision: 1 });
+    expect((await save(r, "ari-2", { existingPage: false, proxy: { text: `b.proxy.example:${r.socks.port}:${USER}:${PASSWORD}` }, env: ENV })).json()).toMatchObject({ revision: 1 });
     const profileId = randomUUID();
     await expect(addFrom(printed, profileId, "ari-2", read)).rejects.toThrow(/not the one add-profile read/);
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId, outcome: "refused" });
     expect(await findOnboardingProfile(db(), profileId)).toBeNull();
     expect(await findPageBrowserDraft(db(), "ari-2")).toMatchObject({ proxy: { url: `socks5://b.proxy.example:${r.socks.port}` } });
+  }, 60_000);
+});
+
+describe("Astra's review of PR #627, round 2: what is stored is what was checked", () => {
+  it("a save stores the address its check connected to — of that very proxy, while fresh — and resolves nothing; another proxy's check, an unknown or stale one is refused", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const text = `gate.provider.example:${r.socks.port}:${USER}:${PASSWORD}`;
+    r.dns.set("gate.provider.example", ["127.0.0.1"]);
+    const checked = (await check(r, { kind: "text", proxy: { text } })).json() as { ok: boolean; socksEndpoint: string; checkId: string };
+    expect(checked).toMatchObject({ ok: true, socksEndpoint: `127.0.0.1:${r.socks.port}` });
+    // The name now answers another public address: the save never asks it.
+    r.dns.set("gate.provider.example", ["93.184.216.34"]);
+    const asked = r.resolved.length;
+    const saved = await save(r, "ari-2", { existingPage: false, proxy: { text }, env: ENV, checkId: checked.checkId, expectedRevision: null });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(r.resolved.length).toBe(asked);
+    expect(await findPageBrowserDraft(db(), "ari-2")).toMatchObject({ socksEndpoint: `127.0.0.1:${r.socks.port}` });
+    // The check of another proxy (another password): refused.
+    const other = await save(r, "ari-3", { existingPage: false, proxy: { text: `gate.provider.example:${r.socks.port}:${USER}:another-password` }, env: ENV, checkId: checked.checkId, expectedRevision: null });
+    expect(other.json()).toMatchObject({ reason: "check_other_proxy" });
+    expect((await save(r, "ari-3", { existingPage: false, proxy: { text }, env: ENV, checkId: NO_CHECK, expectedRevision: null })).json()).toMatchObject({ reason: "check_missing" });
+    // Stale: the owner checks again.
+    r.clock.offset = 11 * 60_000;
+    expect((await save(r, "ari-3", { existingPage: false, proxy: { text }, env: ENV, checkId: checked.checkId, expectedRevision: null })).json()).toMatchObject({ reason: "check_stale" });
+    expect(await findPageBrowserDraft(db(), "ari-3")).toBeNull();
+  }, 60_000);
+
+  it("concurrent saves: a writer of a revision gone is refused — the proxy B saved meanwhile keeps its own address, never A's", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const b = await anotherSocks(r, USER, PASSWORD);
+    // Revision 1: proxy A, at the rig's SOCKS5.
+    expect((await save(r, "ari-2", { existingPage: false, proxy: { text: `a.proxy.example:${r.socks.port}:${USER}:${PASSWORD}` }, env: ENV })).json()).toMatchObject({ revision: 1 });
+    // Owner tab 1 checks the kept proxy A to save the environment again…
+    const checkA = (await check(r, { kind: "draft", name: "ari-2" })).json() as { checkId: string };
+    // …while tab 2 saves proxy B, at another address.
+    const textB = `b.proxy.example:${b.port}:${USER}:${PASSWORD}`;
+    const checkB = (await check(r, { kind: "text", proxy: { text: textB } })).json() as { checkId: string };
+    expect((await save(r, "ari-2", { existingPage: false, proxy: { text: textB }, env: ENV, checkId: checkB.checkId, expectedRevision: 1 })).json()).toMatchObject({ revision: 2 });
+    // Tab 1 saves on revision 1: refused, nothing written.
+    const stale = await save(r, "ari-2", { existingPage: false, env: { ...ENV, timeZone: "Europe/Paris" }, checkId: checkA.checkId, expectedRevision: 1 });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: "draft_changed" });
+    // Even on the revision of now, its check is of A, not of the kept B: refused.
+    expect((await save(r, "ari-2", { existingPage: false, env: ENV, checkId: checkA.checkId, expectedRevision: 2 })).json()).toMatchObject({ reason: "check_other_proxy" });
+    // A new draft over one that exists: refused.
+    expect((await save(r, "ari-2", { existingPage: false, proxy: { text: textB }, env: ENV, checkId: checkB.checkId, expectedRevision: null })).json()).toMatchObject({ error: "draft_changed" });
+    expect(await findPageBrowserDraft(db(), "ari-2")).toMatchObject({
+      revision: 2, socksEndpoint: `127.0.0.1:${b.port}`, proxy: { url: `socks5://b.proxy.example:${b.port}` }, env: { timeZone: "Europe/Berlin" },
+    });
   }, 60_000);
 });

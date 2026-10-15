@@ -235,7 +235,8 @@ describe("a new page connected through its own browser, the whole path (plan §3
     const checked = await server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: as(cookie), payload: { source: { kind: "text", proxy: { text: pasted } } } });
     expect(checked.json()).toMatchObject({ ok: true, spoken: "socks5", exit: { ip: "203.0.113.7", countryCode: "DE", timeZone: "Europe/Berlin" }, env: { timeZone: "Europe/Berlin", languages: ["de-DE", "de", "en-US", "en"] } });
     expect(checked.body).not.toContain(SOCKS_PASSWORD);
-    const drafted = await server.inject({ method: "PUT", url: "/api/v1/page-browser/drafts/ari-2", headers: as(cookie), payload: { existingPage: false, proxy: { text: pasted }, env: ENV } });
+    // Saved with that check: the address it connected to is the one stored.
+    const drafted = await server.inject({ method: "PUT", url: "/api/v1/page-browser/drafts/ari-2", headers: as(cookie), payload: { existingPage: false, proxy: { text: pasted }, env: ENV, checkId: checked.json().checkId, expectedRevision: null } });
     expect(drafted.statusCode, drafted.body).toBe(200);
     expect(drafted.body).not.toContain(SOCKS_PASSWORD);
 
@@ -293,12 +294,20 @@ describe("a new page connected through its own browser, the whole path (plan §3
     // The proxy replaced in one field (another format of the same SOCKS5):
     // only the one its container admits; a change only from the dashboard's
     // own pages.
+    const checkOf = async (text: string) => (await server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: as(cookie), payload: { source: { kind: "text", proxy: { text } } } })).json().checkId as string;
     const again = { text: `socks5://${SOCKS_USER}:${SOCKS_PASSWORD}@127.0.0.1:${socks.port}` };
-    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: { cookie, host: "hub.test", origin: "https://evil.example" }, payload: { proxy: again } })).statusCode).toBe(403);
-    const other = await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: { text: `127.0.0.1:1:${SOCKS_USER}:${SOCKS_PASSWORD}` } } });
+    const againChecked = await checkOf(again.text);
+    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: { cookie, host: "hub.test", origin: "https://evil.example" }, payload: { proxy: again, checkId: againChecked } })).statusCode).toBe(403);
+    // Another SOCKS5, checked: not the one the container admits.
+    const elsewhere = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
+    await elsewhere.start();
+    cleanups.push(() => elsewhere.stop());
+    elsewhere.routes.set("ipinfo.io:443", ipinfo.port);
+    const otherText = `127.0.0.1:${elsewhere.port}:${SOCKS_USER}:${SOCKS_PASSWORD}`;
+    const other = await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: { text: otherText }, checkId: await checkOf(otherText) } });
     expect(other.statusCode).toBe(400);
     expect(other.json().message).toContain(`was made for the SOCKS5 127.0.0.1:${socks.port}`);
-    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: again } })).json()).toEqual({
+    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: again, checkId: againChecked } })).json()).toEqual({
       proxy: { scheme: "socks5", host: "127.0.0.1", port: socks.port, username: SOCKS_USER, passwordSet: true },
     });
     // Checked as given; its exit IP — a preview — pinned by the owner.

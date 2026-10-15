@@ -55,6 +55,7 @@ function checked(overrides: Partial<PageBrowserProxyCheckResponse> = {}): PageBr
     exit: { ip: "203.0.113.7", country: null, countryCode: "DE", region: "Land Berlin", city: "Berlin", isp: "Example Mobile GmbH", asn: "AS64500", timeZone: "Europe/Berlin", latitude: 52.5244, longitude: 13.4105 },
     ipInfoService: "ipinfo.io",
     env: ENV,
+    checkId: "4b1f0e2a-9c3d-4e5f-8a7b-6c5d4e3f2a1b",
     checkedAt: "2026-10-15T12:00:00.000Z",
     ...overrides,
   };
@@ -159,6 +160,8 @@ describe("the draft page and the Settings section rendered", () => {
     expect(html).toContain("Проверить прокси");
     expect(html).toContain('id="pb-env-timeZone"');
     expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*data-draft-save/);
+    // Saved only after a check: the address it connected to is the one stored.
+    expect(html).toContain("data-draft-needs-check");
   });
 
   it("an existing page moving to its browser: its own proxy shown, masked, checkable; no field", () => {

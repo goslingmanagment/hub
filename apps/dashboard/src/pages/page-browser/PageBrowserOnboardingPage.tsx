@@ -61,7 +61,10 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
   const editable = data.login.state !== "login" && data.login.state !== "closing";
   const pasting = editable && (data.proxy === null || replacing);
   const preview = proxyPreviewOf(text, order);
-  const ready = preview.kind === "parsed" && preview.problem === null;
+  // Saved only after a check of this very text that logged in through it:
+  // the address it connected to is the one kept.
+  const checkId = pasting ? check.result?.checkId ?? null : null;
+  const ready = preview.kind === "parsed" && preview.problem === null && checkId !== null;
   const runCheck = () => {
     const source = pasting
       ? (preview.kind === "parsed" ? { kind: "text" as const, proxy: { text, ...(order === null ? {} : { order }) } } : null)
@@ -71,7 +74,7 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!ready || pending) return;
+    if (!ready || pending || checkId === null) return;
     setPending(true);
     setProblem(null);
     const proxy = { text, ...(order === null ? {} : { order }) };
@@ -79,7 +82,7 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
     // nothing keeps it after (no query cache).
     setText("");
     setOrder(null);
-    sendPageBrowserProfileProxy(qc, data.profile.profileId, proxy)
+    sendPageBrowserProfileProxy(qc, data.profile.profileId, proxy, checkId)
       .then(() => { setReplacing(false); check.reset(); }, (error: unknown) => setProblem(errorText(error)))
       .finally(() => setPending(false));
   };
@@ -99,9 +102,10 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
       {pasting && (
         <form onSubmit={submit} className="mb-3 flex flex-col gap-2" autoComplete="off">
           <ProxyPasteField id="pb-proxy" label={data.proxy === null ? "Прокси этой страницы" : "Новая прокси — тот же SOCKS5, другой логин или пароль"} text={text} onText={(value) => { setText(value); check.reset(); }} order={order} onOrder={setOrder} disabled={pending} />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button type="submit" className={PLAIN} disabled={!ready || pending}>{pending ? "Сохраняем…" : "Сохранить"}</button>
             {data.proxy !== null && <button type="button" className={PLAIN} onClick={() => { setReplacing(false); setText(""); check.reset(); }}>Отмена</button>}
+            {checkId === null && preview.kind === "parsed" && <span className="text-xs text-text-muted">Сохранить — после успешной проверки этой прокси</span>}
           </div>
         </form>
       )}

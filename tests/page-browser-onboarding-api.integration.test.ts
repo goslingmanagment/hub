@@ -13,6 +13,8 @@ import { bindNewFanslyPageThroughBrowser } from "../apps/runtime/src/services/pa
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { bindProvenProfile, proveOnboardingAccount } from "./helpers/page-browser-onboarding.ts";
+import { FakeSocks } from "./helpers/page-browser-fakes.ts";
+import { fakeIpInfoService, GEOJS_BERLIN, IPINFO_BERLIN, localCheckOptions } from "./helpers/proxy-check-fakes.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { harnessConfig, until } from "./helpers/sync-engine.ts";
 
@@ -76,14 +78,26 @@ async function fakeScreen(): Promise<{ port: number; open: Set<Socket>; close: (
   };
 }
 
+const PROXY_PASSWORD = "proxy-password-not-shown";
+const NO_CHECK = "00000000-0000-4000-8000-000000000000";
+
 async function rig() {
   const config = harnessConfig(testDb!.connectionString);
   const profileId = randomUUID();
+  // The page's SOCKS5 on this machine, and the IP-info services the
+  // owner's check asks through it.
+  const socks = new FakeSocks("u", PROXY_PASSWORD);
+  await socks.start();
+  cleanups.push(() => socks.stop());
+  const ipinfo = await fakeIpInfoService(() => ({ status: 200, body: IPINFO_BERLIN }));
+  cleanups.push(ipinfo.close);
+  const geojs = await fakeIpInfoService(() => ({ status: 200, body: GEOJS_BERLIN }));
+  cleanups.push(geojs.close);
   await registerPageBrowserProfile(db(), {
     profileId,
     container: "page-browser-ari-2",
     ...sealPageBrowserSecrets(config, { engineToken: "engine-token-of-the-api-test-0123", apiToken: "api-token-of-the-api-test-4567", vncPassword: "vnc-password-of-the-api-test-89ab" }),
-    socksEndpoint: "203.0.113.50:1080",
+    socksEndpoint: `127.0.0.1:${socks.port}`,
     env: ENV,
   });
   const screen = await fakeScreen();
@@ -91,8 +105,8 @@ async function rig() {
   const app = createTestAppContext(testDb!, {
     pageBrowserEndpoints: { rpcUrl: () => "ws://127.0.0.1:9/rpc", screen: () => ({ host: "127.0.0.1", port: screen.port }) },
     pageBrowserScreenWatch: { everyMs: 100, deadlineMs: 1_000 },
-    // The documentation block this test's proxies sit in, taken as public.
-    pageBrowserProxyCheck: { allowAddresses: (ip) => ip.startsWith("203.0.113.") },
+    // This machine's SOCKS5 taken as public.
+    pageBrowserProxyCheck: { options: localCheckOptions(socks, ipinfo, geojs), allowAddresses: (ip) => ip === "127.0.0.1" },
   });
   await createUserAccount(app, { username: "owner-onb", role: "owner", password: "synthetic-password" }, { source: "cli" });
   await createUserAccount(app, { username: "lead-onb", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
@@ -104,7 +118,14 @@ async function rig() {
     const header = response.headers["set-cookie"];
     return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
   };
-  return { profileId, app, server, port: Number(new URL(address).port), screen, cookie: await cookieOf("owner-onb"), lead: await cookieOf("lead-onb") };
+  return { profileId, app, server, port: Number(new URL(address).port), screen, socks, ipinfo, cookie: await cookieOf("owner-onb"), lead: await cookieOf("lead-onb") };
+}
+
+/** The pasted proxy and the owner's check of it, as the dashboard sends a
+ *  replacement (a check that gave no id: none named). */
+async function checkedProxy(r: Rig, text: string): Promise<{ proxy: { text: string }; checkId: string }> {
+  const answer = await r.server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: { cookie: r.cookie, host: HOST, origin: ORIGIN }, payload: { source: { kind: "text", proxy: { text } } } });
+  return { proxy: { text }, checkId: (answer.statusCode === 200 ? (answer.json() as { checkId: string | null }).checkId : null) ?? NO_CHECK };
 }
 
 type Rig = Awaited<ReturnType<typeof rig>>;
@@ -150,24 +171,30 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
     expect((await post(r, "/login/start")).json()).toMatchObject({ error: "browser_not_ready" });
     // A proxy that is not the container's SOCKS5, not a SOCKS5 at all, or
     // with no login and password; one field, any common format.
-    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.51:1080:u:p" } })).json().message).toContain("was made for the SOCKS5 203.0.113.50:1080");
-    expect((await post(r, "/proxy", { proxy: { text: "http://u:p@203.0.113.50:1080" } })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("HTTP-прокси") });
-    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080" } })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("логин и пароль") });
-    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50" } })).json()).toMatchObject({ reason: "proxy_unreadable" });
-    expect((await post(r, "/proxy", { proxy: { text: "u:proxy-password-not-shown@203.0.113.50:1080" } })).json()).toEqual({
-      proxy: { scheme: "socks5", host: "203.0.113.50", port: 1080, username: "u", passwordSet: true },
+    const elsewhere = new FakeSocks("u", PROXY_PASSWORD);
+    await elsewhere.start();
+    cleanups.push(() => elsewhere.stop());
+    elsewhere.routes.set("ipinfo.io:443", r.ipinfo.port);
+    expect((await post(r, "/proxy", await checkedProxy(r, `127.0.0.1:${elsewhere.port}:u:${PROXY_PASSWORD}`))).json().message).toContain(`was made for the SOCKS5 127.0.0.1:${r.socks.port}`);
+    expect((await post(r, "/proxy", { proxy: { text: `http://u:p@127.0.0.1:${r.socks.port}` }, checkId: NO_CHECK })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("HTTP-прокси") });
+    expect((await post(r, "/proxy", { proxy: { text: `127.0.0.1:${r.socks.port}` }, checkId: NO_CHECK })).json()).toMatchObject({ reason: "proxy_unusable", message: expect.stringContaining("логин и пароль") });
+    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50" }, checkId: NO_CHECK })).json()).toMatchObject({ reason: "proxy_unreadable" });
+    // Not without its check: the address it connected to is the one compared.
+    expect((await post(r, "/proxy", { proxy: { text: `u:${PROXY_PASSWORD}@127.0.0.1:${r.socks.port}` }, checkId: NO_CHECK })).json()).toMatchObject({ reason: "check_missing" });
+    expect((await post(r, "/proxy", await checkedProxy(r, `u:${PROXY_PASSWORD}@127.0.0.1:${r.socks.port}`))).json()).toEqual({
+      proxy: { scheme: "socks5", host: "127.0.0.1", port: r.socks.port, username: "u", passwordSet: true },
     });
     expect((await post(r, "/pin", { ip: "203.0.113.9" })).json()).toEqual({ pinnedExitIp: "203.0.113.9" });
     const view = await r.server.inject({ method: "GET", url: `/api/v1/page-browser/profiles/${r.profileId}`, headers: { cookie: r.cookie } });
     expect(view.json()).toMatchObject({
       profile: { name: "ari-2", proxySet: true, pinnedExitIp: "203.0.113.9" },
-      proxy: { url: "socks5://203.0.113.50:1080", username: "u", masked: { host: "203.0.113.50", port: 1080, username: "u", passwordSet: true } },
+      proxy: { url: `socks5://127.0.0.1:${r.socks.port}`, username: "u", masked: { host: "127.0.0.1", port: r.socks.port, username: "u", passwordSet: true } },
       browser: { ready: true }, login: { state: "off" }, identity: { pending: false, ok: null },
     });
     expect(view.body).not.toContain("proxy-password-not-shown");
     expect((await post(r, "/login/start")).json()).toEqual({ state: "login", changed: true });
     // The proxy does not change under an open login.
-    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080:u:p" } })).json()).toMatchObject({ error: "login_open" });
+    expect((await post(r, "/proxy", { proxy: { text: `127.0.0.1:${r.socks.port}:u:p` }, checkId: NO_CHECK })).json()).toMatchObject({ error: "login_open" });
     // Given up; then bound: every lever of the profile is refused.
     expect((await post(r, "/close")).json()).toEqual({ state: "closing", changed: true });
     expect((await post(r, "/login/start")).json()).toMatchObject({ error: "onboarding_refused" });
@@ -212,7 +239,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
   it("opens the browser's screen only while its login is open, and closes it before the login's closing is written, and once bound", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    expect((await post(r, "/proxy", { proxy: { text: "203.0.113.50:1080:u:p" } })).statusCode).toBe(200);
+    expect((await post(r, "/proxy", await checkedProxy(r, `127.0.0.1:${r.socks.port}:u:${PROXY_PASSWORD}`))).statusCode).toBe(200);
     await post(r, "/pin", { ip: "203.0.113.9" });
     await expect(openScreen(r)).rejects.toThrow(/409/);
     await post(r, "/login/start");
@@ -263,7 +290,7 @@ describe("a new page's onboarding through its browser, the API (PR 16)", () => {
   it("refuses the page's creation when the onboarding was given up, or its login opened again, after the account's check — nothing created, the profile unbound (Astra's review of PR 16, item 2)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
-    expect((await post(r, "/proxy", { proxy: { text: "socks5://u:p@203.0.113.50:1080" } })).statusCode).toBe(200);
+    expect((await post(r, "/proxy", await checkedProxy(r, `socks5://u:${PROXY_PASSWORD}@127.0.0.1:${r.socks.port}`))).statusCode).toBe(200);
     const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
     const account = "300000000000000916";
     /** The account's check as the engine's link answers it, its answer journaled. */

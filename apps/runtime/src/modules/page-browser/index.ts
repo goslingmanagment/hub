@@ -47,7 +47,8 @@ import {
 } from "../../services/egress/page-browser-login.ts";
 import { AppError, BadRequestError, NotFoundError } from "../../services/errors.ts";
 import { onboardingProxyOf, PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, profilePageName } from "../../services/page-browser-onboarding.ts";
-import { maskStoredProxy, readProxyText, sealUsableProxy } from "../../services/page-browser-proxy-entry.ts";
+import { endpointOfCheck, maskStoredProxy, readProxyText, sealUsableProxy } from "../../services/page-browser-proxy-entry.ts";
+import { ProxyCheckLedger } from "../../services/page-browser-proxy-checks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerPageBrowserProxyEntryRoutes } from "./proxy-entry.ts";
 
@@ -155,6 +156,8 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
   const endpoints = () => appContext.pageBrowserEndpoints ?? PAGE_BROWSER_ENDPOINTS;
+  // The owner's proxy checks a save may name (in memory, a few minutes).
+  const checks = new ProxyCheckLedger({ now: appContext.pageBrowserProxyCheck?.now });
 
   async function pageOf(label: string): Promise<{ pageId: number; label: string }> {
     const found = await findPageByLabel(appContext.db, label);
@@ -641,11 +644,13 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     if (profile.onboarding === "login") throw new AppError("The browser's login is open: close it before its proxy changes", 409, "login_open");
     // One field, any common format, read by Hub; a proxy a page's browser
     // can use, or the owner's words why not.
-    const sealed = await sealUsableProxy(appContext.config, readProxyText(request.body.proxy), appContext.pageBrowserProxyCheck);
-    // The address it was judged public at, never a second DNS answer: it
-    // must be the SOCKS5 the container was made for.
-    if (profile.socksEndpoint !== null && sealed.socksEndpoint !== profile.socksEndpoint) {
-      throw new BadRequestError(`Invalid proxy: the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${sealed.socksEndpoint}`, { reason: "proxy_mismatch" });
+    const pasted = readProxyText(request.body.proxy);
+    const sealed = sealUsableProxy(appContext.config, pasted);
+    // The address the owner's check of this very proxy connected to — never
+    // a DNS answer of now: it must be the SOCKS5 the container was made for.
+    const socksEndpoint = endpointOfCheck(checks, request.body.checkId, pasted, appContext.pageBrowserProxyCheck);
+    if (profile.socksEndpoint !== null && socksEndpoint !== profile.socksEndpoint) {
+      throw new BadRequestError(`Invalid proxy: the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${socksEndpoint}`, { reason: "proxy_mismatch" });
     }
     if (!(await setOnboardingProxy(appContext.db, { profileId: profile.profileId, url: sealed.url, encryptedAuth: sealed.encryptedAuth, keyVersion: sealed.keyVersion }))) {
       throw new AppError(`Profile ${profile.profileId} serves a page now`, 409, "profile_bound");
@@ -656,7 +661,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
 
   // A page's browser started in the dashboard: the proxy's check, the
   // drafts add-profile makes the browser from (owner decision 2026-10-15).
-  registerPageBrowserProxyEntryRoutes(server, ctx, { requireThisOrigin });
+  registerPageBrowserProxyEntryRoutes(server, ctx, { requireThisOrigin, checks });
 
   server.post("/api/v1/page-browser/profiles/:profileId/pin", {
     schema: routeSchemas.pageBrowserProfilePin,

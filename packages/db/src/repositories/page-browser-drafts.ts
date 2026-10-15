@@ -45,7 +45,7 @@ export const PAGE_BROWSER_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 export class PageBrowserDraftError extends Error {
   constructor(
-    readonly reason: "bad_name" | "name_is_a_page" | "name_has_browser" | "no_page" | "page_has_browser" | "label_mismatch" | "no_proxy" | "not_socks5",
+    readonly reason: "bad_name" | "name_is_a_page" | "name_has_browser" | "no_page" | "page_has_browser" | "label_mismatch" | "no_proxy" | "not_socks5" | "draft_changed" | "page_proxy_changed",
     message: string,
   ) {
     super(message);
@@ -214,8 +214,12 @@ export interface SavePageBrowserDraftInput {
   /** An existing page's proxy as it was judged (`pageProxyStateOf`). */
   pageProxy?: { id: number; fingerprint: string } | null;
   /** A new page's proxy, sealed by the caller (`socks5://host:port`).
-   *  Undefined: the stored one is kept (an edit that leaves it). */
+   *  Undefined: the stored one is kept (an edit that leaves it) — and it
+   *  must still be `keptProxy`, the one whose check gave `socksEndpoint`. */
   proxy?: { url: string; encryptedAuth: string; keyVersion: number };
+  keptProxy?: { url: string; encryptedAuth: string | null };
+  /** The revision the owner edits; null: a new draft (none may exist). */
+  expectedRevision: number | null;
   env: Record<string, unknown>;
   by: string;
 }
@@ -223,8 +227,12 @@ export interface SavePageBrowserDraftInput {
 /**
  * The owner's draft, created or saved again (its revision raised), in one
  * transaction under the draft's row: refused — nothing written — for a name
- * that cannot be a browser to be made now, and for a new page's draft with
- * no proxy.
+ * that cannot be a browser to be made now, for a new page's draft with no
+ * proxy, and for a stale writer (Astra's review of PR #627, round 2): the
+ * revision the owner edited must be the draft's now (compare-and-set under
+ * the row lock; null — no draft may exist), a kept proxy must be the one its
+ * check was of, and an existing page's proxy must be the one its check was
+ * of (its row locked until this commits).
  */
 export async function savePageBrowserDraft(db: Database, input: SavePageBrowserDraftInput): Promise<PageBrowserDraft> {
   if (input.proxy !== undefined && !input.proxy.url.startsWith("socks5://")) {
@@ -236,12 +244,31 @@ export async function savePageBrowserDraft(db: Database, input: SavePageBrowserD
     const problem = await pageBrowserDraftProblem(tx, { name: input.name, pageId: input.pageId });
     if (problem !== null) throw problem;
     const current = await lockPageBrowserDraft(tx, input.name);
+    if ((current?.revision ?? null) !== input.expectedRevision) {
+      throw new PageBrowserDraftError("draft_changed", current === null
+        ? `The draft of ${input.name} is gone (deleted meanwhile): open it again`
+        : input.expectedRevision === null
+          ? `A draft of ${input.name} exists already: open it to change it`
+          : `The draft of ${input.name} was saved meanwhile (revision ${current.revision}, not ${input.expectedRevision}): open it again`);
+    }
     const proxy = input.pageId !== null
       ? null
       : input.proxy ?? (current !== null && current.pageId === null ? current.proxy : null);
     if (input.pageId === null && proxy === null) throw new PageBrowserDraftError("no_proxy", "A new page's browser needs its proxy");
+    if (input.pageId === null && input.proxy === undefined) {
+      const kept = input.keptProxy;
+      if (kept === undefined || proxy!.url !== kept.url || proxy!.encryptedAuth !== kept.encryptedAuth) {
+        throw new PageBrowserDraftError("draft_changed", `The proxy of the draft of ${input.name} is not the one checked: open it again`);
+      }
+    }
     const pageProxy = input.pageId === null ? null : input.pageProxy ?? null;
     if (input.pageId !== null && pageProxy === null) throw new PageBrowserDraftError("no_proxy", "An existing page's browser goes out through the page's proxy: it has none");
+    if (input.pageId !== null) {
+      const now = await pageProxyStateOf(tx, input.pageId, { lock: true });
+      if (now === null || now.id !== pageProxy!.id || now.fingerprint !== pageProxy!.fingerprint) {
+        throw new PageBrowserDraftError("page_proxy_changed", `The proxy of page ${input.name} changed since it was checked: check it again`);
+      }
+    }
     const env = JSON.stringify(input.env);
     await tx.execute(sql`
       insert into page_browser_drafts (name, page_id, proxy_url, proxy_auth, proxy_key_version, env, socks_endpoint, page_proxy_id,

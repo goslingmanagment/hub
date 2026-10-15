@@ -188,7 +188,10 @@ export type PageBrowserMaskedProxy = z.infer<typeof pageBrowserMaskedProxySchema
  *  read as a host and a port. */
 export const pageBrowserProxyTextSchema = z.object({
   text: z.string().min(1).max(2000),
-  order: z.enum(["host_first", "user_first"]).optional(),
+  /** The reading the owner chose when the text reads more than one way:
+   *  host:port:login:password, login:password:host:port,
+   *  login:password@host:port, host:port@login:password. */
+  order: z.enum(["host_first", "user_first", "login_at_host", "host_at_login"]).optional(),
 }).strict();
 export type PageBrowserProxyText = z.infer<typeof pageBrowserProxyTextSchema>;
 
@@ -219,6 +222,9 @@ export type PageBrowserProfileResponse = z.infer<typeof pageBrowserProfileRespon
 
 export const pageBrowserProfileProxyBodySchema = z.object({
   proxy: pageBrowserProxyTextSchema,
+  /** The owner's check of this very proxy (`proxy-check`'s `checkId`): the
+   *  address it connected to is the one compared and kept. */
+  checkId: z.string().uuid(),
 }).strict();
 export type PageBrowserProfileProxyBody = z.infer<typeof pageBrowserProfileProxyBodySchema>;
 
@@ -287,6 +293,10 @@ export const pageBrowserProxyCheckResponseSchema = z.object({
   ipInfoService: z.string().nullable(),
   /** The environment proposed from the exit (null: not enough known). */
   env: pageBrowserEnvSchema.nullable(),
+  /** This check, for a save to name (null: it did not log in through the
+   *  proxy): the address it connected to is the one a save stores — for
+   *  the same proxy, for a few minutes. */
+  checkId: z.string().uuid().nullable(),
   checkedAt: isoDateTime(),
 }).strict();
 export type PageBrowserProxyCheckResponse = z.infer<typeof pageBrowserProxyCheckResponseSchema>;
@@ -330,6 +340,13 @@ export const pageBrowserDraftSaveBodySchema = z.object({
   /** A new page's proxy; absent on an edit keeps the one given. */
   proxy: pageBrowserProxyTextSchema.optional(),
   env: pageBrowserEnvSchema,
+  /** The owner's check of the proxy saved (`proxy-check`'s `checkId`): the
+   *  pasted one, the draft's kept one, or the existing page's own. Its
+   *  address is the one stored; nothing is resolved at the save. */
+  checkId: z.string().uuid(),
+  /** The draft's revision the owner edits (null: a new draft): a save over
+   *  another revision is refused. */
+  expectedRevision: z.number().int().positive().nullable(),
 }).strict();
 export type PageBrowserDraftSaveBody = z.infer<typeof pageBrowserDraftSaveBodySchema>;
 

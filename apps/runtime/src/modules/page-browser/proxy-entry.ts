@@ -30,10 +30,11 @@ import {
   checkPageBrowserProxy,
   maskStoredProxy,
   readProxyText,
+  endpointOfCheck,
   sealUsableProxy,
-  socksEndpointOrRefuse,
   storedProxyAsPasted,
 } from "../../services/page-browser-proxy-entry.ts";
+import type { ProxyCheckLedger } from "../../services/page-browser-proxy-checks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // A page's server browser started in the dashboard (Project Browser, owner
@@ -61,11 +62,11 @@ function commandOf(name: string, existing: boolean): string {
 export function registerPageBrowserProxyEntryRoutes(
   server: ApiServer,
   ctx: ApiModuleContext,
-  helpers: { requireThisOrigin: (headers: IncomingMessage["headers"]) => void },
+  helpers: { requireThisOrigin: (headers: IncomingMessage["headers"]) => void; checks: ProxyCheckLedger },
 ): void {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
-  const { requireThisOrigin } = helpers;
+  const { requireThisOrigin, checks } = helpers;
   const overrides = () => appContext.pageBrowserProxyCheck;
 
   async function audit(principal: Principal, metadata: Record<string, unknown>, platformAccountId: number | null = null): Promise<void> {
@@ -141,7 +142,7 @@ export function registerPageBrowserProxyEntryRoutes(
         break;
       }
     }
-    return checkPageBrowserProxy(proxy, overrides());
+    return checkPageBrowserProxy(proxy, checks, overrides());
   });
 
   server.get("/api/v1/page-browser/drafts", {
@@ -166,10 +167,23 @@ export function registerPageBrowserProxyEntryRoutes(
     const body = request.body;
     const envProblem = browserEnvProblem(body.env);
     if (envProblem !== null) throw new BadRequestError(envProblem, { reason: "env_invalid" });
+    // A writer of a revision gone is refused at once (and again, under the
+    // row lock, by the save's compare-and-set: Astra's review of PR #627,
+    // round 2).
+    const before = await findPageBrowserDraft(appContext.db, name);
+    if ((before?.revision ?? null) !== body.expectedRevision) {
+      throw new AppError(before === null
+        ? `The draft of ${name} is gone (deleted meanwhile): open it again`
+        : body.expectedRevision === null
+          ? `A draft of ${name} exists already: open it to change it`
+          : `The draft of ${name} was saved meanwhile (revision ${before.revision}, not ${body.expectedRevision}): open it again`, 409, "draft_changed");
+    }
     let pageId: number | null = null;
-    let sealed: Awaited<ReturnType<typeof sealUsableProxy>> | undefined;
-    // The SOCKS5 the container is made for, judged now: the proxy's host
-    // resolved once, every address public (Astra's review of PR #627, item 3).
+    let sealed: ReturnType<typeof sealUsableProxy> | undefined;
+    let keptProxy: { url: string; encryptedAuth: string | null } | undefined;
+    // The SOCKS5 the container is made for: the address the owner's check of
+    // this very proxy connected to — never resolved here (Astra's review of
+    // PR #627, round 2).
     let socksEndpoint: string;
     let pageProxy: { id: number; fingerprint: string } | null = null;
     if (body.existingPage) {
@@ -179,28 +193,30 @@ export function registerPageBrowserProxyEntryRoutes(
       const found = await findFanslyPageForBrowser(appContext.db, name);
       if (found === null) throw new NotFoundError(`No active Fansly page ${name}`);
       pageId = found.pageId;
-      // The page's proxy as it is now: the registration refuses once it
-      // changed (item 4).
+      // The page's proxy as it is now — the one its check must be of, held
+      // in the save (its row locked) and at the registration (item 4).
       const state = await pageProxyStateOf(appContext.db, pageId);
       let own: PastedProxy | null;
       try {
-        own = state === null ? null : storedProxyAsPasted(appContext.config, { url: state.url, encryptedAuth: null });
+        own = state === null ? null : storedProxyAsPasted(appContext.config, { url: state.url, encryptedAuth: state.encryptedAuth });
       } catch {
         own = null;
       }
       if (state === null || own === null || own.scheme !== "socks5") {
         throw new BadRequestError(`У страницы ${name} ${own === null ? "нет прокси" : "не SOCKS5-прокси"}: браузер страницы выходит только через SOCKS5. Сначала смените прокси страницы`, { reason: "proxy_unusable" });
       }
-      socksEndpoint = await socksEndpointOrRefuse(own, overrides());
+      socksEndpoint = endpointOfCheck(checks, body.checkId, own, overrides());
       pageProxy = { id: state.id, fingerprint: state.fingerprint };
     } else if (body.proxy !== undefined) {
-      sealed = await sealUsableProxy(appContext.config, readProxyText(body.proxy), overrides());
-      socksEndpoint = sealed.socksEndpoint;
+      const pasted = readProxyText(body.proxy);
+      sealed = sealUsableProxy(appContext.config, pasted);
+      socksEndpoint = endpointOfCheck(checks, body.checkId, pasted, overrides());
     } else {
-      // Saved again with the proxy given before: judged again now.
-      const current = await findPageBrowserDraft(appContext.db, name);
-      if (current?.proxy == null) throw new BadRequestError("A new page's browser needs its proxy", { reason: "no_proxy" });
-      socksEndpoint = await socksEndpointOrRefuse(storedProxyAsPasted(appContext.config, { url: current.proxy.url, encryptedAuth: null }), overrides());
+      // Saved again with the proxy given before: its check must be of that
+      // proxy, and the save holds it so (`keptProxy`, under the row lock).
+      if (before?.proxy == null) throw new BadRequestError("A new page's browser needs its proxy", { reason: "no_proxy" });
+      keptProxy = { url: before.proxy.url, encryptedAuth: before.proxy.encryptedAuth };
+      socksEndpoint = endpointOfCheck(checks, body.checkId, storedProxyAsPasted(appContext.config, keptProxy), overrides());
     }
     let saved: PageBrowserDraft;
     try {
@@ -209,6 +225,8 @@ export function registerPageBrowserProxyEntryRoutes(
         pageId,
         socksEndpoint,
         pageProxy,
+        expectedRevision: body.expectedRevision,
+        ...(keptProxy === undefined ? {} : { keptProxy }),
         ...(sealed === undefined ? {} : { proxy: { url: sealed.url, encryptedAuth: sealed.encryptedAuth, keyVersion: sealed.keyVersion } }),
         env: body.env as unknown as Record<string, unknown>,
         by: `owner:${principal.user.id}`,
@@ -217,6 +235,7 @@ export function registerPageBrowserProxyEntryRoutes(
       if (error instanceof PageBrowserDraftError) {
         if (error.reason === "no_page") throw new NotFoundError(error.message);
         if (error.reason === "bad_name" || error.reason === "no_proxy" || error.reason === "not_socks5") throw new BadRequestError(error.message, { reason: error.reason });
+        if (error.reason === "draft_changed" || error.reason === "page_proxy_changed") throw new AppError(error.message, 409, error.reason);
         throw new ConflictError(error.message);
       }
       throw error;

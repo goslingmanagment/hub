@@ -1101,7 +1101,9 @@ session, the browser logs in from its own device and IP (plan §3.2 «Подкл
    the port speaks, the latency, the exit IP, country, region and city, ISP and ASN, time zone — named by
    `ipinfo.io` through the proxy (`get.geojs.io` when it refuses); Fansly is never touched. The browser's
    environment (time zone, languages, position) is proposed from that place; the owner confirms it and saves the
-   draft — the proxy's password sealed in Hub, never shown again. For an existing page that moves to its browser
+   draft — the proxy's password sealed in Hub, never shown again. The save needs a fresh check of that very proxy
+   (10 minutes): the address the check connected to is the one stored, nothing is resolved at the save; a save over
+   a revision someone else saved meanwhile is refused (open the draft again). For an existing page that moves to its browser
    (the pilot lilly-1), choose «Существующая страница…»: its own proxy is shown and checked, and changed in the
    page's settings, not here.
 2. **The profile**, from the workstation — Hub's draft gives the SOCKS5's `ip:port` (the public address Hub judged

@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readPastedProxy, type PastedProxy } from "@agency_hub_core/shared";
 
 import { resolveProxyHost } from "../apps/runtime/src/services/egress/proxy-check.ts";
-import { checkPageBrowserProxy, sealUsableProxy } from "../apps/runtime/src/services/page-browser-proxy-entry.ts";
+import { ProxyCheckLedger } from "../apps/runtime/src/services/page-browser-proxy-checks.ts";
+import { checkPageBrowserProxy, endpointOfCheck } from "../apps/runtime/src/services/page-browser-proxy-entry.ts";
 import { FakeSocks, SOCKS_PASSWORD, SOCKS_USER } from "./helpers/page-browser-fakes.ts";
 import { fakeIpInfoService, GEOJS_BERLIN, IPINFO_BERLIN, localCheckOptions } from "./helpers/proxy-check-fakes.ts";
-import { harnessConfig } from "./helpers/sync-engine.ts";
 
 // The owner's proxy is reached at the address Hub judged, and nowhere else
 // (Astra's review of PR #627, item 1): a name is resolved once, every
@@ -64,21 +64,45 @@ describe("the proxy's host: resolved once, every address judged (Astra's review 
       return answer;
     };
     const allowAddresses = (ip: string) => ip === "127.0.0.1";
-    const result = await checkPageBrowserProxy(named(socks.port), { options, resolve, allowAddresses });
+    const result = await checkPageBrowserProxy(named(socks.port), new ProxyCheckLedger(), { options, resolve, allowAddresses });
     expect(result).toMatchObject({ ok: true, socksEndpoint: `127.0.0.1:${socks.port}`, exit: { ip: "203.0.113.7" } });
     expect(answers).toEqual([["127.0.0.1"]]);
     expect(socks.logins).toEqual([{ username: SOCKS_USER, password: SOCKS_PASSWORD, ok: true }]);
 
     // An answer with one inside address among public ones: refused before any connection.
-    const mixed = await checkPageBrowserProxy(named(socks.port), { options, resolve: async () => ["127.0.0.1", "10.230.0.3"], allowAddresses });
+    const mixed = await checkPageBrowserProxy(named(socks.port), new ProxyCheckLedger(), { options, resolve: async () => ["127.0.0.1", "10.230.0.3"], allowAddresses });
     expect(mixed).toMatchObject({ ok: false, problem: { code: "private_address" }, spoken: null, socksEndpoint: null });
     expect(socks.logins).toHaveLength(1);
   });
 
-  it("a saved proxy carries the public ip:port it was judged at — what its container is made for", async () => {
-    const config = harnessConfig("postgres://unused");
-    const sealed = await sealUsableProxy(config, named(7000), { resolve: async () => ["93.184.216.34"] });
-    expect(sealed).toMatchObject({ url: "socks5://gate.provider.example:7000", socksEndpoint: "93.184.216.34:7000" });
-    await expect(sealUsableProxy(config, named(7000), { resolve: async () => ["93.184.216.34", "127.0.0.1"] })).rejects.toMatchObject({ reason: "proxy_unusable" });
+  it("a save takes the address its check connected to — of that very proxy, while fresh — and resolves nothing (Astra's review of PR #627, round 2)", async () => {
+    const socks = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
+    await socks.start();
+    cleanups.push(() => socks.stop());
+    const ipinfo = await fakeIpInfoService(() => ({ status: 200, body: IPINFO_BERLIN }));
+    cleanups.push(ipinfo.close);
+    const geojs = await fakeIpInfoService(() => ({ status: 200, body: GEOJS_BERLIN }));
+    cleanups.push(geojs.close);
+    let clock = 1_000_000;
+    const ledger = new ProxyCheckLedger({ now: () => clock });
+    const allowAddresses = (ip: string) => ip === "127.0.0.1" || ip === "93.184.216.34";
+    // The check connects to the first answer; DNS then names another public address.
+    let answer = ["127.0.0.1"];
+    let asked = 0;
+    const overrides = { options: localCheckOptions(socks, ipinfo, geojs), resolve: async () => { asked += 1; return answer; }, allowAddresses };
+    const proxy = named(socks.port);
+    const checked = await checkPageBrowserProxy(proxy, ledger, overrides);
+    expect(checked).toMatchObject({ ok: true, socksEndpoint: `127.0.0.1:${socks.port}`, checkId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    answer = ["93.184.216.34"];
+    expect(endpointOfCheck(ledger, checked.checkId!, proxy, overrides)).toBe(`127.0.0.1:${socks.port}`);
+    expect(asked).toBe(1);
+    // Another proxy (another password), an unknown check, a stale one: refused.
+    expect(() => endpointOfCheck(ledger, checked.checkId!, { ...proxy, password: "other" }, overrides)).toThrow(expect.objectContaining({ reason: "check_other_proxy" }));
+    expect(() => endpointOfCheck(ledger, "00000000-0000-4000-8000-000000000000", proxy, overrides)).toThrow(expect.objectContaining({ reason: "check_missing" }));
+    clock += 11 * 60_000;
+    expect(() => endpointOfCheck(ledger, checked.checkId!, proxy, overrides)).toThrow(expect.objectContaining({ reason: "check_stale" }));
+    // A check that did not log in through the proxy gives no id.
+    clock = 1_000_000;
+    expect(await checkPageBrowserProxy({ ...proxy, password: "wrong" }, ledger, { ...overrides, resolve: async () => ["127.0.0.1"] })).toMatchObject({ ok: false, checkId: null });
   });
 });

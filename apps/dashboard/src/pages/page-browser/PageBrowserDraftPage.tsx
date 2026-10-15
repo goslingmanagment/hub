@@ -55,6 +55,9 @@ export function PageBrowserDraftPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState<PageBrowserDraftView | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // The draft's revision this page edits (null: a new draft): a save over
+  // another one is refused (Astra's review of PR #627, round 2).
+  const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
   const check = useProxyCheck();
 
   // An edit: the draft as saved (its proxy stays sealed in Hub).
@@ -62,6 +65,7 @@ export function PageBrowserDraftPage() {
   useEffect(() => {
     if (loaded || draft === null) return;
     setLoaded(true);
+    setExpectedRevision(draft.revision);
     setKind(draft.page === null ? "new" : "existing");
     setName(draft.name);
     if (draft.page !== null) setPageLabel(draft.page.label);
@@ -81,6 +85,10 @@ export function PageBrowserDraftPage() {
     : null;
   const env = envOfFields(fields);
   const proxyReady = kind === "existing" ? chosenPage?.proxy != null : pasting ? preview.kind === "parsed" && preview.problem === null : storedProxy !== null;
+  // Saved only after a check of the proxy as it stands that logged in
+  // through it: the address it connected to is the one stored.
+  const checkId = check.result?.checkId ?? null;
+  const canSave = !pending && env.env !== null && browserName !== "" && nameProblem === null && proxyReady && checkId !== null;
 
   const source = (): PageBrowserProxyCheckBody["source"] | null => {
     if (kind === "existing") return pageLabel === "" ? null : { kind: "page", pageLabel };
@@ -100,17 +108,18 @@ export function PageBrowserDraftPage() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pending || env.env === null || browserName === "" || nameProblem !== null || !proxyReady) return;
+    if (!canSave || env.env === null || checkId === null) return;
     setPending(true);
     setProblem(null);
     const proxy = pasting ? { text, ...(order === null ? {} : { order }) } : undefined;
-    savePageBrowserDraft(qc, browserName, { existingPage: kind === "existing", ...(proxy === undefined ? {} : { proxy }), env: env.env })
+    savePageBrowserDraft(qc, browserName, { existingPage: kind === "existing", ...(proxy === undefined ? {} : { proxy }), env: env.env, checkId, expectedRevision })
       .then((answer) => {
         // The proxy's password leaves this page: Hub keeps it sealed.
         setText("");
         setOrder(null);
         setReplacing(false);
         check.reset();
+        setExpectedRevision(answer.revision);
         setSaved(answer);
       }, (error: unknown) => setProblem(errorText(error)))
       .finally(() => setPending(false));
@@ -228,9 +237,10 @@ export function PageBrowserDraftPage() {
         </Card>
 
         <div className="flex flex-col gap-2">
-          <button type="submit" className={PRIMARY} disabled={pending || env.env === null || browserName === "" || nameProblem !== null || !proxyReady} data-draft-save>
+          <button type="submit" className={PRIMARY} disabled={!canSave} data-draft-save>
             {pending ? "Сохраняем…" : "Сохранить черновик"}
           </button>
+          {checkId === null && <p className="text-xs text-text-secondary" data-draft-needs-check>Сохранить можно после успешной проверки прокси: сохраняется адрес, к которому подключилась проверка.</p>}
           <p className="text-xs text-text-muted">Пароль прокси уйдёт в Hub один раз и будет храниться зашифрованным; на эту страницу он не возвращается.</p>
           {problem !== null && <p role="alert" className="text-sm text-danger">{problem}</p>}
         </div>

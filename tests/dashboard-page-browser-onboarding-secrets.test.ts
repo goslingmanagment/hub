@@ -34,6 +34,7 @@ const PROXY_PASSWORD = "pb16-dash-proxy-password-7e2c";
 const MARKERS = [LOGIN, PASSWORD, CODE, PROXY_PASSWORD];
 
 const MASKED = { scheme: "socks5", host: "203.0.113.50", port: 1080, username: "pb-user", passwordSet: true };
+const CHECK = "4b1f0e2a-9c3d-4e5f-8a7b-6c5d4e3f2a1b";
 const ENV = { timeZone: "Europe/Berlin", languages: ["de-DE", "de", "en-US", "en"], geolocation: { latitude: 52.52, longitude: 13.4, accuracyM: 1000 } };
 
 const ANSWER: PageBrowserLoginStepResponse = { screen: { screen: "code", screenVersion: "fansly-login/1", fields: ["code"], siteError: null }, refused: null, unreachable: false };
@@ -57,14 +58,14 @@ describe("a new page's onboarding and the query client (PR 16)", () => {
     const qc = new QueryClient();
     qc.setQueryData(pageBrowserProfileKey(PROFILE), { login: { state: "login" } });
     const proxy = { text: `203.0.113.50:1080:pb-user:${PROXY_PASSWORD}` };
-    expect(await sendPageBrowserProfileProxy(qc, PROFILE, proxy)).toEqual({ proxy: MASKED });
-    expect(sdk.pageBrowserProfileProxy).toHaveBeenCalledWith({ params: { profileId: PROFILE }, body: { proxy } });
+    expect(await sendPageBrowserProfileProxy(qc, PROFILE, proxy, CHECK)).toEqual({ proxy: MASKED });
+    expect(sdk.pageBrowserProfileProxy).toHaveBeenCalledWith({ params: { profileId: PROFILE }, body: { proxy, checkId: CHECK } });
     expect(await sendPageBrowserProfileLoginStep(qc, PROFILE, { kind: "submit", login: LOGIN, password: PASSWORD })).toEqual(ANSWER);
     expect(sdk.pageBrowserProfileLoginSubmit).toHaveBeenCalledWith({ params: { profileId: PROFILE }, body: { login: LOGIN, password: PASSWORD } });
     expect(await sendPageBrowserProfileLoginStep(qc, PROFILE, { kind: "code", code: CODE })).toMatchObject({ screen: { screen: "success" } });
     // Failed: no retry, nothing kept.
     sdk.pageBrowserProfileProxy.mockRejectedValueOnce(new Error("the API cannot be reached"));
-    await expect(sendPageBrowserProfileProxy(qc, PROFILE, proxy)).rejects.toThrow("cannot be reached");
+    await expect(sendPageBrowserProfileProxy(qc, PROFILE, proxy, CHECK)).rejects.toThrow("cannot be reached");
     expect(sdk.pageBrowserProfileProxy).toHaveBeenCalledTimes(2);
 
     expect(qc.getMutationCache().getAll()).toHaveLength(0);
@@ -80,10 +81,11 @@ describe("a new page's onboarding and the query client (PR 16)", () => {
     const proxy = { text: `socks5://pb-user:${PROXY_PASSWORD}@203.0.113.50:1080` };
     expect(await checkPageBrowserProxy({ kind: "text", proxy })).toMatchObject({ ok: true });
     expect(sdk.pageBrowserProxyCheck).toHaveBeenCalledWith({ body: { source: { kind: "text", proxy } } });
-    expect(await savePageBrowserDraft(qc, "ari-2", { existingPage: false, proxy, env: ENV })).toMatchObject({ name: "ari-2" });
-    expect(sdk.pageBrowserDraftSave).toHaveBeenCalledWith({ params: { name: "ari-2" }, body: { existingPage: false, proxy, env: ENV } });
+    const body = { existingPage: false, proxy, env: ENV, checkId: CHECK, expectedRevision: null };
+    expect(await savePageBrowserDraft(qc, "ari-2", body)).toMatchObject({ name: "ari-2" });
+    expect(sdk.pageBrowserDraftSave).toHaveBeenCalledWith({ params: { name: "ari-2" }, body });
     sdk.pageBrowserDraftSave.mockRejectedValueOnce(new Error("the API cannot be reached"));
-    await expect(savePageBrowserDraft(qc, "ari-2", { existingPage: false, proxy, env: ENV })).rejects.toThrow("cannot be reached");
+    await expect(savePageBrowserDraft(qc, "ari-2", body)).rejects.toThrow("cannot be reached");
     expect(qc.getMutationCache().getAll()).toHaveLength(0);
     expect(held(qc)).not.toContain(PROXY_PASSWORD);
     // The drafts are read anew after a save.

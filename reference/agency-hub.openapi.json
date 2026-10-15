@@ -137325,7 +137325,9 @@
                         "type": "string",
                         "enum": [
                           "host_first",
-                          "user_first"
+                          "user_first",
+                          "login_at_host",
+                          "host_at_login"
                         ]
                       }
                     },
@@ -137385,11 +137387,30 @@
                       "geolocation"
                     ],
                     "additionalProperties": false
+                  },
+                  "checkId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "expectedRevision": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
                   "existingPage",
-                  "env"
+                  "env",
+                  "checkId",
+                  "expectedRevision"
                 ],
                 "additionalProperties": false
               }
@@ -142668,7 +142689,9 @@
                         "type": "string",
                         "enum": [
                           "host_first",
-                          "user_first"
+                          "user_first",
+                          "login_at_host",
+                          "host_at_login"
                         ]
                       }
                     },
@@ -142676,10 +142699,16 @@
                       "text"
                     ],
                     "additionalProperties": false
+                  },
+                  "checkId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "required": [
-                  "proxy"
+                  "proxy",
+                  "checkId"
                 ],
                 "additionalProperties": false
               }
@@ -143057,7 +143086,9 @@
                                 "type": "string",
                                 "enum": [
                                   "host_first",
-                                  "user_first"
+                                  "user_first",
+                                  "login_at_host",
+                                  "host_at_login"
                                 ]
                               }
                             },
@@ -143420,6 +143451,18 @@
                         }
                       ]
                     },
+                    "checkId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "checkedAt": {
                       "type": "string",
                       "format": "date-time",
@@ -143436,6 +143479,7 @@
                     "exit",
                     "ipInfoService",
                     "env",
+                    "checkId",
                     "checkedAt"
                   ],
                   "additionalProperties": false

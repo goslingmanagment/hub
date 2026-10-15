@@ -100,15 +100,16 @@ export function useCreatePageThroughBrowser(profileId: string) {
 }
 
 /**
- * The proxy of the page to be — the text the owner pasted, read by Hub —
- * goes straight to the API, never through React Query: a mutation keeps its
+ * The proxy of the page to be — the text the owner pasted, read by Hub, and
+ * the owner's check of it (its address is the one kept) — goes straight to
+ * the API, never through React Query: a mutation keeps its
  * arguments in the client's cache for its gcTime after the page is gone, and
  * the proxy's password with them (PR 15's lesson for the login form). The
  * view is read anew after it.
  */
-export async function sendPageBrowserProfileProxy(qc: QueryClient, profileId: string, proxy: PageBrowserProfileProxyBody["proxy"]): Promise<{ proxy: PageBrowserMaskedProxy }> {
+export async function sendPageBrowserProfileProxy(qc: QueryClient, profileId: string, proxy: PageBrowserProfileProxyBody["proxy"], checkId: string): Promise<{ proxy: PageBrowserMaskedProxy }> {
   try {
-    return await kernel.pageBrowserProfileProxy({ params: { profileId }, body: { proxy } });
+    return await kernel.pageBrowserProfileProxy({ params: { profileId }, body: { proxy, checkId } });
   } finally {
     void qc.invalidateQueries({ queryKey: pageBrowserProfileKey(profileId) });
     void qc.invalidateQueries({ queryKey: pageBrowserProfilesKey });
