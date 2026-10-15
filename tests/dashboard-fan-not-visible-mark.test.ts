@@ -14,12 +14,10 @@ const mocks = vi.hoisted(() => ({
     useSpenderBatch: vi.fn(),
     usePageSpenderAutoList: vi.fn(),
   },
-  store: { period: "all", topSupportersPeriod: "all" },
+  store: { period: "all" },
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks.queries);
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: (selector?: (state: typeof mocks.store) => unknown) => selector ? selector(mocks.store) : mocks.store,
-}));
+vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => mocks.store }));
 
 import { describeFanNotVisible } from "../apps/dashboard/src/components/shared/FanNotVisibleMark.tsx";
 import { PageSpendersSection } from "../apps/dashboard/src/pages/PageDetailPage.tsx";

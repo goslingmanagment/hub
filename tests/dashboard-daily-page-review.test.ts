@@ -13,14 +13,11 @@ const mocks = vi.hoisted(() => ({
     "usePageFanDetail", "usePageFanProfile", "usePageFanProfileVersion", "usePageFanProfileVersions",
     "usePageFanTransactions", "useCreateFanNote", "useSpenderDetail", "useSpenderBatch",
   ].map((key) => [key, vi.fn()])),
-  store: { period: "7d", topSupportersPeriod: "all" },
+  store: { period: "7d" },
   fanNavigation: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks.queries);
 vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => ({ period: mocks.store.period }) }));
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: (selector?: (state: typeof mocks.store) => unknown) => selector ? selector(mocks.store) : mocks.store,
-}));
 vi.mock("@/lib/navigation", async (original) => {
   const module = await original<typeof Navigation>();
   return { ...module, buildFanProfileNavigation: (...args: Parameters<typeof module.buildFanProfileNavigation>) => {
@@ -73,7 +70,6 @@ beforeEach(() => {
   for (const mock of Object.values(mocks.queries)) mock.mockReset().mockReturnValue(read(undefined));
   mocks.fanNavigation.mockClear();
   mocks.store.period = "7d";
-  mocks.store.topSupportersPeriod = "all";
   mocks.queries.useAuthMe!.mockReturnValue(read({ user: { role: "owner" } }));
   mocks.queries.useCreateFanNote!.mockReturnValue({ isPending: false, mutateAsync: vi.fn() });
 });
@@ -132,7 +128,7 @@ describe("daily-page independent reads", () => {
   it("preserves supporter totals but marks failed batch enrichment unavailable", () => {
     mocks.queries.useSpenders!.mockReturnValue(read({ scope: { page }, items: [supporterItem()], total: 1 }));
     mocks.queries.useSpenderBatch!.mockReturnValue(failure());
-    const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters");
+    const html = renderPage(TopSupportersPage, "/pages/:pageLabel/top-supporters", "/pages/lana/top-supporters?period=all");
     expect(html).toContain("$100.00");
     expect(html).toContain("Детали подписок и разбивка расходов");
     expect(html).toContain("Недоступно");

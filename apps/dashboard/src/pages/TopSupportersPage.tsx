@@ -15,7 +15,7 @@ import { buildFanProfileNavigation, resolveSpenderPeriod } from "@/lib/navigatio
 import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
+import { usePeriodStore } from "@/stores/periodStore";
 import {
   SPENDER_RETENTION_ACTIVE_DAYS,
   SPENDER_RETENTION_INACTIVE_DAYS,
@@ -464,7 +464,7 @@ export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const storedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
+  const { period: storedPeriod } = usePeriodStore();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedPeriod = resolveSpenderPeriod(searchParams.get("period"), storedPeriod);
   const [chatPreview, setChatPreview] = useState<ChatPreviewState | null>(null);

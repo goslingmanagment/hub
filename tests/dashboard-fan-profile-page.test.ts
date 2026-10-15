@@ -18,8 +18,8 @@ const storeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: () => ({
+vi.mock("@/stores/periodStore", () => ({
+  usePeriodStore: () => ({
     period: storeMocks.period,
     setPeriod: vi.fn(),
   }),

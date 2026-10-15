@@ -1,6 +1,6 @@
 import type { CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
-import type { PeriodOption } from "@/stores/periodStore";
-import { buildPageSectionRoute, isSafeInAppPath } from "./navigation.js";
+import type { Period, PeriodOption } from "@/stores/periodStore";
+import { buildPageSectionRoute, isSafeInAppPath, revenuePeriod } from "./navigation.js";
 
 export const OVERVIEW_PERIODS = ["today", "7d", "30d", "all"] as const;
 export const PERIOD_LABELS: Record<PeriodOption, string> = {
@@ -19,7 +19,7 @@ export interface OverviewState {
 
 export function parseOverviewState(
   params: URLSearchParams,
-  fallback: PeriodOption,
+  fallback: Period,
 ): OverviewState {
   const period = params.get("period");
   const chart = params.get("chart");
@@ -27,7 +27,7 @@ export function parseOverviewState(
   return {
     period: OVERVIEW_PERIODS.includes(period as PeriodOption)
       ? (period as PeriodOption)
-      : fallback,
+      : revenuePeriod(fallback),
     row: params.get("row") || null,
     chart:
       chart && /^(agency|(?:page|model):.+)$/.test(chart) ? chart : "agency",

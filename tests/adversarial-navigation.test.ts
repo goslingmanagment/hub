@@ -24,9 +24,6 @@ vi.mock("react-router", () => ({
   Link: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => ({ period: "7d" }) }));
-vi.mock("@/stores/spenderPeriodStore", () => ({
-  useSpenderPeriodStore: (selector: (state: { period: string }) => unknown) => selector({ period: "7d" }),
-}));
 vi.mock("@/components/layout/DashboardShellContext", () => ({
   useDashboardShell: () => ({
     pageCatalogState: "ready",

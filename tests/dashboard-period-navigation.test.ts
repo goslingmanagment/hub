@@ -10,10 +10,9 @@ const route = vi.hoisted(() => ({
 }));
 vi.mock("react-router", () => ({ useLocation: () => route, useSearchParams: () => [route.search, route.setSearch] }));
 vi.mock("@/stores/periodStore", () => ({ usePeriodStore: () => ({ period: "7d", setPeriod: route.setPeriod }) }));
-vi.mock("@/stores/spenderPeriodStore", () => ({ useSpenderPeriodStore: () => ({ period: "7d", topSupportersPeriod: "all", setPeriod: route.setPeriod, setTopSupportersPeriod: route.setPeriod }) }));
 import { PeriodSelector } from "../apps/dashboard/src/components/shared/PeriodSelector.tsx";
 
-function choosePeriod(mode: "dashboard" | "spender" | "topSupporters") {
+function choosePeriod(mode: "dashboard" | "spender") {
   // The router/store hooks are isolated; invoke the actual narrow control's handler.
   const element = PeriodSelector({ mode }) as ReactElement<{ children: ReactElement[] }>;
   const select = element.props.children[0] as ReactElement<SelectHTMLAttributes<HTMLSelectElement>>;
@@ -29,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("period changes keep the originating list", () => {
-  it.each(["dashboard", "spender", "topSupporters"] as const)("preserves fan return state while resetting only periodic offsets in %s mode", (mode) => {
+  it.each(["dashboard", "spender"] as const)("preserves fan return state while resetting only periodic offsets in %s mode", (mode) => {
     const [search, options] = choosePeriod(mode);
     expect(search.get("period")).toBe("30d");
     expect(search.get("q")).toBe("buyer");

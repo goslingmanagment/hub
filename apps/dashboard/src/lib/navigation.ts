@@ -1,10 +1,18 @@
 import { pathSegment } from "./path.js";
 import { isChatterSite, isConsoleSite } from "./sites.js";
-import type { PeriodOption } from "../stores/periodStore.js";
-import type { SpenderPeriodOption } from "../stores/spenderPeriodStore.js";
+import type { Period, PeriodOption, SpenderPeriodOption } from "../stores/periodStore.js";
 
-export function resolveDashboardPeriod(value: string | null, fallback: PeriodOption): PeriodOption {
-  return value !== null && ["today", "7d", "30d", "all"].includes(value) ? value as PeriodOption : fallback;
+/**
+ * The period a revenue report shows for the console's period. Revenue is
+ * computed for today, 7 and 30 days and all time only; a longer spender
+ * window shows its last 30 days there, and the period control marks 30 days.
+ */
+export function revenuePeriod(period: Period): PeriodOption {
+  return period === "90d" || period === "180d" ? "30d" : period;
+}
+
+export function resolveDashboardPeriod(value: string | null, fallback: Period): PeriodOption {
+  return value !== null && ["today", "7d", "30d", "all"].includes(value) ? value as PeriodOption : revenuePeriod(fallback);
 }
 
 export function resolveSpenderPeriod(value: string | null, fallback: SpenderPeriodOption): SpenderPeriodOption {

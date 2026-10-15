@@ -15,7 +15,7 @@ import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
-import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
+import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { isPlainRowClick } from "./daily/rowClick.js";
 
@@ -26,7 +26,7 @@ export function SpenderAutoListPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const storedPeriod = useSpenderPeriodStore((s) => s.period);
+  const { period: storedPeriod } = usePeriodStore();
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), storedPeriod);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const searchQuery = search.get("query") ?? "";

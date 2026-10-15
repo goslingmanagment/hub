@@ -5,12 +5,12 @@ import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/reac
 import { buildLoginRoute, resolveLoginReturnPath, resolveDashboardPeriod, resolveSpenderPeriod } from "../apps/dashboard/src/lib/navigation.ts";
 
 const mocks = vi.hoisted(() => ({ useAuthMe: vi.fn(), usePages: vi.fn(), useOverview: vi.fn(), useLogin: vi.fn(), useLogout: vi.fn() }));
+const periodStore = vi.hoisted(() => ({ period: "7d", setPeriod: vi.fn() }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ KernelApiError: class extends Error { constructor(message: string, _category: string, readonly status: number) { super(message); } } }));
 vi.mock("../apps/dashboard/src/components/layout/Sidebar.tsx", () => ({ Sidebar: () => "navigation" }));
 vi.mock("../apps/dashboard/src/components/layout/Topbar.tsx", () => ({ Topbar: () => "account" }));
-vi.mock("../apps/dashboard/src/stores/periodStore.ts", () => ({ usePeriodStore: () => ({ period: "7d", setPeriod: vi.fn() }) }));
-vi.mock("../apps/dashboard/src/stores/spenderPeriodStore.ts", () => ({ useSpenderPeriodStore: () => ({ period: "7d", topSupportersPeriod: "all", setPeriod: vi.fn(), setTopSupportersPeriod: vi.fn() }) }));
+vi.mock("../apps/dashboard/src/stores/periodStore.ts", () => ({ usePeriodStore: () => periodStore }));
 
 import { ProtectedLayout } from "../apps/dashboard/src/components/layout/ProtectedLayout.tsx";
 import { useDashboardShell } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
@@ -102,9 +102,20 @@ describe("period identity across pages", () => {
     expect(resolveSpenderPeriod("lifetime", "all")).toBe("all");
     expect(resolveSpenderPeriod(null, "all")).toBe("all");
   });
-  it.each(["dashboard", "spender", "topSupporters"] as const)("shows the URL period in both wide and narrow %s controls", (mode) => {
+  it.each(["dashboard", "spender"] as const)("shows the URL period in both wide and narrow %s controls", (mode) => {
     const html = renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ["/pages/test?period=30d"] }, createElement(PeriodSelector, { mode })));
     expect(html).toMatch(/<option value="30d" selected="">/);
     expect(html).toMatch(/aria-pressed="true"[^>]*>30 дней<\/button>/);
+  });
+  it("keeps one period across screens, showing a long window's last 30 days where revenue stops", () => {
+    periodStore.period = "180d";
+    try {
+      const render = (mode: "dashboard" | "spender") => renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ["/pages/test"] }, createElement(PeriodSelector, { mode })));
+      expect(render("spender")).toMatch(/aria-pressed="true"[^>]*>180 дней<\/button>/);
+      expect(render("dashboard")).toMatch(/aria-pressed="true"[^>]*>30 дней<\/button>/);
+      expect(render("dashboard")).not.toContain("180 дней");
+    } finally {
+      periodStore.period = "7d";
+    }
   });
 });

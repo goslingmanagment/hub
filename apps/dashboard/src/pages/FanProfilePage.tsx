@@ -20,7 +20,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDate, formatDateTime, transactionStateLabel, transactionTypeLabel, daysRemaining } from "@/lib/format";
-import { useSpenderPeriodStore, type SpenderPeriodOption } from "@/stores/spenderPeriodStore";
+import { usePeriodStore, type SpenderPeriodOption } from "@/stores/periodStore";
 import { toast } from "sonner";
 import { isSafeInAppPath, resolveFanProfileBackTarget, resolveSpenderPeriod } from "@/lib/navigation";
 import type {
@@ -71,7 +71,7 @@ export function FanProfilePage() {
   const noteBody = noteDrafts.principalId === principalId ? noteDrafts.drafts[routeKey] ?? "" : "";
   const setNoteBody = (text: string) => dispatchNoteDraft({ type: "edit", principalId, routeKey, text });
   useEffect(() => { dispatchNoteDraft({ type: "principal", principalId }); }, [principalId]);
-  const { period } = useSpenderPeriodStore();
+  const { period } = usePeriodStore();
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
