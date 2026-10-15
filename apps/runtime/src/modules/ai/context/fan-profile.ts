@@ -20,7 +20,13 @@ const TRUNCATION_MARKER = "\n\n[dossier truncated]";
 
 /** The lite dossier's whole budget (fast-reply; Lora persona audit,
  * 2026-10-16): target and hard cap at once. */
-export const FAN_PROFILE_LITE_MAX_CHARS = 4_000;
+export const FAN_PROFILE_LITE_MAX_CHARS = 5_000;
+/** Under size pressure the lite dossier never drops OPEN LOOPS (they feed the
+ * reply's callbacks); it cuts a longer one down to this, at a line boundary. */
+export const FAN_PROFILE_LITE_LOOPS_MAX_CHARS = 1_500;
+
+/** Ends a lite section that was cut at a line boundary. */
+const SECTION_CUT_MARKER = "\n[section truncated]";
 
 /** Features that read the lite dossier: a quick reply needs the fan's facts,
  * how he talks and what is still open; the portrait, stage and strategy are the
@@ -162,9 +168,10 @@ export interface CompiledDossier {
 export interface CompileDossierOptions {
   targetChars?: number;
   hardCapChars?: number;
-  /** The lite dossier (see usesLiteDossier): only the `lite` sections, both
-   * budgets default to FAN_PROFILE_LITE_MAX_CHARS, and every markdown heading
-   * of the body is demoted below the prompt's own `##` level. */
+  /** The lite dossier (see usesLiteDossier): only the `lite` sections under
+   * their own size policy (compileLiteSections), both budgets default to
+   * FAN_PROFILE_LITE_MAX_CHARS, and every markdown heading of the body is
+   * demoted below the prompt's own `##` level. */
   lite?: boolean;
 }
 
@@ -178,20 +185,92 @@ export function demoteDossierHeadings(text: string): string {
   );
 }
 
-/** Head-cut on a code point boundary (an emoji is never split), preferring the
- * last line break in the second half of the budget so a bullet is not cut
- * mid-sentence. */
-function cutLiteBody(body: string, maxChars: number): string {
-  const codePoints = Array.from(body);
+/** The longest head of `text` of at most `maxChars` UTF-16 units that never
+ * splits a code point (an emoji stays whole). */
+function headOnCodePoints(text: string, maxChars: number): string {
   let head = "";
-  for (const codePoint of codePoints) {
+  for (const codePoint of text) {
     if (head.length + codePoint.length > maxChars) {
       break;
     }
     head += codePoint;
   }
+  return head;
+}
+
+/** Head-cut on a code point boundary, preferring the last line break in the
+ * second half of the budget so a bullet is not cut mid-sentence. */
+function cutLiteBody(body: string, maxChars: number): string {
+  const head = headOnCodePoints(body, maxChars);
   const lineBreak = head.lastIndexOf("\n");
   return (lineBreak > maxChars / 2 ? head.slice(0, lineBreak) : head).trimEnd();
+}
+
+/** Cut one lite section to at most `maxChars`, marker included, at the last
+ * line boundary that fits (its heading line always stays when it fits). Null
+ * when not even the marker fits. */
+function cutSectionAtLine(text: string, maxChars: number): string | null {
+  const room = maxChars - SECTION_CUT_MARKER.length;
+  if (room <= 0) {
+    return null;
+  }
+  const head = headOnCodePoints(text, room);
+  const lineBreak = head.lastIndexOf("\n");
+  return (lineBreak > 0 ? head.slice(0, lineBreak) : head).trimEnd() + SECTION_CUT_MARKER;
+}
+
+/** The lite dossier's size policy (Lora persona audit, 2026-10-16). Over the
+ * budget it first drops COMMUNICATION DYNAMICS; still over, it cuts OPEN LOOPS
+ * down to FAN_PROFILE_LITE_LOOPS_MAX_CHARS and then cuts the facts (DOSSIER) at
+ * a line boundary to fit. OPEN LOOPS is never dropped. The kept sections keep
+ * their order. Only a preamble too long for the budget ever reaches the final
+ * whole-body cut. */
+function compileLiteSections(
+  preamble: string,
+  sections: ReadonlyArray<{ label: string; text: string }>,
+  budget: number,
+  hardCapChars: number,
+  dropped: Set<string>,
+): { body: string; truncated: boolean } {
+  let parts = sections.map((section) => ({ ...section }));
+  const join = (): string =>
+    [preamble, ...parts.map((part) => part.text)].filter((part) => part.length > 0).join("\n\n");
+  let truncated = false;
+
+  if (join().length > budget && parts.some((part) => part.label === "COMMUNICATION DYNAMICS")) {
+    parts = parts.filter((part) => part.label !== "COMMUNICATION DYNAMICS");
+    dropped.add("COMMUNICATION DYNAMICS");
+  }
+  if (join().length > budget) {
+    for (const part of parts) {
+      if (part.label === "OPEN LOOPS" && part.text.length > FAN_PROFILE_LITE_LOOPS_MAX_CHARS) {
+        part.text = cutSectionAtLine(part.text, FAN_PROFILE_LITE_LOOPS_MAX_CHARS)!;
+        truncated = true;
+      }
+    }
+  }
+  // The facts take the cut that is left, the last facts section first.
+  for (let index = parts.length - 1; index >= 0 && join().length > budget; index -= 1) {
+    const part = parts[index]!;
+    if (part.label !== "DOSSIER") {
+      continue;
+    }
+    const cut = cutSectionAtLine(part.text, part.text.length - (join().length - budget));
+    if (cut === null) {
+      parts.splice(index, 1);
+      dropped.add("DOSSIER");
+    } else {
+      part.text = cut;
+    }
+    truncated = true;
+  }
+
+  let body = join();
+  if (body.length > hardCapChars) {
+    body = cutLiteBody(body, hardCapChars) + TRUNCATION_MARKER;
+    truncated = true;
+  }
+  return { body, truncated };
 }
 
 export function compileDossierForPrompt(
@@ -256,11 +335,24 @@ export function compileDossierForPrompt(
     return !drop;
   });
 
-  // The lite body is measured as injected, demoted headings included.
-  const shape = (text: string): string => (lite ? demoteDossierHeadings(text) : text);
-  const preamble = shape(parsed[0]!.lines.join("\n").trim());
+  if (lite) {
+    // The lite body is measured as injected, demoted headings included.
+    const compiled = compileLiteSections(
+      demoteDossierHeadings(parsed[0]!.lines.join("\n").trim()),
+      kept.map((entry) => ({
+        label: entry.def.label,
+        text: demoteDossierHeadings(entry.lines.join("\n").trim()),
+      })),
+      targetChars,
+      hardCapChars,
+      dropped,
+    );
+    return { ...compiled, droppedSections: [...dropped], sectioned: true };
+  }
+
+  const preamble = parsed[0]!.lines.join("\n").trim();
   const assemble = (entries: typeof kept): string => {
-    const parts = entries.map((entry) => shape(entry.lines.join("\n").trim()));
+    const parts = entries.map((entry) => entry.lines.join("\n").trim());
     return [preamble, ...parts].filter((part) => part.length > 0).join("\n\n");
   };
 
@@ -282,7 +374,7 @@ export function compileDossierForPrompt(
   // cut loses more meaning than a few thousand extra chars cost.
   let truncated = false;
   if (body.length > hardCapChars) {
-    body = (lite ? cutLiteBody(body, hardCapChars) : body.slice(0, hardCapChars)) + TRUNCATION_MARKER;
+    body = body.slice(0, hardCapChars) + TRUNCATION_MARKER;
     truncated = true;
   }
 
