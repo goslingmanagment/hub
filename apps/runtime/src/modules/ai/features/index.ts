@@ -981,6 +981,7 @@ export async function prepareAiFeatureStream(
           fanRef,
           platform: stored.page.platform,
           now: Date.now(),
+          feature,
         });
       }
     } catch (error) {

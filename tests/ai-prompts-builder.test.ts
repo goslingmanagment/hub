@@ -271,14 +271,20 @@ function buildGreetingTask(input: PromptBuildInput): string {
   return input.greetingVariantCount === 1 ? GREETING_TASK_ONE : GREETING_TASK_THREE;
 }
 
+// Lora persona audit (2026-10-16): the reply features read the persona as who
+// they are, the coach-style analysis features as a labelled voice reference, and
+// the recap reads none.
+const PERSONA_REFERENCE_HEADING =
+  '## Model persona (voice reference for any message you draft; you are the coach, not her)';
+
 function buildExpectedFlatSystem(input: PromptBuildInput): string {
-  const preamble =
-    input.feature === 'help-me' ||
-    input.feature === 'fan-summary' ||
-    input.feature === 'chat-review'
-      ? ANALYSIS_SAFETY_PREAMBLE
-      : REPLY_SAFETY_PREAMBLE;
-  return `${preamble}\n\n## Model Personality\n\n${input.personality.content}`;
+  if (input.feature === 'fan-summary') {
+    return ANALYSIS_SAFETY_PREAMBLE;
+  }
+  if (input.feature === 'help-me' || input.feature === 'chat-review') {
+    return `${ANALYSIS_SAFETY_PREAMBLE}\n\n${PERSONA_REFERENCE_HEADING}\n\n${input.personality.content}`;
+  }
+  return `${REPLY_SAFETY_PREAMBLE}\n\n## Model Personality\n\n${input.personality.content}`;
 }
 
 function buildExpectedFlatUser(input: PromptBuildInput): string {
@@ -368,6 +374,48 @@ describe('system prompt', () => {
     expect(result.system).toContain('You must stay in character at all times');
     expect(result.system).not.toContain('assisting a OnlyFans agency chatter');
   });
+
+  it('labels the persona a voice reference for the coach-style analysis features', () => {
+    const persona = { ...TEST_PERSONALITY, content: 'PERSONA BODY' };
+    for (const feature of ['help-me', 'chat-review', 'coach-chat'] as const) {
+      const result = buildPrompt(buildTestInput({ feature, personality: persona, chatterQuestion: 'q' }));
+      expect(result.systemBlocks, feature).toEqual([
+        { text: `${ANALYSIS_SAFETY_PREAMBLE}\n\n${PERSONA_REFERENCE_HEADING}\n\n`, cache: 'none' },
+        { text: 'PERSONA BODY', cache: '1h' },
+      ]);
+      expect(result.system, feature).not.toContain('## Model Personality');
+    }
+  });
+
+  it('keeps the persona as who the model is for every reply feature', () => {
+    const persona = { ...TEST_PERSONALITY, content: 'PERSONA BODY' };
+    for (const feature of ['fast-reply', 'improve-draft', 'ping', 'hi-greeting', 'voice-script'] as const) {
+      const result = buildPrompt(buildTestInput({
+        feature,
+        personality: persona,
+        draftText: 'draft',
+        pingSegment: feature === 'ping' ? 'segment-a' : undefined,
+      }));
+      expect(result.systemBlocks, feature).toEqual([
+        { text: `${REPLY_SAFETY_PREAMBLE}\n\n## Model Personality\n\n`, cache: 'none' },
+        { text: 'PERSONA BODY', cache: '1h' },
+      ]);
+    }
+  });
+
+  it('sends no persona to fan-summary (full and short) or fan-notes-fill', () => {
+    const persona = { ...TEST_PERSONALITY, content: 'PERSONA BODY' };
+    for (const input of [
+      buildTestInput({ feature: 'fan-summary', personality: persona }),
+      buildTestInput({ feature: 'fan-summary', summaryMode: 'short', personality: persona }),
+      buildTestInput({ feature: 'fan-notes-fill', personality: persona, noteFields: ['Имя'] }),
+    ]) {
+      const result = buildPrompt(input);
+      expect(result.systemBlocks).toEqual([{ text: ANALYSIS_SAFETY_PREAMBLE, cache: 'none' }]);
+      expect(result.system).toBe(ANALYSIS_SAFETY_PREAMBLE);
+      expect(result.user).not.toContain('PERSONA BODY');
+    }
+  });
 });
 
 // ─── Prompt caching blocks ──────────────────────────────────────────────
@@ -426,7 +474,8 @@ describe('prompt caching blocks', () => {
       const input = buildTestInput({ feature: 'fan-summary', summaryMode });
       const result = buildPrompt(input);
 
-      expect(result.systemBlocks).toHaveLength(2);
+      // No persona (Lora persona audit, 2026-10-16): the preamble is the system prompt.
+      expect(result.systemBlocks).toHaveLength(1);
       expect(result.userBlocks).toHaveLength(3);
       expect([...result.systemBlocks, ...result.userBlocks].every((block) => block.cache === 'none')).toBe(true);
       expect(flattenPromptBlocks(result.systemBlocks)).toBe(result.system);
@@ -750,6 +799,54 @@ describe('split reply instructions', () => {
     expect(result.user).not.toContain('Split mode is on for this reply.');
   });
 
+  // Lora persona audit (2026-10-16): the split text rides the uncached task
+  // block right after the tone line, never the context block under the dossier,
+  // and the 1h prefix is one text for every tone, mode and fan.
+  it('puts the fast-reply split text in the task block, after the tone instructions', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        feature: 'fast-reply',
+        replyMode: 'preferSplit',
+        replyTone: 'flirty',
+        fanProfile: { body: 'DOSSIER BODY', generatedAt: new Date('2026-09-01T00:00:00Z') },
+      }),
+    );
+    expect(result.userBlocks).toHaveLength(3);
+    const [prefix, context, task] = result.userBlocks;
+    expect(prefix!.text).not.toContain('Split mode is on');
+    expect(context!.text).not.toContain('Split mode is on');
+    expect(task!.cache).toBe('none');
+    expect(task!.text.startsWith('## Your Task\n\nTone for this reply: flirty.')).toBe(true);
+    const tone = task!.text.indexOf('only the intent and energy of this reply should shift.');
+    const split = task!.text.indexOf('- Split mode is on for this reply.');
+    const write = task!.text.indexOf('Write the next reply from the model to the fan.');
+    expect(tone).toBeGreaterThan(0);
+    expect(split).toBeGreaterThan(tone);
+    expect(write).toBeGreaterThan(split);
+    expect(task!.text).toContain('Keep it short, like a real text.');
+  });
+
+  it('keeps one fast-reply 1h prefix for every tone, reply mode and fan', () => {
+    const base = buildPrompt(buildTestInput({ feature: 'fast-reply' }));
+    for (const input of [
+      buildTestInput({ feature: 'fast-reply', replyMode: 'preferSplit' }),
+      buildTestInput({ feature: 'fast-reply', replyTone: 'spicy' }),
+      buildTestInput({
+        feature: 'fast-reply',
+        transcript: 'Fan: another fan entirely',
+        fanSpendingData: 'Gross: $999',
+        fanProfile: { body: 'DOSSIER BODY', generatedAt: new Date('2026-09-01T00:00:00Z') },
+      }),
+    ]) {
+      const built = buildPrompt(input);
+      expect(built.systemBlocks).toEqual(base.systemBlocks);
+      expect(built.userBlocks[0]).toEqual(base.userBlocks[0]);
+      expect(built.userBlocks[0]!.cache).toBe('1h');
+    }
+    expect(base.userBlocks[0]!.text).toContain('## How to reply\n');
+    expect(base.userBlocks[0]!.text).not.toMatch(/\{\w+\}/);
+  });
+
   it('does not include split instructions for non-fast-reply features', () => {
     const result = buildPrompt(
       buildTestInput({
@@ -799,14 +896,55 @@ describe('improve-draft split mode', () => {
     expect(result.user).not.toContain('Split mode is on for this reply.');
   });
 
-  it('keeps the rules in the uncached context block and the cached prefix unchanged', () => {
+  // Lora persona audit (2026-10-16): the static Rules, "Sounding human" and the
+  // examples sit before the "## Current Draft" anchor, so they ride the 1h
+  // prefix. The two slots there depend on the reply mode alone: one cached
+  // prefix per mode, and the per-fan blocks are the same for both modes.
+  it('keeps the rules in the 1h static prefix: one variant per mode, the context and task unchanged', () => {
     const single = buildPrompt(buildTestInput({ feature: 'improve-draft' }));
     const split = buildPrompt(buildTestInput({ feature: 'improve-draft', replyMode: 'preferSplit' }));
     expect(split.systemBlocks).toEqual(single.systemBlocks);
-    expect(split.userBlocks[0]).toEqual(single.userBlocks[0]);
-    expect(split.userBlocks[1]?.text).toContain('Split mode is on for this rewrite.');
-    expect(split.userBlocks[1]?.cache).toBe('none');
+    expect(split.userBlocks[0]?.cache).toBe('1h');
+    expect(split.userBlocks[0]?.text).toContain('Split mode is on for this rewrite.');
+    expect(single.userBlocks[0]?.text).toContain('- Output exactly one ready-to-send message.\n- Do NOT use [NEXT].\n');
+    expect(single.userBlocks[0]?.text).toContain('a one-liner stays a one-liner.');
+    expect(split.userBlocks[1]).toEqual(single.userBlocks[1]);
     expect(split.userBlocks[2]).toEqual(single.userBlocks[2]);
+  });
+
+  it('caches the rules and examples in a fan-agnostic prefix that ends at the draft', () => {
+    const one = buildPrompt(buildTestInput({ feature: 'improve-draft', draftText: 'draft one' }));
+    const other = buildPrompt(buildTestInput({
+      feature: 'improve-draft',
+      draftText: 'another draft',
+      transcript: 'Fan: something else entirely',
+      fanSpendingData: 'Gross: $999',
+      fanSubscriptionData: 'Tier: VIP',
+      fanProfile: { body: 'DOSSIER BODY', generatedAt: new Date('2026-09-01T00:00:00Z') },
+    }));
+    expect(other.userBlocks[0]).toEqual(one.userBlocks[0]);
+    const prefix = one.userBlocks[0]!.text;
+    expect(prefix).toContain('## Rules');
+    expect(prefix).toContain('## Sounding human');
+    expect(prefix).toContain('</examples>');
+    expect(prefix).not.toContain('## Current Draft');
+    expect(one.userBlocks[1]!.text.startsWith('## Current Draft\n\n<current_draft>\ndraft one\n</current_draft>')).toBe(true);
+  });
+
+  it('asks for the meaning, not a word-for-word translation, right after the internal-language rule', () => {
+    expect(IMPROVE_DRAFT_TEMPLATE).toContain(
+      "A Russian draft is not a reason to answer in Russian: only the fan's own lines decide.\n- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word.\n",
+    );
+  });
+
+  it('shows GOOD rewrites that add no emoji the draft did not have', () => {
+    const examples = IMPROVE_DRAFT_TEMPLATE.slice(
+      IMPROVE_DRAFT_TEMPLATE.indexOf('<examples>'),
+      IMPROVE_DRAFT_TEMPLATE.indexOf('</examples>'),
+    );
+    expect(examples).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(examples).toContain('Draft (chatter, in English): "no way, you did that? that\'s crazy haha"');
+    expect(examples).toContain('GOOD: "no way, you did that? that\'s crazy haha"');
   });
 
   it('does not expand an {improveOutputRules} placeholder typed into the draft', () => {

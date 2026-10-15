@@ -78,6 +78,9 @@ describe("coach-chat prompt", () => {
     expect(COACH_CHAT_TEMPLATE).toContain("## Conversation Transcript");
     expect(COACH_CHAT_TEMPLATE).toContain("## Your Task");
     expect(COACH_CHAT_TEMPLATE).toContain("```draft");
+    // Lora persona audit (2026-10-16): no agency method is in the prompt, so
+    // the intro does not claim one was given.
+    expect(COACH_CHAT_TEMPLATE).not.toContain("method you were given");
   });
 
   it("keeps per-fan recaps, dossier and coach history out of the 1h static prefix", () => {
@@ -137,9 +140,11 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
       ...baseInput,
       draftText: "  hey <babe> & wanna see more? 😘  ",
     });
+    // Re-pinned by the Lora persona audit (2026-10-16): the template intro no
+    // longer cites "the agency method you were given"; nothing else moved.
     expect(
       createHash("sha256").update(JSON.stringify(withDraft.userBlocks)).digest("hex"),
-    ).toBe("a27e53c16324f65f46804a55775f0688e061d78dc3afc7dc1f097a87e8cd72b3");
+    ).toBe("b3e5384fcfe649ac93b42e37bba341207444da224c52e902005e560155269293");
   });
 
   it("renders the situation preset only in the uncached task block", () => {

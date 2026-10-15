@@ -2519,6 +2519,76 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(userText(capture)).not.toContain("## Fan Dossier");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  // Lora persona audit (2026-10-16): fast-reply reads the lite dossier (facts,
+  // dynamics, open loops; headings demoted below the prompt's `##` level);
+  // every other policy feature keeps the full compile.
+  it("gives fast-reply the lite dossier and the other policy features the full one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await seedFanProfile({
+      platform: "onlyfans",
+      targetPageId: pageId,
+      body: [
+        "# ПРОФИЛЬ ФАНАТА: Charles",
+        "",
+        "## 1. ДОСЬЕ",
+        "- Ездит на красном Ducati, живёт в Остине",
+        "",
+        "## 2. ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ",
+        "- Тревожная привязанность",
+        "",
+        "## 3. СТАДИЯ И ТРАЕКТОРИЯ",
+        "- Лояльный, стабильный",
+        "",
+        "## 4. ДИНАМИКА ОБЩЕНИЯ",
+        "- Короткие сообщения, не любит спешку",
+        "",
+        "## 6. ОТКРЫТЫЕ ПЕТЛИ",
+        "- Обещала фото с пляжа",
+        "",
+        "## 7. СТРАТЕГИЯ",
+        "- Давить на тему путешествий",
+      ].join("\n"),
+    });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+    const dossierOf = (text: string) =>
+      text.slice(text.indexOf("<fan_dossier>"), text.indexOf("</fan_dossier>"));
+
+    const reply = await call("fast-reply");
+    expect(reply.statusCode, reply.body).toBe(200);
+    const lite = dossierOf(userText(capture));
+    expect(lite).toContain("#### 1. ДОСЬЕ");
+    expect(lite).toContain("красном Ducati");
+    expect(lite).toContain("Короткие сообщения");
+    expect(lite).toContain("Обещала фото с пляжа");
+    expect(lite).not.toContain("Тревожная привязанность");
+    expect(lite).not.toContain("Лояльный, стабильный");
+    expect(lite).not.toContain("Давить на тему путешествий");
+    expect(lite).not.toMatch(/^#{1,2}\s/m);
+    const { rows } = await testDb.pool.query<{
+      params: { contextManifest?: { fanProfile?: { droppedSections?: string[] } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'fast-reply' order by id desc limit 1`,
+    );
+    expect([...(rows[0]?.params.contextManifest?.fanProfile?.droppedSections ?? [])].sort()).toEqual([
+      "PSYCHOLOGICAL PORTRAIT",
+      "STAGE AND TRAJECTORY",
+      "STRATEGY",
+    ]);
+
+    const fix = await call("improve-draft", { draftText: "hey you" });
+    expect(fix.statusCode, fix.body).toBe(200);
+    const full = dossierOf(userText(capture));
+    expect(full).toContain("## 1. ДОСЬЕ");
+    expect(full).toContain("Тревожная привязанность");
+    expect(full).toContain("Давить на тему путешествий");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("falls back to an older proven dossier instead of injecting a newer unproven profile", async (context) => {
     if (!testDb) {
       context.skip();

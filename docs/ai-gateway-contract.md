@@ -504,11 +504,11 @@ and `params.contextManifest.archiveCount` / `unionCount` are the rows each reade
 
 Cost: the deeper the read, the longer the prompt. Measured on production (2026-10-13), the heaviest
 5000-message window of a chat holds 374k characters of text (75 a message); a full Recap of it is a
-prompt of about 460k characters, about 200k input tokens on the Recap's model (Opus 5.5; production
+prompt of about 455k characters, about 200k input tokens on the Recap's model (Opus 5.5; production
 Recaps tokenize at 2.0 to 2.7 characters a token). By that model's list price a full Recap of that
-chat costs about $0.42 at 1500, $0.67 at 3000 and $1.00 at 5000, the answer included. The
+chat costs about $0.41 at 1500, $0.66 at 3000 and $0.99 at 5000, the answer included. The
 per-request ceiling (`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply
-unchanged, to the longer prompt; the cost preflight of that Recap is $0.94 against the $5 default.
+unchanged, to the longer prompt; the cost preflight of that Recap is $0.93 against the $5 default.
 The read itself is the same statement and plan at every cap: both readers fetch the whole
 conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are resolved
 before the cap).
