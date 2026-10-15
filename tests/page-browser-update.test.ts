@@ -72,7 +72,7 @@ describe("page-browser-update.sh update: one page onto a new Chrome", () => {
     const sql = run.calls.filter((call) => call.tool === "docker" && call.args.includes("postgres"));
     expect(sql.length).toBeGreaterThan(2);
     for (const call of sql) {
-      expect(call.stdin).toMatch(/^-- pb-update:(page lilly-1|command lilly-1 \w+)\nBEGIN READ ONLY;\nSELECT /);
+      expect(call.stdin).toMatch(/^-- pb-update:(page lilly-1|command lilly-1 \w+|stop lilly-1)\nBEGIN READ ONLY;\nSELECT /);
       // No write, outside its quoted literals (the run's note names the script).
       expect(call.stdin!.split("\n").slice(1).join("\n").replace(/'[^']*'/g, "''")).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE)\b/i);
     }
@@ -86,8 +86,10 @@ describe("page-browser-update.sh update: one page onto a new Chrome", () => {
       const note = call.args[call.args.indexOf("--note") + 1];
       expect(note).toMatch(new RegExp(`^page-browser-update ${runId} (out|back): Chrome ${FROM_CHROME} -> ${TO_CHROME} \\(`));
     }
-    // The update's start never names a halt.
+    // The update's start never names a halt, and lifts only its own stop.
     expect(levers[1]!.args).toContain("--if-no-halt");
+    const stopId = String(host.state().commands!.find((row) => row.kind === "stopPage")!.id);
+    expect(levers[1]!.args.slice(levers[1]!.args.indexOf("--if-stop"), levers[1]!.args.indexOf("--if-stop") + 2)).toEqual(["--if-stop", stopId]);
   });
 
   it("a page on Node: no lever of the Hub, Chrome must stand; the engine has nothing of it to check", () => {

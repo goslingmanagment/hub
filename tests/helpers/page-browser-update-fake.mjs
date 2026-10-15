@@ -183,6 +183,14 @@ function browserLever(cli) {
     return action === "snapshot" && outcome !== "ok" ? 1 : 0;
   }
   if (action === "start") {
+    if (cli.includes("--if-stop")) {
+      const wanted = Number(cli[cli.indexOf("--if-stop") + 1]);
+      const last = (state.commands ?? []).filter((row) => row.page === label && row.kind === "stopPage").at(-1);
+      if (page.ownerStop !== true || last?.id !== wanted) {
+        err(`${label}: the stop in force is not command ${wanted}'s: this start lifts only that stop — refused, nothing changed\n`);
+        return 1;
+      }
+    }
     if (cli.includes("--if-no-halt") && page.pb.haltReason) {
       err(`${label}: its browser stands for the owner's decision (${page.pb.haltReason}): a start that clears no halt is refused, nothing changed\n`);
       return 1;
@@ -352,6 +360,15 @@ function docker(argv) {
           err("could not connect to server\n");
           return 1;
         }
+      }
+      const stopNow = /-- pb-update:stop (\S+)/.exec(input);
+      if (stopNow !== null && /BEGIN READ ONLY;/.test(input)) {
+        const page = state.hub?.pages?.[stopNow[1]];
+        if (page === undefined) return 0;
+        const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
+        const last = (state.commands ?? []).filter((row) => row.page === stopNow[1] && row.kind === "stopPage").at(-1);
+        out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}\n`);
+        return 0;
       }
       const asked = /-- pb-update:command (\S+) (\S+)/.exec(input);
       if (asked !== null && /BEGIN READ ONLY;/.test(input)) {

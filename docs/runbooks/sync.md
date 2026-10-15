@@ -252,7 +252,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   confirmed by the operator once Chrome is down — the page stays on its browser, so a page with no Node session is
   updated too), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
   the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
-  starts the browser again (`sync browser start --if-no-halt`: the stop and its pause lifted; never a halt cleared),
+  starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause lifted —
+  only while the stop in force is the update's own; a stop or start of yours since stays yours and the update holds;
+  never a halt cleared),
   waits for the engine's record of the operator: ready on the new Chrome, the self-test passed, the exit IP the
   pinned one, the same account and session — then the window, ending with `sync check live-hour`. Any failure: the
   page goes back to its previous image **with its snapshot**; before the new image ran, simply as it was. Follow it
@@ -268,7 +270,10 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
 - **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
   (one by one, the first failure stops it).
 - **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot,
-  refused before anything changes when the snapshot is gone or the profile is no longer the page's. The snapshot of a
+  refused before anything changes when the snapshot is gone or the profile is no longer the page's. It reads the page
+  as it is then: a browser that serves is stopped by its own lever and confirmed before the container is touched
+  (unless the browser stands stopped now, under a stop the operator answered); a stop of yours stays yours (no start
+  after); a Chrome that runs in the container is never stopped. The snapshot of a
   page's last update is kept until its next update. Never `deploy-page-browser.sh rollback` after a Chrome update:
   page.sh refuses an image whose Chrome is older than the one that last opened the profile (Chrome never opens a
   profile a newer one wrote). The same rule stops page.sh's own way back after a failed `up`: when the new Chrome

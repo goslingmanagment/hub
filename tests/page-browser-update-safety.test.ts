@@ -261,6 +261,142 @@ describe("6 · a standalone snapshot is an operation with its record", () => {
   });
 });
 
+/** The owner's `sync browser stop`, as the engine carries it out: his stop
+ *  command, answered once Chrome is down. */
+const ownerStops = (h: Host) =>
+  h.edit((state) => {
+    const page = state.hub.pages[PAGE]!;
+    page.ownerStop = true;
+    if (!page.paused) Object.assign(page, { paused: true, stopPaused: true });
+    state.commands = [...(state.commands ?? [])];
+    state.commands.push({ id: state.commands.length + 1, page: PAGE, kind: "stopPage", note: "the owner's", outcome: "ok", expired: false, detail: "", haltId: null });
+    state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+  });
+/** The owner's `sync browser start`: his decision, the browser serving again. */
+const ownerStarts = (h: Host) =>
+  h.edit((state) => {
+    const page = state.hub.pages[PAGE]!;
+    Object.assign(page, { ownerStop: false, paused: false, stopPaused: false });
+    state.commands = [...(state.commands ?? [])];
+    state.commands.push({ id: state.commands.length + 1, page: PAGE, kind: "restartBrowser", note: "the owner's", outcome: "ok", expired: false, detail: "", haltId: null });
+    state.containers[`page-browser-${PAGE}`]!.chrome = "up";
+    Object.assign(page.pb, { step: "ready", stop: "", exitOpen: true, stateAt: Date.now() });
+  });
+const ROLLBACK_OUT = ["docker stop", "profile restore", `page.sh up ${FROM}`, "profile-check"];
+
+describe("Astra (hand-over): the rollback reads the page as it is now — never the update's old hand-over", () => {
+  it("an update of a page its owner had stopped, the page started by him since: the rollback stops it with its own confirmed stop before touching the container, and starts it again", () => {
+    host = makeHost((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
+      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+    });
+    expect(host.run(UPDATE).status).toBe(0);
+    expect(host.update().HANDOVER).toBe("0");
+    ownerStarts(host);
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["hub sync browser snapshot", ...ROLLBACK_OUT, "hub sync browser start"]);
+    expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_START: "1", RB_CHECKS: "passed" });
+    const stops = host.state().commands!.filter((row) => row.kind === "stopPage");
+    const start = run.calls.find((call) => call.tool === "docker" && call.args.includes("start") && call.args.includes("browser"))!;
+    expect(start.args[start.args.indexOf("--if-stop") + 1]).toBe(String(stops.at(-1)!.id));
+    expect(profile(host)).toMatchObject({ version: FROM_CHROME, marker: "before" });
+  });
+
+  it("… and its stop not confirmed: nothing touched — the serving page is never stopped blind", () => {
+    host = makeHost((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
+      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+    });
+    expect(host.run(UPDATE).status).toBe(0);
+    ownerStarts(host);
+    host.edit((state) => {
+      state.behaviour.stopOutcome = "unknown";
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["hub sync browser snapshot"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back" });
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true, chrome: "up" });
+    expect(profile(host).restores ?? 0).toBe(0);
+  });
+
+  it("the owner's own stop stands, answered: rolled back under it, no lever — and it stays his (no start)", () => {
+    host = makeHost((state) => {
+      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
+      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+    });
+    expect(host.run(UPDATE).status).toBe(0);
+    ownerStarts(host);
+    ownerStops(host);
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(ROLLBACK_OUT);
+    expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_START: "0", RB_CHECKS: "skipped" });
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ ownerStop: true, paused: true });
+  });
+
+  it("Hub says the browser is stopped, yet Chrome runs in the container: the rollback never stops it", () => {
+    host = makeHost();
+    expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
+    ownerStops(host);
+    host.edit((state) => {
+      state.containers[`page-browser-${PAGE}`]!.chrome = "up";
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "held", RB_STEP: "taken_out" });
+    expect(host.update().HELD_WHY).toContain("the rollback never stops a working page");
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true, chrome: "up" });
+  });
+
+  it("a stop of the owner's not answered yet: the rollback asks none over it — it holds for him", () => {
+    host = makeHost();
+    expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
+    host.edit((state) => {
+      const page = state.hub.pages[PAGE]!;
+      Object.assign(page, { ownerStop: true, paused: true, stopPaused: true });
+      state.commands!.push({ id: state.commands!.length + 1, page: PAGE, kind: "stopPage", note: "the owner's", outcome: "", expired: false, detail: "", haltId: null });
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual([]);
+    expect(host.update().HELD_WHY).toContain("the owner's stop stands on the page's browser");
+  });
+});
+
+describe("Astra (hand-over): the update's start lifts only the stop the update made", () => {
+  it("cut off after the profile check, the owner stops the page meanwhile: resume starts nothing — his stop and its pause stay, the update holds for him", () => {
+    host = makeHost();
+    expect(host.run(UPDATE, { crashOn: "profile-check" }).status).toBe(137);
+    ownerStops(host);
+    const run = host.run(["resume", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["profile-check", "hub sync browser start"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "host_checked" });
+    expect(host.update().HELD_WHY).toContain("the stop in force is not command");
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ ownerStop: true, paused: true });
+    expect(host.state().commands!.filter((row) => row.kind === "restartBrowser")).toEqual([]);
+  });
+
+  it("held at its take-out, the owner stops the page meanwhile: resume asks no stop over his", () => {
+    host = makeHost((state) => {
+      state.behaviour.stopOutcome = "pending";
+    });
+    expect(host.run(UPDATE).status).toBe(1);
+    host.edit((state) => {
+      delete state.behaviour.stopOutcome;
+    });
+    ownerStops(host);
+    const run = host.run(["resume", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual([]);
+    expect(host.update().HELD_WHY).toContain("the owner's stop stands on the page's browser");
+    expect(host.state().commands!.filter((row) => row.kind === "stopPage")).toHaveLength(2);
+  });
+});
+
 describe("a halt held for the owner's decision is never the update's (PR 17)", () => {
   it("one its new operator holds when the page is to be started again: held — no start asked, nothing cleared", () => {
     host = makeHost();
@@ -307,7 +443,8 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
     // Given back, then the Hub stops answering: the old image's start unknown.
     host.edit((state) => {
       state.behaviour.hubDown = false;
-      state.behaviour.sqlFailAfter = 2;
+      // The give-back's reads (the page, its stop, its start's answer): then nothing.
+      state.behaviour.sqlFailAfter = 3;
       (state as { sqlReads?: number }).sqlReads = 0;
     });
     const blind = host.run(["resume", "--page", PAGE]);
@@ -327,7 +464,8 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
   it("the Hub stops answering during the engine checks: held, not rolled back blind", () => {
     host = makeHost((state) => {
       state.behaviour.engine = { [TO_CHROME]: "never" };
-      state.behaviour.sqlFailAfter = 4;
+      // The plan, the stop (now, its answer), the start (the page, its stop, its answer): then nothing.
+      state.behaviour.sqlFailAfter = 6;
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);

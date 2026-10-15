@@ -58,10 +58,12 @@
 #  5. host checks, exit closed: the new Chrome opens the profile and its
 #     policy installs the image's rules extension (profile-check.mjs in the
 #     container), and the profile now names the new Chrome;
-#  6. give back — `sync browser start --if-no-halt`: the update's stop and
-#     its pause lifted, the browser started by the engine (plan §4.1) under
-#     the guard of every start — never clearing a halt held for the owner's
-#     decision;
+#  6. give back — `sync browser start --if-no-halt --if-stop <its stop>`:
+#     the update's stop and its pause lifted — only while the stop in force
+#     is the update's own (a stop or start of the owner's since stays his:
+#     the update holds) — the browser started by the engine (plan §4.1)
+#     under the guard of every start, never clearing a halt held for the
+#     owner's decision;
 #  7. engine checks, read from the engine's record of the operator's state
 #     (page_browsers): ready on the new Chrome — the self-test passed (the
 #     extension's rules among its mechanisms), the environment verified, the
@@ -70,7 +72,10 @@
 #     before, no new login;
 #  8. the window (first page): ready all along, then `sync check live-hour`.
 # Any failure before the new image ran puts the page back as it was (its
-# old container, its transport); after it, a rollback: the page out again,
+# old container, its transport); after it, a rollback — reading the page as
+# it is then, never the update's old hand-over: its own confirmed stop of a
+# browser that serves (unless Hub shows it stopped now), no container
+# stopped under a running Chrome, a start only of a stop it made —: the page out again,
 # the snapshot restored, the old image, the same checks — never the old
 # Chrome on a profile the new one wrote: every container start goes through
 # page.sh's start_state, which refuses it.
@@ -144,7 +149,8 @@ PROFILE_CHROME="" PROFILE_BYTES=0
 REPO_VERSION="" REPO_FILENAME="" REPO_SIZE="" REPO_SHA256="" REPO_DATE="" REPO_SIGNER=""
 H_TRANSPORT="" H_LEAVE="" H_GENERATION="" H_PROFILE="" H_STEP="" H_STOP=""
 H_PAUSED="" H_STOP_PAUSED="" H_OWNER_STOP="" H_HALT_REASON="" H_HALT_ID=""
-CMD_ID="" CMD_OUTCOME="" CMD_EXPIRED="" CMD_DETAIL="" CMD_WHY="" OP_HALT="" PROTO="" PROTO_WHY=""
+CMD_ID="" CMD_OUTCOME="" CMD_EXPIRED="" CMD_DETAIL="" CMD_WHY="" OP_HALT="" PROTO="" PROTO_WHY="" HUB_OUT=""
+STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
 H_EXIT_OPEN="" H_FINGERPRINT="" H_ACCOUNT="" H_EXIT_IP="" H_PINNED="" H_CHROME="" H_OPERATOR="" H_SELFTEST_OK=""
 H_SELFTEST_AT="" H_SELFTEST_FAILED="" H_STATE_AT="" H_NOW=""
 
@@ -727,6 +733,36 @@ SQL
   [[ "$CMD_ID" =~ ^[0-9]+$ ]] || return 1
 }
 
+# The stop in force on the page's browser now: STOP_SET (the owner's stop
+# stands), the page's latest stop command — STOP_ID, STOP_OUTCOME — and
+# STOP_OURS (it is this run's). 1: the Hub cannot be read.
+hub_stop_now() {
+  local row
+  STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
+  row="$(hub_compose exec -T postgres sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtqX -F "|"' <<SQL
+-- pb-update:stop $PAGE
+BEGIN READ ONLY;
+SELECT (pb.owner_stop_at IS NOT NULL)::text,
+       coalesce(c.id::text, ''),
+       coalesce(c.outcome, ''),
+       coalesce((c.note LIKE 'page-browser-update $RUN %')::text, 'false')
+  FROM pages p
+  JOIN page_browsers pb ON pb.page_id = p.id
+  LEFT JOIN LATERAL (
+    SELECT id, outcome, note FROM page_browser_commands
+     WHERE page_id = p.id AND kind = 'stopPage'
+     ORDER BY id DESC LIMIT 1
+  ) c ON true
+ WHERE p.label = '$PAGE';
+COMMIT;
+SQL
+)" || return 1
+  row="$(sed -n '1p' <<<"$row")"
+  [[ -n "$row" ]] || return 1
+  IFS='|' read -r STOP_SET STOP_ID STOP_OUTCOME STOP_OURS <<<"$row"
+  [[ "$STOP_SET" == true || "$STOP_SET" == false ]] || return 1
+}
+
 # Waits for the run's <kind> command of <tag> to end. 0 ok; 1 the operator
 # (or the engine) said no; 3 not known — expired (nobody took it), unknown
 # (sent, no answer), not ended within the deadline, or the Hub unreadable
@@ -766,14 +802,22 @@ hub_ask() {
   local out rc=0
   out="$(hub_compose exec -T api node apps/runtime/dist/cli.js "$@" </dev/null 2>&1)" || rc=$?
   [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+  HUB_OUT="$(printf '%s' "$out" | tail -n 1 | scrub)"
   journal hub_lever "$1 $2 $3 → exit $rc"
   return "$rc"
 }
 
 # The page's browser out of service. 0 the operator confirmed its stop
-# (Chrome down; the page paused by it); 1 refused; 3 not known (CMD_WHY).
+# (Chrome down; the page paused by it); 1 refused; 3 not known; 4 a stop of
+# the owner's stands — never asked over (the update's own stop would then
+# be the latest, and its start could lift the owner's) (CMD_WHY).
 handover_out() {
   local tag="$1" text="$2"
+  hub_stop_now || { CMD_WHY="the Hub cannot be read"; return 3; }
+  if [[ "$STOP_SET" == true && "$STOP_OURS" != true ]]; then
+    CMD_WHY="the owner's stop stands on the page's browser (stop command ${STOP_ID:-unknown}): it stays his"
+    return 4
+  fi
   # A stop this run asked before (a resume): its own outcome first.
   if [[ "$(sget "STOP_$tag")" == 1 ]]; then
     hub_command stopPage "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
@@ -801,11 +845,14 @@ handover_out() {
 }
 
 # The page's browser back in service — never past a halt held for the
-# owner's decision: Hub's mirror (the lever refuses on it, in the same
-# transaction) or the operator's own on its volume. <key>: the instant
-# before the lever (the database's clock): the engine's checks count only
-# what the operator said after it; a start asked before (a resume) keeps
-# its instant. 0 the start went; 2 not started — a halt, or refused
+# owner's decision (Hub's mirror: the lever refuses on it in the same
+# transaction; or the operator's own on its volume), and lifting only the
+# stop this run made: the lever's `--if-stop` names this run's latest stop
+# command, and refuses, nothing changed, if the stop in force is another's
+# (the owner stopped or started the page since). <key>: the instant before
+# the lever (the database's clock): the engine's checks count only what the
+# operator said after it; a start asked before (a resume) keeps its instant.
+# 0 the start went; 2 not started — a halt, a stop not the run's, refused
 # (CMD_WHY); 3 not known (CMD_WHY).
 handover_back() {
   local key="$1" tag="$2" text="$3"
@@ -822,6 +869,13 @@ handover_back() {
     CMD_WHY="its operator holds a halt for the owner's decision ($OP_HALT)"
     return 2
   fi
+  local stop_id
+  hub_command stopPage "*" || { CMD_WHY="the Hub cannot be read"; return 3; }
+  stop_id="$CMD_ID"
+  if [[ -z "$stop_id" ]]; then
+    CMD_WHY="this update stopped nothing to start again"
+    return 2
+  fi
   if [[ "$(sget "START_$tag")" == 1 ]]; then
     hub_command restartBrowser "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
     if [[ -n "$CMD_ID" ]]; then
@@ -835,10 +889,10 @@ handover_back() {
     fi
   fi
   sset "$key=$H_NOW" "START_$tag=1"
-  if ! hub_ask sync browser start "$PAGE" --if-no-halt --note "$(note_of "$tag" "$text")" --wait-ms "$(( LEAVE_WAIT_S * 1000 ))"; then
+  if ! hub_ask sync browser start "$PAGE" --if-no-halt --if-stop "$stop_id" --note "$(note_of "$tag" "$text")" --wait-ms "$(( LEAVE_WAIT_S * 1000 ))"; then
     hub_command restartBrowser "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
     if [[ -z "$CMD_ID" ]]; then
-      CMD_WHY="the start was refused, nothing changed (a halt held for the owner's decision?)"
+      CMD_WHY="the start was refused, nothing changed: ${HUB_OUT:-no word from the Hub}"
       return 2
     fi
   fi
@@ -955,6 +1009,7 @@ step_take_out() {
     case "$rc" in
       0) say taken_out "the page's browser stopped: its operator confirmed it (Chrome down); the page paused by the stop, still on its browser" ;;
       1) forward_failed "the browser's stop: $CMD_WHY"; return ;;
+      4) hold "$CMD_WHY: the update holds for him"; return ;;
       *) hold "the browser's stop is not confirmed: $CMD_WHY"; return ;;
     esac
   fi
@@ -1204,27 +1259,44 @@ rollback_ready() {
   fi
 }
 
-# Whether the page is still out from this update's own stop: confirmed,
-# never started since by this run, and the owner's stop still the Hub's.
-still_out() {
-  hub_command stopPage out && [[ "$CMD_OUTCOME" == ok ]] || return 1
-  hub_command restartBrowser "*" && [[ -z "$CMD_ID" ]] || return 1
-  hub_read && [[ "$H_OWNER_STOP" == true ]]
-}
-
+# The rollback reads the page as it is now — never the update's old
+# hand-over: a page on its browser is stopped by the rollback's own lever
+# and confirmed, unless Hub shows its browser stopped right now (an owner's
+# stop in force whose command the operator answered once Chrome was down).
+# The browser is started again afterwards only if the stop in force is this
+# run's (RB_START); a stop of the owner's stays his. A page on Node, or with
+# no engine, must stand: rb_stop checks Chrome in the container.
 rb_take_out() {
   if ! rollback_ready; then rollback_failed "$RB_WHY"; return; fi
-  if [[ "$(sget HANDOVER)" == 1 ]] && ! still_out; then
-    local rc=0
-    handover_out rbout "rollback: the update stops the page's browser" || rc=$?
-    if ((rc != 0)); then handover_forced "rollback: the browser's stop is not confirmed"; return; fi
+  local start=0
+  if [[ "$(sget ENGINE)" == hub ]]; then
+    if ! hub_read; then hold "rollback: the Hub cannot be read: the page's state now is unknown"; return; fi
+    if [[ "$H_TRANSPORT" == browser ]]; then
+      if ! hub_stop_now; then hold "rollback: the Hub cannot be read: whether the page's browser is stopped now is unknown"; return; fi
+      if [[ "$STOP_SET" == true && "$STOP_OUTCOME" == ok ]]; then
+        [[ "$STOP_OURS" == true ]] && start=1
+        say rollback "the page's browser is stopped now (stop command $STOP_ID, $( ((start == 1)) && echo "this update's" || echo "the owner's: it stays stopped"))"
+      else
+        local rc=0
+        handover_out rbout "rollback: the update stops the page's browser" || rc=$?
+        if ((rc == 4)); then hold "rollback: $CMD_WHY, and its stop is not confirmed: the rollback holds for him"; return; fi
+        if ((rc != 0)); then handover_forced "rollback: the browser's stop is not confirmed"; return; fi
+        start=1
+      fi
+    fi
   fi
-  sset RB_STEP=taken_out
+  sset "RB_START=$start" RB_STEP=taken_out
 }
 
 rb_stop() {
   if ! container_read "$PAGE"; then rollback_failed "$STATE_WHY"; return; fi
   if [[ "$C_STATE" == running ]]; then
+    local chrome
+    chrome="$(chrome_state "$PAGE")"
+    if [[ "$chrome" != down ]]; then
+      hold "rollback: Chrome is $chrome in $(container_of "$PAGE"): the rollback never stops a working page"
+      return
+    fi
     if ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
       rollback_failed "$(container_of "$PAGE") could not be stopped"
       return
@@ -1275,7 +1347,7 @@ rb_host_checks() {
 }
 
 rb_give_back() {
-  if [[ "$(sget HANDOVER)" == 1 ]]; then
+  if [[ "$(sget RB_START)" == 1 ]]; then
     local rc=0
     handover_back RB_GIVEN_BACK_MS rbback "rollback: the update starts the page's browser on its previous image" || rc=$?
     if ((rc != 0)); then
@@ -1594,7 +1666,7 @@ cmd_rollback() {
     done)
       [[ "$(value PB_IMAGE "$(page_env "$PAGE")")" == "$(sget TO_IMAGE)" ]] \
         || fail "$PAGE is not on $(sget TO_IMAGE) any more: its last update is not the page's state to undo"
-      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_GIVEN_BACK_MS= STOP_rbout= START_rbback=
+      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_START= RB_GIVEN_BACK_MS= STOP_rbout= START_rbback=
       step_to rolling_back
       ;;
     *)
