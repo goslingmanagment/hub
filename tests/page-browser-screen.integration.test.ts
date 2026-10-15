@@ -90,11 +90,20 @@ function db(): Database {
 }
 
 /** KasmVNC's WebSocket as the API reaches it: it echoes, and says when a
- *  connection of it closed. */
-async function fakeScreen(): Promise<{ port: number; open: Set<Socket>; close: () => Promise<void> }> {
+ *  connection of it closed. Like KasmVNC 1.5 it refuses a WebSocket with no
+ *  `Origin` (404, "missing Sec-WebSocket-Origin header"; the pilot's first
+ *  screen, 2026-10-15), and keeps the origins it was given. */
+async function fakeScreen(): Promise<{ port: number; open: Set<Socket>; origins: string[]; close: () => Promise<void> }> {
   const open = new Set<Socket>();
+  const origins: string[] = [];
   const server: Server = createHttpServer((_req, res) => void res.writeHead(200).end("kasm"));
-  server.on("upgrade", (_req: IncomingMessage, socket: Socket) => {
+  server.on("upgrade", (req: IncomingMessage, socket: Socket) => {
+    const origin = req.headers.origin ?? req.headers["sec-websocket-origin"];
+    if (typeof origin !== "string" || origin === "") {
+      socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    origins.push(origin);
     open.add(socket);
     socket.on("end", () => socket.destroy());
     socket.on("close", () => open.delete(socket));
@@ -105,6 +114,7 @@ async function fakeScreen(): Promise<{ port: number; open: Set<Socket>; close: (
   return {
     port: (server.address() as AddressInfo).port,
     open,
+    origins,
     close: () => new Promise<void>((resolve) => {
       for (const socket of open) socket.destroy();
       server.closeAllConnections();
@@ -206,6 +216,8 @@ describe("the browser's screen once open (Astra's review of PR 15, item 2)", () 
     const screen = await openScreen(r, cookie);
     expect(await screen.echo("ping")).toBe("echo:ping");
     expect(r.screen.open.size).toBe(1);
+    // KasmVNC got an Origin — the screen's own, never the owner's page.
+    expect(r.screen.origins).toEqual([`http://127.0.0.1:${r.screen.port}`]);
 
     // The page's row held: the closing cannot be written while it is.
     const holder = await testDb.pool.connect();
