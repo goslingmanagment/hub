@@ -196,6 +196,17 @@ interface PromptFeaturePolicy {
    * nothing back; revisit if Recap leaves Opus 4.6 for a model with a lower
    * cache minimum. */
   promptCache: 'full' | 'static' | 'none';
+  /** How the model persona reaches the system prompt (Lora persona audit,
+   * 2026-10-16). 'self': the reply features write AS the model, so the persona
+   * follows the reply preamble under "## Model Personality". 'reference': the
+   * coach-style analysis features (coach-chat, help-me, chat-review) advise the
+   * chatter and only draft fan messages in her voice, so the persona is labelled
+   * as a voice reference and the assistant stays the coach. 'none': fan-summary
+   * and fan-notes-fill describe the fan and never write as the model; their
+   * templates read no persona, so the system prompt is the preamble alone. The
+   * feature service still resolves the persona for every feature (recaps stay
+   * persona-scoped through personaDefinitionId). */
+  persona: 'self' | 'reference' | 'none';
 }
 
 const REPLY_POLICY: PromptFeaturePolicy = {
@@ -207,18 +218,20 @@ const REPLY_POLICY: PromptFeaturePolicy = {
   supportsReplyTone: false,
   usesPingSegment: false,
   promptCache: 'static',
+  persona: 'self',
 };
 
 const ANALYSIS_POLICY: PromptFeaturePolicy = {
   ...REPLY_POLICY,
   promptMode: 'analysis',
+  persona: 'reference',
 };
 
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
   'help-me': ANALYSIS_POLICY,
-  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none' },
+  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
@@ -227,7 +240,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
   // no other feature writes a cache it could read, so a cache write would only
   // be paid for.
-  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none' },
+  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -288,6 +301,11 @@ Match the fan's energy and push it upward. Keep escalation believable, don't sna
 const TONE_FOOTER =
   'The personality still controls voice, cadence, emoji habits, slang, and message length; only the intent and energy of this reply should shift.';
 
+// fast-reply's {splitReplyInstructions} slot sits in the uncached "## Your
+// Task" block, on its own line right after {toneInstructions} (Lora persona
+// audit, 2026-10-16; it used to land in the context block under the dossier).
+// The 1h static prefix carries no slot, so it is one byte-stable text for every
+// fan, tone and reply mode.
 const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
 - Deliver the reply as separate short, text-like sends, separated by [NEXT].
 - ALWAYS return at least 2 parts: split even a brief reply into a main send plus a natural follow-up.
@@ -336,6 +354,11 @@ const COACH_SPLIT_INSTRUCTIONS = `
 // template's original wording, so a request without Split renders the same
 // prompt as before the slots existed; Split swaps both, so the prompt never
 // asks for parts and for "a one-liner stays a one-liner" at once.
+//
+// Both slots sit in the 1h static prefix: the static Rules, "Sounding human"
+// and examples come before the "## Current Draft" cache anchor (Lora persona
+// audit, 2026-10-16). The texts below are static and chosen by replyMode alone,
+// so the prefix stays fan-agnostic: one cached variant per mode.
 const IMPROVE_SINGLE_RULES = {
   output: `- Output exactly one ready-to-send message.
 - Do NOT use [NEXT].`,
@@ -405,6 +428,11 @@ Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХО
 `;
 
 const SYSTEM_PERSONALITY_ANCHOR = '\n\n## Model Personality\n\n';
+// persona 'reference' (coach-chat, help-me, chat-review): the persona is written
+// to the model herself ("you ARE her"), so its heading tells the coach it is a
+// voice reference for drafted messages, not who the assistant is.
+const SYSTEM_PERSONA_REFERENCE_ANCHOR =
+  '\n\n## Model persona (voice reference for any message you draft; you are the coach, not her)\n\n';
 const TRANSCRIPT_ANCHOR = '## Conversation Transcript';
 const DRAFT_ANCHOR = '## Current Draft';
 // coach-chat only: the dialog scratchpad grows every turn, so it rides its own
@@ -1212,12 +1240,18 @@ function buildSystemBlocks(
   personality: Personality,
   platform: PromptPlatform,
 ): PromptBlock[] {
+  const policy = PROMPT_POLICIES[feature];
   const preamble =
-    PROMPT_POLICIES[feature].promptMode === 'reply'
+    policy.promptMode === 'reply'
       ? REPLY_SAFETY_PREAMBLE
       : ANALYSIS_SAFETY_PREAMBLE;
+  if (policy.persona === 'none') {
+    return [{ text: applyPlatformWording(preamble, platform), cache: 'none' }];
+  }
+  const anchor =
+    policy.persona === 'reference' ? SYSTEM_PERSONA_REFERENCE_ANCHOR : SYSTEM_PERSONALITY_ANCHOR;
   return [
-    { text: applyPlatformWording(`${preamble}${SYSTEM_PERSONALITY_ANCHOR}`, platform), cache: 'none' },
+    { text: applyPlatformWording(`${preamble}${anchor}`, platform), cache: 'none' },
     { text: applyPlatformWording(personality.content, platform), cache: '1h' },
   ];
 }

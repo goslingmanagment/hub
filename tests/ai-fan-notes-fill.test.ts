@@ -14,12 +14,15 @@ import {
 import { aiUsageFeatures } from "@agency_hub_core/shared";
 
 import {
+  ANALYSIS_SAFETY_PREAMBLE,
   FEATURE_POLICIES,
   MIN_MESSAGES_FOR_NOTES_FILL,
   OPERATION_FEATURES,
+  applyPlatformWording,
   assertNoteFieldsRequestShape,
   buildPrompt,
   type PromptBuildInput,
+  type PromptPayload,
 } from "../apps/runtime/src/modules/ai/index.ts";
 import {
   buildAnthropicGatewayStreamRequest,
@@ -220,6 +223,26 @@ describe("noteValues in the feature service", () => {
 // merge mode and its {noteFill…} slots existed. Never re-pin them: a change
 // here is a change to a released client's prompt. The reference shapes are
 // also pinned in tests/ai-prompts-split-all.test.ts.
+//
+// One deliberate exception (Lora persona audit, 2026-10-16, owner-approved):
+// the persona left the fan-notes-fill system prompt, which is now the analysis
+// preamble alone. The user prompt is untouched, so the pinned digests are
+// checked with the system blocks the builder sent before the audit put back.
+const withPreAuditSystem = (input: PromptBuildInput): Pick<PromptPayload, "systemBlocks" | "userBlocks"> => {
+  const built = buildPrompt(input);
+  const platform = input.platform ?? "onlyfans";
+  expect(built.systemBlocks).toEqual([
+    { text: applyPlatformWording(ANALYSIS_SAFETY_PREAMBLE, platform), cache: "none" },
+  ]);
+  return {
+    systemBlocks: [
+      { text: applyPlatformWording(`${ANALYSIS_SAFETY_PREAMBLE}\n\n## Model Personality\n\n`, platform), cache: "none" },
+      { text: applyPlatformWording(input.personality.content, platform), cache: "none" },
+    ],
+    userBlocks: built.userBlocks,
+  };
+};
+
 describe("fan-notes-fill legacy mode (no noteValues)", () => {
   const reference = (name: string) => referencePrompts().find((prompt) => prompt.name === name)!.input;
   const small = (): PromptBuildInput => ({
@@ -234,10 +257,10 @@ describe("fan-notes-fill legacy mode (no noteValues)", () => {
 
   it("renders the pre-merge prompt byte for byte", () => {
     expect({
-      "onlyfans fan-notes-fill": promptDigest(buildPrompt(reference("onlyfans fan-notes-fill"))),
-      "fansly fan-notes-fill": promptDigest(buildPrompt(reference("fansly fan-notes-fill"))),
-      "fansly 3 fields, window, no data": promptDigest(buildPrompt(small())),
-      "fansly 3 fields, no coverage note": promptDigest(buildPrompt({ ...small(), transcriptCoverage: undefined })),
+      "onlyfans fan-notes-fill": promptDigest(withPreAuditSystem(reference("onlyfans fan-notes-fill"))),
+      "fansly fan-notes-fill": promptDigest(withPreAuditSystem(reference("fansly fan-notes-fill"))),
+      "fansly 3 fields, window, no data": promptDigest(withPreAuditSystem(small())),
+      "fansly 3 fields, no coverage note": promptDigest(withPreAuditSystem({ ...small(), transcriptCoverage: undefined })),
     }).toEqual({
       "onlyfans fan-notes-fill": "75853463d39e61769cd41781de96ae6a69a6fd7b5d629f58ba3ecc6ad9614d3c",
       "fansly fan-notes-fill": "1adc6d34bee2f05a20c88a8ad0c84b249583c0d30c4f7c889f6f8d70a843a2ee",

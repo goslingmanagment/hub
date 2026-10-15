@@ -6,11 +6,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FAN_PROFILE_HARD_CAP_CHARS,
+  FAN_PROFILE_LITE_MAX_CHARS,
   FAN_PROFILE_TARGET_CHARS,
   FEATURE_POLICIES,
   OPERATION_FEATURES,
   compileDossierForPrompt,
+  demoteDossierHeadings,
   isFanProfileFeatureEnabled,
+  usesLiteDossier,
 } from '../apps/runtime/src/modules/ai/index.ts';
 
 
@@ -217,6 +220,122 @@ describe('compileDossierForPrompt — size pressure', () => {
     expect(result.body.length).toBeLessThanOrEqual(
       FAN_PROFILE_TARGET_CHARS + '\n\n[dossier truncated]'.length,
     );
+  });
+});
+
+// Lora persona audit (2026-10-16): fast-reply reads a lite dossier: the fan's
+// facts, how he talks and what is still open, at most ~4000 chars, with every
+// heading demoted below the prompt's own `##` level. Every other feature keeps
+// the full compile above.
+describe('compileDossierForPrompt — the lite dossier (fast-reply)', () => {
+  const MARKER = '\n\n[dossier truncated]';
+  const promptLevelHeading = /^[ \t]*#{1,2}\s/m;
+
+  it('keeps facts, dynamics and open loops and drops portrait, stage, strategy and money', () => {
+    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, { lite: true });
+    expect(result.sectioned).toBe(true);
+    expect(result.truncated).toBe(false);
+    expect(result.body).toContain('красном Ducati');
+    expect(result.body).toContain('Короткие сообщения, не любит спешку');
+    expect(result.body).toContain('Обещала фото с пляжа');
+    expect(result.body).not.toContain('Тревожная привязанность');
+    expect(result.body).not.toContain('Лояльный, стабильный');
+    expect(result.body).not.toContain('Давить на тему путешествий');
+    expect(result.body).not.toContain('Кит, типсует');
+    expect([...result.droppedSections].sort()).toEqual([
+      'FINANCIAL PROFILE',
+      'PSYCHOLOGICAL PORTRAIT',
+      'STAGE AND TRAJECTORY',
+      'STRATEGY',
+    ]);
+  });
+
+  it('demotes every heading below the prompt level and keeps the hierarchy', () => {
+    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, { lite: true });
+    expect(result.body).not.toMatch(promptLevelHeading);
+    expect(result.body).toContain('### ПРОФИЛЬ ФАНАТА: Michael');
+    expect(result.body).toContain('#### 1. ДОСЬЕ');
+    expect(result.body).toContain('##### Детали');
+    expect(result.body).toContain('#### 4. ДИНАМИКА ОБЩЕНИЯ');
+    expect(result.body).toContain('#### 6. ОТКРЫТЫЕ ПЕТЛИ');
+  });
+
+  it('reads the English section names as well', () => {
+    const result = compileDossierForPrompt(FULL_DOSSIER, { lite: true });
+    expect(result.body).toContain('Charles, 34, Boston');
+    expect(result.body).toContain('hates being rushed');
+    expect(result.body).toContain('Promised beach photos');
+    expect(result.body).not.toContain('Anxious attachment');
+    expect(result.body).not.toContain('trending stable');
+    expect(result.body).not.toContain('avoid hard sells');
+    expect(result.body).not.toContain('Big spender');
+  });
+
+  it('leaves the full compile (every other feature) as it was', () => {
+    const full = compileDossierForPrompt(RUSSIAN_DOSSIER);
+    expect(full).toEqual(compileDossierForPrompt(RUSSIAN_DOSSIER, { lite: false }));
+    expect(full.body).toContain('## 1. ДОСЬЕ');
+    expect(full.body).toContain('Давить на тему путешествий');
+  });
+
+  it('sheds open loops, then dynamics, to fit the budget before cutting the facts', () => {
+    const section = (heading: string, chars: number) => `${heading}\n${'x '.repeat(chars / 2)}`;
+    const overLoops = compileDossierForPrompt(
+      [
+        section('## 1. ДОСЬЕ', 2_000),
+        section('## 4. ДИНАМИКА ОБЩЕНИЯ', 1_000),
+        section('## 6. ОТКРЫТЫЕ ПЕТЛИ', 1_500),
+        section('## 7. СТРАТЕГИЯ', 1_500),
+      ].join('\n'),
+      { lite: true },
+    );
+    expect(overLoops.truncated).toBe(false);
+    expect(overLoops.body.length).toBeLessThanOrEqual(FAN_PROFILE_LITE_MAX_CHARS);
+    expect(overLoops.body).toContain('#### 1. ДОСЬЕ');
+    expect(overLoops.body).toContain('#### 4. ДИНАМИКА ОБЩЕНИЯ');
+    expect(overLoops.droppedSections).toContain('OPEN LOOPS');
+    expect(overLoops.droppedSections).not.toContain('COMMUNICATION DYNAMICS');
+
+    const overDynamics = compileDossierForPrompt(
+      [section('## 1. ДОСЬЕ', 3_000), section('## 4. ДИНАМИКА ОБЩЕНИЯ', 1_500)].join('\n'),
+      { lite: true },
+    );
+    expect(overDynamics.body).toContain('#### 1. ДОСЬЕ');
+    expect(overDynamics.droppedSections).toEqual(['COMMUNICATION DYNAMICS']);
+  });
+
+  it('cuts an oversized facts section at the budget, on a line and never inside an emoji', () => {
+    const lines = Array.from({ length: 400 }, (_, index) => `- fact ${index} 😘 about him`);
+    const result = compileDossierForPrompt(['## 1. ДОСЬЕ', ...lines].join('\n'), { lite: true });
+    expect(result.truncated).toBe(true);
+    expect(result.body.endsWith(MARKER)).toBe(true);
+    const head = result.body.slice(0, -MARKER.length);
+    expect(head.length).toBeLessThanOrEqual(FAN_PROFILE_LITE_MAX_CHARS);
+    expect(head.length).toBeGreaterThan(FAN_PROFILE_LITE_MAX_CHARS / 2);
+    expect(head.endsWith('about him')).toBe(true);
+    expect(head).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it('bounds and demotes a body of unknown shape too', () => {
+    const blob = '# Notes\n' + 'freeform notes about the fan without any known headings. '.repeat(400);
+    const result = compileDossierForPrompt(blob, { lite: true });
+    expect(result.sectioned).toBe(false);
+    expect(result.truncated).toBe(true);
+    expect(result.body.startsWith('### Notes\n')).toBe(true);
+    expect(result.body.length).toBeLessThanOrEqual(FAN_PROFILE_LITE_MAX_CHARS + MARKER.length);
+    expect(result.body).not.toMatch(promptLevelHeading);
+  });
+
+  it('demotes only ATX heading lines', () => {
+    expect(demoteDossierHeadings('# A\n## B\n### C\n##### D\n###### E\n#hashtag\n- # not first\ntext # mid')).toBe(
+      '### A\n#### B\n##### C\n###### D\n###### E\n#hashtag\n- # not first\ntext # mid',
+    );
+  });
+
+  it('is read by fast-reply alone', () => {
+    const lite = OPERATION_FEATURES.filter((feature) => usesLiteDossier(feature));
+    expect(lite).toEqual(['fast-reply']);
+    expect(FEATURE_POLICIES['fast-reply'].usesFanProfile).toBe(true);
   });
 });
 
