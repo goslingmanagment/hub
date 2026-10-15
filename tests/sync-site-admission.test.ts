@@ -47,6 +47,14 @@ describe("the route of a site request", () => {
 });
 
 describe("the decision at a slot", () => {
+  it("socket admission precedes older API reads and bypasses only their hour ceiling, never pause or identity gates", () => {
+    const pending = [request({ id: "read", askedMono: NOW_MONO - 5000 }), request({ id: "socket", host: "ws", path: "/", askedMono: NOW_MONO - 100 })];
+    expect(decideSite(pending, context()).admit?.request.id).toBe("socket");
+    expect(decideSite(pending, context({ sendsLastHour: SITE_SENDS_PER_HOUR }))).toMatchObject({ admit: { request: { id: "socket" } }, refuse: [{ id: "read", reason: "hour_ceiling" }] });
+    expect(decideSite([pending[1]!], context({ pausedAll: true })).refuse).toEqual([{ id: "socket", reason: "paused" }]);
+    expect(decideSite([pending[1]!], context({ checksOnly: true })).refuse).toEqual([{ id: "socket", reason: "credentials" }]);
+  });
+
   it("a fresh session admits only bootstrap GETs; their pause, budgets and checks-only still hold", () => {
     const reads = [request({ id: "data", path: "/api/v1/messaging/groups" }), request({ id: "identity", path: "/api/v1/account/me?x=1" })];
     const fresh = context({ bootstrapOnly: true });

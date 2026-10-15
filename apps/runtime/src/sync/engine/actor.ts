@@ -61,7 +61,7 @@ import {
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
-import { SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
+import { isSiteSocket, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
 import { admitSite, commitSiteEnd, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
 import {
   beforeGateKeys,
@@ -353,8 +353,8 @@ export class SyncActor {
     const confirmingSession = !underCredentials && d.transport.needsSessionConfirmation?.() === true;
     const checksOnly = unverified !== null || confirmingSession;
     const exclusions = pickExclusions(page, d.registry, now, { checksOnly });
-    if (d.site && this.#siteTurns.due()) {
-      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
+    if (d.site && (this.#siteTurns.due() || d.site.pending().some(isSiteSocket))) {
+      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals, !this.#siteTurns.due());
       if (served !== "none") return served;
     }
     const picked = underCredentials
@@ -572,12 +572,13 @@ export class SyncActor {
     now: Date,
     checksOnly: boolean,
     signals: ActorSignals,
+    urgentOnly = false,
   ): Promise<ActorExit | null | "none"> {
     const d = this.#d;
     const site = d.site!;
     if (site.pending().length === 0) return "none";
     const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, bootstrapOnly: d.transport.needsSiteBootstrap?.() === true, now });
-    const classified = settleSiteDecision(d, site, ctx);
+    const classified = settleSiteDecision(d, site, ctx, urgentOnly);
     this.#lapState.siteCandidate = classified !== null;
     if (classified === null) return "none";
     // What the route check just applied, recorded on the attempt (I19).
@@ -610,6 +611,9 @@ export class SyncActor {
     }
     this.#admittedThisLap = true;
     d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
+    if (isSiteSocket(classified.request)) {
+      d.logger.info({ pageId: d.pageId, requestId: classified.request.id, attemptId, class: "urgent", waitMs: d.clock.monoNow() - classified.request.askedMono, waitRemainingMs: classified.request.waitDeadlineMono === undefined ? null : classified.request.waitDeadlineMono - d.clock.monoNow(), settingMs: grant.settingMs }, "Fansly sync actor: socket admitted ahead of site reads through the common pacer");
+    }
     const armed = d.pacer.arm(grant, attemptId, issuedMono);
     // The final word before the browser may send: the same check an engine
     // send passes at `onRequestStart` (ownership alive, within the window,
@@ -631,7 +635,7 @@ export class SyncActor {
     d.pacer.complete(armed, transportOutcomeOfSite(end));
     // A grant is not a send: late/cancelled admissions leave the site's
     // turn intact, as they leave the common pacer's send floor intact.
-    if (end.kind === "response" || (end.kind === "transport_error" && end.sent)) this.#siteTurns.siteAdmitted();
+    if (!isSiteSocket(classified.request) && (end.kind === "response" || (end.kind === "transport_error" && end.sent))) this.#siteTurns.siteAdmitted();
     this.#phase("commit");
     const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, send: captureSendOf(d, armed), end, classified }));
     if (!committed.ok) {

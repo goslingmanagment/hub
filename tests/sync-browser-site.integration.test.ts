@@ -281,7 +281,7 @@ describe("the site path over the operator's RPC", () => {
     }, 20_000, "the socket admitted, opened, committed and acknowledged");
     const wsAnswer = r.operator.wsAnswers.find((a) => a.connectionId === socket.connectionId)!;
     const wsRow = (await attempts(r.page.pageId)).find((row) => wsAnswer.admit && row.id === wsAnswer.attemptId)!;
-    expect(wsRow).toMatchObject({ origin: "site", class: "site", operation: "ws.upgrade", outcome: "response", browserRequestId: socket.connectionId, httpStatus: 101 });
+    expect(wsRow).toMatchObject({ origin: "site", class: "urgent", operation: "ws.upgrade", outcome: "response", browserRequestId: socket.connectionId, httpStatus: 101 });
     // Asked again (the operator repeats it after a reconnect): nothing twice.
     r.operator.siteAdmit({ siteRequestId: asked.siteRequestId, path: "/api/v1/messaging/groups" });
     await sleep(500);

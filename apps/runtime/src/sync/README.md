@@ -1052,8 +1052,11 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   more. The journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
-  and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the
-  operator's id in `browser_request_id`).
+  and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site` for API
+  reads/login and `urgent` for the site's WS Upgrade; the operator's id in `browser_request_id`). The socket takes
+  the next eligible shared slot ahead of API FIFO and outside its hour ceiling (legacy WS rows excluded too),
+  without consuming the HTTP site's turn or moving the engine's cycle. Page/identity/route gates and the common
+  send pause still hold; a CONNECT whose short deadline cannot fit that pause is refused.
 - **The engine's requests** (PR 12, `fansly/browser-transport.ts`): the same `PageTransport`. `prepare` builds the
   registry's request without Chrome's and the session's headers (the operator puts the live session's in). `send` is
   the RPC `send` with the admission context (`SendAdmission`: the attempt, the owner generation, the absolute send

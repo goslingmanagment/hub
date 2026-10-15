@@ -23,6 +23,7 @@ import { routeAdmissionView, type RouteClocks } from "./route-policy.ts";
 import type { RouteKeySpec } from "./route-policy.ts";
 import {
   decideSite,
+  isSiteSocket,
   SITE_END_WAIT_MS,
   siteAnswerEffect,
   type ClassifiedSiteRequest,
@@ -82,8 +83,9 @@ export async function siteContextOf(
 }
 
 /** Refuse what must be refused now; the admissible request, if any. */
-export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext): ClassifiedSiteRequest | null {
-  const decision = decideSite(site.pending(), ctx);
+export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext, urgentOnly = false): ClassifiedSiteRequest | null {
+  const pending = site.pending();
+  const decision = decideSite(urgentOnly ? pending.filter(isSiteSocket) : pending, ctx);
   for (const refusal of decision.refuse) {
     d.metrics.increment("sync_site_refused", { reason: refusal.reason });
     site.refuse(refusal.id, refusal.reason);
