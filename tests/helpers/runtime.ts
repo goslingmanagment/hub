@@ -4,6 +4,9 @@ import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
 import { createFanslySendGuards } from "../../apps/runtime/src/services/fansly-send-guard/index.ts";
 import type { StartedTestDatabase } from "./db.ts";
 
+/** When every test generation is built: the `Now:` line of its prompt. */
+export const TEST_AI_PROMPT_NOW_MS = Date.parse("2026-10-15T04:12:00.000Z");
+
 export function createTestAppContext(
   testDb: StartedTestDatabase,
   overrides?: {
@@ -24,6 +27,8 @@ export function createTestAppContext(
     pageBrowserEndpoints?: AppContext["pageBrowserEndpoints"];
     pageBrowserScreenWatch?: AppContext["pageBrowserScreenWatch"];
     pageBrowserProxyTest?: AppContext["pageBrowserProxyTest"];
+    /** The AI prompts' `Now:` clock; TEST_AI_PROMPT_NOW_MS by default. */
+    aiPromptClock?: AppContext["aiPromptClock"];
     ofapiEventRetentionDays?: number;
     ofapiEventWorkerReplicas?: number;
     ofapiDmProjectionEnabled?: boolean;
@@ -218,6 +223,9 @@ export function createTestAppContext(
     pageBrowserEndpoints: overrides?.pageBrowserEndpoints,
     pageBrowserScreenWatch: overrides?.pageBrowserScreenWatch,
     pageBrowserProxyTest: overrides?.pageBrowserProxyTest,
+    // Pinned: suites compare the prompts of two generations byte for byte,
+    // and a wall clock would split them at a minute boundary.
+    aiPromptClock: overrides?.aiPromptClock ?? (() => TEST_AI_PROMPT_NOW_MS),
     fanslySendGuards: createFanslySendGuards({
       db: testDb.db,
       config,

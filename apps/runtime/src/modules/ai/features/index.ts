@@ -1081,7 +1081,7 @@ export async function prepareAiFeatureStream(
   // task block. The hub renders its own transcript in UTC with day lines; a
   // client's text keeps the clock of the device that wrote it.
   const clock: PromptClock = {
-    nowMs: Date.now(),
+    nowMs: app.aiPromptClock?.() ?? Date.now(),
     transcript: body.clientContext ? "client" : "utc",
     modelLocal: personaLocalTime(persona.personality.id),
   };
