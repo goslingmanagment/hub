@@ -4,6 +4,7 @@ import {
   holdSyncPageManualLoginPause,
   lockOwnedPage,
   OwnershipLostError,
+  readPageBrowserControl,
   type Database,
   type SyncPageTransport,
 } from "@agency_hub_core/db";
@@ -12,7 +13,9 @@ import type { CommandKind, CommandResult, Mode, State } from "../../services/egr
 import type { MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import type { Clock, Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
+import { BrowserControl, browserStands, browserStandsForLogin, browserStartRefusal } from "./browser-control.ts";
 import { browserIntakeOf, openBrowserLink, type BrowserPageDeps } from "./browser-page.ts";
+import { BrowserRecorder } from "./browser-record.ts";
 import { BrowserSiteAdmission } from "./browser-site.ts";
 import type { BrowserBufferIntake } from "./browser-intake.ts";
 
@@ -26,11 +29,18 @@ import type { BrowserBufferIntake } from "./browser-intake.ts";
 //
 // - wanted: the page stays on its pause (put back if it was lifted
 //   meanwhile); the operator goes into the manual login (`setMode`); a
-//   browser that stands — stopped, or never started; never one halted for
-//   the owner's decision — is started (`restartBrowser`), so the site's login
-//   screen comes up. The form's calls go from the API to the operator, which
-//   takes them only now. The site's login operations pass the pause in the
-//   site path (PR 8's exemption), under the pacer and the budgets.
+//   browser that stands — stopped, or never started, or stopped because
+//   Fansly signed it out (`login_required`, the halt the login is the
+//   owner's decision for); never one halted for another decision of his — is
+//   started (`restartBrowser`), so the site's login screen comes up. The
+//   start goes under the one guard of every start of the browser
+//   (`browserStartRefusal`, PR 17), read fresh right before it: never while
+//   the owner stopped the browser (`sync browser stop`), never during a leave
+//   or for a newer owner, never one whose operator says it holds another
+//   halt for the owner — which the operator itself refuses to start (it
+//   holds its halt on its volume). The form's calls go from the API to the operator, which takes
+//   them only now. The site's login operations pass the pause in the site
+//   path (PR 8's exemption), under the pacer and the budgets.
 // - ending: a page on Node has its browser stopped first (`stopPage`: the
 //   exit closed, then Chrome quits as a person's would — what keeps the new
 //   session in the profile, stage 1 §5 item 28 — and no second socket opens
@@ -78,6 +88,8 @@ export const BROWSER_LOGIN_TIMING: Readonly<BrowserLoginTiming> = Object.freeze(
 export interface BrowserLoginDeps {
   db: Database;
   pageId: number;
+  /** The page's browser profile: the guard's fresh read of it. */
+  profileId: string;
   /** The slot's owner generation: its writes are fenced by it. */
   generation: bigint;
   /** The page's transport the slot runs. */
@@ -90,12 +102,12 @@ export interface BrowserLoginDeps {
   timing?: Partial<BrowserLoginTiming>;
 }
 
-/** The browser stands, waiting for a start: not in a failure's backoff, and
- *  not halted for the owner's decision (a changed exit IP, a header or socket
- *  the site changed, a buffer that does not open) — only stopped, or never
- *  started. */
-function stands(state: State): boolean {
-  return state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && (state.stopReason === null || state.stopReason === "owner_stop");
+/** The browser stands, waiting for the login's start: not in a failure's
+ *  backoff, and not halted for the owner's decision (a changed exit IP, a
+ *  header or socket the site changed, a buffer that does not open) — only
+ *  stopped, or never started; or stopped because Fansly signed it out. */
+function standsForLogin(state: State): boolean {
+  return browserStands(state) || browserStandsForLogin(state);
 }
 
 /** The browser's exit is closed and it is not starting. */
@@ -113,6 +125,8 @@ export class BrowserLoginDriver {
   #lastStartMono = Number.NEGATIVE_INFINITY;
   /** The owner's login as the last look read it (null: not read yet). */
   #last: "off" | "wanted" | "ending" | null = null;
+  /** The guard's last refusal of the login's start (said once). */
+  #refused: string | null = null;
 
   constructor(deps: BrowserLoginDeps) {
     this.#d = deps;
@@ -186,7 +200,22 @@ export class BrowserLoginDriver {
           return;
         }
         const now = this.#d.clock.monoNow();
-        if (stands(state) && now - this.#lastStartMono >= this.#timing.restartEveryMs) {
+        if (standsForLogin(state) && now - this.#lastStartMono >= this.#timing.restartEveryMs) {
+          // The guard of every start of the browser, read fresh right before it.
+          const refusal = browserStartRefusal({
+            control: await readPageBrowserControl(db, { profileId: this.#d.profileId }),
+            state: client.state,
+            generation: this.#d.generation,
+            who: "login",
+          });
+          if (refusal !== null || this.#stopped) {
+            if (refusal !== null && refusal !== this.#refused) {
+              this.#d.logger.info({ pageId, why: refusal }, "Fansly sync browser login: the browser stands; the login does not start it");
+            }
+            this.#refused = refusal;
+            return;
+          }
+          this.#refused = null;
           this.#lastStartMono = now;
           await this.#command("restartBrowser", "the browser stands: its login screen comes with its start");
         }
@@ -279,6 +308,11 @@ export interface BrowserLoginLink {
   readonly site: BrowserSiteAdmission;
   readonly intake: BrowserBufferIntake;
   readonly login: BrowserLoginDriver;
+  /** The owner's commands and his stop of the browser while the link is
+   *  open (PR 17): nothing started by itself. */
+  readonly control: BrowserControl;
+  /** What the operator says, recorded on the profile (its halts latched). */
+  readonly recorder: BrowserRecorder;
   start(): void;
   /** Everything of the link stops, the link closes. Never rejects. */
   stop(): Promise<void>;
@@ -297,7 +331,19 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
   const { db, logger, metrics, pageId, generation } = deps;
   const { profileId, client, bridge } = await openBrowserLink(deps);
   const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics, loginOnly: true });
-  const { socket, applier, intake } = browserIntakeOf(deps, client);
+  // What the operator says, recorded as a slot on the browser does: its
+  // state, its alarms, the halt it holds mirrored for the owner's view.
+  const recorder = new BrowserRecorder({
+    db,
+    pageId,
+    profileId,
+    client,
+    clock: deps.clock,
+    logger,
+    metrics,
+    ...(deps.overrides?.recorderTiming === undefined ? {} : { timing: deps.overrides.recorderTiming }),
+  });
+  const { socket, applier, intake } = browserIntakeOf(deps, client, (lagsMs) => recorder.delivered(lagsMs));
   // The ends the site path no longer waits for (an earlier owner's, one past
   // its wait): their attempts were settled by the actor's own rules (unknown
   // at its recovery, or the end it took); the operator may drop them, or its
@@ -311,7 +357,32 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
   client.onUnclaimedResult((delivered) => {
     logger.warn({ pageId, attemptId: delivered.result.attemptId }, "Fansly sync browser login: a Hub request's outcome on a page on Node; kept by the operator");
   });
-  const login = new BrowserLoginDriver({ db, pageId, generation, transport: "node", client, bridge, clock: deps.clock, logger, metrics, ...(deps.overrides?.loginTiming === undefined ? {} : { timing: deps.overrides.loginTiming }) });
+  const control = new BrowserControl({
+    db,
+    pageId,
+    profileId,
+    generation,
+    client,
+    bridge,
+    clock: deps.clock,
+    logger,
+    metrics,
+    role: "login",
+    ...(deps.overrides?.controlTiming === undefined ? {} : { timing: deps.overrides.controlTiming }),
+  });
+  const login = new BrowserLoginDriver({
+    db,
+    pageId,
+    profileId,
+    generation,
+    transport: "node",
+    client,
+    bridge,
+    clock: deps.clock,
+    logger,
+    metrics,
+    ...(deps.overrides?.loginTiming === undefined ? {} : { timing: deps.overrides.loginTiming }),
+  });
   let stopping: Promise<void> | null = null;
   return {
     profileId,
@@ -319,14 +390,20 @@ export async function openBrowserLoginLink(deps: BrowserLoginLinkDeps): Promise<
     site,
     intake,
     login,
+    control,
+    recorder,
     start() {
       client.start();
+      recorder.start();
       intake.start();
+      control.start();
       login.start();
     },
     stop() {
       stopping ??= (async () => {
         await login.stop();
+        await control.stop();
+        await recorder.stop();
         await intake.stop();
         await applier.drain(1_000);
         socket.stop();

@@ -367,7 +367,7 @@ async function runScenario(s: Stand, scenario: Scenario, series: SeriesRecord, d
         await s.stand.config({ site: scenario.site ?? null });
         const before = await s.stand.mark();
         const reloaded = mono();
-        const restarted = await page.engine.command("restartBrowser");
+        const restarted = await page.engine.start();
         if (!restarted.ok) throw new Error(`restartBrowser: ${restarted.detail ?? ""}`);
         let loaded: string[] = ["not asked yet"];
         await waitFor(async () => (loaded = variantLoaded(await s.stand.journal(before), info.egressIp, variant, 0)).length === 0, 60_000, 500);

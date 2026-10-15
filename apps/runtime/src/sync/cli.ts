@@ -2,7 +2,13 @@ import { hostname } from "node:os";
 
 import { Command, InvalidArgumentError } from "commander";
 
-import { listSyncPages, type SyncRegistryOverride, type SyncRegistryTierOverride } from "@agency_hub_core/db";
+import {
+  listSyncPages,
+  pageBrowserEnvOf,
+  type PageBrowserEnv,
+  type SyncRegistryOverride,
+  type SyncRegistryTierOverride,
+} from "@agency_hub_core/db";
 import { isIndefinite } from "@agency_hub_core/shared";
 
 import { createSyncContext, type SyncContext } from "./context.ts";
@@ -26,6 +32,16 @@ import {
   requeueSyncWork,
 } from "./inspect.ts";
 import { registerSyncBrowserProfileCommands } from "./browser-profile-cli.ts";
+import {
+  askPageBrowserSelfTest,
+  awaitPageBrowserCommand,
+  drainPageBrowser,
+  pinPageBrowser,
+  readPageBrowserStatusesByLabel,
+  startPageBrowser,
+  stopPageBrowsers,
+  SYNC_BROWSER_COMMAND_TTL_MS,
+} from "./browser-levers.ts";
 import { changeSyncPageTransport } from "./page-transport.ts";
 import { raiseSyncRoute } from "./route-raise.ts";
 
@@ -484,6 +500,8 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
       });
     });
 
+  registerSyncBrowserCommands(sync, deps);
+
   const ownership = sync.command("ownership").description("Fansly Sync Engine page ownership");
 
   ownership
@@ -561,5 +579,185 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
           deps.print([row.pageLabel ?? String(row.pageId), row.ownerGeneration.toString(), String(row.quiesced)].join("\t"));
         }
       });
+    });
+}
+
+/** `--env`: a browser's environment as the hello carries it, e.g.
+ *  `{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}`. */
+function parseBrowserEnv(value: string): PageBrowserEnv {
+  const parsed = parseJsonObject(value);
+  const env = pageBrowserEnvOf(parsed);
+  if (env === null) {
+    throw new InvalidArgumentError(
+      "Expected {timeZone, languages: [...], geolocation: {latitude, longitude, accuracyM}} as JSON",
+    );
+  }
+  return env;
+}
+
+/** How long a lever waits for the engine to carry it out, by default. */
+const BROWSER_WAIT_MS = 30_000;
+
+/**
+ * `pnpm cli sync browser …` (Project Browser plan §4.11; PR 17): a page's
+ * browser as the engine sees it, and the owner's levers on it — each audited,
+ * carried out by the engine that owns the page over its link to the operator.
+ */
+function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
+  const browser = sync.command("browser").description("Project Browser: a page's browser — its state, the owner's stop and start, its self-test, its pinned exit IP");
+
+  browser
+    .command("status")
+    .description("the browser of a page (or of every page with one): its state, link, login, exit IP, buffer, delivery, versions, self-test, alarm and alerts (JSON)")
+    .option("--page <label>", "one Fansly page (default: every page with a browser)")
+    .action(async (options: { page?: string }) => {
+      await withContext(deps, async ({ db }) => {
+        deps.print(json(await readPageBrowserStatusesByLabel(db, options.page === undefined ? {} : { pageLabel: options.page })));
+      });
+    });
+
+  browser
+    .command("stop")
+    .description("stop a page's browser now (or --all): the engine pauses the page, the operator closes its exit and stops Chrome; kept until `start` (audited)")
+    .argument("[page]", "the Fansly page")
+    .option("--all", "every page with a browser", false)
+    .option("--note <text>", "why (stored with the audit row)")
+    .option("--wait-ms <ms>", `how long to wait for each operator's answer to the stop — once Chrome is down (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
+    .action(async (pageLabel: string | undefined, options: { all: boolean; note?: string; waitMs?: number }) => {
+      await withContext(deps, async ({ db }) => {
+        const stopped = await stopPageBrowsers(db, {
+          ...(pageLabel === undefined ? {} : { pageLabel }),
+          all: options.all,
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+        });
+        // Every page's operator at once (`--all`): the waits overlap. A stop
+        // is confirmed by the operator's answer to its own request, which
+        // comes once Chrome is down.
+        const confirmed = await Promise.all(stopped.map(async (entry) => {
+          const ran = await awaitPageBrowserCommand(db, entry.command.id, { waitMs: options.waitMs ?? BROWSER_WAIT_MS });
+          return { ...entry, operatorConfirmed: ran?.ok === true, confirmation: ran?.detail ?? null };
+        }));
+        deps.print(json({
+          stopped: confirmed,
+          follows: "the page is paused at once; its owner tells the operator to close the exit and stop Chrome. "
+            + "operatorConfirmed=false: the operator has not answered this stop yet (no owner runs the page, its operator cannot be reached, "
+            + "or Chrome did not go down) — the engine admits nothing of the page meanwhile",
+        }));
+      });
+    });
+
+  browser
+    .command("start")
+    .description("start a page's browser again: the owner's stop lifted (and the pause it put), the halt its operator holds for the owner's decision cleared by its id, the browser started (audited)")
+    .argument("<page>", "the Fansly page")
+    .option("--note <text>", "why (stored with the audit row)")
+    .option("--wait-ms <ms>", `how long to wait for the engine to run it (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+      await withContext(deps, async ({ db }) => {
+        const asked = await startPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
+        const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 5_000 });
+        deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
+      });
+    });
+
+  browser
+    .command("selftest")
+    .description("run the operator's self-test now (its exit closed for it, opened again after when it was open and the test passed; audited)")
+    .argument("<page>", "the Fansly page")
+    .option("--note <text>", "why (stored with the audit row)")
+    .option("--wait-ms <ms>", `how long to wait for the result (default ${SYNC_BROWSER_COMMAND_TTL_MS + 30_000})`, parsePositiveMs)
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+      await withContext(deps, async ({ db }) => {
+        const asked = await askPageBrowserSelfTest(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) });
+        const ran = await awaitPageBrowserCommand(db, asked.command.id, { waitMs: options.waitMs ?? SYNC_BROWSER_COMMAND_TTL_MS + 30_000 });
+        deps.print(json({ ...asked, result: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, doneAt: ran.doneAt?.toISOString() ?? null } }));
+      });
+    });
+
+  browser
+    .command("snapshot")
+    .description("ready a page's browser profile for a snapshot: the browser stopped (as `stop`) and confirmed stopped; the volume is packed by the host (audited)")
+    .argument("<page>", "the Fansly page")
+    .option("--note <text>", "why (stored with the audit row)")
+    .option("--wait-ms <ms>", `how long to wait for the operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+      await withContext(deps, async ({ db }) => {
+        const [stopped] = await stopPageBrowsers(db, {
+          pageLabel,
+          actor: cliActor(),
+          snapshot: true,
+          ...(options.note === undefined ? {} : { note: options.note }),
+        });
+        // Quiet only once the operator answered this very stop — after
+        // Chrome is down — under the page's owner that took it.
+        const ran = await awaitPageBrowserCommand(db, stopped!.command.id, { waitMs: options.waitMs ?? BROWSER_WAIT_MS });
+        const confirmed = ran?.ok === true;
+        const [status] = await readPageBrowserStatusesByLabel(db, { pageLabel });
+        const profileId = status!.browser.profileId;
+        deps.print(json({
+          ...stopped,
+          operatorConfirmed: confirmed,
+          confirmation: ran === null ? null : { outcome: ran.outcome, ok: ran.ok, detail: ran.detail, ownerGeneration: ran.takenGeneration, doneAt: ran.doneAt?.toISOString() ?? null },
+          profileId,
+          volumes: { profile: `pb-profile-${profileId}`, buffer: `pb-buffer-${profileId}` },
+          follows: confirmed
+            ? `the profile is quiet: the host packs pb-profile-${profileId} (Hub's containers have no Docker); then: sync browser start ${pageLabel}`
+            : "the operator has not said it stopped: do not snapshot yet (sync browser status --page …)",
+        }));
+        if (!confirmed) throw new Error(`${pageLabel}: its operator has not said its browser stopped; no snapshot now`);
+      });
+    });
+
+  browser
+    .command("pin-ip")
+    .description(
+      "the exit IP the page's browser may open its exit through (after checking it: `pnpm cli page proxy-ip`), and its environment "
+      + "by the proxy's region; until both are set the page cannot run on its browser (audited)",
+    )
+    .argument("<page>", "the Fansly page")
+    .option("--ip <ip>", "the exit IP to pin")
+    .option("--env <json>", "{timeZone, languages, geolocation: {latitude, longitude, accuracyM}}", parseBrowserEnv)
+    .option("--note <text>", "why (stored with the audit row)")
+    .action(async (pageLabel: string, options: { ip?: string; env?: PageBrowserEnv; note?: string }) => {
+      await withContext(deps, async ({ db }) => {
+        deps.print(json(await pinPageBrowser(db, {
+          pageLabel,
+          actor: cliActor(),
+          ...(options.ip === undefined ? {} : { ip: options.ip }),
+          ...(options.env === undefined ? {} : { env: options.env }),
+          ...(options.note === undefined ? {} : { note: options.note }),
+        })));
+      });
+    });
+
+  browser
+    .command("drain")
+    .description(
+      "take what a stopped browser kept (its buffer marked not drained) while the page stays on Node: bring its container up first; "
+      + "Node's slot ends, a leave takes the buffer with the browser kept stopped, then Node again (audited)",
+    )
+    .argument("<page>", "the Fansly page")
+    .option("--note <text>", "why (stored with the audit row)")
+    .action(async (pageLabel: string, options: { note?: string }) => {
+      await withContext(deps, async ({ db }) => {
+        deps.print(json({
+          ...await drainPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) }),
+          follows: "the host ends Node's slot and takes the browser's buffer (alert 2 browser_leave_unconfirmed if its operator cannot be reached "
+            + "for 2 min: then `sync page transport <page> node --browser-stopped` gives the page back to Node, the buffer still marked)",
+        }));
+      });
+    });
+
+  browser
+    .command("log")
+    .description("the browser's journals (requests, connections, states, sockets) live on the page's volume, out of Hub's reach: read them with the host script")
+    .argument("<page>", "the Fansly page")
+    .allowUnknownOption(true)
+    .action((pageLabel: string) => {
+      throw new Error(
+        "the journals live on the page's buffer volume, which Hub's containers cannot read (they have no Docker): from the workstation, "
+        + `scripts/deploy-page-browser.sh log <user@host> --page ${pageLabel} [--kind requests|connections|states|sockets] [--since <iso>] [--path <prefix>] [--method <M>]`,
+      );
     });
 }

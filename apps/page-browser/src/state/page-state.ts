@@ -6,10 +6,11 @@
 // - A failure on any step sends the page back to the first step with a stop
 //   reason, and a retry after the growing pause of plan §4.1.
 // - A halt is a stop that holds until the engine starts the page again
-//   (`restartBrowser`): the owner's stop, or what only the owner can decide
-//   (a changed exit IP). Nothing of it is kept on disk: an operator or a
-//   container that starts again stands until the engine starts it (stage 1,
-//   amendment 17), so no failed write can turn a stop into a start.
+//   (`restartBrowser`): the engine's stop, or what only the owner can decide
+//   (a changed exit IP). An operator or a container that starts again stands
+//   until the engine starts it (stage 1, amendment 17). What only the owner
+//   can decide is held besides on the volume (state/halt-store.ts, PR 17):
+//   no start runs while it is held, whatever this state says.
 
 import { atLeast, restartDelayMs, RESTART_BACKOFF_MS, stepIndex, type Step, type StopReason } from "./steps.ts";
 

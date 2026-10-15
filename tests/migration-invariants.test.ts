@@ -528,6 +528,37 @@ describe("database migration invariants", () => {
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0277_sync_pages_transport.sql"');
   });
 
+  it("keeps a page browser's visibility and the owner's commands (Project Browser PR 17) brief, nullable and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const visibility = statementsOf(await readFile("packages/db/migrations/0281_page_browser_visibility.sql", "utf8"));
+    expect(visibility).toContain("set local lock_timeout = '5s';");
+    for (const column of ["retry_at timestamptz", "down_since timestamptz", "stop_since timestamptz", "delivery_p50_ms bigint",
+      "delivery_p95_ms bigint", "delivery_at timestamptz", "alarm_kind text", "alarm_at timestamptz", "alarm_detail jsonb",
+      "owner_stop_at timestamptz", "owner_stop_by text", "halt_reason text", "halt_at timestamptz", "halt_id text"]) {
+      expect(visibility).toContain(`add column if not exists ${column}`);
+      // Nullable without a default: catalog only.
+      expect(visibility.split("\n").find((line) => line.includes(column))).not.toMatch(/not null|default/);
+    }
+    // A constant default: catalog only — on sync_pages too, where every actor
+    // of the previous image holds a row lock (waited for 5 s at most).
+    expect(visibility).toContain("alter table sync_pages add column if not exists browser_stop_paused boolean not null default false;");
+    // The owner's commands: a profile's (they go with it), one run per id, never past their expiry.
+    expect(visibility).toContain("profile_id uuid not null references page_browsers(profile_id) on delete cascade");
+    expect(visibility).toContain("constraint page_browser_commands_command_id_key unique (command_id)");
+    expect(visibility).toContain("check (kind in ('restartBrowser', 'stopPage', 'selfTest', 'clearHalt'))");
+    // A page's commands, or a profile's clearHalt (a profile no page has, Astra round 4).
+    expect(visibility).toContain("check ((page_id is not null) <> (kind = 'clearHalt') and (kind <> 'clearHalt' or halt_id is not null))");
+    // Every command ends: ok, failed, expired, unknown (Astra round 3).
+    expect(visibility).toContain("check (outcome in ('ok', 'failed', 'unknown', 'expired'))");
+    // No direct child of pages (the page erasure's inventory is unchanged).
+    expect(visibility).not.toMatch(/references pages/);
+    // No statement writes a row: only the engine and the owner's levers do.
+    expect(visibility).not.toMatch(/^\s*(update|insert)\b/im);
+    expect(visibility).toMatch(/grant select \(retry_at, down_since, stop_since, delivery_p50_ms, delivery_p95_ms, delivery_at, alarm_kind, alarm_at,\s+alarm_detail, owner_stop_at, owner_stop_by, halt_reason, halt_at, halt_id\)\s+on page_browsers to read_only;/);
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0281_page_browser_visibility.sql"');
+  });
+
   it("keeps a page's leave of its browser (Project Browser PR 14) brief, nullable and rollback-compatible", async () => {
     const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
     const leave = statementsOf(await readFile("packages/db/migrations/0278_sync_pages_browser_leave.sql", "utf8"));

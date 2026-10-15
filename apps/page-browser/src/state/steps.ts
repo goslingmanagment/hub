@@ -62,6 +62,7 @@ export const STOP_REASONS = [
   "ws_unaccounted",
   "header_mismatch",
   "login_required",
+  "halt_unreadable",
   "owner_stop",
 ] as const;
 export type StopReason = (typeof STOP_REASONS)[number];

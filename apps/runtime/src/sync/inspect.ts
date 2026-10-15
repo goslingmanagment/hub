@@ -36,6 +36,7 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
+import { readPageBrowserStatuses } from "./browser-status.ts";
 import { holdSetOf, type RouteAdmissionView } from "./engine/admission.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
@@ -151,8 +152,15 @@ export async function readSyncPageStatuses(
 ): Promise<PageStatus[]> {
   if (pages.length === 0) return [];
   const settingMs = await readPauseSettingMs(db, rawConfig);
+  // A page with a browser profile bound to it (Project Browser PR 17): its
+  // «Браузер» block. One read for all; every other page's status is as it was.
+  const browsers = await readPageBrowserStatuses(db, pages);
   const statuses: PageStatus[] = [];
-  for (const page of pages) statuses.push(await readSyncPageStatus(db, rawConfig, page, page.dbNow, settingMs));
+  for (const page of pages) {
+    const status = await readSyncPageStatus(db, rawConfig, page, page.dbNow, settingMs);
+    const browser = browsers.get(page.pageId);
+    statuses.push(browser === undefined ? status : { ...status, browser });
+  }
   return statuses;
 }
 

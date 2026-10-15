@@ -81,7 +81,11 @@
 //   and retries after 10 s, 30 s, 2 min, then every 5 min; a halt (the
 //   engine's stopPage, a changed exit IP) holds until the next
 //   restartBrowser. An operator that starts again stands until the engine
-//   starts the page (stage 1, amendment 17).
+//   starts the page (stage 1, amendment 17). A halt only the owner can
+//   decide is held besides on the volume (state/halt-store.ts, PR 17):
+//   every start and the exit's opening are refused until a clearHalt names
+//   it (or, for login_required, the expected account is confirmed after the
+//   owner's login).
 // - A planned stop closes the exit before CDP goes (plan §4.1). A lost
 //   control — CDP, the holder, its overflow, a browser that stops answering —
 //   closes the exit at once, kills Chrome and retries.
@@ -130,6 +134,7 @@ import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type 
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
+import { HaltStore, heldForTheOwner, LOGIN_DECIDES, newHalt, replacesHeld, type HeldHalt } from "../state/halt-store.ts";
 import { PageState } from "../state/page-state.ts";
 import { atLeast, type StopReason } from "../state/steps.ts";
 import type { OperatorMode } from "../policy/operations.ts";
@@ -218,6 +223,8 @@ export interface OperatorDeps {
   siteTimings?: Partial<SiteTimings>;
   /** Tests: the login desk's waits. */
   loginTimings?: Partial<LoginTimings>;
+  /** Tests: where the held halt is kept (else `stateDir/halt.json`). */
+  haltStore?: HaltStore;
   log?: Logger;
 }
 
@@ -362,6 +369,22 @@ export class Operator {
   /** The engine closed the exit: a start stops short of opening it. */
   #exitHeld = false;
   #selfTest: SelfTestResult | null = null;
+  /** The halt held for the owner's decision (Astra round 3): on the volume
+   *  (`#haltStore`), read when the operator starts. While it is held no start
+   *  runs and the exit does not open — but the owner's login of a browser
+   *  that Fansly signed out (`login_required`, in the manual login). */
+  #held: HeldHalt | null = null;
+  readonly #haltStore: HaltStore;
+  /** The held halt is not on the volume yet (its write failed): tried again
+   *  with every state the operator says. */
+  #heldUnwritten = false;
+  /** The id of the last halt cleared (the owner's clearHalt, or the
+   *  operator's own login_required clearing), kept with the halt: Hub lets
+   *  its mirror of a halt go only on this word (Astra round 4). */
+  #lastClearedId: string | null = null;
+  /** The id of the held `login_required` the owner's login was opened for:
+   *  the expected account confirmed after it clears that halt. */
+  #loginForHalt: string | null = null;
   #exitIp: string | null = null;
   #chromeVersion = "";
   #retryTimer: NodeJS.Timeout | null = null;
@@ -384,6 +407,14 @@ export class Operator {
     this.#classify = deps.classify ?? classifyFanslyHost;
     registerSecret(this.config.rpcToken);
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
+    // The halt held from before this operator, read first. A spoilt slot or
+    // a file that cannot be read is a halt being written: a strict one of its
+    // own (`halt_unreadable`) is held, and written, until the owner clears it.
+    this.#haltStore = deps.haltStore ?? new HaltStore(join(this.config.stateDir, "halt.json"));
+    const kept = this.#haltStore.read();
+    this.#held = kept.halt;
+    this.#lastClearedId = kept.lastClearedId;
+    if (kept.unreadable === true) this.#writeHeld();
 
     this.journals = new Journals({
       dir: this.config.logDir,
@@ -698,6 +729,10 @@ export class Operator {
       this.#log("slot.unended", { operation, pending: pending.length });
       this.#requestFault("request_unended", `${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
     };
+    if (this.#held !== null) {
+      this.#log("halt.held", { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall, from: "the volume" });
+      this.page.halt(this.#held.reason, `held on the volume from before this operator (halt ${this.#held.id})`);
+    }
   }
 
   /** Listen (the exit closed), link to the holder, and stand until the
@@ -707,7 +742,10 @@ export class Operator {
     this.#heartbeatTimer = setInterval(() => this.#beat(), this.#timings.heartbeatMs);
     const proxyPort = await this.egress.listen(this.config.proxyPort, this.config.proxyHost);
     const rpcPort = await this.rpc.listen(this.config.rpcPort, this.config.rpcHost);
-    this.#stateTimer = setInterval(() => this.#sendState(), this.#timings.stateEveryMs);
+    this.#stateTimer = setInterval(() => {
+      if (this.#heldUnwritten) this.#writeHeld();
+      this.#sendState();
+    }, this.#timings.stateEveryMs);
     this.buffer.start();
     void this.#linkHolder(true);
     this.#log("started", { proxyPort, rpcPort, bufferId: this.buffer.id, version: this.config.operatorVersion });
@@ -785,7 +823,14 @@ export class Operator {
       operatorVersion: this.config.operatorVersion,
       buffer: this.#bufferState(),
       selfTest: selfTest ? { ok: selfTest.ok, atWall: selfTest.atWall, failed: selfTest.failed, ...(notInstalled.length > 0 ? { notInstalled } : {}) } : null,
+      halt: this.#held === null ? null : { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall },
+      lastClearedHaltId: this.#lastClearedId,
     };
+  }
+
+  /** The halt held for the owner's decision (null: none). */
+  get heldHalt(): HeldHalt | null {
+    return this.#held;
   }
 
   get lastSelfTest(): SelfTestResult | null {
@@ -879,6 +924,14 @@ export class Operator {
 
   async #startRun(fresh: boolean, note: string): Promise<void> {
     if (this.#stopped || (!fresh && this.page.halted)) return;
+    // No start while a halt is held for the owner — but his login's of a
+    // browser Fansly signed out.
+    const refused = this.#heldRefusal();
+    if (refused !== null) {
+      this.#log("start.refused", { why: refused });
+      if (!this.page.halted) this.page.halt(this.#held!.reason, refused);
+      return;
+    }
     this.#clearRetry();
     const run = ++this.#run;
     this.#starting = true;
@@ -1063,6 +1116,10 @@ export class Operator {
       return;
     }
     this.page.advance("session_confirmed", "the engine's identity read named the expected account");
+    // Fansly signed the browser out; the owner logged in; the expected
+    // account is confirmed now: that halt is over.
+    const held = this.#held;
+    if (held !== null && held.reason === LOGIN_DECIDES && this.#loginForHalt === held.id) this.#clearHeld("the expected account confirmed after the owner's login");
     this.page.advance("ready");
   }
 
@@ -1314,7 +1371,8 @@ export class Operator {
     }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run) return;
     this.control.reset();
-    this.page.stand(note);
+    if (this.#held !== null) this.page.halt(this.#held.reason, `${note}; halt ${this.#held.id} held`);
+    else this.page.stand(note);
   }
 
   /** A failure: the exit closes, Chrome is killed (nothing of it is trusted
@@ -1348,13 +1406,15 @@ export class Operator {
    *  quits as on a user's quit (its profile is written); `kill`: at once. */
   async #halt(reason: StopReason, note: string, how: "stop" | "kill"): Promise<void> {
     this.egress.closeExit(note);
+    // The owner's to decide: held on the volume before the browser stops.
+    if (heldForTheOwner(reason)) this.#hold(reason, note);
     this.#endWork(note);
     this.#cancelRun();
     const run = this.#run;
     this.#clearRetry();
     this.#health.stop();
     this.#stopIpTimer();
-    this.page.halt(reason, note);
+    this.page.halt(heldForTheOwner(reason) && this.#held !== null ? this.#held.reason : reason, note);
     this.#controlExpected = false;
     try {
       await this.#withChrome(async () => {
@@ -1365,6 +1425,87 @@ export class Operator {
       this.#log("chrome.stop_failed", { error: errorMessage(error) });
     }
     if (run === this.#run) this.control.reset();
+  }
+
+  // ── the held halt (Astra round 3) ──────────────────────────────────────
+
+  /** Hold a halt for the owner's decision: the stricter one holds (any but
+   *  `login_required` replaces a held `login_required`, never the reverse;
+   *  else the first stands). In memory at once — every start is refused from
+   *  here — and on the volume. */
+  #hold(reason: StopReason, note: string): void {
+    if (!replacesHeld(this.#held?.reason ?? null, reason)) {
+      this.#log("halt.kept", { id: this.#held!.id, held: this.#held!.reason, also: reason });
+      return;
+    }
+    this.#held = newHalt(reason);
+    this.#loginForHalt = null;
+    this.#log("halt.held", { id: this.#held.id, reason, note });
+    this.#writeHeld();
+  }
+
+  /** The held halt to the volume; a failed write is tried again with every
+   *  state (in memory it holds meanwhile). */
+  #writeHeld(): boolean {
+    try {
+      this.#haltStore.write({ halt: this.#held, lastClearedId: this.#lastClearedId });
+      if (this.#heldUnwritten) this.#log("halt.written", { id: this.#held?.id ?? null });
+      this.#heldUnwritten = false;
+      return true;
+    } catch (error) {
+      if (!this.#heldUnwritten) this.#log("halt.unwritten", { id: this.#held?.id ?? null, error: errorMessage(error) });
+      this.#heldUnwritten = true;
+      return false;
+    }
+  }
+
+  /** Why no start may run now for the held halt, or null. */
+  #heldRefusal(): string | null {
+    const held = this.#held;
+    if (held === null) return null;
+    if (held.reason === LOGIN_DECIDES && this.#mode === "manual_login") return null;
+    return `halted for the owner's decision (${held.reason}, halt ${held.id}): clearHalt first`;
+  }
+
+  /** The halt is cleared: nothing held on the volume first, then in memory;
+   *  a page that stood for it stands as any other. False: the volume could
+   *  not be written — it is still held. */
+  #clearHeld(why: string): boolean {
+    const held = this.#held;
+    if (held === null) return true;
+    try {
+      this.#haltStore.write({ halt: null, lastClearedId: held.id });
+    } catch (error) {
+      this.#log("halt.clear_unwritten", { id: held.id, error: errorMessage(error) });
+      return false;
+    }
+    this.#held = null;
+    this.#lastClearedId = held.id;
+    this.#heldUnwritten = false;
+    this.#loginForHalt = null;
+    this.#log("halt.cleared", { id: held.id, reason: held.reason, why });
+    if (this.page.halted && this.page.snapshot.stopReason === held.reason) this.page.stand(`halt ${held.id} cleared: ${why}`);
+    this.#sendState();
+    return true;
+  }
+
+  /** The owner's `clearHalt` (his audited start): only the halt it names. */
+  #clearHaltCommand(haltId: string): CommandOutcome {
+    const held = this.#held;
+    if (held === null) {
+      // The owner's word on a halt this operator does not hold (it was lost,
+      // or cleared already): said as cleared, so Hub's mirror of it goes.
+      if (this.#lastClearedId !== haltId) {
+        this.#lastClearedId = haltId;
+        this.#writeHeld();
+        this.#sendState();
+      }
+      return { ok: true, detail: "no halt is held" };
+    }
+    if (held.id !== haltId) return { ok: false, detail: `the halt held is ${held.id} (${held.reason}), not ${haltId}: nothing cleared` };
+    return this.#clearHeld("the owner's clearHalt")
+      ? { ok: true, detail: `halt ${held.id} (${held.reason}) cleared` }
+      : { ok: false, detail: `halt ${held.id} could not be cleared on the volume: still held` };
   }
 
   /** A planned stop of Chrome: the exit closes first, then Chrome is asked
@@ -1615,14 +1756,23 @@ export class Operator {
         return { ok: true, detail: "the exit is closed" };
       case "openExit":
         return this.#openExitCommand();
-      case "stopPage":
+      case "stopPage": {
         this.#exitHeld = false;
         await this.#halt("owner_stop", "the engine's stopPage", "stop");
-        return { ok: true, detail: "the page is stopped" };
-      case "restartBrowser":
+        // The answer is the stop's confirmation (a profile's snapshot waits
+        // for it): only once Chrome's process is down — never on the way.
+        const up = await this.chrome.isUp().catch(() => true);
+        return up ? { ok: false, detail: "the exit is closed, but Chrome is still up" } : { ok: true, detail: "the page is stopped: the exit closed, Chrome down" };
+      }
+      case "restartBrowser": {
+        const refused = this.#heldRefusal();
+        if (refused !== null) return { ok: false, detail: refused };
         this.#exitHeld = false;
         void this.#launch(true, "the engine's restartBrowser");
         return { ok: true, detail: "the start began" };
+      }
+      case "clearHalt":
+        return this.#clearHaltCommand(command.command.haltId);
       case "selfTest":
         return this.#selfTestCommand();
       case "setMode":
@@ -1633,6 +1783,7 @@ export class Operator {
   }
 
   async #openExitCommand(): Promise<CommandOutcome> {
+    if (this.#held !== null) return { ok: false, detail: `halted for the owner's decision (${this.#held.reason}, halt ${this.#held.id}): clearHalt first` };
     if (this.page.halted) return { ok: false, detail: `the page is stopped (${this.page.snapshot.stopReason ?? "?"}): restartBrowser starts it` };
     // The same Chrome may still hold a request released before the close:
     // the exit opens only once every one has its end (or Chrome went).
@@ -1673,6 +1824,7 @@ export class Operator {
       return { ok: true, detail: "the manual login: already" };
     }
     this.#setMode("manual_login", generation, "the engine's setMode");
+    if (this.#held !== null && this.#held.reason === LOGIN_DECIDES) this.#loginForHalt = this.#held.id;
     this.login.begin();
     // Hub's requests that wait for their check are refused (#siteNotReady
     // says so from here); a ready page is no longer ready.

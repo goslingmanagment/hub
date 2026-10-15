@@ -891,7 +891,7 @@ describe("the evaluator's own latch: the api watchdog reads its record (bug hunt
     await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
     expect(await evaluatorLatch()).toMatchObject({
       status: "open", platformAccountId: null, errorCode: "unrecorded", kind: "fansly_sync_engine",
-      errorSummary: expect.stringContaining("lora-1: page_stopped, live_degraded, freshness, stuck, route_limited, pace_audit — never recorded"),
+      errorSummary: expect.stringContaining("lora-1: page_stopped, live_degraded, freshness, stuck, route_limited, pace_audit, browser — never recorded"),
     });
 
     // One real pass of the evaluator: the next check resolves it.

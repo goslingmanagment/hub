@@ -7,6 +7,7 @@ import type * as MoneyFramesModule from "../apps/runtime/src/sync/fansly/ws/mone
 const fake = vi.hoisted(() => ({
   pages: vi.fn(), incidents: vi.fn(), journal: vi.fn(), live: vi.fn(), chats: vi.fn(), steps: vi.fn(), demand: vi.fn(), sends: vi.fn(),
   notify: vi.fn(), resolve: vi.fn(), money: vi.fn(), record: vi.fn(), passFailed: vi.fn(),
+  senders: vi.fn(), browser: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", async (original) => ({
@@ -21,6 +22,8 @@ vi.mock("@agency_hub_core/db", async (original) => ({
   readFanslySendAudit: fake.sends,
   recordSyncAlertEvaluation: fake.record,
   markSyncAlertEvaluationPassFailed: fake.passFailed,
+  listSyncPageSenders: fake.senders,
+  findPageBrowserByPage: fake.browser,
 }));
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", async (original) => ({
   ...await original<typeof IncidentsModule>(),
@@ -52,7 +55,7 @@ const journal = {
   transactionsBackfill: { openProgressAt: null, lastCompletedAt: null }, stalledRequests: [],
 };
 const steps = { failing: [], applyPending: [] };
-const HEALTHY = { page_stopped: null, live_degraded: null, freshness: null, stuck: null, route_limited: null, pace_audit: null };
+const HEALTHY = { page_stopped: null, live_degraded: null, freshness: null, stuck: null, route_limited: null, pace_audit: null, browser: null };
 const PAGE_ALERTS = ["page_stopped", "live_degraded", "freshness", "stuck"] as const;
 
 function page(pageId: number): SyncPageRow {
@@ -123,10 +126,13 @@ beforeEach(() => {
   fake.resolve.mockResolvedValue({ status: "resolved" });
   fake.record.mockResolvedValue(undefined);
   fake.passFailed.mockResolvedValue(undefined);
+  // Every page on Node: its browser is never read (Project Browser PR 17).
+  fake.senders.mockResolvedValue(new Map([[1, { transport: "node", leave: null }], [2, { transport: "node", leave: null }]]));
+  fake.browser.mockRejectedValue(new Error("a page on Node has its browser read"));
 });
 
 describe("the alert evaluator's failure boundaries (bug hunt Д11)", () => {
-  it("control: a healthy pass opens page 2's socket outage and records all six rules of both pages", async () => {
+  it("control: a healthy pass opens page 2's socket outage and records all seven rules of both pages", async () => {
     const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
     expect(result?.opened).toEqual([{ pageId: 2, subKey: "live_degraded", detail: "socket_down" }]);
     expect(result?.unevaluated).toEqual([]);
@@ -135,6 +141,40 @@ describe("the alert evaluator's failure boundaries (bug hunt Д11)", () => {
     // At the pass's database clock.
     expect(fake.record).toHaveBeenCalledWith(db, expect.objectContaining({ pageId: 1, at: now }));
     expect(logger.warn).not.toHaveBeenCalled();
+    // Pages on Node: their browser is never read.
+    expect(fake.browser).not.toHaveBeenCalled();
+  });
+
+  it("the pages' transports unread blind the browser rule alone, of every page; no latch of it moves (Project Browser PR 17)", async () => {
+    fake.senders.mockRejectedValue(queryError("57014", "canceling statement due to statement timeout"));
+    fake.incidents.mockResolvedValue([openLatch(1, "browser:browser_down", 20 * MINUTE)]);
+    const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
+    expect(result!.opened).toEqual([{ pageId: 2, subKey: "live_degraded", detail: "socket_down" }]);
+    expect(resolvedKeys()).toEqual([]);
+    for (const pageId of [1, 2]) {
+      expect(lastRecord(pageId)).toEqual({ ...HEALTHY, browser: "browser: senders: database query failed (57014)" });
+    }
+    expect(fake.browser).not.toHaveBeenCalled();
+  });
+
+  it("a page on its browser whose browser read fails blinds its own browser rule alone (Project Browser PR 17)", async () => {
+    fake.senders.mockResolvedValue(new Map([[1, { transport: "browser", leave: null }], [2, { transport: "node", leave: null }]]));
+    fake.browser.mockRejectedValue(queryError("57014", "canceling statement due to statement timeout"));
+    fake.incidents.mockResolvedValue([openLatch(1, "browser:proxy", 20 * MINUTE)]);
+    const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
+    expect(result!.opened).toEqual([{ pageId: 2, subKey: "live_degraded", detail: "socket_down" }]);
+    expect(resolvedKeys()).toEqual([]);
+    expect(lastRecord(1)).toEqual({ ...HEALTHY, browser: "browser: database query failed (57014)" });
+    expect(lastRecord(2)).toEqual(HEALTHY);
+    expect(fake.browser.mock.calls.map(([, pageId]) => pageId)).toEqual([1]);
+  });
+
+  it("a page back on Node has its browser's latches resolved at once, its browser unread (Project Browser PR 17)", async () => {
+    fake.incidents.mockResolvedValue([openLatch(1, "browser:browser_down", 1 * MINUTE)]);
+    const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
+    expect(result!.resolved).toEqual([{ pageId: 1, subKey: "browser:browser_down" }]);
+    expect(lastRecord(1)).toEqual(HEALTHY);
+    expect(fake.browser).not.toHaveBeenCalled();
   });
 
   it("a failed read on one page never silences another page", async () => {

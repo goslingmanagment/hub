@@ -8,6 +8,7 @@ import {
   BODY_PART_BYTES,
   encodeBodyFrame,
   type Ack,
+  type Alarm,
   type BufferEvent,
   type CheckResult,
   type Command,
@@ -235,6 +236,14 @@ export class FakeOperator {
   readonly wsAnswers: WsAdmitResult[] = [];
   /** The engine's commands, in order. */
   readonly commands: Command[] = [];
+  /** How long Chrome takes to go down after a `stopPage` (its answer comes
+   *  then; the state says the stop at once), and a Chrome that stays up
+   *  (PR 17). */
+  chromeStopMs = 0;
+  chromeStays = false;
+  /** The answer to a command but `stopPage` (PR 17: the owner's levers);
+   *  null: "not in this fake". */
+  onOtherCommand: ((command: Command) => { ok: boolean; detail: string | null } | Promise<{ ok: boolean; detail: string | null }>) | null = null;
   /** `quiesced` waits for this (null: at once). */
   holdQuiesce: Promise<void> | null = null;
   /** The last send `quiesced` names (null: the last physical one, if any). */
@@ -292,6 +301,8 @@ export class FakeOperator {
       operatorVersion: "test",
       buffer: { bytes: 0, oldestAgeMs: 0 },
       selfTest: { ok: true, atWall: Date.now(), failed: null },
+      halt: null,
+      lastClearedHaltId: null,
     };
     this.server = new RpcServer({
       token: options.token ?? OPERATOR_TOKEN,
@@ -311,11 +322,28 @@ export class FakeOperator {
         },
         onCommand: async (command) => {
           this.commands.push(command);
-          // The manual login (PR 15): the mode, and a start of a page that stands.
+          // The manual login (PR 15): the mode.
           if (command.command.kind === "setMode") {
             this.pushState({ mode: command.command.mode });
             return { ok: true, detail: `the mode is ${command.command.mode}` };
           }
+          // The halt held for the owner's decision (PR 17, Astra round 3): only
+          // a clearHalt naming it clears it; it refuses a start meanwhile (the
+          // login's for login_required aside).
+          if (command.command.kind === "clearHalt") {
+            const halt = this.state.halt ?? null;
+            if (halt !== null && halt.id !== command.command.haltId) return { ok: false, detail: `the halt held is ${halt.id}: nothing cleared` };
+            this.pushState({ halt: null, lastClearedHaltId: command.command.haltId, ...(halt !== null && this.state.stopReason === halt.reason ? { stopReason: null } : {}) });
+            return { ok: true, detail: halt === null ? "no halt is held" : `halt ${halt.id} cleared` };
+          }
+          const held = this.state.halt ?? null;
+          if ((command.command.kind === "restartBrowser" || command.command.kind === "openExit") && held !== null
+            && !(held.reason === "login_required" && this.state.mode === "manual_login")) {
+            return { ok: false, detail: `halted for the owner's decision (${held.reason}, halt ${held.id}): clearHalt first` };
+          }
+          // A test's own answer to the other commands (PR 17).
+          if (command.command.kind !== "stopPage" && this.onOtherCommand !== null) return this.onOtherCommand(command);
+          // A start of a page that stands (PR 15).
           if (command.command.kind === "restartBrowser") {
             this.pushState({ step: "site_loaded", stopReason: null, retryAtWall: null, exitOpen: true });
             return { ok: true, detail: "the start began" };
@@ -330,9 +358,13 @@ export class FakeOperator {
             }, late.afterMs).unref?.();
           }
           // As the real operator: a stop replaces whatever the page stood for
-          // (a buffer that cannot be opened too).
+          // (a buffer that cannot be opened too) — the state is said at once,
+          // the answer once Chrome is down (`chromeStopMs` later; PR 17).
           this.pushState({ step: "exit_closed", stopReason: "owner_stop", exitOpen: false });
-          return { ok: true, detail: "the page is stopped" };
+          if (this.chromeStopMs > 0) await sleep(this.chromeStopMs);
+          return this.chromeStays
+            ? { ok: false, detail: "the exit is closed, but Chrome is still up" }
+            : { ok: true, detail: "the page is stopped" };
         },
         onSite: (message) => {
           this.siteAnswers.push(message);
@@ -545,6 +577,11 @@ export class FakeOperator {
     this.live = fingerprint;
     this.state = { ...this.state, sessionFingerprint: fingerprint };
     this.pushState();
+  }
+
+  /** The operator's alarm (spec §6.1; PR 17). */
+  alarm(kind: Alarm["kind"], detail: Alarm["detail"] = {}): void {
+    this.server.send({ type: "alarm", atWall: Date.now(), kind, detail });
   }
 
   pushState(patch: Partial<State> = {}): void {

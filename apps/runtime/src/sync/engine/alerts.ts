@@ -1,11 +1,13 @@
 import { sql } from "drizzle-orm";
 
 import {
+  findPageBrowserByPage,
   getNotificationIncidentByKey,
   insertAuditEvent,
   isSyncUrgentWorkWaiting,
   listNotificationIncidents,
   listSyncPages,
+  listSyncPageSenders,
   markSyncAlertEvaluationPassFailed,
   readFanslySendAudit,
   readSyncChatAlertFacts,
@@ -24,6 +26,7 @@ import {
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
+  type SyncPageTransport,
   type SyncPlannedDemandAlertFacts,
   type SyncStepAlertFacts,
 } from "@agency_hub_core/db";
@@ -33,7 +36,9 @@ import {
   notifySyncEngineIncident,
   resolveSyncEngineIncident,
   type IncidentApp,
+  SYNC_ENGINE_BROWSER_KINDS,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
+  syncEngineBrowserSubKey,
   syncEngineIncidentKey,
   syncEngineRouteSubKey,
   type SyncEngineAlertSubKey,
@@ -42,6 +47,7 @@ import {
 import { FANSLY_ROUTES, routeBudget, type FanslyRoute } from "../fansly/routes.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
 import { heldByScope, holdSetOf, pageHoldsInForce, type HoldSet } from "./admission.ts";
+import { evaluateBrowserAlerts, type SyncBrowserAlertCondition } from "./browser-alerts.ts";
 import type { SyncLogger } from "./commit.ts";
 import { NETWORK_ALERT_AFTER_MS, RESOURCE_BREAKER_SUBJECTS, RESOURCE_BREAKER_WINDOW_MS } from "./errors.ts";
 import type { AlertSink, SyncAlertInput } from "./ports.ts";
@@ -845,6 +851,9 @@ interface PagePass {
   /** Open latches by key, with the last instant their condition was seen. */
   open: ReadonlyMap<string, Date>;
   money: Map<number, PageMissingMoney> | { error: unknown };
+  /** Every page's transport (the pass's one read; Project Browser PR 17):
+   *  its failure blinds the `browser` rule of each page, nothing else. */
+  senders: ReadonlyMap<number, { transport: SyncPageTransport }> | { error: unknown };
   result: SyncAlertPassResult;
   /** Each rule of the page: null when judged in full, else why not. */
   outcomes: Map<SyncAlertEvaluationRule, string | null>;
@@ -961,6 +970,14 @@ export class SyncAlertEvaluator {
     } catch (error) {
       money = { error };
     }
+    // One read of the pages' transports: its failure blinds the `browser`
+    // rule of each page, nothing else.
+    let senders: PagePass["senders"];
+    try {
+      senders = await listSyncPageSenders(db);
+    } catch (error) {
+      senders = { error };
+    }
     const failing = new Map<string, ReportedFailure>();
     for (const page of pages) {
       pass.progress(`page ${page.pageId}`);
@@ -968,7 +985,7 @@ export class SyncAlertEvaluator {
       const outcomes = new Map<SyncAlertEvaluationRule, string | null>();
       let unforeseen: string | null = null;
       try {
-        await this.#evaluatePage(page, { open, money, result, outcomes });
+        await this.#evaluatePage(page, { open, money, senders, result, outcomes });
       } catch (error) {
         // The page's boundary: the next pages go on.
         unforeseen = `page: ${syncAlertFailureText(error)}`;
@@ -1015,6 +1032,58 @@ export class SyncAlertEvaluator {
     }
     input.outcomes.set("route_limited", await this.#evaluateRoutes(page, input.open, input.result));
     if (owner) input.outcomes.set("pace_audit", await this.#auditPage(page, input.result));
+    input.outcomes.set("browser", await this.#evaluateBrowser(page, input));
+  }
+
+  /**
+   * The page's browser incidents (Project Browser PR 17, `browser:<kind>`):
+   * judged only on a handover/live page whose transport is its browser, from
+   * its profile's row — a page on Node reads nothing here, and any latch of
+   * its browser left from before resolves at once. A latch without its
+   * condition resolves 10 clean minutes after it was last seen. Null when
+   * every kind was judged and every open and resolve landed; a read that
+   * failed leaves every latch as it is.
+   */
+  async #evaluateBrowser(page: SyncPageRow, input: PagePass): Promise<string | null> {
+    const senders = input.senders;
+    if ("error" in senders) return `browser: senders: ${syncAlertFailureText(senders.error)}`;
+    const onBrowser = pagesOwnerAlerts(page) && (senders as ReadonlyMap<number, { transport: SyncPageTransport }>).get(page.pageId)?.transport === "browser";
+    let conditions: SyncBrowserAlertCondition[] = [];
+    if (onBrowser) {
+      try {
+        conditions = evaluateBrowserAlerts({ page, browser: await findPageBrowserByPage(this.#o.db, page.pageId), now: page.dbNow });
+      } catch (error) {
+        return `browser: ${syncAlertFailureText(error)}`;
+      }
+    }
+    const failures = new Set<string>();
+    for (const kind of SYNC_ENGINE_BROWSER_KINDS) {
+      const subKey = syncEngineBrowserSubKey(kind);
+      const lastSeenAt = input.open.get(syncEngineIncidentKey({ subKey, pageId: page.pageId }));
+      const held = conditions.find((condition) => condition.kind === kind);
+      try {
+        if (held !== undefined) {
+          const landed = await notifySyncEngineIncident(this.#app, {
+            subKey,
+            pageId: page.pageId,
+            pageLabel: page.pageLabel,
+            detail: held.detail,
+            errorSummary: summaryOf(held.detail, held.since, held.context),
+            occurredAt: held.seenAt,
+          });
+          if (!landed) failures.add(OPEN_NOT_WRITTEN);
+          else if (lastSeenAt === undefined) input.result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
+        } else if (lastSeenAt !== undefined) {
+          const cleanMs = onBrowser ? SYNC_ALERT_CLEAN_MS : 0;
+          if (page.dbNow.getTime() - lastSeenAt.getTime() < cleanMs) continue;
+          const failure = await this.#resolve(page, subKey, input.result);
+          if (failure !== null) failures.add(failure);
+        }
+      } catch (error) {
+        failures.add(`browser: ${syncAlertFailureText(error)}`);
+      }
+    }
+    return failures.size === 0 ? null : [...failures].join("; ");
   }
 
   /** One page alert: null when judged in full, else why not. Unknown is no
@@ -1254,16 +1323,23 @@ export async function readSyncAlertStatus(
   });
   const incidents = (await listNotificationIncidents(db, { status: "open" }))
     .filter((incident) => incident.kind === "fansly_sync_engine");
+  const senders = await listSyncPageSenders(db);
   const statuses = [];
   for (const page of input.pages) {
     // Only handover/live page the owner: no other page has a condition.
     const pagesOwner = pagesOwnerAlerts(page);
     const facts = pagesOwner ? await readPageAlertFacts(db, { page, registry: input.registry, money }) : null;
+    const onBrowser = pagesOwner && senders.get(page.pageId)?.transport === "browser";
     statuses.push({
       page: page.pageLabel ?? String(page.pageId),
       mode: page.mode,
       pages: pagesOwner,
       conditions: facts === null ? [] : evaluatePageAlerts(facts, input.registry),
+      // A page on its browser (Project Browser PR 17): its browser's
+      // incidents that hold now (`browser:<kind>`).
+      ...(onBrowser
+        ? { browser: evaluateBrowserAlerts({ page, browser: await findPageBrowserByPage(db, page.pageId), now: page.dbNow }) }
+        : {}),
       // What alert 3 counts and never pages (arena "vanished chat" plan §4):
       // chats Fansly does not serve to the page (`sync chats unavailable`),
       // the chats that opened an episode within the `chats_refused` window,

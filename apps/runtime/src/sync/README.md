@@ -970,8 +970,9 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   (`--browser-stopped`; `scripts/deploy-page-browser.sh to-node` removes the container first, then says it): what
   the operator kept is then marked not drained (`page_browsers.buffer_undrained_since`, alert 2
   `browser_buffer_undrained`) until an operator of that profile says its open buffer keeps nothing and the intake
-  committed its last event — the drain of a stopped
-  container's buffer without taking the page back to its browser is PR 17's. A host that starts again finds the
+  committed its last event — drained, while the page stays on Node, by the owner's `sync browser drain` (PR 17: Node's
+  slot ends for a leave of the browser — told to stand stopped, what it kept taken — then Node again). A host that
+  starts again finds the
   leave pending and runs it first. The deploy refuses to roll back to an image that does not know the page
   transport while a page is on its browser or leaving it (`verify_rollback_target_runs_no_browser_page`): what the
   target can do is read from the image itself — the runtime image's label `agency-hub.sync-page-transport` (Dockerfile;
@@ -979,8 +980,7 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   stay applied when a deploy rolls back to an old image; an image or a count that cannot be read refuses too. A leave that waits for its operator is no stall of the process:
   every look is reported to the watchdog. `browser` needs the page's browser ready: a profile
   bound to the page with a pinned exit IP and an environment (`page_browsers.pinned_exit_ip`, `env`, 0277 — the
-  hello's settings besides the proxy; nothing writes them but `setPageBrowserSettings` yet: the owner's lever is
-  `sync browser pin-ip`, PR 17). `node` needs a stored Node session (or `--prepare`); a page leaving its browser waits
+  hello's settings besides the proxy; the owner's lever is `sync browser pin-ip`, PR 17). `node` needs a stored Node session (or `--prepare`); a page leaving its browser waits
   for its confirmed leave (above). A page whose browser is not ready (no profile bound, no pin, no environment) is not taken at all: it waits
   (`browser_not_ready`), no owner generation is spent on it and no owner beats — alert 1 after its bound — and nothing is sent.
 - **A browser page's slot** (`fansly/browser-page.ts`): one link to the operator (the hello's settings read anew at
@@ -1005,6 +1005,51 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   (`saveVerifiedFanslyCredentials`); the verify of what is stored then lifts the hold (A3). A stored session is never
   tried under it: the hold names its digest as refused.
 
+- **What the operator says, and the owner's levers** (PR 17, `fansly/browser-record.ts`, `fansly/browser-control.ts`,
+  `browser-levers.ts`, `browser-status.ts`; 0281): over the link of the page's owner (its slot, or a leave) the
+  operator's `state` goes on its profile's row — at once when it moved, else every 15 s, only a state it said — its
+  link refused or broken (`link_error`), its last `alarm`, and the delivery of its events from their instant to the
+  intake's commit (p50/p95). The page's status carries a `browser` block only for a page with a profile bound to it.
+  The owner's levers (`sync browser stop|start|selftest|snapshot|pin-ip|drain`, audited `admin.sync_browser_*`) are
+  carried out by the page's owner over its link: the owner's one-shot commands (`page_browser_commands`: a stop, a
+  start, a self-test with the exit closed for it) are taken by the owner of the page and run once by their id, never
+  past their expiry, each ended once — `ok`, `failed`, `expired` (never sent: nobody took it, or its taker went
+  before sending) or `unknown` (sent, no answer: never sent again; only a command nothing was sent of is taken by a
+  newer owner, and one superseded before sending gives it back) — a stop's answer comes once Chrome is down and is
+  the stop's confirmation (a snapshot waits for it, never for a state); the owner's stop
+  (`page_browsers.owner_stop_*`) is kept by `stopPage`; a slot on the browser starts a browser that stands (never
+  started, or stopped by a leave or a stop since lifted). Every start — the slot's, the owner's, a self-test's
+  `openExit`, and the one PR 15's login driver asks for — passes one guard read fresh right before it goes
+  (`browserStartRefusal`: no leave pending, this owner's generation, no owner stop; for the slot's and the owner's
+  also the page on its browser, no pause and no login — Hub's `manual_login`, not only the operator's mode; the
+  login's start, on Node or on the browser, only while its login is `wanted`; a slot and the login do not ask a
+  browser whose operator holds a halt). A halt for the owner's decision is the operator's (Astra round 3): it holds
+  it on its volume (`halt.json`: two preallocated slots written in place, each write checked whole and synced, so a
+  full disk never drops it; a slot spoilt when it starts is a halt being written — a strict `halt_unreadable` of its
+  own; kept across restarts of the operator and its container) and refuses every start and the exit's opening until it is cleared —
+  by a `clearHalt` naming its id, sent only for the owner's audited decision: `sync browser start` (the halt Hub
+  mirrored when he asked; also during a login, on Node or on the browser), for a profile no page has `sync
+  browser-profile clear-halt` or — a changed exit IP only — a newer pin committed with its audit row; or, for
+  `login_required` (Fansly signed the browser out — the one halt the owner's login may start the browser for), by
+  the operator itself once it confirms the expected account after that login. A stricter halt replaces a held
+  `login_required`, never the reverse. An operator before protocol minor 1 (no halt on its volume) is refused at
+  its hello. Hub keeps a mirror of the halt with the operator's state (`page_browsers.halt_*`) for the status, the
+  alerts and the id the owner's decision names — and as a backstop that only refuses (Astra rounds 4–5): it keeps
+  the stricter of the halt it holds and the one said (an older `login_required` never replaces a stricter one), and a
+  halt goes from it only when the operator says it cleared that very one (`state.lastClearedHaltId`) or with the
+  owner's decision; one the operator merely stops saying (lost by a restart) refuses a slot's start, the login's
+  (but its `login_required`) and a self-test's exit until then — every start decision takes the stricter of the
+  operator's halt and the mirror. The accepted residual: a write the volume refused that left both slots valid (the
+  older one with no halt), then a restart before Hub received the halt in a state. A control speaks for the page only while it is its owner's (Hub's `owner_generation`) and, on a
+  login link, while the login is open — read fresh before every command, the stops too. The link of a page on Node
+  for its login records what its operator says as a slot does and runs the owner's commands. The page's pause, its
+  login's pause and the owner's stop are written only under the page row lock (`sync_pages`, FOR NO KEY UPDATE),
+  taken first, whatever there is to change — then the browser's row. The pause a stop put is the stop's (`sync_pages.browser_stop_paused`) until the owner changes
+  the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start` lifts only a pause still
+  the stop's. A stop during an open login takes over the login's pause (its end lifts nothing), and a `start` during
+  one gives the stop's pause back to the login; a drain is refused while a login is open. The link of a page on Node
+  for its login runs the owner's commands and keeps his stop too. A leave records and keeps the owner's stop, nothing
+  more. The journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
 - **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
   browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
   and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site`, the
@@ -1265,7 +1310,11 @@ the pause S every route of a page has a strict budget of its own (owner decision
 ## Alerts and metrics
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
-`live_degraded`, `freshness`, `stuck`) plus the global `process`. Alert 3 (`freshness`) never pages for a lone chat
+`live_degraded`, `freshness`, `stuck`) plus the global `process`. A page on its browser has the browser's own latches
+too (Project Browser PR 17, `browser:<kind>`: `browser_down`, `login_required`, `proxy`, `exit_ip_changed`, `buffer`,
+`selftest_failed`, `protocol_changed`, `cdp_lost`), judged by the evaluator's `browser` rule from what the operator
+said (`engine/browser-alerts.ts`) — a page on Node is judged on its transport alone (the pass's one read of the
+transports; its failure blinds that rule only) and has none. Alert 3 (`freshness`) never pages for a lone chat
 Fansly does not serve (`message_unconfirmed` leaves it out); `chats_refused` pages five chats refused within ten
 minutes (above, "A chat Fansly stopped serving"). The actor opens alert 1 at once from its capture
 transaction (a refused credential, another identity, a pace violation; a 429 opens its route's own latch,
@@ -1322,7 +1371,7 @@ evaluation threw, or whose open or resolve did not land (`resolveSyncEngineIncid
 never resolves its latch. The route incidents and the pace backstop have boundaries of their own; the backstop's cursor
 moves only once every open landed, so the next pass reads the same sends again. A page's boundary catches the
 unforeseen; the next pages go on. Each pass then records, per `handover`/`live` page and rule of
-`SYNC_ALERT_EVALUATION_RULES` (the four alerts, `route_limited`, `pace_audit`), whether it judged the rule in full
+`SYNC_ALERT_EVALUATION_RULES` (the four alerts, `route_limited`, `pace_audit`, `browser`), whether it judged the rule in full
 (`sync_alert_evaluations`: `evaluated_at` on the database clock, else the failure and since when — a part or step, a
 SQLSTATE, never SQL); a pass that cannot read its frame marks the rows failing. A failure is logged when it starts or
 changes and its end once, never every pass. The api watchdog's leg beside alert 5 reads the rows while `sync` beats:
@@ -1367,4 +1416,6 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
+| A page browser's alert | one constant or line in `engine/browser-alerts.ts` + `tests/sync-browser-alerts.test.ts` |
+| Stop, start, self-test a page's browser; pin its exit IP; drain a stopped one | `pnpm cli sync browser stop <page>` (or `--all`), `start`, `selftest`, `pin-ip`, `drain` (audited); `sync browser status [--page <label>]` |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

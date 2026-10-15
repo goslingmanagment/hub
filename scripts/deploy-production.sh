@@ -977,6 +977,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # names them and never inserts a profile's row; a profile left unbound
   # stays unbound under it.
   "0280_page_browser_onboarding.sql"
+  # Project Browser PR 17: page_browsers gains what the engine keeps of a
+  # page's browser for the owner (the operator's retry, since when it is down
+  # and since when it says its stop, the delivery of its events, its last
+  # alarm, the owner's stop, a mirror of the operator's halt: nullable,
+  # catalog only), sync_pages.browser_stop_paused (a constant default:
+  # catalog only) and the new page_browser_commands table, under a 5 s
+  # lock_timeout. The previous image never names them and updates both
+  # tables by named columns; nothing writes them before a page has a browser.
+  "0281_page_browser_visibility.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -21,6 +21,9 @@ import type { SiteAdmitResult } from "../apps/runtime/src/services/egress/page-b
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { BrowserOnboardingTask, type BrowserOnboardingOverrides } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
+import { clearBrowserProfileHalt } from "../apps/runtime/src/sync/browser-profile-cli.ts";
+import { awaitPageBrowserCommand } from "../apps/runtime/src/sync/browser-levers.ts";
+import { SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { bindProvenProfile } from "./helpers/page-browser-onboarding.ts";
 import { FakeOperator, linkSettings, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
@@ -325,11 +328,13 @@ describe("a new page's onboarding through its browser, the engine's side (plan �
     expect(r.operator.sends).toHaveLength(0);
   });
 
-  it("starts a browser that stopped on another exit IP again only once the owner pinned the IP again", async (context) => {
+  it("starts a browser that stopped on another exit IP again only once the owner pinned the IP again — the halt its operator holds cleared by its id first (PR 17)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig({ onboarding: "login" });
-    // The browser's own check named another IP: it stands for the owner's decision.
-    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed" };
+    // The browser's own check named another IP: its operator holds the halt for the owner's decision.
+    // (After the profile's pin: the halt came from the browser's check of it.)
+    const halt = { id: randomUUID(), reason: "exit_ip_changed" as const, atWall: Date.now() };
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "exit_ip_changed", halt };
     startTask(r);
     await untilLoginMode(r);
     await sleep(1_500);
@@ -339,6 +344,82 @@ describe("a new page's onboarding through its browser, the engine's side (plan �
     await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.8" });
     await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 5_000, "the start after the pin");
     expect(r.operator.commands.filter((command) => command.command.kind === "restartBrowser")).toHaveLength(1);
+    // The halt it held, cleared by its id before the start (the operator refuses a start while it holds one).
+    const kinds = r.operator.commands.map((command) => command.command.kind === "clearHalt" ? `clearHalt:${command.command.haltId}` : command.command.kind);
+    expect(kinds.indexOf(`clearHalt:${halt.id}`)).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf(`clearHalt:${halt.id}`)).toBeLessThan(kinds.indexOf("restartBrowser"));
+    expect(r.operator.state.halt).toBeNull();
+  });
+
+  it("a strict halt of a profile no page has (a re-pin decides none): the owner's audited clear-halt, run by its link even with the onboarding off — cleared at the operator and in Hub's mirror (Astra's review of PR 17, round 4)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const halt = { id: randomUUID(), reason: "header_mismatch" as const, atWall: Date.now() };
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "header_mismatch", halt };
+    // Mirrored as the link would record it (Hub keeps it until cleared by its id).
+    await testDb.pool.query("update page_browsers set halt_reason = 'header_mismatch', halt_at = now(), halt_id = $2 where profile_id = $1", [r.profileId, halt.id]);
+    startTask(r);
+    // A pin decides only a changed exit IP: this one stays.
+    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.8" });
+    await sleep(1_000);
+    expect(r.operator.commands.some((command) => command.command.kind === "clearHalt" || command.command.kind === "restartBrowser")).toBe(false);
+    // A stale id: refused at the operator, nothing cleared.
+    const stale = await clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId: randomUUID(), actor: "cli@test" });
+    const staleRan = await awaitPageBrowserCommand(db(), stale.command.id, { waitMs: 15_000 });
+    expect(staleRan).toMatchObject({ outcome: "failed", detail: expect.stringContaining("nothing cleared") });
+    expect((await findOnboardingProfile(db(), r.profileId))!.halt).toMatchObject({ id: halt.id });
+    // The owner's: audited, cleared at the operator and in the mirror.
+    const asked = await clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId: halt.id, actor: "cli@test", note: "the headers were checked" });
+    expect(asked).toMatchObject({ mirrored: { id: halt.id, reason: "header_mismatch" } });
+    const ran = await awaitPageBrowserCommand(db(), asked.command.id, { waitMs: 15_000 });
+    expect(ran).toMatchObject({ outcome: "ok", detail: expect.stringContaining(`halt ${halt.id} cleared`) });
+    expect(r.operator.state.halt).toBeNull();
+    expect((await findOnboardingProfile(db(), r.profileId))!.halt).toBeNull();
+    const audits = await testDb.pool.query<{ metadata: Record<string, unknown> }>("select metadata from audit_events where event_type = 'admin.page_browser_profile' and metadata->>'action' = 'clear_halt' order by id");
+    expect(audits.rows.map((row) => row.metadata)).toEqual([
+      expect.objectContaining({ profileId: r.profileId }),
+      expect.objectContaining({ profileId: r.profileId, haltId: halt.id, note: "the headers were checked" }),
+    ]);
+    // A bound profile's halt is its page's start's.
+    const model = await testDb.pool.query<{ id: string }>("insert into models (slug, name) values ('ari', 'Ari') returning id");
+    const page = await testDb.pool.query<{ id: string }>("insert into pages (model_id, platform, label) values ($1, 'fansly', 'ari-9') returning id", [model.rows[0]!.id]);
+    expect(await bindProvenProfile(db(), { profileId: r.profileId, pageId: Number(page.rows[0]!.id) })).toBe(true);
+    await expect(clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId: halt.id, actor: "cli@test" })).rejects.toBeInstanceOf(SyncOwnerLeverError);
+  });
+
+  it("a halt Hub mirrors that the profile's operator no longer says (lost by a restart): the login starts nothing until the owner's clear-halt (Astra's review of PR 17, round 4)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    const haltId = randomUUID();
+    await testDb.pool.query("update page_browsers set halt_reason = 'header_mismatch', halt_at = now(), halt_id = $2 where profile_id = $1", [r.profileId, haltId]);
+    startTask(r);
+    await untilLoginMode(r);
+    await sleep(1_500);
+    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
+    const asked = await clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId, actor: "cli@test" });
+    expect(await awaitPageBrowserCommand(db(), asked.command.id, { waitMs: 15_000 })).toMatchObject({ outcome: "ok" });
+    expect((await findOnboardingProfile(db(), r.profileId))!.halt).toBeNull();
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the login's start once cleared");
+  });
+
+  it("Astra's round 5: the operator says an older login_required while Hub mirrors a stricter halt — the login starts nothing until that one is cleared", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig({ onboarding: "login" });
+    const signedOut = { id: randomUUID(), reason: "login_required" as const, atWall: Date.now() - 60_000 };
+    r.operator.state = { ...r.operator.state, step: "exit_closed", exitOpen: false, stopReason: "login_required", halt: signedOut };
+    const strictId = randomUUID();
+    await testDb.pool.query("update page_browsers set halt_reason = 'header_mismatch', halt_at = now(), halt_id = $2 where profile_id = $1", [r.profileId, strictId]);
+    startTask(r);
+    await untilLoginMode(r);
+    await sleep(1_500);
+    expect(r.operator.commands.some((command) => command.command.kind === "restartBrowser")).toBe(false);
+    // The stricter one, kept in Hub's mirror by the states that said the older one.
+    expect((await findOnboardingProfile(db(), r.profileId))!.halt).toMatchObject({ id: strictId, reason: "header_mismatch" });
+    // The owner's clear-halt of it: the operator holds another (the login's), the mirror's goes.
+    const asked = await clearBrowserProfileHalt(db(), { profileId: r.profileId, haltId: strictId, actor: "cli@test" });
+    await awaitPageBrowserCommand(db(), asked.command.id, { waitMs: 15_000 });
+    await until(async () => (await findOnboardingProfile(db(), r.profileId))!.halt?.id === signedOut.id, 10_000, "the mirror on the operator's login_required");
+    await until(async () => r.operator.commands.some((command) => command.command.kind === "restartBrowser"), 10_000, "the login's start");
   });
 
   it("gives the onboarding up: the browser stopped, the automation back, then off — the profile stays, unbound", async (context) => {

@@ -63,6 +63,7 @@ import { formatBlockSummary, needsVisualAttention } from "../apps/dashboard/src/
 import { SyncPageDetail } from "../apps/dashboard/src/pages/settings/sync/SyncPageDetail.tsx";
 import { SyncPageList } from "../apps/dashboard/src/pages/settings/sync/SyncPageList.tsx";
 import { WAITING_REASONS, isRunnableReason } from "../apps/runtime/src/sync/engine/status.ts";
+import { browserStatus } from "./helpers/browser-status-fixture.ts";
 
 // The Settings «Синк» tab (step 4, S4-28; plan §10): every Fansly page as the
 // Fansly Sync Engine reads it — owner, holds, socket, the pause, the queue with
@@ -699,6 +700,40 @@ describe("the «Синк» tab: a page in detail", () => {
     const html = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
     expect(html).toContain("Страница не загрузилась");
     expect(html).toContain("Details API unavailable");
+  });
+});
+
+describe("the «Браузер» block: only a page with a browser has one (Project Browser PR 17)", () => {
+  it("a page without a browser: its card and its detail are as they were", () => {
+    for (const html of [
+      renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() })),
+      renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() })),
+    ]) {
+      expect(html).not.toContain("data-engine-browser");
+      expect(html).not.toContain("Браузер");
+    }
+  });
+
+  it("a page with a browser: a line on its card, the whole block on its detail", () => {
+    queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [status({ browser: browserStatus() })] }));
+    const card = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
+    expect(card).toContain('data-browser-compact="true"');
+    expect(card).not.toContain('data-browser-row="exit-ip"');
+    const detail = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
+    expect(detail).toContain('aria-label="Браузер"');
+    expect(detail).toContain('data-browser-row="exit-ip"');
+    // After the engine's status, before the history requests.
+    expect(detail.indexOf('aria-label="Состояние движка"')).toBeLessThan(detail.indexOf('aria-label="Браузер"'));
+    expect(detail.indexOf('aria-label="Браузер"')).toBeLessThan(detail.indexOf("Заявки на историю"));
+  });
+
+  it("the «Вход» line of the block leads to PR 15's login of the page's browser; the card has no such link", () => {
+    queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [status({ browser: browserStatus() })] }));
+    const detail = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
+    const loginRow = detail.slice(detail.indexOf('data-browser-row="login"'), detail.indexOf('data-browser-row="exit-ip"'));
+    expect(loginRow).toMatch(/<a [^>]*data-browser-login-link="true" href="\/pages\/lilly-1\/browser-login"[^>]*>Войти в браузер →<\/a>/);
+    const card = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
+    expect(card).not.toContain("data-browser-login-link");
   });
 });
 

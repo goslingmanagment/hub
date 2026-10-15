@@ -2557,6 +2557,78 @@ const agentSyncClassQueueSchema = z.object({
   waitingByReason: z.partialRecord(agentSyncWaitingReasonEnum, agentSyncCountSchema),
 }).strict();
 
+/** A page's browser (Project Browser plan §4.11, PR 17): the page's transport,
+ *  what its operator last said of itself and how old that is, the owner's
+ *  stop, the login, the session (no token), the exit IP against the pinned
+ *  one (never the proxy's address or credentials), the buffer against its
+ *  caps, the delivery of its events, the versions, the last self-test and
+ *  alarm, and the browser's alerts that hold now. The operator's steps,
+ *  stop reasons and alarm kinds grow with its protocol (spec §6.3): strings. */
+export const agentSyncBrowserStatusSchema = z.object({
+  profileId: z.string().uuid(),
+  container: z.string(),
+  transport: z.enum(["node", "browser"]),
+  /** A leave of the browser waits for its confirmation since. */
+  leavePendingSince: agentIsoTimestamp.nullable(),
+  link: z.object({
+    lastStateAt: agentIsoTimestamp.nullable(),
+    stateAgeMs: z.number().int().nonnegative().nullable(),
+    /** The engine cannot work with the operator: `token`, `protocol_version`, `protocol_error`. */
+    error: z.string().nullable(),
+  }).strict(),
+  state: z.object({
+    step: z.string().nullable(),
+    stopReason: z.string().nullable(),
+    retryAt: agentIsoTimestamp.nullable(),
+    exitOpen: z.boolean(),
+    mode: z.enum(["automation", "manual_login"]),
+    /** Not `ready` since. */
+    downSince: agentIsoTimestamp.nullable(),
+    stopSince: agentIsoTimestamp.nullable(),
+  }).strict(),
+  /** The owner's `sync browser stop`; `paused`: the page's pause is still the one it put. */
+  ownerStop: z.object({ at: agentIsoTimestamp, by: z.string(), paused: z.boolean() }).strict().nullable(),
+  /** Stopped for the owner's decision (a changed exit IP, a guard that failed), latched until `sync browser start`. */
+  halt: z.object({ reason: z.string(), at: agentIsoTimestamp }).strict().nullable(),
+  login: z.object({ needed: z.boolean(), why: z.string().nullable() }).strict(),
+  session: z.object({ present: z.boolean(), accountId: z.string().nullable() }).strict(),
+  proxy: z.object({
+    pinnedExitIp: z.string().nullable(),
+    pinnedAt: agentIsoTimestamp.nullable(),
+    exitIp: z.string().nullable(),
+    matches: z.boolean().nullable(),
+    /** `unavailable`, `auth`, `exit_ip_changed`; null: none said. */
+    problem: z.string().nullable(),
+  }).strict(),
+  buffer: z.object({
+    bytes: z.number().int().nonnegative().nullable(),
+    oldestAgeMs: z.number().int().nonnegative().nullable(),
+    /** Of the fuller cap (bytes or age). */
+    percent: z.number().nonnegative().nullable(),
+    capBytes: z.number().int().positive(),
+    capAgeMs: z.number().int().positive(),
+    haltedReason: z.string().nullable(),
+    haltedAt: agentIsoTimestamp.nullable(),
+    undrainedSince: agentIsoTimestamp.nullable(),
+  }).strict(),
+  delivery: z.object({
+    lastEventAt: agentIsoTimestamp.nullable(),
+    lastCommitAt: agentIsoTimestamp.nullable(),
+    p50Ms: z.number().int().nonnegative().nullable(),
+    p95Ms: z.number().int().nonnegative().nullable(),
+    at: agentIsoTimestamp.nullable(),
+  }).strict(),
+  versions: z.object({ chrome: z.string().nullable(), operator: z.string().nullable() }).strict(),
+  selfTest: z.object({ ok: z.boolean().nullable(), at: agentIsoTimestamp.nullable(), failed: z.string().nullable() }).strict(),
+  alarm: z.object({
+    kind: z.string(),
+    at: agentIsoTimestamp,
+    detail: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  }).strict().nullable(),
+  /** `browser:<kind>` alerts that hold now. */
+  alerts: z.array(z.object({ kind: z.string(), detail: z.string(), since: agentIsoTimestamp.nullable() }).strict()),
+}).strict();
+
 /** One page as the engine sees it (design §3.9): who owns it, the pause rule's
  *  record, sends by class, the queue by "why waiting", holds and breakers. */
 export const agentSyncPageStatusSchema = z.object({
@@ -2627,6 +2699,8 @@ export const agentSyncPageStatusSchema = z.object({
     attemptsLastHour: agentSyncCountSchema,
     demandVsEstimate: z.number().nonnegative().nullable(),
   }).strict().nullable(),
+  /** Only a page with a browser profile bound to it (Project Browser PR 17). */
+  browser: agentSyncBrowserStatusSchema.optional(),
 }).strict();
 
 /** One work row and why it waits ("почему ждёт", plan §10). */
@@ -3171,6 +3245,7 @@ export type AgentHistoryRequestListResponse = z.infer<typeof agentHistoryRequest
 export type AgentSyncPageMode = z.infer<typeof agentSyncPageModeEnum>;
 export type AgentSyncResourceKey = z.infer<typeof agentSyncResourceKeyEnum>;
 export type AgentSyncPageStatus = z.infer<typeof agentSyncPageStatusSchema>;
+export type AgentSyncBrowserStatus = z.infer<typeof agentSyncBrowserStatusSchema>;
 export type AgentSyncWork = z.infer<typeof agentSyncWorkSchema>;
 export type AgentSyncStatusQuery = z.infer<typeof agentSyncStatusQuerySchema>;
 export type AgentSyncStatusResponse = z.infer<typeof agentSyncStatusResponseSchema>;

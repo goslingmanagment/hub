@@ -774,7 +774,7 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
   });
 
   it("the evaluator's rules are the repository's vocabulary", () => {
-    expect([...Object.keys(SYNC_PAGE_ALERT_RULES), "route_limited", "pace_audit"]).toEqual([...SYNC_ALERT_EVALUATION_RULES]);
+    expect([...Object.keys(SYNC_PAGE_ALERT_RULES), "route_limited", "pace_audit", "browser"]).toEqual([...SYNC_ALERT_EVALUATION_RULES]);
   });
 });
 

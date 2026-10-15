@@ -243,7 +243,7 @@ async function standsThenStarts(ctx: Ctx, fromMono: number, holdMs: number, what
   const stood = stoodBetween(transitions(ctx.page), fromMono, mono(), what);
   const restart = mono();
   const engine = ctx.page.engine;
-  const result = await engine.command("restartBrowser");
+  const result = await engine.start();
   const up = result.ok ? await engine.waitState((state) => state.exitOpen && atLeast(state.step, "exit_open"), 60_000, restart) : null;
   return { stands: stood, startsOnCommand: up ? [] : [`restartBrowser did not bring the page up: ${result.detail ?? ""}`] };
 }
@@ -1051,7 +1051,7 @@ export const SCENARIOS: Scenario[] = [
   { name: "loss-planned-stop", proves: "stopPage: the exit closes, the page holds (owner_stop) until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: plannedStop },
   { name: "proxy-down", proves: "the page's SOCKS5 gone: proxy_unavailable, the exit closes, the page stands while it is gone and resumes by itself when it is back with the same IP", needs: [], page: "main", moment: [0, 1500], run: proxyFault("down") },
   { name: "proxy-auth", proves: "the SOCKS5 refuses the login: proxy_auth, the exit closes, resumes by itself once the login is taken again", needs: [], page: "main", moment: [0, 1500], run: proxyFault("auth") },
-  { name: "exit-ip-change", proves: "the exit IP changed: exit_ip_changed, a halt that holds even when the IP comes back, until restartBrowser", needs: [], page: "main", moment: [0, 1500], run: exitIpChange },
+  { name: "exit-ip-change", proves: "the exit IP changed: exit_ip_changed, a halt the operator holds even when the IP comes back, until the owner's clearHalt and restartBrowser", needs: [], page: "main", moment: [0, 1500], run: exitIpChange },
   { name: "engine-link-loss", proves: "the engine silent for 5 s with outcomes on their way: the operator counts the link lost and closes it, the page stays up, the outcomes come again on the next connection, each committed once", needs: [], page: "main", moment: [300, 1500], run: engineLinkLoss },
   { name: "engine-restart", proves: "the engine restarts with outcomes on their way (a new owner generation): quiesced, recover answered, the page stays up, every attempt resolved once", needs: [], page: "main", moment: [300, 1500], run: engineRestart(false) },
   { name: "db-unavailable", proves: "the stand's Postgres down: nothing acknowledged, the page stays up, the buffer keeps it, everything committed once after", needs: [], page: "main", moment: [0, 1500], run: databaseDown },

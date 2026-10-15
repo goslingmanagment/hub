@@ -97,6 +97,9 @@ export function toSyncPageStatusWire(status: PageStatus): AgentSyncPageStatus {
     ws: status.ws === null ? null : { ...status.ws },
     // Wire-only since step 4 (S4-23): no page has a shadow journal.
     shadow: null,
+    // Only a page with a browser (Project Browser PR 17): every other page's
+    // status has no such key.
+    ...(status.browser === undefined ? {} : { browser: structuredClone(status.browser) }),
   };
 }
 

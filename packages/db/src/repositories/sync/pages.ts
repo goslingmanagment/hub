@@ -532,6 +532,106 @@ export async function assertBrowserLeft(tx: Database, input: { pageId: number })
   return BigInt(leave);
 }
 
+/**
+ * The owner asks for what a page's stopped browser kept (Project Browser PR
+ * 17, `sync browser drain`): a page on Node whose browser's buffer is marked
+ * not drained gets a pending leave of its browser again (0278) — the host
+ * ends Node's slot, runs the leave (the operator told to stand stopped, its
+ * kept outcomes and buffer taken, the mark cleared), and Node takes the page
+ * again. Under the page's row lock, in the caller's transaction. Returns the
+ * pending leave's generation; `not_node`: the page is on its browser (its
+ * slot takes what it keeps); `pending`: a leave is pending already;
+ * `login_open`: the owner's login of the browser is open (0279) — the leave
+ * would stop the browser a person is in.
+ */
+export async function requestBrowserDrain(
+  tx: Database,
+  input: { pageId: number },
+): Promise<{ kind: "requested"; leave: bigint } | { kind: "not_node" | "pending" | "login_open" | "no_page" }> {
+  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null; manualLogin: SyncPageManualLogin }>(sql`
+    select transport, browser_leave_generation::text as leave, manual_login as "manualLogin"
+      from sync_pages where page_id = ${input.pageId} for no key update
+  `);
+  const row = current.rows[0];
+  if (row === undefined) return { kind: "no_page" };
+  if (row.transport !== "node") return { kind: "not_node" };
+  if (row.leave !== null) return { kind: "pending" };
+  if (row.manualLogin !== "off") return { kind: "login_open" };
+  const updated = await tx.execute<{ leave: string }>(sql`
+    update sync_pages
+       set browser_leave_generation = owner_generation, browser_leave_requested_at = clock_timestamp(), updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+    returning browser_leave_generation::text as leave
+  `);
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { kind: "requested", leave: BigInt(updated.rows[0]!.leave) };
+}
+
+/**
+ * The owner's browser stop pauses the page (Project Browser PR 17; 0281):
+ * under the page's row lock, in the caller's transaction. A page not paused
+ * is paused with `note`, and the pause is the stop's (`browser_stop_paused`)
+ * — `sync browser start` lifts it. A page on the pause its open login put on
+ * it (`manual_login_paused`, 0279) has that pause taken over by the stop: the
+ * login no longer counts it as its own, so its end does not lift it — the
+ * browser stays stopped and the page paused until `sync browser start`. A
+ * page paused by the owner already keeps its pause and its owner. Wakes the
+ * page's actor. Null: no engine row.
+ */
+export async function pausePageForBrowserStop(
+  tx: Database,
+  input: { pageId: number; note: string },
+): Promise<{ pausedByStop: boolean; fromLogin: boolean } | null> {
+  const current = await tx.execute<{ pausedAll: boolean; loginPaused: boolean }>(sql`
+    select paused_all as "pausedAll", manual_login_paused as "loginPaused"
+      from sync_pages where page_id = ${input.pageId} for no key update
+  `);
+  const row = current.rows[0];
+  if (row === undefined) return null;
+  const fromLogin = row.pausedAll === true && row.loginPaused === true;
+  if (row.pausedAll !== true || fromLogin) {
+    await tx.execute(sql`
+      update sync_pages
+         set paused_all = true, pause_note = ${input.note}, browser_stop_paused = true, manual_login_paused = false,
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+    `);
+  }
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return { pausedByStop: row.pausedAll !== true || fromLogin, fromLogin };
+}
+
+/**
+ * The owner's `sync browser start` lifts the pause its stop put on the page,
+ * and only that one (0281): a pause the owner changed since — paused or
+ * resumed by his own lever — is his and stays. While a login of the page's
+ * browser is open the page stays paused: the pause goes back to the login
+ * (`manual_login_paused`), which lifts it at its end. Under the page's row
+ * lock, taken first and whatever there is to lift (Astra round 2: a start
+ * that found nothing to lift held no lock, and a stop committed between it
+ * and its clearing of the stop's mark was left a pause with no stop), in the
+ * caller's transaction — `sync browser start` keeps it to its end.
+ * `lifted`: the page is unpaused; `to_login`: the pause is the login's now;
+ * null: no pause of the stop's.
+ */
+export async function liftBrowserStopPause(tx: Database, input: { pageId: number }): Promise<"lifted" | "to_login" | null> {
+  await tx.execute(sql`select page_id from sync_pages where page_id = ${input.pageId} for no key update`);
+  const result = await tx.execute<{ toLogin: boolean }>(sql`
+    update sync_pages
+       set paused_all = manual_login <> 'off',
+           manual_login_paused = case when manual_login <> 'off' then true else manual_login_paused end,
+           pause_note = null,
+           browser_stop_paused = false,
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId} and browser_stop_paused and paused_all
+    returning manual_login <> 'off' as "toLogin"
+  `);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return row.toLogin === true ? "to_login" : "lifted";
+}
+
 // ── mode ──────────────────────────────────────────────────────────────────────
 
 /** The transition the owner makes (`sync page mode`): the only one there is
@@ -1585,6 +1685,12 @@ export class SyncPageManualLoginOpenError extends Error {
  * page is the owner's own — the login no longer counts it as the pause it
  * put on the page (`manual_login_paused` false), so the page stays paused
  * when the login ends. The login lifts only what it set.
+ *
+ * The owner's own change of the whole pause (a pause or a resume) makes it
+ * his also against the owner's browser stop (0281): the stop no longer
+ * counts it as the pause it put on the page (`browser_stop_paused` false), so
+ * `sync browser start` lifts only a pause still its own — the model of the
+ * login's pause.
  */
 export async function setPagePause(
   db: Database,
@@ -1613,6 +1719,7 @@ export async function setPagePause(
       update sync_pages
          set paused_all = coalesce(${all}::boolean, paused_all),
              manual_login_paused = case when ${all}::boolean is true then false else manual_login_paused end,
+             browser_stop_paused = case when ${all}::boolean is not null then false else browser_stop_paused end,
              paused_requests = coalesce(${input.requests ?? null}::boolean, paused_requests),
              paused_resources = coalesce(${resources === null ? null : sql.param(resources)}::text[], paused_resources),
              pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,

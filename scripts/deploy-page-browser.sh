@@ -24,6 +24,8 @@ Usage:
   scripts/deploy-page-browser.sh to-node  <user@host> --page <name> [--prepare] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh status   <user@host> [--page <name>]
   scripts/deploy-page-browser.sh chrome   <user@host> <check|build|update|rollout|resume|rollback|snapshot|status|prune> [options]
+  scripts/deploy-page-browser.sh log      <user@host> --page <name> [--kind requests|connections|states|sockets]
+                                          [--since <iso>] [--path <prefix>] [--method <M>]
 
   host      Prepares the server, again after any change to its files: the
             networks pb-control (internal) and pb-egress (no traffic between
@@ -94,6 +96,11 @@ Usage:
             --image hub-page-browser:<tag> --detach`. The server's timer
             (page-browser-update.timer, installed by `host`, enabled by the
             owner) only looks, fetches, builds and proposes.
+  log       The page browser's journals (plan §4.11), read on the server from
+            its buffer volume — Hub's containers cannot reach them: one kind
+            (default requests) from --since on, of a path starting with
+            --path, of --method; e.g. that POST /api/v1/message/ack never
+            left: --path /api/v1/message/ack --method POST.
 
 Options: --identity <path>, --ssh-port <port>. Any other option goes to
 page.sh on the server (see apps/page-browser/host/page.sh).
@@ -405,6 +412,6 @@ case "$COMMAND" in
   build) build ;;
   to-node) to_node ;;
   chrome) chrome ;;
-  up|rollback|down|status) page_remote "$COMMAND" "${PAGE_ARGS[@]}" ;;
+  up|rollback|down|status|log) page_remote "$COMMAND" "${PAGE_ARGS[@]}" ;;
   *) usage; exit 2 ;;
 esac

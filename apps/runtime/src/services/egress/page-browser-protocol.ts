@@ -14,7 +14,10 @@
 // intake, PR 13); `siteAdmitResult`, `wsAdmitResult` and `command` come with
 // the site path's and the transport switch's wiring.
 
-export const PROTOCOL = { major: 1, minor: 0 } as const;
+// Minor 1 (Project Browser PR 17): the operator holds its halt for the
+// owner's decision on its volume — `state.halt` says it, `clearHalt` clears
+// it by its id (sent only to an operator whose state says `halt`).
+export const PROTOCOL = { major: 1, minor: 1 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -59,6 +62,7 @@ export const STOP_REASONS = [
   "ws_unaccounted",
   "header_mismatch",
   "login_required",
+  "halt_unreadable",
   "owner_stop",
 ] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
@@ -157,6 +161,16 @@ export interface State {
    *  buffer is empty. */
   buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
   selfTest: { ok: boolean; atWall: WallMs; failed: SelfTestMechanism | null; notInstalled?: SelfTestMechanism[] } | null;
+  /** (Minor 1, PR 17.) The halt the operator holds for the owner's decision,
+   *  on its volume: it refuses every start and the exit's opening until the
+   *  halt is cleared (`clearHalt` with its id). `null`: none. Absent: an
+   *  operator from before — it holds nothing and takes no `clearHalt`. */
+  halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
+  /** (Minor 1, PR 17.) The id of the last halt cleared — by the owner's
+   *  clearHalt, or by the operator once the expected account was confirmed
+   *  after his login — kept with the halt across restarts. Hub lets its
+   *  mirror of a halt go only on this word. */
+  lastClearedHaltId?: string | null;
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -330,7 +344,7 @@ export interface Command extends FromEngine {
   type: "command";
   commandId: CommandId;
   notAfterMono: MonoMs;
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode };
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string };
 }
 export interface CommandResult {
   type: "commandResult";
@@ -496,7 +510,14 @@ function parseState(m: Record<string, unknown>): State {
       ...(buffer.open === undefined ? {} : { open: parseBufferOpen(buffer.open) }),
     },
     selfTest,
+    ...(m.halt === undefined ? {} : { halt: m.halt === null ? null : parseHalt(m.halt) }),
+    ...(m.lastClearedHaltId === undefined ? {} : { lastClearedHaltId: m.lastClearedHaltId === null ? null : str(m.lastClearedHaltId, "lastClearedHaltId", 64) }),
   };
+}
+
+function parseHalt(value: unknown): NonNullable<State["halt"]> {
+  const halt = record(value, "halt");
+  return { id: str(halt.id, "halt.id", 64), reason: oneOf<StopReason>(halt.reason, STOP_SET, "halt.reason"), atWall: num(halt.atWall, "halt.atWall") };
 }
 
 function parseHelloResult(m: Record<string, unknown>): HelloResult {

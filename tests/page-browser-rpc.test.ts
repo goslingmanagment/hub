@@ -93,7 +93,7 @@ describe("hello", () => {
     const fake = await engine();
     fake.send(hello());
     const result = await fake.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 0 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
+    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 1 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
     expect(hellos).toHaveLength(1);
     expect(hellos[0]?.socks5.password).toBe("S0cks-Pa55-9c1e2d");
     expect(links).toEqual([[true, "hello"]]);

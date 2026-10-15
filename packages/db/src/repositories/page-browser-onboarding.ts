@@ -101,6 +101,9 @@ export interface OnboardingProfile {
   selftestFailed: string | null;
   lastStateAt: Date | null;
   linkError: string | null;
+  /** Hub's mirror of the halt the operator holds (PR 17): kept until the
+   *  operator says it cleared it. */
+  halt: { id: string | null; reason: string; at: Date | null } | null;
   encryptedEngineToken: string;
   encryptedApiToken: string;
   encryptedVncPassword: string;
@@ -140,6 +143,9 @@ type SqlRow = {
   selftestFailed: string | null;
   lastStateAt: Date | string | null;
   linkError: string | null;
+  haltReason: string | null;
+  haltAt: Date | string | null;
+  haltId: string | null;
   encryptedEngineToken: string;
   encryptedApiToken: string;
   encryptedVncPassword: string;
@@ -179,6 +185,9 @@ const columns = sql`
   b.selftest_failed as "selftestFailed",
   b.last_state_at as "lastStateAt",
   b.link_error as "linkError",
+  b.halt_reason as "haltReason",
+  b.halt_at as "haltAt",
+  b.halt_id as "haltId",
   b.encrypted_engine_token as "encryptedEngineToken",
   b.encrypted_api_token as "encryptedApiToken",
   b.encrypted_vnc_password as "encryptedVncPassword",
@@ -231,6 +240,7 @@ function profileOf(row: SqlRow): OnboardingProfile {
     selftestFailed: row.selftestFailed,
     lastStateAt: dateOf(row.lastStateAt),
     linkError: row.linkError,
+    halt: row.haltReason === null ? null : { id: row.haltId, reason: row.haltReason, at: dateOf(row.haltAt) },
     encryptedEngineToken: row.encryptedEngineToken,
     encryptedApiToken: row.encryptedApiToken,
     encryptedVncPassword: row.encryptedVncPassword,
@@ -385,14 +395,18 @@ export async function listUnboundPageBrowsers(db: Database): Promise<OnboardingP
 }
 
 /** The profiles no page has whose engine link is wanted: an onboarding under
- *  way, or an identity request not answered. */
+ *  way, an identity request not answered, or the owner's command waiting
+ *  (his clearHalt, PR 17). */
 export async function listOnboardingLinksWanted(db: Database): Promise<OnboardingProfile[]> {
   const result = await db.execute<SqlRow>(sql`
     select ${columns} from page_browsers b
      where b.page_id is null
        and (b.onboarding <> 'off'
             or (b.identity_request_id is not null
-                and (b.identity_result is null or b.identity_result->>'requestId' is distinct from b.identity_request_id::text)))
+                and (b.identity_result is null or b.identity_result->>'requestId' is distinct from b.identity_request_id::text))
+            or exists (select 1 from page_browser_commands c
+                        where c.profile_id = b.profile_id and c.page_id is null and c.done_at is null and c.sent_at is null
+                          and c.expires_at > clock_timestamp()))
      order by b.created_at, b.profile_id
   `);
   return result.rows.map(profileOf);

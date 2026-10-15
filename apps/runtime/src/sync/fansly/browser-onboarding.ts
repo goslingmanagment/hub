@@ -4,6 +4,11 @@ import pg from "pg";
 
 import {
   bindIdentityAttempt,
+  clearPageBrowserHaltMirror,
+  finishPageBrowserCommand,
+  markPageBrowserCommandSent,
+  takeProfileCommand,
+  type PageBrowserCommandRow,
   browserProfileRouteHoldDetail,
   closeUnfinishedBrowserProfileSends,
   completeFanslySendAttempt,
@@ -40,7 +45,7 @@ import {
   readOnboardingLinkRevision,
   readOnboardingLinkSettings,
 } from "../../services/egress/page-browser-link.ts";
-import { REFUSALS, type CommandKind, type CommandResult, type Mode, type Refusal, type State } from "../../services/egress/page-browser-protocol.ts";
+import { REFUSALS, type Command, type CommandKind, type CommandResult, type Refusal, type State } from "../../services/egress/page-browser-protocol.ts";
 import {
   PageBrowserRpcClient,
   systemMonoBridge,
@@ -411,9 +416,8 @@ export class OnboardingLink {
   #slot: Promise<void> = Promise.resolve();
   #lastStartMono = Number.NEGATIVE_INFINITY;
   #unreachableSince: number | null = null;
-  /** When the pin the browser halted under was set (a changed exit IP): a
-   *  pin set after it — the owner's word on the IP — starts it again. */
-  #haltedPinAt: number | null = null;
+  /** The pin whose clearHalt was asked already (once per pin). */
+  #clearedForPin: number | null = null;
   /** The login's boundary in an open onboarding: the generation and the
    *  instant (this process's monotonic clock) the operator's answer that the
    *  automation is back arrived. An identity read proves the account only if
@@ -485,7 +489,7 @@ export class OnboardingLink {
       if (status.kind === "up") this.#subscribe(status.bufferId);
       else this.#subscribed = null;
       if (status.kind === "refused") {
-        void recordPageBrowserLinkError(db, { profileId: this.profileId, linkError: status.reason === "protocol_major" ? "protocol_version" : status.reason }).catch(() => undefined);
+        void recordPageBrowserLinkError(db, { profileId: this.profileId, linkError: status.reason === "protocol_major" || status.reason === "protocol_minor" ? "protocol_version" : status.reason }).catch(() => undefined);
       }
     }));
     this.client.onEvents((delivered) => {
@@ -583,8 +587,13 @@ export class OnboardingLink {
       return;
     }
     this.#unreachableSince = null;
-    if (state.stopReason === "exit_ip_changed") this.#haltedPinAt ??= profile.pinnedExitIpAt?.getTime() ?? 0;
-    else this.#haltedPinAt = null;
+    // The owner's command first (his clearHalt of a halt this profile's
+    // operator holds, `sync browser-profile clear-halt`; PR 17).
+    const command = await takeProfileCommand(this.#o.db, { profileId: this.profileId, generation: this.generation });
+    if (command !== null) {
+      await this.#runCommand(command);
+      return;
+    }
     switch (profile.onboarding) {
       case "login":
         if (state.mode !== "manual_login") {
@@ -625,25 +634,86 @@ export class OnboardingLink {
 
   /** A browser that stands is started (`restartBrowser`); one halted for a
    *  changed exit IP is started again once the owner pinned the IP again —
-   *  his word on what the browser should see (PR 17's `sync browser pin-ip`
-   *  then `start`, for a profile no page has). */
+   *  his word on what the browser should see, committed with its audit row
+   *  (PR 17's `sync browser pin-ip` then `start`, for a profile no page has).
+   *  The operator holds that halt on its volume (PR 17): a pin set after it is
+   *  the owner's decision on it — cleared by its id at the operator and in
+   *  Hub's mirror, then the start. Hub's mirror keeps a halt the operator no
+   *  longer says (lost by a restart) until it is cleared: it holds every
+   *  start here but a pin's — and the login's for login_required. */
   async #startIfStanding(state: State, why: string): Promise<void> {
     const now = this.#clock.monoNow();
-    const pinnedAt = this.#profile.pinnedExitIpAt?.getTime() ?? 0;
-    const repinned = state.stopReason === "exit_ip_changed" && this.#haltedPinAt !== null && pinnedAt > this.#haltedPinAt;
-    if (repinned) {
-      this.#haltedPinAt = pinnedAt;
+    const profile = this.#profile;
+    const pinnedAt = profile.pinnedExitIpAt?.getTime() ?? 0;
+    const held = state.halt ?? null;
+    const mirror = profile.halt;
+    // The halts that stand (Astra round 5: the stricter of the operator's and
+    // Hub's mirror, never one over the other): the operator's, and the
+    // mirror's when it is another (one the operator lost).
+    const halts: Array<{ id: string | null; reason: string; atWall: number }> = [];
+    if (held !== null) halts.push({ id: held.id, reason: held.reason, atWall: held.atWall });
+    if (mirror !== null && mirror.id !== held?.id) halts.push({ id: mirror.id, reason: mirror.reason, atWall: mirror.at?.getTime() ?? Number.POSITIVE_INFINITY });
+    const strict = halts.filter((halt) => halt.reason !== "login_required");
+    if (strict.length > 0) {
+      // A newer pin decides them only when every one is a changed exit IP
+      // held before it; any other halt is the owner's clear-halt.
+      if (!strict.every((halt) => halt.reason === "exit_ip_changed" && halt.id !== null && pinnedAt > halt.atWall)) return;
+      if (this.#clearedForPin === pinnedAt) return;
+      this.#clearedForPin = pinnedAt;
       this.#lastStartMono = now;
+      for (const halt of strict) {
+        if (held !== null && halt.id === held.id) {
+          const cleared = await this.#command({ kind: "clearHalt", haltId: halt.id }, "the owner pinned the exit IP again: his decision on the halt for it");
+          if (cleared?.ok !== true) return;
+        }
+        await clearPageBrowserHaltMirror(this.#o.db, { profileId: this.profileId, haltId: halt.id! });
+      }
       await this.#command("restartBrowser", "the owner pinned the exit IP again: the browser starts again and checks it");
       return;
     }
-    if (!stands(state) || now - this.#lastStartMono < this.#t.restartEveryMs) return;
+    // Only a login_required (or none): the login's to start.
+    const login = profile.onboarding === "login";
+    if (halts.length > 0 && !login) return;
+    const standing = stands(state) || (login && state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && state.stopReason === "login_required");
+    if (!standing || now - this.#lastStartMono < this.#t.restartEveryMs) return;
     this.#lastStartMono = now;
     await this.#command("restartBrowser", why);
   }
 
-  async #command(kind: CommandKind | { kind: "setMode"; mode: Mode }, why: string): Promise<CommandResult | null> {
-    const name = typeof kind === "string" ? kind : `setMode:${kind.mode}`;
+  /** The owner's command to a profile no page has: his clearHalt of the halt
+   *  its operator holds — at the operator, then Hub's mirror of it — ended
+   *  once (ok, failed, unknown), marked sent before it goes. */
+  async #runCommand(command: PageBrowserCommandRow): Promise<void> {
+    const { db, logger } = this.#o;
+    const finish = (outcome: "ok" | "failed" | "unknown", detail: string) =>
+      finishPageBrowserCommand(db, { id: command.id, generation: this.generation, outcome, detail });
+    if (command.kind !== "clearHalt" || command.haltId === null) {
+      await finish("failed", `not run: a profile no page has takes only a clearHalt (${command.kind})`);
+      return;
+    }
+    if (!(await markPageBrowserCommandSent(db, { id: command.id, generation: this.generation }))) return;
+    const result = await this.#command({ kind: "clearHalt", haltId: command.haltId }, `the owner's clear-halt (${command.requestedBy})`);
+    if (result === null) {
+      await finish("unknown", "clearHalt: sent, no answer from the operator (not sent again)");
+      return;
+    }
+    if (!result.ok) {
+      // The operator holds another halt, not the one he decided on (Hub's
+      // mirror kept the stricter one it lost): his decision on that one
+      // stands — its mirror goes — and the other waits for his next.
+      const other = this.client.state?.halt ?? null;
+      const mirrorCleared = other !== null && other.id !== command.haltId
+        && (await clearPageBrowserHaltMirror(db, { profileId: this.profileId, haltId: command.haltId }));
+      await finish("failed", `clearHalt: ${result.detail ?? "refused"}${mirrorCleared ? `; Hub's mirror of halt ${command.haltId} cleared, the operator's ${other!.id} (${other!.reason}) waits for the owner` : ""}`);
+      return;
+    }
+    const mirrored = await clearPageBrowserHaltMirror(db, { profileId: this.profileId, haltId: command.haltId });
+    await finish("ok", `clearHalt: ${result.detail ?? "ok"}${mirrored ? `; Hub's mirror of halt ${command.haltId} cleared` : ""}`);
+    logger.info({ profileId: this.profileId, haltId: command.haltId, by: command.requestedBy }, "Fansly sync browser onboarding: the owner cleared the operator's halt");
+  }
+
+  async #command(kind: CommandKind | Exclude<Command["command"], { kind: CommandKind }>, why: string): Promise<CommandResult | null> {
+    const name = typeof kind === "string" ? kind : kind.kind === "setMode" ? `setMode:${kind.mode}` : kind.kind;
     const waitMs = this.#t.commandWaitMs;
     const result = await this.client.command(kind, this.#bridge.toKernel(this.#clock.monoNow() + waitMs), waitMs);
     this.#metrics.increment("sync_browser_onboarding_command", { command: name, ok: result?.ok === true ? "true" : result === null ? "unknown" : "false" });
@@ -671,7 +741,7 @@ export class OnboardingLink {
   }
 
   #record(state: State): void {
-    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null]);
+    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null, state.halt ?? null, state.lastClearedHaltId ?? null]);
     const now = this.#clock.monoNow();
     if (this.#lastRecorded !== null && this.#lastRecorded.key === key && now - this.#lastRecorded.at < this.#t.stateRecordMs) return;
     this.#lastRecorded = { at: now, key };
@@ -688,6 +758,9 @@ export class OnboardingLink {
       operatorVersion: state.operatorVersion,
       selfTest: state.selfTest === null ? null : { ok: state.selfTest.ok, at: new Date(state.selfTest.atWall), failed: state.selfTest.failed },
       buffer: { bytes: state.buffer.bytes, oldestAgeMs: state.buffer.oldestAgeMs },
+      // The halt the operator holds, mirrored (PR 17).
+      halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
+      lastClearedHaltId: state.lastClearedHaltId ?? null,
     }).catch(() => undefined);
   }
 

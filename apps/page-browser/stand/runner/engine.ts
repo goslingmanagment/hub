@@ -745,9 +745,9 @@ export class StandEngine {
   }
 
   /** An engine command; resolves with its result (or a timeout's). */
-  command(kind: CommandKind, timeoutMs = 20_000): Promise<CommandResult> {
+  command(kind: CommandKind | Exclude<Command["command"], { kind: CommandKind }>, timeoutMs = 20_000): Promise<CommandResult> {
     const commandId = randomUUID();
-    const message: Command = { type: "command", ownerGeneration: this.generation, commandId, notAfterMono: mono() + timeoutMs, command: { kind } };
+    const message: Command = { type: "command", ownerGeneration: this.generation, commandId, notAfterMono: mono() + timeoutMs, command: typeof kind === "string" ? { kind } : kind };
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.#commandResults.delete(commandId);
@@ -787,13 +787,25 @@ export class StandEngine {
     }
   }
 
+  /** The page started (restartBrowser) — the halt its operator holds for
+   *  the owner cleared first by its id: the stand plays the owner's decision
+   *  (PR 17: the operator refuses every start while it holds one). */
+  async start(): Promise<CommandResult> {
+    const held = this.state?.halt ?? null;
+    if (held !== null) {
+      const cleared = await this.command({ kind: "clearHalt", haltId: held.id });
+      if (!cleared.ok) return cleared;
+    }
+    return this.command("restartBrowser");
+  }
+
   /** The page up, the exit open: started by the engine if it stands. */
   async ensureUp(timeoutMs = 60_000): Promise<void> {
     if (!this.connected) await this.connect();
     const current = this.state;
     if (current !== null && atLeast(current.step, "exit_open") && current.exitOpen) return;
     const since = mono();
-    const started = await this.command("restartBrowser");
+    const started = await this.start();
     if (!started.ok) throw new Error(`restartBrowser: ${started.detail ?? "?"}`);
     const up = await this.waitState((state) => atLeast(state.step, "exit_open") && state.exitOpen, timeoutMs, since);
     if (!up) throw new Error(`the page did not reach exit_open in ${timeoutMs} ms (last: ${JSON.stringify(this.state)})`);
