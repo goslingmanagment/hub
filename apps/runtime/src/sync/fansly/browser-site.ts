@@ -78,6 +78,7 @@ export function protocolSiteRefusal(reason: SiteRefusalReason | "session_mismatc
     case "session_mismatch":
       return "session_mismatch";
     case "credentials":
+      return "credentials";
     case "held":
     case "lease":
       return "held";

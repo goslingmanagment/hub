@@ -63,6 +63,12 @@ export interface RequestLine {
   status?: number | null;
   /** The bytes that came over the network (an end; null: not known). */
   bytes?: number | null;
+  /** CDP's final transferred total; absent for older records. Never a sum
+   *  of decoded streaming chunks. */
+  bytesSource?: "loading_finished" | null;
+  /** Bytes actually received by the decoded body stream, even when the
+   *  capture is incomplete. Null: no armed capture. Separate from wire. */
+  bodyBytes?: number | null;
   /** From the pause to the end. */
   durationMs?: number;
 }

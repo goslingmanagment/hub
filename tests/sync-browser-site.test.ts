@@ -52,6 +52,17 @@ function stubLink() {
 }
 
 describe("the site path's wait deadline", () => {
+  it("keeps credentials distinct from held for both HTTP and socket refusals", () => {
+    const link = stubLink();
+    const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100 });
+    link.deliver({ type: "siteAdmit", siteRequestId: "http-credentials", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", query: "", resourceType: "XHR", route: "account.me", operation: "read", sessionFingerprint: FP, pausedMono: 100, waitDeadlineMono: 10_000 });
+    link.deliver({ type: "wsAdmit", connectionId: CONNECTION, url: "wss://wsv3.fansly.com/", context: "page", sessionFingerprint: FP, requestedMono: 100, waitDeadlineMono: 10_000 });
+    site.refuse("http-credentials", "credentials"); site.refuse(CONNECTION, "credentials");
+    expect(link.answers.map((a) => [a.type, a.admit, a.admit ? null : a.reason])).toEqual([
+      ["siteAdmitResult", false, "credentials"], ["wsAdmitResult", false, "credentials"],
+    ]);
+  });
+
   it("withdraws a pending admission by kind/id/epoch, and fences a choice from before cancellation or reconnection", () => {
     const link = stubLink();
     const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100 });

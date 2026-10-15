@@ -19,6 +19,9 @@ export interface SiteScript {
   headers?: Array<{ name: string; value: string }>;
   /** The body in chunks; its content-length is declared unless `chunked`. */
   chunks?: Buffer[];
+  /** Streaming CDP may report zero encoded bytes; its final total is separate. */
+  encodedChunkBytes?: number;
+  encodedTotalBytes?: number | null;
   chunked?: boolean;
   contentLength?: number;
   /** Chrome's moment of the send (null: no timing). */
@@ -381,7 +384,7 @@ export class SiteChrome {
       read.push(chunk);
       const streamed = request.armedAt !== null && !script.unstreamed;
       const data = script.brokenChunk && index === 0 ? chunk.subarray(0, Math.max(0, chunk.length - 1)) : chunk;
-      this.cdp.emit("Network.dataReceived", { requestId: request.networkId, dataLength: chunk.length, encodedDataLength: chunk.length, ...(streamed ? { data: data.toString("base64") } : {}) }, request.session);
+      this.cdp.emit("Network.dataReceived", { requestId: request.networkId, dataLength: chunk.length, encodedDataLength: script.encodedChunkBytes ?? chunk.length, ...(streamed ? { data: data.toString("base64") } : {}) }, request.session);
     }
     await new Promise((resolve) => setImmediate(resolve));
     if (request.ended) return;
@@ -389,7 +392,7 @@ export class SiteChrome {
     if (script.then === "body_fails") return this.#end(request, "net::ERR_CONNECTION_CLOSED", false);
     if (script.then === "cancel_after_answer") return this.#end(request, "net::ERR_ABORTED", true);
     request.ended = true;
-    this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: total + 200 }, request.session);
+    this.cdp.emit("Network.loadingFinished", { requestId: request.networkId, encodedDataLength: script.encodedTotalBytes === undefined ? total + 200 : script.encodedTotalBytes }, request.session);
   }
 
   #failCommand(command: CdpCommand): unknown {

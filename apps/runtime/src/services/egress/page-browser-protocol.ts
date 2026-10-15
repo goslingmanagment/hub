@@ -18,7 +18,8 @@
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id (sent only to an operator whose state says `halt`).
 // Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
-export const PROTOCOL = { major: 1, minor: 2 } as const;
+// Minor 3 distinguishes credentials refusals; engines send held to older operators.
+export const PROTOCOL = { major: 1, minor: 3 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -264,7 +265,7 @@ export interface SiteAdmit {
 }
 export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteRequestId: SiteRequestId } & (
     | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: "paused" | "held" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
+    | { admit: false; reason: "paused" | "held" | "credentials" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
   );
 export interface SiteDone {
   type: "siteDone";

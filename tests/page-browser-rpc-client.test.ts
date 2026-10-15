@@ -77,12 +77,38 @@ describe("the link", () => {
     await up(made);
     expect(fake.hellos).toHaveLength(1);
     const hello = fake.hellos[0]!;
-    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 2 } });
+    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 3 } });
     expect(hello.socks5).toEqual({ ip: "127.0.0.1", port: 1080, username: "pb-user", password: "pb-pass" });
-    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 2 } });
+    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 3 } });
     expect(made.state).toMatchObject({ step: "exit_open", sessionFingerprint: SESSION_A });
     expect(made.helloDigest).toBe(linkSettingsDigest(linkSettings()));
     expect(fake.server.generation).toBe(3);
+  });
+
+  it.each([1, 2, 3])("sends credentials distinctly to minor %i, with a held fallback only for legacy operators", async (minor) => {
+    const answers: Array<Record<string, unknown>> = [];
+    const server = createServer();
+    server.on("upgrade", (req, socket, head) => {
+      const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
+      if (!ws) return;
+      cleanups.push(() => ws.close(1000));
+      ws.onText = (payload) => {
+        const message = JSON.parse(payload.toString("utf8")) as Record<string, unknown>;
+        if (message.type === "hello") ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor }, bufferId: "b", state: new FakeOperatorState().state }));
+        else if (message.type === "ping") ws.sendText(JSON.stringify({ type: "pong", n: message.n }));
+        else if (message.type === "siteAdmitResult" || message.type === "wsAdmitResult") answers.push(message);
+      };
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+    const port = (server.address() as { port: number }).port;
+    const made = client(`ws://127.0.0.1:${port}/rpc`);
+    await up(made);
+    expect(made.answerSiteAdmit(made.epoch + 1, { siteRequestId: "stale", admit: false, reason: "credentials" })).toBe(false);
+    expect(made.answerSiteAdmit(made.epoch, { siteRequestId: "http", admit: false, reason: "credentials" })).toBe(true);
+    expect(made.answerWsAdmit(made.epoch, { connectionId: "ws", admit: false, reason: "credentials", retryNotBeforeWall: null })).toBe(true);
+    await until(() => answers.length === 2, 3_000, "both refusal messages");
+    expect(answers.map((answer) => answer.reason)).toEqual([minor < 3 ? "held" : "credentials", minor < 3 ? "held" : "credentials"]);
   });
 
   it("pings the operator and answers its pings: the link stays up on both sides", async () => {

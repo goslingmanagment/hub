@@ -574,3 +574,32 @@ create-only account.verify с причиной browser_loaded. Это требу
 ready; accountId/step снимают условие, следующие проходы не поднимают новый
 verify. Паузы и credentials/network/route holds не обходятся. Лог движка
 identity verify raised for the current browser start не содержит digest.
+
+
+### Архив stdout/stderr и точные причины/размеры запросов (F8)
+
+Перед force-recreate и удалением контейнера page.sh вызывает общий
+archive-container-logs.sh. Выбор ограничен и working_dir=$PB_BASE, и
+Compose project=page-browser-$PAGE, и service=browser: соседняя страница
+с тем же working_dir в архив этого пересоздания не попадает. Файлы лежат
+в $PB_BASE/container-logs/$PAGE/browser, вне удаляемого pages/$PAGE;
+каталоги 0700, gzip 0600. Наследуются header с id/revision/временем и
+snapshot=true для ещё работающего контейнера, уникальные имена, явные
+truncated/partial и лимиты общего helper (30 дней/512 MiB на страницу).
+Недоступный/частичный архив явно предупреждает, но не блокирует recovery.
+Host deployment устанавливает helper вместе с page.sh. Рабочий snapshot
+не обещает сохранения строк, написанных уже после чтения docker logs.
+
+В requests.bytes записывается финальный Network.loadingFinished.encodedDataLength
+для физического запроса; bytesSource=loading_finished указывает источник.
+Это число переданных байт CDP, отдельно от bodyBytes — байт, полученных
+декодированным потоком захвата. Нулевая сумма encodedDataLength отдельных
+streaming chunks больше не выдаётся за сетевой размер полного ответа.
+Без финального итога bytes=null; настоящий ноль от Chrome остаётся нулём.
+Тело/его содержимое и заголовки в новые поля журнала не добавляются.
+
+Протокол движок↔оператор minor3 передаёт отказ credentials отдельно от
+held для HTTP и WebSocket. Строгий HTTP-parser и зеркало синхронны.
+Движок с minor1/2 оператором передаёт совместимое held только на проводе;
+логическая причина решения/метрика движка сохраняется. Отзыв допуска
+minor2 и fencing по RPC epoch продолжают действовать.
