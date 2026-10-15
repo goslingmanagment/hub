@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   getSyncPage,
   setPageHold,
+  setPagePause,
   storeFanslySession,
   upsertDemand,
   type Database,
@@ -19,6 +20,7 @@ import {
 } from "../apps/runtime/src/services/sync-engine-account.ts";
 import { SyncCrashFault, type SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import type { SyncMetricLabels } from "../apps/runtime/src/sync/engine/ports.ts";
 import { encryptSyncWorkSecret } from "../apps/runtime/src/sync/requests/secret-params.ts";
 import { enqueueAndWait } from "../apps/runtime/src/sync/requests/urgent.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -61,8 +63,8 @@ import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 // applies the stored answer again without a request. Checks-only is read
 // from the database; a quarantined verify of credentials no longer stored is
 // superseded by the verify of the stored ones (one verify per digest); a
-// candidate save is a CAS on the pair its check proved; a hold written after
-// the gate looked refuses at the admission.
+// candidate save is a CAS on the pair its check proved; a hold or the owner's
+// pause written after the gate looked refuses at the admission.
 
 const S = 300;
 
@@ -623,4 +625,58 @@ describe("the final admission under the page row lock (ruling 5)", () => {
       }
     }, 60_000);
   }
+
+  it("the owner's pause committed after the gate and the pick looked admits nothing more", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    const transport = new ScriptedLiveTransport();
+    const prepare = transport.prepare.bind(transport);
+    // The interleaving, driven: the gate and the pick saw the page unpaused;
+    // the owner's pause (the lever itself) commits between them and the
+    // admission — at the transport's build of the picked request.
+    let paused = false;
+    transport.prepare = async (request) => {
+      if (!paused) {
+        paused = true;
+        await setPagePause(db(), { pageId, all: true, note: "owner pause" });
+      }
+      return prepare(request);
+    };
+    const metrics = new LabelledMetrics();
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry: crashRegistry(), transport, metrics });
+    const run = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      // Whichever comes first: the admission refused, or the request out.
+      await waitFor(
+        () => (metrics.get("sync_admission_page_held") > 0 || transport.hits.length > 0 ? true : null),
+        10_000,
+        "the admission after the pause",
+      );
+      expect(transport.hits).toEqual([]);
+      expect(metrics.labelsOf("sync_admission_page_held")).toEqual([{ pageId, kind: "paused" }]);
+      const attempts = await testDb.pool.query("select id from sync_attempts where page_id = $1", [pageId]);
+      expect(attempts.rows).toEqual([]);
+      const work = await testDb.pool.query<{ state: string }>("select state from sync_work where page_id = $1", [pageId]);
+      expect(work.rows).toEqual([{ state: "open" }]);
+      // The resume: the same work goes out, once.
+      await setPagePause(db(), { pageId, all: false });
+      await waitFor(() => (transport.hits.length === 1 ? true : null), 10_000, "the read after the resume");
+    } finally {
+      stop.abort();
+      await run;
+    }
+  }, 60_000);
 });
+
+/** The metrics with each increment's labels. */
+class LabelledMetrics extends RecordingMetrics {
+  readonly labelled: Array<{ name: string; labels: SyncMetricLabels | undefined }> = [];
+  override increment(name: string, labels?: SyncMetricLabels, by = 1): void {
+    this.labelled.push({ name, labels });
+    super.increment(name, labels, by);
+  }
+  labelsOf(name: string): Array<SyncMetricLabels | undefined> {
+    return this.labelled.filter((entry) => entry.name === name).map((entry) => entry.labels);
+  }
+}

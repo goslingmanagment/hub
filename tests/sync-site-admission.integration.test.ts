@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, type Database } from "@agency_hub_core/db";
+import { getSyncPage, setPagePause, type Database } from "@agency_hub_core/db";
 
 import type { PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../apps/runtime/src/sync/engine/ports.ts";
 import { SITE_SENDS_PER_HOUR } from "../apps/runtime/src/sync/engine/site-admission.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, waitFor } from "./helpers/sync-engine-host.ts";
+import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, waitFor } from "./helpers/sync-engine-host.ts";
 
 // The admission of a page's own site requests by the live actor (Project
 // Browser, plan §3.2, spec §3; stage 3 PR 8) on a real Postgres, with a fake
@@ -148,6 +148,38 @@ describe("the site path of the live actor", () => {
     expect(await attempts(pageId)).toEqual([
       { origin: "login", class: "site", work_id: null, operation: "auth.login", outcome: "response", http_status: 200, sent: true },
     ]);
+  });
+
+  it("a pause committed after the slot's decision refuses the site's request at its admission", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const site = new FakeSiteBrowser();
+    site.ask({ id: "read" });
+    // The interleaving, driven: the slot's decision saw the page unpaused;
+    // the owner's pause (the lever itself) commits at the ownership ping,
+    // right before the admission.
+    const ownership = new FakeOwnershipSession();
+    const ping = ownership.ping.bind(ownership);
+    let paused = false;
+    ownership.ping = async () => {
+      if (!paused) {
+        paused = true;
+        await setPagePause(db(), { pageId, all: true, note: "owner pause" });
+      }
+      return ping();
+    };
+    const { actor, deps, stop, abort } = await makeTestActor({ db: db(), pageId, registry: testRegistry([]), settingMs: 40, metrics: new RecordingMetrics(), ownership });
+    deps.site = site;
+    const run = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(() => (site.refused.length + site.granted.length > 0 ? true : null), 20_000, "the site's request to settle");
+    } finally {
+      stop.abort();
+      await run;
+    }
+    expect(paused).toBe(true);
+    expect(site.granted).toEqual([]);
+    expect(site.refused).toEqual([{ id: "read", reason: "paused" }]);
+    expect(await attempts(pageId)).toEqual([]);
   });
 
   it("a 429 holds the route that answered; a 401 the credentials — not in the manual login", async () => {

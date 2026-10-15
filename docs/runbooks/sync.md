@@ -160,10 +160,11 @@ pnpm cli sync page pause --page lora-1 --resource media-stats.walk --resource po
 pnpm cli sync page resume --page lora-1 --resource media-stats.walk
 ```
 
-- `--all`: the actor admits no request and plans no step, the steps without a request included. An open socket
-  stays open and keeps capturing; it cannot reconnect until the resume, because the connect is a request. A page
-  paused as a whole is a degraded page: what the socket shows is not confirmed, so alert 3 (`message_unconfirmed`,
-  `money_not_in_ledger`) still opens after its 15 or 5 minutes.
+- `--all`: the actor admits no request and plans no step, the steps without a request included. The admission reads
+  the pause under the page's row lock, so nothing is admitted once the pause has committed; a request admitted
+  before it finishes. An open socket stays open and keeps capturing; it cannot reconnect until the resume, because
+  the connect is a request. A page paused as a whole is a degraded page: what the socket shows is not confirmed, so
+  alert 3 (`message_unconfirmed`, `money_not_in_ledger`) still opens after its 15 or 5 minutes.
 - `--requests`: the history requests class. Urgent and planned work goes on.
 - `--resource <key>` (repeatable): those keys only.
 
