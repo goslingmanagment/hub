@@ -122,10 +122,17 @@ export interface BrowserStopResult {
 
 /** `sync browser stop <page> | --all` (and `snapshot`): the owner's stop
  *  marked, the page paused (the pause the stop's when it was not paused),
- *  and a stop asked of the operator, whose answer confirms it. */
+ *  and a stop asked of the operator, whose answer confirms it.
+ *
+ *  `ifNoOwnerStop` (`snapshot --if-no-owner-stop [command]`; the Chrome
+ *  update's stop, PR 18): never over another's stop — refused in the same
+ *  transaction, nothing changed, while an owner's stop stands, unless the
+ *  page's latest stop command is the one named (the update's own, asked
+ *  again). A stop asked over the owner's would be the latest, and the
+ *  update's start (`--if-stop`) could lift his. */
 export async function stopPageBrowsers(
   db: Database,
-  input: { pageLabel?: string; all?: boolean; actor: string; note?: string | null; snapshot?: boolean },
+  input: { pageLabel?: string; all?: boolean; actor: string; note?: string | null; snapshot?: boolean; ifNoOwnerStop?: true | number },
 ): Promise<BrowserStopResult[]> {
   const pages = await targets(db, input);
   const results: BrowserStopResult[] = [];
@@ -133,6 +140,19 @@ export async function stopPageBrowsers(
     results.push(await transaction(db, async (tx) => {
       const paused = await pausePageForBrowserStop(tx, { pageId: page.pageId, note: SYNC_BROWSER_STOP_PAUSE_NOTE });
       if (paused === null) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
+      if (input.ifNoOwnerStop !== undefined) {
+        // Under the page row's lock, taken by the pause: an owner's stop
+        // asked concurrently is seen here, or comes after this one.
+        const current = await readPageBrowserOwnerStop(tx, { pageId: page.pageId });
+        if (current === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
+        const own = typeof input.ifNoOwnerStop === "number" ? input.ifNoOwnerStop : null;
+        if (current.stopped && current.lastStopCommandId !== own) {
+          throw new SyncOwnerLeverError(
+            `${page.label}: an owner's stop stands on its browser (the page's latest stop is command ${current.lastStopCommandId ?? "none"}): `
+            + "this stop is never asked over another's — refused, nothing changed",
+          );
+        }
+      }
       const stop = await setPageBrowserOwnerStop(tx, { pageId: page.pageId, by: input.actor });
       if (stop === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
       const command = await insertPageBrowserCommand(tx, {
@@ -149,6 +169,7 @@ export async function stopPageBrowsers(
         pausedByStop: paused.pausedByStop,
         pauseFromLogin: paused.fromLogin,
         profileId: stop.profileId,
+        ...(input.ifNoOwnerStop === undefined ? {} : { ifNoOwnerStop: input.ifNoOwnerStop }),
         commandId: command.id,
       });
       return {

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, TO_CHROME, type Host } from "./helpers/page-browser-update.ts";
+import { FROM, FROM_CHROME, makeHost, op as opOfCall, PAGE, PROFILE, TO, TO_CHROME, UPDATE_SCRIPT, type Host } from "./helpers/page-browser-update.ts";
 
 // Each test runs the script in bash against a fake server that starts a
 // process per call: slower than a unit test, more so under a full parallel run.
@@ -95,8 +95,9 @@ describe("2 · what Docker cannot say is unknown, never stopped", () => {
     const run = host.run(["resume", "--page", PAGE]);
     expect(run.status).toBe(1);
     expect(run.ops).not.toContain("profile restore");
-    expect(host.update()).toMatchObject({ STEP: "rollback_failed", RB_STEP: "taken_out" });
-    expect(host.update().RB_FAILED).toContain(`page-browser-${PAGE} cannot be read`);
+    // Unknown is held, never judged: its take-out is to be done again.
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "" });
+    expect(host.update().HELD_WHY).toContain(`page-browser-${PAGE} cannot be read`);
     expect(profile(host).restores ?? 0).toBe(0);
     expect(containerOf(host)).toMatchObject({ image: TO, running: true });
   });
@@ -261,6 +262,13 @@ describe("6 · a standalone snapshot is an operation with its record", () => {
   });
 });
 
+/** A page whose browser its owner stopped before the update: his stop
+ *  command, answered — Chrome down, the page paused by it. */
+const ownerStopped = (state: Parameters<NonNullable<Parameters<typeof makeHost>[0]>>[0]) => {
+  Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
+  state.commands = [{ id: 1, page: PAGE, kind: "stopPage", note: "the owner's", outcome: "ok", expired: false, detail: "", haltId: null }];
+  state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+};
 /** The owner's `sync browser stop`, as the engine carries it out: his stop
  *  command, answered once Chrome is down. */
 const ownerStops = (h: Host) =>
@@ -287,8 +295,7 @@ const ROLLBACK_OUT = ["docker stop", "profile restore", `page.sh up ${FROM}`, "p
 describe("Astra (hand-over): the rollback reads the page as it is now — never the update's old hand-over", () => {
   it("an update of a page its owner had stopped, the page started by him since: the rollback stops it with its own confirmed stop before touching the container, and starts it again", () => {
     host = makeHost((state) => {
-      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
-      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+      ownerStopped(state);
     });
     expect(host.run(UPDATE).status).toBe(0);
     expect(host.update().HANDOVER).toBe("0");
@@ -305,8 +312,7 @@ describe("Astra (hand-over): the rollback reads the page as it is now — never 
 
   it("… and its stop not confirmed: nothing touched — the serving page is never stopped blind", () => {
     host = makeHost((state) => {
-      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
-      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+      ownerStopped(state);
     });
     expect(host.run(UPDATE).status).toBe(0);
     ownerStarts(host);
@@ -323,8 +329,7 @@ describe("Astra (hand-over): the rollback reads the page as it is now — never 
 
   it("the owner's own stop stands, answered: rolled back under it, no lever — and it stays his (no start)", () => {
     host = makeHost((state) => {
-      Object.assign(state.hub.pages[PAGE]!, { ownerStop: true, paused: true, stopPaused: true });
-      state.containers[`page-browser-${PAGE}`]!.chrome = "down";
+      ownerStopped(state);
     });
     expect(host.run(UPDATE).status).toBe(0);
     ownerStarts(host);
@@ -346,8 +351,9 @@ describe("Astra (hand-over): the rollback reads the page as it is now — never 
     const run = host.run(["rollback", "--page", PAGE]);
     expect(run.status).toBe(1);
     expect(run.ops).toEqual([]);
-    expect(host.update()).toMatchObject({ STEP: "held", RB_STEP: "taken_out" });
-    expect(host.update().HELD_WHY).toContain("the rollback never stops a working page");
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back", RB_STEP: "" });
+    expect(host.update().HELD_WHY).toContain(`rollback: the container is not stopped: Chrome is up in page-browser-${PAGE}`);
+    expect(host.update().HELD_WHY).toContain("the rollback touches no page that is not quiet under its stop; nothing touched");
     expect(containerOf(host)).toMatchObject({ image: TO, running: true, chrome: "up" });
   });
 
@@ -394,6 +400,182 @@ describe("Astra (hand-over): the update's start lifts only the stop the update m
     expect(run.ops).toEqual([]);
     expect(host.update().HELD_WHY).toContain("the owner's stop stands on the page's browser");
     expect(host.state().commands!.filter((row) => row.kind === "stopPage")).toHaveLength(2);
+  });
+});
+
+describe("Astra (hand-over 2): the update's stop is never asked over the owner's — refused in the stop's own transaction", () => {
+  it("the owner stops the page between the update's look and its stop: the lever refuses, nothing changed — the update holds, his stop stays his", () => {
+    host = makeHost((state) => {
+      state.behaviour.ownerStopsBefore = "snapshot";
+    });
+    const run = host.run(UPDATE);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["hub sync browser snapshot"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "planned" });
+    expect(host.update().HELD_WHY).toContain("the owner's stop stands on the page's browser (stop command 1, asked meanwhile): the update's stop was refused, nothing changed");
+    // Only his stop: none of the update's recorded, none lifted.
+    expect(host.state().commands!.map((row) => [row.kind, row.note])).toEqual([["stopPage", "the owner's"]]);
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ ownerStop: true, paused: true });
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
+    // Resumed, it asks nothing over his stop either.
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status).toBe(1);
+    expect(resumed.ops).toEqual([]);
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ ownerStop: true });
+  });
+
+  it("… and between the rollback's look and its stop: the rollback holds for him", () => {
+    host = makeHost();
+    expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
+    host.edit((state) => {
+      state.behaviour.ownerStopsBefore = "snapshot";
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual(["hub sync browser snapshot"]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back" });
+    expect(host.update().HELD_WHY).toContain("rollback: the owner's stop stands on the page's browser");
+    expect(host.state().commands!.filter((row) => row.kind === "stopPage").map((row) => row.note.startsWith("page-browser-update"))).toEqual([true, false]);
+    expect(host.state().hub.pages[PAGE]).toMatchObject({ ownerStop: true });
+  });
+});
+
+describe("Astra (hand-over 2): one guard before every deed on the page's container or profile", () => {
+  it("cut off after the take-out, before the container's stop; the owner starts the browser: resume never stops it — held, nothing touched; rollback ends it with the page as he has it", () => {
+    host = makeHost();
+    expect(host.run(UPDATE, { crashBefore: "docker stop" }).status).toBe(137);
+    expect(host.update()).toMatchObject({ STEP: "taken_out", CONTAINER_STOPPED: "1" });
+    ownerStarts(host);
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status).toBe(1);
+    expect(resumed.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "taken_out" });
+    expect(host.update().HELD_WHY).toContain(`the container is not stopped: Chrome is up in page-browser-${PAGE}`);
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true, chrome: "up" });
+    // His start stands: the abort lifts nothing, starts nothing.
+    const rollback = host.run(["rollback", "--page", PAGE]);
+    expect(rollback.status).toBe(1);
+    expect(rollback.ops).toEqual([]);
+    expect(host.update().STEP).toBe("aborted");
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true, chrome: "up" });
+    expect(host.state().commands!.filter((row) => row.kind === "restartBrowser").map((row) => row.note)).toEqual(["the owner's"]);
+  });
+
+  it("the stop the update went on under reads unanswered: nothing touched — only the operator's answer says Chrome is down", () => {
+    host = makeHost();
+    expect(host.run(UPDATE, { crashBefore: "docker stop" }).status).toBe(137);
+    host.edit((state) => {
+      state.commands!.find((row) => row.kind === "stopPage")!.outcome = "unknown";
+    });
+    const resumed = host.run(["resume", "--page", PAGE]);
+    expect(resumed.status).toBe(1);
+    expect(resumed.ops).toEqual([]);
+    expect(host.update().HELD_WHY).toContain("stop command 1 is unknown: its operator has not said Chrome is down");
+  });
+
+  it("a page its owner stopped, his stop not answered: held before anything — the update goes on only under a stop answered ok", () => {
+    host = makeHost((state) => {
+      ownerStopped(state);
+      state.commands![0]!.outcome = "expired";
+    });
+    const run = host.run(UPDATE);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "planned", HANDOVER: "0" });
+    expect(host.update().HELD_WHY).toContain("the owner's stop does not hold the page's browser now, answered (stop command 1: expired, in force: true)");
+    expect(host.update().OUT_STOP).toBeUndefined();
+  });
+
+  type Path = "update" | "rollback" | "abort" | "snapshot";
+  const SNAPSHOT = ["snapshot", "--page", PAGE];
+  const rows: Array<{ path: Path; deed: string; why: string | Record<string, string> }> = [
+    { path: "update", deed: "docker stop", why: "the container is not stopped" },
+    { path: "update", deed: "profile snapshot", why: "the profile is not packed" },
+    { path: "update", deed: `page.sh up ${TO}`, why: `${TO} is not started` },
+    { path: "rollback", deed: "docker stop", why: "rollback: the container is not stopped" },
+    { path: "rollback", deed: "profile restore", why: "rollback: the snapshot is not restored" },
+    { path: "rollback", deed: `page.sh up ${FROM}`, why: `rollback: ${FROM} is not started` },
+    { path: "abort", deed: `page.sh up ${FROM}`, why: `abort: ${FROM} is not started again` },
+    // (Chrome up: its own check before the guard's — the page as it was.)
+    { path: "snapshot", deed: "docker stop", why: { starts: `Chrome is up in page-browser-${PAGE}`, "stops anew": "is not stopped, nothing touched" } },
+    { path: "snapshot", deed: "profile snapshot", why: "nothing packed" },
+    { path: "snapshot", deed: `page.sh up ${FROM}`, why: "is not started blind" },
+  ];
+  const owner = {
+    // His start: the stop lifted, Chrome up again if its container runs.
+    starts: (h: Host) => ownerStarts(h),
+    // His start, then a stop of his own: Chrome down, but the stop in
+    // force is not the one the operation went on under.
+    "stops anew": (h: Host) => {
+      ownerStarts(h);
+      ownerStops(h);
+    },
+  };
+
+  for (const row of rows) {
+    for (const [how, act] of Object.entries(owner)) {
+      it(`${row.path}: right before "${row.deed}", the owner ${how}: resume does nothing — held by the guard`, () => {
+        host = makeHost((state) => {
+          if (row.path === "abort") state.behaviour.snapshotFails = true;
+          if (row.path === "snapshot") ownerStopped(state);
+        });
+        if (row.path === "rollback") expect(host.run([...UPDATE, "--window", "0"]).status).toBe(0);
+        const command = row.path === "rollback" ? ["rollback", "--page", PAGE] : row.path === "snapshot" ? SNAPSHOT : UPDATE;
+        expect(host.run(command, { crashBefore: row.deed }).status).toBe(137);
+        act(host);
+        const before = host.state();
+        const resumed = host.run(["resume", "--page", PAGE]);
+        expect(resumed.status).not.toBe(0);
+        expect(resumed.ops).toEqual([]);
+        expect(host.state().containers).toEqual(before.containers);
+        expect(host.state().profiles).toEqual(before.profiles);
+        const why = typeof row.why === "string" ? row.why : row.why[how]!;
+        if (row.path === "snapshot") {
+          expect(resumed.stderr).toContain(why);
+        } else {
+          expect(host.update().STEP).toBe("held");
+          expect(host.update().HELD_WHY).toContain(why);
+        }
+      });
+    }
+  }
+
+  it("every deed's site in the script is a guarded one, the guard before it", () => {
+    const script = readFileSync(UPDATE_SCRIPT, "utf8");
+    const DEED = /docker stop -t|"\$PAGE_SH" up|profile_op (snapshot|restore)/;
+    const code = script.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const sites = code.filter((line) => DEED.test(line));
+    // One deed a step: the container's stop, the profile's pack or restore, a start.
+    const guarded = ["step_stop", "step_snapshot", "step_start_new", "rb_stop", "rb_restore", "rb_start_old", "step_abort", "snap_stop", "snap_take", "snap_start"];
+    expect(sites).toHaveLength(guarded.length);
+    for (const name of guarded) {
+      const body = new RegExp(`\n${name}\\(\\) \\{\n([\\s\\S]*?)\n\\}\n`).exec(script)?.[1] ?? "";
+      const deed = body.search(DEED);
+      expect(deed, name).toBeGreaterThan(0);
+      expect(body.lastIndexOf("guard_quiet", deed), name).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("in a whole update and its rollback, each deed comes right after a guard's read of the Hub", () => {
+    host = makeHost();
+    const update = host.run([...UPDATE, "--window", "0"]);
+    expect(update.status, update.stderr).toBe(0);
+    const rollback = host.run(["rollback", "--page", PAGE]);
+    expect(rollback.status).toBe(1);
+    expect(host.update().STEP).toBe("rolled_back");
+    for (const run of [update, rollback]) {
+      let guarded = false;
+      const deeds: string[] = [];
+      for (const call of run.calls) {
+        if (call.stdin?.startsWith(`-- pb-update:guard ${PAGE}\n`)) guarded = true;
+        const deed = opOfCall(call);
+        if (deed === null || !/^(docker stop|profile (snapshot|restore)|page\.sh up)/.test(deed)) continue;
+        expect(guarded, deed).toBe(true);
+        guarded = false;
+        deeds.push(deed);
+      }
+      expect(deeds.length).toBeGreaterThanOrEqual(3);
+    }
   });
 });
 
@@ -464,8 +646,9 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
   it("the Hub stops answering during the engine checks: held, not rolled back blind", () => {
     host = makeHost((state) => {
       state.behaviour.engine = { [TO_CHROME]: "never" };
-      // The plan, the stop (now, its answer), the start (the page, its stop, its answer): then nothing.
-      state.behaviour.sqlFailAfter = 6;
+      // The plan, the stop (now, its answer), the guard of each deed (3), the
+      // start (the page, its stop, its answer): then nothing.
+      state.behaviour.sqlFailAfter = 9;
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);

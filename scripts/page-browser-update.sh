@@ -31,24 +31,28 @@
 #       An update, rollback or snapshot cut off at any step goes on from it.
 #   page-browser-update.sh rollback --page <page> [--reason <text>] [--detach]
 #       The page's last update undone: its previous image WITH its snapshot.
-#   page-browser-update.sh snapshot --page <page>
-#       A standing page's profile now (Chrome down; the container stopped
-#       for it and started again through page.sh): the host's half of
-#       `sync browser snapshot`. Its record is written before the stop.
+#   page-browser-update.sh snapshot --page <page> [--engine hub|none]
+#       A standing page's profile now (Chrome down — on its browser, under
+#       the owner's stop, answered; the container stopped for it and
+#       started again through page.sh): the host's half of `sync browser
+#       snapshot`. Its record is written before the stop.
 #   page-browser-update.sh status [--page <page>]
 #   page-browser-update.sh prune
 #
 # One page's update (every step journaled; resumable from its state file):
 #  1. take out — the page stops serving through the owner's lever, never by
-#     killing it: its browser stopped by `sync browser snapshot` (audited,
-#     carried out by the engine that owns the page): the page paused by the
-#     stop, the operator's exit closed and Chrome stopped, confirmed only by
-#     the operator's answer to that stop once Chrome is down. The page stays
-#     on its browser transport (no Node: a page with no Node session is
-#     updated too). A page the owner stopped himself, a page on Node, or one
-#     with no engine (--engine none: the stand, a page the Hub does not
-#     know), must stand already. Either way Chrome must be down in the
-#     container, or nothing goes on.
+#     killing it: its browser stopped by `sync browser snapshot
+#     --if-no-owner-stop` (audited, carried out by the engine that owns the
+#     page; refused in its own transaction, nothing changed, while a stop
+#     of the owner's stands — the update holds, his stop stays his): the
+#     page paused by the stop, the operator's exit closed and Chrome
+#     stopped, confirmed only by the operator's answer to that stop once
+#     Chrome is down. The page stays on its browser transport (no Node: a
+#     page with no Node session is updated too). A page the owner stopped
+#     himself (his stop answered), a page on Node, or one with no engine
+#     (--engine none: the stand, a page the Hub does not know), must stand
+#     already. Either way Chrome must be down in the container, or nothing
+#     goes on.
 #  2. stop the container: nothing writes the profile any more;
 #  3. snapshot the profile volume before the new Chrome first opens it —
 #     Chrome upgrades a profile in place and never opens one a newer Chrome
@@ -81,6 +85,13 @@
 # page.sh's start_state, which refuses it.
 #
 # Rules everything here keeps:
+# - One guard (guard_quiet) right before every deed on the page's container
+#   or profile — its stop, the profile's pack and restore, a start on any
+#   image — on every path (update, resume, rollback, abort, snapshot): the
+#   stop the operation took the page out under is the one in force,
+#   answered ok, and Chrome is down in the container (Docker's state and
+#   Chrome's own). Otherwise the operation holds for the owner, nothing
+#   touched: a browser the owner started or stopped since is his.
 # - What cannot be read is unknown, and unknown is never "stopped",
 #   "nobody" or "failed": a state Docker or the Hub cannot tell stops the
 #   step (nothing destructive happens on it), or holds the update for the
@@ -692,9 +703,11 @@ hold() {
 # engine that owns the page over its link. The page stays on its browser
 # transport throughout — no Node, so a page with no Node session is updated
 # too:
-# - out: `sync browser snapshot` — the update's own stop of the browser and
-#   the pause it puts on the page; confirmed only by the operator's answer
-#   to that very stopPage, which comes once Chrome is down;
+# - out: `sync browser snapshot --if-no-owner-stop` — the update's own stop
+#   of the browser and the pause it puts on the page, never asked over
+#   another's stop (refused in the transaction that would record it,
+#   nothing changed); confirmed only by the operator's answer to that very
+#   stopPage, which comes once Chrome is down;
 # - back: `sync browser start --if-no-halt` — that stop and its pause
 #   lifted, a start under the guard of every start, which never clears a
 #   halt held for the owner's decision (refused, nothing changed, while
@@ -808,36 +821,49 @@ hub_ask() {
 }
 
 # The page's browser out of service. 0 the operator confirmed its stop
-# (Chrome down; the page paused by it); 1 refused; 3 not known; 4 a stop of
-# the owner's stands — never asked over (the update's own stop would then
-# be the latest, and its start could lift the owner's) (CMD_WHY).
+# (Chrome down; the page paused by it), CMD_ID its command; 1 refused; 3
+# not known; 4 a stop of the owner's stands — never asked over (the
+# update's own stop would then be the latest, and its start could lift the
+# owner's) (CMD_WHY). The read below is only a first look: the lever's
+# `--if-no-owner-stop` refuses in the very transaction that would record
+# the stop, nothing changed, if an owner's stop stands by then.
 handover_out() {
-  local tag="$1" text="$2"
+  local tag="$1" text="$2" before=""
   hub_stop_now || { CMD_WHY="the Hub cannot be read"; return 3; }
   if [[ "$STOP_SET" == true && "$STOP_OURS" != true ]]; then
     CMD_WHY="the owner's stop stands on the page's browser (stop command ${STOP_ID:-unknown}): it stays his"
     return 4
   fi
-  # A stop this run asked before (a resume): its own outcome first.
+  # A stop this run asked before (a resume): its own outcome first — while
+  # it is the stop in force (a start since, the owner's, lifted it).
   if [[ "$(sget "STOP_$tag")" == 1 ]]; then
     hub_command stopPage "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
-    if [[ -n "$CMD_ID" ]]; then
+    before="$CMD_ID"
+    if [[ -n "$CMD_ID" && "$STOP_SET" == true && "$STOP_ID" == "$CMD_ID" ]]; then
       [[ "$CMD_OUTCOME" == ok ]] && return 0
       if [[ -z "$CMD_OUTCOME" && "$CMD_EXPIRED" != true ]]; then
         await_command stopPage "$tag"
         return
       fi
-      # Refused, expired or unknown before: asked again (the owner resumed it).
     fi
+    # Refused, expired, unknown or lifted since: asked again (the owner resumed it).
   fi
   # Recorded before the lever: whatever happens next, the run knows it asked.
   sset "STOP_$tag=1"
-  if ! hub_ask sync browser snapshot "$PAGE" --note "$(note_of "$tag" "$text")" --wait-ms "$(( LEAVE_WAIT_S * 1000 ))"; then
+  # Never over another's stop: the run's own in force (asked again) is named.
+  local -a only=(--if-no-owner-stop)
+  [[ "$STOP_SET" == true && "$STOP_OURS" == true ]] && only+=("$STOP_ID")
+  if ! hub_ask sync browser snapshot "$PAGE" "${only[@]}" --note "$(note_of "$tag" "$text")" --wait-ms "$(( LEAVE_WAIT_S * 1000 ))"; then
     # Refused with nothing recorded (its stop, pause and command commit
     # together): nothing changed.
     hub_command stopPage "$tag" || { CMD_WHY="the Hub cannot be read"; return 3; }
-    if [[ -z "$CMD_ID" ]]; then
-      CMD_WHY="the stop was refused, nothing changed"
+    if [[ "$CMD_ID" == "$before" ]]; then
+      hub_stop_now || { CMD_WHY="the Hub cannot be read"; return 3; }
+      if [[ "$STOP_SET" == true && "$STOP_OURS" != true ]]; then
+        CMD_WHY="the owner's stop stands on the page's browser (stop command ${STOP_ID:-unknown}, asked meanwhile): the update's stop was refused, nothing changed — it stays his"
+        return 4
+      fi
+      CMD_WHY="the stop was refused, nothing changed: ${HUB_OUT:-no word from the Hub}"
       return 1
     fi
   fi
@@ -908,6 +934,88 @@ handover_back() {
 # (deploy-page-browser.sh to-node).
 handover_forced() {
   hold "$1: $CMD_WHY — a page is never killed: once its operator answers, resume; or take it off its browser (deploy-page-browser.sh to-node)"
+}
+
+# ── the guard of every deed on the page's container or profile ───────────
+#
+# Called right before each deed that touches the page's container or its
+# profile — the container stopped; the profile packed or restored; the
+# container started (on the new image, on its previous one, or as it was)
+# — on every path: the update, its resume, its rollback and its abort, and
+# a standalone snapshot. The page must be quiet under the stop the
+# operation took it out under, <relied>:
+# - Docker: the container is read; while it runs, Chrome in it is down
+#   (s6 and Chrome's processes);
+# - the Hub (a page its engine runs; one read-only transaction): on its
+#   browser, the stop in force is <relied> — the operation's own stop
+#   command, or the owner's it took the page out under and never lifts —
+#   and the operator answered it ok, which it does once Chrome is down. A
+#   start since (the owner's) lifts it; a newer stop is another's. A page
+#   on Node (<relied> none) must still be on Node.
+# 1 (GUARD_WHY) otherwise, or when any of it cannot be read: the caller
+# holds for the owner, nothing touched. C_STATE: the container as read.
+guard_quiet() {
+  local relied="$1" row transport stop_set stop_id stop_outcome
+  GUARD_WHY=""
+  if ! container_read "$PAGE"; then
+    GUARD_WHY="$STATE_WHY"
+    return 1
+  fi
+  if [[ "$C_STATE" == running ]]; then
+    local chrome
+    chrome="$(chrome_state "$PAGE")"
+    if [[ "$chrome" != down ]]; then
+      GUARD_WHY="Chrome is $chrome in $(container_of "$PAGE")"
+      return 1
+    fi
+  fi
+  [[ "$(sget ENGINE)" == hub ]] || return 0
+  row="$(hub_compose exec -T postgres sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtqX -F "|"' <<SQL
+-- pb-update:guard $PAGE
+BEGIN READ ONLY;
+SELECT sp.transport,
+       (pb.owner_stop_at IS NOT NULL)::text,
+       coalesce(c.id::text, ''),
+       coalesce(c.outcome, '')
+  FROM sync_pages sp
+  JOIN pages p ON p.id = sp.page_id
+  LEFT JOIN page_browsers pb ON pb.page_id = sp.page_id
+  LEFT JOIN LATERAL (
+    SELECT id, outcome FROM page_browser_commands
+     WHERE page_id = p.id AND kind = 'stopPage'
+     ORDER BY id DESC LIMIT 1
+  ) c ON true
+ WHERE p.label = '$PAGE';
+COMMIT;
+SQL
+)" || { GUARD_WHY="the Hub cannot be read"; return 1; }
+  IFS='|' read -r transport stop_set stop_id stop_outcome <<<"$(sed -n '1p' <<<"$row")"
+  case "$transport" in
+    node)
+      if [[ -n "$relied" ]]; then
+        GUARD_WHY="the page is on Node now, no longer under stop command $relied"
+        return 1
+      fi
+      return 0
+      ;;
+    browser) ;;
+    *)
+      GUARD_WHY="the Hub knows the page's transport as '${transport}'"
+      return 1
+      ;;
+  esac
+  if [[ -z "$relied" ]]; then
+    GUARD_WHY="the page is on its browser now, and no stop it was taken out under holds it"
+  elif [[ "$stop_set" != true ]]; then
+    GUARD_WHY="no stop is in force on the page's browser: it was started since stop command $relied"
+  elif [[ "$stop_id" != "$relied" ]]; then
+    GUARD_WHY="the stop in force is command ${stop_id:-unknown}, not $relied it was taken out under"
+  elif [[ "$stop_outcome" != ok ]]; then
+    GUARD_WHY="stop command $relied is ${stop_outcome:-not answered}: its operator has not said Chrome is down"
+  else
+    return 0
+  fi
+  return 1
 }
 
 # The image a page's container runs now, else <fallback>.
@@ -1007,11 +1115,26 @@ step_take_out() {
     local rc=0
     handover_out out "the update stops the page's browser" || rc=$?
     case "$rc" in
-      0) say taken_out "the page's browser stopped: its operator confirmed it (Chrome down); the page paused by the stop, still on its browser" ;;
+      0)
+        sset "OUT_STOP=$CMD_ID"
+        say taken_out "the page's browser stopped (stop command $CMD_ID): its operator confirmed it (Chrome down); the page paused by the stop, still on its browser"
+        ;;
       1) forward_failed "the browser's stop: $CMD_WHY"; return ;;
       4) hold "$CMD_WHY: the update holds for him"; return ;;
       *) hold "the browser's stop is not confirmed: $CMD_WHY"; return ;;
     esac
+  elif [[ "$(sget ENGINE)" == hub && "$(sget TRANSPORT_BEFORE)" == browser ]]; then
+    # The owner's stop holds the page's browser: the update goes on under
+    # it — answered, so Chrome is down — and never lifts it.
+    if ! hub_stop_now; then
+      hold "the Hub cannot be read: whether the owner's stop still holds the page's browser is unknown"
+      return
+    fi
+    if [[ "$STOP_SET" != true || "$STOP_OUTCOME" != ok ]]; then
+      hold "the owner's stop does not hold the page's browser now, answered (stop command ${STOP_ID:-none}: ${STOP_OUTCOME:-not answered}, in force: $STOP_SET): the update touches nothing of it"
+      return
+    fi
+    sset "OUT_STOP=$STOP_ID"
   fi
   local chrome
   chrome="$(chrome_state "$PAGE")"
@@ -1022,10 +1145,17 @@ step_take_out() {
   step_to taken_out
 }
 
+# A deed of the update not done: the page is not quiet under the stop it
+# was taken out under. Held, nothing touched; `rollback` ends the update
+# with the page as it is (its abort, or its rollback, guarded the same way).
+guard_held() {
+  hold "$1: $GUARD_WHY — the update touches no page that is not quiet under its stop; nothing touched (rollback --page $PAGE ends it)"
+}
+
 step_stop() {
   # Recorded before the stop: a failure from here brings the container back.
   sset CONTAINER_STOPPED=1
-  if ! container_read "$PAGE"; then forward_failed "$STATE_WHY"; return; fi
+  if ! guard_quiet "$(sget OUT_STOP)"; then guard_held "the container is not stopped"; return; fi
   if [[ "$C_STATE" == running ]] && ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
     forward_failed "$(container_of "$PAGE") could not be stopped"
     return
@@ -1038,6 +1168,7 @@ step_stop() {
 step_snapshot() {
   local profile
   profile="$(sget PROFILE)"
+  if ! guard_quiet "$(sget OUT_STOP)"; then guard_held "the profile is not packed"; return; fi
   if snapshot_valid "$profile" "$(sget SNAPSHOT)"; then step_to snapshotted; return; fi
   if ! profile_op snapshot "$PAGE" "$profile" "$(sget FROM_IMAGE)"; then
     forward_failed "no snapshot of the profile: $OP_WHY"
@@ -1051,6 +1182,7 @@ step_snapshot() {
 step_start_new() {
   local to
   to="$(sget TO_IMAGE)"
+  if ! guard_quiet "$(sget OUT_STOP)"; then guard_held "$to is not started"; return; fi
   # Recorded before page.sh: from here the new Chrome may open the profile,
   # and a failure is a rollback.
   sset NEW_RAN=1
@@ -1268,13 +1400,14 @@ rollback_ready() {
 # no engine, must stand: rb_stop checks Chrome in the container.
 rb_take_out() {
   if ! rollback_ready; then rollback_failed "$RB_WHY"; return; fi
-  local start=0
+  local start=0 relied=""
   if [[ "$(sget ENGINE)" == hub ]]; then
     if ! hub_read; then hold "rollback: the Hub cannot be read: the page's state now is unknown"; return; fi
     if [[ "$H_TRANSPORT" == browser ]]; then
       if ! hub_stop_now; then hold "rollback: the Hub cannot be read: whether the page's browser is stopped now is unknown"; return; fi
       if [[ "$STOP_SET" == true && "$STOP_OUTCOME" == ok ]]; then
         [[ "$STOP_OURS" == true ]] && start=1
+        relied="$STOP_ID"
         say rollback "the page's browser is stopped now (stop command $STOP_ID, $( ((start == 1)) && echo "this update's" || echo "the owner's: it stays stopped"))"
       else
         local rc=0
@@ -1282,21 +1415,24 @@ rb_take_out() {
         if ((rc == 4)); then hold "rollback: $CMD_WHY, and its stop is not confirmed: the rollback holds for him"; return; fi
         if ((rc != 0)); then handover_forced "rollback: the browser's stop is not confirmed"; return; fi
         start=1
+        relied="$CMD_ID"
       fi
     fi
   fi
-  sset "RB_START=$start" RB_STEP=taken_out
+  sset "RB_START=$start" "RB_STOP=$relied" RB_STEP=taken_out
+}
+
+# A deed of the rollback not done: the page is not quiet under the stop it
+# was taken out under. Held, nothing touched; its take-out is to be done
+# again — a resume reads the page as it is then (rb_take_out).
+rb_guard_held() {
+  sset RB_STEP= RB_STOP=
+  hold "rollback: $1: $GUARD_WHY — the rollback touches no page that is not quiet under its stop; nothing touched (resume takes the page out again, as it is then)"
 }
 
 rb_stop() {
-  if ! container_read "$PAGE"; then rollback_failed "$STATE_WHY"; return; fi
+  if ! guard_quiet "$(sget RB_STOP)"; then rb_guard_held "the container is not stopped"; return; fi
   if [[ "$C_STATE" == running ]]; then
-    local chrome
-    chrome="$(chrome_state "$PAGE")"
-    if [[ "$chrome" != down ]]; then
-      hold "rollback: Chrome is $chrome in $(container_of "$PAGE"): the rollback never stops a working page"
-      return
-    fi
     if ! docker stop -t 25 "$(container_of "$PAGE")" >/dev/null; then
       rollback_failed "$(container_of "$PAGE") could not be stopped"
       return
@@ -1314,6 +1450,7 @@ rb_restore() {
   profile="$(sget PROFILE)"
   name="$(sget SNAPSHOT)"
   expected="$(sget SNAP_CHROME)"
+  if ! guard_quiet "$(sget RB_STOP)"; then rb_guard_held "the snapshot is not restored"; return; fi
   if ! snapshot_valid "$profile" "$name"; then
     rollback_failed "the snapshot ${name:-(none)} is missing or does not match its SHA-256: Chrome $(sget FROM_CHROME) must not open a profile Chrome $(sget TO_CHROME) wrote"
     return
@@ -1331,6 +1468,7 @@ rb_restore() {
 }
 
 rb_start_old() {
+  if ! guard_quiet "$(sget RB_STOP)"; then rb_guard_held "$(sget FROM_IMAGE) is not started"; return; fi
   if ! "$PAGE_SH" up --page "$PAGE" --image "$(sget FROM_IMAGE)" >&2; then
     rollback_failed "page.sh up $(sget FROM_IMAGE) failed"
     return
@@ -1398,15 +1536,26 @@ step_abort() {
       rollback_failed "$STATE_WHY: the page's container is not brought back blind"
       return
     fi
-    if [[ "$C_STATE" != running ]] && ! "$PAGE_SH" up --page "$PAGE" --image "$(sget FROM_IMAGE)" >&2; then
-      rollback_failed "page.sh up $(sget FROM_IMAGE) failed: the page's container is not back"
-      return
+    if [[ "$C_STATE" != running ]]; then
+      if ! guard_quiet "$(sget OUT_STOP)"; then
+        hold "abort: $(sget FROM_IMAGE) is not started again: $GUARD_WHY — not started blind; nothing touched (once you decide: start it yourself, page.sh up --page $PAGE --image $(sget FROM_IMAGE), and resume)"
+        return
+      fi
+      if ! "$PAGE_SH" up --page "$PAGE" --image "$(sget FROM_IMAGE)" >&2; then
+        rollback_failed "page.sh up $(sget FROM_IMAGE) failed: the page's container is not back"
+        return
+      fi
     fi
   fi
   if [[ "$(sget HANDOVER)" == 1 && "$(sget STOP_out)" == 1 ]]; then
-    # The browser started again only if this run's stop was asked at all.
+    # The browser started again only if this run's stop was asked at all,
+    # and is still the stop in force: one the owner lifted (his start) or
+    # replaced (his stop) is his.
     if ! hub_command stopPage out; then hold "abort: the Hub cannot be read: whether the update stopped the browser is unknown"; return; fi
-    if [[ -n "$CMD_ID" ]]; then
+    if [[ -n "$CMD_ID" ]] && ! hub_stop_now; then hold "abort: the Hub cannot be read: whose stop holds the page's browser is unknown"; return; fi
+    if [[ -n "$CMD_ID" && ( "$STOP_SET" != true || "$STOP_OURS" != true ) ]]; then
+      say abort "the page's browser is the owner's now ($( [[ "$STOP_SET" == true ]] && echo "his stop, command $STOP_ID" || echo "started since")): the abort leaves it so"
+    elif [[ -n "$CMD_ID" ]]; then
       local rc=0
       handover_back RB_GIVEN_BACK_MS abortback "abort: the update starts the page's browser again, unchanged" || rc=$?
       if ((rc != 0)); then
@@ -1666,7 +1815,7 @@ cmd_rollback() {
     done)
       [[ "$(value PB_IMAGE "$(page_env "$PAGE")")" == "$(sget TO_IMAGE)" ]] \
         || fail "$PAGE is not on $(sget TO_IMAGE) any more: its last update is not the page's state to undo"
-      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_START= RB_GIVEN_BACK_MS= STOP_rbout= START_rbback=
+      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_START= RB_STOP= RB_GIVEN_BACK_MS= STOP_rbout= START_rbback=
       step_to rolling_back
       ;;
     *)
@@ -1769,6 +1918,13 @@ snap_stop() {
         step_to failed
         return 1
       fi
+      if ! guard_quiet "$(sget STOP)"; then
+        # Nothing stopped: the page as it was.
+        sset "REASON=$GUARD_WHY"
+        alert snapshot_failed "$GUARD_WHY: $(container_of "$PAGE") is not stopped, nothing touched"
+        step_to failed
+        return 1
+      fi
       docker stop -t 25 "$(container_of "$PAGE")" >/dev/null || log "warning: $(container_of "$PAGE") did not stop: the snapshot will not be taken"
     fi
   fi
@@ -1776,7 +1932,10 @@ snap_stop() {
 }
 
 snap_take() {
-  if profile_op snapshot "$PAGE" "$(sget PROFILE)" "$(sget IMAGE)"; then
+  if ! guard_quiet "$(sget STOP)"; then
+    sset "SNAP_FAILED=$GUARD_WHY: not packed"
+    alert snapshot_failed "no snapshot of $PAGE: $GUARD_WHY — nothing packed"
+  elif profile_op snapshot "$PAGE" "$(sget PROFILE)" "$(sget IMAGE)"; then
     sset "SNAPSHOT=$SNAP_NAME" "SNAP_CHROME=$PROFILE_CHROME"
   else
     sset "SNAP_FAILED=$OP_WHY"
@@ -1793,9 +1952,15 @@ snap_start() {
       alert snapshot_failed "$STATE_WHY: $(container_of "$PAGE") is not started blind (resume --page $PAGE)"
       return 1
     fi
-    if [[ "$C_STATE" != running ]] && ! "$PAGE_SH" up --page "$PAGE" --image "$(sget IMAGE)" >&2; then
-      alert snapshot_failed "$(container_of "$PAGE") did not start again (resume --page $PAGE)"
-      return 1
+    if [[ "$C_STATE" != running ]]; then
+      if ! guard_quiet "$(sget STOP)"; then
+        alert snapshot_waiting "$GUARD_WHY: $(container_of "$PAGE") is not started blind (once you decide: start it yourself, page.sh up --page $PAGE --image $(sget IMAGE), and resume --page $PAGE)"
+        return 1
+      fi
+      if ! "$PAGE_SH" up --page "$PAGE" --image "$(sget IMAGE)" >&2; then
+        alert snapshot_failed "$(container_of "$PAGE") did not start again (resume --page $PAGE)"
+        return 1
+      fi
     fi
   fi
   if [[ -n "$(sget SNAP_FAILED)" ]]; then step_to failed; else step_to done; fi
@@ -1819,13 +1984,16 @@ advance_snapshot() {
 }
 
 cmd_snapshot() {
+  local engine=hub
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --page) PAGE="${2:-}"; shift 2 ;;
+      --engine) engine="${2:-}"; shift 2 ;;
       *) fail "snapshot: unknown option $1" ;;
     esac
   done
   [[ "$PAGE" =~ $PAGE_RE ]] || fail "--page: lowercase letters, digits and dashes"
+  [[ "$engine" == hub || "$engine" == none ]] || fail "--engine: hub or none"
   local env image profile update was_running=0
   env="$(page_env "$PAGE")"
   [[ -f "$env" ]] || fail "no page $PAGE here"
@@ -1840,11 +2008,25 @@ cmd_snapshot() {
     [[ "$(chrome_state "$PAGE")" == down ]] || fail "Chrome is not down in $(container_of "$PAGE"): stop the page's browser first (sync browser stop)"
     was_running=1
   fi
+  # A page its engine runs on its browser: the owner's stop holds it,
+  # answered — the stop the snapshot goes on under (the guard's).
+  local stop=""
+  if [[ "$engine" == hub ]]; then
+    local rc=0
+    hub_read || rc=$?
+    ((rc == 0)) || { ((rc == 3)) && fail "the Hub knows no page $PAGE (--engine none for a page it does not know)"; fail "the Hub cannot be read"; }
+    if [[ "$H_TRANSPORT" == browser ]]; then
+      hub_stop_now || fail "the Hub cannot be read"
+      [[ "$STOP_SET" == true && "$STOP_OUTCOME" == ok ]] \
+        || fail "the page's browser is not stopped, answered (stop command ${STOP_ID:-none}: ${STOP_OUTCOME:-not answered}, in force: $STOP_SET): stop it first (sync browser stop)"
+      stop="$STOP_ID"
+    fi
+  fi
   STATE="$(snapshot_state "$PAGE")"
   RUN="manual-$(date -u +%Y%m%dT%H%M%SZ)"
   rm -f "$STATE"
   # The record before the container stops.
-  sset "RUN=$RUN" "PAGE=$PAGE" "PROFILE=$profile" "IMAGE=$image" "WAS_RUNNING=$was_running" "STARTED_AT=$(now_iso)"
+  sset "RUN=$RUN" "PAGE=$PAGE" "PROFILE=$profile" "IMAGE=$image" "ENGINE=$engine" "STOP=$stop" "WAS_RUNNING=$was_running" "STARTED_AT=$(now_iso)"
   step_to planned
   trap on_exit EXIT
   advance_snapshot

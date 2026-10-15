@@ -69,7 +69,8 @@ export interface Host {
   logPath: string;
   pbBase: string;
   bin: string;
-  run(args: string[], options?: { env?: Record<string, string>; crashOn?: string }): Run;
+  /** crashOn: killed right after that deed; crashBefore: right before it. */
+  run(args: string[], options?: { env?: Record<string, string>; crashOn?: string; crashBefore?: string }): Run;
   state(): FakeState;
   edit(change: (state: FakeState) => void): void;
   update(): Record<string, string>;
@@ -168,9 +169,10 @@ export function makeHost(change?: (state: FakeState) => void, options: { tools?:
     bin,
     run(args, runOptions = {}) {
       const pidFile = path.join(root, "script.pid");
-      if (runOptions.crashOn !== undefined) {
+      if (runOptions.crashOn !== undefined || runOptions.crashBefore !== undefined) {
         const current = read();
-        current.behaviour.crashOn = runOptions.crashOn;
+        if (runOptions.crashOn !== undefined) current.behaviour.crashOn = runOptions.crashOn;
+        if (runOptions.crashBefore !== undefined) current.behaviour.crashBefore = runOptions.crashBefore;
         current.crashSeen = 0;
         writeFileSync(statePath, JSON.stringify(current, null, 2));
       }
@@ -202,9 +204,10 @@ export function makeHost(change?: (state: FakeState) => void, options: { tools?:
       const all = readFileSync(logPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Call);
       const calls = all.slice(seen);
       seen = all.length;
-      if (runOptions.crashOn !== undefined) {
+      if (runOptions.crashOn !== undefined || runOptions.crashBefore !== undefined) {
         const current = read();
         delete current.behaviour.crashOn;
+        delete current.behaviour.crashBefore;
         writeFileSync(statePath, JSON.stringify(current, null, 2));
       }
       return { status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, calls, ops: calls.map(op).filter((entry): entry is string => entry !== null) };

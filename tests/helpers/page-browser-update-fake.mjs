@@ -26,6 +26,22 @@ const stdinText = () => {
   }
 };
 const input = tool === "docker" && args.includes("postgres") ? stdinText() : "";
+// "<op>#<n>": killed as the n-th such deed is about to be done — before it,
+// not done, not logged.
+const [beforeOp, beforeNth] = (behaviour.crashBefore ?? "").split("#");
+if (behaviour.crashBefore !== undefined && opOf(tool, args) === beforeOp
+  && (state.crashSeen = (state.crashSeen ?? 0) + 1) >= Number(beforeNth ?? 1) && process.env.FAKE_PIDFILE) {
+  writeFileSync(statePath, JSON.stringify(state, null, 2));
+  const pid = Number(readFileSync(process.env.FAKE_PIDFILE, "utf8").trim());
+  if (pid > 0) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // gone already
+    }
+  }
+  process.exit(137);
+}
 appendFileSync(process.env.FAKE_LOG, `${JSON.stringify({ tool, args, ...(input ? { stdin: input } : {}) })}\n`);
 
 let code = 0;
@@ -166,6 +182,24 @@ function browserLever(cli) {
     return 1;
   }
   const container = state.containers[`page-browser-${label}`];
+  // The owner's own stop, asked just before this lever reaches the Hub.
+  if (behaviour.ownerStopsBefore === action) {
+    delete behaviour.ownerStopsBefore;
+    page.ownerStop = true;
+    if (!page.paused) Object.assign(page, { paused: true, stopPaused: true });
+    command(page, label, "stopPage", "the owner's", "ok");
+    if (container !== undefined) container.chrome = "down";
+  }
+  if (action === "snapshot" && cli.includes("--if-no-owner-stop")) {
+    // In the transaction that would record the stop: never over another's.
+    const next = cli[cli.indexOf("--if-no-owner-stop") + 1];
+    const own = next !== undefined && /^[0-9]+$/.test(next) ? Number(next) : null;
+    const last = (state.commands ?? []).filter((row) => row.page === label && row.kind === "stopPage").at(-1);
+    if (page.ownerStop === true && (last?.id ?? null) !== own) {
+      err(`${label}: an owner's stop stands on its browser (the page's latest stop is command ${last?.id ?? "none"}): this stop is never asked over another's — refused, nothing changed\n`);
+      return 1;
+    }
+  }
   if (action === "snapshot" || action === "stop") {
     if (!page.paused) {
       page.paused = true;
@@ -368,6 +402,14 @@ function docker(argv) {
         const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
         const last = (state.commands ?? []).filter((row) => row.page === stopNow[1] && row.kind === "stopPage").at(-1);
         out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}\n`);
+        return 0;
+      }
+      const guard = /-- pb-update:guard (\S+)/.exec(input);
+      if (guard !== null && /BEGIN READ ONLY;/.test(input)) {
+        const page = state.hub?.pages?.[guard[1]];
+        if (page === undefined) return 0;
+        const last = (state.commands ?? []).filter((row) => row.page === guard[1] && row.kind === "stopPage").at(-1);
+        out(`${page.transport}|${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}\n`);
         return 0;
       }
       const asked = /-- pb-update:command (\S+) (\S+)/.exec(input);

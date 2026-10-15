@@ -695,13 +695,19 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .argument("<page>", "the Fansly page")
     .option("--note <text>", "why (stored with the audit row)")
     .option("--wait-ms <ms>", `how long to wait for the operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
-    .action(async (pageLabel: string, options: { note?: string; waitMs?: number }) => {
+    .option(
+      "--if-no-owner-stop [command]",
+      "never over another's stop: refused, nothing changed, while an owner's stop stands — unless the page's latest stop is this command's (the Chrome update's stop)",
+    )
+    .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoOwnerStop?: true | string }) => {
       await withContext(deps, async ({ db }) => {
+        const ifNoOwnerStop = options.ifNoOwnerStop === undefined ? undefined : options.ifNoOwnerStop === true ? true : parseCommandId(options.ifNoOwnerStop);
         const [stopped] = await stopPageBrowsers(db, {
           pageLabel,
           actor: cliActor(),
           snapshot: true,
           ...(options.note === undefined ? {} : { note: options.note }),
+          ...(ifNoOwnerStop === undefined ? {} : { ifNoOwnerStop }),
         });
         // Quiet only once the operator answered this very stop — after
         // Chrome is down — under the page's owner that took it.

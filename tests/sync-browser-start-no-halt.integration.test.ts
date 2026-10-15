@@ -131,3 +131,49 @@ describe("sync browser start --if-stop <command>", () => {
     expect(start.options.map((option) => option.long)).toContain("--if-stop");
   });
 });
+
+describe("sync browser snapshot --if-no-owner-stop [command]", () => {
+  async function runningBrowserPage() {
+    const label = `upd-${randomUUID().slice(0, 8)}`;
+    const { pageId } = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: "live", proxyUrl: null, label });
+    const profileId = randomUUID();
+    await insertPageBrowser(db(), {
+      profileId, container: `page-browser-${label}`, pageId,
+      ...sealPageBrowserSecrets(harnessConfig(testDb!.connectionString), { engineToken: "e", apiToken: "a", vncPassword: "v" }),
+    });
+    await testDb!.pool.query("update sync_pages set transport = 'browser' where page_id = $1", [pageId]);
+    return { label, pageId, profileId };
+  }
+
+  it("no stop stands: the update's stop, recorded", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await runningBrowserPage();
+    const [stop] = await stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: true });
+    expect(stop!.already).toBe(false);
+  });
+
+  it("an owner's stop stands: refused, nothing changed — the update never supersedes it", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await runningBrowserPage();
+    const [owner] = await stopPageBrowsers(db(), { pageLabel: page.label, actor: "owner" });
+    const rows = async () => ({
+      page: (await testDb!.pool.query("select * from sync_pages where page_id = $1", [page.pageId])).rows,
+      browser: (await testDb!.pool.query("select * from page_browsers where page_id = $1", [page.pageId])).rows,
+      audit: (await testDb!.pool.query("select count(*)::int as n from audit_events")).rows,
+    });
+    const before = await rows();
+    await expect(stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: true })).rejects.toThrow(
+      `an owner's stop stands on its browser (the page's latest stop is command ${owner!.command.id})`,
+    );
+    expect((await commands(page.pageId)).map((row) => row.kind)).toEqual(["stopPage"]);
+    expect(await rows()).toEqual(before);
+    // Named as the update's own (asked again): allowed.
+    await expect(stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: owner!.command.id })).resolves.toHaveLength(1);
+  });
+
+  it("the CLI's option", async (context) => {
+    if (!testDb) return context.skip();
+    const snapshot = buildSyncEngineCommandGroup().commands.find((command) => command.name() === "browser")!.commands.find((command) => command.name() === "snapshot")!;
+    expect(snapshot.options.map((option) => option.long)).toContain("--if-no-owner-stop");
+  });
+});
