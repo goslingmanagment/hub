@@ -368,6 +368,7 @@ describe("a read of the API (plan §4.3)", () => {
     expect(request.failReason).toBe("Failed");
     expect(w.journal).toContainEqual(expect.objectContaining({ path: "/api/v1/subscribers", decision: "ended", result: "no admission within 150 ms" }));
     const ask = w.engine.of("siteAdmit")[0]!;
+    expect(w.engine.of("cancelAdmit")).toEqual([{ type: "cancelAdmit", kind: "site", requestId: ask.siteRequestId, reason: "wait_expired" }]);
     w.site.onAdmitResult({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: String(ask.siteRequestId), admit: true, deadlineMono: monoMs() + 15_000, attemptId: 77 });
     const [done] = await doneOf(w);
     expect(done).toMatchObject({ attemptId: 77, sent: false, status: null, error: { afterSendStart: false, message: expect.stringContaining("not used") }, body: "not_platform_data" });
@@ -906,6 +907,7 @@ describe("documents, owners, restarts (stage 1, amendment 41; plan §4.7, §4.9)
     w.chrome.navigate("F1", "L1");
     w.chrome.navigate("F1", "L2");
     await until(() => waiting.outcome === "failed", 3000, "the old document's request to fail");
+    expect(w.engine.of("cancelAdmit")).toContainEqual({ type: "cancelAdmit", kind: "site", requestId: w.engine.of("siteAdmit")[0]!.siteRequestId, reason: "document_replaced" });
     expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", result: "its document was replaced while it waited" }));
     // Admitted after its document went: not released, the engine hears.
     const late = w.chrome.request(`${API}/notifications`, { headers: siteHeaders("/api/v1/notifications"), frameId: "F1", loaderId: "L2" });

@@ -80,6 +80,21 @@ function state(profileId: string, patch: Partial<PageBrowserStateInput> = {}): P
 }
 
 describe("the operator's state as the engine keeps it (0281)", () => {
+  it("times session bootstrap separately, preserving its start across refreshes and clearing it when the session appears", async () => {
+    const { profileId } = await browserPage();
+    await recordPageBrowserState(db(), state(profileId, { step: "chrome_started" }));
+    expect((await findPageBrowser(db(), profileId))!.sessionWaitSince).toBeNull();
+    await recordPageBrowserState(db(), state(profileId, { step: "site_loaded" }));
+    const started = (await findPageBrowser(db(), profileId))!.sessionWaitSince;
+    expect(started).toBeInstanceOf(Date);
+    await recordPageBrowserState(db(), state(profileId, { step: "site_loaded" }));
+    expect((await findPageBrowser(db(), profileId))!.sessionWaitSince).toEqual(started);
+    await recordPageBrowserState(db(), state(profileId, { step: "site_loaded", sessionFingerprint: "a".repeat(64) }));
+    expect((await findPageBrowser(db(), profileId))!.sessionWaitSince).toBeNull();
+    await recordPageBrowserState(db(), state(profileId, { step: "site_loaded", mode: "manual_login" }));
+    expect((await findPageBrowser(db(), profileId))!.sessionWaitSince).toBeNull();
+  });
+
   it("since when it is not up, and since when it says its stop reason, kept across states; its next retry", async (context) => {
     if (!testDb) return context.skip();
     const { profileId } = await browserPage();

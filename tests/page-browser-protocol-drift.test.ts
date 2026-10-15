@@ -156,6 +156,8 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "result", attemptId: 9, sessionFingerprint: FP, outcome: { kind: "timeout", sent: true, message: "x" } },
   { type: "result", attemptId: 9, sessionFingerprint: FP, outcome: { kind: "aborted_before_send", refusal: "session_mismatch" } },
   { type: "recoverResult", attempts: [{ attemptId: 9, state: "not_sent" }] },
+  { type: "cancelAdmit", kind: "site", requestId: UUID, reason: "wait_expired" },
+  { type: "cancelAdmit", kind: "ws", requestId: UUID, reason: "document_replaced" },
   { type: "siteAdmit", siteRequestId: UUID, method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", query: "", resourceType: "XHR", route: "account.me", operation: "read", sessionFingerprint: null, pausedMono: 1, waitDeadlineMono: 2 },
   { type: "siteDone", siteRequestId: UUID, attemptId: 10, sent: true, sentMono: 1, sentWall: 2, connectionReused: null, status: 200, retryAfter: null, error: null, body: "buffered" },
   { type: "wsAdmit", connectionId: UUID, url: "wss://wsv3.fansly.com/", context: "worker", sessionFingerprint: FP, requestedMono: 1, waitDeadlineMono: 2 },
@@ -282,6 +284,9 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "result", attemptId: 1, sessionFingerprint: FP, outcome: { kind: "aborted_before_send", refusal: "because" } })).ok).toBe(false);
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "check", attemptId: 1, pausedMono: 1, liveSessionFingerprint: "not-hex" })).ok).toBe(false);
     expect(Engine.parseOperatorMessage("not json").ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "cancelAdmit", kind: "send", requestId: UUID, reason: "ended" })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "cancelAdmit", kind: "ws", requestId: "bad", reason: "ended" })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "cancelAdmit", kind: "site", requestId: UUID, reason: "retry" })).ok).toBe(false);
   });
 
   it("decodes the operator's body frames: parts, the last flag, the abandon frame", () => {

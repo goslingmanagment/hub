@@ -77,9 +77,9 @@ describe("the link", () => {
     await up(made);
     expect(fake.hellos).toHaveLength(1);
     const hello = fake.hellos[0]!;
-    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 1 } });
+    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 2 } });
     expect(hello.socks5).toEqual({ ip: "127.0.0.1", port: 1080, username: "pb-user", password: "pb-pass" });
-    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 1 } });
+    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 2 } });
     expect(made.state).toMatchObject({ step: "exit_open", sessionFingerprint: SESSION_A });
     expect(made.helloDigest).toBe(linkSettingsDigest(linkSettings()));
     expect(fake.server.generation).toBe(3);
@@ -106,7 +106,7 @@ describe("the link", () => {
         const message = JSON.parse(payload.toString("utf8")) as { type: string };
         if (message.type !== "hello") return;
         hellos.push(message);
-        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 1 }, bufferId: "b", state: new FakeOperatorState().state }));
+        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 2 }, bufferId: "b", state: new FakeOperatorState().state }));
       };
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -120,7 +120,7 @@ describe("the link", () => {
     expect(statuses).toContain("down");
   });
 
-  it("an operator of protocol minor 0 (no halt held on its volume) is refused at its hello: no work goes through it, the hello is tried again after the refusal's wait (Astra PR 17 round 4)", async () => {
+  it.each([0, 1])("an operator of protocol minor %s is refused before work, then retried after the refusal wait", async (minor) => {
     const hellos: unknown[] = [];
     const server: Server = createServer();
     server.on("upgrade", (req, socket, head) => {
@@ -130,7 +130,7 @@ describe("the link", () => {
         const message = JSON.parse(payload.toString("utf8")) as { type: string };
         if (message.type !== "hello") return;
         hellos.push(message);
-        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 0 }, bufferId: "b", state: new FakeOperatorState().state }));
+        ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor }, bufferId: "b", state: new FakeOperatorState().state }));
       };
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

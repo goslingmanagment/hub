@@ -102,7 +102,7 @@ async function rig(): Promise<Rig> {
   return { page, profileId, operator };
 }
 
-async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean } = {}) {
+async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; logs?: object[] } = {}) {
   let browser: BrowserPage | null = null;
   const made = await makeTestActor({
     db: db(),
@@ -132,6 +132,7 @@ async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: n
     },
   });
   const page = browser as unknown as BrowserPage;
+  if (options.logs) made.actor.deps.logger = { ...quietLogger, info: (entry) => { options.logs!.push(entry); } };
   // The actor runs until the test ends.
   const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
   cleanups.push(async () => {
@@ -166,6 +167,78 @@ async function attempts(pageId: number): Promise<AttemptRow[]> {
 }
 
 describe("the site path over the operator's RPC", () => {
+  it.each(["site", "ws"] as const)("withdraws a selected %s request while the ownership check waits, without an attempt or a wasted turn", async (kind) => {
+    const r = await rig();
+    const { made, browser } = await actorOn(r);
+    await until(async () => browser.client.quiesced !== null, 5_000, "the link quiesced");
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    cleanups.push(() => release());
+    const ping = made.actor.deps.ownership.ping.bind(made.actor.deps.ownership);
+    made.actor.deps.ownership.ping = async (timeout) => {
+      if (!entered) { entered = true; await gate; }
+      return ping(timeout);
+    };
+    const requestId = randomUUID();
+    const ask = () => kind === "site" ? r.operator.siteAdmit({ siteRequestId: requestId, path: "/api/v1/versioning" }) : r.operator.wsAdmit({ connectionId: requestId });
+    ask();
+    await until(async () => entered, 5_000, "selected, before admission");
+    r.operator.server.send({ type: "cancelAdmit", kind, requestId, reason: "document_replaced" });
+    await until(async () => browser.site.pending().length === 0, 5_000, "withdrawal reached the engine");
+    release();
+    ask(); // A duplicate cannot bring the ended request back.
+    const fresh = r.operator.siteAdmit({ path: "/api/v1/account/me" });
+    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === fresh.siteRequestId && a.admit), 5_000, "the unspent site turn");
+    const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === fresh.siteRequestId)!;
+    if (!answer.admit) throw new Error("the fresh request was refused");
+    r.operator.siteDone(answer, { status: 200 });
+    await until(async () => r.operator.acks.includes(answer.attemptId), 5_000, "the only send committed");
+    expect((await attempts(r.page.pageId)).map((a) => a.browserRequestId)).toEqual([fresh.siteRequestId]);
+    expect(r.operator.siteAnswers.some((a) => a.siteRequestId === requestId)).toBe(false);
+    expect(r.operator.wsAnswers.some((a) => a.connectionId === requestId)).toBe(false);
+  }, 20_000);
+
+  it("bootstraps an unknown session despite queued engine work, then verifies the identity before engine reads resume", async () => {
+    const r = await rig();
+    r.operator.setSession(null);
+    r.operator.pushState({ step: "site_loaded" });
+    const logs: object[] = [];
+    const { browser } = await actorOn(r, { withRead: true, logs });
+    await until(async () => browser.client.quiesced !== null, 5_000, "the link quiesced");
+    // The first site send spends its ordinary turn. With no engine send
+    // possible yet, the second bootstrap request used to wait forever.
+    const first = r.operator.siteAdmit({ path: "/api/v1/versioning" });
+    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === first.siteRequestId && a.admit), 5_000, "the first bootstrap grant");
+    const firstAnswer = r.operator.siteAnswers.find((a) => a.siteRequestId === first.siteRequestId)!;
+    if (!firstAnswer.admit) throw new Error("the first bootstrap was refused");
+    r.operator.siteDone(firstAnswer, { status: 200 });
+    await until(async () => r.operator.acks.includes(firstAnswer.attemptId), 5_000, "the first bootstrap committed");
+    const queued = await testDb!.pool.query("select 1 from sync_work where page_id = $1 and resource = $2", [r.page.pageId, READ_KEY]);
+    expect(queued.rowCount).toBeGreaterThan(0);
+    expect(r.operator.physical).toHaveLength(0);
+    await sleep(350);
+    const missing = logs.filter((entry) => (entry as { prepare?: string }).prepare === "session_missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toMatchObject({ event: "browser.no_admit", work: { resource: READ_KEY }, siteCandidate: null, siteTurns: { due: false, engineSinceSite: 0 } });
+
+    const second = r.operator.siteAdmit({ path: "/api/v1/account/me" });
+    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === second.siteRequestId && a.admit), 5_000, "bootstrap must not need an engine send");
+    const secondAnswer = r.operator.siteAnswers.find((a) => a.siteRequestId === second.siteRequestId)!;
+    if (!secondAnswer.admit) throw new Error("the second bootstrap was refused");
+    // Loading the page exposes a new session. It is not trusted merely
+    // because the site's GET succeeded: the real account.verify must run.
+    r.operator.setSession(SESSION_B);
+    r.operator.siteDone(secondAnswer, { status: 200 });
+    const digest = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_B);
+    await until(async () => {
+      const rows = await testDb!.pool.query("select credentials_generation from sync_pages where page_id = $1", [r.page.pageId]);
+      return rows.rows[0]?.credentials_generation === digest && r.operator.physical.some((p) => new URL(p.url).pathname.endsWith("/polls"));
+    }, 10_000, "the new identity verified and engine work resumed");
+    expect(new URL(r.operator.physical[0]!.url).pathname).toBe("/api/v1/account/me");
+    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site")).toHaveLength(2);
+  }, 30_000);
+
   it("a site request and the site socket's CONNECT are admitted through the pacer and journaled; their ends are committed, then acknowledged", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

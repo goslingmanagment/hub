@@ -1,6 +1,7 @@
-import type { SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
+import type { CancelAdmit, SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
 import type { LinkStatus, MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
+import type { SyncLogger } from "../engine/commit.ts";
 import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
 import { classifySiteRequest } from "../engine/site-admission.ts";
 
@@ -135,6 +136,8 @@ export interface BrowserSiteAdmissionOptions {
   /** The engine's monotonic clock (the pacer's). */
   monoNow: () => number;
   metrics?: Metrics;
+  logger?: SyncLogger;
+  pageId?: number;
   /** A page on Node (PR 15): only the manual login's own requests. */
   loginOnly?: boolean;
 }
@@ -153,6 +156,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     client.onOtherMessage((message) => {
       if (message.type === "siteAdmit") this.#onSiteAdmit(message);
       else if (message.type === "wsAdmit") this.#onWsAdmit(message);
+      else if (message.type === "cancelAdmit") this.#onCancel(message);
     });
     client.onEnd((end) => this.#onEnd(end));
     this.#unlisten.push(() => client.onOtherMessage(null), () => client.onEnd(null));
@@ -171,9 +175,15 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       .sort((a, b) => a.askedMono - b.askedMono);
   }
 
-  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void {
+  isPending(request: PendingSiteRequest): boolean {
+    const entry = this.#entries.get(request.id);
+    return !this.#closed && this.#o.client.up && this.#o.client.quiesced !== null
+      && entry?.state === "pending" && entry.epoch === this.#o.client.epoch && entry.request === request;
+  }
+
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }, expected?: PendingSiteRequest): boolean {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.state !== "pending") return;
+    if (entry === undefined || !this.isPending(expected ?? entry.request)) return false;
     const waitDeadline = entry.request.waitDeadlineMono;
     if (waitDeadline !== undefined && this.#o.monoNow() >= waitDeadline) {
       // Its wait ended between the choice and the grant: the browser fails
@@ -182,7 +192,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       entry.attemptId = admission.attemptId;
       this.#answerRefusal(entry, "wait_expired");
       this.#finish(entry, { kind: "aborted_before_send", reason: "wait_expired" });
-      return;
+      return true;
     }
     entry.state = "granted";
     entry.attemptId = admission.attemptId;
@@ -195,11 +205,12 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       this.#o.metrics?.increment("sync_browser_site_grant_unsent", { kind: entry.kind });
       this.#finish(entry, { kind: "aborted_before_send", reason: "link_lost" });
     }
+    return true;
   }
 
-  refuse(id: string, reason: SiteRefusalReason): void {
+  refuse(id: string, reason: SiteRefusalReason, expected?: PendingSiteRequest): void {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.state !== "pending") return;
+    if (entry === undefined || !this.isPending(expected ?? entry.request)) return;
     this.#entries.delete(id);
     this.#remember(id);
     this.#answerRefusal(entry, protocolSiteRefusal(reason));
@@ -222,8 +233,13 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
 
   /** The actor committed the end of `id`: an end the operator reported is
    *  acknowledged (it keeps it until then). */
-  settled(id: string, attemptId: number): void {
+  settled(id: string, attemptId: number, expected?: PendingSiteRequest): void {
     const entry = this.#entries.get(id);
+    // A selection lost on reconnect never reached the operator. Its
+    // local aborted attempt must not close the re-asked request, including
+    // when that new ask has not arrived yet. Withdrawals already tombstone
+    // their id in onCancel, independently of this settlement.
+    if (expected !== undefined && entry?.request !== expected) return;
     if (entry !== undefined && entry.attemptId !== attemptId) return;
     this.#entries.delete(id);
     this.#remember(id);
@@ -341,8 +357,28 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     return live !== fingerprint;
   }
 
+  #onCancel(message: CancelAdmit): void {
+    const entry = this.#entries.get(message.requestId);
+    if (entry === undefined) {
+      this.#remember(message.requestId);
+      return;
+    }
+    if (entry.kind !== message.kind || entry.epoch !== this.#o.client.epoch || entry.state === "ended") return;
+    this.#o.logger?.info({ event: "browser.admit_cancelled", pageId: this.#o.pageId, requestId: message.requestId, kind: message.kind, reason: message.reason, epoch: entry.epoch, state: entry.state }, "Page browser: pending admission withdrawn");
+    this.#o.metrics?.increment("sync_browser_site_cancelled", { kind: message.kind, reason: message.reason });
+    if (entry.state === "pending") {
+      this.#entries.delete(message.requestId);
+      this.#remember(message.requestId);
+    } else {
+      // The grant crossed the withdrawal. The operator has not accepted
+      // it, so it cannot send; retain this end for the actor's commit.
+      this.#finish(entry, { kind: "aborted_before_send", reason: message.reason });
+    }
+  }
+
   #answerRefusal(entry: Entry, reason: ProtocolSiteRefusal): void {
     this.#o.metrics?.increment("sync_browser_site_refused", { kind: entry.kind, reason });
+    this.#o.logger?.info({ event: "browser.admit_refused", pageId: this.#o.pageId, requestId: entry.request.id, kind: entry.kind, reason, epoch: entry.epoch }, "Page browser: admission refused");
     if (entry.kind === "site") this.#o.client.answerSiteAdmit(entry.epoch, { siteRequestId: entry.request.id, admit: false, reason });
     else this.#o.client.answerWsAdmit(entry.epoch, { connectionId: entry.request.id, admit: false, reason, retryNotBeforeWall: null });
   }

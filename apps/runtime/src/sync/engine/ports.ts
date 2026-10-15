@@ -338,7 +338,7 @@ export class CredentialsGenerationChangedError extends Error {
  *  thrown by `prepare` before anything is admitted. Not the platform's
  *  failure — no network hold, no breaker: the actor waits and asks again. */
 export class PageTransportUnavailableError extends Error {
-  constructor(readonly reason: string, readonly retryInMs: number) {
+  constructor(readonly reason: string, readonly retryInMs: number, readonly causeCode: "session_missing" | "unavailable" = "unavailable") {
     super(`The page transport cannot take a request now: ${reason}`);
     this.name = "PageTransportUnavailableError";
   }
@@ -457,14 +457,19 @@ export type SiteRefusalReason =
 export interface SiteAdmissionPort {
   /** The requests waiting now, oldest first. */
   pending(): readonly PendingSiteRequest[];
+  /** Still the same pending request on the same connection as at the pick. */
+  isPending?(request: PendingSiteRequest): boolean;
   /** Admit one: the browser may send it within `sendWithinMs` from now (the
-   *  admission's send window left), under the attempt `attemptId`. */
-  grant(id: string, admission: { attemptId: number; sendWithinMs: number }): void;
+   *  admission's send window left), under the attempt `attemptId`. False:
+   *  the selected request no longer exists; do not await an end by this id.
+   *  An adapter accepting the selection reports even a local refusal via
+   *  `end` (an expired deadline, for example). */
+  grant(id: string, admission: { attemptId: number; sendWithinMs: number }, expected?: PendingSiteRequest): boolean | void;
   /** Refuse one: it is failed in the browser, nothing is sent. */
-  refuse(id: string, reason: SiteRefusalReason): void;
+  refuse(id: string, reason: SiteRefusalReason, expected?: PendingSiteRequest): void;
   /** The end of an admitted request; never throws for an outcome. */
   end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
   /** The end of `id` (its attempt `attemptId`) is committed: a browser that
    *  keeps the end until it is acknowledged may drop it now. Never throws. */
-  settled?(id: string, attemptId: number): void;
+  settled?(id: string, attemptId: number, expected?: PendingSiteRequest): void;
 }

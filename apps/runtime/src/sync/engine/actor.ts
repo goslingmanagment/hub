@@ -201,6 +201,14 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
   return signal.aborted && (error === signal.reason || (error instanceof Error && error.name === "AbortError"));
 }
 
+interface BrowserLapTrace {
+  phase: ActorPhase;
+  work: { id: number; resource: string; class: string } | null;
+  siteCandidate: { id: string; route: string } | null;
+  siteTurns: ReturnType<SiteTurns["snapshot"]>;
+  prepare: string;
+}
+
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
@@ -211,6 +219,9 @@ export class SyncActor {
   #holdSetProblem: string | null = null;
   /** Why the transport last could not take a request (null: it could). */
   #transportProblem: string | null = null;
+  #lapTrace: BrowserLapTrace | null = null;
+  #lapAdmitted = false;
+  #lastEmptyLap: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -258,6 +269,21 @@ export class SyncActor {
   }
 
   async #lap(signals: ActorSignals): Promise<ActorExit | null> {
+    this.#lapAdmitted = false;
+    this.#lapTrace = this.#d.site ? { phase: "applies", work: null, siteCandidate: null, siteTurns: this.#siteTurns.snapshot(), prepare: "not_called" } : null;
+    try {
+      return await this.#stepLap(signals);
+    } finally {
+      if (this.#lapTrace !== null && !this.#lapAdmitted) {
+        const key = JSON.stringify(this.#lapTrace);
+        if (key !== this.#lastEmptyLap) this.#d.logger.info({ pageId: this.#d.pageId, event: "browser.no_admit", ...this.#lapTrace }, "Fansly sync actor: browser lap admitted nothing");
+        this.#lastEmptyLap = key;
+      } else this.#lastEmptyLap = null;
+      this.#lapTrace = null;
+    }
+  }
+
+  async #stepLap(signals: ActorSignals): Promise<ActorExit | null> {
     const d = this.#d;
     this.#phase("applies");
     // The outcomes the sender delivered that nothing waited for (PR 13):
@@ -284,6 +310,7 @@ export class SyncActor {
     // The site's waiting requests are judged every lap: what must be refused
     // now is, whatever the gate says (spec §3).
     const siteCandidate = d.site ? await this.#siteSweep(owned) : null;
+    if (this.#lapTrace && siteCandidate) this.#lapTrace.siteCandidate = { id: siteCandidate.request.id, route: siteCandidate.route };
     const gate = await this.#gate(owned);
     if (!gate.open) {
       // The owner's manual login passes the page's pause and a credentials
@@ -335,6 +362,7 @@ export class SyncActor {
     const picked = underCredentials
       ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
       : await this.#pick(page, holds, held?.until ?? null, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
+    if (this.#lapTrace && picked !== null && !isPickWait(picked)) this.#lapTrace.work = { id: picked.work.id, resource: picked.work.resource, class: picked.work.class };
     if (picked !== null && isPickWait(picked)) {
       // The short look-ahead: the slot waits for the class whose turn it is
       // (nothing is reserved; a wake picks again).
@@ -415,7 +443,9 @@ export class SyncActor {
     let request: Awaited<ReturnType<PageTransport["prepare"]>>;
     try {
       request = await d.transport.prepare(plan.request, { work: picked.work });
+      if (this.#lapTrace) this.#lapTrace.prepare = "ready";
     } catch (error) {
+      if (this.#lapTrace) this.#lapTrace.prepare = error instanceof PageTransportUnavailableError ? error.causeCode : errorName(error);
       if (error instanceof CredentialsGenerationChangedError) {
         await this.#credentialsUnverified(error, signals.stop);
         return null;
@@ -427,6 +457,13 @@ export class SyncActor {
         // own wait (Project Browser plan §3.2).
         d.metrics.increment("sync_transport_unavailable", { pageId: d.pageId });
         this.#transportUnavailable(error.reason);
+        // Chrome learns its session while the site loads. Queued engine
+        // work cannot spend this slot without that session; let the site's
+        // mapped HTTP reads use it through the ordinary admission checks.
+        if (error.causeCode === "session_missing" && d.site) {
+          const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals, true);
+          if (served !== "none") return served;
+        }
         this.#phase("idle");
         await this.#sleep(Math.max(0, Math.min(error.retryInMs, LIVE_GATE_RECHECK_MS)), signals.stop);
         return null;
@@ -462,6 +499,7 @@ export class SyncActor {
     }
     if (admission === null) return null;
     this.admissions += 1;
+    this.#lapAdmitted = true;
     this.#siteTurns.engineAdmitted();
     await this.#fault("after_admit");
 
@@ -528,13 +566,15 @@ export class SyncActor {
     now: Date,
     checksOnly: boolean,
     signals: ActorSignals,
+    bootstrap = false,
   ): Promise<ActorExit | null | "none"> {
     const d = this.#d;
     const site = d.site!;
     if (site.pending().length === 0) return "none";
     const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, now });
-    const classified = settleSiteDecision(d, site, ctx);
+    const classified = settleSiteDecision(d, site, ctx, bootstrap);
     if (classified === null) return "none";
+    if (this.#lapTrace) this.#lapTrace.siteCandidate = { id: classified.request.id, route: classified.route };
     // What the route check just applied, recorded on the attempt (I19).
     const intervals = clocks.intervals(classified.route);
 
@@ -544,11 +584,13 @@ export class SyncActor {
       if (!(await d.ownership.stillHolds(d.pageId))) return { kind: "ownership_lost", foreign: false };
       return null;
     }
+    if (site.isPending?.(classified.request) === false) return "none";
     // The send window starts BEFORE the admission commit (SK16).
     const issuedMono = d.clock.monoNow();
     let attemptId: number;
     try {
       ({ attemptId } = await admitSite(d, { classified, grant, intervals }));
+      this.#lapAdmitted = true;
     } catch (error) {
       if (error instanceof LiveGateClosedError) {
         d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });
@@ -560,7 +602,6 @@ export class SyncActor {
       if (error instanceof AdmissionHeldError) return null;
       throw error;
     }
-    this.#siteTurns.siteAdmitted();
     d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
     const armed = d.pacer.arm(grant, attemptId, issuedMono);
     // The final word before the browser may send: the same check an engine
@@ -570,17 +611,18 @@ export class SyncActor {
     const refusal = d.pacer.checkRemoteGrant(armed);
     let end: SiteRequestEnd;
     if (refusal !== null) {
-      site.refuse(classified.request.id, "lease");
+      site.refuse(classified.request.id, "lease", classified.request);
       d.metrics.increment("sync_site_refused", { reason: "lease" });
       end = { kind: "aborted_before_send", reason: refusal.reason };
     } else {
-      site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) });
+      const granted = site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) }, classified.request);
       this.#phase("send");
-      end = await siteEnd(site, classified.request.id, signals.abort);
+      end = granted === false ? { kind: "aborted_before_send", reason: "request_withdrawn" } : await siteEnd(site, classified.request.id, signals.abort);
     }
     // The send counts at the instant the browser reported (PR 12), else at
     // the completion when it may have gone out (the safe upper bound).
     d.pacer.complete(armed, transportOutcomeOfSite(end));
+    this.#siteTurns.siteEnded(end);
     this.#phase("commit");
     const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, send: captureSendOf(d, armed), end, classified }));
     if (!committed.ok) {
@@ -591,7 +633,7 @@ export class SyncActor {
     }
     // Committed: the browser may drop the end it kept (PR 14).
     try {
-      site.settled?.(classified.request.id, attemptId);
+      site.settled?.(classified.request.id, attemptId, classified.request);
     } catch (error) {
       d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: the site path's settle failed");
     }
@@ -916,6 +958,7 @@ export class SyncActor {
 
   /** The watchdog's mark: the actor moved on to `phase`. */
   #phase(phase: ActorPhase): void {
+    if (this.#lapTrace) this.#lapTrace.phase = phase;
     this.#d.stall?.progress(phase);
   }
 

@@ -59,6 +59,8 @@ export interface PageBrowserRow {
   /** Since when the operator has not said `ready` (0281): its browser is not
    *  up. Null while it is ready (or before its first state). */
   downSince: Date | null;
+  /** Since the site loaded with no live session, with its exit open. */
+  sessionWaitSince: Date | null;
   /** Since when the operator has said its current stop reason (0281). */
   stopSince: Date | null;
   /** The delivery of the operator's events to the engine's commit over the
@@ -87,11 +89,12 @@ type SqlRow = Omit<
   PageBrowserRow,
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
-  | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt"
+  | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt" | "sessionWaitSince"
 > & {
   haltAt: Date | string | null;
   retryAt: Date | string | null;
   downSince: Date | string | null;
+  sessionWaitSince: Date | string | null;
   stopSince: Date | string | null;
   deliveryP50Ms: string | null;
   deliveryP95Ms: string | null;
@@ -143,6 +146,7 @@ const publicColumns = sql`
   b.buffer_undrained_since as "bufferUndrainedSince",
   b.retry_at as "retryAt",
   b.down_since as "downSince",
+  b.session_wait_since as "sessionWaitSince",
   b.stop_since as "stopSince",
   b.delivery_p50_ms::text as "deliveryP50Ms",
   b.delivery_p95_ms::text as "deliveryP95Ms",
@@ -188,6 +192,7 @@ function rowOf(row: SqlRow): PageBrowserRow {
     bufferUndrainedSince: dateOf(row.bufferUndrainedSince),
     retryAt: dateOf(row.retryAt),
     downSince: dateOf(row.downSince),
+    sessionWaitSince: dateOf(row.sessionWaitSince),
     stopSince: dateOf(row.stopSince),
     deliveryP50Ms: numberOf(row.deliveryP50Ms),
     deliveryP95Ms: numberOf(row.deliveryP95Ms),
@@ -289,6 +294,8 @@ export interface PageBrowserStateInput {
  *  up (`down_since`: any step but `ready`) and since when it says its stop
  *  reason (`stop_since`) are kept across states (0281). */
 export async function recordPageBrowserState(db: Database, input: PageBrowserStateInput): Promise<boolean> {
+  const sessionWaiting = input.step === "site_loaded" && input.sessionFingerprint === null && input.exitOpen
+    && input.stopReason === null && input.mode === "automation" && input.halt == null;
   const retry = input.retryAt === undefined ? sql`retry_at` : sql`${input.retryAt === null ? null : input.retryAt.toISOString()}::timestamptz`;
   const saidId = input.halt?.id ?? null;
   const saidReason = input.halt?.reason ?? null;
@@ -300,6 +307,7 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
   const result = await db.execute(sql`
     update page_browsers
        set down_since = case when ${input.step} = 'ready' then null else coalesce(down_since, clock_timestamp()) end,
+           session_wait_since = case when ${sessionWaiting} then coalesce(session_wait_since, clock_timestamp()) else null end,
            stop_since = case when ${input.stopReason}::text is null then null
                              when stop_reason is not distinct from ${input.stopReason}::text then coalesce(stop_since, clock_timestamp())
                              else clock_timestamp() end,

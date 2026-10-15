@@ -241,7 +241,6 @@ function notTaking(state: State | null): string | null {
   if (state === null) return "no link to the page's browser";
   if (state.stopReason !== null) return `the page's browser stands (${state.stopReason})`;
   if (!state.exitOpen) return `the page's browser has its exit closed (${state.step})`;
-  if (state.sessionFingerprint === null) return "the page's browser knows no live session yet";
   return null;
 }
 
@@ -300,7 +299,12 @@ export async function createBrowserPageTransport(
     if (now < unavailableUntil) return unavailable("the page's browser could not take the last request", unavailableUntil - now);
     if (client.up && client.quiesced === null) return unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250);
     const why = notTaking(client.state);
-    return why === null ? null : unavailable(why);
+    if (why !== null) return unavailable(why);
+    return client.state?.sessionFingerprint === null ? missingSession() : null;
+  }
+
+  function missingSession(): PageTransportUnavailableError {
+    return new PageTransportUnavailableError("the page's browser knows no live session yet", unavailableRetryMs, "session_missing");
   }
 
   /** The page's settings changed since the link's hello (a proxy): say it
@@ -322,7 +326,7 @@ export async function createBrowserPageTransport(
 
   async function generationNow(): Promise<{ snapshot: PageSnapshot; generation: string; fingerprint: string }> {
     const fingerprint = client.state?.sessionFingerprint ?? null;
-    if (fingerprint === null) throw unavailable("the page's browser knows no live session yet");
+    if (fingerprint === null) throw missingSession();
     const snapshot = await readSnapshot(ctx.db, page.pageId);
     if (snapshot === null) throw new UnsendableRequestError("page_inactive");
     if (snapshot.proxy === null) throw unavailable("the page has no proxy: its browser has no way out");

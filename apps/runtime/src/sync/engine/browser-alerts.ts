@@ -43,6 +43,8 @@ import { ownerRunState } from "./status.ts";
 export const SYNC_BROWSER_STATE_SILENT_MS = 2 * 60_000;
 /** A browser not up for this long, for a reason it retries by itself. */
 export const SYNC_BROWSER_DOWN_MS = 2 * 60_000;
+/** A loaded site that cannot discover its session (pilot F1). */
+export const SYNC_BROWSER_SESSION_WAIT_MS = 2 * 60_000;
 /** An alarm holds its kind this long after it (the alerts' clean window). */
 export const SYNC_BROWSER_ALARM_HOLD_MS = 10 * 60_000;
 /** The buffer's caps (plan §4.14, spec §5): the operator's defaults — the
@@ -208,6 +210,12 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
   }
 
   // Down for a reason no other kind names, or starting for too long.
+  if (explained === null && reason === null && browser.haltReason === null && browser.step === "site_loaded"
+    && browser.exitOpen && browser.sessionFingerprint === null && browser.sessionWaitSince != null
+    && msSince(browser.sessionWaitSince, now) > SYNC_BROWSER_SESSION_WAIT_MS) {
+    add({ kind: "browser_down", detail: "site_loaded_without_session", since: browser.sessionWaitSince, seenAt: now,
+      context: { step: browser.step, sessionKnown: false } });
+  }
   const covered = reason !== null && (STOP_KIND[reason] !== undefined || RETRIED_KIND[reason] !== undefined);
   if (explained === null && !covered && reason !== "owner_stop" && browser.haltReason === null && browser.lastStateAt !== null
     && downFor > SYNC_BROWSER_DOWN_MS) {

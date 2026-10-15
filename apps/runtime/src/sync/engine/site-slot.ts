@@ -80,8 +80,9 @@ export async function siteContextOf(
 }
 
 /** Refuse what must be refused now; the admissible request, if any. */
-export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext): ClassifiedSiteRequest | null {
-  const decision = decideSite(site.pending(), ctx);
+export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext, bootstrap = false): ClassifiedSiteRequest | null {
+  const pending = site.pending();
+  const decision = decideSite(bootstrap ? pending.filter((request) => request.host === "api" && request.method.toUpperCase() === "GET") : pending, ctx);
   for (const refusal of decision.refuse) {
     d.metrics.increment("sync_site_refused", { reason: refusal.reason });
     site.refuse(refusal.id, refusal.reason);

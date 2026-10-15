@@ -17,7 +17,7 @@
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id (sent only to an operator whose state says `halt`).
-export const PROTOCOL = { major: 1, minor: 1 } as const;
+export const PROTOCOL = { major: 1, minor: 2 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -256,6 +256,15 @@ export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteReques
     | (Admit & { attemptId: AttemptId })
     | { admit: false; reason: "paused" | "held" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
   );
+/** Minor 2: the operator ended a request before accepting its grant.
+ * The authenticated RPC connection fences the owner and connection epoch.
+ * A crossing grant must end not sent; this is never a cancellation of a send. */
+export interface CancelAdmit {
+  type: "cancelAdmit";
+  kind: "site" | "ws";
+  requestId: string;
+  reason: "ended" | "wait_expired" | "document_replaced" | "operator_stopped";
+}
 export interface SiteDone {
   type: "siteDone";
   siteRequestId: SiteRequestId;
@@ -386,6 +395,7 @@ export type OperatorToEngine =
   | Result
   | RecoverResult
   | SiteAdmit
+  | CancelAdmit
   | SiteDone
   | WsAdmit
   | WsDone
@@ -667,6 +677,13 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
         pausedMono: num(m.pausedMono, "pausedMono"),
         waitDeadlineMono: num(m.waitDeadlineMono, "waitDeadlineMono"),
       };
+    }
+    case "cancelAdmit": {
+      const kind = str(m.kind, "kind", 16);
+      if (kind !== "site" && kind !== "ws") throw new Invalid("an unknown cancellation kind");
+      const reason = str(m.reason, "reason", 32);
+      if (reason !== "ended" && reason !== "wait_expired" && reason !== "document_replaced" && reason !== "operator_stopped") throw new Invalid("an unknown cancellation reason");
+      return { type, kind, requestId: kind === "ws" ? uuid(m.requestId, "requestId") : str(m.requestId, "requestId", 64), reason };
     }
     case "siteDone": {
       const body = str(m.body, "body", 32);

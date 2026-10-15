@@ -119,6 +119,7 @@ export interface RpcServerOptions {
 
 interface Conn {
   ws: WsConnection;
+  minor: number;
   greeted: boolean;
   generation: number;
   /** The API's connection of the login form (its first message a call). */
@@ -251,6 +252,9 @@ export class RpcServer {
   send(message: OperatorToEngine): boolean {
     const conn = this.#active;
     if (!conn || conn.ws.closed) return false;
+    // Older engines retain their old timeout behaviour during an image-
+    // first upgrade. Do not send a message they cannot parse.
+    if (message.type === "cancelAdmit" && conn.minor < 2) return false;
     return conn.ws.sendText(JSON.stringify(message));
   }
 
@@ -340,7 +344,7 @@ export class RpcServer {
   }
 
   #adopt(ws: WsConnection): void {
-    const conn: Conn = { ws, greeted: false, generation: 0, api: false };
+    const conn: Conn = { ws, minor: 0, greeted: false, generation: 0, api: false };
     const helloTimer = setTimeout(() => {
       if (!conn.greeted) ws.close(CLOSE_PROTOCOL);
     }, this.#options.helloTimeoutMs ?? 5000);
@@ -510,6 +514,7 @@ export class RpcServer {
     }
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
+    conn.minor = hello.protocol.minor;
     this.#pageId = hello.pageId;
     this.#setActive(conn);
     this.#lastHeard = monoMs();

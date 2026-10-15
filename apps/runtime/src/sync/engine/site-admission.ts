@@ -170,11 +170,17 @@ export class SiteTurns {
   }
 
   engineAdmitted(): void {
-    this.#engineSinceSite += 1;
+    this.#engineSinceSite = Math.min(SITE_TURN_EVERY, this.#engineSinceSite + 1);
   }
 
-  siteAdmitted(): void {
-    this.#engineSinceSite = 0;
+  snapshot(): { due: boolean; engineSinceSite: number } {
+    return { due: this.due(), engineSinceSite: this.#engineSinceSite };
+  }
+
+  siteEnded(end: SiteRequestEnd): void {
+    // An expired or withdrawn request spent neither a send nor its turn.
+    // An uncertain send still counts, just as it does in the pacer.
+    if (end.kind === "response" || (end.kind === "transport_error" && end.sent)) this.#engineSinceSite = 0;
   }
 }
 

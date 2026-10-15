@@ -118,7 +118,7 @@ import { engineHeaders, isPreflight } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { hostAndPath, type RequestLine } from "../logs/journal.ts";
 import { classifyHost, decide as mapDecide, type MapDecision, type OperatorMode } from "../policy/operations.ts";
-import type { BodyRef, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
+import type { BodyRef, CancelAdmit, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, wallMs, type Logger } from "../shared/util.ts";
 import { Documents, type DocumentMark } from "./documents.ts";
 
@@ -170,7 +170,7 @@ export interface SiteLink {
   /** Changes with the connection. */
   epoch(): number;
   generation(): number;
-  send(message: SiteAdmit | SiteDone): boolean;
+  send(message: SiteAdmit | SiteDone | CancelAdmit): boolean;
 }
 
 export interface SiteDeps {
@@ -304,6 +304,7 @@ interface End {
   /** Ended by the operator's own reload of the work tab: not a failure the
    *  site's document saw. */
   reload?: boolean;
+  cancelReason?: CancelAdmit["reason"];
   /** The answer has no body (a redirect answered as final): an empty one is
    *  kept, whole. */
   empty?: boolean;
@@ -814,7 +815,7 @@ export class SiteRequests {
     // The body's stream, armed now, before the admission is asked.
     if (role === "main" && op.platformData) op.capture = this.#arm(op, request);
     this.#timer(op, this.#timings.admitWaitMs, () => {
-      if (op.stage === "keeping" || op.stage === "waiting" || op.stage === "asked") this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: `no admission within ${this.#timings.admitWaitMs} ms` });
+      if (op.stage === "keeping" || op.stage === "waiting" || op.stage === "asked") this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, cancelReason: "wait_expired", error: `no admission within ${this.#timings.admitWaitMs} ms` });
     });
     // Its id in the buffer, durably, before the engine is asked.
     const kept = this.#deps.buffer.changeSiteRequest({ siteRequestId: id, asked: true });
@@ -1272,6 +1273,14 @@ export class SiteRequests {
     op.done = true;
     const stage = op.stage;
     op.stage = "done";
+    // Only a request whose grant has not been accepted can be withdrawn.
+    // A grant already travelling in the other direction is rejected by
+    // onAdmitResult and gets a durable not-sent end as before.
+    if (stage === "asked" && op.attemptId === null && op.askedEpoch === this.#deps.link.epoch()) {
+      const reason = end.cancelReason ?? (end.reload || this.documents.replaced(op.document) ? "document_replaced" : "ended");
+      const written = this.#deps.link.send({ type: "cancelAdmit", kind: "site", requestId: op.id, reason });
+      this.#log("admit.cancelled", { siteRequestId: op.id, epoch: op.askedEpoch, reason, written });
+    }
     for (const timer of op.timers) clearTimeout(timer);
     op.timers.clear();
     if (op.limitTimer) clearTimeout(op.limitTimer);
@@ -1316,7 +1325,7 @@ export class SiteRequests {
     this.#journalEnd(op, end, keep ? (whole ? "buffered" : "incomplete") : null);
     const gone: GroupItem = { siteRequest: { siteRequestId: op.id, gone: true } };
     if (op.attemptId === null) {
-      // Never admitted: nothing to tell the engine (it drops what waits).
+      // Never admitted: its pending admission was withdrawn above.
       if (op.kept) this.#write(`gone:${op.id}`, () => [gone], null);
       return;
     }

@@ -132,10 +132,9 @@ export const MAX_PENDING_BODIES = 512;
 /** Their bytes together: two of the largest bodies. */
 export const MAX_PENDING_BODY_BYTES = 2 * MAX_BODY_BYTES;
 
-/** The oldest operator protocol minor this engine works with: minor 1 holds
- *  the halt for the owner's decision on its volume, says it (`state.halt`,
- *  `state.lastClearedHaltId`) and takes `clearHalt` (PR 17). */
-export const MIN_OPERATOR_MINOR = 1;
+/** Minor 2 withdraws ended pending requests. Older images cannot close the
+ *  admission race; update the operator image before the engine. */
+export const MIN_OPERATOR_MINOR = 2;
 
 export type LinkStatus =
   | { kind: "idle" }
@@ -877,11 +876,10 @@ export class PageBrowserRpcClient {
     }
     if (!SUPPORTED_MAJORS.includes(message.protocol.major)) return this.#protocolError(`the operator chose major ${message.protocol.major}`);
     if (message.protocol.minor < MIN_OPERATOR_MINOR) {
-      // An operator before minor 1 holds no halt for the owner on its volume
-      // and takes no clearHalt (Astra round 4): no work goes through it — its
-      // image is updated first.
+      // Minor 1 held halts; minor 2 also withdraws pending admissions.
+      // No work goes through an older image: update the image first.
       this.#log.warn({ url: this.#o.url, minor: message.protocol.minor, needed: MIN_OPERATOR_MINOR },
-        "page browser link: the operator speaks an older protocol minor (no halt held on its volume): refused — update its image");
+        "page browser link: the operator speaks an older protocol minor: refused — update its image");
       this.#teardown(`the operator's protocol minor ${message.protocol.minor} is before ${MIN_OPERATOR_MINOR}`);
       this.#setStatus({ kind: "refused", reason: "protocol_minor", supportedMajors: [...SUPPORTED_MAJORS] });
       if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);

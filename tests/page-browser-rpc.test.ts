@@ -88,12 +88,23 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
 const command = (generation: number, commandId: string, kind: string, notAfterMono = monoMs() + 10_000) => ({ type: "command", ownerGeneration: generation, commandId, notAfterMono, command: { kind } });
 
 describe("hello", () => {
+  it.each([1, 2])("sends pending withdrawals only to engines supporting minor 2 (peer %s)", async (minor) => {
+    const { engine, server } = await setUp();
+    const fake = await engine();
+    fake.send(hello({ protocol: { majors: [1], minor } }));
+    await fake.waitFor("helloResult");
+    const cancel = { type: "cancelAdmit", kind: "site", requestId: "ended-request", reason: "ended" } as const;
+    expect(server.send(cancel)).toBe(minor >= 2);
+    if (minor >= 2) expect(await fake.waitFor("cancelAdmit")).toEqual(cancel);
+    expect(server.linkUp).toBe(true);
+  });
+
   it("accepts the page's token and answers the version, the buffer id and the state", async () => {
     const { engine, hellos, links, server } = await setUp();
     const fake = await engine();
     fake.send(hello());
     const result = await fake.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 1 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
+    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 2 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
     expect(hellos).toHaveLength(1);
     expect(hellos[0]?.socks5.password).toBe("S0cks-Pa55-9c1e2d");
     expect(links).toEqual([[true, "hello"]]);

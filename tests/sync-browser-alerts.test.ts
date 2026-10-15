@@ -67,6 +67,7 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     bufferUndrainedSince: null,
     retryAt: null,
     downSince: null,
+    sessionWaitSince: null,
     stopSince: null,
     deliveryP50Ms: 40,
     deliveryP95Ms: 90,
@@ -152,6 +153,16 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
     expect(kinds({ browser: { step: "exit_closed", exitOpen: false, stopReason: "chrome_crashed", retryAt: at(5_000), downSince: at(-3 * MINUTE) } }))
       .toEqual({ browser_down: "chrome_crashed" });
     expect(kinds({ browser: { step: "site_loaded", stopReason: null, downSince: at(-3 * MINUTE) } })).toEqual({ browser_down: "not_up:site_loaded" });
+  });
+
+  it("names a loaded site without a session only after its own two-minute wait", () => {
+    const waiting = { step: "site_loaded", sessionFingerprint: null, sessionWaitSince: at(-3 * MINUTE), downSince: at(-5 * MINUTE) };
+    expect(kinds({ browser: waiting })).toEqual({ browser_down: "site_loaded_without_session" });
+    expect(evaluateBrowserAlerts(facts({ browser: waiting }))[0]).toMatchObject({ since: at(-3 * MINUTE), context: { sessionKnown: false } });
+    expect(kinds({ browser: { ...waiting, sessionWaitSince: at(-MINUTE) } })).toEqual({ browser_down: "not_up:site_loaded" });
+    expect(kinds({ browser: { ...waiting, sessionFingerprint: "known" } })).toEqual({ browser_down: "not_up:site_loaded" });
+    expect(kinds({ browser: { ...waiting, mode: "manual_login" } })).toEqual({});
+    expect(kinds({ browser: waiting, page: { pausedAll: true } })).toEqual({});
   });
 
   it("what the owner does himself explains a browser that is down — never a guard that failed", () => {

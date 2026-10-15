@@ -134,10 +134,20 @@ describe("the decision at a slot", () => {
 });
 
 describe("the site's share of the slots", () => {
+  it("a withdrawn or unsent request keeps the site's turn; a possible send spends it", () => {
+    const turns = new SiteTurns();
+    turns.siteEnded({ kind: "aborted_before_send", reason: "document_replaced" });
+    expect(turns.due()).toBe(true);
+    turns.siteEnded({ kind: "transport_error", sent: false, message: "not sent" });
+    expect(turns.due()).toBe(true);
+    turns.siteEnded({ kind: "transport_error", sent: true, message: "unknown" });
+    expect(turns.due()).toBe(false);
+  });
+
   it("one slot after every cycle of engine admissions", () => {
     const turns = new SiteTurns();
     expect(turns.due()).toBe(true);
-    turns.siteAdmitted();
+    turns.siteEnded({ kind: "response", status: 200, retryAfterMs: null });
     for (let i = 1; i < SITE_TURN_EVERY; i++) {
       turns.engineAdmitted();
       expect(turns.due()).toBe(false);

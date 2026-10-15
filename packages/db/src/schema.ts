@@ -471,6 +471,7 @@ export const pageBrowsers = pgTable("page_browsers", {
   // (`recordPageBrowserState`, `recordPageBrowserAlarm`, `setPageBrowserOwnerStop`).
   retryAt: timestamp("retry_at", { withTimezone: true }),
   downSince: timestamp("down_since", { withTimezone: true }),
+  sessionWaitSince: timestamp("session_wait_since", { withTimezone: true }),
   stopSince: timestamp("stop_since", { withTimezone: true }),
   deliveryP50Ms: bigint("delivery_p50_ms", { mode: "number" }),
   deliveryP95Ms: bigint("delivery_p95_ms", { mode: "number" }),
