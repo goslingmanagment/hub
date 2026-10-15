@@ -163,13 +163,46 @@ export const pageBrowserProfilesResponseSchema = z.object({
 }).strict();
 export type PageBrowserProfilesResponse = z.infer<typeof pageBrowserProfilesResponseSchema>;
 
+/** A browser's environment (`hello.env`): its time zone, its languages, its
+ *  position. */
+export const pageBrowserEnvSchema = z.object({
+  timeZone: z.string().min(1).max(64),
+  languages: z.array(z.string().min(2).max(35)).min(1).max(10),
+  geolocation: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), accuracyM: z.number().positive().max(1_000_000) }).strict(),
+}).strict();
+export type PageBrowserEnvBody = z.infer<typeof pageBrowserEnvSchema>;
+
+/** What may be shown of a proxy: its type, host, port and login — its
+ *  password never, only whether it has one. */
+export const pageBrowserMaskedProxySchema = z.object({
+  scheme: z.enum(["socks5", "socks5h", "http", "https"]),
+  host: z.string(),
+  port: z.number().int(),
+  username: z.string().nullable(),
+  passwordSet: z.boolean(),
+}).strict();
+export type PageBrowserMaskedProxy = z.infer<typeof pageBrowserMaskedProxySchema>;
+
+/** A proxy as the owner pasted it, in any common format (Hub reads it with
+ *  `readPastedProxy`); `order` settles a four-part form both ends of which
+ *  read as a host and a port. */
+export const pageBrowserProxyTextSchema = z.object({
+  text: z.string().min(1).max(2000),
+  /** The reading the owner chose when the text reads more than one way:
+   *  host:port:login:password, login:password:host:port,
+   *  login:password@host:port, host:port@login:password. */
+  order: z.enum(["host_first", "user_first", "login_at_host", "host_at_login"]).optional(),
+}).strict();
+export type PageBrowserProxyText = z.infer<typeof pageBrowserProxyTextSchema>;
+
 export const pageBrowserProfileResponseSchema = z.object({
   profile: pageBrowserProfileSummarySchema,
   /** The SOCKS5 its container admits (`ip:port`): the proxy given must be it. */
   socksEndpoint: z.string().nullable(),
-  /** The proxy given for the page to be: its URL (its password never). */
-  proxy: z.object({ url: z.string(), username: z.string().nullable() }).strict().nullable(),
-  env: z.object({ timeZone: z.string(), languages: z.array(z.string()), geolocation: z.object({ latitude: z.number(), longitude: z.number(), accuracyM: z.number() }).strict() }).strict().nullable(),
+  /** The proxy given for the page to be: its URL and its parts (its
+   *  password never). */
+  proxy: z.object({ url: z.string(), username: z.string().nullable(), masked: pageBrowserMaskedProxySchema.nullable() }).strict().nullable(),
+  env: pageBrowserEnvSchema.nullable(),
   login: z.object({
     state: pageBrowserOnboardingStateSchema,
     changedAt: isoDateTime().nullable(),
@@ -188,18 +221,137 @@ export const pageBrowserProfileResponseSchema = z.object({
 export type PageBrowserProfileResponse = z.infer<typeof pageBrowserProfileResponseSchema>;
 
 export const pageBrowserProfileProxyBodySchema = z.object({
-  proxy: z.object({
-    url: z.string().min(1).max(2000),
-    username: z.string().max(500).nullable().optional(),
-    password: z.string().max(500).nullable().optional(),
-  }).strict(),
+  proxy: pageBrowserProxyTextSchema,
+  /** The owner's check of this very proxy (`proxy-check`'s `checkId`): the
+   *  address it connected to is the one compared and kept. */
+  checkId: z.string().uuid(),
 }).strict();
 export type PageBrowserProfileProxyBody = z.infer<typeof pageBrowserProfileProxyBodySchema>;
 
-/** The proxy saved: the exit IP Hub saw through it (`api.ipify.org`), for
- *  the owner to pin. */
+/** The proxy saved, as it may be shown. */
 export const pageBrowserProfileProxyResponseSchema = z.object({
-  exitIp: z.string(),
+  proxy: pageBrowserMaskedProxySchema,
+}).strict();
+
+// ── the owner's proxy check (owner decision 2026-10-15) ───────────────────
+// «Проверить прокси», as antidetect browsers have it: Hub connects through
+// the proxy (never to a platform) and says whether it works and why not,
+// what the port speaks, the latency, and where it goes out — named by an
+// IP-info service through the proxy — with the browser's environment
+// proposed from that place. The exit IP is a preview: the pin is the IP the
+// browser itself sees (it checks it before it opens its exit).
+
+/** What is checked: a pasted proxy, a draft's, a profile's (a new page's,
+ *  as given), or an existing page's own. */
+export const pageBrowserProxyCheckBodySchema = z.object({
+  source: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("text"), proxy: pageBrowserProxyTextSchema }).strict(),
+    z.object({ kind: z.literal("draft"), name: z.string().min(1).max(41) }).strict(),
+    z.object({ kind: z.literal("profile"), profileId: z.string().uuid() }).strict(),
+    z.object({ kind: z.literal("page"), pageLabel: z.string().min(1).max(100) }).strict(),
+  ]),
+}).strict();
+export type PageBrowserProxyCheckBody = z.infer<typeof pageBrowserProxyCheckBodySchema>;
+
+/** Why a proxy does not work, or not for a page's browser: the network's
+ *  word (`dns` … `ip_info_failed`), or Hub's before connecting (`ipv6`,
+ *  `private_address`). A pasted HTTP proxy is checked all the same: its
+ *  port may speak SOCKS5 too (`spoken`). */
+export const pageBrowserProxyProblemSchema = z.enum([
+  "dns", "no_answer", "refused", "unreachable", "not_socks5", "no_password_method", "needs_login", "wrong_login",
+  "tunnel_failed", "ip_info_failed", "ipv6", "private_address",
+]);
+export type PageBrowserProxyProblem = z.infer<typeof pageBrowserProxyProblemSchema>;
+
+export const pageBrowserProxyExitSchema = z.object({
+  ip: z.string(),
+  country: z.string().nullable(),
+  countryCode: z.string().nullable(),
+  region: z.string().nullable(),
+  city: z.string().nullable(),
+  isp: z.string().nullable(),
+  asn: z.string().nullable(),
+  timeZone: z.string().nullable(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+}).strict();
+export type PageBrowserProxyExit = z.infer<typeof pageBrowserProxyExitSchema>;
+
+export const pageBrowserProxyCheckResponseSchema = z.object({
+  /** A page's browser can go out through it: SOCKS5 with its login, a way
+   *  out, its exit known. */
+  ok: z.boolean(),
+  problem: z.object({ code: pageBrowserProxyProblemSchema, detail: z.string() }).strict().nullable(),
+  /** What the port speaks (null: never reached). */
+  spoken: z.enum(["socks5", "http", "tls", "unknown"]).nullable(),
+  proxy: pageBrowserMaskedProxySchema,
+  /** `ip:port` a page container's rules would admit (its name resolved). */
+  socksEndpoint: z.string().nullable(),
+  latencyMs: z.number().int().nonnegative().nullable(),
+  exit: pageBrowserProxyExitSchema.nullable(),
+  /** The IP-info service that named the exit. */
+  ipInfoService: z.string().nullable(),
+  /** The environment proposed from the exit (null: not enough known). */
+  env: pageBrowserEnvSchema.nullable(),
+  /** This check, for a save to name (null: it did not log in through the
+   *  proxy): the address it connected to is the one a save stores — for
+   *  the same proxy, for a few minutes. */
+  checkId: z.string().uuid().nullable(),
+  checkedAt: isoDateTime(),
+}).strict();
+export type PageBrowserProxyCheckResponse = z.infer<typeof pageBrowserProxyCheckResponseSchema>;
+
+// ── drafts: a page's browser started in the dashboard (0282) ─────────────
+// The owner names the browser (a new page's label, or an existing page that
+// moves to its browser), pastes a new page's proxy, confirms the
+// environment; `scripts/deploy-page-browser.sh add-profile` makes the
+// container and the profile from it.
+
+const draftParams = z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,40}$/) }).strict();
+
+export const pageBrowserDraftViewSchema = z.object({
+  name: z.string(),
+  /** An existing page that moves to its browser (null: a new page). */
+  page: z.object({ pageId: z.number().int().positive(), label: z.string() }).strict().nullable(),
+  /** A new page's proxy as given, or the existing page's own; null — the
+   *  existing page has none. */
+  proxy: pageBrowserMaskedProxySchema.nullable(),
+  env: pageBrowserEnvSchema.nullable(),
+  revision: z.number().int().positive(),
+  createdAt: isoDateTime(),
+  updatedAt: isoDateTime(),
+  /** What the owner runs on his workstation next. */
+  command: z.string(),
+}).strict();
+export type PageBrowserDraftView = z.infer<typeof pageBrowserDraftViewSchema>;
+
+export const pageBrowserDraftsResponseSchema = z.object({
+  drafts: z.array(pageBrowserDraftViewSchema),
+  /** The active Fansly pages with no browser yet, each with its own proxy:
+   *  those that may move to their browser. */
+  pages: z.array(z.object({ pageId: z.number().int().positive(), label: z.string(), proxy: pageBrowserMaskedProxySchema.nullable() }).strict()),
+}).strict();
+export type PageBrowserDraftsResponse = z.infer<typeof pageBrowserDraftsResponseSchema>;
+
+export const pageBrowserDraftSaveBodySchema = z.object({
+  /** True: the existing page of that label moves to its browser (its proxy
+   *  is its own); false: a new page's browser. */
+  existingPage: z.boolean(),
+  /** A new page's proxy; absent on an edit keeps the one given. */
+  proxy: pageBrowserProxyTextSchema.optional(),
+  env: pageBrowserEnvSchema,
+  /** The owner's check of the proxy saved (`proxy-check`'s `checkId`): the
+   *  pasted one, the draft's kept one, or the existing page's own. Its
+   *  address is the one stored; nothing is resolved at the save. */
+  checkId: z.string().uuid(),
+  /** The draft's revision the owner edits (null: a new draft): a save over
+   *  another revision is refused. */
+  expectedRevision: z.number().int().positive().nullable(),
+}).strict();
+export type PageBrowserDraftSaveBody = z.infer<typeof pageBrowserDraftSaveBodySchema>;
+
+export const pageBrowserDraftDeleteResponseSchema = z.object({
+  deleted: z.boolean(),
 }).strict();
 
 export const pageBrowserProfilePinBodySchema = z.object({
@@ -277,10 +429,38 @@ export const pageBrowserRouteSchemas = {
   pageBrowserProfileProxy: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Give the proxy of the page to be (the SOCKS5 its browser's container admits): saved sealed, and its exit IP read through it",
+    summary: "Replace the proxy of the page to be, pasted in any common format (the SOCKS5 its browser's container admits): saved sealed",
     params: profileParams,
     body: pageBrowserProfileProxyBodySchema,
     response: { 200: pageBrowserProfileProxyResponseSchema, ...errors },
+  },
+  pageBrowserProxyCheck: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Check a proxy for a page's server browser (pasted, a draft's, a profile's, a page's own): works or why not, the protocol spoken, latency, the exit IP and its place by an IP-info service through the proxy, the environment proposed — never a platform",
+    body: pageBrowserProxyCheckBodySchema,
+    response: { 200: pageBrowserProxyCheckResponseSchema, ...errors },
+  },
+  pageBrowserDrafts: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "The page browsers started in the dashboard and not made yet (drafts), and the pages that may move to their browser",
+    response: { 200: pageBrowserDraftsResponseSchema, ...errors },
+  },
+  pageBrowserDraftSave: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Start or save a page's browser to be made: a new page's proxy (pasted, saved sealed) or an existing page's own, and the environment confirmed",
+    params: draftParams,
+    body: pageBrowserDraftSaveBodySchema,
+    response: { 200: pageBrowserDraftViewSchema, ...errors },
+  },
+  pageBrowserDraftDelete: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Delete a page browser's draft (nothing was made of it yet)",
+    params: draftParams,
+    response: { 200: pageBrowserDraftDeleteResponseSchema, ...errors },
   },
   pageBrowserProfilePin: {
     auth: { kind: "owner-session" },

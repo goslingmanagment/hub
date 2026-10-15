@@ -190,8 +190,9 @@ export function onboardingLinkProblem(profile: OnboardingProfile): string | null
  * (plan §3.2 «Подключение новой страницы через браузер»): the profile's own
  * token, no page (`ONBOARDING_PAGE_ID`) and no expected account — the
  * operator confirms no session then, and Hub learns the account from its
- * own read — the proxy the owner gave for the page to be (SOCKS5 only, its
- * host resolved here), the pinned exit IP and the environment.
+ * own read — the proxy the owner gave for the page to be (SOCKS5 only, at
+ * the address its container was made for — its host resolved here only for
+ * a profile that has none), the pinned exit IP and the environment.
  */
 export async function readOnboardingLinkSettings(
   ctx: { db: Database; config: SecretsConfig },
@@ -208,8 +209,20 @@ export async function readOnboardingLinkSettings(
     : decryptJsonWithKeyVersion<{ username: string | null; password: string | null }>(proxy.encryptedAuth, ctx.config.encryptionKeysByVersion);
   const normalized = normalizeProxyConfigWithMetadata({ url: proxy.url, username: auth?.username ?? null, password: auth?.password ?? null });
   if (!normalized.protocol.startsWith("socks5")) throw new Error(`Page browser profile ${profileId}: the proxy given is not a SOCKS5 one`);
-  const host = normalized.hostname.replace(/^\[|\]$/g, "");
-  const ip = isIP(host) !== 0 ? host : await (options.resolve ?? resolveHost)(host);
+  let ip: string;
+  if (profile.socksEndpoint !== null) {
+    // The address the container was made for, judged public when the owner
+    // gave the proxy: no DNS answer of now replaces it (Astra's review of PR
+    // #627, item 3). Its port must be the proxy's.
+    const [endpointIp, endpointPort] = profile.socksEndpoint.split(":");
+    if (Number(endpointPort) !== Number(normalized.port)) {
+      throw new Error(`Page browser profile ${profileId}: the proxy's port is not the one of the SOCKS5 its container was made for (${profile.socksEndpoint})`);
+    }
+    ip = endpointIp!;
+  } else {
+    const host = normalized.hostname.replace(/^\[|\]$/g, "");
+    ip = isIP(host) !== 0 ? host : await (options.resolve ?? resolveHost)(host);
+  }
   if (isIP(ip) === 0) throw new Error(`Page browser profile ${profileId}: the proxy's host does not resolve to an address`);
   return {
     token: openPageBrowserSecret(ctx.config, profile.encryptedEngineToken),
@@ -235,29 +248,4 @@ export async function readOnboardingLinkRevision(ctx: { db: Database }, profileI
     env: profile.env,
     bound: profile.pageId,
   })).digest("hex");
-}
-
-/** The proxy given for a page to be names the SOCKS5 its profile's
- *  container admits (`socks_endpoint`): the host resolved as the hello
- *  resolves it. Null: it does (or the container's is not known); otherwise
- *  why not, in the owner's words. */
-export async function onboardingProxyMismatch(
-  profile: Pick<OnboardingProfile, "socksEndpoint">,
-  proxy: { url: string; username?: string | null; password?: string | null },
-  options: { resolve?: (host: string) => Promise<string> } = {},
-): Promise<string | null> {
-  const normalized = normalizeProxyConfigWithMetadata({ url: proxy.url, username: proxy.username ?? null, password: proxy.password ?? null });
-  if (!normalized.protocol.startsWith("socks5")) return "a page's browser goes out through a SOCKS5 proxy only (socks5://…)";
-  if (profile.socksEndpoint === null) return null;
-  const host = normalized.hostname.replace(/^\[|\]$/g, "");
-  let ip: string;
-  try {
-    ip = isIP(host) !== 0 ? host : await (options.resolve ?? resolveHost)(host);
-  } catch {
-    return `the proxy's host ${host} does not resolve`;
-  }
-  const endpoint = `${ip}:${Number(normalized.port)}`;
-  return endpoint === profile.socksEndpoint
-    ? null
-    : `the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${endpoint}`;
 }

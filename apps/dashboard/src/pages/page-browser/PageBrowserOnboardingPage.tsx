@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Circle, ExternalLink, Lock, RefreshCw } from "lucide-react";
 import type { PageBrowserProfileResponse } from "@agency_hub_core/contracts";
-import { buildProxyConfig, formatProxyPreview, getProxyStringError } from "@agency_hub_core/shared";
+import type { PastedProxyOrder } from "@agency_hub_core/shared";
 
 import {
   pageBrowserProfileScreenshotUrl,
@@ -23,12 +23,15 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { Card, Chip, INPUT, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN, ToneChip } from "./loginParts.js";
 import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
+import { ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
+import { asSocks5Text, envLine, maskedLine, proxyPreviewOf } from "./proxyEntryView.js";
 import { stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // A new page connected through its own server browser (Project Browser plan
 // §3.2 «Подключение новой страницы через браузер»; PR 16): the profile that
-// `deploy-page-browser.sh add-profile` made, its proxy, the exit IP its
-// browser checks itself, the owner's login through PR 15's form, the account
+// `deploy-page-browser.sh add-profile` made from the owner's draft, its
+// proxy (given in the draft; checked again or replaced here in one pasted
+// field — owner decision 2026-10-15), the exit IP its browser checks itself, the owner's login through PR 15's form, the account
 // read through the browser, the page created and bound. What is typed — the
 // proxy's password, the login, the password, the code — goes straight to
 // the API and is kept nowhere here.
@@ -47,51 +50,84 @@ function StepTitle({ n, title, state }: { n: number; title: string; state: StepS
   );
 }
 
-function ProxyStep({ data, state, exitIp, onExitIp }: { data: PageBrowserProfileResponse; state: StepState; exitIp: string | null; onExitIp: (ip: string) => void }) {
+function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse; state: StepState; onExitIp: (ip: string | null) => void }) {
   const qc = useQueryClient();
-  const [raw, setRaw] = useState("");
+  const [text, setText] = useState("");
+  const [order, setOrder] = useState<PastedProxyOrder | null>(null);
+  const [replacing, setReplacing] = useState(false);
   const [pending, setPending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const check = useProxyCheck();
   const editable = data.login.state !== "login" && data.login.state !== "closing";
-  const proxyError = raw.trim() === "" ? null : getProxyStringError(raw);
-  const config = buildProxyConfig(raw);
-  const preview = formatProxyPreview(raw);
+  const pasting = editable && (data.proxy === null || replacing);
+  const preview = proxyPreviewOf(text, order);
+  // Saved only after a check of this very text that logged in through it:
+  // the address it connected to is the one kept.
+  const checkId = pasting ? check.result?.checkId ?? null : null;
+  const ready = preview.kind === "parsed" && preview.problem === null && checkId !== null;
+  const runCheck = () => {
+    const source = pasting
+      ? (preview.kind === "parsed" ? { kind: "text" as const, proxy: { text, ...(order === null ? {} : { order }) } } : null)
+      : { kind: "profile" as const, profileId: data.profile.profileId };
+    if (source === null) return;
+    void check.run(source).then((answer) => onExitIp(answer?.ok === true && answer.exit !== null ? answer.exit.ip : null));
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (config === undefined || pending) return;
+    if (!ready || pending || checkId === null) return;
     setPending(true);
     setProblem(null);
+    const proxy = { text, ...(order === null ? {} : { order }) };
     // The proxy's password leaves the field at once: it goes to the API, and
     // nothing keeps it after (no query cache).
-    setRaw("");
-    sendPageBrowserProfileProxy(qc, data.profile.profileId, { url: config.url, username: config.username ?? null, password: config.password ?? null })
-      .then((answer) => onExitIp(answer.exitIp), (error: unknown) => setProblem(errorText(error)))
+    setText("");
+    setOrder(null);
+    sendPageBrowserProfileProxy(qc, data.profile.profileId, proxy, checkId)
+      .then(() => { setReplacing(false); check.reset(); }, (error: unknown) => setProblem(errorText(error)))
       .finally(() => setPending(false));
   };
+  // First the check, then the save: the address it connected to is the one kept.
+  const checkPanel = (
+    <ProxyCheckPanel
+      check={check}
+      onCheck={runCheck}
+      disabled={pasting ? preview.kind !== "parsed" : data.proxy === null}
+      onUseAsSocks5={pasting ? () => {
+        const socks = asSocks5Text(text, order);
+        if (socks !== null) {
+          setText(socks);
+          check.reset();
+        }
+      } : undefined}
+    />
+  );
   return (
     <Card title={<StepTitle n={1} title="Прокси страницы" state={state} />}>
       {data.proxy !== null && (
-        <p className="mb-3 text-sm text-text-secondary">
-          Задан: <span className="font-mono text-text-primary">{data.proxy.url}</span>
-          {data.proxy.username !== null && <> · логин <span className="font-mono">{data.proxy.username}</span></>}
-          {exitIp !== null && <> · через него Hub видит IP <span className="font-mono text-text-primary">{exitIp}</span></>}
+        <p className="mb-1 text-sm text-text-secondary" data-proxy-saved>
+          {data.proxy.masked !== null ? <span className="font-mono text-text-primary">{maskedLine(data.proxy.masked)}</span> : <span className="font-mono text-text-primary">{data.proxy.url}</span>}
         </p>
       )}
-      {editable && (
-        <form onSubmit={submit} className="flex flex-col gap-2" autoComplete="off">
-          <label htmlFor="pb-proxy" className="text-sm text-text-secondary">
-            {data.proxy === null ? "SOCKS5 этой страницы" : "Заменить прокси"} — тот, с которым создан браузер{data.socksEndpoint !== null && <> (<span className="font-mono">{data.socksEndpoint}</span>)</>}
-          </label>
-          <div className="flex gap-2">
-            <input id="pb-proxy" value={raw} onChange={(event) => setRaw(event.target.value)} placeholder="user:pass@host:port" className={`${INPUT} flex-1 font-mono`} spellCheck={false} disabled={pending} />
-            <button type="submit" className={PLAIN} disabled={config === undefined || proxyError !== null || pending}>
-              {pending ? "Проверяем…" : "Сохранить"}
-            </button>
+      {data.socksEndpoint !== null && (
+        <p className="mb-3 text-xs text-text-muted">Браузер создан для SOCKS5 <span className="font-mono">{data.socksEndpoint}</span>: другую прокси он не пропустит.</p>
+      )}
+      {data.env !== null && (
+        <p className="mb-3 text-xs text-text-muted">Окружение браузера: <span className="font-mono text-text-secondary">{envLine(data.env)}</span></p>
+      )}
+      {pasting && (
+        <form onSubmit={submit} className="mb-3 flex flex-col gap-2" autoComplete="off">
+          <ProxyPasteField id="pb-proxy" label={data.proxy === null ? "Прокси этой страницы" : "Новая прокси — тот же SOCKS5, другой логин или пароль"} text={text} onText={(value) => { setText(value); check.reset(); }} order={order} onOrder={setOrder} disabled={pending} />
+          {checkPanel}
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="submit" className={PLAIN} disabled={!ready || pending}>{pending ? "Сохраняем…" : "Сохранить"}</button>
+            {data.proxy !== null && <button type="button" className={PLAIN} onClick={() => { setReplacing(false); setText(""); check.reset(); }}>Отмена</button>}
+            {checkId === null && preview.kind === "parsed" && <span className="text-xs text-text-muted">Сохранить — после успешной проверки этой прокси</span>}
           </div>
-          {preview !== null && <p className="text-xs text-text-tertiary">{preview}</p>}
-          {proxyError !== null && <p className="text-xs text-danger">{proxyError}</p>}
-          <p className="text-xs text-text-muted">Hub сохранит прокси зашифрованным и покажет выходной IP через него. Пароль прокси нигде не показывается.</p>
         </form>
+      )}
+      {!pasting && checkPanel}
+      {editable && data.proxy !== null && !replacing && (
+        <button type="button" className={`${PLAIN} mt-3`} onClick={() => { setReplacing(true); check.reset(); }}>Заменить прокси</button>
       )}
       {problem !== null && <p role="alert" className="mt-2 text-sm text-danger">{problem}</p>}
     </Card>
@@ -319,7 +355,8 @@ export function PageBrowserOnboardingPage() {
   const { profileId = "" } = useParams<{ profileId: string }>();
   const onboarding = usePageBrowserProfile(profileId);
   const close = useClosePageBrowserProfile(profileId);
-  // The exit IP Hub saw through the proxy just saved: offered for the pin.
+  // The exit IP the owner's check saw through the proxy: offered for the pin
+  // (a preview — the browser checks its own before it opens its exit).
   const [exitIp, setExitIp] = useState<string | null>(null);
   const back = (
     <Link to={buildSettingsRoute("pages")} className="text-xs font-medium text-accent hover:underline">&larr; Страницы</Link>
@@ -362,7 +399,7 @@ export function PageBrowserOnboardingPage() {
           </Card>
         </div>
         <div className="flex flex-col gap-4">
-          <ProxyStep data={data} state={steps.proxy} exitIp={exitIp} onExitIp={setExitIp} />
+          <ProxyStep data={data} state={steps.proxy} onExitIp={setExitIp} />
           <PinStep data={data} state={steps.pin} suggested={exitIp} />
           <LoginStep data={data} state={steps.login} view={view} />
           <AccountStep data={data} state={steps.account} />

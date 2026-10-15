@@ -986,6 +986,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # lock_timeout. The previous image never names them and updates both
   # tables by named columns; nothing writes them before a page has a browser.
   "0281_page_browser_visibility.sql"
+  # Project Browser (owner decision 2026-10-15): a page browser's draft — the
+  # new, empty table page_browser_drafts under a 5 s lock_timeout, nothing
+  # else altered. The previous image never names it; a draft it leaves
+  # unconsumed stays so (its add-profile still takes --socks and --env).
+  "0282_page_browser_drafts.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

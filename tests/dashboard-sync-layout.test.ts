@@ -23,6 +23,8 @@ const queryMocks = vi.hoisted(() => ({
   useSyncOverview: vi.fn(),
   // Project Browser PR 16: the Pages tab lists the new pages' browsers.
   usePageBrowserProfiles: vi.fn(() => ({ data: { profiles: [] }, isError: false })),
+  usePageBrowserDrafts: vi.fn(() => ({ data: { drafts: [], pages: [] }, isError: false })),
+  useDeletePageBrowserDraft: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);

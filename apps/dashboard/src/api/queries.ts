@@ -17,3 +17,4 @@ export * from "./overview.js";
 export * from "./pages.js";
 export * from "./pageBrowser.js";
 export * from "./pageBrowserOnboarding.js";
+export * from "./pageBrowserDrafts.js";

@@ -6,7 +6,7 @@ import type { Socket } from "node:net";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { findOnboardingProfile, registerPageBrowserProfile, type Database } from "@agency_hub_core/db";
+import { findOnboardingProfile, type Database } from "@agency_hub_core/db";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
@@ -14,7 +14,7 @@ import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
+import { buildSyncBrowserProfileCommandGroup } from "../apps/runtime/src/sync/browser-profile-cli.ts";
 import { Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { BrowserOnboardingTask } from "../apps/runtime/src/sync/fansly/browser-onboarding.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -35,13 +35,17 @@ import {
   writeNetSelftest,
 } from "./helpers/page-browser-fakes.ts";
 import { FakeLoginSite } from "./helpers/page-browser-login-site.ts";
+import { fakeIpInfoService, GEOJS_BERLIN, IPINFO_BERLIN, localCheckOptions } from "./helpers/proxy-check-fakes.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { harnessConfig, until as eventually } from "./helpers/sync-engine.ts";
 
 // A new page connected through its own browser, the whole path (Project
 // Browser plan §3.2 «Подключение новой страницы через браузер»; stage 3 PR
-// 16), and the proof that what the owner types reaches the browser and
-// nothing else — PR 15's proof, on the onboarding's path: the dashboard's
+// 16; the proxy entered and checked first, owner decision 2026-10-15), and
+// the proof that what the owner types reaches the browser and nothing else
+// — PR 15's proof, on the onboarding's path: the owner's proxy pasted,
+// checked through the SOCKS5 and saved in a draft, add-profile's CLI
+// registering the profile from it, the dashboard's
 // calls to the real API (its routes, its logger), the API's calls to the
 // real operator (its RPC, journals, buffer, login desk) in front of a
 // scripted Chrome with a fake Fansly login, the real onboarding link of the
@@ -193,19 +197,71 @@ describe("a new page connected through its own browser, the whole path (plan §3
     model.proxyPort = ports.proxyPort;
     await until(() => operator.cdp.linked, 3000, "the holder link");
 
-    // The profile as add-profile registers it: a new page's, its page empty.
+    // The IP-info services the owner's check asks, behind the same SOCKS5.
+    const ipinfo = await fakeIpInfoService(() => ({ status: 200, body: IPINFO_BERLIN }));
+    cleanups.push(ipinfo.close);
+    const geojs = await fakeIpInfoService(() => ({ status: 200, body: GEOJS_BERLIN }));
+    cleanups.push(geojs.close);
     const config = harnessConfig(testDb.connectionString, "https://apiv3.fansly.com/api/v1");
-    const profileId = randomUUID();
-    await registerPageBrowserProfile(db(), {
-      profileId,
-      container: "page-browser-ari-2",
-      ...sealPageBrowserSecrets(config, { engineToken: RPC_TOKEN, apiToken: API_TOKEN, vncPassword: VNC_PASSWORD }),
-      socksEndpoint: `127.0.0.1:${socks.port}`,
-      env: ENV,
-    });
 
-    // The engine's onboarding task: the real settings (the proxy given in the
-    // dashboard, the pin), the operator's RPC on this machine.
+    // The API.
+    const apiLines: string[] = [];
+    const app = createTestAppContext(testDb, {
+      fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
+      logger: capturing(apiLines),
+      pageBrowserEndpoints: { rpcUrl: () => `ws://127.0.0.1:${ports.rpcPort}/rpc`, screen: () => ({ host: "127.0.0.1", port: 1 }) },
+      // The owner's check: through the local SOCKS5 to the IP-info services
+      // on this machine.
+      pageBrowserProxyCheck: { options: localCheckOptions(socks, ipinfo, geojs), allowAddresses: (ip) => ip === "127.0.0.1" },
+    });
+    await createUserAccount(app, { username: "owner-pb16", role: "owner", password: "synthetic-password" }, { source: "cli" });
+    await createUserAccount(app, { username: "lead-pb16", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
+    const server = await buildApiServer(app);
+    cleanups.push(() => server.close());
+    const cookieOf = async (username: string) => {
+      const response = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username, password: "synthetic-password" } });
+      const header = response.headers["set-cookie"];
+      return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
+    };
+    const cookie = await cookieOf("owner-pb16");
+    const leadCookie = await cookieOf("lead-pb16");
+    const as = (who: string) => ({ cookie: who, host: "hub.test", origin: "https://hub.test" });
+    await testDb.pool.query("insert into models (slug, name) values ('ari', 'Ari')");
+
+    // The browser starts in the dashboard: the proxy pasted whole, checked
+    // through it — its exit, its place, the environment proposed —, the
+    // environment confirmed, the draft saved.
+    const pasted = `127.0.0.1:${socks.port}:${SOCKS_USER}:${SOCKS_PASSWORD}`;
+    const checked = await server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: as(cookie), payload: { source: { kind: "text", proxy: { text: pasted } } } });
+    expect(checked.json()).toMatchObject({ ok: true, spoken: "socks5", exit: { ip: "203.0.113.7", countryCode: "DE", timeZone: "Europe/Berlin" }, env: { timeZone: "Europe/Berlin", languages: ["de-DE", "de", "en-US", "en"] } });
+    expect(checked.body).not.toContain(SOCKS_PASSWORD);
+    // Saved with that check: the address it connected to is the one stored.
+    const drafted = await server.inject({ method: "PUT", url: "/api/v1/page-browser/drafts/ari-2", headers: as(cookie), payload: { existingPage: false, proxy: { text: pasted }, env: ENV, checkId: checked.json().checkId, expectedRevision: null } });
+    expect(drafted.statusCode, drafted.body).toBe(200);
+    expect(drafted.body).not.toContain(SOCKS_PASSWORD);
+
+    // add-profile on the server: Hub's draft read (no secret), the container
+    // made for its SOCKS5, the profile registered from the draft — its
+    // secrets on the CLI's standard input.
+    const printed: string[] = [];
+    const cli = buildSyncBrowserProfileCommandGroup({
+      openContext: async () => ({ db: db(), rawConfig: config, close: async () => undefined }),
+      print: (line) => void printed.push(line),
+      readStdin: async () => `${RPC_TOKEN}\n${API_TOKEN}\n${VNC_PASSWORD}\n`,
+      allowAddresses: (ip) => ip === "127.0.0.1",
+    });
+    await cli.parseAsync(["browser-profile", "draft", "--name", "ari-2"], { from: "user" });
+    const draft = JSON.parse(printed.at(-1)!) as { socks: string; draftId: string; revision: number };
+    expect(draft).toMatchObject({ socks: `127.0.0.1:${socks.port}`, env: ENV, existingPage: false });
+    const profileId = randomUUID();
+    await cli.parseAsync([
+      "browser-profile", "add", "--profile", profileId, "--container", "page-browser-ari-2", "--socks", draft.socks,
+      "--from-draft", "ari-2", "--draft-id", draft.draftId, "--draft-revision", String(draft.revision), "--secrets-stdin", "--new-page", "ari-2",
+    ], { from: "user" });
+    expect(printed.join("\n")).not.toContain(SOCKS_PASSWORD);
+
+    // The engine's onboarding task: the real settings (the proxy from the
+    // draft, the pin), the operator's RPC on this machine.
     const engineLines: string[] = [];
     const task = new BrowserOnboardingTask({
       db: db(),
@@ -226,48 +282,38 @@ describe("a new page connected through its own browser, the whole path (plan §3
     });
     cleanups.push(() => task.stop());
     task.start();
-
-    // The API.
-    const apiLines: string[] = [];
-    const app = createTestAppContext(testDb, {
-      fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
-      logger: capturing(apiLines),
-      pageBrowserEndpoints: { rpcUrl: () => `ws://127.0.0.1:${ports.rpcPort}/rpc`, screen: () => ({ host: "127.0.0.1", port: 1 }) },
-      // The proxy test: the local SOCKS5 taken, the exit IP as api.ipify.org
-      // would name it.
-      pageBrowserProxyTest: async () => "203.0.113.7",
-    });
-    await createUserAccount(app, { username: "owner-pb16", role: "owner", password: "synthetic-password" }, { source: "cli" });
-    await createUserAccount(app, { username: "lead-pb16", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
-    const server = await buildApiServer(app);
-    cleanups.push(() => server.close());
-    const cookieOf = async (username: string) => {
-      const response = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username, password: "synthetic-password" } });
-      const header = response.headers["set-cookie"];
-      return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
-    };
-    const cookie = await cookieOf("owner-pb16");
-    const leadCookie = await cookieOf("lead-pb16");
-    const as = (who: string) => ({ cookie: who, host: "hub.test", origin: "https://hub.test" });
     const base = `/api/v1/page-browser/profiles/${profileId}`;
-    await testDb.pool.query("insert into models (slug, name) values ('ari', 'Ari')");
 
-    // The new profile, listed for the owner only.
+    // The new profile, listed for the owner only, its proxy the draft's.
     expect((await server.inject({ method: "GET", url: "/api/v1/page-browser/profiles", headers: as(leadCookie) })).statusCode).toBe(403);
     const listed = await server.inject({ method: "GET", url: "/api/v1/page-browser/profiles", headers: as(cookie) });
-    expect(listed.json()).toMatchObject({ profiles: [{ profileId, name: "ari-2", onboarding: "off", proxySet: false, pinnedExitIp: null, envSet: true }] });
-    // Its login is not open before a proxy and a pin.
+    expect(listed.json()).toMatchObject({ profiles: [{ profileId, name: "ari-2", onboarding: "off", proxySet: true, pinnedExitIp: null, envSet: true }] });
+    // Its login is not open before a pin.
     expect((await server.inject({ method: "POST", url: `${base}/login/start`, headers: as(cookie) })).json()).toMatchObject({ error: "browser_not_ready" });
 
-    // The proxy: only the SOCKS5 its container admits; a change only from
-    // the dashboard's own pages.
-    const proxy = { url: `socks5://127.0.0.1:${socks.port}`, username: SOCKS_USER, password: SOCKS_PASSWORD };
-    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: { cookie, host: "hub.test", origin: "https://evil.example" }, payload: { proxy } })).statusCode).toBe(403);
-    const other = await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: { ...proxy, url: "socks5://127.0.0.1:1" } } });
+    // The proxy replaced in one field (another format of the same SOCKS5):
+    // only the one its container admits; a change only from the dashboard's
+    // own pages.
+    const checkOf = async (text: string) => (await server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: as(cookie), payload: { source: { kind: "text", proxy: { text } } } })).json().checkId as string;
+    const again = { text: `socks5://${SOCKS_USER}:${SOCKS_PASSWORD}@127.0.0.1:${socks.port}` };
+    const againChecked = await checkOf(again.text);
+    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: { cookie, host: "hub.test", origin: "https://evil.example" }, payload: { proxy: again, checkId: againChecked } })).statusCode).toBe(403);
+    // Another SOCKS5, checked: not the one the container admits.
+    const elsewhere = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
+    await elsewhere.start();
+    cleanups.push(() => elsewhere.stop());
+    elsewhere.routes.set("ipinfo.io:443", ipinfo.port);
+    const otherText = `127.0.0.1:${elsewhere.port}:${SOCKS_USER}:${SOCKS_PASSWORD}`;
+    const other = await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: { text: otherText }, checkId: await checkOf(otherText) } });
     expect(other.statusCode).toBe(400);
     expect(other.json().message).toContain(`was made for the SOCKS5 127.0.0.1:${socks.port}`);
-    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy } })).json()).toEqual({ exitIp: "203.0.113.7" });
-    expect((await server.inject({ method: "POST", url: `${base}/pin`, headers: as(cookie), payload: { ip: "203.0.113.7" } })).json()).toEqual({ pinnedExitIp: "203.0.113.7" });
+    expect((await server.inject({ method: "POST", url: `${base}/proxy`, headers: as(cookie), payload: { proxy: again, checkId: againChecked } })).json()).toEqual({
+      proxy: { scheme: "socks5", host: "127.0.0.1", port: socks.port, username: SOCKS_USER, passwordSet: true },
+    });
+    // Checked as given; its exit IP — a preview — pinned by the owner.
+    const exit = (await server.inject({ method: "POST", url: "/api/v1/page-browser/proxy-check", headers: as(cookie), payload: { source: { kind: "profile", profileId } } })).json();
+    expect(exit).toMatchObject({ ok: true, exit: { ip: "203.0.113.7" } });
+    expect((await server.inject({ method: "POST", url: `${base}/pin`, headers: as(cookie), payload: { ip: exit.exit.ip } })).json()).toEqual({ pinnedExitIp: "203.0.113.7" });
 
     // The login: the engine puts the browser into the manual login and starts it.
     expect((await server.inject({ method: "POST", url: `${base}/login/start`, headers: as(cookie) })).json()).toEqual({ state: "login", changed: true });
@@ -372,7 +418,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
     const audit = (await testDb.pool.query<{ metadata: Record<string, unknown> }>(
       "select metadata from audit_events where event_type = 'admin.page_browser_onboarding' order by id",
     )).rows.map((row) => `${String(row.metadata.step)}:${String(row.metadata.screen ?? row.metadata.to ?? "")}`);
-    expect(audit).toEqual(["proxy:", "pin:", "open:login", "submit:error", "submit:code", "code:success", "close:open", "bind:"]);
+    expect(audit).toEqual(["draft:", "proxy:", "pin:", "open:login", "submit:error", "submit:code", "code:success", "close:open", "bind:"]);
     expect(engineLines.join("")).toContain("Fansly sync browser onboarding");
   }, 180_000);
 });

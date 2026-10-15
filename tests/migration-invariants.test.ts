@@ -596,6 +596,31 @@ describe("database migration invariants", () => {
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0279_sync_pages_manual_login.sql"');
   });
 
+  it("keeps a page browser's draft (owner decision 2026-10-15) a new table only, its proxy sealed, rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const drafts = statementsOf(await readFile("packages/db/migrations/0282_page_browser_drafts.sql", "utf8"));
+    expect(drafts).toContain("set local lock_timeout = '5s';");
+    expect(drafts).toContain("create table if not exists page_browser_drafts (");
+    // Nothing else altered, nothing written.
+    expect(drafts).not.toMatch(/^\s*alter table\b/im);
+    expect(drafts).not.toMatch(/^\s*(update|insert|delete)\b/im);
+    // A new page's draft carries its proxy (sealed with its key version); an existing page's uses its own.
+    expect(drafts).toContain("(proxy_auth is null) = (proxy_key_version is null)");
+    expect(drafts).toContain("(page_id is null) = (proxy_url is not null)");
+    // Its own identity, never reused; the address judged public at its save;
+    // an existing page's proxy as it was then (Astra's review of PR #627).
+    expect(drafts).toContain("draft_id uuid not null default gen_random_uuid()");
+    expect(drafts).toContain("constraint page_browser_drafts_draft_id_key unique (draft_id)");
+    expect(drafts).toContain("socks_endpoint text not null");
+    expect(drafts).toContain("(page_id is null) = (page_proxy_id is null) and (page_proxy_id is null) = (page_proxy_fingerprint is null)");
+    // The read role sees every column but the proxy's sealed auth.
+    const grant = /grant select \(([^)]*)\)\s+on page_browser_drafts to read_only;/.exec(drafts)?.[1] ?? "";
+    expect(grant).toContain("proxy_url");
+    expect(grant).not.toContain("proxy_auth");
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0282_page_browser_drafts.sql"');
+  });
+
   it("keeps a new page's onboarding through its browser (Project Browser PR 16) brief, defaulted, sealed and rollback-compatible", async () => {
     const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
     const onboarding = statementsOf(await readFile("packages/db/migrations/0280_page_browser_onboarding.sql", "utf8"));

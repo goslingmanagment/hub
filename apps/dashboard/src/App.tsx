@@ -36,6 +36,7 @@ const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((
 const ClientHealthPage = lazy(() => import("./pages/dev/ClientHealthPage.js").then((m) => ({ default: m.ClientHealthPage })));
 const PageBrowserLoginPage = lazy(() => import("./pages/page-browser/PageBrowserLoginPage.js").then((m) => ({ default: m.PageBrowserLoginPage })));
 const PageBrowserOnboardingPage = lazy(() => import("./pages/page-browser/PageBrowserOnboardingPage.js").then((m) => ({ default: m.PageBrowserOnboardingPage })));
+const PageBrowserDraftPage = lazy(() => import("./pages/page-browser/PageBrowserDraftPage.js").then((m) => ({ default: m.PageBrowserDraftPage })));
 
 function LazyFallback() {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
@@ -66,6 +67,8 @@ export function App() {
             {/* Project Browser PR 15: the owner logs a page's server browser in. */}
             <Route path="pages/:pageLabel/browser-login" element={<OwnerRoute><PageBrowserLoginPage /></OwnerRoute>} />
             {/* Project Browser PR 16: a new page connected through its own browser. */}
+            {/* Owner decision 2026-10-15: a page's browser starts here — its proxy pasted and checked, its environment confirmed. */}
+            <Route path="browser-profiles/new" element={<OwnerRoute><PageBrowserDraftPage /></OwnerRoute>} />
             <Route path="browser-profiles/:profileId" element={<OwnerRoute><PageBrowserOnboardingPage /></OwnerRoute>} />
             <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
             <Route path="ofapi-media" element={<OfapiMediaPage />} />

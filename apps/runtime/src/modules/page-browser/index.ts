@@ -29,19 +29,11 @@ import {
   type Database,
   type OnboardingProfile,
 } from "@agency_hub_core/db";
-import {
-  createProxyRequestDispatcher,
-  encryptJson,
-  normalizeProxyConfig,
-  redactSensitiveText,
-  undiciRequest,
-} from "@agency_hub_core/shared";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { authenticateSessionToken, ownerSessionExpiry, recordAudit, requireOwner, SESSION_COOKIE_NAME } from "../../services/auth.ts";
 import {
   onboardingLinkProblem,
-  onboardingProxyMismatch,
   openPageBrowserSecret,
   readPageBrowserPageSettings,
 } from "../../services/egress/page-browser-link.ts";
@@ -55,8 +47,10 @@ import {
 } from "../../services/egress/page-browser-login.ts";
 import { AppError, BadRequestError, NotFoundError } from "../../services/errors.ts";
 import { onboardingProxyOf, PAGE_BROWSER_ONBOARDING_AUDIT_EVENT, profilePageName } from "../../services/page-browser-onboarding.ts";
-import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
+import { endpointOfCheck, maskStoredProxy, readProxyText, sealUsableProxy } from "../../services/page-browser-proxy-entry.ts";
+import { ProxyCheckLedger } from "../../services/page-browser-proxy-checks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { registerPageBrowserProxyEntryRoutes } from "./proxy-entry.ts";
 
 /** The owner's login of a page's browser in the audit log: opened, closed,
  *  each step and its result — never what was typed. */
@@ -144,10 +138,13 @@ interface LoginNow {
  *   still sends with a POST; the API has no CSRF token, and a browser sends
  *   `Origin` with every POST. Refused: 403 `cross_origin`, before the
  *   session is read.
- * - A new page's onboarding (PR 16): the proxy of the page to be (saved
- *   sealed, the SOCKS5 its container admits only; its exit IP read through
- *   it for the owner), the exit IP pinned (the browser checks it itself
- *   before it opens its exit: its own word is what the view shows), the
+ * - A new page's onboarding (PR 16): the proxy of the page to be — given in
+ *   the owner's draft before its container was made (`proxy-entry.ts`, owner
+ *   decision 2026-10-15), replaced here by one pasted field in any common
+ *   format (saved sealed, the SOCKS5 its container admits only) and checked
+ *   by the owner's «Проверить прокси» —, the exit IP pinned (the check's IP
+ *   is a preview; the browser checks its own before it opens its exit: its
+ *   own word is what the view shows), the
  *   login as a page's, and the onboarding given up (the engine stops the
  *   browser; `remove-profile` deletes the profile). The account check and
  *   the page's creation are the catalog's (`/api/v1/admin/credentials/verify`,
@@ -159,6 +156,8 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
   const endpoints = () => appContext.pageBrowserEndpoints ?? PAGE_BROWSER_ENDPOINTS;
+  // The owner's proxy checks a save may name (in memory, a few minutes).
+  const checks = new ProxyCheckLedger({ now: appContext.pageBrowserProxyCheck?.now });
 
   async function pageOf(label: string): Promise<{ pageId: number; label: string }> {
     const found = await findPageByLabel(appContext.db, label);
@@ -599,7 +598,9 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     return {
       profile: summaryOf(profile),
       socksEndpoint: profile.socksEndpoint,
-      proxy: profile.proxy === null ? null : { url: profile.proxy.url, username: proxyUsername(profile) },
+      proxy: profile.proxy === null
+        ? null
+        : { url: profile.proxy.url, username: proxyUsername(profile), masked: maskStoredProxy(appContext.config, { url: profile.proxy.url, encryptedAuth: profile.proxy.encryptedAuth }) },
       env,
       login: { state: profile.onboarding, changedAt: profile.onboardingChangedAt?.toISOString() ?? null },
       browser: { ready: problem === null, problem, reachable: screen === null ? null : !screen.unreachable },
@@ -641,45 +642,26 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     requireOwner(principal);
     const profile = await profileOf(request.params.profileId);
     if (profile.onboarding === "login") throw new AppError("The browser's login is open: close it before its proxy changes", 409, "login_open");
-    let proxy: ReturnType<typeof normalizeProxyConfig>;
-    try {
-      const given = request.body.proxy;
-      proxy = normalizeProxyConfig({ url: given.url, username: given.username ?? null, password: given.password ?? null });
-      if (appContext.pageBrowserProxyTest === undefined) await assertAllowedProxyTarget(proxy);
-    } catch (error) {
-      throw new BadRequestError(`Invalid proxy: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`);
+    // One field, any common format, read by Hub; a proxy a page's browser
+    // can use, or the owner's words why not.
+    const pasted = readProxyText(request.body.proxy);
+    const sealed = sealUsableProxy(appContext.config, pasted);
+    // The address the owner's check of this very proxy connected to — never
+    // a DNS answer of now: it must be the SOCKS5 the container was made for.
+    const socksEndpoint = endpointOfCheck(checks, request.body.checkId, pasted, appContext.pageBrowserProxyCheck);
+    if (profile.socksEndpoint !== null && socksEndpoint !== profile.socksEndpoint) {
+      throw new BadRequestError(`Invalid proxy: the browser's container was made for the SOCKS5 ${profile.socksEndpoint}; this proxy is ${socksEndpoint}`, { reason: "proxy_mismatch" });
     }
-    const mismatch = await onboardingProxyMismatch(profile, proxy);
-    if (mismatch !== null) throw new BadRequestError(`Invalid proxy: ${mismatch}`);
-    const exitIp = await exitIpThrough(proxy);
-    const encryptedAuth = proxy.username || proxy.password
-      ? JSON.stringify(encryptJson({ username: proxy.username ?? null, password: proxy.password ?? null }, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion))
-      : null;
-    if (!(await setOnboardingProxy(appContext.db, { profileId: profile.profileId, url: proxy.url, encryptedAuth, keyVersion: encryptedAuth === null ? null : appContext.config.encryptionKeyVersion }))) {
+    if (!(await setOnboardingProxy(appContext.db, { profileId: profile.profileId, url: sealed.url, encryptedAuth: sealed.encryptedAuth, keyVersion: sealed.keyVersion }))) {
       throw new AppError(`Profile ${profile.profileId} serves a page now`, 409, "profile_bound");
     }
-    await audit(principal, { profileId: profile.profileId, step: "proxy", exitIp });
-    return { exitIp };
+    await audit(principal, { profileId: profile.profileId, step: "proxy", proxy: `${sealed.masked.host}:${sealed.masked.port}` });
+    return { proxy: sealed.masked };
   });
 
-  /** The exit IP seen through a proxy (`api.ipify.org`, as the dashboard's
-   *  proxy test reads it). */
-  async function exitIpThrough(proxy: ReturnType<typeof normalizeProxyConfig>): Promise<string> {
-    if (appContext.pageBrowserProxyTest !== undefined) return appContext.pageBrowserProxyTest(proxy);
-    const dispatcher = createProxyRequestDispatcher(proxy);
-    try {
-      const { statusCode, body } = await undiciRequest("https://api.ipify.org?format=json", { method: "GET", signal: AbortSignal.timeout(30_000), dispatcher });
-      const text = await body.text();
-      if (statusCode < 200 || statusCode >= 300) throw new Error(`IP check returned HTTP ${statusCode}`);
-      const ip = (JSON.parse(text) as { ip?: unknown }).ip;
-      if (typeof ip !== "string" || isIP(ip) === 0) throw new Error("the IP check named no address");
-      return ip;
-    } catch (error) {
-      throw new BadRequestError(`Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`);
-    } finally {
-      await dispatcher.close();
-    }
-  }
+  // A page's browser started in the dashboard: the proxy's check, the
+  // drafts add-profile makes the browser from (owner decision 2026-10-15).
+  registerPageBrowserProxyEntryRoutes(server, ctx, { requireThisOrigin, checks });
 
   server.post("/api/v1/page-browser/profiles/:profileId/pin", {
     schema: routeSchemas.pageBrowserProfilePin,

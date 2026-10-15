@@ -18,6 +18,7 @@ import {
 import { loadBootConfig } from "./services/boot-config.ts";
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
+import type { ProxyCheckOverrides } from "./services/page-browser-proxy-entry.ts";
 import { createEgressPacer } from "./services/egress/pacer.ts";
 import { hasServiceEgressProxy } from "./services/egress/service-proxy.ts";
 import { ofapiCredentialPolicy } from "./services/ofapi-credential-policy.ts";
@@ -83,11 +84,11 @@ export interface AppContext {
    *  take before the screen closes without its answer. Absent: 1 s each.
    *  Tests change them. */
   pageBrowserScreenWatch?: { everyMs?: number; deadlineMs?: number } | undefined;
-  /** TESTS ONLY: the proxy test of a proxy given for a new page's browser
-   *  (Project Browser PR 16) — its target's check and the exit IP read
-   *  through it — in place of the real one (a public target only, the IP
-   *  from api.ipify.org through the proxy, as the dashboard's proxy test). */
-  pageBrowserProxyTest?: ((proxy: { url: string; username?: string | null; password?: string | null }) => Promise<string>) | undefined;
+  /** TESTS ONLY: the owner's check of a page browser's proxy (Project
+   *  Browser, owner decision 2026-10-15) against this machine — its IP-info
+   *  services behind a local SOCKS5, loopback proxies let through. Absent:
+   *  the real services, public proxies only. */
+  pageBrowserProxyCheck?: ProxyCheckOverrides | undefined;
   /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
    *  captures a page through it any more (step 4): it is this process's holder
    *  identity — for the journal of the identity check without a page, the

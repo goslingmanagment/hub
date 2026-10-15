@@ -99,6 +99,11 @@ const SANCTIONED_DELETER_FILES = [
   // forget the API's open screens of a page's browser once closed, and the
   // closings of a login once written. No SQL deletion.
   "apps/runtime/src/modules/page-browser/index.ts",
+  // Project Browser (owner decision 2026-10-15; Astra's review of PR #627,
+  // round 2): Map.delete forgets the owner's proxy checks once stale (10
+  // minutes, in the API's memory). No SQL deletion: nothing of a check is
+  // stored.
+  "apps/runtime/src/services/page-browser-proxy-checks.ts",
   // Project Browser (stage 3 PR 16): Map/Set.delete forget the onboarding
   // links of profiles no page has and a route's in-memory hold. No SQL
   // deletion: every send of a link is journaled and kept.
@@ -109,6 +114,12 @@ const SANCTIONED_DELETER_FILES = [
   // a bound profile, no captured fact: its sends stay journaled, its site
   // answers in observations.
   "packages/db/src/repositories/page-browser-onboarding.ts",
+  // Project Browser (owner decision 2026-10-15): a page browser's draft —
+  // the owner's configuration typed in the dashboard (a name, a proxy he
+  // pasted, sealed; the environment he confirmed), not a captured fact —
+  // deleted by his own press, or consumed by the profile's registration
+  // that copies it. Never scheduled.
+  "packages/db/src/repositories/page-browser-drafts.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

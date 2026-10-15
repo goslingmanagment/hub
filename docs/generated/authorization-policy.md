@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 25 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (307)
+## Routes (311)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -265,6 +265,9 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
+| GET | `/api/v1/page-browser/drafts` | `pageBrowserDrafts` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/page-browser/drafts/:name` | `pageBrowserDraftDelete` | `owner-session` | — | — | no |
+| PUT | `/api/v1/page-browser/drafts/:name` | `pageBrowserDraftSave` | `owner-session` | — | — | no |
 | GET | `/api/v1/page-browser/pages/:pageLabel/login` | `pageBrowserLoginGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/code` | `pageBrowserLoginCode` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/finish` | `pageBrowserLoginFinish` | `owner-session` | — | — | no |
@@ -283,6 +286,7 @@ both enforcement modes. A full device token is not affected.
 | POST | `/api/v1/page-browser/profiles/:profileId/pin` | `pageBrowserProfilePin` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/profiles/:profileId/proxy` | `pageBrowserProfileProxy` | `owner-session` | — | — | no |
 | GET | `/api/v1/page-browser/profiles/:profileId/screen/*` | `pageBrowserProfileScreen` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/proxy-check` | `pageBrowserProxyCheck` | `owner-session` | — | — | no |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
