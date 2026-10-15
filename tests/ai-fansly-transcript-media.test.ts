@@ -153,6 +153,7 @@ describe("the normalizer with Fansly bodies", () => {
       ]),
     });
     expect(formatTranscript(messages).split("\n")).toEqual([
+      "--- 2026-10-01 ---",
       "[10:00] Model: [Video - PPV $20.00, unknown] [Media Bundle: 2 Photos] two things",
       "[10:00] Fan: [Photo] [Tip: $5.00] for you",
       "[10:00] Model: [PPV $15.00, unknown] two things",
@@ -163,7 +164,7 @@ describe("the normalizer with Fansly bodies", () => {
   it("leaves a message's OFAPI media reading alone without the option", () => {
     const ofapi = [{ ...base, id: "1", media: [{ id: 1, type: "photo" }, { id: 2, type: "video" }], mediaCount: 2, price: 15 }];
     const plain = formatTranscript(normalizeTranscriptMessages(ofapi));
-    expect(plain).toBe("[10:00] Model: [Media Bundle: 1 Photo, 1 Video - PPV $15.00, unknown] two things");
+    expect(plain).toBe("--- 2026-10-01 ---\n[10:00] Model: [Media Bundle: 1 Photo, 1 Video - PPV $15.00, unknown] two things");
     expect(formatTranscript(normalizeTranscriptMessages(ofapi, { mediaLabelBodiesByMessageId: new Map() }))).toBe(plain);
   });
 });

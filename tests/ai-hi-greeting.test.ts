@@ -258,7 +258,8 @@ describe('unified hi-greeting prompt', () => {
     const prefix = HI_GREETING_TEMPLATE.slice(0, HI_GREETING_TEMPLATE.indexOf('## Conversation Transcript'));
     expect(prefix).not.toContain('[VARIANT]');
     expect(prefix).not.toContain('{greetingTask}');
-    expect(HI_GREETING_TEMPLATE.endsWith('## Your Task\n\n{greetingTask}\n')).toBe(true);
+    // The clock line opens the same uncached task block (tests/ai-prompt-clock.test.ts).
+    expect(HI_GREETING_TEMPLATE.endsWith('## Your Task\n\n{nowLine}{greetingTask}\n')).toBe(true);
   });
 
   it('renders the Fan Profile: display name, username, saved name and bio, all escaped', () => {

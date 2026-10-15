@@ -80,4 +80,4 @@ Practical recommendations for the chatter:
 
 ## Your Task
 
-Generate the full fan profile review covering all sections above. Write in Russian. Skip sections with no data.
+{nowLine}Generate the full fan profile review covering all sections above. Write in Russian. Skip sections with no data.

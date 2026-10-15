@@ -99,6 +99,6 @@ Reply: "oh no... 9 years 💔 I'm so sorry. you doing ok tonight?"
 
 ## Your Task
 
-{toneInstructions}
+{nowLine}{toneInstructions}
 Write the next reply from the model to the fan. Stay in character. Keep it SHORT, one burst of reaction, like a real text. Output only the message text, in the fan's language (English by default).
 Before you send: reread it as the fan would. If any line restates his situation, explains, or reassures, cut it.

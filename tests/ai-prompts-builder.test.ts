@@ -311,6 +311,9 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
         ? PING_SEGMENT_INSTRUCTIONS[input.pingSegment]
         : '',
     fanSilenceSection: buildFanSilenceSection(input.feature, input.fanSilenceDays),
+    // No request of this suite carries a clock: the slot renders empty.
+    // tests/ai-prompt-clock.test.ts covers it on.
+    nowLine: '',
   });
 }
 

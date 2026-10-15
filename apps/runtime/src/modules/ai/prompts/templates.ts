@@ -107,7 +107,7 @@ Reply: "oh no... 9 years 💔 I'm so sorry. you doing ok tonight?"
 
 ## Your Task
 
-{toneInstructions}
+{nowLine}{toneInstructions}
 Write the next reply from the model to the fan. Stay in character. Keep it SHORT, one burst of reaction, like a real text. Output only the message text, in the fan's language (English by default).
 Before you send: reread it as the fan would. If any line restates his situation, explains, or reassures, cut it.
 `;
@@ -169,7 +169,7 @@ GOOD: "ооо привет красавчик 😏 спасибо за подп�
 
 ## Your Task
 
-Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).
+{nowLine}Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).
 `;
 
 export const HELP_ME_TEMPLATE = `You are a coaching assistant for a OnlyFans agency chatter. The chatter pressed "Help" in the middle of a live conversation: they need a fast read of the situation and two ready-to-send options for the next message. Analyze the conversation below and give exactly that.
@@ -236,7 +236,7 @@ The flirty message suggestion here. Written in the model's voice, in the fan's l
 
 ## Your Task
 
-Analyze the conversation. Write the coaching section in Russian (four short blocks) and both suggestions in the fan's language (English by default). Keep explanations and translations outside the suggestion tags. Use the exact XML format above.
+{nowLine}Analyze the conversation. Write the coaching section in Russian (four short blocks) and both suggestions in the fan's language (English by default). Keep explanations and translations outside the suggestion tags. Use the exact XML format above.
 `;
 
 export const FAN_SUMMARY_TEMPLATE = `You are generating a detailed fan profile review for a OnlyFans agency chatter. Analyze the conversation history and spending/subscription data to create a comprehensive profile of this fan.
@@ -321,7 +321,7 @@ Practical recommendations for the chatter:
 
 ## Your Task
 
-Generate the full fan profile review covering all sections above. Write in Russian. Skip sections with no data.
+{nowLine}Generate the full fan profile review covering all sections above. Write in Russian. Skip sections with no data.
 `;
 
 // Fan-summary short variant (Task 8): kernel-native compact-recap template —
@@ -360,7 +360,7 @@ only, no prose padding. Hard limit: keep the whole recap under 350 words.
 
 ## Your Task
 
-Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.
+{nowLine}Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.
 `;
 
 export const CHAT_REVIEW_TEMPLATE = `You are a quality reviewer evaluating how well a OnlyFans chatter is handling a conversation. The review is a working tool: the chatter reads it to fix concrete mistakes, not to get a grade for its own sake. Every claim must be backed by specific messages.
@@ -498,7 +498,7 @@ Fan username: {fanDisplayName}
 
 ## Your Task
 
-Use this fan segment strategy:
+{nowLine}Use this fan segment strategy:
 
 {segmentInstructions}
 
@@ -572,7 +572,7 @@ Display name: {fanDisplayName}
 
 ## Your Task
 
-{greetingTask}
+{nowLine}{greetingTask}
 `;
 
 // Coach feature (Task 7): kernel-native template — coach-chat postdates the
@@ -620,7 +620,7 @@ method you were given.
 
 ## Your Task
 
-The chatter asks:
+{nowLine}The chatter asks:
 
 <chatter_question>
 {chatterQuestion}

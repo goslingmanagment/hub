@@ -181,6 +181,7 @@ describe("OnlyFans image notes", () => {
       limits: QUICK_FEATURE_MEDIA_NOTE_LIMITS,
     });
     expect(formatTranscript(applied.messages)).toBe([
+      "--- 2026-09-28 ---",
       "[10:00] Fan: [Photo #1: A cat.] look",
       "[10:01] Fan: [Media Bundle: 2 Photos] [Photo #2] [Photo #3] more",
       "[10:02] Model: [Photo - PPV $5.00, unknown] buy",

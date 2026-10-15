@@ -45,6 +45,7 @@ export {
   isPromptDebugEchoEnabled,
   parseAiStreamCapabilities,
 } from "./prompt-debug-echo.ts";
+export { personaLocalTime, type PersonaLocalTime } from "./persona-local-time.ts";
 
 interface PersonaRecord {
   key: string;

@@ -29,4 +29,4 @@ only, no prose padding. Hard limit: keep the whole recap under 350 words.
 
 ## Your Task
 
-Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.
+{nowLine}Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.

@@ -464,6 +464,14 @@ describe("AI feature service pilot (Stage 30)", () => {
     expect(userText).toContain("<fan_spending_data>");
     expect(userText).toContain("<fan_subscription_data>");
     expect(userText).not.toContain(EMPTY_TRANSCRIPT_TEXT);
+    // The hub's own transcript: dated, UTC, and the task opens with the
+    // context's pinned clock and Lora's time in Minsk.
+    expect(userText).toMatch(/^--- \d{4}-\d{2}-\d{2} ---$/m);
+    const task = body.prompt.userBlocks.at(-1)!.text;
+    expect(task).toMatch(/^## Your Task\n\nNow: /);
+    expect(task).toContain(
+      "Now: Thu 2026-10-15, 04:12 UTC. Transcript times and day lines are UTC. The model's local time: Thu 07:12 (Minsk, UTC+3).\n",
+    );
 
     // Ledger + restricted capture rode along (Stage 29 internals).
     const { rows } = await testDb.pool.query(
@@ -1188,6 +1196,10 @@ describe("client-context path (Stage 32)", () => {
     const summaryText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(summaryText).toContain("fresh client-side message about the beach");
     expect(summaryText).toContain("Total: $42.00");
+    // The client's text keeps its own clock: the task says so.
+    expect(summaryText).toContain(
+      "Now: Thu 2026-10-15, 04:12 UTC. Transcript times come from the chatter's device clock, which may be in another time zone.",
+    );
 
     // hi-greeting locks on the client count (35 > 10)…
     const hiLocked = await call("hi-greeting", baseContext);

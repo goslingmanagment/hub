@@ -62,4 +62,4 @@ The flirty message suggestion here. Written in the model's voice, in the fan's l
 
 ## Your Task
 
-Analyze the conversation. Write the coaching section in Russian (four short blocks) and both suggestions in the fan's language (English by default). Keep explanations and translations outside the suggestion tags. Use the exact XML format above.
+{nowLine}Analyze the conversation. Write the coaching section in Russian (four short blocks) and both suggestions in the fan's language (English by default). Keep explanations and translations outside the suggestion tags. Use the exact XML format above.
