@@ -26,7 +26,7 @@ async function setUp() {
   cleanups.push(temp.remove);
   const chrome = new FakeChrome();
   await chrome.boot();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome);
   await holder.start();
   cleanups.push(() => holder.stop());

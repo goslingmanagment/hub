@@ -39,7 +39,7 @@ async function setUp(maxBytes = 128 * 1024 * 1024, options: { stopGraceMs?: numb
   cleanups.push(temp.remove);
   const chrome = new FakeChrome();
   await chrome.boot();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const exits: number[] = [];
   let kills = 0;
   const holder = new Holder({

@@ -117,7 +117,7 @@ async function setUp(
   // A port for Chrome's DevTools, then Chrome is down until the operator starts it.
   await chrome.boot();
   await chrome.shutdown();
-  cleanups.push(() => chrome.shutdown());
+  cleanups.push(() => chrome.close());
   const model = new BrowserModel(chrome);
   const holder = new HolderUnderS6(join(temp.dir, "holder.sock"), chrome, options.holderMaxBytes);
   await holder.start();
