@@ -339,6 +339,7 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     r.site.setTab(r.operator.control.workTab!.sessionId);
     const shown = await r.server.inject({ method: "GET", url: base, headers: as(r.cookie) });
     expect(shown.json()).toMatchObject({ login: { state: "wanted" }, browser: { reachable: true }, screen: { screen: "login", fields: ["login", "password"] }, refused: null });
+    expect(new URL(shown.json().screenUrl, "https://hub.test").searchParams.get("resize")).toBe("scale");
     const shot = await r.server.inject({ method: "GET", url: `${base}/screenshot`, headers: as(r.cookie) });
     expect(shot.statusCode).toBe(200);
     expect(shot.headers["content-type"]).toBe("image/jpeg");

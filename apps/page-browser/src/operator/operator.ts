@@ -120,7 +120,7 @@ import { SiteSockets, type SocketStop, type SocketTimings } from "../ws/sockets.
 import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
 import { writeHandover } from "../env/handover.ts";
-import { describeEnv, sameEnv } from "../env/rules.ts";
+import { describeEnv, sameEnv, SCREEN } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
 import { ExtensionFiles } from "../egress/extension-files.ts";
 import { ApiGate, SLOT_LIMIT_MS } from "../egress/gate.ts";
@@ -979,6 +979,25 @@ export class Operator {
       }
       this.control.geolocation = env.geolocation;
       this.page.advance("env_applied", describeEnv(env));
+      // The owner's screen can outlive Chrome: check X itself before a
+      // restart, not only screen.width once Chrome is already running.
+      let geometry: { width: number; height: number } | null = null;
+      let geometryError: string | null = null;
+      try {
+        geometry = await this.chrome.screenGeometry();
+      } catch (error) {
+        geometryError = errorMessage(error);
+      }
+      check();
+      const screenNote = geometry === null
+        ? `cannot read the X server's screen: ${geometryError}; check or restart the X server`
+        : `X screen ${geometry.width}×${geometry.height}; expected ${SCREEN.width}×${SCREEN.height}`;
+      this.#log("screen.geometry", { geometry, expected: SCREEN, error: geometryError });
+      this.journals.state({ event: "screen.geometry", geometry, from: this.page.step, to: this.page.step, stopReason: null, retryAtWall: null, halted: false, note: screenNote });
+      if (geometry === null) throw new StartFailure("screen_geometry", screenNote);
+      if (geometry.width !== SCREEN.width || geometry.height !== SCREEN.height) {
+        throw new StartFailure("screen_geometry", `${screenNote}; the screen changed independently of Chrome: restart the X server before starting Chrome`);
+      }
       await this.#withChrome(async () => {
         check();
         this.control.reset();

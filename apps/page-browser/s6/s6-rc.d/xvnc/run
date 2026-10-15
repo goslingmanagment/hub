@@ -23,7 +23,7 @@ install -d -o root -g root -m 1777 /tmp/.X11-unix
 # Xkasmvnc exits when they fail).
 exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin \
   /command/s6-setuidgid pb-chrome /usr/bin/Xkasmvnc :99 \
-  -geometry 1920x1080 -depth 24 \
+  -geometry 1920x1080 -depth 24 -AcceptSetDesktopSize 0 \
   -websocketPort 6901 -interface 0.0.0.0 \
   -httpd /usr/share/kasmvnc/www \
   -KasmPasswordFile "$PASSWORD_FILE" \

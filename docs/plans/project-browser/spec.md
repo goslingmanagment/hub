@@ -251,6 +251,7 @@ type StopReason = "selftest_failed" | "exit_ip_changed" | "proxy_unavailable" | 
   | "holder_overflow" | "buffer_full" | "disk_full" | "chrome_crashed" | "unknown_ws_message"
   | "header_mismatch" | "login_required" | "owner_stop"
   | "env_mismatch"  // окружение в браузере не совпало с настройками страницы (план §4.1, шаг 2; PR 5)
+  | "screen_geometry"  // до запуска Chrome: X не показывает 1920×1080; проверить/перезапустить X, причина и размер в журнале
   | "buffer_unavailable"  // буфер не открылся (занят, ошибка ввода-вывода, повреждён, новее оператора):
                           // RPC и тревоги работают, выход закрыт, Chrome не запускается (PR 11)
   | "ws_guard_failed"  // обёртка сокета не встала в контекст сайта: страница стоит (PR 10)

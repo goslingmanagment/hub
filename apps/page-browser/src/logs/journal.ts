@@ -68,6 +68,8 @@ export interface RequestLine {
 }
 
 export interface StateLine {
+  event?: "screen.geometry";
+  geometry?: { width: number; height: number } | null;
   from: string;
   to: string;
   stopReason: string | null;

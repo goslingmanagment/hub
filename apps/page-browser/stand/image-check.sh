@@ -94,6 +94,12 @@ run_check() {
     docker logs "page-browser-$PAGE" 2>&1 | grep -E 'init-net|net-selftest|s6-rc|rc.init' | tail -30 >&2
     return 1
   fi
+  # The synthetic screen password is root's secret. No browser/page
+  # session is used: this client only tries to resize the local X server.
+  docker exec "page-browser-$PAGE" mkdir -p /opt/page-browser/stand
+  docker cp "$APP/stand/screen-check.mjs" "page-browser-$PAGE:/opt/page-browser/stand/screen-check.mjs" >/dev/null
+  log "$label: screen-check.mjs"
+  docker exec "page-browser-$PAGE" node --no-warnings /opt/page-browser/stand/screen-check.mjs
   local script
   for script in image-check.mjs rules-check.mjs; do
     docker cp "$APP/stand/$script" "page-browser-$PAGE:/tmp/$script" >/dev/null

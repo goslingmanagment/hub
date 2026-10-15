@@ -934,6 +934,23 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
   });
 
+  it("a screen resized by the owner's VNC client survives Chrome's restart: refuse before starting Chrome and name the X server recovery", async () => {
+    const s = await setUp();
+    await started(s);
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    s.control.screen = { width: 1728, height: 936 };
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "screen_geometry", 5000, "the changed X screen refused");
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+    expect(s.operator.egress.exitOpen).toBe(false);
+    await until(() => journal(s.logDir, "states").some((line) => String(line.note).includes("restart the X server")), 3000);
+    const geometry = journal(s.logDir, "states").filter((line) => line.event === "screen.geometry");
+    expect(geometry).toEqual(expect.arrayContaining([
+      expect.objectContaining({ geometry: { width: 1920, height: 1080 } }),
+      expect.objectContaining({ geometry: { width: 1728, height: 936 } }),
+    ]));
+  });
+
   it("is verified again on every start: after Chrome crashed, and then a difference fails that start", async () => {
     const s = await setUp();
     await started(s);

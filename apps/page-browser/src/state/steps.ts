@@ -47,6 +47,7 @@ export type Step = (typeof STEPS)[number];
 export const STOP_REASONS = [
   "selftest_failed",
   "env_mismatch",
+  "screen_geometry",
   "exit_ip_changed",
   "proxy_unavailable",
   "proxy_auth",

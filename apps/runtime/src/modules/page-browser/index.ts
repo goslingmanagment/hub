@@ -51,6 +51,9 @@ import { endpointOfCheck, maskStoredProxy, readProxyText, sealUsableProxy } from
 import { ProxyCheckLedger } from "../../services/page-browser-proxy-checks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerPageBrowserProxyEntryRoutes } from "./proxy-entry.ts";
+import { screenUrl } from "./screen-url.ts";
+
+export { screenUrl } from "./screen-url.ts";
 
 /** The owner's login of a page's browser in the audit log: opened, closed,
  *  each step and its result — never what was typed. */
@@ -211,14 +214,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       call: what,
       timeoutMs,
     });
-  }
-
-  function screenUrl(target: Target): string {
-    const base = target.kind === "page"
-      ? `/api/v1/page-browser/pages/${encodeURIComponent(target.label)}/screen`
-      : `/api/v1/page-browser/profiles/${target.profileId}/screen`;
-    const socketPath = `${base.slice(1)}/websockify`;
-    return `${base}/index.html?autoconnect=1&resize=remote&path=${encodeURIComponent(socketPath)}`;
   }
 
   function stepOf(answer: LoginAnswer): PageBrowserLoginStepResponse {

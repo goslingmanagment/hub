@@ -15,6 +15,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { sleep } from "../shared/util.ts";
 
 export interface ChromeControl {
+  /** The X server's screen, before Chrome starts. */
+  screenGeometry(): Promise<{ width: number; height: number }>;
   /** Start Chrome once: s6 does not restart it when it dies. */
   start(): Promise<void>;
   /** A planned stop; resolves once Chrome is down. */
@@ -28,7 +30,7 @@ export interface ChromeControl {
 
 function run(file: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: 5000, encoding: "utf8" }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+    execFile(file, args, { timeout: 5000, encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
   });
 }
 
@@ -43,6 +45,13 @@ export class S6Chrome implements ChromeControl {
 
   async start(): Promise<void> {
     await run("/command/s6-svc", ["-o", this.#service]);
+  }
+
+  async screenGeometry(): Promise<{ width: number; height: number }> {
+    const shown = await run("/usr/bin/xdpyinfo", ["-display", ":99"]);
+    const dimensions = /^\s*dimensions:\s+(\d+)x(\d+) pixels\b/m.exec(shown);
+    if (!dimensions) throw new Error("the X server did not report its screen dimensions");
+    return { width: Number(dimensions[1]), height: Number(dimensions[2]) };
   }
 
   async stop(): Promise<void> {

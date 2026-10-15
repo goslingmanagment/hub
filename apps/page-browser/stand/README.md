@@ -10,6 +10,13 @@ PR (plan §5, row 19).
 `image-check.sh` / `image-check.mjs` in this directory are PR 2's image check
 and are not part of the suites.
 
+The image check also runs `screen-check.mjs`: a local KasmVNC client requests
+1728×936, disconnects, then another requests 1280×720. X must remain
+1920×1080 both times. It needs only Xkasmvnc and a synthetic screen password,
+not Chrome, a page session or an external connection. KasmVNC 1.5's
+`AcceptSetDesktopSize=0` enforces this even for an old `resize=remote` URL;
+new screen URLs scale the owner's view locally (`resize=scale`).
+
 ## What is here
 
 | Path | What |

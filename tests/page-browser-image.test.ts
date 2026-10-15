@@ -51,6 +51,7 @@ describe("Chrome's start", () => {
   it("gives Chrome the screen the operator checks: the X server's geometry and the window", () => {
     expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain(`-geometry ${SCREEN.width}x${SCREEN.height} `);
     expect(command).toContain(`--window-size=${SCREEN.width},${SCREEN.height}`);
+    expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain("-AcceptSetDesktopSize 0");
   });
 });
 
