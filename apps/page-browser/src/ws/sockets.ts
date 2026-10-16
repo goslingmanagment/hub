@@ -28,9 +28,9 @@
 //  - `ws.in` — every incoming text frame as it is (Fansly's socket speaks
 //    text; a binary frame is counted, not kept);
 //  - `ws.close` — exactly one a connection, the last of it, after its
-//    ws.open: when CDP says the socket closed, or when the browser goes under
-//    it (CDP may never say). A connection's closing is known at once, in
-//    memory: what CDP still says of it afterwards is dropped and counted.
+//    ws.open: when CDP says the socket closed, its target goes, or the browser
+//    goes under it (CDP may never say). A connection's closing is known at
+//    once, in memory: what CDP still says of it afterwards is dropped and counted.
 //  - `gap` where frames may be missing (spec §6.1 reasons), from the last
 //    event of the socket saved before the break — never the moment a late
 //    word of CDP is taken: with no event before, the boundary is unknown
@@ -262,6 +262,7 @@ function unknownBoundary(): Mark {
 /** A socket as CDP shows it to this operator: one connection. */
 interface CdpSocket {
   key: string;
+  sessionId: string | null;
   /** The connection's id in the stream and the socket journal. */
   id: string;
   url: string;
@@ -277,6 +278,9 @@ interface CdpSocket {
   /** Open: its ws.open is written (or on its way); false — no live session
    *  was known at its 101: opened in the stream once one is. */
   kept: boolean;
+  /** Its 101's stamp while no live session is known: opening later moves
+   *  no boundary later. */
+  openStamp: Stamp | null;
   /** The latest calibrated moment of its events (operator mono). */
   provenMono: number | null;
 }
@@ -379,9 +383,9 @@ export class SiteSockets {
   /** Changes when every calibration goes (a new Chrome, a new CDP link):
    *  one under way from before is dropped. */
   #clockEpoch = 0;
-  /** Socket events waiting for a session's first calibration, and those
-   *  behind them, in CDP's order. */
-  readonly #waiting: Array<{ event: CdpEvent; handle: (event: CdpEvent) => Taken }> = [];
+  /** Socket events waiting for a session's first calibration, and what
+   *  follows them (a target's end too), in CDP's order. */
+  readonly #waiting: Array<{ event: CdpEvent; handle: (event: CdpEvent) => Taken } | { run: () => void }> = [];
   /** A target may detach while its event waits behind another calibration. */
   readonly #targetTypes = new WeakMap<CdpEvent, string | null>();
   #waitTimer: NodeJS.Timeout | null = null;
@@ -410,6 +414,7 @@ export class SiteSockets {
       cdp.holdAcks(method);
       cdp.on(method, (event) => this.#take(event, handlers[method]));
     }
+    cdp.on("Target.detachedFromTarget", (event) => this.#onDetached(event));
   }
 
   /** One event of the socket and its acknowledgement to the holder: once
@@ -453,6 +458,11 @@ export class SiteSockets {
     }
     while (this.#waiting.length > 0) {
       const head = this.#waiting[0]!;
+      if ("run" in head) {
+        this.#waiting.shift();
+        head.run();
+        continue;
+      }
       if (!expired && this.#awaitsClock(head.event)) break;
       this.#waiting.shift();
       this.#handle(head.event, head.handle);
@@ -715,12 +725,33 @@ export class SiteSockets {
   }
 
   /** The site's live session became known: a socket that opened before it
-   *  opens in the stream now, after a gap over what it carried meanwhile. */
+   *  opens in the stream at its 101's stamp, after a gap over what it
+   *  carried meanwhile. */
   sessionKnown(): void {
     if (this.#deps.sessionFingerprint() === null) return;
     for (const socket of this.#sockets.values()) {
-      if (socket.state === "open" && !socket.kept) this.#keep(socket, { mono: monoMs(), wall: wallMs() });
+      if (socket.state === "open" && !socket.kept && socket.openStamp !== null) this.#keep(socket, socket.openStamp);
     }
+  }
+
+  /** Its target went: after every socket event already taken, end each
+   *  socket of that session and forget it. The holder acknowledges the
+   *  detach itself; the queued end acknowledges nothing. */
+  #onDetached(event: CdpEvent): void {
+    if (event.replayed) return;
+    const sessionId = event.params.sessionId;
+    if (typeof sessionId !== "string") return;
+    const end = () => {
+      for (const [key, socket] of this.#sockets) {
+        if (socket.sessionId !== sessionId) continue;
+        this.#endObserved(socket, null, "its target went");
+        if (socket.state === "open" && socket.kept) this.#close(socket, "its target went", { mono: monoMs(), wall: wallMs() });
+        else socket.state = "ended";
+        this.#sockets.delete(key);
+      }
+    };
+    if (this.#waiting.length > 0) this.#waiting.push({ run: end });
+    else end();
   }
 
   /** Chrome goes (or nothing of it is listened to any more): each open
@@ -954,7 +985,7 @@ export class SiteSockets {
       this.#log("socket.not_followed", { why: `more than ${MAX_SOCKETS} sockets of the host alive at once` });
       return this.#drop("a socket past the bound of those followed");
     }
-    const socket: CdpSocket = { key, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, sendState: "new", kept: false, provenMono: null };
+    const socket: CdpSocket = { key, sessionId: event.sessionId ?? null, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, sendState: "new", kept: false, openStamp: null, provenMono: null };
     this.#sockets.set(key, socket);
     this.#socketLog(event, socket, "created");
     return null;
@@ -1012,12 +1043,14 @@ export class SiteSockets {
   #keep(socket: CdpSocket, at: Stamp): Taken {
     const fingerprint = this.#deps.sessionFingerprint();
     if (fingerprint === null) {
+      socket.openStamp = at;
       this.#uncovered ??= this.#last ?? unknownBoundary();
       this.#log("socket.unkept", { connectionId: socket.id, why: "no live session of the site known yet" });
       this.#deps.journal({ connectionId: socket.id, event: "unkept", detail: "no live session of the site known yet: opened in the stream once one is" });
       return null;
     }
     socket.kept = true;
+    socket.openStamp = null;
     const id = socket.id;
     const opened: GroupItem[] = [
       { connection: { connectionId: id, admitted: { attemptId: OBSERVED_SOCKET_ATTEMPT } } },

@@ -448,6 +448,32 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     ]);
   });
 
+  it("a worker goes after its socket's send: its handshake is ended once, with its status unknown; a replayed detach ends nothing", async () => {
+    const w = await world();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "W1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "W1");
+    const sentMono = monoMs();
+    w.sockets.openTunnel("wsv3.fansly.com", 443).event({ kind: "handshake_sent", mono: sentMono, wall: Date.now() });
+    await until(() => w.sockets.clockOf("W1") !== null, 3000, "the worker's events taken");
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "W1" }, "S1", true);
+    expect(w.observed).toEqual([{ type: "sent", id: expect.any(String), url: URL_WS, sentMono }]);
+    const detaches: number[] = [];
+    w.cdp.on("Target.detachedFromTarget", (event) => detaches.push(event.seq));
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "W1" }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, "W1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "W1");
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "W1" }, "S1");
+    w.sockets.endAll("a test");
+    await w.buffer.flush();
+    expect(w.observed).toEqual([
+      { type: "sent", id: expect.any(String), url: URL_WS, sentMono },
+      { type: "ended", id: w.observed[0]!.id, status: null, error: "its target went" },
+    ]);
+    expect(w.events()).toEqual([]);
+    expect(w.cdp.heldAcks.has("Target.detachedFromTarget")).toBe(false);
+    expect(detaches.every((seq) => !w.cdp.acks.includes(seq))).toBe(true);
+  });
+
   it("Chrome gone reports unclaimed writes first, ends every reported socket, drops waiters and clears timers", async () => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -528,6 +554,35 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
       { kind: "ws.in", frame: '{"t":2,"d":"kept"}' },
     ]);
     client.destroy();
+  });
+
+  it("a 101 before the site's session keeps its own stamp: a frame lost meanwhile stays under the next reconnect's gap", async () => {
+    const w = await world();
+    w.session.fingerprint = null;
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
+    await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
+    const answer = { mono: monoMs() - 10_000, wall: Date.now() - 10_000 };
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: answer.mono / 1000, response: { status: 101 } }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (answer.mono + 1_000) / 1000, response: { opcode: 1, payloadData: "lost before the session was known" } }, "S1");
+    await w.buffer.flush();
+    expect(w.events()).toEqual([]);
+    w.session.fingerprint = FINGERPRINT;
+    w.sockets.sessionKnown();
+    await until(() => w.events().length === 2, 3000, "the first gap and the deferred open");
+    const open = w.events()[1]!;
+    const spread = w.sockets.clockOf("S1")!.spread;
+    expect(open.atMono as number).toBeLessThanOrEqual(answer.mono);
+    expect(open.atMono as number).toBeGreaterThanOrEqual(answer.mono - spread - 1);
+    expect(open.atWall as number).toBeLessThanOrEqual(answer.wall + 1);
+    expect(open.atWall as number).toBeGreaterThanOrEqual(answer.wall - spread - 2);
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", timestamp: monoMs() / 1000, response: { status: 101 } }, "S1");
+    await until(() => w.events().length === 5, 3000, "the close and the next connection's gap and open");
+    expect(w.events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.close", "gap", "ws.open"]);
+    const gaps = w.events().filter((event) => event.kind === "gap");
+    expect(gaps[1]).toMatchObject({ reason: "ws_reconnect", fromSeq: open.seq, fromWall: open.atWall });
+    expect(gaps[1]!.fromWall as number).toBeLessThanOrEqual(answer.wall + 1);
   });
 
   it("the site's socket is no less the site's in any mode: the proxy refuses none, and only the exit closed stops its CONNECT", async () => {
@@ -665,6 +720,32 @@ describe("frames (plan §4.4)", () => {
 });
 
 describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
+  it("an iframe goes under an open connection: its one close and the next reconnect's gap, from the frame before the detach", async () => {
+    const w = await world();
+    const client = await opened(w, "WS1", "S2");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, payloadData: "before the detach" } }, "S2");
+    await until(() => w.events().length === 2, 3000, "the iframe's open and frame");
+    const last = w.events()[1]!;
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "S2" }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: "after the detach" } }, "S2");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S2");
+    await until(() => w.events().length === 3, 3000, "the iframe's close");
+    expect(w.sockets.openConnections).toBe(0);
+    expect(w.buffer.connections()).toEqual([]);
+    const next = await opened(w, "WS2");
+    await until(() => w.events().length === 5, 3000, "the next connection's gap and open");
+    expect(w.events().map((event) => [event.kind, event.connectionId])).toEqual([
+      ["ws.open", w.connectionOf()],
+      ["ws.in", w.connectionOf()],
+      ["ws.close", w.connectionOf()],
+      ["gap", undefined],
+      ["ws.open", w.connectionOf(1)],
+    ]);
+    expect(w.events()[3]).toMatchObject({ reason: "ws_reconnect", fromSeq: last.seq, fromWall: last.atWall });
+    client.destroy();
+    next.destroy();
+  });
+
   it.for([
     { reading: "fails", previous: false },
     { reading: "fails", previous: true },
@@ -1368,6 +1449,52 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     await until(() => stored() === 2, 3000, "the holder's other acknowledgements delivered");
     controlled.release();
     await until(() => stored() === 0, 3000, "the queued events acknowledged after their writes");
+  });
+
+  it("a detach waits behind its session's events: the open and frame go before its close, and only socket events keep their acknowledgements", async () => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    const controlled = new ControlledBuffer(buffer);
+    controlled.holding = true;
+    const types = new Map([["S1", "page"], ["S2", "iframe"]]);
+    const { cdp, sockets, connectionOf } = await operatorSide(holder, controlled, { targetType: (sessionId) => types.get(sessionId ?? "") ?? null });
+    cleanups.push(() => cdp.close());
+    const acks = vi.spyOn(cdp, "ack");
+    let release: () => void = () => undefined;
+    const wait = new Promise<void>((resolve) => (release = resolve));
+    const metrics = chrome.handlers.get("Performance.getMetrics")!;
+    chrome.handlers.set("Performance.getMetrics", async (command) => {
+      if (command.sessionId === "S2") await wait;
+      return metrics(command);
+    });
+    let detachSeq = 0;
+    const detached = new Promise<void>((resolve) => cdp.on("Target.detachedFromTarget", (event) => {
+      types.delete(String(event.params.sessionId));
+      detachSeq = event.seq;
+      resolve();
+    }));
+    tunnel(sockets).event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S2");
+    chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S2");
+    chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, "S2");
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, payloadData: "before the detach" } }, "S2");
+    chrome.event("Target.detachedFromTarget", { sessionId: "S2" }, "S1");
+    await detached;
+    await until(() => stored() === 4, 3000, "the detach acknowledged, the socket's events still waiting");
+    expect(eventsOf(buffer)).toEqual([]);
+    release();
+    await until(() => controlled.held.length === 3, 3000, "the open, frame and close durable, their acknowledgements held");
+    expect(eventsOf(buffer).map((event) => [event.kind, event.connectionId])).toEqual([
+      ["ws.open", connectionOf()],
+      ["ws.in", connectionOf()],
+      ["ws.close", connectionOf()],
+    ]);
+    expect(buffer.connections()).toEqual([]);
+    await until(() => stored() === 2, 3000, "only the open and frame's acknowledgements held");
+    controlled.release();
+    await until(() => stored() === 0, 3000, "the socket's events acknowledged once durable");
+    expect(acks.mock.calls.filter(([seq]) => seq === detachSeq)).toHaveLength(1);
   });
 
   it.each([
