@@ -1529,7 +1529,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     { chrome: "an hour ahead", shift: 3_600_000 },
     { chrome: "an hour behind", shift: -3_600_000 },
   ])("Astra's round 7: the first batch told five minutes late, before its session's calibration (Chrome's clock $chrome): stamped no later than its handshake — the next gap from there, a message missed four minutes ago inside the repair's window", async ({ shift }) => {
-    const { chrome, buffer, sockets, holder, t, wallT, chromeAt } = await lateFirstBatch(shift);
+    const { chrome, buffer, sockets, t, wallT, chromeAt } = await lateFirstBatch(shift);
     const late = eventsOf(buffer);
     for (const [kind, seen] of [["ws.open", t - 304_000], ["ws.in", t - 300_000], ["ws.close", t - 299_000]] as const) {
       const event = late.find((one) => one.kind === kind)!;
