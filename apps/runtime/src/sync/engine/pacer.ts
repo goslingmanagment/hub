@@ -36,6 +36,9 @@ export const TAKEOVER_FACTOR = 1.2;
 /** A waiting pacer re-reads S at least this often, so an owner who raises S
  *  lengthens the wait already in progress. */
 export const SETTING_RECHECK_MS = 1_000;
+/** Decision Б8: prolonged site traffic only warns; it never shortens the
+ *  pause or opens an own slot early. Once per wait, after five minutes. */
+export const SLOT_WAIT_WARN_MS = 5 * 60_000;
 /** Admission issue (monotonic, taken before the admission transaction) →
  *  `onRequestStart`. Later than this, the dispatch is refused: no bytes. */
 export const SEND_WINDOW_MS = 15_000;
@@ -250,10 +253,18 @@ export class Pacer {
    * least every SETTING_RECHECK_MS), so a raised setting lengthens a wait in
    * progress; u is drawn once per send and kept across re-waits.
    */
-  async waitForSlot(signal: AbortSignal): Promise<SlotGrant> {
+  async waitForSlot(signal: AbortSignal, observers: {
+    /** Each loop turn, including when site sends keep extending the wait. */
+    onWaiting?: () => void;
+    /** Once per wait longer than SLOT_WAIT_WARN_MS; admission stays closed. */
+    onLongWait?: (waitMs: number) => void;
+  } = {}): Promise<SlotGrant> {
+    const startedMono = this.#deps.clock.monoNow();
+    let warned = false;
     for (;;) {
       signal.throwIfAborted();
       this.#assertCanAdmit();
+      observers.onWaiting?.();
       const settingMs = this.#effectiveSetting(await this.#deps.pause.readSettingMs());
       signal.throwIfAborted();
       this.#assertCanAdmit();
@@ -261,6 +272,10 @@ export class Pacer {
       const pauseMs = Math.ceil(settingMs * (1 + jitterU));
       const earliestMono = this.#earliestMono(pauseMs);
       const now = this.#deps.clock.monoNow();
+      if (!warned && now - startedMono > SLOT_WAIT_WARN_MS) {
+        warned = true;
+        observers.onLongWait?.(now - startedMono);
+      }
       if (now >= earliestMono) {
         return { settingMs, jitterU, pauseMs, earliestMono };
       }

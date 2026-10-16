@@ -64,10 +64,10 @@ export interface FanslyPageHoldRow {
 /** The latest refusal of the page's credentials (the hold's detail, written
  *  on every refusal). */
 export interface CredentialsFailure {
-  /** The refused attempt (`sync_attempts.id`; a page's attempts are strictly
-   *  sequential). Null: a refusal without an attempt (the step-3 switch
-   *  imported the legacy engine's auth block) or one written before refusals
-   *  carried it. */
+  /** The refused attempt (`sync_attempts.id`; observed site ids are assigned
+   *  after the send and do not order sends). Null: a refusal without an
+   *  attempt (the step-3 switch imported the legacy engine's auth block) or
+   *  one written before refusals carried it. */
   attemptId: number | null;
   /** When the refused request was sent. */
   at: Date | null;
@@ -218,18 +218,24 @@ export interface CredentialsProof {
   attemptId: number;
   /** When it was sent (else admitted: an earlier, safe stand-in). */
   sentAt: Date;
+  /** Observed site attempts are journaled after the fact: their ids do not
+   *  order sends. `sentAt` is the proof's conservative send lower bound. */
+  observed?: boolean;
 }
 
 /**
  * Ruling 5: a credentials hold clears only by a proof whose request was sent
  * after the LATEST refusal — by attempt order when the refusal names its
  * attempt, else by the send instant against the later of the refusal's and the
- * episode's start. A hold without either instant is never cleared by a proof.
+ * episode's start. Observed site proofs ALWAYS use time and require a known
+ * failure instant, even when the refusal names its attempt. A hold without
+ * either instant is never cleared by a proof.
  * Clearing it lifts that row alone: a network hold beside it stands.
  */
 export function proofClearsCredentialsHold(hold: CredentialsHold, proof: CredentialsProof): boolean {
-  if (hold.failure.attemptId !== null) return proof.attemptId > hold.failure.attemptId;
+  if (proof.observed !== true && hold.failure.attemptId !== null) return proof.attemptId > hold.failure.attemptId;
   const failedAt = hold.failure.at;
+  if (proof.observed === true && failedAt === null) return false;
   const since = hold.since;
   const after = failedAt === null ? since : since === null || failedAt.getTime() > since.getTime() ? failedAt : since;
   return after !== null && proof.sentAt.getTime() > after.getTime();

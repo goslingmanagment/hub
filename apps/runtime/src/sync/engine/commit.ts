@@ -1898,7 +1898,7 @@ async function recordIdentityProofOf(
   tx: Database,
   d: CommitDeps,
   page: SyncPageRow,
-  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date },
+  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date; observed?: boolean },
 ): Promise<IdentityProofWrite> {
   const { attemptId, sentAt } = facts;
   const recorded = await recordSyncPageIdentityProof(tx, {
@@ -1912,7 +1912,7 @@ async function recordIdentityProofOf(
   // rule below still judges this one by its own send.
   const proof = { cleared: null, superseded: !recorded };
   const { credentials: held } = holdSetOf(page.holds).page;
-  if (held === null || !proofClearsCredentialsHold(held, { attemptId, sentAt })) return proof;
+  if (held === null || !proofClearsCredentialsHold(held, facts)) return proof;
   // The credentials hold alone: a network hold beside it stands until its end.
   await clearPageHold(tx, { pageId: d.pageId, generation: d.generation, kinds: [held.kind] });
   await insertAuditEvent(tx, {
@@ -1943,8 +1943,10 @@ async function recordIdentityProofOf(
  * an applied identity read of the engine's own: the page's identity and the
  * credentials generation of the browser under that session, sent no earlier
  * than `sentNotBefore` (a lower bound: a fence after it is not passed). Its
- * attempt is the site's observed one. An account other than the page's
- * proves nothing (the engine's own read then meets the mismatch).
+ * attempt is the site's observed one: only its send lower bound orders it
+ * against a credentials failure, never its after-the-fact id. An account
+ * other than the page's proves nothing (the engine's own read then meets
+ * the mismatch).
  */
 export async function commitSiteIdentity(
   d: CommitDeps,
@@ -1962,6 +1964,7 @@ export async function commitSiteIdentity(
       accountId: input.accountId,
       credentialsGeneration: input.credentialsGeneration,
       sentAt: input.sentNotBefore,
+      observed: true,
     });
     return written.superseded ? "superseded" : "recorded";
   });

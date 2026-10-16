@@ -155,7 +155,7 @@ export interface ActorDeps extends CommitDeps {
   /** The stall watchdog's tracker of this actor (`engine/watchdog.ts`): every
    *  phase of a lap moves it, so only a step that never settles goes stale.
    *  Each wait between two marks is bounded far below the stall bound (the
-   *  pacer's ≤ 1.2 × S, a wake ≤ 1 s, a request ≤ 20 s). */
+   *  pacer reports each wait turn, a wake ≤ 1 s, a request ≤ 20 s). */
   stall?: StallTracker;
 }
 
@@ -176,6 +176,14 @@ export interface ActorSignals {
 }
 
 type Committed<T> = { ok: true; value: T } | { ok: false; exit: ActorExit };
+
+interface ObservedSiteEntry {
+  attemptId: number | null;
+  route: FanslyRoute;
+  sentWall: Date;
+  sessionFingerprint: string | null;
+  credentialsGeneration: string | null;
+}
 
 /** Where an actor is, as the stall watchdog reports it. */
 export type ActorPhase =
@@ -227,7 +235,7 @@ export class SyncActor {
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
   /** Variant Б: observed site requests by their browser id. */
-  readonly #observed = new Map<string, { attemptId: number | null; route: FanslyRoute; sentWall: Date }>();
+  readonly #observed = new Map<string, ObservedSiteEntry>();
   /** Variant Б: the journal of observed facts, one commit at a time, in order. */
   #observedChain: Promise<void> = Promise.resolve();
   /** Variant Б: the monotonic instants of this hour's observed sends. */
@@ -269,8 +277,12 @@ export class SyncActor {
         // A route the catalogue does not know is the site's other read.
         const route: FanslyRoute = isFanslyRoute(event.route) ? event.route : SITE_OTHER_ROUTE;
         this.#journalObserved(async () => {
+          // Bind the send to this settings snapshot before a later identity
+          // message can see a changed proxy or session.
+          const credentialsGeneration = event.sessionFingerprint === null ? null
+            : await d.transport.siteCredentialsGeneration?.(event.sessionFingerprint) ?? null;
           const { attemptId } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS });
-          this.#rememberObserved(event.id, { attemptId, route, sentWall: event.sentWall });
+          this.#rememberObserved(event.id, { attemptId, route, sentWall: event.sentWall, sessionFingerprint: event.sessionFingerprint, credentialsGeneration });
         });
         return;
       }
@@ -282,7 +294,7 @@ export class SyncActor {
           const end: SiteRequestEnd = event.status !== null
             ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
             : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
-          await commitSiteEnd(d, { attemptId: sent.attemptId, send: observedSend(sent.sentWall, FANSLY_PAUSE_MIN_MS), end, classified: { route: sent.route, exempt: false } });
+          await commitSiteEnd(d, { attemptId: sent.attemptId, send: observedSend(sent.sentWall, FANSLY_PAUSE_MIN_MS), end, classified: { route: sent.route, exempt: false }, observed: true });
         });
         return;
       case "identity":
@@ -290,9 +302,11 @@ export class SyncActor {
           const sent = this.#observed.get(event.id);
           const generationOf = d.transport.siteCredentialsGeneration;
           if (sent?.attemptId == null || generationOf === undefined) return;
-          const credentialsGeneration = await generationOf.call(d.transport, event.sessionFingerprint);
-          if (credentialsGeneration === null) return;
-          const outcome = await commitSiteIdentity(d, { attemptId: sent.attemptId, accountId: event.accountId, credentialsGeneration, sentNotBefore: event.sentNotBeforeWall });
+          const currentGeneration = await generationOf.call(d.transport, event.sessionFingerprint);
+          const credentialsGeneration = sent.credentialsGeneration;
+          const outcome = credentialsGeneration === null || currentGeneration !== credentialsGeneration || event.sessionFingerprint !== sent.sessionFingerprint
+            ? "superseded_settings"
+            : await commitSiteIdentity(d, { attemptId: sent.attemptId, accountId: event.accountId, credentialsGeneration, sentNotBefore: event.sentNotBeforeWall });
           d.metrics.increment("sync_site_identity", { outcome });
           if (outcome !== "recorded") {
             d.logger.warn({ pageId: d.pageId, outcome, attemptId: sent.attemptId }, "Fansly sync actor: the site's own account read proves nothing of this page");
@@ -311,7 +325,7 @@ export class SyncActor {
     });
   }
 
-  #rememberObserved(id: string, entry: { attemptId: number | null; route: FanslyRoute; sentWall: Date }): void {
+  #rememberObserved(id: string, entry: ObservedSiteEntry): void {
     this.#observed.delete(id);
     this.#observed.set(id, entry);
     if (this.#observed.size > OBSERVED_SITE_KEPT) this.#observed.delete(this.#observed.keys().next().value!);
@@ -423,7 +437,10 @@ export class SyncActor {
     let grant: SlotGrant;
     this.#phase("slot");
     try {
-      grant = await d.pacer.waitForSlot(signals.stop);
+      grant = await d.pacer.waitForSlot(signals.stop, {
+        onWaiting: () => d.stall?.progress("slot"),
+        onLongWait: (waitMs) => d.logger.warn({ pageId: d.pageId, waitMs }, "Fansly sync actor: the site's traffic has delayed the engine's own slot for over five minutes"),
+      });
     } catch (error) {
       if (isAbort(error, signals.stop)) return { kind: "stopped" };
       throw error;
@@ -646,7 +663,10 @@ export class SyncActor {
     let grant: SlotGrant;
     this.#phase("slot");
     try {
-      grant = await d.pacer.waitForSlot(signals.stop);
+      grant = await d.pacer.waitForSlot(signals.stop, {
+        onWaiting: () => d.stall?.progress("slot"),
+        onLongWait: (waitMs) => d.logger.warn({ pageId: d.pageId, waitMs }, "Fansly sync actor: the site's traffic has delayed the engine's own slot for over five minutes"),
+      });
     } catch (error) {
       if (isAbort(error, signals.stop)) return { kind: "stopped" };
       throw error;

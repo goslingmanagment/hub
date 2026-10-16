@@ -247,8 +247,9 @@ export interface PageTransport {
   held?: HeldOutcomeSource;
   /** A browser page's transport (variant Б): the credentials generation of
    *  the page's browser under the live session `sessionFingerprint` — what a
-   *  proof of the site's own `/account/me` proves. Absent (Node): the site's
-   *  identity proves nothing of this transport. */
+   *  proof of the site's own `/account/me` proves. Read when the send is
+   *  journaled and again before proving: changed settings prove nothing.
+   *  Absent (Node): the site's identity proves nothing of this transport. */
   siteCredentialsGeneration?(sessionFingerprint: string): Promise<string | null>;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor

@@ -13,6 +13,7 @@ import {
   type Database,
   type SyncPageRow,
 } from "@agency_hub_core/db";
+import { isCredentialsHoldKind } from "@agency_hub_core/shared";
 
 import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import { AdmissionHeldError, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
@@ -223,7 +224,7 @@ export async function siteEnd(site: SiteAdmissionPort, id: string, signal: Abort
  */
 export async function commitSiteEnd(
   d: CommitDeps,
-  input: { attemptId: number; send: CaptureSend; end: SiteRequestEnd; classified: Pick<ClassifiedSiteRequest, "route" | "exempt"> },
+  input: { attemptId: number; send: CaptureSend; end: SiteRequestEnd; classified: Pick<ClassifiedSiteRequest, "route" | "exempt">; observed?: boolean },
 ): Promise<void> {
   const { attemptId, send: armed, end, classified } = input;
   if (end.kind === "aborted_before_send") {
@@ -283,7 +284,15 @@ export async function commitSiteEnd(
     });
     const fenced = { pageId: d.pageId, generation: d.generation };
     if (decision.pageHold.action === "set") {
-      await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
+      // Observed requests can end out of order. Their answers are all
+      // captured above, but an older send must not move the latest refusal
+      // back. Admitted site requests (minor 1–3) keep their existing rule.
+      const failedAt = holds.page.credentials?.failure.at;
+      const superseded = input.observed === true && isCredentialsHoldKind(decision.pageHold.kind)
+        && failedAt != null && (armed.sentWall === null || failedAt.getTime() > armed.sentWall.getTime());
+      if (!superseded) {
+        await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
+      }
     } else if (decision.pageHold.action === "clear") {
       await clearPageHold(tx, { ...fenced, kinds: decision.pageHold.kinds });
     }

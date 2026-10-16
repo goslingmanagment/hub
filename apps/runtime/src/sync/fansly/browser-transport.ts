@@ -791,7 +791,9 @@ export async function createBrowserPageTransport(
       }
     },
     // Variant Б: what a proof of the site's own `/account/me` under that
-    // session proves — the generation of the page's browser with it.
+    // session proves — the generation of the page's browser with it in the
+    // current snapshot. The actor keeps the send's snapshot and compares it
+    // with the proof's; a proxy changed between them must not be certified.
     async siteCredentialsGeneration(sessionFingerprint: string): Promise<string | null> {
       try {
         return await readBrowserCredentialsGeneration(ctx.db, page.pageId, sessionFingerprint);
