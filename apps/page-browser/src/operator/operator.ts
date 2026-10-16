@@ -113,7 +113,7 @@ import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
-import { SiteObserver } from "../intercept/observe.ts";
+import { SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -655,7 +655,6 @@ export class Operator {
       cdp: this.cdp,
       resolve: (request, decision) => this.paused.resolve(request, decision),
       gate: this.egress.gate,
-      cut: (cls, reason) => this.egress.cutClass(cls, reason),
       classify: this.#classify,
       exitOpen: () => this.egress.exitOpen,
       buffer: this.buffer,
@@ -672,7 +671,6 @@ export class Operator {
         generation: () => this.rpc.generation,
         send: (message) => this.rpc.send(message),
       },
-      fault: (reason, note) => this.#requestFault(reason, note),
       alarm: (kind, detail) => this.#alarm(kind, detail),
       sessionChanged: (fingerprint) => this.#onSessionChanged(fingerprint),
       identityAnswer: (answer) => this.#onIdentity(answer),
@@ -682,6 +680,7 @@ export class Operator {
       cdp: this.cdp,
       resolve: (request, decision) => this.paused.resolve(request, decision),
       gate: this.egress.gate,
+      isHubRequest: (networkId) => this.hub.ownsNetworkId(networkId),
       cutApi: (reason) => this.egress.cutClass("api", reason),
       buffer: this.buffer,
       link: {
@@ -772,11 +771,13 @@ export class Operator {
       this.site.onGateEvent(event);
       if (event.kind !== "first_bytes" && event.kind !== "announced") this.#log("gate", { kind: event.kind, window: event.window, ...event.detail });
     };
-    // The page's slot past its bound with an end unknown: fail closed — the
-    // exit closes and Chrome goes (the slot is freed only then).
+    // The page's slot past its bound with an end unknown: Chrome may still
+    // hold the request, and it goes with the browser — in a quiet moment, so
+    // no request of the site's is cut (plan-b §4.1.10). Hub sends nothing
+    // meanwhile: the slot stays the operation's until Chrome is gone.
     this.egress.gate.onUnended = (operation, pending) => {
       this.#log("slot.unended", { operation, pending: pending.length });
-      this.#requestFault("request_unended", `${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
+      void this.#restartUnended(operation, `${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
     };
     if (this.#held !== null) {
       this.#log("halt.held", { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall, from: "the volume" });
@@ -1610,6 +1611,26 @@ export class Operator {
     }
   }
 
+  /** A Hub request without a proven end: wait without a deadline for fresh
+   *  site requests, ignoring hung or lost ends. A proven Hub end meanwhile
+   *  cancels this restart; another operation's slot is never touched. */
+  async #restartUnended(operation: string, note: string): Promise<void> {
+    const run = this.#run;
+    const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.egress.gate.slotOwner !== operation;
+    if (stale()) return;
+    const began = monoMs();
+    const fresh = () => this.observer.activeSince(monoMs() - SITE_STALE_IN_FLIGHT_MS);
+    const freshInFlight = fresh();
+    this.#log("slot.wait_quiet", { operation, freshInFlight, staleIgnored: this.observer.inFlight - freshInFlight, staleInFlightMs: SITE_STALE_IN_FLIGHT_MS });
+    while (!stale() && fresh() > 0) await sleep(25);
+    if (stale()) {
+      if (this.egress.gate.slotOwner !== operation) this.#log("slot.restart_skipped", { operation, owner: this.egress.gate.slotOwner, why: "the slot is no longer this operation's" });
+      return;
+    }
+    this.#log("slot.restart", { operation, quiet: true, freshInFlight: 0, staleIgnored: this.observer.inFlight, siteInFlight: this.observer.inFlight, waitedMs: monoMs() - began });
+    void this.#fail("request_unended", note);
+  }
+
   async #waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -1705,11 +1726,11 @@ export class Operator {
     void this.#halt(reason, note, how);
   }
 
-  /** A Hub request the operator cannot vouch for (hub-requests/): the exit
-   *  closes now, in this turn. A request Chrome may still hold dies with the
-   *  browser, and the page starts again — the strict rule, until the owner's
-   *  decision №16 says otherwise; headers that differ from the site's stop
-   *  it for the owner (plan §4.7). */
+  /** A request of the site's admission path (intercept/site.ts, protocol
+   *  1.3) the operator cannot vouch for: the exit closes now, in this turn. A
+   *  request Chrome may still hold dies with the browser, and the page starts
+   *  again; headers that differ from the site's stop it for the owner (plan
+   *  §4.7). Hub's own requests never stop the page (variant Б). */
   #requestFault(reason: "request_unended" | "header_mismatch", note: string): void {
     this.egress.closeExit(note);
     if (reason === "header_mismatch") void this.#halt("header_mismatch", note, "stop");

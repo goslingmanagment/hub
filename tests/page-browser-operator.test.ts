@@ -11,6 +11,7 @@ import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
+import { SITE_STALE_IN_FLIGHT_MS } from "../apps/page-browser/src/intercept/observe.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
@@ -104,6 +105,8 @@ async function setUp(
     siteLoadMs?: number;
     /** The page's slot past its admission's deadline (22 s in the operator). */
     slotLimitMs?: number;
+    /** How long a request of the site in flight is waited out (30 s in the operator). */
+    reloadWaitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
@@ -169,7 +172,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -198,6 +201,19 @@ function command(engine: FakeEngine, kind: string): Promise<Record<string, unkno
 async function started(s: SetUp): Promise<void> {
   expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
   await until(() => s.operator.page.step === "site_loaded", START_MS, "the open exit");
+}
+
+/** Advance both clocks while the real CDP and RPC sockets keep running. */
+function shiftedClock(s: SetUp): (ms: number) => void {
+  const wall = Date.now.bind(Date);
+  const mono = process.hrtime.bigint.bind(process.hrtime);
+  let offsetMs = 0;
+  const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wall() + offsetMs);
+  const monoClock = vi.spyOn(process.hrtime, "bigint").mockImplementation(() => mono() + BigInt(offsetMs) * 1_000_000n);
+  // A simulated jump is not a missing heartbeat from the live fake engine.
+  s.operator.rpc.setTiming(100, 60 * 60_000);
+  cleanups.push(() => { wallClock.mockRestore(); monoClock.mockRestore(); });
+  return (ms) => { offsetMs += ms; };
 }
 
 function journal(logDir: string, kind: string): Array<Record<string, unknown>> {
@@ -1402,6 +1418,82 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
   }, 30_000);
 });
 
+describe("a planned restart for an unended Hub slot (plan-b §4.1.10)", () => {
+  async function waiting() {
+    const s = await setUp({ slotLimitMs: 100, reloadWaitMs: 50, params: { restartBackoffMs: [60_000] } });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    // The site's API request remains in flight while the Hub slot's bound passes.
+    s.chrome.event("Network.requestWillBeSent", { requestId: "site-busy", request: { url: "https://apiv3.fansly.com/api/v1/notifications", method: "GET" } }, tab);
+    await until(() => s.operator.observer.inFlight === 1, 3000, "the site's request in flight");
+    expect(s.operator.egress.gate.takeSlot("hub:unended", monoMs() + 100, "hub-unended")).toEqual({ ok: true });
+    s.operator.egress.gate.operationEnded("hub:unended");
+    await until(() => s.lines.some((line) => line.includes('"e":"slot.wait_quiet"')), 3000, "waiting for quiet past the slot's bound");
+    return { ...s, tab };
+  }
+
+  it.each([false, true])("a proven end cancels the restart even if another operation takes the slot (%s)", async (nextOperation) => {
+    const s = await waiting();
+    s.chrome.event("Network.loadingFailed", { requestId: "hub-unended", canceled: false, errorText: "net::ERR_CONNECTION_RESET" }, s.tab);
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the proven Hub end");
+    if (nextOperation) expect(s.operator.egress.gate.takeSlot("hub:next", monoMs() + 15_000, "hub-next")).toEqual({ ok: true });
+    await until(() => s.lines.some((line) => line.includes('"e":"slot.restart_skipped"')), 3000, "the stale restart discarded");
+    s.chrome.event("Network.loadingFailed", { requestId: "site-busy", errorText: "net::ERR_CONNECTION_RESET" }, s.tab);
+    await until(() => s.operator.observer.inFlight === 0, 3000, "the quiet site");
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.operator.egress.gate.slotOwner).toBe(nextOperation ? "hub:next" : null);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.chrome.sent("Browser.close")).toEqual([]);
+    expect(s.lines.some((line) => line.includes('"e":"slot.restart"'))).toBe(false);
+  });
+
+  it("waits beyond reloadWaitMs for the site to become quiet, then restarts gently", async () => {
+    const s = await waiting();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.operator.egress.gate.slotOwner).toBe("hub:unended");
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.chrome.sent("Browser.close")).toEqual([]);
+    s.chrome.event("Network.loadingFailed", { requestId: "site-busy", errorText: "net::ERR_CONNECTION_RESET" }, s.tab);
+    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 3000, "the quiet restart");
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "Chrome gone, the slot free");
+    expect(s.chrome.sent("Browser.close")).toHaveLength(1);
+    expect(s.lines.map((line) => JSON.parse(line))).toContainEqual(expect.objectContaining({ e: "slot.restart", operation: "hub:unended", quiet: true, siteInFlight: 0 }));
+  });
+
+  it("never restarts while fresh site requests keep flying, even beyond the former five-minute wait", async () => {
+    const s = await waiting();
+    const advance = shiftedClock(s);
+    for (let n = 1; n <= 8; n++) {
+      // Overlap fresh requests: the previous one is still younger than 60 s.
+      advance(SITE_STALE_IN_FLIGHT_MS * 3 / 4);
+      s.chrome.event("Network.requestWillBeSent", { requestId: `site-busy-${n}`, request: { url: "https://apiv3.fansly.com/api/v1/notifications", method: "GET" } }, s.tab);
+      await until(() => s.operator.observer.inFlight === n + 1, 3000, "the next fresh site request");
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(s.operator.observer.activeSince(monoMs() - SITE_STALE_IN_FLIGHT_MS)).toBeGreaterThan(0);
+      expect(s.operator.page.snapshot.stopReason).toBeNull();
+      expect(s.operator.egress.gate.slotOwner).toBe("hub:unended");
+      expect(s.operator.egress.exitOpen).toBe(true);
+      expect(s.chrome.sent("Browser.close")).toEqual([]);
+    }
+    expect(s.lines.some((line) => line.includes('"e":"slot.restart"'))).toBe(false);
+  });
+
+  it("a hung or lost site request older than the named bound does not hold the quiet restart", async () => {
+    const s = await waiting();
+    const advance = shiftedClock(s);
+    advance(SITE_STALE_IN_FLIGHT_MS + 1);
+    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 3000, "the stale request ignored");
+    const logs = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(logs).toContainEqual(expect.objectContaining({ e: "slot.wait_quiet", operation: "hub:unended", freshInFlight: 1, staleIgnored: 0, staleInFlightMs: SITE_STALE_IN_FLIGHT_MS }));
+    const restart = logs.find((line) => line.e === "slot.restart")!;
+    expect(restart).toMatchObject({ quiet: true, freshInFlight: 0, staleIgnored: 1, siteInFlight: 1 });
+    expect(restart.waitedMs).toBeGreaterThanOrEqual(SITE_STALE_IN_FLIGHT_MS);
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "Chrome gone, the slot free");
+    expect(s.chrome.sent("Browser.close")).toHaveLength(1);
+  });
+});
+
 describe("Hub requests through the page (PR 9; plan §4.2)", () => {
   const TOKEN = "fansly-token-OpErAtOr0123456789xyz";
   const CLIENT_ID = "720167541418230001";
@@ -1531,6 +1623,44 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
       expect(s.lines.join("\n"), secret).not.toContain(secret);
       expect(journals, secret).not.toContain(secret);
     }
+  });
+
+  it.each(["Network.loadingFailed", "Network.loadingFinished"])("the old site path cannot free a cancelled Hub request's slot; only Hub confirms its later %s", async (endEvent) => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: false, reason: "route_hold" });
+      if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+    };
+    const site = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", {
+      Accept: "application/json, text/plain, */*",
+      authorization: TOKEN,
+      "fansly-client-check": fanslyClientCheck(ME, CLIENT_ID),
+      "fansly-client-id": CLIENT_ID,
+      "fansly-client-ts": String(Date.now()),
+      "fansly-session-id": SESSION_ID,
+    });
+    await until(() => site.outcome === "failed", 3000, "the site's session learned");
+    // Chrome accepts the release but reports no answer or end yet.
+    s.chrome.handlers.set("Fetch.continueRequest", () => ({}));
+    s.engine.send(sendOf(s.engine, 9150));
+    await until(() => s.operator.egress.gate.slotOwner === "hub:9150", 3000, "the Hub slot");
+    const request = s.model.hubRequests.find((entry) => entry.attemptId === 9150)!;
+    const ended = vi.spyOn(s.operator.egress.gate, "requestEnded");
+    s.chrome.event("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, tab);
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9150)).outcome).toEqual({ kind: "transport_error", sent: true, message: "the page cancelled the request before its answer: its end is unknown" });
+    expect(ended.mock.calls.filter(([id]) => id === request.networkId)).toEqual([]);
+    expect(s.operator.egress.gate.slotOwner).toBe("hub:9150");
+    expect(s.operator.egress.gate.slotPending).toEqual([request.networkId]);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    s.engine.send(sendOf(s.engine, 9151));
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9151)).outcome).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    // A later, proven end reaches both listeners; Hub alone frees the slot.
+    s.chrome.event(endEvent, { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET", encodedDataLength: 0 }, tab);
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the Hub request's confirmed end");
+    expect(ended.mock.calls.filter(([id]) => id === request.networkId)).toEqual([[request.networkId]]);
   });
 
   it("recover: not_sent of a request the buffer says was never released, unknown of one that was", async () => {
@@ -1933,7 +2063,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the slot free once answered");
   });
 
-  it("the page's slot past its bound with a released request's end unknown: the page stops (request_unended), Chrome goes, and only then is the slot free", async () => {
+  it("the page's slot past its bound with a released request's end unknown: once the site's request is stale, Chrome goes (request_unended); only then is the slot free", async () => {
     let attempt = 9700;
     const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
     // Admissions of 1 s here.
@@ -1948,8 +2078,13 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     const owner = s.operator.egress.gate.slotOwner;
     expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
     expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    await until(() => s.lines.some((line) => line.includes('"e":"slot.wait_quiet"')), 5000, "waiting for the site's request");
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    const advance = shiftedClock(s);
+    advance(SITE_STALE_IN_FLIGHT_MS + 1);
     await until(() => s.operator.page.snapshot.stopReason === "request_unended", 5000, "the stop past the bound");
     expect(s.lines.join("\n")).toContain('"e":"slot.unended"');
+    expect(s.lines.join("\n")).toContain('"e":"slot.restart"');
     await until(() => s.operator.egress.gate.slotOwner === null, 5000, "Chrome gone, the slot free");
   });
 

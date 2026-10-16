@@ -50,18 +50,26 @@
 //     (amendment 19) and is final; it is stored in the buffer and sent only
 //     once durable (the operator's `onCommitted`), with its body.
 //
-// The end of a request is Chrome's to report (amendment 23): an operation
-// that has neither an answer nor an end within its limit — 21 s from the
-// admission, counted again from the send (amendment 32) — or a released
-// request the page cancelled before its answer stops the page
-// (`request_unended`: Chrome dies with the request in it) before the engine
-// hears of it. With the answer in and the body still coming, the limit cuts
-// the tunnels and the outcome is a timeout.
+// The end of a request is Chrome's to report (amendment 23). Variant Б
+// (plan-b §4.1.10): Hub is the site's guest, and nothing of Hub's stops the
+// page or cuts the tunnels the site's own requests share.
+// - A request past its deadline or its limit, or over its body limit, is
+//   cancelled in the page (page.ts ABORT). With its answer in, the outcome is
+//   a timeout (or an overflow) and it has ended: what is cancelled is only
+//   its body.
+// - A released request without its answer that the page cancelled (an F5, a
+//   new document), that this process cancelled, or that has neither an
+//   answer nor an end within its limit (21 s from the admission, counted
+//   again from the send, amendment 32), may still be in Chrome's network
+//   service: its outcome is sent at once (possibly sent, never retried), but
+//   a cancel is not its end. The page's slot (egress/gate.ts) stays held
+//   until Chrome reports a real end of it, or until Chrome is gone; past the
+//   slot's bound the operator restarts Chrome in a quiet moment.
 //
-// What is not on the stand yet: media. The CDN hosts are not under the gate
-// (spec §9: their tunnels serve the site's images too): a media request's
-// deadline is checked when it is released, and its tunnels are cut by its
-// request deadline and its limit, but a record of it is not held. Its `sent`
+// What is not on the stand yet: media. The CDN hosts have no API window
+// (spec §9: their tunnels serve the site's images too), but a media request
+// holds Hub's same slot until its proven end. Its deadlines cancel it only
+// in the page, and a record of it is not held. Its `sent`
 // is CDP's word, and a released one counts as sent. Whether an Image and a
 // video element ask as the site's own do, and a video in one request, the
 // stand and the test account must show.
@@ -74,7 +82,7 @@ import type { ApiGate, GateEvent } from "../egress/gate.ts";
 import type { HostClass } from "../egress/hosts.ts";
 import type { AlarmKind, Check, CheckResult, ResponseSource, Result, Send, Sent } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
-import { attemptOf, issuedUrl, ISSUE, PLACEHOLDER_SUFFIX, realUrl, RELEASE } from "./page.ts";
+import { ABORT, attemptOf, issuedUrl, ISSUE, PLACEHOLDER_SUFFIX, realUrl, RELEASE } from "./page.ts";
 import { SESSION_HEADERS, SiteSession } from "./session.ts";
 
 /** Plan §4.14 and spec §8.2: the body limits. */
@@ -131,15 +139,11 @@ export interface HubDeps {
   /** Resolves a held pause (cdp/paused.ts). */
   resolve: (request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>) => Promise<Resolution>;
   gate: ApiGate;
-  /** Cuts every tunnel of a class (egress/proxy.ts). */
-  cut: (cls: "api" | "cdn", reason: string) => number;
   classify: (host: string) => HostClass;
   exitOpen: () => boolean;
   buffer: HubBuffer;
   site: HubSite;
   link: HubLink;
-  /** The page must stop: the exit is closed when this returns. */
-  fault: (reason: "request_unended" | "header_mismatch", note: string) => void;
   alarm: (kind: AlarmKind, detail: Record<string, string | number | boolean>) => void;
   /** The live session changed (state says it). */
   sessionChanged?: (fingerprint: string | null) => void;
@@ -215,8 +219,10 @@ interface Attempt {
   timedOut: boolean;
   expired: boolean;
   noResponse: boolean;
-  /** The operator cut its transfer itself (a limit): a cancel then is ours. */
-  cutByUs: boolean;
+  /** A limit requires ABORT at the attempt's end, never RELEASE first. */
+  abortInPage: string | null;
+  /** This process cancelled it in the page (a limit): a cancel then is ours. */
+  abortedByUs: boolean;
   done: boolean;
   ended: Promise<void>;
   end: () => void;
@@ -279,6 +285,10 @@ export class HubRequests {
   readonly #pathOf = new Map<string, { path: string; hub: boolean }>();
   /** Main-frame documents of each tab session. */
   readonly #navigations = new Map<string, number>();
+  /** Released physical requests until Chrome reports their end, whatever
+   *  became of their attempts: a cancel before the answer is no end
+   *  (`#onFailed`). */
+  readonly #releasedPhys = new Map<string, Physical>();
   #lastMediaSend: { mono: number; wall: number } | null = null;
 
   constructor(deps: HubDeps) {
@@ -295,8 +305,9 @@ export class HubRequests {
       onHeaderMismatch: (path, hub, site) => {
         const detail = { what: "header names", path, hub: hub.join(","), site: site.join(",") };
         this.#log("session.header_mismatch", detail);
+        // An alarm only (plan-b Б6): Hub's requests stand until Chrome starts
+        // anew (the session refuses them); the page and the site go on.
         deps.alarm("header_mismatch", detail);
-        deps.fault("header_mismatch", `a Hub request's headers differ from the site's on ${path}`);
       },
     });
     const cdp = deps.cdp;
@@ -408,7 +419,8 @@ export class HubRequests {
       timedOut: false,
       expired: false,
       noResponse: false,
-      cutByUs: false,
+      abortInPage: null,
+      abortedByUs: false,
       done: false,
       ended: new Promise<void>((resolve) => (end = resolve)),
       end: () => end(),
@@ -500,10 +512,12 @@ export class HubRequests {
       this.session.reset();
       this.#navigations.clear();
       this.#byFetch.clear();
-      this.#byNetwork.clear();
       this.#sessionOf.clear();
       this.#pathOf.clear();
     }
+    // This can run before Chrome is gone. Keep released requests and their
+    // ownership for later end events (both maps are bounded by remember).
+    // The gate's browserGone, after Chrome's confirmed exit, frees its slot.
   }
 
   // ── the interception ───────────────────────────────────────────────────
@@ -556,7 +570,7 @@ export class HubRequests {
   /** Whether a network request is one of Hub's own (variant Б: the site's
    *  observer leaves Hub's requests to this path). */
   ownsNetworkId(networkId: string): boolean {
-    return this.#byNetwork.has(networkId);
+    return this.#releasedPhys.has(networkId) || this.#byNetwork.has(networkId);
   }
 
   /** A request of the site's own to the API, as it stopped: the session is
@@ -712,22 +726,23 @@ export class HubRequests {
       status: null,
       headers: [],
     };
-    if (phys.window !== null) {
-      // The window right before the release: the request's records go up
-      // only in it, and only before the deadline (spec §9).
-      const opened = this.#deps.gate.open(phys.window, deadline!, 0, request.networkId);
-      if (!opened.ok) {
-        // Another admitted request of the page unfinished (egress/gate.ts):
-        // not released, not sent — the engine's not-sent outcome, as its
-        // pacer's one place in flight says ("pace").
-        const why = `the gate refused the request: ${opened.reason}`;
-        const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
-        return this.#refuseAt(attempt, request, outcome, why);
-      }
+    // Every Hub request takes the same slot; only API requests also open
+    // a window for the API's records (spec §9).
+    const opened = phys.window !== null
+      ? this.#deps.gate.open(phys.window, deadline!, 0, request.networkId)
+      : this.#deps.gate.takeSlot(`hub:${attempt.id}`, deadline!, request.networkId);
+    if (!opened.ok) {
+      // Another admitted request of the page unfinished (egress/gate.ts):
+      // not released, not sent — the engine's not-sent outcome, as its
+      // pacer's one place in flight says ("pace").
+      const why = `the gate refused the request: ${opened.reason}`;
+      const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
+      return this.#refuseAt(attempt, request, outcome, why);
     }
     if (role === "preflight") attempt.preflight = phys;
     else attempt.main = phys;
     phys.released = true;
+    if (phys.networkId !== null) remember(this.#releasedPhys, phys.networkId, phys);
     attempt.stage = "released";
     if (attempt.limitTimer === null) this.#restartLimit(attempt);
     this.#armRequestDeadline(attempt);
@@ -736,6 +751,7 @@ export class HubRequests {
     if (resolution === "refused" && !attempt.done) {
       // The pause was gone (the page dropped the request): it never left.
       phys.released = false;
+      if (phys.networkId !== null) this.#releasedPhys.delete(phys.networkId);
       if (phys.window !== null) this.#deps.gate.close(phys.window);
       this.#finish(attempt, { kind: "transport_error", sent: this.#sent(attempt), message: "the request was gone before its release" });
     }
@@ -919,6 +935,7 @@ export class HubRequests {
     if (typeof params.requestId !== "string") return;
     // Chrome's end of this very request, for the page's slot (gate.ts) —
     // whatever became of its attempt.
+    this.#releasedPhys.delete(params.requestId);
     this.#deps.gate.requestEnded(params.requestId);
     const found = this.#physical(params.requestId);
     if (!found) return;
@@ -944,7 +961,16 @@ export class HubRequests {
   #onFailed(event: CdpEvent): void {
     const params = event.params as { requestId?: string; errorText?: string; canceled?: boolean };
     if (typeof params.requestId !== "string") return;
-    this.#deps.gate.requestEnded(params.requestId);
+    // A cancel before the answer is the page's word, not the network
+    // service's: Chrome may still hold the request and write it later
+    // (amendment 37). The page's slot stays held — only a real end, or
+    // Chrome gone, frees it (plan-b §4.1.10).
+    const released = this.#releasedPhys.get(params.requestId);
+    const unproven = params.canceled === true && (released === undefined ? this.ownsNetworkId(params.requestId) : !released.answered);
+    if (!unproven) {
+      this.#releasedPhys.delete(params.requestId);
+      this.#deps.gate.requestEnded(params.requestId);
+    }
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { attempt, phys } = found;
@@ -964,13 +990,10 @@ export class HubRequests {
       return this.#finish(attempt, attempt.timedOut ? { kind: "timeout", sent: true, message: "the body did not finish by the request's deadline" } : { kind: "transport_error", sent: true, message: `the body did not arrive whole: ${errorText}` });
     }
     const sent = this.#sent(attempt);
-    if (params.canceled === true && !attempt.cutByUs) {
-      // The page's word, not the sender's: Chrome's network service may
-      // still hold the request and write it in a later admission's window
-      // (amendment 37). It dies with the browser: the page stops in the same
-      // turn — the engine hears only once the outcome is durable, later.
-      this.#finish(attempt, { kind: "transport_error", sent, message: "the page cancelled the request before its answer: the page stops" });
-      this.#deps.fault("request_unended", `Hub attempt ${attempt.id}: the page cancelled a released request before its answer`);
+    if (params.canceled === true && !attempt.abortedByUs) {
+      // The page's word (an F5, a new document): the request's end is
+      // unknown, and the page's slot stays held (above). The page goes on.
+      this.#finish(attempt, { kind: "transport_error", sent, message: "the page cancelled the request before its answer: its end is unknown" });
       return;
     }
     if (attempt.expired && !sent) return this.#finish(attempt, { kind: "aborted_before_send", refusal: "send_deadline_passed" });
@@ -1022,15 +1045,14 @@ export class HubRequests {
   }
 
   /** Over the limit — declared (the response then fails before its body),
-   *  or while it comes: decided, then its tunnels are cut; the page is not
-   *  asked to cancel (amendment 25). */
-  #overflow(attempt: Attempt, what: string, cut: boolean): void {
+   *  or while it comes: decided, then the request is cancelled in the page
+   *  (never by its tunnels: the site's share them). */
+  #overflow(attempt: Attempt, what: string, abort: boolean): void {
     if (attempt.done) return;
     this.#log("body.over_limit", { attemptId: attempt.id, limit: attempt.limit, what });
-    attempt.cutByUs = true;
+    if (abort) attempt.abortInPage = "a Hub response over its body limit";
     if (attempt.send.kind === "api") this.#finish(attempt, { kind: "transport_error", sent: true, message: `the response body is over ${attempt.limit} bytes (${what})` });
     else this.#respond(attempt, { empty: true, overflow: true });
-    if (cut) this.#deps.cut(attempt.cls, "a Hub response over its body limit");
   }
 
   /** A response outcome: the body captured (sealed now), or an empty one
@@ -1137,7 +1159,6 @@ export class HubRequests {
     for (const request of [...attempt.held]) void this.#failHeld(attempt, request, "Aborted", "its attempt ended");
     attempt.waiting = null;
     this.#live.delete(attempt.id);
-    this.#releaseInPage(attempt);
     attempt.end();
     this.#log("result", {
       attemptId: attempt.id,
@@ -1148,6 +1169,7 @@ export class HubRequests {
       bodyBytes: body?.bytes ?? null,
     });
     this.#store(attempt.id, attempt.fingerprint, outcome, body);
+    this.#releaseInPage(attempt);
   }
 
   /** Stored durably, then sent by the operator. A buffer that takes no
@@ -1170,6 +1192,10 @@ export class HubRequests {
   }
 
   #releaseInPage(attempt: Attempt): void {
+    if (attempt.abortInPage !== null) {
+      void this.#abort(attempt, attempt.abortInPage);
+      return;
+    }
     const tab = this.#deps.site.tabSession();
     if (attempt.world === null || tab === null) return;
     this.#deps.cdp
@@ -1197,10 +1223,12 @@ export class HubRequests {
     return { attempt, phys: ghost };
   }
 
-  /** Did anything of the operation leave? The gate's word for the API; for
-   *  media (no gate) a released request counts as sent. */
+  /** Did anything of the operation leave? A strict gate's word for the API.
+   *  A passive gate (variant Б, plan-b §4.1.10) shares the site's
+   *  connections and cannot say a released request did not leave: then, as
+   *  for media (no gate), a released request counts as sent. */
   #sent(attempt: Attempt): boolean {
-    if (attempt.cls === "cdn") return attempt.main?.released === true;
+    if (attempt.cls === "cdn" || this.#deps.gate.passive) return attempt.preflight?.released === true || attempt.main?.released === true;
     return attempt.preflight?.firstBytesMono != null || attempt.main?.firstBytesMono != null;
   }
 
@@ -1223,17 +1251,18 @@ export class HubRequests {
   }
 
   /** The engine's request deadline (Node's REQUEST_TIMEOUT_MS; media 10 s):
-   *  the class's tunnels are cut; an answer whose body still comes ends as a
-   *  timeout now, a request without one when Chrome reports its end. */
+   *  the request is cancelled in the page; an answer whose body still comes
+   *  ends as a timeout now, a request without one when Chrome reports its
+   *  end (its slot held: that cancel is no proof of an end). */
   #armRequestDeadline(attempt: Attempt): void {
     if (attempt.requestTimerArmed) return;
     attempt.requestTimerArmed = true;
     this.#timer(attempt, attempt.send.requestDeadlineMono - this.#now(), () => {
       if (attempt.done) return;
       attempt.timedOut = true;
-      attempt.cutByUs = true;
-      this.#deps.cut(attempt.cls, "a Hub request past its deadline");
+      attempt.abortInPage = "a Hub request past its deadline";
       if (attempt.main?.answered) this.#finish(attempt, { kind: "timeout", sent: true, message: "the body did not finish by the request's deadline" });
+      else void this.#abort(attempt, attempt.abortInPage);
     });
   }
 
@@ -1241,17 +1270,31 @@ export class HubRequests {
     attempt.limitTimer = null;
     if (attempt.done) return;
     if (attempt.main?.answered) {
-      attempt.cutByUs = true;
-      this.#deps.cut(attempt.cls, "a Hub response over its time limit");
+      attempt.abortInPage = "a Hub response over its time limit";
       this.#finish(attempt, { kind: "timeout", sent: true, message: "the body did not finish within the request's limit" });
       return;
     }
     // No answer and no end: Chrome may still hold the request (amendment
-    // 23). The page stops — the exit closes first — then the engine hears.
-    // Decided first; the page stops in the same turn — the engine hears
-    // only once the outcome is durable, after the exit closed.
-    this.#finish(attempt, { kind: "timeout", sent: this.#sent(attempt), message: "no answer and no end of the request within its limit: the page stops" });
-    this.#deps.fault("request_unended", `Hub attempt ${attempt.id}: no answer and no end within ${this.#timings.opLimitMs} ms`);
+    // 23). Its outcome now, possibly sent; the page's slot stays held until
+    // Chrome reports a real end, or is gone (plan-b §4.1.10).
+    attempt.abortInPage = "a Hub request without an answer or an end within its limit";
+    this.#finish(attempt, { kind: "timeout", sent: this.#sent(attempt), message: "no answer and no end of the request within its limit: its end is unknown" });
+  }
+
+  /** Cancels the request in the page (page.ts ABORT): it ends there, never
+   *  by its tunnels. The world may be gone with its document: then so is the
+   *  request. */
+  async #abort(attempt: Attempt, why: string): Promise<void> {
+    if (attempt.abortedByUs) return;
+    attempt.abortedByUs = true;
+    const tab = this.#deps.site.tabSession();
+    this.#log("request.abort", { attemptId: attempt.id, why });
+    if (attempt.world === null || tab === null) return;
+    try {
+      await this.#deps.cdp.send("Runtime.callFunctionOn", { functionDeclaration: ABORT, executionContextId: attempt.world, arguments: [{ value: attempt.id }], returnByValue: true }, tab);
+    } catch (error) {
+      this.#log("request.abort_failed", { attemptId: attempt.id, error: errorMessage(error) });
+    }
   }
 
   #timer(attempt: Attempt, ms: number, run: () => void): NodeJS.Timeout {

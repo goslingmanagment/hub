@@ -40,6 +40,8 @@ export const OBSERVED_EARLY_MS = 10_000;
 export const OBSERVED_OUTBOX_MAX = OBSERVED_KEPT * 2;
 /** A body larger than this is not kept whole (the engine backfills it). */
 export const OBSERVED_BODY_MAX = 32 * 1024 * 1024;
+/** Past any API request's own limit: a hung or lost end must not hold a restart. */
+export const SITE_STALE_IN_FLIGHT_MS = 60_000;
 
 const NO_SESSION = "0".repeat(64);
 
@@ -75,6 +77,7 @@ interface Observed {
   route: string;
   platformData: boolean;
   preflight: boolean;
+  startedMono: number;
   sentMono: number | null;
   status: number | null;
   extraStatus: number | null;
@@ -129,6 +132,18 @@ export class SiteObserver {
     for (const id of this.#early.keys()) this.#takeEarly(id);
   }
 
+  /** The site's API requests seen to start, not to end (including lost ends). */
+  get inFlight(): number {
+    return this.#requests.size;
+  }
+
+  /** In flight and started at or after this instant on the operator's clock. */
+  activeSince(minStartMono: number): number {
+    let active = 0;
+    for (const r of this.#requests.values()) if (r.startedMono >= minStartMono) active += 1;
+    return active;
+  }
+
   /** Kept across Chrome resets, like the gate's last send: a takeover floor. */
   get lastSend(): { mono: number; wall: number } | null {
     return this.#lastSend;
@@ -173,6 +188,7 @@ export class SiteObserver {
       route,
       platformData,
       preflight: method === "OPTIONS",
+      startedMono: monoMs(),
       sentMono: null,
       status: null,
       extraStatus: null,

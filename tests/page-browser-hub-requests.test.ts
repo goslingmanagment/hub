@@ -9,7 +9,7 @@ import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cd
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, type HubTimings } from "../apps/page-browser/src/hub-requests/hub.ts";
-import { attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
+import { ABORT, attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
 import { cyrb53, fanslyClientCheck, sessionFingerprint, SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -66,14 +66,13 @@ interface World {
   hub: HubRequests;
   buffer: EventBuffer;
   outcomes: Map<number, Stored>;
-  faults: Array<{ reason: string; note: string; exitClosed: boolean; outcomeKnown: boolean }>;
   alarms: Array<{ kind: string; detail: Record<string, unknown> }>;
   lines: string[];
   exit: { open: boolean };
   ready: { why: string | null };
 }
 
-async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string } = {}): Promise<World> {
+async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean } = {}): Promise<World> {
   let dir = options.dir;
   if (dir === undefined) {
     const temp = tempDir("pb-hub-");
@@ -83,14 +82,13 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
   const lines: string[] = [];
   setLogSink((line) => lines.push(line));
   const cdp = new FakeCdpPort();
-  const gate = new ApiGate({ ...(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) });
+  const gate = new ApiGate({ ...(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.passive ? { passive: true } : {}) });
   const chrome = new HubChrome(cdp, gate);
   gate.cut = () => chrome.cut("api");
   gate.cutHeld = () => 0;
-  cleanups.push(() => gate.reset());
+  cleanups.push(() => { gate.reset(); gate.browserGone(); });
   const engine = new FakeHubEngine();
   const outcomes = new Map<number, Stored>();
-  const faults: World["faults"] = [];
   const alarms: World["alarms"] = [];
   const exit = { open: true };
   const ready = { why: null as string | null };
@@ -122,16 +120,11 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     cdp,
     resolve: (request, decision) => paused.resolve(request, decision),
     gate,
-    cut: (cls) => chrome.cut(cls),
     classify: classifyFanslyHost,
     exitOpen: () => exit.open,
     buffer,
     site: { notReady: () => ready.why, tabSession: () => chrome.session, world: async () => 7 },
     link: engine.link(),
-    fault: (reason, note) => {
-      faults.push({ reason, note, exitClosed: exit.open, outcomeKnown: outcomes.size > 0 });
-      exit.open = false;
-    },
     alarm: (kind, detail) => alarms.push({ kind, detail }),
     timings: { pauseWaitMs: 1000, checkWaitMs: 1000, opLimitMs: 2000, mainWaitMs: 1000, ...options.timings },
     log: makeLog("hub"),
@@ -145,7 +138,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     chrome.siteRequest(ME, siteHeaders());
     await until(() => created.session.fingerprint !== null, 2000, "the live session");
   }
-  return { dir, cdp, chrome, gate, engine, hub: created, buffer, outcomes, faults, alarms, lines, exit, ready };
+  return { dir, cdp, chrome, gate, engine, hub: created, buffer, outcomes, alarms, lines, exit, ready };
 }
 
 let nextId = 1000;
@@ -289,7 +282,6 @@ describe("a Hub request (plan §4.2)", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
     expect(w.chrome.wire).toEqual([]);
-    expect(w.faults).toEqual([]);
   });
 
   it("one admitted request of the page at a time: a second admission while the first is unfinished — its admission ran out unsent, Chrome still holds it — is not released (not sent, \"pace\"); nothing goes late; once the first ended, the next goes", async () => {
@@ -396,15 +388,21 @@ describe("a Hub request (plan §4.2)", () => {
     // Failed at the response stage, its body never asked for.
     expect(w.cdp.sent("Network.streamResourceContent")).toEqual([]);
     expect(w.cdp.sent("Fetch.continueResponse")).toEqual([]);
-    const chunked = send(w, { maxBodyBytes: 1000 }, { chunked: true, chunks: [Buffer.alloc(600, 1), Buffer.alloc(600, 2), Buffer.alloc(600, 3)] });
+    const chunked = send(w, { maxBodyBytes: 1000 }, { chunked: true, chunks: [Buffer.alloc(600, 1), Buffer.alloc(600, 2), Buffer.alloc(600, 3)], chunkDelayMs: 50 });
     expect(await outcomeOf(w, chunked.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the response body is over 1000 bytes (1200 bytes received)" });
-    // Cut by its tunnels, not by asking the page; no body kept.
-    expect(w.chrome.requestsOf(chunked.attemptId).every((request) => request.ended)).toBe(true);
+    // Cancelled in the page — never by its tunnels, which the site's own
+    // requests share (variant Б); no body kept.
+    await until(() => w.chrome.requestsOf(chunked.attemptId).every((request) => request.ended), 2000, "the cancel");
+    expect(w.chrome.abortedInPage).toEqual([chunked.attemptId]);
+    expect(w.chrome.releasedInPage).not.toContain(chunked.attemptId);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(readdirSync(join(w.dir, "buffer", "bodies"))).toEqual([]);
     // Media over 5 MiB: the old bodyOverflow, an answer with no body.
-    const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/big.jpg", maxBodyBytes: 100 }, { chunked: true, chunks: [Buffer.alloc(80), Buffer.alloc(80)] });
+    const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/big.jpg", maxBodyBytes: 100 }, { chunked: true, chunks: [Buffer.alloc(80), Buffer.alloc(80), Buffer.alloc(80)], chunkDelayMs: 50 });
     expect(await outcomeOf(w, media.attemptId)).toMatchObject({ kind: "response", status: 200, bodyOverflow: true, body: { decodedBytes: 0 } });
+    expect(w.chrome.abortedInPage).toContain(media.attemptId);
+    expect(w.chrome.releasedInPage).not.toContain(media.attemptId);
+    expect(w.chrome.requestsOf(media.attemptId).every((request) => request.ended)).toBe(true);
   });
 
   it("is whole only when it ended with loadingFinished and every chunk was there as long as it said", async () => {
@@ -440,7 +438,6 @@ describe("a Hub request (plan §4.2)", () => {
     expect(await outcomeOf(w, before.attemptId)).toEqual({ kind: "transport_error", sent: false, message: "net::ERR_TUNNEL_CONNECTION_FAILED" });
     const after = send(w, {}, { then: "fail_after_send" });
     expect(await outcomeOf(w, after.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "net::ERR_CONNECTION_RESET" });
-    expect(w.faults).toEqual([]);
   });
 
   it("knows where its answer came from: the network, a 304 revalidation, the service worker, an unconfirmed cache", async () => {
@@ -556,21 +553,19 @@ describe("the session (plan §4.7)", () => {
     expect(w.chrome.issued).toEqual([]);
   });
 
-  it("compares a Hub request's header names with the site's on the same path: a difference alarms and stops the page", async () => {
+  it("compares a Hub request's header names with the site's on the same path: a difference alarms and stops Hub's requests, never the page (plan-b Б6)", async () => {
     const w = await world();
     const site = w.chrome.siteRequest(ME, siteHeaders());
     w.chrome.siteSent(site.networkId, ["accept", "authorization", "fansly-client-check", "fansly-client-id", "fansly-client-ts", "fansly-session-id", "user-agent"]);
     const same = send(w);
     await outcomeOf(w, same.attemptId);
-    expect(w.faults).toEqual([]);
     // The site's next request goes with a header Hub's do not have.
     const next = w.chrome.siteRequest(ME, siteHeaders());
     w.chrome.siteSent(next.networkId, ["accept", "authorization", "fansly-client-check", "fansly-client-id", "fansly-client-ts", "fansly-session-id", "user-agent", "x-new"]);
-    await until(() => w.faults.length === 1);
-    expect(w.faults[0]).toMatchObject({ reason: "header_mismatch" });
-    expect(w.alarms).toContainEqual({ kind: "header_mismatch", detail: expect.objectContaining({ what: "header names", path: `GET ${ME}` }) });
+    await until(() => w.alarms.length === 1);
+    expect(w.alarms).toEqual([{ kind: "header_mismatch", detail: expect.objectContaining({ what: "header names", path: `GET ${ME}` }) }]);
+    expect(w.exit.open).toBe(true);
     // And no Hub request goes until the browser starts anew.
-    w.exit.open = true;
     const after = send(w);
     expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: "a Hub request's headers differed from the site's: the transport is not ready" });
   });
@@ -586,7 +581,6 @@ describe("the session (plan §4.7)", () => {
     w.chrome.siteSent(next.networkId, withSocket.filter((name) => name !== "fansly-session-id"));
     const again = send(w);
     await outcomeOf(w, again.attemptId);
-    expect(w.faults).toEqual([]);
     expect(w.alarms).toEqual([]);
   });
 
@@ -604,31 +598,159 @@ describe("the session (plan §4.7)", () => {
     await outcomeOf(w, message.attemptId);
     expect(w.chrome.issued).toHaveLength(1);
     expect(w.chrome.issued[0]!.headers.map(([name]) => name)).not.toContain("fansly-session-id");
-    expect(w.faults).toEqual([]);
   });
 });
 
-describe("what the operator cannot vouch for stops the page", () => {
-  it("no answer and no end within the limit: the page stops (the exit closes) before the engine can hear", async () => {
-    const w = await world({ timings: { opLimitMs: 300 } });
+describe("a Hub request whose end is unknown holds the page's slot, and never stops the page (plan-b §4.1.10)", () => {
+  it("no answer and no end within the limit: its outcome at once (possibly sent), cancelled in the page; the slot stays held — the next admission is refused (\"pace\") — until Chrome is gone; past the bound, onUnended", async () => {
+    const w = await world({ timings: { opLimitMs: 300 }, slotLimitMs: 300 });
+    const unended: string[] = [];
+    w.gate.onUnended = (operation) => unended.push(operation);
+    // The slot's bound: the admission's deadline and the slot's limit.
+    let deadlineMs = 400;
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
     const message = send(w, {}, { then: "hang_after_send" });
-    await until(() => w.faults.length === 1, 3000, "the stop");
-    expect(w.faults[0]).toMatchObject({ reason: "request_unended", exitClosed: true, outcomeKnown: false });
-    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: "no answer and no end of the request within its limit: the page stops" });
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: "no answer and no end of the request within its limit: its end is unknown" });
+    await until(() => w.chrome.abortedInPage.includes(message.attemptId), 2000, "the cancel");
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
+    // The page's cancel is no end: the slot is still the operation's.
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    expect(w.exit.open).toBe(true);
+    deadlineMs = 15_000;
+    const next = send(w);
+    expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    await until(() => unended.length === 1, 5000, "the slot's bound");
+    expect(unended).toEqual([`hub:${message.attemptId}`]);
+    // Chrome gone (the operator restarts it): the next one goes.
+    w.gate.browserGone();
+    const after = send(w);
+    expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
   });
 
-  it("a released request the page cancels before its answer stops the page", async () => {
+  it.each(["Network.loadingFinished", "Network.loadingFailed"])("repeated cancels before the answer keep the slot until a proven %s; the page goes on", async (endEvent) => {
     const w = await world();
     const message = send(w, {}, { then: "cancel_after_send" });
-    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the page cancelled the request before its answer: the page stops" });
-    expect(w.faults).toEqual([expect.objectContaining({ reason: "request_unended", exitClosed: true })]);
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the page cancelled the request before its answer: its end is unknown" });
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    for (let i = 0; i < 2; i++) {
+      w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+      expect(w.gate.slotPending).toEqual([request.networkId]);
+      expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    }
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    expect(w.exit.open).toBe(true);
+    const next = send(w);
+    expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    w.cdp.emit(endEvent, { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET", encodedDataLength: 0 }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
+    const after = send(w);
+    expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
   });
 
-  it("an answer whose body does not finish within the limit is cut and ends as a timeout, without a stop", async () => {
+  it.each([true, false])("endAll(browserGone=%s) before Chrome is confirmed gone keeps ownership and the slot through subsequent cancels", async (browserGone) => {
+    const w = await world();
+    const message = send(w, {}, { then: "hang_after_send" });
+    await until(() => w.chrome.wire.some((request) => request.attemptId === message.attemptId), 2000, "the released request");
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    w.hub.endAll("the exit closed, Chrome is still up", browserGone);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "transport_error", sent: true });
+    expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    for (let i = 0; i < 2; i++) {
+      w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+      expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+      expect(w.gate.slotPending).toEqual([request.networkId]);
+    }
+    w.gate.browserGone();
+    expect(w.gate.slotOwner).toBeNull();
+  });
+
+  it("a cancel of a Hub-owned request without a physical entry is no proven end either", async () => {
+    const w = await world();
+    // Chrome rejects the release: the physical entry is dropped, but it
+    // has not reported the request's end and the Hub ownership remains.
+    w.cdp.handlers.set("Fetch.continueRequest", () => ({ error: { code: -32602, message: "Invalid InterceptionId." } }));
+    const message = send(w);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "transport_error", sent: false });
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
+  });
+
+  it.each(["image", "video"] as const)("a %s with an unknown end holds the same slot without an API window, paces API and media, and raises onUnended", async (kind) => {
+    const w = await world({ passive: true, timings: { opLimitMs: 300 }, slotLimitMs: 300 });
+    const unended: string[] = [];
+    w.gate.onUnended = (operation) => unended.push(operation);
+    let deadlineMs = 400;
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
+    const media = { kind, url: `https://cdn3.fansly.com/unknown.${kind === "image" ? "jpg" : "mp4"}`, maxBodyBytes: MEDIA_BODY_LIMIT };
+    const message = send(w, media, { then: "hang_after_send" });
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "timeout", sent: true });
+    await until(() => w.chrome.requestsOf(message.attemptId).every((request) => request.ended), 2000, "the media cancel");
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    expect(w.gate.slotPending).toEqual([request.networkId]);
+    expect(w.gate.state).toEqual({ phase: "closed", window: null, deadline: null });
+    expect(w.exit.open).toBe(true);
+    deadlineMs = 15_000;
+    for (const next of [send(w), send(w, media)]) {
+      expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+      expect(w.chrome.wire.some((entry) => entry.attemptId === next.attemptId)).toBe(false);
+    }
+    await until(() => unended.length === 1, 5000, "the media slot's bound");
+    expect(unended).toEqual([`hub:${message.attemptId}`]);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
+    const after = send(w);
+    expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
+  });
+
+  it("an answer whose body does not finish within the limit ends as a timeout, cancelled in the page; answered, it has ended — the slot is free", async () => {
     const w = await world({ timings: { opLimitMs: 200 } });
     const message = send(w, {}, { chunks: [Buffer.from("a"), Buffer.from("b"), Buffer.from("c")], chunkDelayMs: 150 });
     expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: "the body did not finish within the request's limit" });
-    expect(w.faults).toEqual([]);
+    await until(() => w.chrome.abortedInPage.includes(message.attemptId), 2000, "the cancel");
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
+    await until(() => w.gate.slotOwner === null, 2000, "the slot freed");
+    const next = send(w);
+    expect(await outcomeOf(w, next.attemptId)).toMatchObject({ kind: "response", status: 200 });
+  });
+
+  it.each([false, true])("the request deadline cancels in the page without RELEASE first (answered: %s)", async (answered) => {
+    const w = await world({ timings: { opLimitMs: 2000 } });
+    const outcomeAtAbort: boolean[] = [];
+    const call = w.cdp.handlers.get("Runtime.callFunctionOn")!;
+    w.cdp.handlers.set("Runtime.callFunctionOn", (command) => {
+      if (command.params.functionDeclaration === ABORT) {
+        const [{ value: attemptId }] = command.params.arguments as [{ value: number }];
+        outcomeAtAbort.push(w.buffer.attempt(attemptId)?.outcome === true);
+      }
+      return call(command);
+    });
+    const now = monoMs();
+    const message = send(w, { sendDeadlineMono: now + 300, requestDeadlineMono: now + 500 }, answered ? { chunks: [Buffer.from("a"), Buffer.from("b")], chunkDelayMs: 400 } : { then: "hang_after_send" });
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: answered ? "the body did not finish by the request's deadline" : "no answer by the request's deadline" });
+    expect(w.chrome.abortedInPage).toEqual([message.attemptId]);
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
+    // With an answer already in, the timeout is stored before ABORT.
+    // Without one, Chrome's cancellation still determines the outcome.
+    expect(outcomeAtAbort).toEqual([answered]);
+    await until(() => answered ? w.gate.slotOwner === null : w.gate.slotOwner === `hub:${message.attemptId}`, 2000, "the slot after cancellation");
+    expect(w.exit.open).toBe(true);
+  });
+
+  it("a passive gate (variant Б) cannot say a released request did not leave: a network failure after the release is possibly sent", async () => {
+    const w = await world({ passive: true });
+    const ok = send(w);
+    expect(await outcomeOf(w, ok.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    const failed = send(w, {}, { then: "fail_before_send" });
+    expect(await outcomeOf(w, failed.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "net::ERR_TUNNEL_CONNECTION_FAILED" });
   });
 
   it("a document replaced while the request waits: failed, never released", async () => {

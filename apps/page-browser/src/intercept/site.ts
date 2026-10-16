@@ -177,6 +177,8 @@ export interface SiteDeps {
   cdp: CdpPort;
   resolve: (request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>) => Promise<Resolution>;
   gate: ApiGate;
+  /** Hub alone decides the end of its requests, including cancelled ones. */
+  isHubRequest: (networkId: string) => boolean;
   /** Cuts every API tunnel (egress/proxy.ts). */
   cutApi: (reason: string) => number;
   buffer: SiteBuffer;
@@ -1137,7 +1139,7 @@ export class SiteRequests {
     const params = event.params as { requestId?: unknown; encodedDataLength?: unknown };
     // Chrome's end of this very request, for the page's slot (gate.ts) —
     // whatever became of its operation.
-    if (typeof params.requestId === "string") this.#deps.gate.requestEnded(params.requestId);
+    if (typeof params.requestId === "string") this.#requestEnded(params.requestId);
     const bytes = typeof params.encodedDataLength === "number" && Number.isFinite(params.encodedDataLength) && params.encodedDataLength >= 0 ? params.encodedDataLength : null;
     if (typeof params.requestId === "string") this.#passedEnd(params.requestId, "finished", bytes);
     const found = this.#physical(params.requestId);
@@ -1158,7 +1160,7 @@ export class SiteRequests {
 
   #onFailed(event: CdpEvent): void {
     const params = event.params as { requestId?: unknown; errorText?: unknown; canceled?: unknown };
-    if (typeof params.requestId === "string") this.#deps.gate.requestEnded(params.requestId);
+    if (typeof params.requestId === "string") this.#requestEnded(params.requestId);
     if (typeof params.requestId === "string") this.#passedEnd(params.requestId, String(params.errorText ?? "failed"), null);
     const found = this.#physical(params.requestId);
     if (!found) return;
@@ -1409,8 +1411,12 @@ export class SiteRequests {
    *  request stays pending until Chrome's own end or the slot's bound. */
   async #resolve(request: PausedRequest, decision: Exclude<PausedDecision, { action: "hold" }>): Promise<Resolution> {
     const resolution = await this.#deps.resolve(request, decision);
-    if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.#deps.gate.requestEnded(request.networkId);
+    if (resolution === "answered" && request.stage === "response" && (decision.action === "fail" || decision.action === "fulfill")) this.#requestEnded(request.networkId);
     return resolution;
+  }
+
+  #requestEnded(networkId: string | null): void {
+    if (networkId !== null && !this.#deps.isHubRequest(networkId)) this.#deps.gate.requestEnded(networkId);
   }
 
   async #failHeld(op: SiteOp, request: PausedRequest, reason: "Aborted" | "Failed", why: string): Promise<void> {
