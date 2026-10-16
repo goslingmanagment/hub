@@ -212,10 +212,66 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
   });
 
   it("fails Hub's send closer than its pause to an observed site request", () => {
-    const siteSend = site(20, "account.me");
-    const hub = engine(21.5, "notifications.page");
+    // The site's end has not arrived: its send alone must suffice.
+    const siteSend = site(20, "account.me", { httpStatus: null, completedAt: null });
+    const hub = engine(21, "notifications.page");
     const audit = auditPagePace([engine(10, "notifications.page"), siteSend, hub], WINDOW);
-    expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_500, clock: "wall" })]);
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_000, clock: "wall" })]);
+  });
+
+  it.each([20, -1])("an old observed send without sent_at at %s s cannot hide a short Hub gap behind its send window", (seconds) => {
+    // Before the fix the site's upper bound (admission + 15 s) sorted it
+    // AFTER Hub's send; skipped as observed, it left a false pass forever.
+    const observed = site(seconds, "site.other", {
+      sentAt: null, countedAt: at(seconds + 15), httpStatus: null, completedAt: null,
+    });
+    const hub = engine(seconds + 1, "notifications.page");
+    const audit = auditPagePace([engine(seconds - 10, "notifications.page"), observed, hub], WINDOW);
+    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], minGapMs: null });
+    expect(audit.inconclusive).toEqual([expect.objectContaining({
+      ref: hub.ref, prevRef: observed.ref, prevSentAt: at(seconds), gapMs: 1_000,
+      pauseMs: 2_500, open: "predecessor_send_not_recorded",
+    })]);
+    // The same uncertainty when Hub's own send was never marked either.
+    expect(auditPagePace([observed, unrecorded(seconds + 1, "notifications.page")], WINDOW))
+      .toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], inconclusive: [expect.objectContaining({ judgedAt: "admission", open: "predecessor_send_not_recorded" })] });
+  });
+
+  it("an old observed burst is never judged; Hub's pause counts from its latest admission", () => {
+    const older = site(20, "site.other", { sentAt: null, countedAt: at(35) });
+    const newest = site(20.1, "site.other", { sentAt: null, countedAt: at(35.1) });
+    const audit = auditPagePace([older, newest, engine(21.1, "notifications.page")], WINDOW);
+    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
+    expect(audit.inconclusive).toEqual([expect.objectContaining({ prevRef: newest.ref, gapMs: 1_000, open: "predecessor_send_not_recorded" })]);
+    expect(auditPagePace([older, newest], WINDOW)).toMatchObject({ verdict: "pass", pairs: 0, inconclusive: [] });
+  });
+
+  it("an old observed send at the same rounded instant is a possible predecessor even with a larger id", () => {
+    const hub = engine(20, "notifications.page");
+    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
+    expect(auditPagePace([hub, observed], WINDOW)).toMatchObject({
+      verdict: "inconclusive", pairs: 0, violations: [],
+      inconclusive: [expect.objectContaining({ ref: hub.ref, prevRef: observed.ref, gapMs: 0, open: "predecessor_send_not_recorded" })],
+    });
+  });
+
+  it("an old observed send passes only when the gap from its admission proves Hub's own pause", () => {
+    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
+    // The site's own 2 s pause proves nothing about Hub's 2.5 s pause.
+    expect(auditPagePace([observed, engine(22, "notifications.page")], WINDOW).verdict).toBe("inconclusive");
+    expect(auditPagePace([observed, engine(22.5, "notifications.page")], WINDOW))
+      .toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
+    expect(auditPagePace([observed, engine(22.498, "notifications.page")], WINDOW).verdict).toBe("pass");
+    expect(auditPagePace([observed, engine(22.497, "notifications.page")], WINDOW).verdict).toBe("inconclusive");
+  });
+
+  it("an inconclusive old observed predecessor does not mask a proven Hub violation", () => {
+    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
+    const first = engine(21, "notifications.page");
+    const second = engine(22, "transactions.page");
+    const audit = auditPagePace([observed, first, second], WINDOW);
+    expect(audit).toMatchObject({ verdict: "fail", pairs: 1, inconclusive: [expect.objectContaining({ ref: first.ref })] });
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: second.ref, prevRef: first.ref, gapMs: 1_000 })]);
   });
 });
 

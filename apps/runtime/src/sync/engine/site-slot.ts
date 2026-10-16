@@ -152,13 +152,14 @@ export async function admitSite(
  * go and observed — never admitted, never refused. Its attempt is journaled
  * after the fact under this owner as a site row (`origin` site), with the
  * owner's minimum S and no jitter (nothing paced it), so the route clocks, the
- * takeover floor and the hour count see it. Its end goes through
+ * takeover floor and the hour count see it. Its send instant and mark are
+ * recorded immediately, even if its end never arrives. Its end goes through
  * `commitSiteEnd` (`observedSend`): the site's 429, 401 and 403 hold the
  * engine's own routes as an admitted request's do.
  */
 export async function recordObservedSiteSend(
   d: CommitDeps,
-  input: { id: string; method: string; host: string; path: string; route: string; settingMs: number },
+  input: { id: string; method: string; host: string; path: string; route: string; settingMs: number; sentWall: Date },
 ): Promise<{ attemptId: number }> {
   return inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
@@ -176,6 +177,7 @@ export async function recordObservedSiteSend(
         observed: true,
       },
       browserRequestId: input.id,
+      sentAt: input.sentWall,
       settingMs: input.settingMs,
       jitterU: 0,
       pauseMs: input.settingMs,

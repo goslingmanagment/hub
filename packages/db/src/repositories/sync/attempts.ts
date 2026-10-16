@@ -319,6 +319,9 @@ export interface InsertSiteAdmissionInput {
   /** The operator's id of the request (`siteRequestId`, a socket's
    *  `connectionId`; 0272 `browser_request_id`). */
   browserRequestId?: string | null;
+  /** An already observed browser send: record its instant and
+   *  `transport_reported` mark now; `sent` is still unfinished. */
+  sentAt?: Date;
   settingMs: number;
   jitterU: number;
   pauseMs: number;
@@ -350,14 +353,16 @@ export async function insertSiteAdmission(
     insert into sync_attempts (
       page_id, work_id, resource, subject, class, slot, owner_generation, demand_revision,
       setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms, origin,
-      browser_request_id
+      browser_request_id, sent_at, send_mark, outcome
     )
     select page.page_id, null, 'site', '', ${input.origin === "site" && input.operation === "ws.upgrade" ? "urgent" : "site"}::text, null,
            ${generationParam(input.generation)}, null,
            ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
            ${input.operation}::text, ${jsonParam(input.request)}, false,
            ${boundedInt(input.routeIntervalMs)}::integer, ${boundedInt(input.familyIntervalMs)}::integer,
-           ${input.origin}::text, ${input.browserRequestId ?? null}::text
+           ${input.origin}::text, ${input.browserRequestId ?? null}::text,
+           ${timestampParam(input.sentAt)}, ${input.sentAt === undefined ? null : "transport_reported"}::text,
+           ${input.sentAt === undefined ? "admitted" : "sent"}::text
       from page
     returning id::text as "attemptId", admitted_at as "admittedAt"
   `);
@@ -473,7 +478,8 @@ export interface CaptureAttemptResult {
  * actual send instant and the observation of its raw response; when it was
  * sent, the page's `last_send_at` (never moved backwards),
  * `last_send_attempt_id` and `last_completed_at`. Idempotent: only an
- * `admitted`/`sent` attempt is settled.
+ * `admitted`/`sent` attempt is settled. An already recorded browser send
+ * keeps its transport-reported instant and mark when its outcome arrives.
  */
 export async function captureAttempt(db: Database, input: CaptureAttemptInput): Promise<CaptureAttemptResult> {
   const observation = input.observation ?? null;
@@ -483,9 +489,11 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
     ), att as (
       update sync_attempts
          set outcome = ${input.outcome}::text,
-             sent_at = case when ${input.sent}::boolean
+             sent_at = case when send_mark = 'transport_reported' and sent_at is not null then sent_at
+               when ${input.sent}::boolean
                then coalesce(${timestampParam(input.sentAt)}, sent_at, clock_timestamp()) else sent_at end,
-             send_mark = ${input.sent ? input.sendMark ?? "request_start" : null}::text,
+             send_mark = case when send_mark = 'transport_reported' then send_mark
+               else ${input.sent ? input.sendMark ?? "request_start" : null}::text end,
              send_mono_offset_ms = ${input.sendMonoOffsetMs ?? null}::double precision,
              gap_prev_ms = ${input.gapPrevMs ?? null}::double precision,
              completed_at = clock_timestamp(),
@@ -958,8 +966,9 @@ export interface FanslySendAuditRow {
   observed: boolean;
   /** The engine attempt's owner generation; null for a legacy row. */
   ownerGeneration: bigint | null;
-  /** The admission (`admitted_at`; a legacy row's capture): no byte of the
-   *  request left before it — the lower bound of a send never recorded. */
+  /** The admission (`admitted_at`; a legacy row's capture): the lower bound
+   *  of a send never recorded. An observed site send was journaled after it
+   *  left, so its admission is an upper bound instead. */
   admittedAt: Date;
   /** The recorded actual send instant (`sent_at`); null: none recorded. */
   sentAt: Date | null;
