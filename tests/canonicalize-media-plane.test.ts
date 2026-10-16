@@ -638,6 +638,26 @@ describe("replay determinism and payload sanity", () => {
     expect(second.map((event) => event.dedupKey)).toEqual(first.map((event) => event.dedupKey));
   });
 
+  it("a message read again with the same material dedupes; changed material mints a new key", () => {
+    // Every head read returns the chat's newest 25 messages, so one message is
+    // read many times. The read's clock rides on the head (the archive's
+    // precedence clock) but is not part of the material's identity.
+    const material = (payload: unknown, receivedAt: Date) => only(
+      canonicalizeSyncPullObservation(dmObservation(payload, receivedAt), CONTEXT),
+      "message.material_observed",
+    );
+    const firstRead = material(paidVideoPayload(), RECEIVED_AT);
+    const laterRead = material(paidVideoPayload(), new Date(RECEIVED_AT.getTime() + 3_600_000));
+    expect(laterRead.dedupKey).toBe(firstRead.dedupKey);
+    expect((laterRead.data.head as { materialObservedAt: string }).materialObservedAt)
+      .not.toBe((firstRead.data.head as { materialObservedAt: string }).materialObservedAt);
+
+    const edited = paidVideoPayload();
+    (edited.messages[0] as Record<string, unknown>).content = "<p>changed</p>";
+    expect(material(edited, new Date(RECEIVED_AT.getTime() + 7_200_000)).dedupKey)
+      .not.toBe(firstRead.dedupKey);
+  });
+
   it("mints a NEW key when the price or the sale counters move, and only then", () => {
     const base = canonicalizeSyncPullObservation(dmObservation(paidVideoPayload()), CONTEXT);
     const repriced = paidVideoPayload();

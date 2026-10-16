@@ -973,7 +973,19 @@ function materialDrafts(
       materialObservedAt: observation.receivedAt.toISOString(),
       originClass: "fansly_dm_sidecar",
     };
-    const fingerprint = contentHash(head);
+    // The fingerprint (and so the dedup key) is the message's MATERIAL, not
+    // the moment it was read. Every head read returns the newest 25 messages,
+    // so a chat's message is read again on each new one; with the receipt
+    // clock in the hash every read appended a full copy of the same material
+    // (and its checkpoint) and rewrote the archive row. Now a re-read of
+    // unchanged material dedupes, and a real change — media, price, reply,
+    // markers, text — still mints a new event. The head keeps the clock of
+    // the read that first saw this material: the archive's precedence clock
+    // (Fansly heads carry no vendor change time). A re-parse of observations
+    // read before this change mints one event per message and material at
+    // most; their older clock loses to the archive's newer one.
+    const { materialObservedAt: _observedAt, ...material } = head;
+    const fingerprint = contentHash(material);
     drafts.push({
       type: "message.material_observed",
       occurredAt: messageCreatedAt,

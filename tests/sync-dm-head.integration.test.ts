@@ -707,6 +707,51 @@ describe("dm-messages.head", () => {
     )).toBe(5);
   });
 
+  it("a later head read of the same chat appends material only for what changed and rewrites no unchanged archive row", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedThread(pageId, { n: 9, stored: range(1, 3), chain: true });
+    const registry = await registryFor(pageId);
+    const materialCount = () => scalar(
+      "select count(*)::int as n from domain_events where account_id = $1 and type = 'message.material_observed'", [pageId],
+    );
+    const archiveVersions = async () => {
+      const result = await testDb!.pool.query<{ ref: string; xmin: string }>(
+        "select message_ref as ref, xmin::text from message_archive where account_id = $1 order by message_ref::numeric",
+        [pageId],
+      );
+      return new Map(result.rows.map((row) => [row.ref, row.xmin]));
+    };
+
+    await demand(pageId, "dm-messages.head", 9, [msg(5)]);
+    await runLive(pageId, registry, serve(groupOf(9), range(1, 5)),
+      async () => (await workRow(pageId, "dm-messages.head", 9))?.state === "done");
+    expect(await materialCount()).toBe(5);
+    const before = await archiveVersions();
+    const eventsBefore = await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId]);
+
+    // One new message: the head returns it with the five already read.
+    await demand(pageId, "dm-messages.head", 9, [msg(6)]);
+    await runLive(pageId, registry, serve(groupOf(9), range(1, 6)),
+      async () => {
+        const work = await workRow(pageId, "dm-messages.head", 9);
+        return work?.state === "done" && work.demand.messageIds.length === 0
+          && (await storedIds((await testDb!.pool.query<{ id: string }>(
+            "select id::text from page_dm_threads where platform_account_id = $1", [pageId],
+          )).rows.map((row) => Number(row.id))[0]!)).includes(msg(6));
+      });
+    // Only message 6 is new material; the re-read five dedupe.
+    expect(await materialCount()).toBe(6);
+    const after = await archiveVersions();
+    for (const k of range(1, 5)) {
+      expect(after.get(msg(k)), `message ${k}`).toBe(before.get(msg(k)));
+    }
+    expect(after.has(msg(6))).toBe(true);
+    // Message 6's received/sent event, its material and one checkpoint: nothing for the five.
+    expect(await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId]))
+      .toBe(eventsBefore + 3);
+  });
+
   it("drops a fenced fan's rows from every write and keeps the page's own", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
