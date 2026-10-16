@@ -111,14 +111,14 @@ forward-only миграция; **(c)** решение владельца или 
 | # | Находка | Где | Эффект | Класс |
 |---|---|---|---|---|
 | M1 | `message.material_observed` с новым ключом при каждом чтении, плюс checkpoint и перезапись строки архива | `canonicalize/sync-pull.ts` (Fansly) | До 25 событий по ~1,3 КБ на одно новое сообщение в активном чате | **Сделано** для Fansly |
-| M2 | То же для OFAPI | `services/ofapi-message-material.ts:124` | По событию на каждое чтение через REST (readthrough, snapshot) | (a), после проверки взаимодействия с `dm_message_archive` в ai-transcript-union |
+| M2 | То же для OFAPI | `services/ofapi-message-material.ts:124` | По событию на каждое чтение через REST (capture, snapshot, serving) | (a) с решением владельца: проверено, что union транскрипта и serving не меняют вывод (часы `dm_message_archive` тоже двигаются только при изменении). Остаётся узкий A→B→A: `isNew` «отметить непрочитанным» без смены `changedAt` оставит архив в B. Если делать — хэшировать `createdAt` вместе с материалом. Сначала стоит узнать долю OFAPI в дублях (раздел 11 замера) |
 | M3 | Повторное применение того же события перезаписывало строку архива и reply-поля | `repositories/message-archive.ts` | Лишний tuple и записи во все 7 индексов, включая GIN | **Сделано** |
 | M4 | Три обслуживающих хранилища OnlyFans: `page_dm_messages`, `dm_message_archive` (пишется и читается, комментарий «frozen» устарел), `message_archive` | `ofapi-dm-archive.ts`, `ofapi-dm-readthrough.ts`, `ai-transcript-union.ts`, `conversation-feed.ts`, `agent-transcript.ts` | ~0,47 + 1,35 + 0,53 КБ на одно сообщение | (b) → (c): проецировать OFAPI в `message_archive` при settle, отпечатки reconciler'а вынести в узкую таблицу, затем вывести две таблицы из записи |
 | M5 | `text_html` дублирует `text_plain` почти во всех строках Fansly | `message-archive.ts` | Вторая копия текста в каждой строке | (a): хранить `text_html` только если он отличается; читателям `coalesce` |
-| M6 | `dm_live_messages.content` не очищается после подтверждения архивом | `sync/live-messages.ts` | Копия каждого живого сообщения навсегда | (a): обнулять `content`/`attachments` при `confirm_outcome = 'match'` |
+| M6 | `dm_live_messages.content` не очищается после подтверждения архивом | `sync/live-messages.ts` | ~0,1–0,15 МБ/сутки | **Не делать**: читатели показывают оверлей, пока *их* хранилище не получило сообщение (match против `page_dm_messages` ≠ есть в `message_archive`); `sync check live-hour` считает SLO по `attachments`; выгода мала |
 | M7 | Числовые id как text (`conversation_ref`, `message_ref`, `fan_native_id`), повторяющиеся текстовые enum | `message_archive` | ~20 Б вместо 8 на поле | (b) для новых колонок |
 | M8 | GIN-индекс полнотекстового поиска обслуживает только агентский поиск; `agentReadPlaneMode` по умолчанию `off`, поиск дашборда идёт через `ILIKE` | `0059_message_archive.sql:46` | Самый дорогой индекс при росте сообщений | (c): проверить `idx_scan`; сделать частичным или удалить |
-| M9 | Ключи дедупликации, привязанные к наблюдению: каталог (vault), earnings, окна статистики пишут неизменённое состояние на каждом опросе | `fansly-catalog.ts`, `fansly-earnings.ts:146`, `fansly-stats.ts:335,548` | Строка событий на каждый опрос | (a): дописывать только при изменении `content_hash` проекции |
+| M9 | Ключи, привязанные к наблюдению: каталог и членство в альбомах (`:obs:<id>`), `rawmedia`, earnings — неизменённое состояние пишется на каждом просмотре | `canonicalize/fansly-catalog.ts`, `raw-media.ts:60`, `fansly-earnings.ts:146` | Членство в альбомах: ~2,5–17 МБ/сутки на страницу (столько же `rawmedia`); каталог и earnings — десятые МБ | **Не минимальная правка**: на «событие на каждый просмотр» опираются `last_observed_at`, отметки «пропал», дневные строки gift-кодов, аудит earnings C2a и тесты J12. Content-only ключ возвращает баг A→B→A; сравнение с проекцией ломает детерминизм реплея. Нужен редизайн: события по содержимому + компактное событие «видел» на просмотр. `statstop`/`mediatag` — не дубли (ключ по окну) |
 | M10 | `ai_generation_content.prompt_blocks` хранит статичные блоки и транскрипт целиком при каждом вызове | `ai-gateway.ts:563` | Растёт как «генерации × длина транскрипта» | (b): content-addressed блоки, транскрипт дневными кусками |
 | M11 | `dm_message_archive_retain_until_idx` и ежедневная «очистка» при сроке 36 500 дней не удаляют ничего | `ofapi-events.ts:572` | Индекс и ежедневный проход впустую | (a) + (b) |
 
@@ -149,7 +149,7 @@ forward-only миграция; **(c)** решение владельца или 
 | T7 | `sync_attempts.request` хранит `query` (повтор `params`), `spec` (повтор `operation`), `credentialsGeneration` в каждой строке | `commit.ts:357` | Около четверти JSON строки | (a) |
 | T8 | Удаление FK по истекшему `sync_runs` обнуляет `sync_raw_payloads.sync_run_id`, то есть UPDATE строк захваченных фактов | FK 0012 | Лишняя запись и потеря связи raw → run | (b), решение владельца |
 | T9 | Нет партиционирования ни у одной таблицы телеметрии; все очистки — построчный `DELETE` | `retention.ts`, `sync.ts`, `golden-signals.ts` | Bloat и никакого возврата места | (b): дневные или месячные партиции + DROP PARTITION |
-| T10 | `fansly_ws_decode_receipts.nodes` никто не читает | `fansly-ws.ts:308` | Копия разобранного кадра | (a) после проверки SQL аналитика |
+| T10 | `fansly_ws_decode_receipts.nodes` никто не читает, а это `decodeFanslyWsCapture(frame)` сохранённого кадра | `fansly-ws.ts:308`, `sync/live-messages.ts:429` | ~130–530 Б на кадр, плюс столько же WAL | **Сделано** |
 | T11 | «Датчики» (одно значение: возраст, счётчик, размер) писались дважды, как одинаковые p50 и p95: ~15 в минуту у golden signals и ~20 раз в 5 минут у метрик движка | `golden-signals.ts`, `sync/engine/metrics.ts`, `ofapi-delivery-history-signal.ts` | Половина строк этих серий — копии | **Сделано** |
 
 ### 3.4. Агрегаты и проекции
@@ -198,7 +198,7 @@ forward-only миграция; **(c)** решение владельца или 
 | H3 | `statement_timeout`/`idle_in_transaction_session_timeout` только у пула `sync` | `bootstrap.ts:152` | (a) или (c) на уровне сервера |
 | H4 | `SYNC_HTTP_TRACE_FILE` при включении пишет без ротации во writable layer | `observability.ts:212` | (a): запретить в production |
 | H5 | Fastify логирует две строки на каждый API-запрос (дашборд опрашивает каждые 10 с) | `api/server.ts:220` | (a): `disableRequestLogging` + строка для ошибок и медленных |
-| H6 | Ежедневная сборка Chrome на хосте не чистит build cache | `page-browser-update.sh:2270` | (a) |
+| H6 | Ежедневная сборка Chrome на хосте не чистит build cache | `page-browser-update.sh:2270` | **Сделано**: `docker builder prune --filter until=168h`, как в деплое Hub |
 | H7 | HTTP-кэш Chrome в профиле без лимита | `s6-rc.d/chrome/run` | (a), после проверки на заметность для сайтов |
 | H8 | Playwright Chromium ставится после `node_modules`: каждое изменение зависимостей пересобирает слой ~300–500 МБ ради одной PNG в день | `Dockerfile:92` | (a) |
 | H9 | Размер БД не сохранялся во времени, истории по таблицам не было | `db-disk-alert.ts` | **Сделано**: §4.4 |
@@ -286,6 +286,19 @@ Gauge-метрики golden signals, движка синхронизации и 
 доставки вебхуков пишут одно значение в слот p95 — его читают алерты, тесты и
 отчёт `/api/v1/ops/metrics`. Настоящие распределения (capture, canonicalize,
 projection, `dm_visible_lag`, `money_lag` и другие) сохраняют оба квантиля.
+
+### 4.8. Ещё два безопасных исправления
+
+- Ежедневное обновление браузеров страниц чистит build cache старше недели
+  (`scripts/page-browser-update.sh`); сбой — предупреждение, не ошибка.
+- Квитанция разбора кадра сокета больше не хранит разобранные узлы
+  (`fansly_ws_decode_receipts.nodes` — NULL для новых строк).
+
+Проверены и **отвергнуты** как несущие риск регрессий (подробности в §3):
+M6 (текст живых сообщений), M9 (события по просмотру), upsert'ы статистики с
+`newerWins` в WHERE (меняют `first_observed_at` и счётчики `applied`),
+guard на `page_dm_messages` (от `synced_at` зависит очистка), третий UPDATE
+попыток OFAPI (намеренный замер, выигрыш мал). M2 ждёт решения (§3.1).
 
 ## 5. Модель под «каждое сообщение спендера»
 
@@ -392,8 +405,9 @@ where metric = 'disk_pg_database_bytes' order by sampled_at desc limit 48;
 
 1. **Разобрать сырой вывод замера** (§7, §1.1): по нему решаются §3.5, P3,
    T3 и выбор между C2 и C3.
-2. **Следующий PR, только код (a):** M2 (OFAPI), M5, M6, M9, C7, C8, T5, T6, T7,
-   P4, H4, H5, H6.
+2. **Решения и редизайн:** M2 (OFAPI, узкий A→B→A), M9 (события «видел» вместо
+   полного состояния на просмотр — самый крупный оставшийся поток событий).
+   Мелочи (a) с малым выигрышем: M5, C7, C8, T5, T7, P4, H4, H5.
 3. **Сжатое хранение сырья:** пилот на одном закрытом месяце (сжатие ~2× на
    выборке, §1.1) вместе с включением CAS — оба меняют физическое
    представление тел и проверяются одной процедурой паритета.
