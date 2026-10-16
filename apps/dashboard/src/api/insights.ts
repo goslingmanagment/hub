@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { followPages } from "@/lib/paging";
 import { kernel } from "./sdk.js";
 
 /**
@@ -29,10 +30,17 @@ export function useStatsTraffic(
   return useQuery({
     meta: ANALYTICS_QUERY_META,
     queryKey: ["statsTraffic", pageLabel, window.from, window.to, subjectKind],
-    queryFn: () => kernel.statsTraffic({
-      params: { pageLabel },
-      query: { ...window, subjectKind },
-    }),
+    queryFn: () => followPages(
+      (cursor) => kernel.statsTraffic({
+        params: { pageLabel },
+        query: { ...window, subjectKind, limit: 500, ...(cursor ? { cursor } : {}) },
+      }),
+      (first, pages) => ({
+        ...first,
+        rows: pages.flatMap((page) => page.rows),
+        nextCursor: pages.at(-1)!.nextCursor,
+      }),
+    ),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
   });
 }
@@ -49,7 +57,9 @@ export function useStatsMedia(
       params: { pageLabel },
       // Bounded on purpose: the sparklines need a handful of media with their
       // series, not the whole catalogue with a year of buckets.
-      query: { ...window, limit: 25, bucketLimit: 500 },
+      // The panels draw `daily` and read `windowViews`, both summed in SQL over
+      // the whole window; the raw per-source rows are not drawn, so none ride.
+      query: { ...window, limit: 25, bucketLimit: 1 },
     }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
   });
@@ -101,12 +111,25 @@ export function useMoneyRevenueMix(
   return useQuery({
     meta: ANALYTICS_QUERY_META,
     queryKey: ["moneyRevenueMix", pageLabel, window.from, window.to],
-    queryFn: () => kernel.moneyRevenueMix({
-      params: { pageLabel },
-      // The mix window is BUSINESS DATES, not instants: the platform's earnings
-      // breakdown is a per-day fact and has no time of day.
-      query: { from: window.from.slice(0, 10), to: window.to.slice(0, 10), limit: 500 },
-    }),
+    queryFn: () => followPages(
+      (cursor) => kernel.moneyRevenueMix({
+        params: { pageLabel },
+        // The mix window is BUSINESS DATES, not instants: the platform's earnings
+        // breakdown is a per-day fact and has no time of day.
+        query: {
+          from: window.from.slice(0, 10),
+          to: window.to.slice(0, 10),
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        },
+      }),
+      // Months and coverage are whole on every page; only the days are paged.
+      (first, pages) => ({
+        ...first,
+        daily: pages.flatMap((page) => page.daily),
+        nextCursor: pages.at(-1)!.nextCursor,
+      }),
+    ),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
   });
 }

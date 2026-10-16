@@ -119,6 +119,7 @@ export async function sendPageBrowserProfileProxy(qc: QueryClient, profileId: st
 /** A step of the form, as the page's login sends it: straight to the API. */
 export async function sendPageBrowserProfileLoginStep(qc: QueryClient, profileId: string, step: PageBrowserLoginStep): Promise<PageBrowserLoginStepResponse> {
   try {
+    if (step.kind === "open") return await kernel.pageBrowserProfileLoginOpen({ params: { profileId } });
     return step.kind === "code"
       ? await kernel.pageBrowserProfileLoginCode({ params: { profileId }, body: { code: step.code } })
       : await kernel.pageBrowserProfileLoginSubmit({ params: { profileId }, body: { login: step.login, password: step.password } });

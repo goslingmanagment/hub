@@ -107,10 +107,20 @@ const COVERED = {
   holdings: [],
 };
 
+/** The window every traffic response echoes back (the contract requires it):
+ *  the charts lay their axis out over it. */
+const TRAFFIC_WINDOW = {
+  from: "2026-07-17T00:00:00.000Z",
+  to: "2026-08-16T00:00:00.000Z",
+  periodMs: 86_400_000,
+  subjectKind: "account_profile",
+  subjectRef: null,
+};
+
 /** Succeeded-and-empty responses: the ONLY state in which a panel may say
  *  "nothing here" about the world rather than about our own request. */
 const EMPTY = {
-  traffic: { rows: [] },
+  traffic: { window: TRAFFIC_WINDOW, rows: [] },
   media: { media: [], top: [], bucketsTruncated: false },
   tags: { topTags: [], platformTags: [] },
   coverage: { planes: [], engine: { mode: "live", streams: [] }, holdings: [] },
@@ -121,6 +131,7 @@ const EMPTY = {
 /** Account-level media traffic that DOES carry both watch components:
  *  45 000 percent-points over 1 000 video views → 45.0 %. */
 const WATCHED_MEDIA_TRAFFIC = {
+  window: { ...TRAFFIC_WINDOW, subjectKind: "account_media" },
   rows: [{
     bucketStart: "2026-08-01T00:00:00.000Z",
     measure: "visits",

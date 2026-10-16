@@ -11,7 +11,7 @@ import type { RunningSnapshot } from "@agency_hub_core/shared";
 
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
 
-// Migration 0283 and the heartbeat writer (storage audit 2026-10-16).
+// Migration 0284 and the heartbeat writer (storage audit 2026-10-16).
 
 const DROPPED = [
   "page_fans_platform_account_idx",

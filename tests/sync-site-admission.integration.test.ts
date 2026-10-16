@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, setPagePause, type Database } from "@agency_hub_core/db";
+import { countSiteSendsSince, getSyncPage, setPagePause, type Database } from "@agency_hub_core/db";
+import { WS_ADMIT_WAIT_MS } from "../apps/page-browser/src/ws/sockets.ts";
 
 import type { PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../apps/runtime/src/sync/engine/ports.ts";
 import { SITE_SENDS_PER_HOUR } from "../apps/runtime/src/sync/engine/site-admission.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, waitFor } from "./helpers/sync-engine-host.ts";
+import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, testSpec, waitFor } from "./helpers/sync-engine-host.ts";
 
 // The admission of a page's own site requests by the live actor (Project
 // Browser, plan §3.2, spec §3; stage 3 PR 8) on a real Postgres, with a fake
@@ -100,6 +101,107 @@ async function attempts(pageId: number): Promise<AttemptRow[]> {
 }
 
 describe("the site path of the live actor", () => {
+  it("an urgent socket does not consume the due HTTP site turn or move it behind engine work", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const site = new FakeSiteBrowser();
+    site.ask({ id: "read" });
+    site.ask({ id: "socket", host: "ws", path: "/" });
+    site.answer = (request) => ({ kind: "response", status: request.host === "ws" ? 101 : 200, retryAfterMs: null });
+    const made = await makeTestActor({ db: db(), pageId, settingMs: 40, registry: testRegistry([testSpec("busy.poll", {
+      plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+      apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+    }, { kind: "poll", class: "planned", period: { everyMs: 1 } })]) });
+    made.deps.site = site;
+    const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+    try { await waitFor(() => site.granted.length === 2 ? true : null, 5_000, "the urgent socket and due HTTP turn"); }
+    finally { made.stop.abort(); await run; }
+    expect((await attempts(pageId)).slice(0, 2)).toMatchObject([
+      { origin: "site", class: "urgent", operation: "ws.upgrade" },
+      { origin: "site", class: "site", operation: "site.other" },
+    ]);
+  });
+
+  it("a socket gets the next paced slot within F2's deadline despite a spent site turn, engine work and eighty older reads", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const site = new FakeSiteBrowser();
+    let askedAt = 0;
+    site.ask({ id: "warm" });
+    site.answer = (request) => {
+      if (request.id === "warm") {
+        for (let i = 0; i < 80; i += 1) site.ask({ id: `read-${i}` });
+        askedAt = performance.now();
+        site.ask({ id: "socket", host: "ws", path: "/", waitDeadlineMono: askedAt + WS_ADMIT_WAIT_MS });
+      }
+      return { kind: "response", status: request.host === "ws" ? 101 : 200, retryAfterMs: null };
+    };
+    const made = await makeTestActor({ db: db(), pageId, settingMs: 40, registry: testRegistry([testSpec("busy.poll", {
+      plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+      apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+    }, { kind: "poll", class: "planned", period: { everyMs: 1 } })]) });
+    made.deps.site = site;
+    const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+    try {
+      await waitFor(() => site.granted.some((g) => g.id === "socket") || site.refused.some((r) => r.id === "socket") ? true : null, 5_000, "the socket's deadline");
+    } finally { made.stop.abort(); await run; }
+    const grant = site.granted.find((g) => g.id === "socket");
+    expect(grant).toBeDefined();
+    expect(grant!.atMs - askedAt).toBeLessThan(WS_ADMIT_WAIT_MS);
+    expect(site.granted.slice(0, 2).map((g) => g.id)).toEqual(["warm", "socket"]);
+    expect(grant!.atMs - site.granted[0]!.atMs).toBeGreaterThanOrEqual(40);
+    expect((await attempts(pageId)).slice(0, 2)).toMatchObject([
+      { origin: "site", class: "site", operation: "site.other", sent: true },
+      { origin: "site", class: "urgent", operation: "ws.upgrade", http_status: 101, sent: true },
+    ]);
+  });
+
+  it("the site's hour ceiling excludes sent socket upgrades, including legacy class-site rows", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    await testDb!.pool.query(
+      `insert into sync_attempts (page_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                 admitted_at, sent_at, operation, request, outcome, origin)
+       select $1, 'site', '', 'site', 1, 2500, 0.1, 2750, t, t,
+              case when n <= 300 then 'site.other' else 'ws.upgrade' end, '{}'::jsonb, 'response', 'site'
+       from generate_series(1, 305) n, lateral (select clock_timestamp() - n * interval '5 seconds') s(t)`, [pageId]);
+    expect(await countSiteSendsSince(db(), { pageId, since: new Date(Date.now() - 3_600_000) })).toBe(300);
+    // The forward constraint permits only the socket-specific urgent site
+    // row, not arbitrary API reads or a NULL operation claiming urgency.
+    for (const operation of ["site.other", null]) {
+      await expect(testDb!.pool.query(
+        `update sync_attempts set class='urgent', operation=$2 where id=(select id from sync_attempts where page_id=$1 and operation='site.other' limit 1)`,
+        [pageId, operation],
+      )).rejects.toMatchObject({ code: operation === null ? "23502" : "23514" });
+    }
+    const site = new FakeSiteBrowser();
+    site.ask({ id: "ordinary" });
+    site.ask({ id: "socket", host: "ws", path: "/" });
+    site.answer = () => ({ kind: "response", status: 101, retryAfterMs: null });
+    await runActor(pageId, site, () => site.granted.length === 1 && site.refused.length === 1);
+    expect(site.granted[0]?.id).toBe("socket");
+    expect(site.refused).toEqual([{ id: "ordinary", reason: "hour_ceiling" }]);
+    expect((await attempts(pageId)).at(-1)).toMatchObject({ class: "urgent", operation: "ws.upgrade", http_status: 101 });
+    expect(await countSiteSendsSince(db(), { pageId, since: new Date(Date.now() - 3_600_000) })).toBe(300);
+  });
+
+  it("an aborted late admission does not spend the site's turn on ten engine requests (lilly-1 322581)", async () => {
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const site = new FakeSiteBrowser();
+    site.ask({ id: "dead" });
+    site.ask({ id: "live" });
+    site.answer = (request) => request.id === "dead" ? { kind: "aborted_before_send", reason: "cancelled" } : { kind: "response", status: 200, retryAfterMs: null };
+    const made = await makeTestActor({ db: db(), pageId, settingMs: 40, registry: testRegistry([testSpec("busy.poll", {
+      plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+      apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+    }, { kind: "poll", class: "planned", period: { everyMs: 1 } })]) });
+    made.deps.site = site;
+    const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+    try {
+      await waitFor(() => site.granted.length === 2 ? true : null, 5_000, "the live request after an unsent grant");
+    } finally { made.stop.abort(); await run; }
+    expect((await attempts(pageId)).slice(0, 2)).toMatchObject([
+      { origin: "site", outcome: "aborted_before_send", sent: false }, { origin: "site", outcome: "response", sent: true },
+    ]);
+  });
+
   it("admits the site's reads through the pacer and the journal", async () => {
     const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
     const site = new FakeSiteBrowser();

@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Daily per-table storage census (migration 0284). Written by the hourly disk
+// Daily per-table storage census (migration 0285). Written by the hourly disk
 // check; the first check of a UTC day records the day, the rest find it there.
 
 /** UTC calendar day of `at`, as the census keys it. */

@@ -23,7 +23,7 @@ ARG KASMVNC_VERSION=1.5.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates nftables procps xz-utils \
+      ca-certificates nftables procps xz-utils x11-utils \
       fonts-liberation fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji \
       libgl1-mesa-dri libegl1 libgles2 \
  && rm -rf /var/lib/apt/lists/*

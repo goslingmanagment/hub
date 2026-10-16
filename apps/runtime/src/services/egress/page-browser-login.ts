@@ -46,6 +46,7 @@ export const PAGE_BROWSER_ENDPOINTS: PageBrowserEndpoints = {
 
 export type LoginCall =
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string };
@@ -247,4 +248,9 @@ export function proxyScreenUpgrade(input: { req: IncomingMessage; socket: Duplex
   socket.on("close", both);
   socket.on("end", both);
   return { close: both };
+}
+
+/** Scale the viewer to its window; never ask the page's X server to resize. */
+export function pageBrowserScreenUrl(base: string): string {
+  return `${base}/index.html?autoconnect=1&resize=scale&path=${encodeURIComponent(`${base.slice(1)}/websockify`)}`;
 }

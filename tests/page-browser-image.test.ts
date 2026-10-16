@@ -26,7 +26,7 @@ describe("Chrome's start", () => {
   const flags = [...command.matchAll(/^\s+(--[a-z-]+)/gm)].map((match) => match[1]);
 
   it("has the plan's flags and nothing that shows automation or drops the sandbox", () => {
-    expect(flags).toEqual(["--user-data-dir", "--remote-debugging-port", "--window-size", "--lang", "--no-first-run", "--ignore-gpu-blocklist"]);
+    expect(flags).toEqual(["--user-data-dir", "--remote-debugging-port", "--window-size", "--lang", "--no-first-run", "--disable-features", "--ignore-gpu-blocklist"]);
     for (const banned of ["--no-sandbox", "--enable-automation", "--headless", "--remote-debugging-pipe", "--disable-blink-features", "--remote-debugging-port=0"]) {
       expect(command).not.toContain(banned);
     }
@@ -51,6 +51,8 @@ describe("Chrome's start", () => {
   it("gives Chrome the screen the operator checks: the X server's geometry and the window", () => {
     expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain(`-geometry ${SCREEN.width}x${SCREEN.height} `);
     expect(command).toContain(`--window-size=${SCREEN.width},${SCREEN.height}`);
+    expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain("-AcceptSetDesktopSize 0");
+    expect(read("apps/page-browser/Dockerfile")).toContain("x11-utils");
   });
 });
 
@@ -392,6 +394,18 @@ describe("the image", () => {
     for (const s6 of ["noarch", "x86_64", "aarch64"]) expect(vendor).toMatch(new RegExp(`^[0-9a-f]{64}  s6-overlay-${s6}\\.tar\\.xz$`, "m"));
   });
 
+  it("the owner's F7 decision disables background models and Safe Browsing while retaining Chrome TLS/CRL handling", () => {
+    const policies = JSON.parse(read("apps/page-browser/policies/hub.json")) as Record<string, unknown>;
+    expect(policies).toMatchObject({ ComponentUpdatesEnabled: false, SafeBrowsingProtectionLevel: 0, GenAILocalFoundationalModelSettings: 1 });
+    // OptimizationGuideFetchingEnabled ended at Chrome103, so it cannot
+    // substitute for the actual feature gates in pinned155.
+    expect(policies).not.toHaveProperty("OptimizationGuideFetchingEnabled");
+    const run = read("apps/page-browser/s6/s6-rc.d/chrome/run");
+    expect(run).toContain("--disable-features=OptimizationHints");
+    expect(run).not.toMatch(/--(?:disable-background-networking|disable-component-update|ignore-certificate-errors|ignore-ssl-errors)(?:\s|=|$)/);
+    expect(policies).not.toHaveProperty("CertificateTransparencyEnforcementDisabledForUrls");
+  });
+
   it("Chrome's policies: only through the operator's proxy, nothing saved, no extension but ours", () => {
     const policies = JSON.parse(read("apps/page-browser/policies/hub.json")) as Record<string, unknown>;
     expect(policies).toMatchObject({
@@ -411,6 +425,7 @@ describe("the image", () => {
       BrowserAddPersonEnabled: false,
       SyncDisabled: true,
       DownloadRestrictions: 3,
+      GenAILocalFoundationalModelSettings: 1,
       RestoreOnStartup: 4,
       RemoteDebuggingAllowed: true,
       ExtensionSettings: { "*": { installation_mode: "blocked" } },
@@ -434,7 +449,7 @@ describe("the stand's checks of the image", () => {
     expect(rulesCheckSh).toContain('[[ "$CONTAINER" == page-browser-* ]]');
     expect(rulesCheckSh).toContain('exec docker exec "$CONTAINER" /command/s6-setuidgid pb-operator node --no-warnings /tmp/rules-check.mjs');
     for (const script of ["image-check.sh", "rules-check.sh"]) expect(spawnSync("bash", ["-n", path.join(app, "stand", script)]).status, script).toBe(0);
-    for (const script of ["image-check.mjs", "rules-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
+    for (const script of ["image-check.mjs", "rules-check.mjs", "screen-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
   });
 
   it("the rules check asks the image's own map for what must be cancelled, and never a container whose Chrome runs unasked", () => {

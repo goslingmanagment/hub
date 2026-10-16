@@ -152,6 +152,7 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
     expect(kinds({ browser: { step: "exit_closed", exitOpen: false, stopReason: "chrome_crashed", retryAt: at(5_000), downSince: at(-3 * MINUTE) } }))
       .toEqual({ browser_down: "chrome_crashed" });
     expect(kinds({ browser: { step: "site_loaded", stopReason: null, downSince: at(-3 * MINUTE) } })).toEqual({ browser_down: "not_up:site_loaded" });
+    expect(kinds({ browser: { step: "site_loaded", stopReason: null, sessionFingerprint: null, downSince: at(-3 * MINUTE) } })).toEqual({ browser_down: "session_unknown" });
   });
 
   it("what the owner does himself explains a browser that is down — never a guard that failed", () => {

@@ -212,6 +212,119 @@ export async function listInsightsMediaTrafficBuckets(
   return result.rows.map(trafficRow);
 }
 
+export interface InsightsMediaDailyPoint {
+  mediaOfferRef: string;
+  bucketStart: Date;
+  /** Summed across the media's source codes (FYP + direct). Null when no row
+   *  of the bucket carried the metric — never a zero for "not served". */
+  views: number | null;
+  previewViews: number | null;
+}
+
+/**
+ * Per media, ONE point per bucket: the source codes of a bucket summed in SQL.
+ *
+ * This is the series a chart draws. `listInsightsMediaTrafficBuckets` serves
+ * the raw rows — two per bucket — under one budget for the whole response, so
+ * a 30-day window over a few dozen media ran out after each media's newest ten
+ * days. A point per bucket halves that, and the budget here is sized for a
+ * window, not for a page of rows. Interleaved newest-first per media, like the
+ * raw rows, so a cut is shared fairly and the caller can detect it with one
+ * row over the limit.
+ */
+export async function listInsightsMediaDailyPoints(
+  db: Database,
+  input: {
+    pageId: number;
+    mediaOfferRefs: readonly string[];
+    periodMs: number;
+    from: Date;
+    to: Date;
+    limit: number;
+  },
+): Promise<InsightsMediaDailyPoint[]> {
+  if (input.mediaOfferRefs.length === 0) {
+    return [];
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select daily.subject_ref as subject_ref,
+           daily.bucket_start as bucket_start,
+           daily.views as views,
+           daily.preview_views as preview_views
+    from (
+      select source.subject_ref,
+             source.bucket_start,
+             sum(source.views) as views,
+             sum(source.preview_views) as preview_views,
+             row_number() over (
+               partition by source.subject_ref
+               order by source.bucket_start desc
+             ) as media_point_rank
+      from stats_traffic_buckets source
+      where source.page_id = ${input.pageId}
+        and source.subject_kind = 'media_offer'
+        and source.subject_ref = any(${textArrayParam(input.mediaOfferRefs)})
+        and source.period_ms = ${input.periodMs}
+        and source.bucket_start >= ${input.from}
+        and source.bucket_start < ${input.to}
+      group by source.subject_ref, source.bucket_start
+    ) daily
+    order by daily.media_point_rank asc, daily.subject_ref asc, daily.bucket_start desc
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    mediaOfferRef: String(row.subject_ref),
+    bucketStart: requiredDate(row.bucket_start),
+    views: int(row.views),
+    previewViews: int(row.preview_views),
+  }));
+}
+
+export interface InsightsMediaWindowTotal {
+  mediaOfferRef: string;
+  views: number | null;
+  previewViews: number | null;
+}
+
+/**
+ * Per media, its views over the WHOLE window, summed in SQL across buckets and
+ * source codes. No budget: one row per media. A total read off a budgeted list
+ * of rows is a total of whatever fitted, and that is what the content table
+ * used to show.
+ */
+export async function listInsightsMediaWindowTotals(
+  db: Database,
+  input: {
+    pageId: number;
+    mediaOfferRefs: readonly string[];
+    periodMs: number;
+    from: Date;
+    to: Date;
+  },
+): Promise<InsightsMediaWindowTotal[]> {
+  if (input.mediaOfferRefs.length === 0) {
+    return [];
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select source.subject_ref as subject_ref,
+           sum(source.views) as views,
+           sum(source.preview_views) as preview_views
+    from stats_traffic_buckets source
+    where source.page_id = ${input.pageId}
+      and source.subject_kind = 'media_offer'
+      and source.subject_ref = any(${textArrayParam(input.mediaOfferRefs)})
+      and source.period_ms = ${input.periodMs}
+      and source.bucket_start >= ${input.from}
+      and source.bucket_start < ${input.to}
+    group by source.subject_ref
+  `);
+  return result.rows.map((row) => ({
+    mediaOfferRef: String(row.subject_ref),
+    views: int(row.views),
+    previewViews: int(row.preview_views),
+  }));
+}
+
 // ── media catalogue heads ────────────────────────────────────────────────────
 
 export interface InsightsMediaHeadRow {

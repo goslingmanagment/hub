@@ -1,4 +1,4 @@
--- 0284: one row per table per UTC day — its size and its write counters.
+-- 0285: one row per table per UTC day — its size and its write counters.
 --
 -- The disk check knew the filesystem and pg_database_size, but nothing kept
 -- WHICH table grows, by how much a day, or which one is rewritten most:

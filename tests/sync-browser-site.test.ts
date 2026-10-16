@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SiteAdmitResult, State, WsAdmit, WsAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
+import type { OperatorToEngine, SiteAdmitResult, SiteDone, State, WsDone, WsAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import type { LinkStatus, PageBrowserRpcClient } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
 import { BrowserSiteAdmission } from "../apps/runtime/src/sync/fansly/browser-site.ts";
 
@@ -14,6 +14,8 @@ const CONNECTION = "0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
 
 function stubLink() {
   let other: ((message: never) => void) | null = null;
+  let end: ((message: SiteDone | WsDone) => boolean) | null = null;
+  let onLink: ((status: LinkStatus) => void) | null = null;
   const answers: Array<SiteAdmitResult | WsAdmitResult> = [];
   const state = { mode: "automation", sessionFingerprint: FP } as unknown as State;
   const client = {
@@ -24,8 +26,9 @@ function stubLink() {
     onOtherMessage(listener: ((message: never) => void) | null) {
       other = listener;
     },
-    onEnd() {},
-    onLink(_listener: (status: LinkStatus) => void) {
+    onEnd(listener: typeof end) { end = listener; },
+    onLink(listener: (status: LinkStatus) => void) {
+      onLink = listener;
       return () => undefined;
     },
     answerSiteAdmit(_epoch: number, answer: Omit<SiteAdmitResult, "type" | "ownerGeneration">) {
@@ -40,10 +43,57 @@ function stubLink() {
       return true;
     },
   };
-  return { client: client as unknown as PageBrowserRpcClient, answers, deliver: (message: WsAdmit) => other!(message as never) };
+  return {
+    client: client as unknown as PageBrowserRpcClient, answers,
+    deliver: (message: OperatorToEngine) => other!(message as never),
+    deliverEnd: (message: SiteDone | WsDone) => end!(message),
+    reconnect: () => { onLink!({ kind: "down", reason: "test" }); client.epoch += 1; },
+  };
 }
 
 describe("the site path's wait deadline", () => {
+  it("keeps credentials distinct from held for both HTTP and socket refusals", () => {
+    const link = stubLink();
+    const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100 });
+    link.deliver({ type: "siteAdmit", siteRequestId: "http-credentials", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", query: "", resourceType: "XHR", route: "account.me", operation: "read", sessionFingerprint: FP, pausedMono: 100, waitDeadlineMono: 10_000 });
+    link.deliver({ type: "wsAdmit", connectionId: CONNECTION, url: "wss://wsv3.fansly.com/", context: "page", sessionFingerprint: FP, requestedMono: 100, waitDeadlineMono: 10_000 });
+    site.refuse("http-credentials", "credentials"); site.refuse(CONNECTION, "credentials");
+    expect(link.answers.map((a) => [a.type, a.admit, a.admit ? null : a.reason])).toEqual([
+      ["siteAdmitResult", false, "credentials"], ["wsAdmitResult", false, "credentials"],
+    ]);
+  });
+
+  it("withdraws a pending admission by kind/id/epoch, and fences a choice from before cancellation or reconnection", () => {
+    const link = stubLink();
+    const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100 });
+    const ask = { type: "wsAdmit" as const, connectionId: CONNECTION, url: "wss://wsv3.fansly.com/", context: "page" as const, sessionFingerprint: FP, requestedMono: 100, waitDeadlineMono: 10_000 };
+    link.deliver(ask);
+    const oldChoice = site.pending()[0]!;
+    link.deliver({ type: "admissionCancel", kind: "site", id: CONNECTION, reason: "request_ended" });
+    expect(site.pending()).toHaveLength(1);
+    link.reconnect();
+    link.deliver(ask);
+    expect(site.grant(CONNECTION, { attemptId: 7, sendWithinMs: 100 }, oldChoice)).toBe(false);
+    expect(site.pending()).toHaveLength(1);
+    link.deliver({ type: "admissionCancel", kind: "ws", id: CONNECTION, reason: "document_replaced" });
+    expect(site.pending()).toEqual([]);
+    expect(site.grant(CONNECTION, { attemptId: 8, sendWithinMs: 100 })).toBe(false);
+    link.deliver(ask);
+    expect(site.pending()).toEqual([]);
+    expect(link.answers).toEqual([]);
+  });
+
+  it("a withdrawal crossing a grant never invents an unsent result: the buffered end still decides", async () => {
+    const link = stubLink();
+    const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100 });
+    link.deliver({ type: "wsAdmit", connectionId: CONNECTION, url: "wss://wsv3.fansly.com/", context: "page", sessionFingerprint: FP, requestedMono: 100, waitDeadlineMono: 10_000 });
+    site.grant(CONNECTION, { attemptId: 7, sendWithinMs: 100 });
+    link.deliver({ type: "admissionCancel", kind: "ws", id: CONNECTION, reason: "request_ended" });
+    const ended = site.end(CONNECTION, new AbortController().signal);
+    link.deliverEnd({ type: "wsDone", connectionId: CONNECTION, attemptId: 7, sent: true, sentMono: 110, status: 101, error: null });
+    expect(await ended).toMatchObject({ kind: "response", status: 101 });
+  });
+
   it("is the operator's absolute one, carried into the request", () => {
     const link = stubLink();
     const now = 100_000;

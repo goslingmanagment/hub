@@ -5,6 +5,8 @@ import type { PageBrowserLoginResponse, PageBrowserLoginStepResponse } from "@ag
 // and what a step's answer says. Pure: the page renders it, tests read it.
 
 export type LoginView =
+  /** The landing is recognized; the owner can open the site's login modal. */
+  | { kind: "landing" }
   /** The login is closed; `problem`: why it cannot be opened. */
   | { kind: "closed"; problem: string | null }
   /** Open: the page paused, the browser on its way to the login screen. */
@@ -53,6 +55,8 @@ export function loginViewOf(data: PageBrowserLoginResponse): LoginView {
   const screen = data.screen;
   if (screen === null) return { kind: "preparing" };
   switch (screen.screen) {
+    case "landing":
+      return { kind: "landing" };
     case "success":
       return { kind: "success" };
     case "unknown":
@@ -71,6 +75,8 @@ export function formViewOf(screen: NonNullable<PageBrowserLoginResponse["screen"
 /** The view's chip: its words and its tone. */
 export function loginChipOf(view: LoginView): { label: string; tone: Tone } {
   switch (view.kind) {
+    case "landing":
+      return { label: "Окно входа ещё закрыто", tone: "progress" };
     case "closed":
       return { label: "Вход закрыт", tone: "neutral" };
     case "preparing":

@@ -314,7 +314,7 @@ async function persistDatabaseSizeGauge(
   }
 }
 
-/** Once a UTC day: every table's size and write counters (0284,
+/** Once a UTC day: every table's size and write counters (0285,
  * storage_relation_daily). Later checks of the day find it recorded. Catalog
  * reads only. Best-effort: a failed census never costs the disk alert. */
 async function recordDailyStorageCensus(

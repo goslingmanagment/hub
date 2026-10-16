@@ -574,6 +574,38 @@ describe("the session (plan §4.7)", () => {
     const after = send(w);
     expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: "a Hub request's headers differed from the site's: the transport is not ready" });
   });
+
+  it("pilot 2 (2026-10-16): fansly-session-id follows the site's socket, not the parity — the site's own requests to one path with and without it stop nothing", async () => {
+    const w = await world();
+    const withSocket = ["accept", "authorization", "fansly-client-check", "fansly-client-id", "fansly-client-ts", "fansly-session-id", "user-agent"];
+    const site = w.chrome.siteRequest(ME, siteHeaders());
+    w.chrome.siteSent(site.networkId, withSocket);
+    const same = send(w);
+    await outcomeOf(w, same.attemptId);
+    const next = w.chrome.siteRequest(ME, siteHeaders());
+    w.chrome.siteSent(next.networkId, withSocket.filter((name) => name !== "fansly-session-id"));
+    const again = send(w);
+    await outcomeOf(w, again.attemptId);
+    expect(w.faults).toEqual([]);
+    expect(w.alarms).toEqual([]);
+  });
+
+  it("pilot 2 (2026-10-16): the work tab's new document has no socket yet — Hub waits for its first API request and goes with its headers, without the old fansly-session-id", async () => {
+    const w = await world();
+    w.chrome.navigate("https://fansly.com/");
+    // The session goes on; its headers were the old document's.
+    expect(w.hub.session.fingerprint).not.toBeNull();
+    const early = send(w);
+    expect(await outcomeOf(w, early.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: expect.stringContaining("the site's new document made no API request with authorization yet") });
+    expect(w.chrome.issued).toEqual([]);
+    const { "fansly-session-id": _socketless, ...fresh } = siteHeaders();
+    w.chrome.siteRequest(ME, fresh);
+    const message = send(w);
+    await outcomeOf(w, message.attemptId);
+    expect(w.chrome.issued).toHaveLength(1);
+    expect(w.chrome.issued[0]!.headers.map(([name]) => name)).not.toContain("fansly-session-id");
+    expect(w.faults).toEqual([]);
+  });
 });
 
 describe("what the operator cannot vouch for stops the page", () => {

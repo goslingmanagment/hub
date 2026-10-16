@@ -147,3 +147,16 @@ describe("the code Fansly e-mailed for a login from a new device (owner decision
     expect(wrong).toContain('id="pb-code"');
   });
 });
+
+
+describe("the landing action in the dashboard", () => {
+  it("offers opening the modal before any credential fields", () => {
+    const data = response({ screen: { screen: "landing", screenVersion: "fansly-login/3", fields: [], siteError: null } });
+    expect(loginViewOf(data)).toEqual({ kind: "landing" });
+    const html = render(data);
+    expect(html).toContain("Открыть окно входа");
+    expect(html).not.toContain('type="password"');
+    expect(html).not.toContain('name="login"');
+    expect(html).not.toContain("Незнакомый экран");
+  });
+});

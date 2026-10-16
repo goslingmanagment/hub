@@ -50,7 +50,7 @@ export async function upsertInstanceHeartbeat(
         // every beat. Keeping the stored datum when it is unchanged lets the
         // new row version reuse it as is instead of compressing and writing
         // the whole document again each minute; with no index on last_seen_at
-        // (0283) the beat is then a HOT update of a few bytes.
+        // (0284) the beat is then a HOT update of a few bytes.
         running: sql`case
           when ${runtimeInstances.running} is distinct from excluded.running then excluded.running
           else ${runtimeInstances.running}

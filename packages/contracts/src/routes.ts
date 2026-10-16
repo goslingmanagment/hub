@@ -5734,7 +5734,20 @@ const insightsMediaRowSchema = z.object({
   deletedAtPlatform: isoTimestamp.nullable(),
   firstObservedAt: isoTimestamp,
   lastObservedAt: isoTimestamp,
+  /** Raw rows, one per bucket AND source code, under the response-wide
+   *  `bucketLimit` — a page of rows, not a window. */
   buckets: z.array(insightsTrafficRowSchema),
+  /** The media's views over the WHOLE window, summed across buckets and
+   *  source codes; never cut by a budget. Null when no row carried it. */
+  windowViews: z.number().int().nullable(),
+  windowPreviewViews: z.number().int().nullable(),
+  /** One point per bucket (source codes summed), newest-first budget shared
+   *  with the other media; `dailyTruncated` says when it ran out. */
+  daily: z.array(z.object({
+    bucketStart: isoTimestamp,
+    views: z.number().int().nullable(),
+    previewViews: z.number().int().nullable(),
+  })),
 });
 
 const insightsTopMediaRowSchema = z.object({
@@ -5785,6 +5798,7 @@ export const statsMediaResponseSchema = z.object({
   }),
   coverage: z.array(insightsCoverageRowSchema),
   bucketsTruncated: z.boolean(),
+  dailyTruncated: z.boolean(),
   nextCursor: z.string().nullable(),
 });
 
@@ -5910,7 +5924,12 @@ export const contentMediaResponseSchema = z.object({
   generatedAt: isoTimestamp,
   /** Catalog heads. IDs ONLY — `mediaRef`/`previewRef` are platform ids, and no
    *  delivery or CDN address exists anywhere in this response by construction. */
-  media: z.array(insightsMediaRowSchema.omit({ buckets: true })),
+  media: z.array(insightsMediaRowSchema.omit({
+    buckets: true,
+    windowViews: true,
+    windowPreviewViews: true,
+    daily: true,
+  })),
   vaultAlbums: z.array(z.object({
     vaultKind: z.string(),
     albumRef: z.string(),

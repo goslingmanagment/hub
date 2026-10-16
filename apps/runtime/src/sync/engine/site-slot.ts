@@ -23,6 +23,7 @@ import { routeAdmissionView, type RouteClocks } from "./route-policy.ts";
 import type { RouteKeySpec } from "./route-policy.ts";
 import {
   decideSite,
+  isSiteSocket,
   SITE_END_WAIT_MS,
   siteAnswerEffect,
   type ClassifiedSiteRequest,
@@ -58,6 +59,7 @@ export async function siteContextOf(
     clocks: RouteClocks | null;
     specs: readonly RouteKeySpec[];
     checksOnly: boolean;
+    bootstrapOnly?: boolean;
     now: Date;
   },
 ): Promise<SiteContext> {
@@ -69,6 +71,7 @@ export async function siteContextOf(
     pausedAll: input.page.pausedAll,
     pageHeld: pageHeldForSite(input.holds, input.now),
     checksOnly: input.checksOnly,
+    bootstrapOnly: input.bootstrapOnly === true,
     // A route state this build cannot read admits nothing: no route opens.
     routeOpensAt: (route) => {
       if (view === null) return { at: new Date(input.now.getTime() + 3_600_000) };
@@ -80,8 +83,9 @@ export async function siteContextOf(
 }
 
 /** Refuse what must be refused now; the admissible request, if any. */
-export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext): ClassifiedSiteRequest | null {
-  const decision = decideSite(site.pending(), ctx);
+export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext, urgentOnly = false): ClassifiedSiteRequest | null {
+  const pending = site.pending();
+  const decision = decideSite(urgentOnly ? pending.filter(isSiteSocket) : pending, ctx);
   for (const refusal of decision.refuse) {
     d.metrics.increment("sync_site_refused", { reason: refusal.reason });
     site.refuse(refusal.id, refusal.reason);

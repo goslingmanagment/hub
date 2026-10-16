@@ -61,6 +61,7 @@ describe("deploy-page-browser.sh: the update on the server", () => {
     const listed = spawnSync("tar", ["-tf", path.join(root, "stdin.tar")], { encoding: "utf8" }).stdout.split("\n");
     for (const file of [
       "scripts/page-browser-update.sh",
+      "scripts/archive-container-logs.sh",
       "apps/page-browser/host/profile-check.mjs",
       "apps/page-browser/host/google-linux-signing-key.asc",
       "apps/page-browser/host/page-browser-update.service",
@@ -68,6 +69,8 @@ describe("deploy-page-browser.sh: the update on the server", () => {
     ]) expect(listed).toContain(file);
     const [command] = run.commands;
     expect(command).toContain('install -m 755 "$staging/scripts/page-browser-update.sh" /opt/agency-hub/page-browser/page-browser-update.sh');
+    expect(command).toContain('install -m 755 "$staging/scripts/archive-container-logs.sh" /opt/agency-hub/page-browser/archive-container-logs.sh');
+    expect(command).toContain('install -d -m 700 /opt/agency-hub/page-browser/container-logs');
     expect(command).toContain("/etc/systemd/system/page-browser-update.timer");
     expect(command).toContain("install -d -m 700 /opt/agency-hub/page-browser/update /opt/agency-hub/page-browser/snapshots");
     expect(command).not.toMatch(/^\s*systemctl (enable|start)[^\n]*page-browser-update/m);

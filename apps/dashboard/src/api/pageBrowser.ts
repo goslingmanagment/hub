@@ -47,6 +47,7 @@ export function useFinishPageBrowserLogin(pageLabel: string) {
 
 /** A step of the form: the login and the password, or the code. */
 export type PageBrowserLoginStep =
+  | { kind: "open" }
   | { kind: "submit"; login: string; password: string }
   | { kind: "code"; code: string };
 
@@ -59,6 +60,7 @@ export type PageBrowserLoginStep =
  */
 export async function sendPageBrowserLoginStep(qc: QueryClient, pageLabel: string, step: PageBrowserLoginStep): Promise<PageBrowserLoginStepResponse> {
   try {
+    if (step.kind === "open") return await kernel.pageBrowserLoginOpen({ params: { pageLabel } });
     return step.kind === "code"
       ? await kernel.pageBrowserLoginCode({ params: { pageLabel }, body: { code: step.code } })
       : await kernel.pageBrowserLoginSubmit({ params: { pageLabel }, body: { login: step.login, password: step.password } });

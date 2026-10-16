@@ -2524,7 +2524,7 @@ export const opsMetricSamples = pgTable("ops_metric_samples", {
   sampledAt: timestamp("sampled_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// 0284: one row per table per UTC day — size on disk and cumulative pg_stat
+// 0285: one row per table per UTC day — size on disk and cumulative pg_stat
 // write counters; partitions roll up into their root. Written once a day by
 // the hourly disk check (repositories/storage-census.ts).
 export const storageRelationDaily = pgTable(

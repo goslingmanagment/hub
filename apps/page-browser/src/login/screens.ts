@@ -19,7 +19,9 @@
 //   field, the one button that submits it. Before every press the screen is
 //   read again (spec §7).
 //
-// Signs of version fansly-login/2, from the site's public bundle
+// Version 3 adds the landing action, verified against public
+// main.1c19146fbffb67a3.js (2026-10-15; SHA256 in spec §7).
+// The modal signs of fansly-login/2 came from the site's public bundle
 // (main.2e6b96097a4bb73b.js, the login modal `app-login-modal`; 8-docs
 // stage1/fansly-bundle-notes.md) and Angular's forms, not from the live login
 // screen: stage 1, item 12 recorded the screens Fansly showed the test
@@ -65,12 +67,12 @@
 // alone and no account loaded is unknown, never a success.
 
 /** The version of the signs below. */
-export const SCREEN_VERSION = "fansly-login/2";
+export const SCREEN_VERSION = "fansly-login/3";
 
 /** The site whose screens these are. */
 export const LOGIN_ORIGIN = "https://fansly.com";
 
-export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
 export type LoginField = "login" | "password" | "code";
 /** Where the code the site asks for comes from: "email" — Fansly e-mailed it
  *  for a login from a new device; null — the page's 2FA code. */
@@ -107,6 +109,8 @@ export interface PageMarks {
    *  window asks for a secret: no screen of the login). */
   outside: boolean;
   forms: FormMarks[];
+  /** Counts only: one landing, one Login action, no visible modal. */
+  landing?: { roots: number; login: number; windows: number };
 }
 
 export interface Recognized {
@@ -207,6 +211,15 @@ const SCAN = String.raw`
       };
     });
   };
+  const landingRoots = () => [...doc.querySelectorAll("app-landing-page-new")].filter(visible);
+  const windows = () => [...doc.querySelectorAll("[role=dialog], [role=alertdialog], .modal, app-login-modal")].filter(visible);
+  const openButtons = () => {
+    const roots = landingRoots();
+    if (roots.length !== 1 || windows().length !== 0) return [];
+    return [...roots[0].querySelectorAll('.right-content > [data-menu-item="login"].btn')].filter((el) =>
+      visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("disabled")
+      && /^(log ?in|sign ?in|войти)$/i.test(text(el)));
+  };
   const CAPTCHA = /recaptcha|hcaptcha|challenges\.cloudflare\.com|turnstile|arkoselabs|funcaptcha|geetest/i;
   const captcha = () => [...doc.querySelectorAll("iframe")].some((frame) => visible(frame) && CAPTCHA.test(frame.getAttribute("src") || ""))
     || [...doc.querySelectorAll("[class*=captcha], [id*=captcha], [class*=challenge-], [data-sitekey]")].some(visible);
@@ -221,6 +234,7 @@ ${SCAN}
     readyState: doc.readyState,
     captcha: captcha(),
     outside: outside(),
+    landing: { roots: landingRoots().length, login: openButtons().length, windows: windows().length },
     forms: forms().map((form) => ({
       password: form.password.length,
       login: form.login.length,
@@ -235,10 +249,15 @@ ${SCAN}
 
 /** The element of `role` in the one form the screen shows (null: not one
  *  such form, or not one such element): `Runtime.evaluate`, by reference. */
-export function locateExpression(role: LoginField | "submit"): string {
+export function locateExpression(role: LoginField | "submit" | "open"): string {
   return `(function pbLoginLocate(role) {
 ${SCAN}
   const all = forms();
+  if (role === "open") {
+    const buttons = openButtons();
+    return location.origin === "https://fansly.com" && location.pathname === "/" && doc.readyState === "complete"
+      && !captcha() && !outside() && all.length === 0 && buttons.length === 1 ? buttons[0] : null;
+  }
   if (captcha() || outside() || all.length !== 1) return null;
   const form = all[0];
   const one = (list) => (list.length === 1 ? list[0] : null);
@@ -279,6 +298,9 @@ export function recognize(marks: PageMarks | null, session: SessionMarks): Recog
   const form = marks.forms[0];
   if (form === undefined) {
     if (marks.readyState !== "complete") return unknown("the site is still loading");
+    if (marks.path === "/" && marks.landing?.roots === 1 && marks.landing.login === 1 && marks.landing.windows === 0) {
+      return { screen: "landing", fields: [], siteError: null, codeFrom: null, why: "the landing page has one Login action and no login window" };
+    }
     if (session.live !== null && session.accountLoaded === session.live) {
       return { screen: "success", fields: [], siteError: null, codeFrom: null, why: "no form of the login, and the site loaded the account under the live session" };
     }

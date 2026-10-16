@@ -51,6 +51,8 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
   const screen = data.screen;
   if (screen === null) return { kind: "preparing" };
   switch (screen.screen) {
+    case "landing":
+      return { kind: "landing" };
     case "success":
       return { kind: "success" };
     case "unknown":

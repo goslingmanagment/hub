@@ -99,6 +99,7 @@ class Cancelled extends Error {}
 
 /** The element a step acts on, in the document it was found in. */
 interface Located {
+  landing?: true;
   tab: string;
   /** The isolated world of the document it was found in (a new document
    *  has a new one). */
@@ -166,6 +167,11 @@ export class LoginDesk {
     }
   }
 
+  /** Open only the recognized landing's Login action; never type on it. */
+  open(guard: LoginGuard): Promise<LoginOutcome> {
+    return this.#step("open", [], guard, () => Promise.resolve());
+  }
+
   /** The login and the password into the login form, then its button —
    *  for as long as `guard` lets the call act. */
   submit(login: string, password: string, guard: LoginGuard): Promise<LoginOutcome> {
@@ -190,7 +196,7 @@ export class LoginDesk {
     await this.#current?.catch(() => undefined);
   }
 
-  #step(name: "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
+  #step(name: "open" | "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
     if (this.#current !== null) return Promise.resolve({ kind: "refused", reason: "busy" });
     const run = this.#run(name, needs, guard, typeIn).finally(() => {
       if (this.#current === run) this.#current = null;
@@ -199,18 +205,18 @@ export class LoginDesk {
     return run;
   }
 
-  async #run(name: "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
+  async #run(name: "open" | "submit" | "code", needs: LoginField[], guard: LoginGuard, typeIn: () => Promise<void>): Promise<LoginOutcome> {
     let acted: LoginScreen;
     try {
       allowed(guard);
       const before = await this.#recognize();
-      if (!sameFields(before.fields, needs)) {
+      if (!sameFields(before.fields, needs) || (name === "open" && before.screen !== "landing")) {
         this.#log("step.refused", { step: name, screen: before.screen, why: before.why });
         return { kind: "refused", reason: "screen_changed" };
       }
       acted = before.screen;
       await typeIn();
-      await this.#press(needs, guard);
+      await this.#press(needs, guard, name === "open" ? "open" : "submit");
       this.#log("step.done", { step: name, from: acted });
     } catch (error) {
       if (error instanceof Cancelled) {
@@ -237,7 +243,8 @@ export class LoginDesk {
     return this.#stateOf(seen);
   }
 
-  #stateOf(seen: Recognized): LoginOutcome {
+  #stateOf(seen: Recognized & { marks: ReturnType<typeof safeMarks> }): LoginOutcome {
+    this.#log("login.state", { screen: seen.screen, screenVersion: SCREEN_VERSION, why: seen.why, marks: seen.marks });
     return { kind: "state", screen: seen.screen, screenVersion: SCREEN_VERSION, fields: seen.fields, siteError: seen.siteError, codeFrom: seen.codeFrom };
   }
 
@@ -252,7 +259,10 @@ export class LoginDesk {
         tab,
         this.#timings.commandMs,
       );
-      if (reply.exceptionDetails !== undefined) return null;
+      if (reply.exceptionDetails !== undefined) {
+        this.#log("read.failed", { why: "the login probe threw in the page" });
+        return null;
+      }
       return marksOf(reply.result?.value);
     } catch (error) {
       this.#log("read.failed", { error: errorMessage(error) });
@@ -260,15 +270,17 @@ export class LoginDesk {
     }
   }
 
-  async #recognize(): Promise<Recognized> {
-    return recognize(await this.#marks(), { live: this.#deps.session(), atStart: this.#sessionAtStart, codeAccepted: this.#codeAccepted, accountLoaded: this.#accountLoaded });
+  async #recognize(): Promise<Recognized & { marks: ReturnType<typeof safeMarks> }> {
+    const marks = await this.#marks();
+    const seen = recognize(marks, { live: this.#deps.session(), atStart: this.#sessionAtStart, codeAccepted: this.#codeAccepted, accountLoaded: this.#accountLoaded });
+    return { ...seen, marks: safeMarks(marks) };
   }
 
   /** The element of `role` in the one form shown, by reference; the screen
    *  read again first, and it must still show `needs`. */
-  async #locate(role: LoginField | "submit", needs: LoginField[]): Promise<Located> {
+  async #locate(role: LoginField | "submit" | "open", needs: LoginField[]): Promise<Located> {
     const seen = await this.#recognize();
-    if (!sameFields(seen.fields, needs)) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
+    if (!sameFields(seen.fields, needs) || (role === "open" && seen.screen !== "landing")) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
     const tab = this.#deps.tab();
     if (tab === null) throw new ScreenChanged("no work tab");
     const world = await this.#deps.world();
@@ -280,14 +292,14 @@ export class LoginDesk {
     );
     const objectId = reply.result?.objectId;
     if (typeof objectId !== "string" || reply.result?.subtype === "null") throw new ScreenChanged(`no single ${role} on the screen`);
-    return { tab, world, objectId };
+    return { tab, world, objectId, ...(role === "open" ? { landing: true as const } : {}) };
   }
 
   /** Right before an act on `at`: the screen still shows `needs`, in the
    *  same work tab and the same document `at` was found in. */
   async #still(at: Located, needs: LoginField[]): Promise<void> {
     const seen = await this.#recognize();
-    if (!sameFields(seen.fields, needs)) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
+    if (!sameFields(seen.fields, needs) || (at.landing === true && seen.screen !== "landing")) throw new ScreenChanged(`the screen is now ${seen.screen} (${seen.why})`);
     if (this.#deps.tab() !== at.tab) throw new ScreenChanged("the work tab changed");
     if ((await this.#deps.world()) !== at.world) throw new ScreenChanged("the document changed");
   }
@@ -322,8 +334,8 @@ export class LoginDesk {
   /** The form's one button, pressed at its centre: the pointer moved there
    *  first, then — the screen and the document read again, the point still
    *  hitting the button — pressed and let go. */
-  async #press(needs: LoginField[], guard: LoginGuard): Promise<void> {
-    const button = await this.#locate("submit", needs);
+  async #press(needs: LoginField[], guard: LoginGuard, role: "submit" | "open" = "submit"): Promise<void> {
+    const button = await this.#locate(role, needs);
     const { tab, objectId } = button;
     const cdp = this.#deps.cdp;
     allowed(guard);
@@ -397,5 +409,23 @@ export function marksOf(value: unknown): PageMarks | null {
     if ([form.password, form.login, form.code, form.other, form.submit].some((n) => n < 0)) return null;
     forms.push(form);
   }
-  return { origin: v.origin, path: v.path, readyState: v.readyState, captcha: v.captcha, outside: v.outside, forms };
+  const raw = v.landing;
+  let landing: PageMarks["landing"];
+  if (raw !== undefined) {
+    if (raw === null || typeof raw !== "object") return null;
+    const fields = raw as Record<string, unknown>;
+    landing = { roots: count(fields.roots), login: count(fields.login), windows: count(fields.windows) };
+    if (Object.values(landing).some((n) => n < 0)) return null;
+  }
+  return { origin: v.origin, path: v.path, readyState: v.readyState, captcha: v.captcha, outside: v.outside, forms, ...(landing ? { landing } : {}) };
+}
+
+/** Journal counters only: no path, error text, e-mail address or field values. */
+function safeMarks(marks: PageMarks | null) {
+  if (!marks) return null;
+  return {
+    readyState: ["loading", "interactive", "complete"].includes(marks.readyState) ? marks.readyState : "unknown",
+    captcha: marks.captcha, outside: marks.outside, landing: marks.landing ?? null,
+    forms: marks.forms.slice(0, 32).map(({ password, login, code, other, submit, newDevice, error }) => ({ password, login, code, other, submit, newDevice, hasError: error !== null })),
+  };
 }

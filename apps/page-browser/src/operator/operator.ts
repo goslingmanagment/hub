@@ -88,7 +88,7 @@
 //   owner's login).
 // - A planned stop closes the exit before CDP goes (plan §4.1). A lost
 //   control — CDP, the holder, its overflow, a browser that stops answering —
-//   closes the exit at once, kills Chrome and retries.
+//   closes the exit at once, gives Chrome a bounded quit then kills if needed, and retries.
 // - Nothing passes that could not be kept (spec §5): a start waits for the
 //   journals and the buffer to be written and to have room; a buffer that
 //   fills up (its caps, the disk) closes the exit and fails the page with
@@ -119,6 +119,8 @@ import { BoundaryFile } from "../ws/boundary.ts";
 import { SiteSockets, type SocketStop, type SocketTimings } from "../ws/sockets.ts";
 import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
+import { readXGeometry, type XGeometry } from "../env/display.ts";
+import { SCREEN } from "../env/rules.ts";
 import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
@@ -141,6 +143,7 @@ import type { OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
+import { quitChromeAfterFailure } from "./quit.ts";
 import type { OperatorConfig } from "./config.ts";
 import { HealthProbe } from "./health.ts";
 
@@ -164,6 +167,8 @@ export interface OperatorTimings {
   exitIpTimeoutMs: number;
   /** A planned stop waits this long for Chrome to quit by itself. */
   quitWaitMs: number;
+  /** One total close-and-exit deadline on a failure (at most 2 s). */
+  failureQuitMs: number;
   /** The site's document in the work tab (plan §4.1, step 8). */
   siteLoadMs: number;
   /** Before the work tab is loaded anew, how long a request of the site
@@ -190,6 +195,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   selfTestProbeMs: 4000,
   exitIpTimeoutMs: 15_000,
   quitWaitMs: 5000,
+  failureQuitMs: 2000,
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
@@ -207,6 +213,8 @@ const DISCARD_WAIT_MS = 5_000;
 export interface OperatorDeps {
   config: OperatorConfig;
   chrome: ChromeControl;
+  /** Tests provide their X server; production reads :99 with xdpyinfo. */
+  display?: () => Promise<XGeometry>;
   classify?: HostClassifier;
   /** The host of the self-test's probes: the API host. */
   apiHost?: string;
@@ -248,6 +256,13 @@ class StartFailure extends Error {
 /** The start was superseded (a newer start, a stop, a failure elsewhere). */
 class Cancelled extends Error {}
 
+/** Chrome cannot repair X: hold instead of retrying the same desktop. */
+class DisplayChanged extends StartFailure {
+  constructor(detail: string) {
+    super("env_mismatch", `X screen changed (${detail}); restart the container's X server, then clear the halt and start the browser`);
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -286,6 +301,7 @@ export class Operator {
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
   readonly #log: Logger;
+  readonly #display: () => Promise<XGeometry>;
   readonly #apiHost: string;
   readonly #exitIpTarget: ExitIpTarget;
   readonly #extension: ExtensionChecks;
@@ -401,6 +417,7 @@ export class Operator {
     this.chrome = deps.chrome;
     this.#timings = { ...DEFAULT_TIMINGS, ...deps.timings };
     this.#log = deps.log ?? makeLog("operator");
+    this.#display = deps.display ?? readXGeometry;
     this.#apiHost = deps.apiHost ?? FANSLY_HOSTS.api[0];
     this.#exitIpTarget = deps.exitIpTarget ?? IPIFY;
     this.#extension = deps.extension ?? EXTENSION_CHECKS;
@@ -669,7 +686,15 @@ export class Operator {
       session: {
         fingerprint: () => this.hub.session.fingerprint,
         note: (request) => {
-          this.hub.noteSiteRequest(request);
+          const documents = this.site.documents;
+          const loader = documents.loaderOfRequest(request.networkId);
+          const current = documents.currentLoader(this.control.workTab?.mainFrameId ?? null);
+          // Only the work tab's current document supplies Hub headers.
+          // Unknown loaders keep their old behaviour, unless the tracker
+          // already knows the request's document was replaced.
+          if ((loader === null || loader === current) && !documents.replaced(documents.mark(request))) {
+            this.hub.noteSiteRequest(request);
+          }
           this.#siteShowedSession(request);
         },
       },
@@ -702,13 +727,24 @@ export class Operator {
     this.sockets = new SiteSockets({
       cdp: this.cdp,
       buffer: this.buffer,
-      link: { send: (message) => this.rpc.send(message) },
+      link: { send: (message) => this.rpc.send(message), epoch: () => this.rpc.epoch },
       // The site's socket is not of the manual login (spec §2.4).
       notAdmitting: () => (this.#mode === "manual_login" ? "the manual login: no socket of the site" : this.admissionsOpen() ? null : this.#noAdmissionWhy()),
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
       socketHost: (host) => this.#classify(host) === "ws",
+      workTab: () => this.control.workTab,
+      isWorkDocumentTarget: (sessionId) => {
+        const targets = this.control.targets;
+        let target = targets.find((t) => t.sessionId === sessionId);
+        if (target === undefined || (target.type !== "page" && target.type !== "iframe")) return false;
+        while (target !== undefined) {
+          if (target.sessionId === this.control.workTab?.sessionId) return true;
+          target = targets.find((t) => t.sessionId === target?.parentSessionId);
+        }
+        return false;
+      },
       cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
       alarm: (kind, detail) => this.#alarm(kind, detail),
@@ -977,6 +1013,13 @@ export class Operator {
       } catch (error) {
         throw new StartFailure("env_mismatch", `the page's environment could not be handed to Chrome: ${errorMessage(error)}`);
       }
+      let geometry: XGeometry;
+      try { geometry = await this.#display(); }
+      catch { throw new StartFailure("env_mismatch", "cannot read the X screen before Chrome starts; inspect the container's X server"); }
+      check();
+      const matches = geometry.width === SCREEN.width && geometry.height === SCREEN.height && geometry.depth === 24;
+      this.#log("x.geometry", { ...geometry, expected: { ...SCREEN, depth: 24 }, matches });
+      if (!matches) throw new DisplayChanged(`${geometry.width}×${geometry.height}×${geometry.depth}, expected ${SCREEN.width}×${SCREEN.height}×24`);
       this.control.geolocation = env.geolocation;
       this.page.advance("env_applied", describeEnv(env));
       await this.#withChrome(async () => {
@@ -1003,6 +1046,9 @@ export class Operator {
       const shown = await this.envCheck.run(env, this.#timings.envCheckMs);
       check();
       this.#log(shown.ok ? "env.verified" : "env.mismatch", { durationMs: shown.durationMs, seen: shown.seen, mismatches: shown.mismatches });
+      if (shown.seen && (shown.seen.screen.width !== SCREEN.width || shown.seen.screen.height !== SCREEN.height)) {
+        throw new DisplayChanged(`Chrome sees ${shown.seen.screen.width}×${shown.seen.screen.height}, expected ${SCREEN.width}×${SCREEN.height}`);
+      }
       if (!shown.ok) throw new StartFailure("env_mismatch", `the browser does not show the page's environment: ${shown.mismatches.join("; ")}`);
       this.page.advance("control_attached", `${this.#chromeVersion}; environment verified: ${describeEnv(env)}`);
       this.#health.start();
@@ -1018,7 +1064,7 @@ export class Operator {
     } catch (error) {
       if (error instanceof Cancelled || run !== this.#run) return;
       const failure = error instanceof StartFailure ? error : new StartFailure("cdp_lost", errorMessage(error));
-      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
+      if (failure instanceof DisplayChanged || failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
       else await this.#fail(failure.reason, failure.message);
     } finally {
       if (run === this.#run) this.#starting = false;
@@ -1223,8 +1269,9 @@ export class Operator {
         return;
       }
       this.#siteReloaded = true;
+      const socketsRevoked = this.sockets.documentChanging();
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
-      this.#log("site.reload", { failed });
+      this.#log("site.reload", { failed, socketsRevoked });
       this.page.back("exit_open", `the session is confirmed; ${failed} API request${failed === 1 ? "" : "s"} of the site failed before it, none sent: the work tab is loaded anew, once`);
       // From here it is a load like step 8's: confirmed again when it is in.
       this.#reloadPending = false;
@@ -1375,9 +1422,9 @@ export class Operator {
     else this.page.stand(note);
   }
 
-  /** A failure: the exit closes, Chrome is killed (nothing of it is trusted
-   *  any more; a self-test probe still queued dies with it), and the start
-   *  is tried again after the backoff. */
+  /** A failure: the exit closes, Chrome gets a bounded profile-writing quit
+   *  and then a kill if needed. Nothing of it is released meanwhile. The
+   *  start is tried again after the backoff, after that Chrome is down. */
   async #fail(reason: StopReason, note: string): Promise<void> {
     this.egress.closeExit(note);
     this.#endWork(note);
@@ -1394,7 +1441,8 @@ export class Operator {
     if (run !== this.#run) return;
     const retryAtWall = this.page.fail(why, note);
     await this.#withChrome(async () => {
-      await this.chrome.kill();
+      if (run !== this.#run) return;
+      await quitChromeAfterFailure(this.cdp, this.chrome, this.#timings.failureQuitMs, this.#log);
       this.egress.gate.browserGone();
     }).catch((error: unknown) => this.#log("chrome.kill_failed", { error: errorMessage(error) }));
     if (run !== this.#run || this.#stopped) return; // a newer start took over meanwhile
@@ -1954,6 +2002,8 @@ export class Operator {
         return this.login.state();
       case "login.screenshot":
         return this.login.screenshot();
+      case "login.open":
+        return this.login.open(this.#loginGuard());
       case "login.submit":
         return this.login.submit(request.login, request.password, this.#loginGuard());
       case "login.code":

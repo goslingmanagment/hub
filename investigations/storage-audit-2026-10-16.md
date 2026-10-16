@@ -96,7 +96,7 @@
 | Вынести `parse_version` из `observations` (§6.5) | Не сделано; индекс 0144 добавил ещё одну зависимость |
 | Ссылки CAS у вебхуков, запись `exact_bytes` | Не сделано |
 | Фиксированные ключи дедупликации (§9.3) | Не сделано |
-| Удаление индексов §9.6 | Частично: `sync_raw_payloads_retain_idx`, `ofapi_commands_payload_redaction_idx` (0283) |
+| Удаление индексов §9.6 | Частично: `sync_raw_payloads_retain_idx`, `ofapi_commands_payload_redaction_idx` (0284) |
 | Партиционирование телеметрии | Не сделано |
 | S6: холодный tiering | Не сделано; текущий tiering по-прежнему увеличивает объём и несовместим с CAS |
 
@@ -143,7 +143,7 @@ forward-only миграция; **(c)** решение владельца или 
 | T1 | Легаси `sync_runs`/`sync_run_events`/`sync_http_attempts` держат августовский объём (~14 ГБ); строки Fansly истекут к ~2026-11-05 | `services/sync/executor.ts`, `repositories/sync.ts:969` | Самый крупный разовый возврат места | (c): после 11-05 census, затем `VACUUM FULL` или pg_repack по одной таблице |
 | T2 | `sync_attempts` с `evidence = true` не удаляются никогда — это как раз обходы истории DM | `repositories/sync/retention.ts:105` | До ~50 ГБ/год при полной загрузке истории (оценка) | (b): параметры запроса журналировать вместе с наблюдением; затем `sync_attempts` — чистая 30-дневная телеметрия с партициями по `admitted_at` |
 | T3 | На один HTTP-запрос движка: INSERT + 3 non-HOT UPDATE `sync_attempts` (6 индексов), 3 non-HOT UPDATE `sync_work`, 2 UPDATE `sync_pages` | `sync/engine/attempts.ts`, `work.ts` | ~8 КБ WAL на запрос (оценка) | (b) после EXPLAIN: убрать предикатные индексы по меняющимся колонкам, fillfactor 80 и autovacuum 0,02 |
-| T4 | Heartbeat `runtime_instances` каждую минуту переписывал снимок конфигурации (~6–8 КБ) non-HOT update'ом из-за индекса по `last_seen_at` | `runtime-instances.ts` | ~7 тыс. перезаписей в сутки | **Сделано**: снимок сохраняется, если не изменился; индекс удалён (0283). Тест: `storage-write-hygiene.integration.test.ts` |
+| T4 | Heartbeat `runtime_instances` каждую минуту переписывал снимок конфигурации (~6–8 КБ) non-HOT update'ом из-за индекса по `last_seen_at` | `runtime-instances.ts` | ~7 тыс. перезаписей в сутки | **Сделано**: снимок сохраняется, если не изменился; индекс удалён (0284). Тест: `storage-write-hygiene.integration.test.ts` |
 | T5 | События `worker_heartbeat` каждые 30 с на каждый идущий run дублируют heartbeat аренды | `executor.ts:65,509` | Строки в `sync_run_events` | (a) |
 | T6 | Третий UPDATE на попытку OFAPI и повторный `JSON.stringify` ответа только чтобы посчитать байты | `services/sync/shared.ts:247`, `sync.ts:823` | Лишний tuple на запрос | (a) |
 | T7 | `sync_attempts.request` хранит `query` (повтор `params`), `spec` (повтор `operation`), `credentialsGeneration` в каждой строке | `commit.ts:357` | Около четверти JSON строки | (a) |
@@ -166,7 +166,7 @@ forward-only миграция; **(c)** решение владельца или 
 
 ### 3.5. Индексы
 
-Удалены миграцией 0283: девять индексов. Шесть из них — ведущий
+Удалены миграцией 0284: девять индексов. Шесть из них — ведущий
 префикс другого индекса той же таблицы с тем же предикатом. Три не читаются
 никем: `sync_raw_payloads_retain_idx`, `ofapi_commands_payload_redaction_idx`,
 `runtime_instances_last_seen_idx`.
@@ -201,7 +201,7 @@ forward-only миграция; **(c)** решение владельца или 
 | H6 | Ежедневная сборка Chrome на хосте не чистит build cache | `page-browser-update.sh:2270` | **Сделано**: `docker builder prune --filter until=168h`, как в деплое Hub |
 | H7 | HTTP-кэш Chrome в профиле без лимита | `s6-rc.d/chrome/run` | (a), после проверки на заметность для сайтов |
 | H8 | Playwright Chromium ставится после `node_modules`: каждое изменение зависимостей пересобирает слой ~300–500 МБ ради одной PNG в день | `Dockerfile:92` | (a) |
-| H9 | Размер БД не сохранялся во времени, истории по таблицам не было | `db-disk-alert.ts` | **Сделано**: `storage_relation_daily` (0284) раз в сутки после алертов, под `lock_timeout` 2 с; почасовой `disk_pg_database_bytes` |
+| H9 | Размер БД не сохранялся во времени, истории по таблицам не было | `db-disk-alert.ts` | **Сделано**: `storage_relation_daily` (0285) раз в сутки после алертов, под `lock_timeout` 2 с; почасовой `disk_pg_database_bytes` |
 
 ## 4. Модель под «каждое сообщение спендера»
 

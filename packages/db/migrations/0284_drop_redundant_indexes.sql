@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0283: drop indexes that only cost writes, and leave room for HOT updates on
+-- 0284: drop indexes that only cost writes, and leave room for HOT updates on
 -- the two fan tables the sync rewrites most.
 --
 -- Every index below is maintained on each insert (and on each update that is

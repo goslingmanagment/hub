@@ -179,7 +179,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
   const { db, logger, metrics, pageId, generation } = deps;
   const { profileId, client, bridge, bufferUndrainedSince } = await openBrowserLink(deps);
   const overrides = deps.overrides ?? {};
-  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics });
+  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics, logger: deps.logger });
   let transport: PageTransport;
   try {
     transport = await createBrowserPageTransport({ db, config: deps.config }, { pageId }, {
