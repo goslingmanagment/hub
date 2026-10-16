@@ -967,25 +967,18 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     }
   });
 
-  it("no socket of the site in the manual login: its CONNECT is refused before any admission is asked", async () => {
+  it("the site's socket goes in the manual login as in the automation (variant Б, plan-b §4.1.5): no admission is asked, the proxy refuses it in neither", async () => {
     const s = await setUp();
     await started(s);
-    siteRead(s, SITE_TOKEN, SITE_CLIENT);
-    await s.engine.waitFor("state", (state) => state.sessionFingerprint === sessionFingerprint(SITE_TOKEN, SITE_CLIENT), WAIT_MS);
-    // In the automation the socket's CONNECT is asked of the engine.
-    const asked = proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
-    await s.engine.waitFor("wsAdmit", undefined, WAIT_MS);
-    const ask = s.engine.last("wsAdmit")!;
-    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: false, reason: "held", retryNotBeforeWall: null });
-    (await asked).socket.destroy();
+    const automation = await proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
+    automation.socket.destroy();
     expect(await command(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-    const before = s.engine.of("wsAdmit").length;
-    const refused = await proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
-    refused.socket.destroy();
-    expect(refused.status).not.toBe(200);
-    // A negative check: the wait only gives a wrong operator the time to ask.
+    const login = await proxyConnect(s.model.proxyPort, "wsv3.fansly.com:443");
+    login.socket.destroy();
+    // Neither refused by the proxy (its 403); the test's SOCKS5 has no route there (502).
+    expect([automation.status, login.status]).not.toContain(403);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(s.engine.of("wsAdmit")).toHaveLength(before);
+    expect(s.engine.of("wsAdmit")).toEqual([]);
   });
 
   // Astra's review of PR 15, item 3: a step taken in one owner's manual

@@ -6,8 +6,7 @@
 // So the proxy decides on every TLS record Chrome writes into a socket's
 // tunnel after its handshake request, at the record's 5-byte header — as the
 // send gate does for the API (gate.ts) — and lets up only what a message of
-// spec §2.6 or Chrome's own control frame can be. Anything else is held, the
-// tunnel is cut and the page stops (`unknown_ws_message`): fail closed.
+// spec §2.6 or Chrome's own control frame can be. Anything else never goes.
 //
 // The sizes. Chrome writes each WebSocket frame — or a batch of them — with
 // one write, and BoringSSL makes a TLS record of it (WebSocketBasicStream::
@@ -32,15 +31,23 @@
 //   of `close()` without a code — and a close with its code only (8) —
 //   Chrome's 1001 when the page goes (network::WebSocket::~WebSocket);
 // - the authorization, once a connection: exactly the size of
-//   {"t":1,"d":"{\"token\":\"<the live token>\",\"v\":3}"} with the token the
-//   site's own API requests carry (hub-requests/session.ts). No live session
-//   — no authorization goes (a socket is not even admitted without one,
-//   ws/sockets.ts).
-// Everything else is held: a message of another size, a second
+//   {"t":1,"d":"{\"token\":\"<the live token>\",\"v\":3}"} with the token of
+//   the site's own `session_active_session` (variant Б, plan-b §4.1.9: read
+//   from its localStorage by DOMStorage, never kept or logged — only the
+//   size is).
+// Everything else is not let up: a message of another size, a second
 // authorization, a coalesced record (two frames in one write), a pong that
 // echoes a non-empty ping, a close with a reason (the page's own, or Chrome's
 // echo of the server's — RespondToClosingHandshake sends the reason back),
 // a fragmented or compressed message.
+//
+// The authorization's size can be late (variant Б): the site's storage is
+// observed over CDP through the holder, its socket's bytes come through the
+// proxy, and nothing orders the two. So a record before the connection's
+// authorization that is of no size the gate knows may be the authorization
+// under a token not observed yet: it is `hold` — kept with everything after
+// it, decided again as the metadata comes, for a few seconds at most (the
+// proxy's). One after the authorization is refused at once.
 //
 // What stays open (the residual): a forbidden message of exactly one of
 // those sizes passes this gate — a payload of 0, 1 or 2 bytes (no Fansly
@@ -79,13 +86,16 @@ export function authorizationBytes(token: string): number {
 
 /** What the socket's path knows when a record is decided. */
 export interface SocketRules {
-  /** The authorization's payload bytes for the live session; null: none. */
+  /** The authorization's payload bytes for the site's live session (its
+   *  `session_active_session`); null: none known. */
   authorizationBytes: number | null;
 }
 
 export type SocketRecord = "tls" | "ping" | "empty_control" | "close_code" | "authorization";
 
-export type SocketVerdict = { up: true; record: SocketRecord } | { up: false; why: string };
+/** `hold`: it may be the authorization under a token not observed yet —
+ *  decided again once the metadata changes (the proxy keeps it meanwhile). */
+export type SocketVerdict = { up: true; record: SocketRecord } | { up: false; hold: boolean; why: string };
 
 export class SocketRecordGate {
   /** The record's overhead on this tunnel (recordOverhead). */
@@ -96,21 +106,28 @@ export class SocketRecordGate {
     this.overhead = overhead;
   }
 
+  /** The connection's authorization went up. */
+  get authorized(): boolean {
+    return this.#authorized;
+  }
+
   /** One record Chrome writes after its handshake request, by its header:
-   *  its content type and its whole size. */
+   *  its content type and its whole size. Nothing but an authorization that
+   *  goes up changes the gate: a record not let up may be decided again. */
   decide(type: number, size: number, rules: SocketRules): SocketVerdict {
     if (type === 20 || type === 21) return { up: true, record: "tls" };
-    if (type !== 23) return { up: false, why: `a TLS record of type ${type} after the handshake` };
+    if (type !== 23) return { up: false, hold: false, why: `a TLS record of type ${type} after the handshake` };
     const frame = size - this.overhead;
     if (frame < clientFrameBytes(0)) return { up: true, record: "tls" };
     if (frame === clientFrameBytes(1)) return { up: true, record: "ping" };
     if (frame === clientFrameBytes(0)) return { up: true, record: "empty_control" };
     if (frame === clientFrameBytes(2)) return { up: true, record: "close_code" };
     if (rules.authorizationBytes !== null && frame === clientFrameBytes(rules.authorizationBytes)) {
-      if (this.#authorized) return { up: false, why: "a second authorization-sized message on the connection" };
+      if (this.#authorized) return { up: false, hold: false, why: "a second authorization-sized message on the connection" };
       this.#authorized = true;
       return { up: true, record: "authorization" };
     }
-    return { up: false, why: rules.authorizationBytes === null ? "a message that is not the ping, and no live session to authorize" : "a message of no allowed size" };
+    if (this.#authorized) return { up: false, hold: false, why: "a message of no allowed size" };
+    return { up: false, hold: true, why: rules.authorizationBytes === null ? "a message before the authorization, and no live session of the site known" : "a message before the authorization of no size the live session's can be" };
   }
 }

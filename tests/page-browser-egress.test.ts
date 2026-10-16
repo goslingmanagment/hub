@@ -114,7 +114,7 @@ describe("the open exit", () => {
       "refused: host closed by the map",
       // No admitting path given to this proxy: a socket is never let through
       // without one (PR 10, ws/sockets.ts).
-      "refused: socket not admitted (no admitting path)",
+      "refused: socket (no socket path)",
     ]);
     expect(records.map((record) => record.cls)).toEqual([...Array(9).fill("denied"), "closed", "closed", "ws"]);
     expect(records.every((record) => record.refused)).toBe(true);

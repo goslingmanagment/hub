@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { countSiteSendsSince, getSyncPage, setPagePause, type Database } from "@agency_hub_core/db";
-import { WS_ADMIT_WAIT_MS } from "../apps/page-browser/src/ws/sockets.ts";
 
 import type { PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../apps/runtime/src/sync/engine/ports.ts";
 import { SITE_SENDS_PER_HOUR } from "../apps/runtime/src/sync/engine/site-admission.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOwnershipSession, makeTestActor, RecordingMetrics, seedSyncPage, testRegistry, testSpec, waitFor } from "./helpers/sync-engine-host.ts";
+
+/** How long an operator before variant Б (protocol minor < 4) let a socket
+ *  CONNECT wait for its admission; a minor-4 operator asks none. */
+const WS_ADMIT_WAIT_MS = 2_500;
 
 // The admission of a page's own site requests by the live actor (Project
 // Browser, plan §3.2, spec §3; stage 3 PR 8) on a real Postgres, with a fake

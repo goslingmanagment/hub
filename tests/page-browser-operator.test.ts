@@ -1947,20 +1947,11 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => closed.outcome === "failed", 3000, "the closed write");
     expect(s.operator.site.failures).toBe(2);
     // The engine's identity read: the session is confirmed, the engine admits.
-    const pendingSocket = s.operator.sockets.admit("wsv3.fansly.com", 443);
-    if (typeof pendingSocket === "string") throw new Error(pendingSocket);
-    const socketAsk = await s.engine.waitFor("wsAdmit");
     admitting = true;
     s.model.hubBody = account("123456789");
     s.engine.send(identity(9501, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9501, 10_000);
     await until(() => s.operator.page.step === "ready", START_MS, "the page ready");
-    expect(await s.engine.waitFor("admissionCancel", (m) => m.id === socketAsk.connectionId, 1_000)).toMatchObject({ kind: "ws", reason: "document_replaced" });
-    expect(await pendingSocket.granted).toBeNull();
-    // The old document's late grant cannot open a tunnel in the new one.
-    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: socketAsk.connectionId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9599 });
-    expect(await s.engine.waitFor("wsDone", (m) => m.attemptId === 9599)).toMatchObject({ sent: false });
-    expect(s.operator.sockets.busy).toBe(false);
     // Loaded anew, once: the navigation of step 8, and this one.
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
     await expect.poll(() => stateNotes(s), SETTLED).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
@@ -2248,7 +2239,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
   });
 });
 
-describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)", () => {
+describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3; variant Б, plan-b §4.1.9)", () => {
   const URL_WS = "wss://wsv3.fansly.com/?v=3";
   const TOKEN = "eyJ-operator-socket-token-1a2b3c4d";
   const AUTH = JSON.stringify({ t: 1, d: JSON.stringify({ token: TOKEN, v: 3 }) });
@@ -2256,14 +2247,17 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
 
   const SITE_TOKEN = "MTA4NDU4OTk3MjEyNjE2NzA0MDoxOjI6MjZhNjU0M2Q0YWZmYzQyOWNiZWE0OWRmYjFmNmI4";
   const CLIENT_ID = "720167541418230011";
+  const storage = (key: string, extra: Record<string, unknown> = {}) => ({ storageId: { storageKey: "https://fansly.com/", isLocalStorage: true }, key, ...extra });
+  /** The site's stored session, as Fansly's session model writes it. */
+  const storedSession = (token: string) => JSON.stringify({ id: "720167541418230099", accountId: "123456789", deviceId: CLIENT_ID, token, metadata: null });
 
   function bindingOf(s: SetUp): string {
     return String(s.chrome.sent("Runtime.addBinding")[0]!.params.name);
   }
 
   /** The site's own API request with its session, as it stops in Fetch: the
-   *  operator learns the live session from it (a socket is admitted only
-   *  with one). */
+   *  operator learns the live session from it (a connection opens in the
+   *  stream under it). */
   async function siteSession(s: SetUp, tab: string): Promise<string> {
     const headers = { authorization: SITE_TOKEN, "fansly-client-id": CLIENT_ID, "fansly-client-check": fanslyClientCheck("/api/v1/account/me", CLIENT_ID), "fansly-client-ts": String(Date.now()) };
     s.model.pause("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", "GET", tab, "XHR", headers);
@@ -2272,24 +2266,19 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     return fingerprint;
   }
 
-  /** The site's socket to the 101, the engine admitting it. */
-  async function socketOpened(s: SetUp, server: { received: () => Buffer }, tab: string, attemptId: number): Promise<{ client: SocketTunnelClient; connectionId: string }> {
-    s.chrome.event("Network.webSocketCreated", { requestId: `WS${attemptId}`, url: URL_WS }, tab);
-    const asked = s.engine.of("wsAdmit").length;
-    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
-    await until(() => s.engine.of("wsAdmit").length > asked, 5000, "the admission asked");
-    const ask = s.engine.of("wsAdmit").at(-1)!;
-    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId });
-    const client = await connecting;
+  /** The site's socket to the 101: its CONNECT goes on at once. */
+  async function socketOpened(s: SetUp, server: { received: () => Buffer }, tab: string, n: number): Promise<{ client: SocketTunnelClient }> {
+    s.chrome.event("Network.webSocketCreated", { requestId: `WS${n}`, url: URL_WS }, tab);
+    const client = await SocketTunnelClient.connect(s.model.proxyPort);
     expect(client.status).toBe(200);
     await client.tls();
-    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000 }, tab);
+    s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: `WS${n}`, timestamp: monoMs() / 1000 }, tab);
     const before = server.received().length;
     client.request();
     await until(() => server.received().subarray(before).includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
-    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${attemptId}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${n}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     await client.answered();
-    return { client, connectionId: String(ask.connectionId) };
+    return { client };
   }
 
   it("goes into every tab before it runs: Runtime, the binding, the guard as a script of every new document", async () => {
@@ -2309,8 +2298,8 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     expect(bindingOf(s)).toMatch(/^pb[0-9a-f]{18}$/);
   });
 
-  it("end to end: the CONNECT waits for wsAdmit, the admitted socket is a tunnel of its own, wsDone once durable, its frames to the engine in order; nothing secret in a log", async () => {
-    const s = await setUp();
+  it("end to end: the CONNECT goes on at once — no wsAdmit — the handshake is the site's send (siteSent and siteEnded, ws.upgrade), its frames to the engine in order; nothing secret in a log", async () => {
+    const s = await setUp({ minor: 4 });
     const server = await socketServer();
     cleanups.push(server.close);
     s.socks.routes.set("wsv3.fansly.com:443", server.port);
@@ -2318,18 +2307,16 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const tab = s.operator.control.workTab!.sessionId;
     const fingerprint = await siteSession(s, tab);
     s.chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, tab);
-    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
-    const ask = await s.engine.waitFor("wsAdmit");
-    expect(ask).toMatchObject({ url: URL_WS, context: "page", sessionFingerprint: fingerprint });
-    expect(s.socks.connects).not.toContain("wsv3.fansly.com:443");
-    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ask.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId: 4242 });
-    const client = await connecting;
+    const client = await SocketTunnelClient.connect(s.model.proxyPort);
     expect(client.status).toBe(200);
     await client.tls();
     s.chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, tab);
     client.request();
     await until(() => server.received().includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
+    const sent = await s.engine.waitFor("siteSent", (message) => message.route === "ws.upgrade");
+    expect(sent).toEqual({ type: "siteSent", siteRequestId: expect.any(String), method: "GET", host: "wsv3.fansly.com", path: "/", route: "ws.upgrade", sessionFingerprint: fingerprint, sentMono: expect.any(Number) });
     s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
+    expect(await s.engine.waitFor("siteEnded", (message) => message.siteRequestId === sent.siteRequestId)).toMatchObject({ status: 101, error: null });
     // The authorization and a ping, as Chrome writes them: the socket gate lets them go.
     await client.answered();
     client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
@@ -2337,22 +2324,68 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
     s.chrome.event("Network.webSocketFrameSent", { requestId: "WS1", response: { opcode: 1, payloadData: AUTH } }, tab);
     for (let n = 0; n < 5; n++) s.chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: JSON.stringify({ t: 2, d: JSON.stringify({ n, marker: FRAME_SECRET }) }) } }, tab);
-    const done = await s.engine.waitFor("wsDone");
-    expect(done).toEqual({ type: "wsDone", connectionId: ask.connectionId, attemptId: 4242, sent: true, sentMono: expect.any(Number), status: 101, error: null });
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });
     const events = () => s.engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
     await until(() => events().length === 7, 5000, "7 events");
     expect(events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.in", "ws.in", "ws.in", "ws.in"]);
-    expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: ask.connectionId, attemptId: 4242, sessionFingerprint: fingerprint });
-    // The outcome stays until the engine's resultAck.
-    s.engine.send({ type: "resultAck", ownerGeneration: 1, attemptId: 4242 });
-    await until(() => s.operator.buffer.stats().outcomes === 0, 3000, "the outcome to go");
+    expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: sent.siteRequestId, attemptId: 0, sessionFingerprint: fingerprint });
+    expect(s.engine.of("wsAdmit")).toEqual([]);
+    expect(s.engine.of("wsDone")).toEqual([]);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
     await s.operator.journals.close();
     const journals = readdirSync(s.logDir).map((name) => readFileSync(join(s.logDir, name), "utf8"));
-    expect(journal(s.logDir, "sockets").map((line) => line.event)).toEqual(["asked", "admitted", "open", "out"]);
-    expect(journal(s.logDir, "sockets")[3]).toMatchObject({ message: { kind: "auth", opcode: 1, bytes: AUTH.length } });
+    expect(journal(s.logDir, "sockets").map((line) => line.event)).toEqual(["open", "out"]);
+    expect(journal(s.logDir, "sockets")[1]).toMatchObject({ message: { kind: "auth", opcode: 1, bytes: AUTH.length } });
     const everything = [...journals, ...s.lines].join("\n");
     for (const secret of [TOKEN, SITE_TOKEN, FRAME_SECRET, "?v=3"]) expect(everything, secret).not.toContain(secret);
+    client.destroy();
+  });
+
+  it("the socket authorizes before the document's first API request: its size from the site's session_active_session, read as the site's document commits — and followed as the storage changes", async () => {
+    const s = await setUp({ minor: 4 });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    s.model.chrome.handlers.set("DOMStorage.getDOMStorageItems", () => ({ entries: [["session_device_id", CLIENT_ID], ["session_active_session", storedSession(SITE_TOKEN)]] }));
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    await until(() => s.operator.hub.session.socketAuthorizationBytes() === authorizationBytes(SITE_TOKEN), 5000, "the stored session read");
+    expect(s.chrome.sent("DOMStorage.getDOMStorageItems")[0]).toMatchObject({ sessionId: tab, params: { storageId: { securityOrigin: "https://fansly.com", isLocalStorage: true } } });
+    // No API request of the site with its session: the socket still authorizes.
+    const { client } = await socketOpened(s, server, tab, 1);
+    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    client.message(1, SOCKET_FILL.ping);
+    await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
+    // The site logs in anew: its storage says the new session; the next
+    // socket's authorization is of its size.
+    const NEW = `${SITE_TOKEN}-new-login`;
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: storedSession(SITE_TOKEN), newValue: storedSession(NEW) }), tab);
+    await until(() => s.operator.hub.session.socketAuthorizationBytes() === authorizationBytes(NEW), 3000, "the new session followed");
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.lines.join("\n")).not.toContain(SITE_TOKEN);
+    client.destroy();
+  });
+
+  it("an authorization its storage told late: held at the proxy, the storage read again — it goes once the session is known, and nothing stops", async () => {
+    const s = await setUp({ minor: 4 });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    let stored: string | null = null;
+    s.model.chrome.handlers.set("DOMStorage.getDOMStorageItems", () => ({ entries: stored === null ? [] : [["session_active_session", stored]] }));
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const { client } = await socketOpened(s, server, tab, 2);
+    const reads = s.chrome.sent("DOMStorage.getDOMStorageItems").length;
+    // The site wrote its session; the storage's event has not come yet.
+    stored = storedSession(SITE_TOKEN);
+    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    // Read again for the held record: it goes.
+    await until(() => server.received().includes(SOCKET_FILL.authorization), 5000, "the authorization at the server");
+    expect(s.chrome.sent("DOMStorage.getDOMStorageItems").length).toBeGreaterThan(reads);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.engine.of("alarm")).toEqual([]);
     client.destroy();
   });
 
@@ -2381,7 +2414,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     expect(journal(s.logDir, "connections")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", result: `cut: the socket gate held a record of ${TLS13_OVERHEAD + 58} bytes (a message of no allowed size)` }));
   });
 
-  it("without the engine (no ping for 5 s — 600 ms here) no new socket is admitted, and no wsAdmit is asked; what is open stays", async () => {
+  it("without the engine (no ping for 5 s — 600 ms here) the site's socket still goes, and what is open stays: its frames still kept", async () => {
     const s = await setUp();
     const server = await socketServer();
     cleanups.push(server.close);
@@ -2390,22 +2423,31 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const tab = s.operator.control.workTab!.sessionId;
     await siteSession(s, tab);
     const { client: open } = await socketOpened(s, server, tab, 4300);
-    await s.engine.waitFor("wsDone");
+    await until(() => s.operator.buffer.connections().length === 1, 3000, "the connection kept");
     s.engine.answerPings = false;
     await until(() => !s.operator.rpc.linkUp, 3000, "the link to go");
-    s.chrome.event("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, tab);
-    const refused = await SocketTunnelClient.connect(s.model.proxyPort);
-    expect(refused.status).toBe(403);
-    expect(s.engine.of("wsAdmit")).toHaveLength(1);
-    // The journal's line is written asynchronously: wait for it, do not race it.
-    await until(() => journal(s.logDir, "connections").some((line) => line.result === "refused: socket not admitted (no engine link)"), 3000, "the refusal journaled");
-    expect(journal(s.logDir, "connections").at(-1)).toMatchObject({ host: "wsv3.fansly.com", refused: true, result: "refused: socket not admitted (no engine link)" });
+    const next = await SocketTunnelClient.connect(s.model.proxyPort);
+    expect(next.status).toBe(200);
     // The open one: still a tunnel, its frames still kept.
     expect(s.operator.sockets.openConnections).toBe(1);
+    const seq = s.operator.buffer.lastSeq;
     s.chrome.event("Network.webSocketFrameReceived", { requestId: "WS4300", response: { opcode: 1, payloadData: '{"t":2,"d":"{}"}' } }, tab);
-    await until(() => s.operator.buffer.lastSeq === 3, 3000, "the frame kept");
+    await until(() => s.operator.buffer.lastSeq === seq + 1, 3000, "the frame kept");
     expect(s.operator.egress.exitOpen).toBe(true);
+    next.destroy();
     open.destroy();
+  });
+
+  it("the manual login lets the site's socket go too: a person's login is the site's own", async () => {
+    const s = await setUp({ minor: 4 });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    s.socks.routes.set("wsv3.fansly.com:443", server.port);
+    await started(s);
+    expect(await commandWith(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    const client = await SocketTunnelClient.connect(s.model.proxyPort);
+    expect(client.status).toBe(200);
+    client.destroy();
   });
 
   it("a message the guard did not let go stops the page: the exit closed, the stop held for the engine's restart, the alarm with no content", async () => {
@@ -2447,28 +2489,31 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     expect(journal(s.logDir, "requests")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", decision: "failed", result: "BlockedByClient: the socket host serves the site's socket only (socket_host)" }));
   });
 
-  it("a socket that cannot be accounted for — a handshake on its tunnel CDP never shows — fails the page: the exit closed, Chrome started again, nothing reassigned", async () => {
-    const s = await setUp({ params: { restartBackoffMs: [300] }, socketTimings: { bindWaitMs: 200 } });
+  it("a socket whose handshake CDP never shows (a context not attached) is still under the socket gate: nothing fails for it, and a forbidden message after its authorization never leaves", async () => {
+    const s = await setUp({ params: { restartBackoffMs: [300] } });
     const server = await socketServer();
     cleanups.push(server.close);
     s.socks.routes.set("wsv3.fansly.com:443", server.port);
     await started(s);
     const tab = s.operator.control.workTab!.sessionId;
     await siteSession(s, tab);
-    s.chrome.event("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, tab);
-    const connecting = SocketTunnelClient.connect(s.model.proxyPort);
-    await until(() => s.engine.of("wsAdmit").length === 1, 5000, "the admission asked");
-    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: s.engine.of("wsAdmit")[0]!.connectionId, admit: true, deadlineMono: monoMs() + 5000, attemptId: 4500 });
-    const client = await connecting;
+    const client = await SocketTunnelClient.connect(s.model.proxyPort);
     expect(client.status).toBe(200);
     await client.tls();
-    // The request goes up its tunnel; CDP never shows the handshake.
+    // The request goes up its tunnel; CDP never shows the socket.
     client.request();
-    await until(() => s.operator.page.snapshot.stopReason === "ws_unaccounted", 5000, "the failure");
-    expect(s.operator.egress.exitOpen).toBe(false);
-    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
-    expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
-    await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "site_loaded", 10_000, "Chrome started again");
+    await client.answered();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.operator.egress.exitOpen).toBe(true);
+    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    client.message(52, SOCKET_FILL.forbidden);
+    await until(() => s.operator.page.snapshot.stopReason === "unknown_ws_message", 5000, "the stop");
+    expect(server.received().includes(SOCKET_FILL.authorization)).toBe(true);
+    expect(server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    // Halted for the owner: Chrome is not started again for it.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(1);
     client.destroy();
   });
 
@@ -2481,7 +2526,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     const tab = s.operator.control.workTab!.sessionId;
     await siteSession(s, tab);
     const { client } = await socketOpened(s, server, tab, 4400);
-    await s.engine.waitFor("wsDone");
+    await until(() => s.operator.buffer.lastSeq === 2, 3000, "the start's gap and the open");
     expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
     await until(() => s.operator.buffer.lastSeq === 4, 10_000, "the close and the gap");
     s.engine.send({ type: "events.subscribe", ownerGeneration: 1, bufferId: s.operator.buffer.id, afterSeq: 0 });

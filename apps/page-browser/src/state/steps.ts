@@ -37,7 +37,9 @@ export type Step = (typeof STEPS)[number];
  *    That context could send unchecked: the exit closes, Chrome goes at once,
  *    and the page stands until the engine starts it again (stage 1,
  *    amendment 17);
- *  - `ws_unaccounted` (PR 10): a site socket the operator could not account
+ *  - `ws_unaccounted` (PR 10; no longer raised since variant Б, plan-b
+ *    §4.1.9 — no socket is admitted, so none is accounted for; kept in the
+ *    protocol until 2.0): a site socket the operator could not account
  *    for — a handshake on its tunnel CDP did not show, a tunnel that ended
  *    with CDP not telling its socket's end, a second handshake, frames of a
  *    socket no tunnel was bound to: what CDP says later could be taken for

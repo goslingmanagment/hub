@@ -14,6 +14,10 @@
 //   attempt 0 — no engine attempt is behind it;
 // - journals each request with its end.
 //
+// The site's socket's handshake is a send of the site's too (route
+// `ws.upgrade`, Б-2d): ws/sockets.ts tells it here from CDP's socket events,
+// and it goes to the engine the same way, through the same outbox.
+//
 // Hub's own requests (its placeholder host, then its real one) are not the
 // site's: the caller says which network ids are Hub's. A request answered
 // from a cache or a service worker never left: no `siteSent` (no
@@ -42,6 +46,10 @@ export const OBSERVED_OUTBOX_MAX = OBSERVED_KEPT * 2;
 export const OBSERVED_BODY_MAX = 32 * 1024 * 1024;
 /** Past any API request's own limit: a hung or lost end must not hold a restart. */
 export const SITE_STALE_IN_FLIGHT_MS = 60_000;
+/** The route of the site socket's handshake (the engine's catalogue). */
+export const WS_UPGRADE_ROUTE = "ws.upgrade";
+/** Socket handshakes followed at most (each ends within seconds). */
+const SOCKETS_KEPT = 64;
 
 const NO_SESSION = "0".repeat(64);
 
@@ -113,6 +121,8 @@ export class SiteObserver {
   readonly #requests = new Map<string, Observed>();
   readonly #early = new Map<string, EarlyInfo>();
   readonly #outbox: QueuedObservation[] = [];
+  /** The site socket's handshakes told and not ended, by their id. */
+  readonly #sockets = new Map<string, SiteSent>();
   #lastSend: { mono: number; wall: number } | null = null;
 
   constructor(deps: SiteObserverDeps) {
@@ -159,6 +169,35 @@ export class SiteObserver {
       const sent = this.#siteSent(r);
       this.#send({ message: sent, sent });
     }
+    for (const sent of this.#sockets.values()) if (!queued.has(sent.siteRequestId)) this.#send({ message: sent, sent });
+  }
+
+  /** The site socket's handshake left (ws/sockets.ts): a send of the site's
+   *  (`ws.upgrade`), told as any. */
+  socketSent(handshake: { id: string; url: URL; sentMono: number }): void {
+    const sent: SiteSent = {
+      type: "siteSent",
+      siteRequestId: handshake.id,
+      method: "GET",
+      host: handshake.url.hostname,
+      path: handshake.url.pathname,
+      route: WS_UPGRADE_ROUTE,
+      sessionFingerprint: this.#deps.session.fingerprint(),
+      sentMono: handshake.sentMono,
+    };
+    this.#sockets.delete(handshake.id);
+    this.#sockets.set(handshake.id, sent);
+    if (this.#sockets.size > SOCKETS_KEPT) this.#sockets.delete(this.#sockets.keys().next().value!);
+    this.#send({ message: sent, sent });
+  }
+
+  /** How the site socket's handshake ended: its answer (101 — it opened),
+   *  or why it failed. */
+  socketEnded(end: { id: string; status: number | null; error: string | null }): void {
+    const sent = this.#sockets.get(end.id);
+    if (sent === undefined) return;
+    this.#sockets.delete(end.id);
+    this.#send({ message: { type: "siteEnded", siteRequestId: end.id, endedMono: monoMs(), status: end.status, retryAfter: null, error: end.error }, sent });
   }
 
   #onWillBeSent(event: CdpEvent): void {

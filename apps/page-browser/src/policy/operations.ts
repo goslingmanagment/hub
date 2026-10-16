@@ -54,7 +54,7 @@ export const CDN_HOST = "cdn*.fansly.com";
  *   site        Fansly's page, scripts, styles, fonts — and any other host
  *               under fansly.com: at once, unpaced, journaled; writes closed
  *   api         by the engine's admission (spec §2.2–2.5)
- *   ws          the site's socket only, each by the engine's admission
+ *   ws          the site's socket only, observed (variant Б, plan-b §4.1.9)
  *   cdn         media and previews: the site's unpaced, Hub's admitted;
  *               writes closed
  *   closed      nothing at all, until the owner opens it
@@ -625,7 +625,7 @@ export interface MapRequest {
  *   admit     by the engine's admission (`siteAdmit`): its route, a read or
  *             a login operation, whether its answer is platform data
  *   preflight a CORS preflight: under its request's admission (decision №1)
- *   socket    the site's socket: the engine admits its tunnel (`wsAdmit`)
+ *   socket    the site's socket (its tunnel goes on at the proxy, observed)
  *   refuse    failed (BlockedByClient) and journaled: closed by the map, not
  *             of the operator's mode, or a local or special-use address */
 export type MapDecision =

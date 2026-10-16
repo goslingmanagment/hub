@@ -123,6 +123,10 @@ export type { Step, StopReason };
 // Minor 3 distinguishes credentials refusals; engines send held to older operators.
 // Minor 4 (variant Б): the site observed, not admitted (`siteSent`,
 // `siteEnded`, `siteIdentity`); such an operator sends no `siteAdmit`/`wsAdmit`.
+// Its socket's handshake is a `siteSent` of route `ws.upgrade` (its
+// `siteRequestId` the connection's id), and a `ws.open` of it carries
+// attempt 0: no admission is behind it (Б-2d). `wsDone` it sends only for a
+// connection an older operator's admission kept (`fate: "unknown"`).
 export const PROTOCOL = { major: 1, minor: 4 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
@@ -468,6 +472,7 @@ export interface EventsRefused {
   givenSeq: number;
 }
 export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
+  /** `attemptId` 0: an observed socket's (minor 4), no admission behind it. */
   | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
   | { kind: "ws.in"; connectionId: ConnectionId; frame: string }
   | { kind: "ws.close"; connectionId: ConnectionId; code: number | null; reason: string | null }
