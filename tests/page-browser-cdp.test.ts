@@ -231,7 +231,7 @@ describe("the control", () => {
     expect(order.indexOf("Browser.grantPermissions")).toBeLessThan(order.indexOf("Target.setAutoAttach"));
     // The work tab: set up — its position included —, then let run.
     const tabCommands = order.filter((entry) => entry.endsWith("@S1"));
-    expect(tabCommands).toEqual(["Network.enable@S1", "Page.enable@S1", "Emulation.setGeolocationOverride@S1", "Target.setAutoAttach@S1", "Runtime.runIfWaitingForDebugger@S1"]);
+    expect(tabCommands).toEqual(["Network.enable@S1", "Page.enable@S1", "DOMStorage.enable@S1", "Emulation.setGeolocationOverride@S1", "Target.setAutoAttach@S1", "Runtime.runIfWaitingForDebugger@S1"]);
     expect(chrome.sent("Emulation.setGeolocationOverride").find((command) => command.sessionId === "S1")?.params).toEqual({ latitude: 48.137, longitude: 11.575, accuracy: 25 });
     expect(chrome.commands.find((command) => command.method === "Network.enable")?.params).toEqual({ maxTotalBufferSize: 100, maxResourceBufferSize: 20 });
     expect(chrome.commands.find((command) => command.method === "Target.setAutoAttach" && command.sessionId === "S1")?.params).toMatchObject({ filter: [{ type: "service_worker", exclude: true }, {}] });
