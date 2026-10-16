@@ -119,6 +119,8 @@ import { BoundaryFile } from "../ws/boundary.ts";
 import { SiteSockets, type SocketStop, type SocketTimings } from "../ws/sockets.ts";
 import { PLACEHOLDER_SUFFIX, WORLD } from "../hub-requests/page.ts";
 import { EnvCheck } from "../env/check.ts";
+import { readXGeometry, type XGeometry } from "../env/display.ts";
+import { SCREEN } from "../env/rules.ts";
 import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
@@ -207,6 +209,8 @@ const DISCARD_WAIT_MS = 5_000;
 export interface OperatorDeps {
   config: OperatorConfig;
   chrome: ChromeControl;
+  /** Tests provide their X server; production reads :99 with xdpyinfo. */
+  display?: () => Promise<XGeometry>;
   classify?: HostClassifier;
   /** The host of the self-test's probes: the API host. */
   apiHost?: string;
@@ -248,6 +252,13 @@ class StartFailure extends Error {
 /** The start was superseded (a newer start, a stop, a failure elsewhere). */
 class Cancelled extends Error {}
 
+/** Chrome cannot repair X: hold instead of retrying the same desktop. */
+class DisplayChanged extends StartFailure {
+  constructor(detail: string) {
+    super("env_mismatch", `X screen changed (${detail}); restart the container's X server, then clear the halt and start the browser`);
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -286,6 +297,7 @@ export class Operator {
   readonly #health: HealthProbe;
   readonly #timings: OperatorTimings;
   readonly #log: Logger;
+  readonly #display: () => Promise<XGeometry>;
   readonly #apiHost: string;
   readonly #exitIpTarget: ExitIpTarget;
   readonly #extension: ExtensionChecks;
@@ -401,6 +413,7 @@ export class Operator {
     this.chrome = deps.chrome;
     this.#timings = { ...DEFAULT_TIMINGS, ...deps.timings };
     this.#log = deps.log ?? makeLog("operator");
+    this.#display = deps.display ?? readXGeometry;
     this.#apiHost = deps.apiHost ?? FANSLY_HOSTS.api[0];
     this.#exitIpTarget = deps.exitIpTarget ?? IPIFY;
     this.#extension = deps.extension ?? EXTENSION_CHECKS;
@@ -988,6 +1001,13 @@ export class Operator {
       } catch (error) {
         throw new StartFailure("env_mismatch", `the page's environment could not be handed to Chrome: ${errorMessage(error)}`);
       }
+      let geometry: XGeometry;
+      try { geometry = await this.#display(); }
+      catch { throw new StartFailure("env_mismatch", "cannot read the X screen before Chrome starts; inspect the container's X server"); }
+      check();
+      const matches = geometry.width === SCREEN.width && geometry.height === SCREEN.height && geometry.depth === 24;
+      this.#log("x.geometry", { ...geometry, expected: { ...SCREEN, depth: 24 }, matches });
+      if (!matches) throw new DisplayChanged(`${geometry.width}×${geometry.height}×${geometry.depth}, expected ${SCREEN.width}×${SCREEN.height}×24`);
       this.control.geolocation = env.geolocation;
       this.page.advance("env_applied", describeEnv(env));
       await this.#withChrome(async () => {
@@ -1014,6 +1034,9 @@ export class Operator {
       const shown = await this.envCheck.run(env, this.#timings.envCheckMs);
       check();
       this.#log(shown.ok ? "env.verified" : "env.mismatch", { durationMs: shown.durationMs, seen: shown.seen, mismatches: shown.mismatches });
+      if (shown.seen && (shown.seen.screen.width !== SCREEN.width || shown.seen.screen.height !== SCREEN.height)) {
+        throw new DisplayChanged(`Chrome sees ${shown.seen.screen.width}×${shown.seen.screen.height}, expected ${SCREEN.width}×${SCREEN.height}`);
+      }
       if (!shown.ok) throw new StartFailure("env_mismatch", `the browser does not show the page's environment: ${shown.mismatches.join("; ")}`);
       this.page.advance("control_attached", `${this.#chromeVersion}; environment verified: ${describeEnv(env)}`);
       this.#health.start();
@@ -1029,7 +1052,7 @@ export class Operator {
     } catch (error) {
       if (error instanceof Cancelled || run !== this.#run) return;
       const failure = error instanceof StartFailure ? error : new StartFailure("cdp_lost", errorMessage(error));
-      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
+      if (failure instanceof DisplayChanged || failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
       else await this.#fail(failure.reason, failure.message);
     } finally {
       if (run === this.#run) this.#starting = false;

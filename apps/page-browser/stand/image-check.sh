@@ -94,6 +94,10 @@ run_check() {
     docker logs "page-browser-$PAGE" 2>&1 | grep -E 'init-net|net-selftest|s6-rc|rc.init' | tail -30 >&2
     return 1
   fi
+  # Only root reads this local check's synthetic screen password. It never
+  # leaves the container; the check connects to Kasm's loopback WebSocket.
+  docker cp "$APP/stand/screen-check.mjs" "page-browser-$PAGE:/tmp/screen-check.mjs" >/dev/null
+  docker exec "page-browser-$PAGE" node --no-warnings /tmp/screen-check.mjs
   local script
   for script in image-check.mjs rules-check.mjs; do
     docker cp "$APP/stand/$script" "page-browser-$PAGE:/tmp/$script" >/dev/null

@@ -207,6 +207,7 @@ export class FakeChromeControl implements ChromeControl {
   readonly chrome: FakeChrome;
   readonly calls: string[] = [];
   networkPid: number | null = 4242;
+  geometry = { width: 1920, height: 1080, depth: 24 };
   /** Chrome's run script, before Chrome is up (the model reads the
    *  page's environment there). */
   onStart: () => void = () => undefined;

@@ -159,6 +159,7 @@ async function setUp(
         operatorVersion: "test",
       },
       chrome: control,
+      display: async () => control.geometry,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
       ...(options.buffer ? { buffer: options.buffer } : {}),
@@ -870,6 +871,19 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
 describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
   const evaluations = (s: SetUp, marker: string) => s.chrome.sent("Runtime.evaluate").filter((command) => String(command.params.expression).includes(marker));
 
+  it("halts before Chrome when X retained the pilot's resized screen, with a restart-X reason", async () => {
+    const s = await setUp();
+    s.control.geometry = { width: 1728, height: 936, depth: 24 };
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.halted, 4000, "the changed X screen is held");
+    expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", stopReason: "env_mismatch", retryAtWall: null });
+    expect(s.control.calls).not.toContain("start");
+    await expect.poll(() => journal(s.logDir, "states"), SETTLED).toContainEqual(expect.objectContaining({ note: expect.stringContaining("restart the container's X server") }));
+    const geometry = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "x.geometry");
+    expect(geometry).toMatchObject({ width: 1728, height: 936, depth: 24, matches: false });
+    expect(s.socks.connects).toEqual([]);
+  });
+
   it("goes to Chrome's start from the hello, its position to every tab before it runs, and is verified in the browser", async () => {
     const s = await setUp();
     await started(s);
@@ -913,7 +927,6 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
   it.each([
     ["a time zone", { timeZone: "UTC" }, "time zone UTC, not Europe/Berlin"],
     ["languages Chrome extends with its UI language's defaults", { languages: ["en-US", "en", "en-GB"] }, "Chrome adds its UI language's defaults"],
-    ["a screen", { screen: { width: 800, height: 600 } }, "screen 800×600, not 1920×1080"],
     ["a position", { position: { latitude: 0, longitude: 0, accuracy: 50 } }, "position 0, 0 ±50 m, not 52.5, 13.4 ±50 m"],
   ])("%s the browser does not show as set fails the start: env_mismatch, the exit never opens, and it is tried again", async (_what, shows, reason) => {
     const s = await setUp();
@@ -932,6 +945,15 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.socks.connects).toEqual([]);
     expect(s.control.calls).toContain("kill");
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
+  });
+
+  it("holds a screen mismatch found after Chrome starts with the same restart-X explanation", async () => {
+    const s = await setUp();
+    s.model.shows.screen = { width: 800, height: 600 };
+    await command(s.engine, "restartBrowser");
+    await until(() => s.operator.page.snapshot.halted, 5000, "screen mismatch held");
+    expect(s.operator.page.snapshot).toMatchObject({ stopReason: "env_mismatch", retryAtWall: null });
+    await expect.poll(() => journal(s.logDir, "states"), SETTLED).toContainEqual(expect.objectContaining({ note: expect.stringContaining("Chrome sees 800×600") }));
   });
 
   it("is verified again on every start: after Chrome crashed, and then a difference fails that start", async () => {

@@ -51,6 +51,8 @@ describe("Chrome's start", () => {
   it("gives Chrome the screen the operator checks: the X server's geometry and the window", () => {
     expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain(`-geometry ${SCREEN.width}x${SCREEN.height} `);
     expect(command).toContain(`--window-size=${SCREEN.width},${SCREEN.height}`);
+    expect(read("apps/page-browser/s6/s6-rc.d/xvnc/run")).toContain("-AcceptSetDesktopSize 0");
+    expect(read("apps/page-browser/Dockerfile")).toContain("x11-utils");
   });
 });
 
@@ -430,7 +432,7 @@ describe("the stand's checks of the image", () => {
     expect(rulesCheckSh).toContain('[[ "$CONTAINER" == page-browser-* ]]');
     expect(rulesCheckSh).toContain('exec docker exec "$CONTAINER" /command/s6-setuidgid pb-operator node --no-warnings /tmp/rules-check.mjs');
     for (const script of ["image-check.sh", "rules-check.sh"]) expect(spawnSync("bash", ["-n", path.join(app, "stand", script)]).status, script).toBe(0);
-    for (const script of ["image-check.mjs", "rules-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
+    for (const script of ["image-check.mjs", "rules-check.mjs", "screen-check.mjs"]) expect(spawnSync(process.execPath, ["--check", path.join(app, "stand", script)]).status, script).toBe(0);
   });
 
   it("the rules check asks the image's own map for what must be cancelled, and never a container whose Chrome runs unasked", () => {
