@@ -287,7 +287,7 @@ describe("the current public landing, before the login modal", () => {
     expect(recognize(marks, { live: null, atStart: null }).screen).toBe("landing");
     expect(await located("open")).toBe("div#open-login");
     for (const role of ["login", "password", "code", "submit"] as const) expect(await located(role)).toBeNull();
-    await show(pageOf(LANDING + `<script>document.getElementById("open-login").addEventListener("click", () => { document.body.innerHTML = ${JSON.stringify(loginState({ loading: false }))}; });</script>`));
+    await show(pageOf(LANDING + `<script>document.getElementById("open-login").addEventListener("click", () => { document.body.innerHTML = ${JSON.stringify(loginState({ loading: false })).replace(/</g, "\\u003c")}; });</script>`));
     const desk = await deskOver(); desk.begin();
     expect(await desk.open(() => null)).toMatchObject({ kind: "state", screen: "login", fields: ["login", "password"] });
     expect(await page!.evaluate("window.clicks")).toBe(1);
