@@ -12,6 +12,7 @@ import {
   hasUnconfirmedDmLiveChatMessage,
   isDmArchiveScopeFenced,
   latestClosedWorkForKey,
+  listArchiveMaterialHeads,
   listDomainEventsByDedupKeys,
   listOpenHistoryItems,
   listPageDmThreadListStates,
@@ -42,6 +43,7 @@ import {
 import { compareFanslySnowflakeIds, getFanslyDmMessageSyncExcludedReason } from "@agency_hub_core/shared";
 
 import { familyForObservation } from "../../../services/canonicalize/index.ts";
+import { fanslyMaterialContentHash } from "../../../services/canonicalize/sync-pull.ts";
 import type { CanonicalEventDraft } from "../../../services/canonicalize/types.ts";
 import { canonicalizeObservationInTransaction } from "../../engine/canonicalize.ts";
 import { ApplyDeferred, ApplyQuarantine, FanslyContractViolationError } from "../../engine/commit.ts";
@@ -1050,11 +1052,34 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   counters: Record<string, number>;
 }): Promise<void> {
   if (DM_SYNC_FAMILY === null) throw new Error("no canonicalizer family claims Fansly dm_messages");
+  const payload = replaceJournalUnstorableText(input.response).value;
+  // The material the archive already holds for this page's messages: a head
+  // read returns the chat's newest 25, so most of them were read before. A
+  // material draft equal to the head of the event that last wrote the row is
+  // dropped — appending it would only copy the same material again (with a
+  // checkpoint) and rewrite the row. Changed material, including a change
+  // back to an earlier version, differs from that head and is appended.
+  const storedHeads = await listArchiveMaterialHeads(tx, {
+    accountId: input.pageId,
+    platform: "fansly",
+    messageRefs: pageMessageRefs(payload),
+  });
+  let unchangedMaterial = 0;
   const draftFenced = new Map<string, boolean>();
   const excludeDraft = async (draft: CanonicalEventDraft): Promise<boolean> => {
     const messageRef = draft.messageRef ?? null;
     // Material of a message: decided by that message's own fence check.
-    if (messageRef !== null) return input.fence.fencedIds.has(messageRef);
+    if (messageRef !== null && input.fence.fencedIds.has(messageRef)) return true;
+    if (messageRef !== null && draft.type === "message.material_observed") {
+      const stored = storedHeads.get(messageRef);
+      const head = draft.data.head;
+      if (stored !== undefined && head !== null && typeof head === "object" && !Array.isArray(head)
+        && fanslyMaterialContentHash(head as Record<string, unknown>) === fanslyMaterialContentHash(stored)) {
+        unchangedMaterial += 1;
+        return true;
+      }
+    }
+    if (messageRef !== null) return false;
     const refs = [draft.fanIdentityRef, draft.conversationRef].filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
     if (refs.length === 0) return false;
     const materialAt = draft.occurredAt.getTime() < input.observation.receivedAt.getTime() ? draft.occurredAt : input.observation.receivedAt;
@@ -1076,7 +1101,7 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
     accountId: input.pageId,
     kind: "dm_messages",
     // The body as journaled (§3.11): dm_messages is never CDN-stripped.
-    payload: replaceJournalUnstorableText(input.response).value,
+    payload,
     observedAt: null,
     receivedAt: input.observation.receivedAt,
   }, {
@@ -1086,12 +1111,28 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   });
   bump(input.counters, `canonicalize_${canon.outcome}`);
   if (canon.outcome === "rejected") return;
-  bump(input.counters, "drafts_fenced", canon.excluded);
+  bump(input.counters, "drafts_fenced", canon.excluded - unchangedMaterial);
+  bump(input.counters, "material_unchanged", unchangedMaterial);
   if (canon.outcome === "stamped") bump(input.counters, "events_appended", canon.appended);
   if (canon.messageDedupKeys.length === 0) return;
   const events = await listDomainEventsByDedupKeys(tx, input.pageId, canon.messageDedupKeys);
   const archived = await applyMessageEventsToArchive(tx, { accountId: input.pageId, platform: "fansly", events });
   bump(input.counters, "archive_inserted", archived.inserted);
+}
+
+/** The message ids of a `/message` page, as the canonicalizer reads them. */
+function pageMessageRefs(payload: unknown): string[] {
+  const messages = payload !== null && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as { messages?: unknown }).messages
+    : undefined;
+  if (!Array.isArray(messages)) return [];
+  const refs = new Set<string>();
+  for (const message of messages) {
+    const id = message !== null && typeof message === "object" ? (message as { id?: unknown }).id : undefined;
+    if (typeof id === "string" && id.length > 0) refs.add(id);
+    else if (typeof id === "number" && Number.isFinite(id)) refs.add(String(id));
+  }
+  return [...refs];
 }
 
 // ── the chat Fansly stopped serving (arena "vanished chat", plan §2) ────────

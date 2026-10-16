@@ -862,6 +862,20 @@ function fanslyAutomationMarkers(message: Record<string, unknown>) {
 }
 
 /**
+ * The material of a Fansly `message.material_observed` head without the read
+ * that observed it: equal for two reads of an unchanged message. The engine
+ * compares a new draft's against the head of the event that last wrote the
+ * archive row, and drops the draft when they match — a head read returns the
+ * chat's newest 25 messages, so each message is read again on every new one,
+ * and every such read used to append a full copy of the same material (and a
+ * checkpoint) and rewrite the archive row (storage audit 2026-10-16).
+ */
+export function fanslyMaterialContentHash(head: Record<string, unknown>): string {
+  const { materialObservedAt: _observedAt, ...material } = head;
+  return contentHash(material);
+}
+
+/**
  * A17-4 VARIANT B: the archive learns about Fansly purchase material through
  * the channel it ALREADY understands. No archive column is added; the head
  * fills the existing ones (material head, media list, price_mills) exactly as
@@ -973,19 +987,12 @@ function materialDrafts(
       materialObservedAt: observation.receivedAt.toISOString(),
       originClass: "fansly_dm_sidecar",
     };
-    // The fingerprint (and so the dedup key) is the message's MATERIAL, not
-    // the moment it was read. Every head read returns the newest 25 messages,
-    // so a chat's message is read again on each new one; with the receipt
-    // clock in the hash every read appended a full copy of the same material
-    // (and its checkpoint) and rewrote the archive row. Now a re-read of
-    // unchanged material dedupes, and a real change — media, price, reply,
-    // markers, text — still mints a new event. The head keeps the clock of
-    // the read that first saw this material: the archive's precedence clock
-    // (Fansly heads carry no vendor change time). A re-parse of observations
-    // read before this change mints one event per message and material at
-    // most; their older clock loses to the archive's newer one.
-    const { materialObservedAt: _observedAt, ...material } = head;
-    const fingerprint = contentHash(material);
+    // The receipt clock stays in the fingerprint: material that changes and
+    // changes back (A → B → A) must reach the archive with the clock of the
+    // read that saw it last. Re-reads of UNCHANGED material are dropped before
+    // the append instead, by the engine against the archive's current head
+    // (fanslyMaterialContentHash, sync/fansly/resources/dm-messages.ts).
+    const fingerprint = contentHash(head);
     drafts.push({
       type: "message.material_observed",
       occurredAt: messageCreatedAt,

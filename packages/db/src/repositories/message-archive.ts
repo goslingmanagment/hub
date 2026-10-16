@@ -245,6 +245,41 @@ async function applyReplyMaterial(
 }
 
 /**
+ * The material head that last wrote each of these archive rows: the `head` of
+ * the `message.material_observed` event the row's source_event_id names, by
+ * message ref. A row whose last writer was another event type, or none, has
+ * no entry. The event is found by its primary key (id, occurred_at): a
+ * material event is dated by the message time the row also carries, so a
+ * clamped historical event (occurred_at moved to its receipt) is simply not
+ * found — the caller then writes as it always did.
+ */
+export async function listArchiveMaterialHeads(
+  db: Database,
+  input: { accountId: number; platform: string; messageRefs: readonly string[] },
+): Promise<Map<string, Record<string, unknown>>> {
+  const heads = new Map<string, Record<string, unknown>>();
+  if (input.messageRefs.length === 0) return heads;
+  const result = await db.execute<{ message_ref: string; head: Record<string, unknown> | null }>(sql`
+    select ma.message_ref, e.data -> 'head' as head
+    from message_archive ma
+    join domain_events e
+      on e.id = ma.source_event_id
+     and e.occurred_at = ma.occurred_at
+     and e.account_id = ma.account_id
+     and e.type = 'message.material_observed'
+    where ma.account_id = ${input.accountId}
+      and ma.platform = ${input.platform}
+      and ma.message_ref = any(${sql.param([...input.messageRefs])}::text[])
+  `);
+  for (const row of result.rows) {
+    if (row.head !== null && typeof row.head === "object" && !Array.isArray(row.head)) {
+      heads.set(row.message_ref, row.head);
+    }
+  }
+  return heads;
+}
+
+/**
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
  * already collapsed same-fact events upstream); deleted tombstones (a stub
@@ -425,28 +460,18 @@ export async function applyMessageEventsToArchive(
           serving_contract_version = excluded.serving_contract_version,
           content_pending = false,
           updated_at = now()
-        where (
-             ${target}.content_pending
-             or ${target}.serving_contract_version < excluded.serving_contract_version
-             or (
-               excluded.vendor_changed_at is not null
-               and (${target}.vendor_changed_at is null
-                 or excluded.vendor_changed_at >= ${target}.vendor_changed_at)
-             )
-             or (
-               excluded.vendor_changed_at is null
-               and ${target}.vendor_changed_at is null
-               and (${target}.material_observed_at is null
-                 or excluded.material_observed_at >= ${target}.material_observed_at)
-             )
+        where ${target}.content_pending
+           or ${target}.serving_contract_version < excluded.serving_contract_version
+           or (
+             excluded.vendor_changed_at is not null
+             and (${target}.vendor_changed_at is null
+               or excluded.vendor_changed_at >= ${target}.vendor_changed_at)
            )
-           -- Re-applying the event that last wrote this row writes it again
-           -- unchanged: a re-read whose material deduped hands the archive
-           -- that same event back (Fansly dm heads). Skip that tuple.
-           and (
-             ${target}.content_pending
-             or ${target}.serving_contract_version < excluded.serving_contract_version
-             or ${target}.source_event_id is distinct from excluded.source_event_id
+           or (
+             excluded.vendor_changed_at is null
+             and ${target}.vendor_changed_at is null
+             and (${target}.material_observed_at is null
+               or excluded.material_observed_at >= ${target}.material_observed_at)
            )
         returning id
       `);

@@ -752,6 +752,48 @@ describe("dm-messages.head", () => {
       .toBe(eventsBefore + 3);
   });
 
+  it("material that changes and changes back (A → B → A) lands in the archive with the last read", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedThread(pageId, { n: 10, stored: range(1, 2), chain: true });
+    const registry = await registryFor(pageId);
+    // Each read is a head read for one new message (newest = `top`); message 3
+    // rides along in the head with the content of that moment.
+    const servedWith = (top: number, content: string) => (req: FanslyWireRequest): FanslyWireOutcome => {
+      const before = beforeOf(req);
+      const ks = range(1, top).reverse().filter((k) => before === null || BigInt(msg(k)) < BigInt(before));
+      return okResponse({
+        messages: ks.slice(0, 25).map((k) => wireMessage(groupOf(10), k, k === 3 ? { content } : {})),
+      });
+    };
+    const read = async (top: number, content: string) => {
+      await demand(pageId, "dm-messages.head", 10, [msg(top)]);
+      await runLive(pageId, registry, servedWith(top, content), async () => {
+        const work = await workRow(pageId, "dm-messages.head", 10);
+        return work?.state === "done" && work.demand.messageIds.length === 0;
+      });
+    };
+    const archived = async () => (await testDb!.pool.query<{ text_plain: string }>(
+      "select text_plain from message_archive where account_id = $1 and message_ref = $2",
+      [pageId, msg(3)],
+    )).rows[0]?.text_plain;
+    const materials = () => scalar(
+      "select count(*)::int as n from domain_events where account_id = $1 and type = 'message.material_observed' and message_ref = $2",
+      [pageId, msg(3)],
+    );
+
+    await read(3, "first version");
+    expect(await archived()).toBe("first version");
+    await read(4, "first version");
+    expect(await materials()).toBe(1);
+    await read(5, "second version");
+    expect(await archived()).toBe("second version");
+    await read(6, "first version");
+    // The return to A is a change from B: a new event with the newest clock.
+    expect(await archived()).toBe("first version");
+    expect(await materials()).toBe(3);
+  });
+
   it("drops a fenced fan's rows from every write and keeps the page's own", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
