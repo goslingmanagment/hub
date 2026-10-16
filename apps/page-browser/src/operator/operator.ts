@@ -686,7 +686,15 @@ export class Operator {
       session: {
         fingerprint: () => this.hub.session.fingerprint,
         note: (request) => {
-          this.hub.noteSiteRequest(request);
+          const documents = this.site.documents;
+          const loader = documents.loaderOfRequest(request.networkId);
+          const current = documents.currentLoader(this.control.workTab?.mainFrameId ?? null);
+          // Only the work tab's current document supplies Hub headers.
+          // Unknown loaders keep their old behaviour, unless the tracker
+          // already knows the request's document was replaced.
+          if ((loader === null || loader === current) && !documents.replaced(documents.mark(request))) {
+            this.hub.noteSiteRequest(request);
+          }
           this.#siteShowedSession(request);
         },
       },
