@@ -535,41 +535,54 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     b.destroy();
   });
 
-  it("a socket that opens before the site's session is known goes too: it opens in the stream once the session is, after a gap over what it carried meanwhile", async () => {
+  it("a socket before the site's session keeps its verification and frames, in order under its own open, before a later frame", async () => {
     const w = await world();
     w.session.fingerprint = null;
     const client = await opened(w);
-    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"early"}' } }, "S1");
+    await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
+    const seqs: number[] = [];
+    w.cdp.on("Network.webSocketFrameReceived", (event) => seqs.push(event.seq));
+    const frames = ['{"t":1,"d":{}}', '{"t":2,"d":"early-1"}', '{"t":2,"d":"early-2"}'];
+    const seen = monoMs() - 5_000;
+    for (const [index, payloadData] of frames.entries()) w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (seen + index * 1_000) / 1000, response: { opcode: 1, payloadData } }, "S1");
     await w.buffer.flush();
     expect(w.events()).toEqual([]);
+    expect(seqs.every((seq) => !w.cdp.acks.includes(seq))).toBe(true);
     expect(w.journal.find((line) => line.event === "unkept")).toMatchObject({ connectionId: w.connectionOf() });
     w.session.fingerprint = FINGERPRINT;
     w.sockets.sessionKnown();
+    w.sockets.sessionKnown();
     w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: '{"t":2,"d":"kept"}' } }, "S1");
     await w.buffer.flush();
-    await until(() => w.events().length === 3, 3000, "the gap, the open and the frame");
+    await until(() => w.events().length === 6 && seqs.every((seq) => w.cdp.acks.includes(seq)), 3000, "the gap, the open and every frame durable and acknowledged");
     expect(w.events()).toMatchObject([
       { kind: "gap", reason: "ws_reconnect", fromSeq: null, fromWall: null },
       { kind: "ws.open", connectionId: w.connectionOf(), sessionFingerprint: FINGERPRINT },
-      { kind: "ws.in", frame: '{"t":2,"d":"kept"}' },
+      ...[...frames, '{"t":2,"d":"kept"}'].map((frame) => ({ kind: "ws.in", connectionId: w.connectionOf(), frame })),
     ]);
+    for (const [index, event] of w.events().slice(2, 5).entries()) {
+      expect(event.atMono as number).toBeLessThanOrEqual(seen + index * 1_000);
+      expect(event.atMono as number).toBeGreaterThanOrEqual(seen + index * 1_000 - w.sockets.clockOf("S1")!.spread - 1);
+    }
+    for (const seq of seqs) expect(w.cdp.acks.filter((ack) => ack === seq)).toHaveLength(1);
     client.destroy();
   });
 
-  it("a 101 before the site's session keeps its own stamp: a frame lost meanwhile stays under the next reconnect's gap", async () => {
+  it("a 101 and frame before the site's session keep their own stamps; the next reconnect starts from that frame", async () => {
     const w = await world();
     w.session.fingerprint = null;
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
     const answer = { mono: monoMs() - 10_000, wall: Date.now() - 10_000 };
     w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: answer.mono / 1000, response: { status: 101 } }, "S1");
-    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (answer.mono + 1_000) / 1000, response: { opcode: 1, payloadData: "lost before the session was known" } }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (answer.mono + 1_000) / 1000, response: { opcode: 1, payloadData: "before the session was known" } }, "S1");
     await w.buffer.flush();
     expect(w.events()).toEqual([]);
     w.session.fingerprint = FINGERPRINT;
     w.sockets.sessionKnown();
-    await until(() => w.events().length === 2, 3000, "the first gap and the deferred open");
+    await until(() => w.events().length === 3, 3000, "the first gap, the deferred open and frame");
     const open = w.events()[1]!;
+    const frame = w.events()[2]!;
     const spread = w.sockets.clockOf("S1")!.spread;
     expect(open.atMono as number).toBeLessThanOrEqual(answer.mono);
     expect(open.atMono as number).toBeGreaterThanOrEqual(answer.mono - spread - 1);
@@ -578,11 +591,66 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     w.cdp.emit("Network.webSocketClosed", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", timestamp: monoMs() / 1000, response: { status: 101 } }, "S1");
-    await until(() => w.events().length === 5, 3000, "the close and the next connection's gap and open");
-    expect(w.events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.close", "gap", "ws.open"]);
+    await until(() => w.events().length === 6, 3000, "the close and the next connection's gap and open");
+    expect(w.events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.close", "gap", "ws.open"]);
     const gaps = w.events().filter((event) => event.kind === "gap");
-    expect(gaps[1]).toMatchObject({ reason: "ws_reconnect", fromSeq: open.seq, fromWall: open.atWall });
-    expect(gaps[1]!.fromWall as number).toBeLessThanOrEqual(answer.wall + 1);
+    expect(gaps[1]).toMatchObject({ reason: "ws_reconnect", fromSeq: frame.seq, fromWall: frame.atWall });
+    expect(gaps[1]!.fromWall as number).toBeLessThanOrEqual(answer.wall + 1_001);
+  });
+
+  it.each(["closed", "detached", "Chrome gone"])("a socket %s before the session drops its held frames and acknowledges each once, leaving the loss covered", async (how) => {
+    const w = await world();
+    w.session.fingerprint = null;
+    const client = await opened(w);
+    await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
+    const seqs: number[] = [];
+    w.cdp.on("Network.webSocketFrameReceived", (event) => seqs.push(event.seq));
+    for (const payloadData of ['{"t":1,"d":{}}', "early-1", "early-2"]) w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData } }, "S1");
+    expect(seqs.every((seq) => !w.cdp.acks.includes(seq))).toBe(true);
+    if (how === "closed") w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
+    else if (how === "detached") w.cdp.emit("Target.detachedFromTarget", { sessionId: "S1" });
+    else w.sockets.endAll("a test");
+    await w.buffer.flush();
+    await until(() => seqs.every((seq) => w.cdp.acks.includes(seq)), 3000, "the dropped frames acknowledged");
+    expect(w.events().filter((event) => event.kind !== "gap")).toEqual([]);
+    w.session.fingerprint = FINGERPRINT;
+    w.sockets.sessionKnown();
+    await w.buffer.flush();
+    expect(w.events().filter((event) => event.kind !== "gap")).toEqual([]);
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", response: { status: 101 } }, "S1");
+    await until(() => w.events().some((event) => event.kind === "ws.open"), 3000, "the next open and its gap");
+    expect(w.events().filter((event) => event.kind === "gap")).toContainEqual(expect.objectContaining({ reason: "ws_reconnect", fromSeq: null, fromWall: null }));
+    for (const seq of seqs) expect(w.cdp.acks.filter((ack) => ack === seq)).toHaveLength(1);
+    client.destroy();
+  });
+
+  it.each(["1000 frames", "4 MiB"])("before the session, %s is the bound: passing it drops everything held, acknowledges it, and starts the loss before it", async (bound) => {
+    const w = await world();
+    w.session.fingerprint = null;
+    const client = await opened(w);
+    await until(() => w.sockets.clockOf("S1") !== null, 3000, "the session's calibration");
+    const seqs: number[] = [];
+    w.cdp.on("Network.webSocketFrameReceived", (event) => seqs.push(event.seq));
+    const frameCount = bound === "1000 frames" ? 1000 : 1;
+    // Non-ASCII text: the cap counts bytes, not JavaScript characters.
+    const payloadData = bound === "1000 frames" ? "early" : "я".repeat(2 * 1024 * 1024);
+    for (let index = 0; index < frameCount; index += 1) w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData } }, "S1");
+    expect(seqs.every((seq) => !w.cdp.acks.includes(seq))).toBe(true);
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: "past the bound" } }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: "still dropped" } }, "S1");
+    await until(() => seqs.every((seq) => w.cdp.acks.includes(seq)), 3000, "every dropped frame acknowledged");
+    w.session.fingerprint = FINGERPRINT;
+    w.sockets.sessionKnown();
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", response: { opcode: 1, payloadData: "after the session" } }, "S1");
+    await until(() => w.events().length === 3, 3000, "the gap, open and later frame");
+    expect(w.events()).toMatchObject([
+      { kind: "gap", reason: "ws_reconnect", fromSeq: null, fromWall: null },
+      { kind: "ws.open", connectionId: w.connectionOf() },
+      { kind: "ws.in", connectionId: w.connectionOf(), frame: "after the session" },
+    ]);
+    for (const seq of seqs) expect(w.cdp.acks.filter((ack) => ack === seq)).toHaveLength(1);
+    client.destroy();
   });
 
   it("the site's socket is no less the site's in any mode: the proxy refuses none, and only the exit closed stops its CONNECT", async () => {
@@ -720,6 +788,88 @@ describe("frames (plan §4.4)", () => {
 });
 
 describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
+  it.each(["A first", "B first"])("two open connections, %s ends: A's late frame dropped after its target goes stays under A's boundary, before B's later pong", async (order) => {
+    const w = await world();
+    const a = await opened(w, "WS1", "S2");
+    const b = await opened(w, "WS2", "S1");
+    await until(() => w.sockets.clockOf("S1") !== null && w.sockets.clockOf("S2") !== null, 3000, "both sessions calibrated");
+    const seen = monoMs() - 10_000;
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: seen / 1000, response: { opcode: 1, payloadData: "A at 10" } }, "S2");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS2", timestamp: (seen + 2_000) / 1000, response: { opcode: 1, payloadData: '{"t":0}' } }, "S1");
+    await until(() => w.events().length === 4, 3000, "both opens and frames saved");
+    const lastA = w.events()[2]!;
+    const lastB = w.events()[3]!;
+    expect(lastB.atWall as number).toBeGreaterThan(lastA.atWall as number);
+    if (order === "B first") w.cdp.emit("Network.webSocketClosed", { requestId: "WS2", timestamp: monoMs() / 1000 }, "S1");
+    w.cdp.emit("Target.detachedFromTarget", { sessionId: "S2" }, "S1");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: (seen + 1_000) / 1000, response: { opcode: 1, payloadData: "A at 11, delivered after the detach" } }, "S2");
+    if (order === "A first") w.cdp.emit("Network.webSocketClosed", { requestId: "WS2", timestamp: monoMs() / 1000 }, "S1");
+    const next = await opened(w, "WS3");
+    await until(() => w.events().length === 8, 3000, "both closes and the next gap and open");
+    const gap = w.events().find((event) => event.kind === "gap")!;
+    expect(gap).toMatchObject({ reason: "ws_reconnect", fromSeq: lastA.seq, fromWall: lastA.atWall });
+    expect(gap.fromWall as number).toBeLessThanOrEqual(lastA.atWall as number);
+    expect(w.events().filter((event) => event.kind === "ws.in")).toHaveLength(2);
+    a.destroy();
+    b.destroy();
+    next.destroy();
+  });
+
+  it("equal walls take the earlier connection's seq, even when it closes second", async () => {
+    const w = await world();
+    // No timestamp: each stamp is this Chrome's start, the same wall.
+    for (const requestId of ["WS1", "WS2"]) {
+      w.cdp.emit("Network.webSocketCreated", { requestId, url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId, response: { status: 101 } }, "S1");
+      w.cdp.emit("Network.webSocketFrameReceived", { requestId, response: { opcode: 1, payloadData: requestId } }, "S1");
+    }
+    await until(() => w.events().length === 4, 3000, "both connections saved at the same wall");
+    const lastA = w.events()[1]!;
+    expect(w.events()[3]!.atWall).toBe(lastA.atWall);
+    for (const requestId of ["WS2", "WS1"]) w.cdp.emit("Network.webSocketClosed", { requestId }, "S1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS3", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS3", response: { status: 101 } }, "S1");
+    await until(() => w.events().length === 8, 3000, "both closes, the gap and the next open");
+    expect(w.events()[6]).toMatchObject({ reason: "ws_reconnect", fromSeq: lastA.seq, fromWall: lastA.atWall });
+  });
+
+  it("an unkept connection's unknown boundary stays earlier than another connection's saved frame", async () => {
+    const w = await world();
+    const a = await opened(w);
+    await until(() => w.events().length === 1, 3000, "A's open saved");
+    w.session.fingerprint = null;
+    const b = await opened(w, "WS2", "S2");
+    await until(() => w.sockets.clockOf("S2") !== null, 3000, "B's session calibrated");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS2" }, "S2");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, payloadData: "A later" } }, "S1");
+    w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
+    w.session.fingerprint = FINGERPRINT;
+    const next = await opened(w, "WS3");
+    await until(() => w.events().length === 5, 3000, "A's frame and close, the next gap and open");
+    expect(w.events()[3]).toMatchObject({ reason: "ws_reconnect", fromSeq: null, fromWall: null });
+    a.destroy();
+    b.destroy();
+    next.destroy();
+  });
+
+  it("Chrome goes under two open connections: its gap starts at the earliest of their last saved frames", async () => {
+    const w = await world();
+    const a = await opened(w, "WS1", "S2");
+    const b = await opened(w, "WS2", "S1");
+    await until(() => w.sockets.clockOf("S1") !== null && w.sockets.clockOf("S2") !== null, 3000, "both sessions calibrated");
+    const seen = monoMs() - 10_000;
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: seen / 1000, response: { opcode: 1, payloadData: "A earlier" } }, "S2");
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS2", timestamp: (seen + 2_000) / 1000, response: { opcode: 1, payloadData: "B later" } }, "S1");
+    await until(() => w.events().length === 4, 3000, "both frames saved");
+    const lastA = w.events()[2]!;
+    w.sockets.endAll("a test");
+    await until(() => w.events().length === 7, 3000, "the browser's gap and both closes");
+    expect(w.events()[4]).toMatchObject({ kind: "gap", reason: "chrome_restart", fromSeq: lastA.seq, fromWall: lastA.atWall });
+    expect(w.events().slice(5).map((event) => event.kind)).toEqual(["ws.close", "ws.close"]);
+    a.destroy();
+    b.destroy();
+  });
+
   it("an iframe goes under an open connection: its one close and the next reconnect's gap, from the frame before the detach", async () => {
     const w = await world();
     const client = await opened(w, "WS1", "S2");
@@ -1388,6 +1538,58 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
 
   const eventsOf = (buffer: EventBuffer) => buffer.readEvents(0, 1000, 10_000_000).map((event) => JSON.parse(event.json) as Record<string, unknown>);
   const framesOf = (events: Array<Record<string, unknown>>) => events.filter((event) => event.kind === "ws.in").map((event) => (JSON.parse(String(event.frame)) as { d: string }).d);
+
+  it.each(["taken", "refused, then taken"])("frames before the live session hold their holder acks until durable; the open %s stays before them and every later frame", async (how) => {
+    const { chrome, holder, openBuffer, stored } = await holderWorld();
+    const buffer = openBuffer();
+    cleanups.push(() => buffer.close());
+    const controlled = new ControlledBuffer(buffer);
+    let fingerprint: string | null = null;
+    const { cdp, sockets, connectionOf } = await operatorSide(holder, controlled, { sessionFingerprint: () => fingerprint });
+    cleanups.push(() => cdp.close());
+    const acks = vi.spyOn(cdp, "ack");
+    const seqs: number[] = [];
+    cdp.on("Network.webSocketFrameReceived", (event) => seqs.push(event.seq));
+    tunnel(sockets);
+    handshake(chrome, "WS1");
+    answered(chrome, "WS1");
+    await until(() => sockets.clockOf("S1") !== null && stored() === 0, 3000, "the 101 taken without a live session");
+    chrome.event("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, payloadData: '{"t":1,"d":{}}' } }, "S1");
+    frame(chrome, "early-1");
+    frame(chrome, "early-2");
+    await until(() => seqs.length === 3 && stored() === 3, 3000, "all three frames held");
+    expect(eventsOf(buffer)).toEqual([]);
+    expect(acks.mock.calls.filter(([seq]) => seqs.includes(seq))).toEqual([]);
+    let refusing = how === "refused, then taken";
+    const appendGroup = controlled.appendGroup.bind(controlled);
+    vi.spyOn(controlled, "appendGroup").mockImplementation((items) => refusing ? { ok: false, reason: "buffer_full" } : appendGroup(items));
+    controlled.holding = true;
+    fingerprint = FINGERPRINT;
+    sockets.sessionKnown();
+    if (refusing) {
+      expect(eventsOf(buffer)).toEqual([]);
+      refusing = false;
+      sockets.retryNow();
+      await until(() => controlled.held.length === 1, 3000, "the retried open taken, its durability held");
+      expect(eventsOf(buffer).map((event) => event.kind)).toEqual(["gap", "ws.open"]);
+    }
+    frame(chrome, "later");
+    await until(() => seqs.length === 4, 3000, "the later frame taken");
+    if (how === "refused, then taken") {
+      expect(eventsOf(buffer).map((event) => event.kind)).toEqual(["gap", "ws.open"]);
+      controlled.release();
+    }
+    await until(() => controlled.held.length === (how === "taken" ? 5 : 4), 3000, "the writes held before their acknowledgements");
+    const events = eventsOf(buffer);
+    expect(events.map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.in", "ws.in", "ws.in"]);
+    expect(events.slice(1).every((event) => event.connectionId === connectionOf())).toBe(true);
+    expect(events.slice(2).map((event) => event.frame)).toEqual(['{"t":1,"d":{}}', ...["early-1", "early-2", "later"].map((d) => JSON.stringify({ t: 2, d }))]);
+    expect(stored()).toBe(4);
+    expect(acks.mock.calls.filter(([seq]) => seqs.includes(seq))).toEqual([]);
+    controlled.release();
+    await until(() => stored() === 0, 3000, "every frame acknowledged after its write is durable");
+    for (const seq of seqs) expect(acks.mock.calls.filter(([acked]) => acked === seq)).toHaveLength(1);
+  });
 
   it("a frame is acknowledged to the holder only once it is durable", async () => {
     const { chrome, holder, openBuffer, stored } = await holderWorld();

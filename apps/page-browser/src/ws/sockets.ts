@@ -24,7 +24,8 @@
 //    the connection kept in the buffer (schema.ts v3, attempt 0 — no
 //    admission is behind it) in the same commit. A socket that opens while no
 //    session is known yet is opened in the stream once one is, after a gap
-//    over what it carried meanwhile;
+//    over what it may have carried meanwhile; its incoming text frames wait
+//    in memory, with their stamps and their acknowledgements, until then;
 //  - `ws.in` — every incoming text frame as it is (Fansly's socket speaks
 //    text; a binary frame is counted, not kept);
 //  - `ws.close` — exactly one a connection, the last of it, after its
@@ -259,6 +260,23 @@ function unknownBoundary(): Mark {
   return { seq: null, wall: null };
 }
 
+/** The earlier loss stays: an unknown wall is before every known one;
+ *  equal walls take the earlier event (an unknown number first). */
+function earlierMark(left: Mark | null, right: Mark): Mark {
+  if (left === null) return right;
+  if (left.wall === null) return right.wall === null && (right.seq ?? -1) < (left.seq ?? -1) ? right : left;
+  if (right.wall === null || right.wall < left.wall || (right.wall === left.wall && (right.seq ?? -1) < (left.seq ?? -1))) return right;
+  return left;
+}
+
+/** An incoming text frame waiting for the site's live session. Its holder
+ *  acknowledgement waits for its write, or for it to be dropped. */
+interface WaitingFrame {
+  frame: string;
+  at: Stamp;
+  done: (written?: Promise<unknown>) => void;
+}
+
 /** A socket as CDP shows it to this operator: one connection. */
 interface CdpSocket {
   key: string;
@@ -281,6 +299,17 @@ interface CdpSocket {
   /** Its 101's stamp while no live session is known: opening later moves
    *  no boundary later. */
   openStamp: Stamp | null;
+  /** This connection's last open or frame (its number once durable), and
+   *  the last one saved. A close moves its boundary no later. */
+  last: Mark | null;
+  saved: Mark | null;
+  /** Before the live session: incoming text in CDP's order; null once the
+   *  bound was passed — no more kept until the session is known. */
+  frames: WaitingFrame[] | null;
+  frameBytes: number;
+  /** Frames already waiting for a refused open stay ahead of later ones,
+   *  even after a retry takes the open but before it is durable. */
+  frameWait: Promise<void> | null;
   /** The latest calibrated moment of its events (operator mono). */
   provenMono: number | null;
 }
@@ -308,6 +337,8 @@ interface Write {
 /** Sockets remembered at most (a site that leaks them). */
 const MAX_SOCKETS = 1000;
 const MAX_GONE = 1000;
+const MAX_WAITING_FRAMES = 1000;
+const MAX_WAITING_FRAME_BYTES = 4 * 1024 * 1024;
 
 function hostOf(url: string): string {
   try {
@@ -360,10 +391,6 @@ export class SiteSockets {
   #chromeGaps = 0;
   /** Every event of this Chrome comes after its start. */
   #chromeStarted = { mono: monoMs(), wall: wallMs() };
-  /** The last event of the socket's stream (ws.open, ws.in, ws.close). */
-  #last: Mark | null = null;
-  /** The last event of the socket's stream that is durable. */
-  #saved: { seq: number | null; wall: number | null } = { seq: null, wall: null };
   /** Settles once every write of the socket's stream accepted so far has
    *  settled (durable or not). */
   #settled: Promise<unknown> = Promise.resolve();
@@ -725,8 +752,8 @@ export class SiteSockets {
   }
 
   /** The site's live session became known: a socket that opened before it
-   *  opens in the stream at its 101's stamp, after a gap over what it
-   *  carried meanwhile. */
+   *  opens in the stream at its 101's stamp, after the reconnect's gap;
+   *  what waited of its frames follows, before anything later of it. */
   sessionKnown(): void {
     if (this.#deps.sessionFingerprint() === null) return;
     for (const socket of this.#sockets.values()) {
@@ -746,7 +773,11 @@ export class SiteSockets {
         if (socket.sessionId !== sessionId) continue;
         this.#endObserved(socket, null, "its target went");
         if (socket.state === "open" && socket.kept) this.#close(socket, "its target went", { mono: monoMs(), wall: wallMs() });
-        else socket.state = "ended";
+        else {
+          if (socket.state === "open") this.#uncover(socket.last ?? unknownBoundary());
+          this.#dropFrames(socket);
+          socket.state = "ended";
+        }
         this.#sockets.delete(key);
       }
     };
@@ -769,7 +800,11 @@ export class SiteSockets {
     // on their way).
     let lost = false;
     for (const socket of this.#sockets.values()) {
-      if (socket.state === "handshaking" || (socket.state === "open" && !socket.kept)) lost = true;
+      if (socket.state === "handshaking" || (socket.state === "open" && !socket.kept)) {
+        lost = true;
+        this.#uncover(socket.last ?? unknownBoundary());
+      }
+      this.#dropFrames(socket);
     }
     const open = [...this.#open.values()];
     if (open.length > 0 || lost) this.#closeAll(open, why, lost);
@@ -981,11 +1016,11 @@ export class SiteSockets {
     if (this.#sockets.size >= MAX_SOCKETS && !this.#forgetOneEnded()) {
       // Every one kept is alive: this one is not followed (its frames, if
       // it opens, are under the next connection's gap).
-      this.#uncovered ??= this.#last ?? unknownBoundary();
+      this.#uncover(unknownBoundary());
       this.#log("socket.not_followed", { why: `more than ${MAX_SOCKETS} sockets of the host alive at once` });
       return this.#drop("a socket past the bound of those followed");
     }
-    const socket: CdpSocket = { key, sessionId: event.sessionId ?? null, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, sendState: "new", kept: false, openStamp: null, provenMono: null };
+    const socket: CdpSocket = { key, sessionId: event.sessionId ?? null, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, sendState: "new", kept: false, openStamp: null, last: null, saved: null, frames: [], frameBytes: 0, frameWait: null, provenMono: null };
     this.#sockets.set(key, socket);
     this.#socketLog(event, socket, "created");
     return null;
@@ -1038,13 +1073,13 @@ export class SiteSockets {
   /** An open connection into the stream: its ws.open under the live
    *  session, kept in the buffer, after the reconnect's gap — one commit,
    *  tried until durable whatever becomes of the socket meanwhile. With no
-   *  live session known it waits (`sessionKnown`): what it carries until
-   *  then is under that gap. */
+   *  live session known it waits (`sessionKnown`), its incoming text held
+   *  until the open can go before it. */
   #keep(socket: CdpSocket, at: Stamp): Taken {
     const fingerprint = this.#deps.sessionFingerprint();
     if (fingerprint === null) {
       socket.openStamp = at;
-      this.#uncovered ??= this.#last ?? unknownBoundary();
+      this.#uncover(socket.last ?? unknownBoundary());
       this.#log("socket.unkept", { connectionId: socket.id, why: "no live session of the site known yet" });
       this.#deps.journal({ connectionId: socket.id, event: "unkept", detail: "no live session of the site known yet: opened in the stream once one is" });
       return null;
@@ -1063,9 +1098,12 @@ export class SiteSockets {
     this.#open.set(id, socket);
     this.#uncovered = null;
     const mark: Mark = { seq: null, wall: at.wall };
-    this.#last = mark;
-    const durable = this.#write(`open:${id}`, items, (written) => this.#saved_(written, mark));
+    socket.last = mark;
+    const durable = this.#write(`open:${id}`, items, (written) => this.#saved_(socket, written, mark));
     if (durable !== null) this.#settled = Promise.all([this.#settled, durable]);
+    for (const held of socket.frames ?? []) held.done(this.#frame(socket, held.frame, held.at)?.durable);
+    socket.frames = [];
+    socket.frameBytes = 0;
     return durable === null ? null : { durable };
   }
 
@@ -1073,7 +1111,7 @@ export class SiteSockets {
     const socket = this.#socket(event);
     if (socket === "other") return null;
     if (socket === "unknown") return this.#drop("a frame of a socket CDP did not show being created");
-    if (socket.state !== "open" || !socket.kept) return this.#drop("a frame of a socket not kept");
+    if (socket.state !== "open") return this.#drop("a frame of a socket not kept");
     const response = (event.params as { response?: { opcode?: unknown; payloadData?: unknown } }).response;
     if (response?.opcode !== 1 || typeof response.payloadData !== "string") {
       // Not text: Fansly's socket sends none; counted, its content not kept.
@@ -1082,20 +1120,64 @@ export class SiteSockets {
       return null;
     }
     const at = this.#at(event, socket);
-    const appended = this.#deps.buffer.append({ kind: "ws.in", connectionId: socket.id, frame: response.payloadData }, at);
+    if (!socket.kept) {
+      const bytes = Buffer.byteLength(response.payloadData);
+      if (socket.frames === null) return this.#drop("a frame after the bound while no live session is known");
+      if (socket.frames.length >= MAX_WAITING_FRAMES || socket.frameBytes + bytes > MAX_WAITING_FRAME_BYTES) {
+        this.#uncover(socket.last ?? unknownBoundary());
+        this.#dropFrames(socket);
+        return this.#drop("a frame past the bound while no live session is known");
+      }
+      const frame = response.payloadData;
+      const durable = new Promise<unknown>((done) => socket.frames!.push({ frame, at, done }));
+      socket.frameBytes += bytes;
+      return { durable };
+    }
+    return this.#frame(socket, response.payloadData, at);
+  }
+
+  /** What waited for the session goes before later frames of this
+   *  connection, even when its open is waiting for room or a retry. */
+  #frame(socket: CdpSocket, frame: string, at: Stamp): Taken {
+    const opening = socket.frameWait ?? this.#openWaits(socket.id);
+    if (opening !== undefined) {
+      socket.frameWait = opening;
+      const durable = opening.then(() => {
+        socket.frameWait = null;
+        return this.#appendFrame(socket, frame, at)?.durable;
+      });
+      this.#settled = Promise.all([this.#settled, durable]);
+      return { durable };
+    }
+    return this.#appendFrame(socket, frame, at);
+  }
+
+  #appendFrame(socket: CdpSocket, frame: string, at: Stamp): Taken {
+    const appended = this.#deps.buffer.append({ kind: "ws.in", connectionId: socket.id, frame }, at);
     if (!appended.ok) {
       // The buffer stops the page itself, and its own gap follows.
       this.#log("event.unkept", { kind: "ws.in", reason: appended.reason });
       return null;
     }
     const mark: Mark = { seq: null, wall: at.wall };
-    this.#last = mark;
+    socket.last = mark;
     const durable = appended.durable.then((written) => {
-      this.#saved_(written, mark);
+      this.#saved_(socket, written, mark);
       if (!written.ok) this.#log("event.unkept", { kind: "ws.in", reason: written.reason });
     });
     this.#settled = Promise.all([this.#settled, durable]);
     return { durable };
+  }
+
+  /** Nothing of what waited is written: every held acknowledgement goes.
+   *  Null keeps later frames from starting another wait on this socket. */
+  #dropFrames(socket: CdpSocket): void {
+    for (const held of socket.frames ?? []) {
+      this.#drop("a frame waiting for the site's live session");
+      held.done();
+    }
+    socket.frames = null;
+    socket.frameBytes = 0;
   }
 
   #onFrameSent(event: CdpEvent): Taken {
@@ -1150,6 +1232,8 @@ export class SiteSockets {
     switch (socket.state) {
       case "open":
         if (socket.kept) return this.#close(socket, "closed", this.#at(event, socket));
+        this.#uncover(socket.last ?? unknownBoundary());
+        this.#dropFrames(socket);
         socket.state = "ended";
         this.#deps.journal({ connectionId: socket.id, event: "closed", detail: "closed, never kept" });
         return null;
@@ -1168,11 +1252,17 @@ export class SiteSockets {
 
   // ── writes ─────────────────────────────────────────────────────────────
 
-  /** A durable event of the socket's stream: the last one saved. */
-  #saved_(written: Durable, mark: Mark): void {
+  /** A durable event of this connection: the last one saved. */
+  #saved_(socket: CdpSocket, written: Durable, mark: Mark): void {
     if (!written.ok || written.seq === null) return;
     mark.seq = written.seq;
-    if (this.#saved.seq === null || written.seq > this.#saved.seq) this.#saved = { seq: written.seq, wall: mark.wall };
+    if (socket.saved === null || socket.saved.seq === null || written.seq > socket.saved.seq) socket.saved = mark;
+  }
+
+  /** Several connections may leave losses behind: none moves another
+   *  connection's boundary later. */
+  #uncover(mark: Mark): void {
+    this.#uncovered = earlierMark(this.#uncovered, mark);
   }
 
   /** A connection's one terminal close (its kept row goes in the same
@@ -1186,21 +1276,21 @@ export class SiteSockets {
     // What may be missing until the next connection opens: from the last
     // event of the socket before this close — a moment saved before the
     // loss, not the close's (CDP may tell it late; a close of ours is now).
-    this.#uncovered ??= this.#last ?? unknownBoundary();
+    this.#uncover(socket.last ?? unknownBoundary());
     // The connection's last event: its number once the close is durable —
     // and, as a boundary, the moment of the last event received before it
     // (the open or a frame): a close moves no boundary later (Astra's
     // review of PR 15, round 6).
-    const previousWall = this.#last?.wall ?? this.#chromeStarted.wall;
+    const previousWall = socket.last?.wall ?? this.#chromeStarted.wall;
     const mark: Mark = { seq: null, wall: Math.min(stamp.wall, previousWall) };
-    this.#last = mark;
+    socket.last = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
     const durable = this.#end(
       connectionId,
       [{ event: { kind: "ws.close", connectionId, code: null, reason: null }, at: stamp, connection: { connectionId, gone: true } }],
-      (written) => this.#saved_(written, mark),
-      this.#openWaits(connectionId),
+      (written) => this.#saved_(socket, written, mark),
+      socket.frameWait ?? this.#openWaits(connectionId),
     );
     if (durable !== null) this.#settled = Promise.all([this.#settled, durable]);
     return durable === null ? null : { durable };
@@ -1215,12 +1305,11 @@ export class SiteSockets {
   }
 
   /** The browser goes under open connections, or under a socket that may
-   *  have spoken: the browser's gap — from the last event of the socket
-   *  saved before, once every write before it has settled — then the closes
+   *  have spoken: the browser's gap — from the earliest last event saved
+   *  of them, once every write before it has settled — then the closes
    *  of the open ones, in one commit, after their opens. */
   #closeAll(sockets: CdpSocket[], why: string, lost: boolean): void {
     const stamp = { mono: monoMs(), wall: wallMs() };
-    const mark: Mark = { seq: null, wall: this.#last?.wall ?? null };
     const ids: string[] = [];
     const before: Array<Promise<unknown>> = [this.#settled];
     for (const socket of sockets) {
@@ -1235,15 +1324,15 @@ export class SiteSockets {
       this.#deps.journal({ connectionId, event: "closed", detail: why });
     }
     if (ids.length === 0 && !lost) return;
-    // The browser's gap from the last event saved before — taken when the
-    // first try goes: every write before the closes has settled by then,
+    // The browser's gap from the earliest last event saved of them — taken
+    // when the first try goes: every write before the closes has settled by then,
     // and nothing of these connections comes after. What may be missing
     // until the next connection opens is from the same moment (unknown
     // until then — never the time of these closes).
     const from = unknownBoundary();
+    const uncovered = this.#uncovered;
+    for (const socket of sockets) this.#uncover(socket.last ?? unknownBoundary());
     let taken = false;
-    this.#uncovered ??= from;
-    this.#last = mark;
     const key = `chrome:${++this.#chromeGaps}`;
     for (const id of ids) this.#ending.set(id, key);
     this.#write(
@@ -1251,17 +1340,18 @@ export class SiteSockets {
       () => {
         if (!taken) {
           taken = true;
-          from.seq = this.#saved.seq;
-          from.wall = this.#saved.wall;
+          let earliest = uncovered;
+          for (const socket of sockets) earliest = earlierMark(earliest, socket.saved ?? unknownBoundary());
+          from.seq = earliest?.seq ?? null;
+          from.wall = earliest?.wall ?? null;
         }
         return [{ gap: "chrome_restart", from: { seq: from.seq, wall: from.wall } }, ...ids.map((connectionId): GroupItem => ({ event: { kind: "ws.close", connectionId, code: null, reason: null }, at: stamp, connection: { connectionId, gone: true } }))];
       },
-      (written) => {
+      () => {
         for (const id of ids) {
           this.#ending.delete(id);
           remember(this.#ended, id, true, MAX_GONE);
         }
-        this.#saved_(written, mark);
       },
       Promise.all(before),
     );
