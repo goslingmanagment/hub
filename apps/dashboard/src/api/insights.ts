@@ -57,7 +57,9 @@ export function useStatsMedia(
       params: { pageLabel },
       // Bounded on purpose: the sparklines need a handful of media with their
       // series, not the whole catalogue with a year of buckets.
-      query: { ...window, limit: 25, bucketLimit: 500 },
+      // The panels draw `daily` and read `windowViews`, both summed in SQL over
+      // the whole window; the raw per-source rows are not drawn, so none ride.
+      query: { ...window, limit: 25, bucketLimit: 1 },
     }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
   });

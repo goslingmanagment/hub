@@ -72,9 +72,9 @@ export function TopMediaPanel({
   const data = panelData(state);
 
   const rows = useMemo(() => {
-    // A bucket carries one row PER SOURCE (FYP and direct), so the day's views
-    // are their sum — plotting the rows one after another drew a zig-zag
-    // between the two sources instead of a trend.
+    // `daily` is one point per bucket with the sources (FYP + direct) summed
+    // in SQL — the raw rows are two per bucket, and plotting them one after
+    // another drew a zig-zag between the sources instead of a trend.
     const viewsByMedia = new Map<string, Map<string, number>>();
     const mediaWithHeads = new Set<string>();
     const servedKeys = new Set<string>();
@@ -82,24 +82,24 @@ export function TopMediaPanel({
     for (const media of data?.media ?? []) {
       mediaWithHeads.add(media.mediaOfferRef);
       const byBucket = new Map<string, number>();
-      for (const bucket of media.buckets) {
-        if (bucket.views === null) continue;
-        const key = bucketKey(bucket.bucketStart);
-        byBucket.set(key, (byBucket.get(key) ?? 0) + bucket.views);
+      for (const point of media.daily) {
+        if (point.views === null) continue;
+        const key = bucketKey(point.bucketStart);
+        byBucket.set(key, point.views);
         servedKeys.add(key);
         if (earliest === null || key < earliest) earliest = key;
       }
       viewsByMedia.set(media.mediaOfferRef, byBucket);
     }
     // One timeline for every row, so the sparklines line up by date. When the
-    // response ran out of bucket budget, each media got its NEWEST buckets
+    // response ran out of point budget, each media got its NEWEST points
     // first, so the shared line starts where the oldest served one does —
     // a hole before it would be a cut, not a quiet day.
     const window = data?.window;
     const timeline = window === undefined
       ? []
       : bucketTimeline(
-        data?.bucketsTruncated && earliest !== null ? { from: earliest, to: window.to } : window,
+        data?.dailyTruncated && earliest !== null ? { from: earliest, to: window.to } : window,
         window.periodMs,
         servedKeys,
       );
@@ -113,7 +113,7 @@ export function TopMediaPanel({
       series: seriesFor(entry.mediaOfferRef),
       missingSeriesLabel: !mediaWithHeads.has(entry.mediaOfferRef)
         ? "нет в каталоге"
-        : data?.bucketsTruncated === true
+        : data?.dailyTruncated === true
           ? "не вошло в ответ"
           : "нет данных за период",
     }));
@@ -359,15 +359,12 @@ export function ContentPerformancePanel({
   );
   const data = panelData(state);
 
-  const rows = useMemo(() => (data?.media ?? []).map((media) => {
-    let views: number | null = null;
-    for (const bucket of media.buckets) {
-      if (bucket.views !== null) {
-        views = (views ?? 0) + bucket.views;
-      }
-    }
-    return { media, views };
-  }), [data]);
+  // The window's total, summed in SQL. Summing the served rows here counted
+  // only what fitted the response's row budget — the newest ten days or so.
+  const rows = useMemo(
+    () => (data?.media ?? []).map((media) => ({ media, views: media.windowViews })),
+    [data],
+  );
 
   return (
     <AnalyticsPanel

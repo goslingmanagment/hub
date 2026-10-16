@@ -19,8 +19,10 @@ import {
   listInsightsCoverage,
   listInsightsHoldings,
   listInsightsMediaHeads,
+  listInsightsMediaDailyPoints,
   listInsightsMediaHeadsByRefs,
   listInsightsMediaTrafficBuckets,
+  listInsightsMediaWindowTotals,
   listInsightsPayoutMethods,
   listInsightsPayoutRequests,
   listInsightsPlatformTags,
@@ -104,6 +106,10 @@ const INVENTORY_ALBUM_SUM_BASIS =
  *  pathological page cannot produce an unbounded body. */
 const CATALOG_SIDECAR_LIMIT = 500;
 const TOP_WINDOW_LIMIT = 500;
+/** Per-media chart points (one per bucket, source codes summed) for the whole
+ *  response: 60 media over 90 daily buckets, with room. Bounded so an
+ *  arbitrary window cannot produce an unbounded body; a cut is flagged. */
+const MEDIA_DAILY_POINT_LIMIT = 6_000;
 const PER_POST_ROLLUP_LIMIT = 500;
 const LIKERS_LIMIT = 200;
 const MONTH_TOTALS_LIMIT = 500;
@@ -406,16 +412,46 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
     const heads = [...landingHeads, ...rankedHeads];
     const bucketLimit = request.query.bucketLimit;
-    const buckets = await listInsightsMediaTrafficBuckets(appContext.db, {
-      pageId: page.id,
-      mediaOfferRefs: heads.map((head) => head.mediaOfferRef),
-      periodMs: request.query.periodMs,
-      from: window.from,
-      to: window.to,
-      // One row over the budget is how truncation is DETECTED rather than
-      // guessed: a full page could always be exactly full by coincidence.
-      limit: bucketLimit + 1,
-    });
+    const headRefs = heads.map((head) => head.mediaOfferRef);
+    const [buckets, dailyPoints, windowTotals] = await Promise.all([
+      listInsightsMediaTrafficBuckets(appContext.db, {
+        pageId: page.id,
+        mediaOfferRefs: headRefs,
+        periodMs: request.query.periodMs,
+        from: window.from,
+        to: window.to,
+        // One row over the budget is how truncation is DETECTED rather than
+        // guessed: a full page could always be exactly full by coincidence.
+        limit: bucketLimit + 1,
+      }),
+      listInsightsMediaDailyPoints(appContext.db, {
+        pageId: page.id,
+        mediaOfferRefs: headRefs,
+        periodMs: request.query.periodMs,
+        from: window.from,
+        to: window.to,
+        limit: MEDIA_DAILY_POINT_LIMIT + 1,
+      }),
+      listInsightsMediaWindowTotals(appContext.db, {
+        pageId: page.id,
+        mediaOfferRefs: headRefs,
+        periodMs: request.query.periodMs,
+        from: window.from,
+        to: window.to,
+      }),
+    ]);
+    const dailyTruncated = dailyPoints.length > MEDIA_DAILY_POINT_LIMIT;
+    const dailyByMedia = new Map<string, Array<{
+      bucketStart: string;
+      views: number | null;
+      previewViews: number | null;
+    }>>();
+    for (const point of dailyTruncated ? dailyPoints.slice(0, MEDIA_DAILY_POINT_LIMIT) : dailyPoints) {
+      const list = dailyByMedia.get(point.mediaOfferRef) ?? [];
+      list.push({ bucketStart: iso(point.bucketStart), views: point.views, previewViews: point.previewViews });
+      dailyByMedia.set(point.mediaOfferRef, list);
+    }
+    const totalsByMedia = new Map(windowTotals.map((total) => [total.mediaOfferRef, total]));
     const bucketsTruncated = buckets.length > bucketLimit;
     const servedBuckets = bucketsTruncated ? buckets.slice(0, bucketLimit) : buckets;
     const bucketsByMedia = new Map<string, InsightsTrafficBucketRow[]>();
@@ -442,6 +478,11 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       media: heads.map((head) => ({
         ...mediaHeadToWire(head),
         buckets: (bucketsByMedia.get(head.mediaOfferRef) ?? []).map(trafficRowToWire),
+        windowViews: totalsByMedia.get(head.mediaOfferRef)?.views ?? null,
+        windowPreviewViews: totalsByMedia.get(head.mediaOfferRef)?.previewViews ?? null,
+        // Oldest first, as a series is read.
+        daily: (dailyByMedia.get(head.mediaOfferRef) ?? [])
+          .sort((left, right) => left.bucketStart.localeCompare(right.bucketStart)),
       })),
       top: top.map((row) => ({
         plane: row.plane,
@@ -463,6 +504,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       },
       coverage: coverage.map(coverageRowToWire),
       bucketsTruncated,
+      dailyTruncated,
       nextCursor: last === undefined
         ? null
         : encodeCursor([iso(last.lastObservedAt), last.mediaOfferRef]),

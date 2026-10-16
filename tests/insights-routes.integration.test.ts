@@ -811,6 +811,44 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     expect(body.bucketsTruncated).toBe(true);
   });
 
+  it("sums a media's sources per bucket and over the window, whatever the row budget", async (context) => {
+    if (!requireServer(context)) return;
+    // bucketLimit=1 cuts the RAW rows; the chart series and the window totals
+    // are aggregates in SQL and must not be a sum of whatever fitted.
+    const response = await get(
+      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}&bucketLimit=1`,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.bucketsTruncated).toBe(true);
+    expect(body.dailyTruncated).toBe(false);
+    type MediaRow = {
+      mediaOfferRef: string;
+      windowViews: number | null;
+      windowPreviewViews: number | null;
+      daily: Array<{ bucketStart: string; views: number | null; previewViews: number | null }>;
+    };
+    const media = new Map<string, MediaRow>(
+      body.media.map((row: MediaRow) => [row.mediaOfferRef, row]),
+    );
+
+    // FYP 500 + direct 120 on one day: one point, not two rows.
+    const sold = media.get("media-1")!;
+    expect(sold.daily).toEqual([
+      { bucketStart: "2026-08-10T00:00:00.000Z", views: 620, previewViews: 80 },
+    ]);
+    expect(sold.windowViews).toBe(620);
+    expect(sold.windowPreviewViews).toBe(80);
+
+    // A withheld preview counter stays null in the sum — never a zero.
+    const unsold = media.get("media-2")!;
+    expect(unsold.daily).toEqual([
+      { bucketStart: "2026-08-11T00:00:00.000Z", views: 80, previewViews: null },
+    ]);
+    expect(unsold.windowViews).toBe(80);
+    expect(unsold.windowPreviewViews).toBeNull();
+  });
+
   it("starts from the newest catalogue heads and still unions the ranked media", async (context) => {
     if (!requireServer(context)) return;
     const response = await get(
