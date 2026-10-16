@@ -303,9 +303,12 @@ export async function captureFanslyWsFrame(db: Database, input: {
   });
 }
 
+/** Settles a receipt from its decoded nodes. The nodes set the state and are
+ * not stored: nothing reads them, and decodeFanslyWsCapture(frame) of the
+ * journaled observation rebuilds them (storage audit 2026-10-16). */
 export async function settleFanslyWsDecode(db: Database, observationId: number, nodes: FanslyWsDecodeNode[]) {
   const state = nodes.some((n) => n.state !== "retained") ? "debt" : "retained";
-  await db.execute(sql`update fansly_ws_decode_receipts set nodes=${JSON.stringify(nodes)}::jsonb,
+  await db.execute(sql`update fansly_ws_decode_receipts set
     state=${state},decoded_at=clock_timestamp() where observation_id=${observationId} and state='pending'`);
 }
 

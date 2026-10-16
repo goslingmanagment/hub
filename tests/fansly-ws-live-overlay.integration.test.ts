@@ -150,8 +150,8 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
     await runMessageArchiveProjection(f.app);
     expect(await count("message_archive")).toBe(0);
 
-    expect(await query("select state, live_state, live_decoder_version from fansly_ws_decode_receipts"))
-      .toEqual([{ state: "retained", live_state: "applied", live_decoder_version: 1 }]);
+    expect(await query("select state, live_state, live_decoder_version, nodes from fansly_ws_decode_receipts"))
+      .toEqual([{ state: "retained", live_state: "applied", live_decoder_version: 1, nodes: null }]);
     // Idempotent per receipt: an acked receipt is never taken again.
     expect(await f.apply(observationId)).toEqual({ status: "not_pending" });
     expect(await listPendingFanslyWsLiveReceipts(f.app.db, { limit: 10 })).toEqual([]);
