@@ -96,7 +96,10 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(0);
     expect(await applyFanslyWsLiveReceipt(testDb.db, { observationId: id })).toMatchObject({ status: "debt" });
     const receipt = (await testDb.pool.query("select state,nodes,live_state from fansly_ws_decode_receipts")).rows[0];
-    expect(receipt.state).toBe("debt"); expect(receipt.nodes[2]).toMatchObject({ path: [1], state: "unknown" });
+    // The nodes decide the state and are not stored: the journaled frame
+    // rebuilds them (storage audit 2026-10-16).
+    expect(receipt.state).toBe("debt"); expect(receipt.nodes).toBeNull();
+    expect(decodeFanslyWsCapture(raw.frame)[2]).toMatchObject({ path: [1], state: "unknown" });
     // A service-5 type-1 event without a message is not a message: debt, and
     // no business event, overlay row or HTTP.
     expect(receipt.live_state).toBe("debt");
@@ -109,8 +112,8 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const id = await f.capture();
     await testDb.pool.query("update fansly_ws_decode_receipts set live_state='legacy' where observation_id=$1", [id]);
     expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(1);
-    expect((await testDb.pool.query("select state,live_state from fansly_ws_decode_receipts")).rows)
-      .toEqual([{ state: "debt", live_state: "legacy" }]);
+    expect((await testDb.pool.query("select state,live_state,nodes from fansly_ws_decode_receipts")).rows)
+      .toEqual([{ state: "debt", live_state: "legacy", nodes: null }]);
     expect(await applyFanslyWsLiveReceipt(testDb.db, { observationId: id })).toEqual({ status: "not_pending" });
   });
 

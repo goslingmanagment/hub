@@ -122,6 +122,10 @@ function appStub(overrides?: {
         }
         return { rows: [] };
       }),
+      // The census runs in a transaction; the stub hands the same db back.
+      async transaction<T>(this: { execute: unknown }, run: (tx: unknown) => Promise<T>): Promise<T> {
+        return run(this);
+      },
     },
     logger: { warn: vi.fn(), info: vi.fn() },
   } as never;
@@ -167,8 +171,9 @@ describe("runDbDiskUsageCheck", () => {
 
     expect(result).toMatchObject({ breached: true, thresholdPercent: 80, databaseBytes: 2 * GIB });
     expect(result).toMatchObject({ healthy: false, usedBytes: 90 * GIB, availableBytes: 10 * GIB });
-    // health upsert + capacity gauges + pg_database_size + runway history
-    expect(executeMock(app)).toHaveBeenCalledTimes(4);
+    // health upsert + capacity gauges + pg_database_size + its gauge + runway
+    // history, then the daily census: day probe, two timeouts, the census
+    expect(executeMock(app)).toHaveBeenCalledTimes(9);
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
@@ -293,6 +298,57 @@ describe("runDbDiskUsageCheck", () => {
     }
     // Sampling only: no incident is raised or resolved by the gauges.
     expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+  });
+
+  it("records the database size gauge and the daily storage census, once a day", async () => {
+    const app = appStub({ databaseBytes: 3 * GIB });
+    const now = new Date("2026-07-05T12:15:00.000Z");
+    await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 50 }),
+    });
+    const texts = executeMock(app).mock.calls.map((call) =>
+      extractSqlText(call[0] as { queryChunks?: Array<{ value?: string[] }> }));
+    const gauge = executeMock(app).mock.calls[3]![0] as { queryChunks?: unknown[] };
+    expect(extractQueryParams(gauge)).toEqual(["disk_pg_database_bytes", 3 * GIB, "p50", now]);
+    expect(texts.filter((text) => text.includes("insert into storage_relation_daily"))).toHaveLength(1);
+    const probe = texts.findIndex((text) => text.includes("select exists (select 1 from storage_relation_daily"));
+    expect(extractQueryParams(executeMock(app).mock.calls[probe]![0] as { queryChunks?: unknown[] }))
+      .toEqual(["2026-07-05"]);
+    // After every alert query: the census is last, under its lock timeout.
+    expect(probe).toBeGreaterThan(texts.findIndex((text) => text.includes("from ops_metric_samples")));
+    expect(texts).toContain("set local lock_timeout = '2s'");
+
+    // The day is already recorded: one probe, no census.
+    const again = appStub();
+    executeMock(again).mockImplementation(async (query: unknown) => {
+      const text = extractSqlText(query as { queryChunks?: Array<{ value?: string[] }> });
+      if (text.includes("from storage_relation_daily")) return { rows: [{ found: true }] };
+      if (text.includes("pg_database_size")) return { rows: [{ bytes: String(GIB) }] };
+      return { rows: [] };
+    });
+    await runDbDiskUsageCheck(again, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 50 }),
+    });
+    expect(executeMock(again).mock.calls.map((call) =>
+      extractSqlText(call[0] as { queryChunks?: Array<{ value?: string[] }> }))
+      .filter((text) => text.includes("insert into storage_relation_daily"))).toHaveLength(0);
+  });
+
+  it("keeps the disk alert working when the storage census fails", async () => {
+    const app = appStub();
+    executeMock(app).mockImplementation(async (query: unknown) => {
+      const text = extractSqlText(query as { queryChunks?: Array<{ value?: string[] }> });
+      if (text.includes("storage_relation_daily")) throw new Error("census down");
+      if (text.includes("pg_database_size")) return { rows: [{ bytes: String(GIB) }] };
+      return { rows: [] };
+    });
+    const result = await runDbDiskUsageCheck(app, {
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
+    });
+    expect(result).toMatchObject({ breached: true, databaseBytes: GIB });
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the disk alert working when the capacity-gauge insert fails", async () => {

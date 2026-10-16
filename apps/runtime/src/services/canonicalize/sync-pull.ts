@@ -862,6 +862,20 @@ function fanslyAutomationMarkers(message: Record<string, unknown>) {
 }
 
 /**
+ * The material of a Fansly `message.material_observed` head without the read
+ * that observed it: equal for two reads of an unchanged message. The engine
+ * compares a new draft's against the head of the event that last wrote the
+ * archive row, and drops the draft when they match — a head read returns the
+ * chat's newest 25 messages, so each message is read again on every new one,
+ * and every such read used to append a full copy of the same material (and a
+ * checkpoint) and rewrite the archive row (storage audit 2026-10-16).
+ */
+export function fanslyMaterialContentHash(head: Record<string, unknown>): string {
+  const { materialObservedAt: _observedAt, ...material } = head;
+  return contentHash(material);
+}
+
+/**
  * A17-4 VARIANT B: the archive learns about Fansly purchase material through
  * the channel it ALREADY understands. No archive column is added; the head
  * fills the existing ones (material head, media list, price_mills) exactly as
@@ -973,6 +987,11 @@ function materialDrafts(
       materialObservedAt: observation.receivedAt.toISOString(),
       originClass: "fansly_dm_sidecar",
     };
+    // The receipt clock stays in the fingerprint: material that changes and
+    // changes back (A → B → A) must reach the archive with the clock of the
+    // read that saw it last. Re-reads of UNCHANGED material are dropped before
+    // the append instead, by the engine against the archive's current head
+    // (fanslyMaterialContentHash, sync/fansly/resources/dm-messages.ts).
     const fingerprint = contentHash(head);
     drafts.push({
       type: "message.material_observed",

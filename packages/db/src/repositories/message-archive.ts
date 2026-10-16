@@ -179,7 +179,7 @@ async function applyReplyMaterial(
   // retrying the already-applied body is safe. Whole-head provenance stays put.
   await db.execute(sql`
     with current as materialized (
-      select id, in_reply_to_ref, reply_metadata,
+      select id, in_reply_to_ref, reply_metadata, reply_parent_observed_at, reply_root_observed_at,
         ${observesParent} and ${input.observedAt}::timestamptz >= coalesce(
           reply_parent_observed_at,
           case when in_reply_to_ref is not null then material_observed_at end,
@@ -214,21 +214,69 @@ async function applyReplyMaterial(
         || (case when accept_root then jsonb_build_object('rootMessageId', ${root}::text) else '{}'::jsonb end)
           as next_metadata
       from accepted
+    ), proposed as (
+      select id, accept_parent, accept_root,
+        case when accept_parent then ${parent}::text else in_reply_to_ref end as next_in_reply_to_ref,
+        case
+          when next_metadata->>'messageId' is null
+            and next_metadata->>'rootMessageId' is null then null
+          else next_metadata end as next_reply_metadata,
+        case when accept_parent
+          then ${input.observedAt}::timestamptz else reply_parent_observed_at end as next_parent_observed_at,
+        case when accept_root
+          then ${input.observedAt}::timestamptz else reply_root_observed_at end as next_root_observed_at
+      from merged
     )
     update ${target} as target set
-      in_reply_to_ref = case when merged.accept_parent then ${parent}::text else target.in_reply_to_ref end,
-      reply_metadata = case
-        when merged.next_metadata->>'messageId' is null
-          and merged.next_metadata->>'rootMessageId' is null then null
-        else merged.next_metadata end,
-      reply_parent_observed_at = case when merged.accept_parent
-        then ${input.observedAt}::timestamptz else target.reply_parent_observed_at end,
-      reply_root_observed_at = case when merged.accept_root
-        then ${input.observedAt}::timestamptz else target.reply_root_observed_at end,
+      in_reply_to_ref = proposed.next_in_reply_to_ref,
+      reply_metadata = proposed.next_reply_metadata,
+      reply_parent_observed_at = proposed.next_parent_observed_at,
+      reply_root_observed_at = proposed.next_root_observed_at,
       updated_at = now()
-    from merged where target.id = merged.id
-      and (merged.accept_parent or merged.accept_root)
+    from proposed where target.id = proposed.id
+      and (proposed.accept_parent or proposed.accept_root)
+      -- The same reply at the same clock (an event applied again) is no
+      -- change: no new row version.
+      and (target.in_reply_to_ref, target.reply_metadata,
+           target.reply_parent_observed_at, target.reply_root_observed_at)
+        is distinct from (proposed.next_in_reply_to_ref, proposed.next_reply_metadata,
+           proposed.next_parent_observed_at, proposed.next_root_observed_at)
   `);
+}
+
+/**
+ * The material head that last wrote each of these archive rows: the `head` of
+ * the `message.material_observed` event the row's source_event_id names, by
+ * message ref. A row whose last writer was another event type, or none, has
+ * no entry. The event is found by its primary key (id, occurred_at): a
+ * material event is dated by the message time the row also carries, so a
+ * clamped historical event (occurred_at moved to its receipt) is simply not
+ * found — the caller then writes as it always did.
+ */
+export async function listArchiveMaterialHeads(
+  db: Database,
+  input: { accountId: number; platform: string; messageRefs: readonly string[] },
+): Promise<Map<string, Record<string, unknown>>> {
+  const heads = new Map<string, Record<string, unknown>>();
+  if (input.messageRefs.length === 0) return heads;
+  const result = await db.execute<{ message_ref: string; head: Record<string, unknown> | null }>(sql`
+    select ma.message_ref, e.data -> 'head' as head
+    from message_archive ma
+    join domain_events e
+      on e.id = ma.source_event_id
+     and e.occurred_at = ma.occurred_at
+     and e.account_id = ma.account_id
+     and e.type = 'message.material_observed'
+    where ma.account_id = ${input.accountId}
+      and ma.platform = ${input.platform}
+      and ma.message_ref = any(${sql.param([...input.messageRefs])}::text[])
+  `);
+  for (const row of result.rows) {
+    if (row.head !== null && typeof row.head === "object" && !Array.isArray(row.head)) {
+      heads.set(row.message_ref, row.head);
+    }
+  }
+  return heads;
 }
 
 /**

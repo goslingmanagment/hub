@@ -162,8 +162,9 @@ describe("page-browser-update.sh check: a newer Chrome is fetched, verified, bui
     const buildCall = run.calls.find((call) => call.tool === "docker" && call.args[0] === "build")!;
     expect(buildCall.args).toEqual(expect.arrayContaining(["--build-arg", `CHROME_VERSION=${NEW}`, "--build-arg", "OPERATOR_VERSION=aaaaaaaaaaaa"]));
     expect(buildCall.args.some((arg) => arg.startsWith("vendor="))).toBe(true);
-    // Proposed, and nothing else: no page, no lever of the Hub.
-    expect(run.ops).toEqual([`docker build ${NEW_TAG}`]);
+    // Proposed, and nothing else: no page, no lever of the Hub — only the
+    // prune after the build, down to the build cache.
+    expect(run.ops).toEqual([`docker build ${NEW_TAG}`, "builder prune --force --filter until=168h"]);
     expect(run.calls.some((call) => call.tool === "page.sh" || (call.tool === "docker" && call.args.includes("compose")))).toBe(false);
     const proposed = host.journal().find((line) => line.event === "proposed")!;
     expect(proposed.detail).toContain(`its image ${NEW_TAG} is built. No page is updated by itself (owner decision №15 is open)`);
@@ -365,11 +366,23 @@ describe("build and prune", () => {
     }
     const run = host.run(["prune"]);
     expect(run.status, run.stderr).toBe(0);
-    expect(run.ops).toEqual([`image rm ${tags[1]!.tag}`]);
+    // The build cache older than a week goes with them (the images' own layers are not cache).
+    expect(run.ops).toEqual([`image rm ${tags[1]!.tag}`, "builder prune --force --filter until=168h"]);
     expect(Object.keys(host.state().images).sort()).toEqual([tags[0]!.tag, tags[2]!.tag, tags[3]!.tag, tags[4]!.tag, "hub-page-browser:stand"].sort());
     expect(readdirSync(chrome).filter((name) => name.endsWith(".deb")).sort()).toEqual(
       [tags[0]!, tags[2]!, tags[3]!, tags[4]!].map(({ version }) => `google-chrome-stable_${version}_amd64.deb`).sort(),
     );
+  });
+});
+
+describe("the build cache", () => {
+  it("a build cache prune that fails is a warning: the prune still succeeds", () => {
+    host = makeHost((state) => {
+      state.behaviour = { ...(state.behaviour ?? {}), builderPruneFails: true };
+    });
+    const run = host.run(["prune"]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toContain("the build cache could not be pruned");
   });
 });
 

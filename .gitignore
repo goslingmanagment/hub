@@ -42,6 +42,10 @@ docs/runbooks/*
 !docs/runbooks/ofapi-credit-reconciliation.md
 # AI media describer: switches, stops, custody exception and read-only checks.
 !docs/runbooks/ai-media-describe.md
+# Read-only production storage census. Tracked because a test runs its SQL
+# on the migrated schema: a census that no longer parses is found in CI, not
+# on the server.
+!docs/runbooks/storage-census.sql
 *.sql.gz
 
 # Local mockup/reference artifacts

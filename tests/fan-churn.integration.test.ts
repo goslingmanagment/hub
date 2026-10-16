@@ -126,15 +126,32 @@ describe("fan writers do not rewrite unchanged rows (diag 2026-09-11)", () => {
     const v7 = await pageFanVersion(fan!.id, page.id);
     expect(v7.xmin).toBe(v6.xmin);
 
-    // Older than the refresh window: last_seen_at moves again.
+    // Older than the refresh window, unchanged state: the refreshes leave the
+    // row alone. They reach every fan of the page, most of them fans the walk
+    // never saw (storage audit 2026-10-16); the walk's own upsertFanPages is
+    // what refreshes a fan it saw.
     await harness.pool.query(
       "update page_fans set last_seen_at = now() - interval '2 minutes' where fan_id = $1 and platform_account_id = $2",
       [fan!.id, page.id],
     );
+    const staleRow = await pageFanVersion(fan!.id, page.id);
     await refreshFanPageFollowerState(harness.db, page.id);
+    await refreshFanPageSubscriberState(harness.db, page.id);
     const v8 = await pageFanVersion(fan!.id, page.id);
-    expect(v8.xmin).not.toBe(v7.xmin);
-    expect(Date.now() - v8.last_seen_at.getTime()).toBeLessThan(60_000);
+    expect(v8.xmin).toBe(staleRow.xmin);
+    expect(v8.last_seen_at.getTime()).toBe(staleRow.last_seen_at.getTime());
+
+    await upsertFanPages(harness.db, [{ ...membership, isSubscriber: false }]);
+    const v9 = await pageFanVersion(fan!.id, page.id);
+    expect(v9.xmin).not.toBe(v8.xmin);
+    expect(Date.now() - v9.last_seen_at.getTime()).toBeLessThan(60_000);
+
+    // A state change still writes and stamps the row.
+    await harness.pool.query("update page_follows set is_active = false where platform_account_id = $1", [page.id]);
+    await refreshFanPageFollowerState(harness.db, page.id);
+    const v10 = await pageFanVersion(fan!.id, page.id);
+    expect(v10.is_follower).toBe(false);
+    expect(v10.xmin).not.toBe(v9.xmin);
   });
 });
 

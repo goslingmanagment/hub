@@ -259,6 +259,7 @@ export function op(call: Call): string | null {
   if (a[0] === "exec" && a.includes("node") && a.some((arg) => arg.endsWith("pb-profile-check.mjs"))) return "profile-check";
   if (a[0] === "build") return `docker build ${a[a.indexOf("-t") + 1]}`;
   if (a[0] === "image" && a[1] === "rm") return `image rm ${a[a.length - 1]}`;
+  if (a[0] === "builder" && a[1] === "prune") return `builder prune ${a.slice(2).join(" ")}`;
   return null;
 }
 

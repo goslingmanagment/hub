@@ -1043,6 +1043,14 @@ export async function deactivatePageFollowsMissingFromSnapshot(
     ));
 }
 
+/**
+ * The page's follower flags from its active follows. Writes only rows whose
+ * flags change (and stamps `last_seen_at` on them). It does not refresh
+ * `last_seen_at` on unchanged rows: it reads every page_fans row of the page,
+ * most of them fans this walk never saw, and the walk's own upsertFanPages
+ * already refreshes the fans it did see. Refreshing them here rewrote the
+ * whole page every walk (storage audit 2026-10-16).
+ */
 export async function refreshFanPageFollowerState(db: Database, platformAccountId: number) {
   await db.execute(sql`
     with active as (
@@ -1069,7 +1077,6 @@ export async function refreshFanPageFollowerState(db: Database, platformAccountI
       and (
         fp.is_follower is distinct from (resolved.active_followed_at is not null)
         or fp.follower_since is distinct from resolved.active_followed_at
-        or ${lastSeenIsStale(sql`fp.last_seen_at`)}
       )
   `);
 }
@@ -1529,6 +1536,16 @@ async function retireCurrentPageSubscriptions(db: Database, platformAccountId: n
   return ids.length;
 }
 
+/**
+ * The page's subscriber fields from its current subscriptions, written only
+ * where they change. Like refreshFanPageFollowerState it never refreshes
+ * `last_seen_at` on an unchanged row: the second statement reaches every fan
+ * of the page who is not a current subscriber — fans the subscribers sweep
+ * never saw — and refreshing them rewrote nearly all of page_fans on every
+ * sweep (a production census of 2026-10-16 put ~8 M rows and 2.2 GB of WAL
+ * since 10 October on that statement). The sweep's upsertFanPages refreshes
+ * the subscribers it saw.
+ */
 export async function refreshFanPageSubscriberState(db: Database, platformAccountId: number) {
   await db.execute(sql`
     update page_fans fp
@@ -1564,7 +1581,6 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         or fp.subscription_expires_at is distinct from active.active_subscription_expires_at
         or fp.auto_renew is distinct from active.active_auto_renew
         or fp.auto_renew_off_detected_at is distinct from active.active_auto_renew_off_detected_at
-        or ${lastSeenIsStale(sql`fp.last_seen_at`)}
       )
   `);
   await db.execute(sql`
@@ -1588,7 +1604,6 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         or subscription_expires_at is not null
         or auto_renew is not null
         or auto_renew_off_detected_at is not null
-        or ${lastSeenIsStale(sql`last_seen_at`)}
       )
   `);
 }

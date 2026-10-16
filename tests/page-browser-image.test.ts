@@ -366,6 +366,10 @@ describe("the page's container (docker-compose.page-browser.yml)", () => {
     expect(compose).toContain("hostname: pb-${PB_PROFILE_ID}");
   });
 
+  it("bounds its container log (storage audit 2026-10-16)", () => {
+    expect(compose).toContain('    logging:\n      driver: local\n      options:\n        max-size: "10m"\n        max-file: "3"\n');
+  });
+
   it("stays out of Hub's stack", () => {
     // Hub's deploy refuses any service but api, worker, scheduler, sync and
     // postgres, and its stack scope recreates PostgreSQL.

@@ -1578,7 +1578,6 @@ export const syncRawPayloads = pgTable(
     responseTips: jsonbSafe("response_tips").$type<{ tips: unknown }>(),
   },
   (table) => ({
-    retainIdx: index("sync_raw_payloads_retain_idx").on(table.retainUntil),
     dmTipContextBackfillIdx: index("sync_raw_payloads_dm_tip_context_backfill_idx")
       .on(table.id)
       .where(sql`${table.endpoint} = 'dm_messages' and ${table.payloadKind} = 'dm_messages'`),
@@ -1817,7 +1816,6 @@ export const pageFans = pgTable(
   },
   (table) => ({
     uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),
-    platformAccountIdx: index("page_fans_platform_account_idx").on(table.platformAccountId),
     externalPresenceIdx: index("page_fans_external_presence_idx").on(
       table.platformAccountId,
       table.externalPresenceAt,
@@ -1860,11 +1858,6 @@ export const pageFanExternalNotes = pgTable(
       table.platformAccountId,
       table.provider,
       table.externalNoteId,
-    ),
-    pageFanProviderIdx: index("page_fan_external_notes_page_fan_provider_idx").on(
-      table.platformAccountId,
-      table.fanId,
-      table.provider,
     ),
     pageFanProviderActiveIdx: index("page_fan_external_notes_page_fan_provider_active_idx").on(
       table.platformAccountId,
@@ -2476,12 +2469,6 @@ export const ofapiCommands = pgTable(
     verifierCandidateIdx: index("ofapi_commands_verifier_candidate_idx")
       .on(table.ofapiAccountId, table.conversationId, table.attemptStartedAt)
       .where(sql`${table.state} in ('in_flight', 'indeterminate')`),
-    payloadRedactionIdx: index("ofapi_commands_payload_redaction_idx")
-      .on(table.updatedAt)
-      .where(sql`
-        ${table.payloadRedactedAt} is null
-        and ${table.state} in ('confirmed', 'failed_retryable', 'failed_terminal', 'cancelled')
-      `),
     retryCommandFk: foreignKey({
       name: "ofapi_commands_retry_of_command_id_fk",
       columns: [table.retryOfCommandId],
@@ -2536,6 +2523,36 @@ export const opsMetricSamples = pgTable("ops_metric_samples", {
   quantile: text("quantile").notNull(),
   sampledAt: timestamp("sampled_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// 0285: one row per table per UTC day — size on disk and cumulative pg_stat
+// write counters; partitions roll up into their root. Written once a day by
+// the hourly disk check (repositories/storage-census.ts).
+export const storageRelationDaily = pgTable(
+  "storage_relation_daily",
+  {
+    sampledOn: date("sampled_on").notNull(),
+    relation: text("relation").notNull(),
+    partitions: integer("partitions").notNull(),
+    heapBytes: bigint("heap_bytes", { mode: "number" }).notNull(),
+    toastBytes: bigint("toast_bytes", { mode: "number" }).notNull(),
+    indexBytes: bigint("index_bytes", { mode: "number" }).notNull(),
+    totalBytes: bigint("total_bytes", { mode: "number" }).notNull(),
+    liveTuples: bigint("live_tuples", { mode: "number" }).notNull(),
+    deadTuples: bigint("dead_tuples", { mode: "number" }).notNull(),
+    inserts: bigint("inserts", { mode: "number" }).notNull(),
+    updates: bigint("updates", { mode: "number" }).notNull(),
+    hotUpdates: bigint("hot_updates", { mode: "number" }).notNull(),
+    deletes: bigint("deletes", { mode: "number" }).notNull(),
+    sampledAt: timestamp("sampled_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "storage_relation_daily_pkey",
+      columns: [table.sampledOn, table.relation],
+    }),
+    relationIdx: index("storage_relation_daily_relation_idx").on(table.relation, table.sampledOn.desc()),
+  }),
+);
 
 export const transactions = pgTable(
   "transactions",
@@ -2637,10 +2654,6 @@ export const revenueDaily = pgTable(
       table.businessDate,
       table.canonicalType,
       table.transactionState,
-    ),
-    accountDateIdx: index("revenue_daily_account_date_idx").on(
-      table.platformAccountId,
-      table.businessDate,
     ),
   }),
 );
@@ -4097,7 +4110,6 @@ export const ofapiCreditLedger = pgTable(
     attemptEntryPhase: text("attempt_entry_phase").$type<"settlement" | "certainty_adjustment">(),
   },
   (table) => ({
-    occurredAtIdx: index("ofapi_credit_ledger_occurred_at_idx").on(table.occurredAt),
     sourceOccurredAtIdx: index("ofapi_credit_ledger_source_occurred_at_idx")
       .on(table.source, table.occurredAt),
     // A4: cover the owner ledger list's filtered + ordered + paginated paths
@@ -4314,7 +4326,6 @@ export const runtimeInstances = pgTable(
       name: "runtime_instances_pkey",
       columns: [table.role, table.instanceId],
     }),
-    lastSeenIdx: index("runtime_instances_last_seen_idx").on(table.lastSeenAt),
   }),
 );
 
@@ -5217,7 +5228,6 @@ export const aiAcceptanceEvents = pgTable(
       table.lifecycle,
       table.occurredAt,
     ),
-    generationIdx: index("ai_acceptance_events_generation_idx").on(table.generationRef),
   }),
 );
 
@@ -6135,10 +6145,6 @@ export const messageMediaOffers = pgTable(
       name: "message_media_offers_pkey",
       columns: [table.pageId, table.messageRef, table.offerOrdinal],
     }),
-    pageMessageIdx: index("message_media_offers_page_message_idx").on(
-      table.pageId,
-      table.messageRef,
-    ),
   }),
 );
 
