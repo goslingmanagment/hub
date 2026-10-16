@@ -33,9 +33,9 @@ import {
 // identity read under the live session» — only once the site showed that
 // session in a document loaded after the mode last changed: the session that
 // exists after the person's login (Astra's review of PR 16, rounds 2–3).
-// Until the new document's own authorized GET, Hub requests wait for its
-// headers; a late GET of the replaced document cannot supply them.
-// The document is Chrome's loader: the one named
+// Until the new document's own authorized GET, the Hub requests' headers may
+// still be the session of before the login; a late GET of the replaced
+// document still carries it. The document is Chrome's loader: the one named
 // in answer to the navigation started after the change.
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -206,16 +206,12 @@ let readN = 9700;
 /** The engine's account read under `fingerprint`, answered with `account` —
  *  asked again when it did not go at all (the page's one request in flight
  *  still the site's last, the gate busy with it), as the engine asks again. */
-async function accountRead(s: SetUp, fingerprint: string, account: string, expected: "response" | "no_template" = "response"): Promise<void> {
+async function accountRead(s: SetUp, fingerprint: string, account: string): Promise<void> {
   s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: account } } }));
   for (let tries = 0; ; tries++) {
     const attemptId = ++readN;
     s.engine.send({ type: "send", ownerGeneration: 1, attemptId, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
     const outcome = (await s.engine.waitFor("result", (message) => message.attemptId === attemptId, 10_000)).outcome as { kind: string; sent?: boolean; refusal?: string };
-    if (expected === "no_template") {
-      expect(outcome).toMatchObject({ kind: "transport_error", sent: false, message: expect.stringContaining("the site's new document made no API request with authorization yet") });
-      return;
-    }
     if (((outcome.kind === "transport_error" && outcome.sent === false) || outcome.kind === "aborted_before_send") && tries < 3) {
       await pause(200);
       continue;
@@ -238,7 +234,7 @@ async function loginAndBack(s: SetUp): Promise<void> {
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("a profile no page has yet: its account read confirms only the session that exists after the login (PR 16, Astra's round 2)", () => {
-  it("waits for the new document's session after the login; once the site shows it, a read under it is confirmed — whatever account it names", async () => {
+  it("never on the session of before the login its headers still carry; once the site shows the new one, a read under it is confirmed — whatever account it names", async () => {
     const s = await setUp();
     const a = sessionFingerprint(TOKEN_A, CLIENT);
     const b = sessionFingerprint(TOKEN_B, CLIENT);
@@ -247,10 +243,10 @@ describe("a profile no page has yet: its account read confirms only the session 
     await s.engine.waitFor("siteDone", () => true, 10_000);
     // A person logs the browser into account B; the automation is back, the
     // site loaded anew — and it has made no authorized request yet: the Hub
-    // request has no template, even though the fingerprint is still A's.
+    // request's headers are still A's.
     await loginAndBack(s);
     expect(s.operator.state.sessionFingerprint).toBe(a);
-    await accountRead(s, a, ACCOUNT_A, "no_template");
+    await accountRead(s, a, ACCOUNT_A);
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
     // The new document's own read shows B: A's read confirms nothing.
@@ -265,7 +261,7 @@ describe("a profile no page has yet: its account read confirms only the session 
     expect(s.operator.state).toMatchObject({ sessionFingerprint: b, accountId: ACCOUNT_B });
   });
 
-  it("waits for the new document to show the same session again, then confirms a read under it", async () => {
+  it("a read that went before the site showed its session again is confirmed once the new document shows that same session", async () => {
     const s = await setUp();
     const a = sessionFingerprint(TOKEN_A, CLIENT);
     siteRead(s, TOKEN_A);
@@ -273,11 +269,10 @@ describe("a profile no page has yet: its account read confirms only the session 
     await s.engine.waitFor("siteDone", () => true, 10_000);
     // The person logged in to the same account (the session unchanged).
     await loginAndBack(s);
-    await accountRead(s, a, ACCOUNT_A, "no_template");
+    await accountRead(s, a, ACCOUNT_A);
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
     await siteReadDone(s, TOKEN_A);
-    await accountRead(s, a, ACCOUNT_A);
     await until(() => s.operator.page.step === "ready", 10_000, "confirmed once shown");
     expect(s.operator.state).toMatchObject({ sessionFingerprint: a, accountId: ACCOUNT_A });
   });
@@ -319,8 +314,8 @@ describe("a profile no page has yet: its account read confirms only the session 
     // Later still, after the new document committed: another of the old one's.
     siteRead(s, TOKEN_A, old);
     await pause(200);
-    // Neither late GET can supply the new document's template.
-    await accountRead(s, a, ACCOUNT_A, "no_template");
+    // The Hub request's headers are A's: a read under them confirms nothing.
+    await accountRead(s, a, ACCOUNT_A);
     await pause(300);
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId === ACCOUNT_A && atLeastConfirmed(s)).toBe(false);

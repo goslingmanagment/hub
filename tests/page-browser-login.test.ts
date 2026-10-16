@@ -835,11 +835,8 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     const loads = s.model.navigations.length;
     expect(await command(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
     await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
-    // The new document's own first API read (as the site's load makes it):
-    // Hub's headers are learned from it, not from the document before.
-    const loadedEndsA = s.engine.of("siteDone").length;
-    siteRead(s, token, SITE_CLIENT);
-    await until(() => s.engine.of("siteDone").length > loadedEndsA, WAIT_MS, "the new document's read ended");
+    // No read of the new document's own first: before the identity read its
+    // authorized GETs sit behind preflights the engine refuses (pilot 2).
     s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
     s.engine.send({ type: "send", ownerGeneration: 1, attemptId: 9701, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
     await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
@@ -889,11 +886,8 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     expect(s.operator.page.step).toBe("site_loaded");
     expect(s.operator.state.accountId).toBeNull();
-    // The new document's own first API read (as the site's load makes it):
-    // Hub's headers are learned from it, not from the document before.
-    const loadedEndsB = s.engine.of("siteDone").length;
-    siteRead(s, token, SITE_CLIENT);
-    await until(() => s.engine.of("siteDone").length > loadedEndsB, WAIT_MS, "the new document's read ended");
+    // No read of the new document's own first: before the identity read its
+    // authorized GETs sit behind preflights the engine refuses (pilot 2).
     // A fresh identity read under the live session: ready again.
     s.engine.send(identity(9503));
     await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready again");

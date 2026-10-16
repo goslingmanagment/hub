@@ -590,20 +590,23 @@ describe("the session (plan §4.7)", () => {
     expect(w.alarms).toEqual([]);
   });
 
-  it("pilot 2 (2026-10-16): the work tab's new document has no socket yet — Hub waits for its first API request and goes with its headers, without the old fansly-session-id", async () => {
+  it("pilot 2 (2026-10-16): the work tab's new document has no socket yet — Hub goes at once with the session's headers but not the old fansly-session-id, and takes it again once the document shows one", async () => {
     const w = await world();
     w.chrome.navigate("https://fansly.com/");
-    // The session goes on; its headers were the old document's.
+    // No wait for the new document's own request: before the identity read
+    // its authorized GETs sit behind preflights the engine refuses.
     expect(w.hub.session.fingerprint).not.toBeNull();
-    const early = send(w);
-    expect(await outcomeOf(w, early.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: expect.stringContaining("the site's new document made no API request with authorization yet") });
-    expect(w.chrome.issued).toEqual([]);
-    const { "fansly-session-id": _socketless, ...fresh } = siteHeaders();
-    w.chrome.siteRequest(ME, fresh);
-    const message = send(w);
-    await outcomeOf(w, message.attemptId);
+    const first = send(w);
+    await outcomeOf(w, first.attemptId);
     expect(w.chrome.issued).toHaveLength(1);
-    expect(w.chrome.issued[0]!.headers.map(([name]) => name)).not.toContain("fansly-session-id");
+    const names = w.chrome.issued[0]!.headers.map(([name]) => name);
+    expect(names).toContain("authorization");
+    expect(names).not.toContain("fansly-session-id");
+    // Its socket up, the new document's request shows a session id again.
+    w.chrome.siteRequest(ME, siteHeaders());
+    const second = send(w);
+    await outcomeOf(w, second.attemptId);
+    expect(w.chrome.issued[1]!.headers.map(([name]) => name)).toContain("fansly-session-id");
     expect(w.faults).toEqual([]);
   });
 });

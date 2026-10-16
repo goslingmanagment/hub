@@ -978,7 +978,8 @@ export class HubRequests {
     const count = (this.#navigations.get(event.sessionId) ?? 0) + 1;
     this.#navigations.set(event.sessionId, count);
     // The work tab's new document sends no fansly-session-id until its
-    // socket is up: Hub's headers are learned from it anew (pilot 2).
+    // socket is up: Hub's go without it until the new document shows one
+    // (pilot 2).
     if (event.sessionId === this.#deps.site.tabSession()) this.session.newDocument();
     // Requests of the old document that still wait are failed now: released
     // later, Chrome would not send them, nor say they ended (amendment 30).

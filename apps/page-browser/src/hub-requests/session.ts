@@ -215,8 +215,7 @@ export class SiteSession {
   headersFor(pathname: string, extra: Record<string, string>): BuiltHeaders {
     const template = this.#template;
     const fingerprint = this.#fingerprint;
-    if (fingerprint === null) return { ok: false, why: "no live session of the site yet: it made no API request with authorization" };
-    if (template === null) return { ok: false, why: "the site's new document made no API request with authorization yet" };
+    if (template === null || fingerprint === null) return { ok: false, why: "no live session of the site yet: it made no API request with authorization" };
     if (this.#checkOk === false) return { ok: false, why: "the site computes fansly-client-check another way than the operator: the transport is not ready" };
     if (this.#parityBroken) return { ok: false, why: "a Hub request's headers differed from the site's: the transport is not ready" };
     const clientId = header(template, "fansly-client-id") ?? "";
@@ -252,12 +251,14 @@ export class SiteSession {
   }
 
   /** The work tab's document was replaced: the session goes on (its
-   *  fingerprint stays), but the headers were the old document's — the new
-   *  one has no socket yet, so no fansly-session-id. Hub requests wait for
-   *  its first API request with authorization, and the names it sent are
-   *  compared afresh. A broken parity stays broken. */
+   *  fingerprint and its headers stay), but the new document has no socket
+   *  yet, so no fansly-session-id — Hub's requests go without it until the
+   *  new document's own request shows one. Not waiting for that request:
+   *  before the identity read its authorized GETs sit behind preflights the
+   *  engine refuses (pilot 2, 2026-10-16). The names it sent are compared
+   *  afresh; a broken parity stays broken. */
   newDocument(): void {
-    this.#template = null;
+    this.#template = this.#template?.filter(([name]) => name.toLowerCase() !== "fansly-session-id") ?? null;
     this.#siteNames.clear();
     this.#hubNames.clear();
   }
