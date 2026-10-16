@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { FanslySendAuditRow } from "@agency_hub_core/db";
+import { SYNC_SEND_WINDOW_MS, type FanslySendAuditRow } from "@agency_hub_core/db";
 
 import {
   auditPagePace,
@@ -226,7 +226,7 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
       sentAt: null, countedAt: at(seconds + 15), httpStatus: null, completedAt: null,
     });
     const hub = engine(seconds + 1, "notifications.page");
-    const audit = auditPagePace([engine(seconds - 10, "notifications.page"), observed, hub], WINDOW);
+    const audit = auditPagePace([engine(seconds - SYNC_SEND_WINDOW_MS / 1_000 - 1, "notifications.page"), observed, hub], WINDOW);
     expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], minGapMs: null });
     expect(audit.inconclusive).toEqual([expect.objectContaining({
       ref: hub.ref, prevRef: observed.ref, prevSentAt: at(seconds), gapMs: 1_000,
@@ -252,6 +252,60 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(auditPagePace([hub, observed], WINDOW)).toMatchObject({
       verdict: "inconclusive", pairs: 0, violations: [],
       inconclusive: [expect.objectContaining({ ref: hub.ref, prevRef: observed.ref, gapMs: 0, open: "predecessor_send_not_recorded" })],
+    });
+  });
+
+  it("an old observed send journaled after Hub's send is a possible predecessor, regardless of row order", () => {
+    // The site sent at 20.990, Hub at 21.000; the site's start was only
+    // journaled at 21.010 and its end was lost, leaving no sent_at.
+    const before = engine(0, "notifications.page");
+    const hub = engine(21, "notifications.page");
+    const observed = site(20.99, "site.other", {
+      admittedAt: at(21.01), sentAt: null, countedAt: at(36.01), httpStatus: null, completedAt: null,
+    });
+    for (const rows of [[before, hub, observed], [observed, hub, before], [hub, observed]]) {
+      const audit = auditPagePace(rows, WINDOW);
+      expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], minGapMs: null });
+      expect(audit.inconclusive).toEqual([expect.objectContaining({
+        ref: hub.ref, prevRef: observed.ref, prevSentAt: at(21.01), wallGapMs: -10,
+        open: "predecessor_send_not_recorded",
+      })]);
+    }
+  });
+
+  it.each([0, 1])("bounds an old observed send's possible predecessors by the send window (+%s ms)", (extraMs) => {
+    const hub = engine(21, "notifications.page");
+    const admission = new Date(hub.sentAt!.getTime() + SYNC_SEND_WINDOW_MS + extraMs);
+    const observed = site(21, "site.other", { admittedAt: admission, sentAt: null, completedAt: null });
+    const audit = auditPagePace([engine(10, "notifications.page"), hub, observed], WINDOW);
+    expect(audit.verdict).toBe(extraMs === 0 ? "inconclusive" : "pass");
+    expect(audit.inconclusive).toHaveLength(extraMs === 0 ? 1 : 0);
+    expect(audit.violations).toEqual([]);
+  });
+
+  it.each([true, false])("equal recorded site and Hub send instants leave their order unknown (site has the smaller id: %s)", (siteFirst) => {
+    const before = engine(10, "notifications.page");
+    const observed = site(21, "site.other", { ref: siteFirst ? 1 : 2 });
+    const hub = engine(21, "notifications.page", { ref: siteFirst ? 2 : 1 });
+    for (const rows of [[before, hub, observed], [observed, hub, before]]) {
+      const audit = auditPagePace(rows, WINDOW);
+      expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
+      expect(audit.inconclusive).toEqual([expect.objectContaining({
+        ref: hub.ref, prevRef: observed.ref, gapMs: 0, open: "send_order_unknown",
+      })]);
+    }
+    // Distinct recorded instants retain their verdicts on either side.
+    expect(auditPagePace([before, hub, { ...observed, sentAt: at(20.999) }], WINDOW).verdict).toBe("fail");
+    expect(auditPagePace([before, hub, { ...observed, sentAt: at(21.001) }], WINDOW).verdict).toBe("pass");
+  });
+
+  it("a delayed old observed row does not mask a proven violation between distinct recorded sends", () => {
+    const before = engine(20, "notifications.page");
+    const hub = engine(21, "notifications.page");
+    const observed = site(21.01, "site.other", { sentAt: null, countedAt: at(36.01), completedAt: null });
+    expect(auditPagePace([before, hub, observed], WINDOW)).toMatchObject({
+      verdict: "fail", pairs: 1,
+      violations: [expect.objectContaining({ ref: hub.ref, prevRef: before.ref, gapMs: 1_000 })],
     });
   });
 

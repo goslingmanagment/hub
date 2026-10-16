@@ -1,4 +1,4 @@
-import type { FanslySendAuditRow } from "@agency_hub_core/db";
+import { SYNC_SEND_WINDOW_MS, type FanslySendAuditRow } from "@agency_hub_core/db";
 
 import {
   FAMILY_BUDGETS,
@@ -47,8 +47,10 @@ import {
 // bound, where no interval up to the send window could fail). One that
 // provably never went out does not count.
 // An older observed site row without `sent_at` was journaled after its send:
-// its admission is its upper bound. A Hub send short of the pause from that
-// bound is inconclusive, since the site's actual instant was never recorded.
+// its instant lies in [admission − the send window, admission]. A Hub send
+// it may precede by less than the pause is inconclusive, even if the site's
+// admission sorts after Hub. Equal recorded site and Hub instants leave their
+// order unknown too.
 //
 // What cannot be judged is `inconclusive`, never a pass: a pair whose later
 // send recorded no pause or interval (an attempt admitted before 0237, a
@@ -181,6 +183,8 @@ export type PaceOpenReason =
   /** An observed predecessor's send instant was never recorded and the gap
    *  from its admission does not prove the pause. */
   | "predecessor_send_not_recorded"
+  /** Recorded site and Hub send instants are equal: their order is unknown. */
+  | "send_order_unknown"
   /** The pacer's monotonic gap keeps the pause, the recorded instants do not. */
   | "clocks_disagree";
 
@@ -223,6 +227,19 @@ export interface PaceAudit {
   minMarginMs: number | null;
 }
 
+function judgePlacedPaceGap(later: Placed, prev: Placed): PaceGapJudgement | null {
+  if (later.row.pauseMs === null) return null;
+  const sameOwner = later.row.journal === "engine" && prev.row.journal === "engine"
+    && later.row.ownerGeneration !== null && later.row.ownerGeneration === prev.row.ownerGeneration;
+  return judgePaceGap({
+    // A send never recorded left no monotonic gap either.
+    monoGapMs: later.row.sentAt !== null && sameOwner ? later.row.gapPrevMs : null,
+    wallGapMs: later.laterMs - prev.ms,
+    pauseMs: later.row.pauseMs,
+    settingMs: later.row.settingMs,
+  });
+}
+
 /**
  * I1 over the page's sends of both journals, in send order: every pair whose
  * later send lies in `window`, by `judgePaceGap`. The monotonic gap is the
@@ -231,7 +248,8 @@ export interface PaceAudit {
  * which only makes it shorter). A send never recorded that may have gone out
  * stands at its upper bound, as the takeover floor counts it (`paceFloorFromDb`),
  * and is judged at its admission. An old observed site's unknown send is
- * bounded by its admission, since it was journaled after the send.
+ * bounded by [admission − the send window, admission], since it was journaled
+ * after the send.
  */
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
@@ -240,10 +258,10 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
       return at === null ? [] : [placed(row, at)];
     })
     .sort((a, b) => a.ms - b.ms
-      // At the same rounded instant, an unknown observed send is still a
-      // possible predecessor, even if Hub's admission has the smaller id.
-      || Number(b.row.observed && b.row.sentAt === null) - Number(a.row.observed && a.row.sentAt === null)
+      // Equal site and Hub instants have no known order, whatever their ids.
+      || Number(b.row.observed) - Number(a.row.observed)
       || byJournalAndRef(a, b));
+  const unknownObserved = sends.filter((send) => send.row.observed && send.row.sentAt === null);
   const audit: PaceAudit = {
     verdict: "pass",
     pairs: 0,
@@ -253,14 +271,32 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
     minCrossJournalGapMs: null,
     minMarginMs: null,
   };
-  for (let index = 1; index < sends.length; index += 1) {
+  for (let index = 0; index < sends.length; index += 1) {
     const later = sends[index]!;
     if (later.row.observed || !inWindow(later.laterMs, window)) continue;
-    const prev = sends[index - 1]!;
+    let prev = sends[index - 1];
+    let judged = prev === undefined ? null : judgePlacedPaceGap(later, prev);
+    if (prev === undefined || judged?.verdict === "pass") {
+      // The latest possible unknown site predecessor suffices. Binary search
+      // also finds one journaled AFTER Hub, without scanning every pair.
+      let low = 0;
+      let high = unknownObserved.length;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        if (unknownObserved[mid]!.ms <= later.laterMs + SYNC_SEND_WINDOW_MS) low = mid + 1;
+        else high = mid;
+      }
+      const possible = unknownObserved[low - 1];
+      if (possible !== undefined && (later.row.pauseMs === null
+        || possible.ms >= later.laterMs
+        || paceGapViolates(later.laterMs - possible.ms, "wall", later.row.pauseMs))) {
+        prev = possible;
+        judged = judgePlacedPaceGap(later, prev);
+      }
+    }
+    if (prev === undefined) continue;
     const unrecordedPredecessor = prev.row.observed && prev.row.sentAt === null;
     const recorded = later.row.sentAt !== null;
-    const sameOwner = later.row.journal === "engine" && prev.row.journal === "engine"
-      && later.row.ownerGeneration !== null && later.row.ownerGeneration === prev.row.ownerGeneration;
     const wallGapMs = later.laterMs - prev.ms;
     const pair: PacePair = {
       journal: later.journal,
@@ -276,13 +312,6 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
       pauseMs: later.row.pauseMs,
       open: null,
     };
-    const judged = pair.pauseMs === null ? null : judgePaceGap({
-      // (A send never recorded left no monotonic gap either.)
-      monoGapMs: recorded && sameOwner ? later.row.gapPrevMs : null,
-      wallGapMs,
-      pauseMs: pair.pauseMs,
-      settingMs: later.row.settingMs,
-    });
     if (judged !== null) {
       pair.gapMs = judged.gapMs;
       pair.clock = judged.clock;
@@ -294,6 +323,7 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
     pair.open = judged === null
       ? "no_pause"
       : unrecordedPredecessor && paceGapViolates(wallGapMs, "wall", pair.pauseMs!) ? "predecessor_send_not_recorded"
+      : prev.row.observed && recorded && prev.row.sentAt !== null && wallGapMs === 0 ? "send_order_unknown"
       // Its admission is the earliest it can have left: short of the pause
       // there, only its send instant could tell — and nobody recorded it.
       : !recorded && judged.verdict !== "pass" ? "send_not_recorded"
