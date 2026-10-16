@@ -1,21 +1,43 @@
 import { useId } from "react";
 
 interface TrendSparklineProps {
-  values: number[];
+  /** Evenly spaced in time. `null` is a bucket nobody measured: the line
+   *  breaks there instead of bridging it or dropping to zero. */
+  values: ReadonlyArray<number | null>;
   width?: number;
   height?: number;
   color?: string;
+  /** What the line shows, for a screen reader and the hover title. */
+  label?: string;
 }
 
-/** Generic inline trend: a filled polyline over an ordered numeric series. */
+/** Runs of consecutive measured points, by index. */
+function runs(values: ReadonlyArray<number | null>): number[][] {
+  const result: number[][] = [];
+  let current: number[] = [];
+  values.forEach((value, index) => {
+    if (value === null || !Number.isFinite(value)) {
+      if (current.length > 0) result.push(current);
+      current = [];
+    } else {
+      current.push(index);
+    }
+  });
+  if (current.length > 0) result.push(current);
+  return result;
+}
+
+/** Generic inline trend: a filled line over an ordered numeric series. */
 export function TrendSparkline({
   values,
   width = 140,
   height = 36,
   color = "var(--color-accent)",
+  label = "Динамика",
 }: TrendSparklineProps) {
   const gradientId = useId();
-  if (values.length === 0) {
+  const measured = values.filter((value): value is number => value !== null && Number.isFinite(value));
+  if (measured.length === 0) {
     return <div style={{ width, height }} />;
   }
 
@@ -28,18 +50,14 @@ export function TrendSparkline({
     );
   }
 
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 0);
+  const min = Math.min(...measured, 0);
+  const max = Math.max(...measured, 0);
   const range = max - min || 1;
   const yFor = (value: number) => height - 2 - ((value - min) / range) * (height - 6);
   const stepX = width / (values.length - 1);
-  const points = values.map((value, index) => {
-    const x = index * stepX;
-    const y = yFor(value);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
+  const point = (index: number) =>
+    `${(index * stepX).toFixed(1)},${yFor(values[index]!).toFixed(1)}`;
   const zeroY = yFor(0).toFixed(1);
-  const areaPoints = `0,${zeroY} ${points.join(" ")} ${width},${zeroY}`;
 
   return (
     <svg
@@ -47,24 +65,40 @@ export function TrendSparkline({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label="trend"
+      aria-label={label}
       className="shrink-0"
     >
+      <title>{label}</title>
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity={0.28} />
           <stop offset="100%" stopColor={color} stopOpacity={0.02} />
         </linearGradient>
       </defs>
-      <polygon points={areaPoints} fill={`url(#${gradientId})`} />
-      <polyline
-        points={points.join(" ")}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.5}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+      {runs(values).map((run) => {
+        const first = run[0]!;
+        const last = run[run.length - 1]!;
+        if (run.length === 1) {
+          return <circle key={first} cx={first * stepX} cy={yFor(values[first]!)} r={1.75} fill={color} />;
+        }
+        const line = run.map(point).join(" ");
+        return (
+          <g key={first}>
+            <polygon
+              points={`${(first * stepX).toFixed(1)},${zeroY} ${line} ${(last * stepX).toFixed(1)},${zeroY}`}
+              fill={`url(#${gradientId})`}
+            />
+            <polyline
+              points={line}
+              fill="none"
+              stroke={color}
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      })}
     </svg>
   );
 }

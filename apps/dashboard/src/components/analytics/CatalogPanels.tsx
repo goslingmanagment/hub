@@ -7,6 +7,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
+import { bucketKey, bucketTimeline } from "@/components/charts/scale";
 import { TrendSparkline } from "@/components/shared/TrendSparkline";
 import { formatMills } from "@/lib/format";
 import {
@@ -71,19 +72,45 @@ export function TopMediaPanel({
   const data = panelData(state);
 
   const rows = useMemo(() => {
-    const seriesByMedia = new Map<string, number[]>();
+    // A bucket carries one row PER SOURCE (FYP and direct), so the day's views
+    // are their sum — plotting the rows one after another drew a zig-zag
+    // between the two sources instead of a trend.
+    const viewsByMedia = new Map<string, Map<string, number>>();
     const mediaWithHeads = new Set<string>();
+    const servedKeys = new Set<string>();
+    let earliest: string | null = null;
     for (const media of data?.media ?? []) {
       mediaWithHeads.add(media.mediaOfferRef);
-      const points = media.buckets
-        .filter((bucket) => bucket.views !== null)
-        .sort((left, right) => left.bucketStart.localeCompare(right.bucketStart))
-        .map((bucket) => bucket.views!);
-      seriesByMedia.set(media.mediaOfferRef, points);
+      const byBucket = new Map<string, number>();
+      for (const bucket of media.buckets) {
+        if (bucket.views === null) continue;
+        const key = bucketKey(bucket.bucketStart);
+        byBucket.set(key, (byBucket.get(key) ?? 0) + bucket.views);
+        servedKeys.add(key);
+        if (earliest === null || key < earliest) earliest = key;
+      }
+      viewsByMedia.set(media.mediaOfferRef, byBucket);
     }
+    // One timeline for every row, so the sparklines line up by date. When the
+    // response ran out of bucket budget, each media got its NEWEST buckets
+    // first, so the shared line starts where the oldest served one does —
+    // a hole before it would be a cut, not a quiet day.
+    const window = data?.window;
+    const timeline = window === undefined
+      ? []
+      : bucketTimeline(
+        data?.bucketsTruncated && earliest !== null ? { from: earliest, to: window.to } : window,
+        window.periodMs,
+        servedKeys,
+      );
+    const seriesFor = (ref: string): Array<number | null> => {
+      const byBucket = viewsByMedia.get(ref);
+      if (byBucket === undefined || byBucket.size === 0) return [];
+      return timeline.map((key) => byBucket.get(key) ?? null);
+    };
     return (data?.top ?? []).slice(0, 15).map((entry) => ({
       ...entry,
-      series: seriesByMedia.get(entry.mediaOfferRef) ?? [],
+      series: seriesFor(entry.mediaOfferRef),
       missingSeriesLabel: !mediaWithHeads.has(entry.mediaOfferRef)
         ? "нет в каталоге"
         : data?.bucketsTruncated === true
@@ -133,13 +160,21 @@ export function TopMediaPanel({
             <tbody>
               {rows.map((row) => (
                 <tr key={`${row.plane}:${row.requestedEnd}:${row.mediaOfferRef}`}>
-                  <td className="num muted">{row.rank}</td>
+                  <td className="num muted">{row.rank + 1}</td>
                   <td className="muted font-mono text-xs">{row.mediaOfferRef}</td>
                   <td className="num">{metric(row.views)}</td>
                   <td className="num">{metric(row.previewViews)}</td>
                   <td>
                     {row.series.length > 0
-                      ? <TrendSparkline values={row.series} width={120} height={32} />
+                      ? (
+                        <TrendSparkline
+                          values={row.series}
+                          width={120}
+                          height={32}
+                          color="var(--color-chart-blue)"
+                          label="Просмотры по дням"
+                        />
+                      )
                       : <span className="text-xs text-text-muted">{row.missingSeriesLabel}</span>}
                   </td>
                 </tr>
@@ -215,8 +250,10 @@ export function TopTagsPanel({
           reason={emptyPanelReason(verdict, "Рейтинг тегов за этот период не собран.")}
         />
       ) : (
-        <div className={ANALYTICS_TABLE_WRAP}>
-          <table className="data-table">
+        // Bounded, with its header pinned: twenty rows at full height made this
+        // card a page tall and stretched the FYP chart beside it into a void.
+        <div className={`${ANALYTICS_TABLE_WRAP} max-h-[520px] overflow-y-auto`}>
+          <table className="data-table data-table-sticky">
             <thead>
               <tr>
                 <th className="num">#</th>
@@ -231,7 +268,7 @@ export function TopTagsPanel({
                 const global = globalByTag.get(tag.tagRef);
                 return (
                   <tr key={`${tag.requestedEnd}:${tag.tagRef}`}>
-                    <td className="num muted">{tag.rank}</td>
+                    <td className="num muted">{tag.rank + 1}</td>
                     <td>
                       {tag.tagName ?? (
                         <span className="whitespace-nowrap text-text-muted" title={`Номер тега: ${tag.tagRef}`}>
