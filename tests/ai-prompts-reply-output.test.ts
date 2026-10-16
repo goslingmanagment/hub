@@ -144,6 +144,61 @@ describe('reply output normalization', () => {
     expect(normalizeReplyParts('<think-tank> lol')).toEqual(['<think-tank> lol']);
   });
 
+  // Production leaks, 2026-10-10..11 (fast reply, Opus 5.5 at low effort).
+  it('strips <thinking_mode> and <mental_model> blocks', () => {
+    expect(
+      normalizeReplyParts(
+        "<thinking_mode>\nThe fan joked about being a gentleman. Keep it short, no em dashes.\n</thinking_mode>\n\nhaha such a gentleman 😏 i'm holding you to that",
+      ),
+    ).toEqual(["haha such a gentleman 😏 i'm holding you to that"]);
+    expect(
+      normalizeReplyParts(
+        '<mental_model>\nHe asks what would excite her. A trip fits.\n</mental_model>\n\nhonestly a random trip to japan 😌[NEXT]what about you?',
+      ),
+    ).toEqual(['honestly a random trip to japan 😌', 'what about you?']);
+    expect(normalizeReplyParts('<Reasoning_Trace step="1">a [NEXT] b</reasoning_trace>hey you')).toEqual(['hey you']);
+    expect(normalizeReplyParts('<thinking_mode>never closed\nso no reply')).toEqual([]);
+  });
+
+  // Production leaks, 2026-10-09..14 (Opus 5.5 at low effort): reasoning as plain text.
+  it('drops a plain-text plan note and everything before it in its part', () => {
+    expect(
+      normalizeReplyParts("Fan writes in Russian, so reply in Russian. He asked what she's doing.\n\nахах да, лежу с котом 🙈[NEXT]а ты где?)"),
+    ).toEqual(['ахах да, лежу с котом 🙈', 'а ты где?)']);
+    expect(
+      normalizeVariantReplyParts(
+        'Cold opener. The display name is Jay, so a name hook works. No long dashes.\n\nok jay... are you a dj 👀[VARIANT]hey jay',
+      ),
+    ).toEqual(['ok jay... are you a dj 👀', 'hey jay']);
+    // A draft, the model's check of it, then the draft it settled on.
+    expect(
+      normalizeSingleReplyPart(
+        'so what caught your eye? 😏\n\nWait, the rules say no full stop at end, question mark fine.\n\nso what caught your eye then? 😏',
+      ),
+    ).toEqual(['so what caught your eye then? 😏']);
+    expect(
+      normalizeReplyParts('long night huh 😭\n\n(rule check) no period at end, no dash. Fine.\n\nlong night huh 😭 any break?'),
+    ).toEqual(['long night huh 😭 any break?']);
+    // With nothing after it, the note goes alone; it never cuts another part.
+    expect(normalizeReplyParts('hey you\nCheck: no em dash, lowercase.')).toEqual(['hey you']);
+    expect(normalizeReplyParts('first part[NEXT]Cold opener, no fan lines.\n\nsecond part')).toEqual([
+      'first part',
+      'second part',
+    ]);
+    expect(normalizeReplyParts('No long dashes.')).toEqual([]);
+  });
+
+  it('keeps replies that mention dashes, display names, fans or thinking in passing', () => {
+    for (const reply of [
+      'no dash cam?? lol\n\nok tell me everything',
+      'your display name is giving superhero lol\n\nso what are you up to',
+      'haha ur in the fan club for everything 😂\n\na fan wrote me a poem once',
+      'thinking of me while busy is the bare minimum 😂\n\nwhen are you back',
+    ]) {
+      expect(normalizeReplyParts(reply)).toEqual([reply]);
+    }
+  });
+
   it('filters every bracket-garbage token', () => {
     for (const garbage of ['[', ']', '["', '"]', "['", "']"]) {
       expect(isInsertableReplyPart(garbage)).toBe(false);
