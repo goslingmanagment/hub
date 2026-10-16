@@ -3,6 +3,8 @@ import { useMemo } from "react";
 import type { MoneyRevenueMixResponse } from "@agency_hub_core/contracts";
 import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
+import { usdAxisFormatter } from "@/components/charts/format";
+import { businessDateRange } from "@/components/charts/scale";
 import { StackedBarChart, type StackedBarChartSeries } from "@/components/shared/StackedBarChart";
 import { formatMills } from "@/lib/format";
 
@@ -26,17 +28,27 @@ import {
   type CoverageRow,
 } from "./coverage.js";
 
-/* The theme's Fansly blue first, then hues that pass the colour-blind
- * separation check as neighbours in a stack. A type keeps its colour by its
- * place in code order, never by its rank. */
-const PALETTE = [
-  "var(--color-fansly)",
-  "var(--color-warning)",
-  "var(--color-chart-teal)",
-  "var(--color-chart-violet)",
-  "var(--color-chart-pink)",
-  "var(--color-green)",
-];
+/* A type's colour belongs to the TYPE, never to its place in this window's
+ * list: a period where tips are absent must not repaint subscriptions. The
+ * common types take the validated six-slot order; a legacy code wears its
+ * current twin's hue, lighter; refunds and anything rarer are neutral grey
+ * (named in the legend and the tooltip, so grey never has to tell them apart). */
+const TYPE_COLORS: Readonly<Record<string, string>> = {
+  subscriptions: "var(--color-chart-blue)",
+  tips: "var(--color-chart-orange)",
+  media: "var(--color-chart-aqua)",
+  media_sets: "var(--color-chart-violet)",
+  locked_text: "var(--color-chart-magenta)",
+  stream_tickets: "var(--color-chart-lime)",
+};
+const REFUND_COLOR = "var(--color-text-muted)";
+const OTHER_COLOR = "var(--color-border-strong)";
+const LEGACY_OPACITY = 0.5;
+
+function typeColor(label: string): string {
+  if (label === "refund") return REFUND_COLOR;
+  return TYPE_COLORS[label] ?? OTHER_COLOR;
+}
 
 type RevenueType = { code: number; label: string; era: string | null };
 
@@ -92,7 +104,7 @@ export function RevenueMixPanel({
   const data = panelData(state);
   const cached = state.status === "ready" && state.refreshFailed;
 
-  const { rows, series, codes } = useMemo(() => {
+  const { rows, served, series, codes } = useMemo(() => {
     const byDate = new Map<string, Record<string, string | number>>();
     const types = new Map<number, RevenueType>();
     for (const row of data?.daily ?? []) {
@@ -109,13 +121,22 @@ export function RevenueMixPanel({
     }
     const orderedTypes = [...types.values()].sort((left, right) => left.code - right.code);
     const names = legendNames(orderedTypes);
+    // Every date of the window, so the bars keep their place in time; a date
+    // nothing came back for is an empty slot that says "no data" on hover.
+    const window = data?.window;
+    const dates = window === undefined ? [] : businessDateRange(window.from, window.to);
+    for (const date of byDate.keys()) {
+      if (!dates.includes(date)) dates.push(date);
+    }
+    dates.sort();
     return {
-      rows: [...byDate.values()].sort((left, right) =>
-        String(left.businessDate).localeCompare(String(right.businessDate))),
-      series: orderedTypes.map((type, index): StackedBarChartSeries => ({
+      rows: dates.map((date) => byDate.get(date) ?? { businessDate: date }),
+      served: byDate.size,
+      series: orderedTypes.map((type): StackedBarChartSeries => ({
         key: String(type.code),
         label: names.get(type.code) ?? String(type.code),
-        color: PALETTE[index % PALETTE.length]!,
+        color: typeColor(type.label),
+        fillOpacity: type.era === "legacy" ? LEGACY_OPACITY : undefined,
       })),
       codes: orderedTypes.map((type) => `${names.get(type.code) ?? ""} — ${type.code}`),
     };
@@ -152,7 +173,7 @@ export function RevenueMixPanel({
           <AnalyticsLoading />
         ) : state.status === "error" ? (
           <AnalyticsError message={state.message} onRetry={onRetry} />
-        ) : rows.length === 0 ? (
+        ) : served === 0 ? (
           <AnalyticsEmpty
             reason={emptyPanelReason(
               verdict,
@@ -168,6 +189,7 @@ export function RevenueMixPanel({
               series={series}
               xTickFormatter={formatBucketDay}
               valueFormatter={(value) => formatMills(value)}
+              axisFormatter={usdAxisFormatter}
               height={280}
             />
           </div>

@@ -219,7 +219,7 @@ export function PageDetailPage() {
             selectedPeriodLabel={selectedPeriodLabel}
             points={revenuePoints}
             valueFormatter={(v) => formatUsdFromMills(v)}
-            yAxisWidth={72}
+            valueKind="money"
             height={240}
           />
         </ReadSection>

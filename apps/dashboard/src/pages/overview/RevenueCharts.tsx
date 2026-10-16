@@ -139,7 +139,7 @@ export function RevenueCharts({
                   points={calendarSeries(daily.data.series, windows)}
                   allowMonthly={false}
                   valueFormatter={money}
-                  yAxisWidth={72}
+                  valueKind="money"
                   color="var(--color-accent)"
                 />
               </Suspense>

@@ -11,6 +11,20 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import {
+  CHART_ANIMATION,
+  CHART_MARGIN,
+  ChartTooltipCard,
+  activeDot,
+  chartGridProps,
+  lineCursor,
+  useTickBudget,
+  xAxisProps,
+  yAxisProps,
+  type ChartTooltipRenderProps,
+} from "@/components/charts/ChartKit";
+import { evenTickIndices, linearTicks } from "@/components/charts/scale";
+import { formatBusinessDateShort } from "@/lib/format";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import type {
   OfapiCreditsLedgerResponse,
@@ -37,11 +51,12 @@ const CHART_DAYS = 30;
 const RUNWAY_DANGER_DAYS = 3;
 const RUNWAY_WARNING_DAYS = 7;
 
-// Theme tokens, so the charts follow the console's palette.
+// The validated chart hues in their categorical order (never the status
+// colours: "Сверка баланса" is a source, not a warning).
 const SOURCE_SERIES = [
-  { key: "rest", label: "Приложение", color: "var(--color-accent)" },
-  { key: "webhookAccrual", label: "Вебхуки", color: "var(--color-fansly)" },
-  { key: "external", label: "Сверка баланса", color: "var(--color-warning)" },
+  { key: "rest", label: "Приложение", color: "var(--color-chart-blue)" },
+  { key: "webhookAccrual", label: "Вебхуки", color: "var(--color-chart-orange)" },
+  { key: "external", label: "Сверка баланса", color: "var(--color-chart-aqua)" },
   { key: "adjustment", label: "Корректировки", color: "var(--color-text-muted)" },
 ] as const;
 
@@ -178,10 +193,6 @@ function utcCellTime(iso: string) {
 
 function utcTime(iso: string) {
   return `${iso.slice(11, 16)} UTC`;
-}
-
-function shortDay(day: string) {
-  return day.slice(5);
 }
 
 const MONTH_NAMES = [
@@ -355,6 +366,10 @@ function BalanceChart(props: {
     value: props.balanceByDay.get(day) ?? null,
   }));
   const hasReadings = props.balanceByDay.size > 0;
+  const { budget, onResize } = useTickBudget();
+  // An area grows from zero, so its axis does too.
+  const yScale = linearTicks(0, Math.max(0, ...props.balanceByDay.values()), { integer: true });
+  const xTicks = evenTickIndices(data.length, budget).map((index) => data[index]!.day);
   const refillCount = props.refills.reduce((sum, refill) => sum + refill.count, 0);
   const refillTotal = props.refills.reduce((sum, refill) => sum + refill.credits, 0);
   const firstReadingDay = hasReadings
@@ -377,29 +392,20 @@ function BalanceChart(props: {
           Показаний баланса пока нет — график начнётся с первой проверки баланса у провайдера.
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={300}>
-          <AreaChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={300} onResize={onResize}>
+          <AreaChart data={data} margin={CHART_MARGIN}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+                <stop offset="0%" stopColor={color} stopOpacity={0.24} />
                 <stop offset="100%" stopColor={color} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
-            <XAxis
-              dataKey="day"
-              tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
-              tickFormatter={shortDay}
-            />
+            <CartesianGrid {...chartGridProps} />
+            <XAxis {...xAxisProps} dataKey="day" ticks={xTicks} tickFormatter={formatBusinessDateShort} />
             <YAxis
-              tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-              width={56}
-              allowDecimals={false}
+              {...yAxisProps}
+              domain={yScale.domain}
+              ticks={yScale.ticks}
               tickFormatter={fmtCredits}
             />
             {props.refills.map((refill) => (
@@ -414,31 +420,32 @@ function BalanceChart(props: {
               type="monotone"
               dataKey="value"
               name="Баланс"
+              // A balance is a level: between two readings it moved from one to
+              // the other, so the line bridges a day without a reading. The
+              // tooltip still says that day had none.
               connectNulls
               stroke={color}
               strokeWidth={2}
               fill={`url(#${gradientId})`}
               dot={false}
-              activeDot={{ r: 4, fill: color, strokeWidth: 0 }}
+              activeDot={activeDot(color)}
+              {...CHART_ANIMATION}
             />
             <Tooltip
-              contentStyle={{
-                backgroundColor: "var(--color-card)",
-                border: "1px solid var(--color-border)",
-                borderRadius: 8,
-                fontSize: 13,
-              }}
+              cursor={lineCursor}
+              filterNull={false}
+              isAnimationActive={false}
               wrapperStyle={{ zIndex: 20 }}
-              formatter={(value) => {
-                if (value === null || value === undefined) {
-                  return ["нет показания", "Баланс"];
-                }
-                const amount = Number(value);
-                return [
-                  `${credits(amount)}${props.usd ? ` · ${props.usd(amount)}` : ""}`,
-                  "Баланс",
-                ];
-              }}
+              content={(tooltip: ChartTooltipRenderProps) => (
+                <ChartTooltipCard
+                  {...tooltip}
+                  series={[{ key: "value", label: "Баланс", color }]}
+                  formatValue={(amount) =>
+                    `${credits(amount)}${props.usd ? ` · ${props.usd(amount)}` : ""}`}
+                  formatLabel={(label) => formatBusinessDateShort(String(label))}
+                  emptyText="Нет показания баланса за этот день"
+                />
+              )}
             />
           </AreaChart>
         </ResponsiveContainer>
@@ -1350,7 +1357,7 @@ export function OfapiCreditsPage() {
                 data={dailyBars}
                 xKey="day"
                 series={[...activeSpendSeries]}
-                xTickFormatter={shortDay}
+                xTickFormatter={formatBusinessDateShort}
                 valueFormatter={fmtCredits}
                 tooltipValueFormatter={(value) =>
                   priceKnown ? `${credits(value)} · ${usd(value)}` : credits(value)}

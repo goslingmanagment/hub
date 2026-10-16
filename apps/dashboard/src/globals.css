@@ -45,11 +45,18 @@
   --color-danger-text: #8f2525;
   --color-success-border: #bfe3cc;
   --color-success-text: #14532d;
-  /* Chart hues after the named ones, chosen to stay apart for colour-blind
-     readers as neighbours in a stack. */
-  --color-chart-teal: #1baf7a;
+  /* Chart series hues. Validated as a categorical set (lightness band, chroma
+     floor, colour-blind and normal-vision separation of neighbours, 3:1 on
+     the card) in both themes: blue · orange · aqua · violet · magenta · lime
+     is the six-slot order, blue · green · violet · orange the traffic order.
+     They are NOT the status colours: a series never wears warning or danger. */
+  --color-chart-blue: #2f5fb3;
+  --color-chart-orange: #d9572a;
+  --color-chart-aqua: #119467;
   --color-chart-violet: #6250d6;
-  --color-chart-pink: #e87ba4;
+  --color-chart-magenta: #d4568a;
+  --color-chart-lime: #4d7c0f;
+  --color-chart-green: #15803d;
   /* The dimmed page behind a dialog. */
   --color-backdrop: rgb(28 25 23 / 0.32);
   --radius-card: 12px;
@@ -97,9 +104,13 @@
     --color-danger-text: #f6a0a0;
     --color-success-border: #24503a;
     --color-success-text: #86dca9;
-    --color-chart-teal: #3cc994;
+    --color-chart-blue: #4d86e0;
+    --color-chart-orange: #d9612e;
+    --color-chart-aqua: #199e70;
     --color-chart-violet: #8f80f0;
-    --color-chart-pink: #ef94b7;
+    --color-chart-magenta: #d55181;
+    --color-chart-lime: #7a9a1e;
+    --color-chart-green: #2e9e5b;
     --color-backdrop: rgb(0 0 0 / 0.6);
   }
 }
@@ -140,9 +151,13 @@
   --color-danger-text: #f6a0a0;
   --color-success-border: #24503a;
   --color-success-text: #86dca9;
-  --color-chart-teal: #3cc994;
+  --color-chart-blue: #4d86e0;
+  --color-chart-orange: #d9612e;
+  --color-chart-aqua: #199e70;
   --color-chart-violet: #8f80f0;
-  --color-chart-pink: #ef94b7;
+  --color-chart-magenta: #d55181;
+  --color-chart-lime: #7a9a1e;
+  --color-chart-green: #2e9e5b;
   --color-backdrop: rgb(0 0 0 / 0.6);
 }
 :root { color-scheme: light; }

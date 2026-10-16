@@ -3,7 +3,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
-  Legend,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,6 +13,29 @@ import {
 import type { StatsTrafficResponse } from "@agency_hub_core/contracts";
 import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
+import {
+  CHART_ANIMATION,
+  CHART_MARGIN,
+  ChartLegend,
+  ChartTooltipCard,
+  activeDot,
+  chartGridProps,
+  gapSpans,
+  isolatedDot,
+  lineCursor,
+  useTickBudget,
+  xAxisProps,
+  yAxisProps,
+  type ChartSeries,
+  type ChartTooltipRenderProps,
+} from "@/components/charts/ChartKit";
+import { countAxisLabel, durationAxisLabel } from "@/components/charts/format";
+import {
+  durationTicks,
+  evenTickIndices,
+  linearTicks,
+  stackedExtent,
+} from "@/components/charts/scale";
 import {
   panelData,
   type AnalyticsPanelState,
@@ -37,39 +60,17 @@ import {
   type AnalyticsCoverageWindow,
   type CoverageRow,
 } from "./coverage.js";
-import { buildFypMediaViewSummary } from "./traffic-metrics.js";
+import {
+  UNKNOWN_SOURCE_KEY,
+  bucketInProgress,
+  buildFypMediaViewSummary,
+  buildTrafficSourceRows,
+  onTimeline,
+  type TimelinePoint,
+  type TrafficMeasure,
+} from "./traffic-metrics.js";
 
 type TrafficRow = StatsTrafficResponse["rows"][number];
-
-/** The chart chrome: recessive grid and axes in the theme's own colours. */
-const gridProps = {
-  strokeDasharray: "3 3",
-  vertical: false,
-  stroke: "var(--color-border)",
-} as const;
-
-const axisTick = { fontSize: 12, fill: "var(--color-text-muted)" };
-
-const tooltipProps = {
-  contentStyle: {
-    backgroundColor: "var(--color-card)",
-    border: "1px solid var(--color-border)",
-    borderRadius: 8,
-    fontSize: 13,
-    color: "var(--color-text-primary)",
-  },
-  wrapperStyle: { zIndex: 20 },
-};
-
-/** Legend text wears the text colour; the swatch beside it carries identity. */
-function legendText(value: unknown) {
-  return <span style={{ color: "var(--color-text-secondary)" }}>{String(value)}</span>;
-}
-
-/** Legend and tooltip keep the series' own order (recharts sorts by name). */
-function inOrder(keys: readonly string[]) {
-  return (item: { dataKey?: unknown }) => keys.indexOf(String(item.dataKey));
-}
 
 /**
  * The four profile families, in the order the §2.1 census lists them, plus a
@@ -78,35 +79,146 @@ function inOrder(keys: readonly string[]) {
  * THE FIFTH SERIES IS NOT DECORATION. A1: an unknown or new type code is
  * journaled and SURFACED, never dropped. Folding it silently into a known
  * family — or omitting it from the chart — would make a platform change look
- * like a dip in traffic.
+ * like a dip in traffic. It is drawn whenever some bucket carries one.
  */
-/* Colours: the theme's Fansly blue and green, then two hues that pass the
- * colour-blind separation check against them; the unnamed source is grey. */
-const FAMILY_SERIES = [
-  { key: "10000", label: "Прямые и лента", color: "var(--color-fansly)" },
-  { key: "44000", label: "Продвижение FYP", color: "var(--color-green)" },
+/* Colours: the validated traffic order (blue · green · violet · orange) —
+ * chart hues, never the status colours; the unnamed source is neutral grey. */
+const FAMILY_SERIES: readonly ChartSeries[] = [
+  { key: "10000", label: "Прямые и лента", color: "var(--color-chart-blue)" },
+  { key: "44000", label: "Продвижение FYP", color: "var(--color-chart-green)" },
   { key: "44010", label: "Рекомендации", color: "var(--color-chart-violet)" },
-  { key: "44030", label: "Поиск", color: "var(--color-warning)" },
-  { key: "unknown", label: "Неизвестный источник", color: "var(--color-text-muted)" },
-] as const;
+  { key: "44030", label: "Поиск", color: "var(--color-chart-orange)" },
+  { key: UNKNOWN_SOURCE_KEY, label: "Неизвестный источник", color: "var(--color-text-muted)" },
+];
 
-const FAMILY_ORDER = inOrder(FAMILY_SERIES.map((entry) => entry.key));
-const FYP_ORDER = inOrder(["fyp", "direct"]);
+const FYP_SERIES: readonly ChartSeries[] = [
+  { key: "fyp", label: "FYP", color: "var(--color-chart-green)" },
+  { key: "direct", label: "Прямые", color: "var(--color-chart-blue)" },
+];
 
-type Measure = "visits" | "dwell";
-
-const MEASURE_OPTIONS: readonly { value: Measure; label: string }[] = [
+const MEASURE_OPTIONS: readonly { value: TrafficMeasure; label: string }[] = [
   { value: "visits", label: "Визиты" },
   { value: "dwell", label: "Время" },
 ];
 
-const MEASURE_DESCRIPTION: Readonly<Record<Measure, string>> = {
+const MEASURE_DESCRIPTION: Readonly<Record<TrafficMeasure, string>> = {
   visits: "Визиты профиля по источникам — тот же счётчик, что в виджете Fansly.",
   dwell: "Время на профиле по источникам.",
 };
 
 function bucketLabel(value: unknown): string {
   return formatBucketDay(String(value));
+}
+
+/** The response came back cut even after following its pages. */
+function TruncatedNote() {
+  return (
+    <p className="card-footer text-text-muted">
+      Показана только часть периода: данных больше, чем Hub отдаёт за один запрос.
+    </p>
+  );
+}
+
+/**
+ * A stacked area chart of daily buckets over the whole window, with the
+ * console's axes, legend and tooltip. Shared by both traffic panels.
+ */
+function StackedTimeChart({
+  rows,
+  series,
+  periodMs,
+  unit,
+  fill = false,
+  height = 280,
+}: {
+  rows: readonly TimelinePoint[];
+  series: readonly ChartSeries[];
+  periodMs: number;
+  unit: "count" | "duration";
+  /** Grow into the card's height (never below `height`). */
+  fill?: boolean;
+  height?: number;
+}) {
+  const { budget, onResize } = useTickBudget();
+  const keys = series.map((entry) => entry.key);
+  const extent = stackedExtent(rows, keys);
+  const yScale = unit === "duration"
+    ? durationTicks(extent.max)
+    : linearTicks(0, extent.max, { integer: true });
+  const xTicks = evenTickIndices(rows.length, budget).map((index) => rows[index]!.bucketStart);
+  const formatValue = unit === "duration" ? formatDurationMs : formatCount;
+  const gaps = gapSpans(rows, "bucketStart", keys);
+
+  const chart = (
+    <ResponsiveContainer width="100%" height={fill ? "100%" : height} onResize={onResize}>
+      <AreaChart data={rows as TimelinePoint[]} margin={CHART_MARGIN}>
+        <CartesianGrid {...chartGridProps} />
+        {gaps.map((gap) => (
+          <ReferenceArea
+            key={String(gap.x1)}
+            x1={gap.x1 as string}
+            x2={gap.x2 as string}
+            fill="var(--color-text-muted)"
+            fillOpacity={0.07}
+            stroke="none"
+            ifOverflow="hidden"
+          />
+        ))}
+        <XAxis {...xAxisProps} dataKey="bucketStart" ticks={xTicks} tickFormatter={bucketLabel} />
+        <YAxis
+          {...yAxisProps}
+          domain={yScale.domain}
+          ticks={yScale.ticks}
+          tickFormatter={unit === "duration" ? durationAxisLabel : countAxisLabel}
+        />
+        <Tooltip
+          cursor={lineCursor}
+          filterNull={false}
+          isAnimationActive={false}
+          wrapperStyle={{ zIndex: 20 }}
+          content={(props: ChartTooltipRenderProps) => (
+            <ChartTooltipCard
+              {...props}
+              series={series}
+              formatValue={formatValue}
+              formatLabel={bucketLabel}
+              totalLabel="Всего"
+              note={(row) => bucketInProgress(String(row.bucketStart), periodMs)
+                ? "День ещё идёт — число вырастет."
+                : null}
+            />
+          )}
+        />
+        {series.map((entry) => (
+          <Area
+            key={entry.key}
+            type="monotone"
+            dataKey={entry.key}
+            name={entry.label}
+            stackId="stack"
+            stroke={entry.color}
+            strokeWidth={1.5}
+            fill={entry.color}
+            fillOpacity={0.16}
+            dot={isolatedDot(rows, entry.key, entry.color)}
+            activeDot={activeDot(entry.color)}
+            {...CHART_ANIMATION}
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+
+  return (
+    <>
+      <ChartLegend series={series} />
+      {fill ? (
+        <div className="chart-fill" style={{ ["--chart-min-height" as string]: `${height}px` }}>
+          <div className="chart-fill-box">{chart}</div>
+        </div>
+      ) : chart}
+    </>
+  );
 }
 
 /**
@@ -116,6 +228,9 @@ function bucketLabel(value: unknown): string {
  * time. The two members are NOT summed: member 1 is a visit count and member 0
  * carries dwell with its OWN, differing view count, and the precise meaning of
  * member 0's counts is unproven. Adding them would invent a number.
+ *
+ * The axis is the WHOLE window: a day Hub holds nothing about is a hole at its
+ * date, not a day squeezed out of the timeline (see `buildTrafficSourceRows`).
  */
 export function TrafficBySourcePanel({
   state,
@@ -131,7 +246,7 @@ export function TrafficBySourcePanel({
   showDenominatorNote: boolean;
   onRetry: () => void;
 }) {
-  const [measure, setMeasure] = useState<Measure>("visits");
+  const [measure, setMeasure] = useState<TrafficMeasure>("visits");
   const verdict = coverageBadgeVerdict(
     coverage,
     ANALYTICS_COVERAGE_PLANES.traffic,
@@ -139,29 +254,11 @@ export function TrafficBySourcePanel({
   );
   const data = panelData(state);
 
-  const series = useMemo(() => {
-    const buckets = new Map<string, Record<string, number | string>>();
-    for (const row of data?.rows ?? []) {
-      const known = row.measure !== null && row.family !== null;
-      if (known && row.measure !== measure) {
-        continue;
-      }
-      const value = measure === "visits" ? row.views : row.interactionTimeMs;
-      // NULL IS NOT ZERO: a metric the platform never served contributes
-      // nothing to the stack rather than a floor of zero.
-      if (value === null) {
-        continue;
-      }
-      const key = known ? row.family! : "unknown";
-      const bucket = buckets.get(row.bucketStart) ?? { bucketStart: row.bucketStart };
-      bucket[key] = Number(bucket[key] ?? 0) + value;
-      buckets.set(row.bucketStart, bucket);
-    }
-    return [...buckets.values()].sort((left, right) =>
-      String(left.bucketStart).localeCompare(String(right.bucketStart)));
-  }, [data, measure]);
-
-  const formatValue = measure === "visits" ? formatCount : formatDurationMs;
+  const chart = useMemo(() => buildTrafficSourceRows(data, measure), [data, measure]);
+  const series = useMemo(
+    () => FAMILY_SERIES.filter((entry) => chart.keys.includes(entry.key)),
+    [chart.keys],
+  );
 
   return (
     <AnalyticsPanel
@@ -175,6 +272,11 @@ export function TrafficBySourcePanel({
           <p>
             Визиты и время — два разных ряда Fansly. Они не складываются: у времени
             свой счётчик просмотров, и сумма дала бы число, которого нет.
+          </p>
+          <p>
+            День, за который Hub ничего не собрал, — разрыв на графике, а не ноль.
+            Источник, которого нет в собранном дне, — ноль: Fansly присылает только
+            источники, у которых в этот день был трафик.
           </p>
           <p>
             «Неизвестный источник» — новый код Fansly, который Hub пока не умеет
@@ -204,7 +306,7 @@ export function TrafficBySourcePanel({
         <AnalyticsLoading />
       ) : state.status === "error" ? (
         <AnalyticsError message={state.message} onRetry={onRetry} />
-      ) : series.length === 0 ? (
+      ) : chart.servedBuckets === 0 ? (
         <AnalyticsEmpty
           reason={emptyPanelReason(
             verdict,
@@ -212,51 +314,29 @@ export function TrafficBySourcePanel({
           )}
         />
       ) : (
-        <div className="card-body">
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              <CartesianGrid {...gridProps} />
-              <XAxis
-                dataKey="bucketStart"
-                tickFormatter={bucketLabel}
-                tick={axisTick}
-                axisLine={false}
-                tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={24}
-              />
-              <YAxis
-                tick={axisTick}
-                tickFormatter={(value: number) => formatValue(value)}
-                axisLine={false}
-                tickLine={false}
-                width="auto"
-              />
-              <Tooltip
-                {...tooltipProps}
-                labelFormatter={bucketLabel}
-                itemSorter={FAMILY_ORDER}
-                formatter={(value: unknown, name: unknown) => [formatValue(Number(value ?? 0)), String(name ?? "")]}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendText} itemSorter={FAMILY_ORDER} />
-              {FAMILY_SERIES.map((entry) => (
-                <Area
-                  key={entry.key}
-                  type="monotone"
-                  dataKey={entry.key}
-                  name={entry.label}
-                  stackId="traffic"
-                  stroke={entry.color}
-                  strokeWidth={1.5}
-                  fill={entry.color}
-                  fillOpacity={0.2}
-                />
-              ))}
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+        <>
+          <div className="card-body">
+            <StackedTimeChart
+              rows={chart.rows}
+              series={series}
+              periodMs={data?.window.periodMs ?? 86_400_000}
+              unit={measure === "dwell" ? "duration" : "count"}
+            />
+          </div>
+          {data?.nextCursor ? <TruncatedNote /> : null}
+        </>
       )}
     </AnalyticsPanel>
+  );
+}
+
+/** One figure of the FYP panel's summary strip. */
+function Figure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-text-secondary">{label}</div>
+      <div className="mt-0.5 text-[15px] font-semibold text-text-primary">{value}</div>
+    </div>
   );
 }
 
@@ -281,10 +361,14 @@ export function FypSharePanel({
   const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.fyp, selectedWindow);
   const data = panelData(state);
 
-  const { series, sharePercent: share } = useMemo(
-    () => buildFypMediaViewSummary(data?.rows ?? []),
-    [data],
-  );
+  const summary = useMemo(() => {
+    const built = buildFypMediaViewSummary(data?.rows ?? []);
+    return {
+      ...built,
+      rows: data === undefined ? [] : onTimeline(data.window, built.series) as TimelinePoint[],
+    };
+  }, [data]);
+  const share = summary.sharePercent;
 
   return (
     <AnalyticsPanel
@@ -299,17 +383,20 @@ export function FypSharePanel({
         </span>
       )}
       help={(
-        <p>
-          Просмотры медиа — полные плюс просмотры превью, как в виджете Fansly. Доля FYP
-          рассчитана в Hub из этих чисел: готовой доли или среднего Fansly не присылает.
-        </p>
+        <>
+          <p>
+            Просмотры медиа — полные плюс просмотры превью, как в виджете Fansly. Доля FYP
+            рассчитана в Hub из этих чисел: готовой доли или среднего Fansly не присылает.
+          </p>
+          <p>День, за который Hub ничего не собрал, — разрыв на графике, а не ноль.</p>
+        </>
       )}
     >
       {state.status === "loading" ? (
         <AnalyticsLoading />
       ) : state.status === "error" ? (
         <AnalyticsError message={state.message} onRetry={onRetry} />
-      ) : series.length === 0 ? (
+      ) : summary.series.length === 0 ? (
         <AnalyticsEmpty
           reason={emptyPanelReason(
             verdict,
@@ -317,56 +404,29 @@ export function FypSharePanel({
           )}
         />
       ) : (
-        <div className="card-body">
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              <CartesianGrid {...gridProps} />
-              <XAxis
-                dataKey="bucketStart"
-                tickFormatter={bucketLabel}
-                tick={axisTick}
-                axisLine={false}
-                tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={24}
+        <>
+          <div className="card-body flex flex-1 flex-col">
+            <div className="mb-4 grid grid-cols-3 gap-4 border-b border-border-light pb-4">
+              <Figure label="Из FYP" value={summary.fypTotal === null ? "—" : formatCount(summary.fypTotal)} />
+              <Figure label="Прямые" value={summary.directTotal === null ? "—" : formatCount(summary.directTotal)} />
+              <Figure
+                label="Всего"
+                value={summary.fypTotal === null || summary.directTotal === null
+                  ? "—"
+                  : formatCount(summary.fypTotal + summary.directTotal)}
               />
-              <YAxis
-                tick={axisTick}
-                tickFormatter={(value: number) => formatCount(value)}
-                axisLine={false}
-                tickLine={false}
-                width="auto"
-              />
-              <Tooltip
-                {...tooltipProps}
-                labelFormatter={bucketLabel}
-                itemSorter={FYP_ORDER}
-                formatter={(value: unknown, name: unknown) => [formatCount(Number(value ?? 0)), String(name ?? "")]}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendText} itemSorter={FYP_ORDER} />
-              <Area
-                type="monotone"
-                dataKey="fyp"
-                name="FYP"
-                stackId="media"
-                stroke="var(--color-green)"
-                strokeWidth={1.5}
-                fill="var(--color-green)"
-                fillOpacity={0.2}
-              />
-              <Area
-                type="monotone"
-                dataKey="direct"
-                name="Прямые"
-                stackId="media"
-                stroke="var(--color-fansly)"
-                strokeWidth={1.5}
-                fill="var(--color-fansly)"
-                fillOpacity={0.2}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+            </div>
+            <StackedTimeChart
+              rows={summary.rows}
+              series={FYP_SERIES}
+              periodMs={data?.window.periodMs ?? 86_400_000}
+              unit="count"
+              fill
+              height={240}
+            />
+          </div>
+          {data?.nextCursor ? <TruncatedNote /> : null}
+        </>
       )}
     </AnalyticsPanel>
   );

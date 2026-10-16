@@ -10,6 +10,21 @@ import {
   YAxis,
 } from "recharts";
 import { useSpenderSeries } from "@/api/queries";
+import {
+  CHART_ANIMATION,
+  CHART_MARGIN,
+  ChartTooltipCard,
+  activeDot,
+  chartGridProps,
+  lineCursor,
+  useTickBudget,
+  xAxisProps,
+  yAxisProps,
+  type ChartTooltipRenderProps,
+} from "@/components/charts/ChartKit";
+import { usdAxisFormatter } from "@/components/charts/format";
+import { evenTickIndices, linearTicks } from "@/components/charts/scale";
+import { ruPlural } from "@/lib/plural";
 import { formatBusinessDateShort } from "@/lib/format";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
@@ -39,6 +54,7 @@ export function SpenderTrendPanel({
   period = "90d",
 }: SpenderTrendPanelProps) {
   const gradientId = useId();
+  const { budget, onResize } = useTickBudget();
   const { data, isLoading, isError } = useSpenderSeries(platform, platformUserId, {
     scope: "page",
     pageLabel,
@@ -76,6 +92,9 @@ export function SpenderTrendPanel({
     null,
   );
 
+  const yScale = linearTicks(0, Math.max(0, ...points.map((p) => p.value)), { integer: true });
+  const xTicks = evenTickIndices(points.length, budget).map((index) => points[index]!.date);
+
   return (
     <div className="border-t border-border bg-hover-alt">
       <div className="grid grid-cols-2 gap-3 px-5 py-4 sm:grid-cols-4 sm:px-6">
@@ -99,40 +118,45 @@ export function SpenderTrendPanel({
             За этот период трат нет.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+          <ResponsiveContainer width="100%" height="100%" onResize={onResize}>
+            <AreaChart data={points} margin={CHART_MARGIN}>
               <defs>
                 <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--color-accent)" stopOpacity={0.35} />
+                  <stop offset="0%" stopColor="var(--color-accent)" stopOpacity={0.3} />
                   <stop offset="100%" stopColor="var(--color-accent)" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
+              <CartesianGrid {...chartGridProps} />
               <XAxis
+                {...xAxisProps}
                 dataKey="date"
-                tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
-                axisLine={false}
-                tickLine={false}
+                ticks={xTicks}
                 tickFormatter={formatBusinessDateShort}
-                interval="preserveStartEnd"
               />
               <YAxis
-                tick={{ fontSize: 12, fill: "var(--color-text-muted)" }}
-                axisLine={false}
-                tickLine={false}
-                width={56}
-                tickFormatter={(v: number) => formatUsdFromMills(v)}
+                {...yAxisProps}
+                domain={yScale.domain}
+                ticks={yScale.ticks}
+                tickFormatter={usdAxisFormatter((yScale.ticks[1] ?? 1) - (yScale.ticks[0] ?? 0))}
               />
               <ChartTooltip
-                contentStyle={{
-                  backgroundColor: "var(--color-card)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: "var(--color-text-primary)",
-                }}
-                labelFormatter={(label) => formatBusinessDateShort(String(label))}
-                formatter={(value) => [formatUsdFromMills(Number(value)), "Потратил"]}
+                cursor={lineCursor}
+                isAnimationActive={false}
+                wrapperStyle={{ zIndex: 20 }}
+                content={(tooltip: ChartTooltipRenderProps) => (
+                  <ChartTooltipCard
+                    {...tooltip}
+                    series={[{ key: "value", label: "Потратил", color: "var(--color-accent)" }]}
+                    formatValue={(value) => formatUsdFromMills(value)}
+                    formatLabel={(label) => formatBusinessDateShort(String(label))}
+                    note={(row) => {
+                      const count = Number(row.txnCount ?? 0);
+                      return count > 0
+                        ? `${count} ${ruPlural(count, "операция", "операции", "операций")}`
+                        : null;
+                    }}
+                  />
+                )}
               />
               <Area
                 type="monotone"
@@ -140,6 +164,8 @@ export function SpenderTrendPanel({
                 stroke="var(--color-accent)"
                 strokeWidth={2}
                 fill={`url(#${gradientId})`}
+                activeDot={activeDot("var(--color-accent)")}
+                {...CHART_ANIMATION}
               />
             </AreaChart>
           </ResponsiveContainer>

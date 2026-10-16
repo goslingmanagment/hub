@@ -155282,6 +155282,71 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "windowViews": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "windowPreviewViews": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "daily": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "bucketStart": {
+                                  "type": "string"
+                                },
+                                "views": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "previewViews": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "bucketStart",
+                                "views",
+                                "previewViews"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -155300,7 +155365,10 @@
                           "deletedAtPlatform",
                           "firstObservedAt",
                           "lastObservedAt",
-                          "buckets"
+                          "buckets",
+                          "windowViews",
+                          "windowPreviewViews",
+                          "daily"
                         ],
                         "additionalProperties": false
                       }
@@ -155521,6 +155589,9 @@
                     "bucketsTruncated": {
                       "type": "boolean"
                     },
+                    "dailyTruncated": {
+                      "type": "boolean"
+                    },
                     "nextCursor": {
                       "type": [
                         "string",
@@ -155536,6 +155607,7 @@
                     "watchMetrics",
                     "coverage",
                     "bucketsTruncated",
+                    "dailyTruncated",
                     "nextCursor"
                   ],
                   "additionalProperties": false
