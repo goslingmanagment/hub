@@ -40,11 +40,13 @@
 // Chrome before is dropped and counted.
 //
 //  1. `wsAdmit` with a new connection id, the address and context CDP shows
-//     for the oldest socket of the host waiting to connect (a label only),
+//     for the unique live socket of the host waiting to connect (not yet bound),
+//     or the host and page context when CDP cannot label it yet,
 //     the live session and the wait's end (at most 2.5 s from the
 //     CONNECT). Nothing is asked when no admission may be given: no engine
 //     heard for 5 s (plan §4.9 — what is open stays open), the exit closed,
-//     the page not up, the buffer taking no writes — or no live session of
+//     the page not up, the buffer taking no writes, a unique pending CDP
+//     candidate known to belong to an old document — or no live session of
 //     the site yet: the socket gate could not let its authorization go
 //     (egress/socket-gate.ts), and a socket before the login is of no use to
 //     Hub. The CONNECT is refused then.
@@ -169,6 +171,8 @@ export interface SocketTimings {
 }
 
 export const WS_ADMIT_WAIT_MS = 2_500;
+/** A retired document's unclaimed CONNECT candidate is kept this long. */
+export const RETIRED_CONNECT_WAIT_MS = 30_000;
 
 const DEFAULT_TIMINGS: SocketTimings = { admitWaitMs: WS_ADMIT_WAIT_MS, bindWaitMs: 15_000, accountWaitMs: 15_000, retryMs: [1000, 2000, 5000, 15_000, 30_000] };
 
@@ -305,6 +309,8 @@ interface Admission {
   /** Its CONNECT came (CLOCK_MONOTONIC): its wait counts from here. */
   connectMono: number;
   documentEpoch: number;
+  /** A unique current-document candidate, for the label only; not bound. */
+  candidate: CdpSocket | null;
   waitDeadlineMono: number;
   linkEpoch: number | null;
   resolve: (deadline: number | null) => void;
@@ -340,11 +346,12 @@ interface CdpSocket {
   documentEpoch: number;
   documentOwned: boolean;
   retired: boolean;
+  retiredMono: number | null;
   url: string;
   host: string;
   context: WsAdmit["context"];
-  /** The admission asking for its CONNECT, by `wsAdmit`'s label only. */
-  guessedBy: string | null;
+  /** No CONNECT has taken this candidate and CDP has not ended it. */
+  connectPending: boolean;
   /** Its admission, bound at its handshake, for good. */
   admission: Admission | null;
   /** new → handshaking (bound) → open (its 101 kept) → ended; answered: its
@@ -576,12 +583,22 @@ export class SiteSockets {
   /** A CONNECT to the socket host: its admission (it waits for the socket
    *  before it, then for the engine), or why it is refused at once. */
   admit(host: string, port: number): SocketTicket | string {
-    const refused = this.#refusal();
+    const unavailable = this.#refusal();
+    const socket = unavailable === null ? this.#waitingSocket(host) : null;
+    // Refuse only the unique old candidate. With no candidate or several,
+    // retain the original current-epoch admission path. Accepted residual
+    // risk: a late old CONNECT overlapping a new candidate, or arriving
+    // after RETIRED_CONNECT_WAIT_MS, can cause ws_unaccounted and a restart.
+    const old = socket !== null && (socket.retired || socket.documentEpoch < this.#documentEpoch);
+    const refused = unavailable ?? (old ? "its CDP socket belongs to an old work document" : null);
     if (refused !== null) {
+      if (old) socket!.connectPending = false;
       this.#log("admit.refused", { host, why: refused });
       this.#deps.journal({ connectionId: null, event: "refused", detail: `no admission asked: ${refused}` });
       return refused;
     }
+    const candidate = this.#waitingSocket(host, true);
+    if (candidate !== null) candidate.connectPending = false;
     const id = randomUUID();
     let resolve: (deadline: number | null) => void = () => undefined;
     const granted = new Promise<number | null>((done) => (resolve = done));
@@ -594,6 +611,7 @@ export class SiteSockets {
       connectMono,
       waitDeadlineMono: connectMono + this.#timings.admitWaitMs,
       documentEpoch: this.#documentEpoch,
+      candidate,
       linkEpoch: null,
       provenMono: this.#now(),
       resolve,
@@ -639,8 +657,7 @@ export class SiteSockets {
     admission.linkEpoch = this.#deps.link.epoch?.() ?? null;
     admission.fingerprint = fingerprint;
     this.#admissions.set(admission.id, admission);
-    const socket = this.#waitingSocket(admission.host);
-    if (socket !== null) socket.guessedBy = admission.id;
+    const socket = admission.candidate;
     const now = this.#now();
     const url = socket?.url ?? `wss://${admission.host}${admission.port === 443 ? "" : `:${admission.port}`}/`;
     const context = socket?.context ?? "page";
@@ -738,8 +755,9 @@ export class SiteSockets {
    *  document-destruction proof, not the intent to navigate. */
   #retireDocumentSockets(): void {
     for (const socket of this.#sockets.values()) {
-      if (!socket.documentOwned) continue;
+      if (!socket.documentOwned || socket.retired) continue;
       socket.retired = true;
+      socket.retiredMono = this.#now();
       if (socket.state === "ended") continue;
       const admission = socket.admission;
       if (admission !== null) this.#deps.cutTunnel(admission.id, "its work document was replaced");
@@ -1147,7 +1165,7 @@ export class SiteSockets {
       this.#failClosed(this.#current, `more than ${MAX_SOCKETS} sockets of the host alive at once`);
       return null;
     }
-    const socket: CdpSocket = { key, documentEpoch: this.#documentEpoch, documentOwned: this.#deps.isWorkDocumentTarget?.(event.sessionId ?? null) === true, retired: false, url, host, context: contextOf(this.#deps.targetType(event.sessionId ?? null)), guessedBy: null, admission: null, state: "new" };
+    const socket: CdpSocket = { key, documentEpoch: this.#documentEpoch, documentOwned: this.#deps.isWorkDocumentTarget?.(event.sessionId ?? null) === true, retired: false, retiredMono: null, url, host, context: contextOf(this.#deps.targetType(event.sessionId ?? null)), connectPending: true, admission: null, state: "new" };
     this.#sockets.set(key, socket);
     this.#socketLog(event, socket, "created");
     return null;
@@ -1157,20 +1175,31 @@ export class SiteSockets {
    *  CDP says of it later is dropped as of no socket kept). False: none. */
   #forgetOneEnded(): boolean {
     for (const [key, socket] of this.#sockets) {
-      if (socket.state !== "ended") continue;
+      if (socket.state !== "ended" || (socket.retired && this.#connectPending(socket))) continue;
       this.#sockets.delete(key);
       return true;
     }
     return false;
   }
 
-  /** The oldest socket of `host` still to connect, for `wsAdmit`'s label
-   *  (a label only: nothing is bound by it). */
-  #waitingSocket(host: string): CdpSocket | null {
+  /** Expiry is checked when matching or making room, like ended sockets:
+   *  it needs no timer and never extends on another document's retirement. */
+  #connectPending(socket: CdpSocket): boolean {
+    if (socket.retiredMono !== null && this.#now() >= socket.retiredMono + RETIRED_CONNECT_WAIT_MS) socket.connectPending = false;
+    return socket.connectPending;
+  }
+
+  /** The unique unclaimed candidate, including an old document's for a
+   *  bounded time. currentOnly selects a label, never admission evidence. */
+  #waitingSocket(host: string, currentOnly = false): CdpSocket | null {
+    let waiting: CdpSocket | null = null;
     for (const socket of this.#sockets.values()) {
-      if (socket.host === host && socket.state === "new" && (socket.guessedBy === null || !this.#admissions.has(socket.guessedBy))) return socket;
+      if (socket.host !== host || !this.#connectPending(socket) || (socket.state !== "new" && !socket.retired)) continue;
+      if (currentOnly && (socket.retired || socket.documentEpoch !== this.#documentEpoch || socket.state !== "new")) continue;
+      if (waiting !== null) return null;
+      waiting = socket;
     }
-    return null;
+    return waiting;
   }
 
   /** The current admission whose tunnel is open and whose socket is not
@@ -1364,6 +1393,7 @@ export class SiteSockets {
     const socket = this.#socket(event);
     if (typeof socket === "string") return null;
     this.#socketLog(event, socket, "frame_error");
+    socket.connectPending = false;
     if (socket.retired) return null;
     if (socket.state === "new" || socket.admission === null) {
       // Not bound: one whose CONNECT was refused (or waited in vain). Its
@@ -1392,6 +1422,7 @@ export class SiteSockets {
     const socket = this.#socket(event);
     if (typeof socket === "string") return this.#drop("a close of a socket not bound");
     this.#socketLog(event, socket, "closed");
+    socket.connectPending = false;
     const admission = socket.admission;
     switch (socket.state) {
       case "open":
@@ -1649,7 +1680,6 @@ export class SiteSockets {
     const queued = this.#queue.indexOf(admission);
     if (queued >= 0) this.#queue.splice(queued, 1);
     this.#forget(admission, why);
-    this.#releaseGuess(admission);
     this.#log("admit.ended", { connectionId: admission.id, why, asked });
     this.#deps.journal({ connectionId: admission.id, event: "refused", detail: why });
     admission.resolve(null);
@@ -1696,7 +1726,6 @@ export class SiteSockets {
     if (admission.waitTimer) clearTimeout(admission.waitTimer);
     admission.waitTimer = null;
     this.#forget(admission, why);
-    this.#releaseGuess(admission);
     // A CONNECT still waiting for it is refused (a no-op once it went on).
     admission.resolve(null);
   }
@@ -1704,10 +1733,6 @@ export class SiteSockets {
   #forget(admission: Admission, why: string): void {
     this.#admissions.delete(admission.id);
     remember(this.#gone, admission.id, { why, attemptId: admission.attemptId }, MAX_GONE);
-  }
-
-  #releaseGuess(admission: Admission): void {
-    for (const socket of this.#sockets.values()) if (socket.guessedBy === admission.id) socket.guessedBy = null;
   }
 
   /** CDP's word on the current admission's socket must come within `ms`:

@@ -30,7 +30,7 @@ import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/uti
 import { guardExpression } from "../apps/page-browser/src/ws/guard.ts";
 import { GuardInstaller } from "../apps/page-browser/src/ws/install.ts";
 import { BoundaryFile } from "../apps/page-browser/src/ws/boundary.ts";
-import { CALIBRATION_MAX_MS, SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
+import { CALIBRATION_MAX_MS, RETIRED_CONNECT_WAIT_MS, SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
 import {
   FakeCdpPort,
   FakeChrome,
@@ -95,7 +95,7 @@ interface World {
   outcome: (attemptId: number) => Record<string, unknown> | null;
 }
 
-async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number } = {}): Promise<World> {
+async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number; now?: () => number } = {}): Promise<World> {
   const temp = tempDir("pb-ws-");
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -147,6 +147,7 @@ async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buff
       egress.closeExit(note);
     },
     ...(options.timings ? { timings: options.timings } : {}),
+    ...(options.now ? { now: options.now } : {}),
     log: makeLog("ws"),
   });
   const created = sockets;
@@ -193,23 +194,18 @@ function failingCommits(inner: EventBuffer, control: { failing: boolean; pending
   };
 }
 
-/** The site opens a socket: CDP shows it, Chrome CONNECTs (it waits). */
-function siteOpens(w: World, requestId = "WS1", sessionId = "S1"): Promise<SocketTunnelClient> {
-  w.cdp.emit("Network.webSocketCreated", { requestId, url: URL_WS }, sessionId);
-  return SocketTunnelClient.connect(w.proxyPort);
-}
-
 /** An admitted socket to the 101: the TLS handshake, the handshake request
  *  as CDP and the proxy see it, the answer. */
 /** `chrome`: Chrome's clock of an instant of this process's (its own base). */
 async function opened(w: World, requestId = "WS1", attemptId = 41, sessionId = "S1", chrome: (mono: number) => number = (mono) => mono): Promise<SocketTunnelClient> {
-  const connecting = siteOpens(w, requestId, sessionId);
+  const connecting = SocketTunnelClient.connect(w.proxyPort);
   const asked = w.link.of("wsAdmit").length;
   await until(() => w.link.of("wsAdmit").length > asked, 3000, "the admission asked");
   w.answer({ admit: true, attemptId });
   const client = await connecting;
   expect(client.status).toBe(200);
   await client.tls();
+  w.cdp.emit("Network.webSocketCreated", { requestId, url: URL_WS }, sessionId);
   w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId, timestamp: chrome(monoMs()) / 1000 }, sessionId);
   const before = w.server.received().length;
   client.request();
@@ -219,15 +215,37 @@ async function opened(w: World, requestId = "WS1", attemptId = 41, sessionId = "
 }
 
 describe("admission before connection (condition №3; amendment 8)", () => {
+  it("admits a CONNECT ahead of CDP without waiting for a candidate, then binds the current document's socket", async () => {
+    const w = await world();
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
+    await until(() => w.link.of("wsAdmit").length === 1);
+    expect(w.link.of("wsAdmit")[0]).toMatchObject({ url: "wss://wsv3.fansly.com/", context: "page" });
+    w.answer({ admit: true, attemptId: 9007 });
+    const live = await connecting;
+    expect(live.status).toBe(200);
+    await live.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "late-cdp", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "late-cdp", timestamp: monoMs() / 1000 }, "S1");
+    live.request();
+    await until(() => w.server.received().includes(SOCKET_FILL.request));
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "late-cdp", response: { status: 101 } }, "S1");
+    await until(() => w.outcome(9007) !== null);
+    expect(w.outcome(9007)).toMatchObject({ sent: true, status: 101 });
+    expect(w.sockets.openConnections).toBe(1);
+    expect(w.stops).toEqual([]);
+    w.cdp.emit("Network.webSocketClosed", { requestId: "late-cdp" }, "S1");
+    live.destroy();
+  });
+
   it("holds the CONNECT until the engine admits it; nothing reaches Fansly before", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1, 3000, "wsAdmit");
     const ask = w.link.of("wsAdmit")[0]!;
     expect(ask).toEqual({
       type: "wsAdmit",
       connectionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-      url: URL_WS,
+      url: "wss://wsv3.fansly.com/",
       context: "page",
       sessionFingerprint: FINGERPRINT,
       requestedMono: expect.any(Number),
@@ -248,7 +266,7 @@ describe("admission before connection (condition №3; amendment 8)", () => {
 
   it("refused by the engine: the CONNECT is refused, nothing goes, no outcome is owed", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: false, reason: "route_hold" } as never);
     const client = await connecting;
@@ -263,7 +281,7 @@ describe("admission before connection (condition №3; amendment 8)", () => {
   it("asks nothing and refuses at once when no admission may be given (no engine link, the buffer full...)", async () => {
     const w = await world();
     w.admitting.why = "no engine link";
-    const client = await siteOpens(w);
+    const client = await SocketTunnelClient.connect(w.proxyPort);
     expect(client.status).toBe(403);
     expect(w.link.of("wsAdmit")).toEqual([]);
     await until(() => w.records.length === 1);
@@ -272,9 +290,9 @@ describe("admission before connection (condition №3; amendment 8)", () => {
 
   it("one socket at a time: a second CONNECT waits — asked for once the first is accounted for (here: refused)", async () => {
     const w = await world();
-    const first = siteOpens(w, "WS1");
+    const first = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
-    const second = siteOpens(w, "WS2");
+    const second = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.sockets.pending === 2);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(w.link.of("wsAdmit")).toHaveLength(1);
@@ -319,7 +337,7 @@ describe("the admission's deadline (spec §9)", () => {
 
   it("cuts the tunnel at the deadline when the request has not gone: it never reaches Fansly", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, deadlineMono: monoMs() + 400, attemptId: 52 });
     const client = await connecting;
@@ -338,7 +356,7 @@ describe("the admission's deadline (spec §9)", () => {
 
   it("refuses the CONNECT of an admission that came expired, and closes the attempt", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, deadlineMono: monoMs() - 1, attemptId: 53 });
     expect((await connecting).status).toBe(403);
@@ -349,7 +367,7 @@ describe("the admission's deadline (spec §9)", () => {
 
   it("an admission that finds its CONNECT gone ends at once, not sent", async () => {
     const w = await world();
-    const client = siteOpens(w);
+    const client = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     const connectionId = String(w.link.of("wsAdmit")[0]!.connectionId);
     // Chrome drops it (the stand had the proxy end it: Chrome keeps one).
@@ -376,7 +394,7 @@ describe("the admission's deadline (spec §9)", () => {
   it("two sockets at once: the second waits for the first's whole life — asked for only once the first closed and its close is durable", async () => {
     const w = await world();
     await opened(w, "WS1", 61);
-    const second = siteOpens(w, "WS2");
+    const second = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.sockets.pending === 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
     // The first is open: the second's CONNECT waits, nothing asked.
@@ -390,7 +408,7 @@ describe("the admission's deadline (spec §9)", () => {
 
   it("refuses the CONNECTs still waiting when the engine's link changes; an answer that comes later is closed, not used", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.sockets.linkChanged();
     expect((await connecting).status).toBe(403);
@@ -403,11 +421,12 @@ describe("the admission's deadline (spec §9)", () => {
 describe("the handshake's outcome (wsDone)", () => {
   it("401/403/429: the status goes to the engine (its auth stop or ws.upgrade hold)", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 81 });
     const client = await connecting;
     await client.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
     client.request();
     await until(() => w.server.received().includes(SOCKET_FILL.request));
@@ -426,11 +445,12 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("a tunnel that ends after its request waits for CDP's status: the proxy's end and CDP's answer travel apart", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     const connectionId = w.answer({ admit: true, attemptId: 82 });
     const client = await connecting;
     await client.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
     client.request();
     await until(() => w.server.received().includes(SOCKET_FILL.request));
@@ -443,7 +463,7 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("an unaccounted tunnel — its request went up, it ended, CDP silent on its socket — fails closed: the page stops (ws_unaccounted), nothing is reassigned, nothing admitted until Chrome starts again", async () => {
     const w = await world({ timings: { accountWaitMs: 200 } });
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     const connectionId = w.answer({ admit: true, attemptId: 83 });
     const client = await connecting;
@@ -458,7 +478,7 @@ describe("the handshake's outcome (wsDone)", () => {
     // The next socket is not admitted — not this Chrome's, whatever CDP says
     // later of the first.
     w.egress.openExit();
-    const next = await siteOpens(w, "WS2");
+    const next = await SocketTunnelClient.connect(w.proxyPort);
     expect(next.status).toBe(403);
     expect(w.link.of("wsAdmit")).toHaveLength(1);
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
@@ -492,7 +512,7 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("a handshake on the tunnel that CDP never shows fails closed: its tunnel cut, the page stops (ws_unaccounted)", async () => {
     const w = await world({ timings: { bindWaitMs: 200 } });
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 87 });
     const client = await connecting;
@@ -571,7 +591,7 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("Astra's round 6: a tunnel that ended with no request on it is not accounted for until CDP shows its socket's end — the next CONNECT waits, and the late handshake is its own admission's", async () => {
     const w = await world();
-    const connecting = siteOpens(w, "WS1");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 95, deadlineMono: monoMs() + 300 });
     const client = await connecting;
@@ -581,11 +601,12 @@ describe("the handshake's outcome (wsDone)", () => {
     client.socket.resume();
     await until(() => w.outcome(95) !== null, 3000, "A's outcome");
     expect(w.outcome(95)).toMatchObject({ sent: false, error: expect.stringContaining("the tunnel ended before the handshake request") });
-    const next = siteOpens(w, "WS2");
+    const next = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.sockets.pending === 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(w.link.of("wsAdmit")).toHaveLength(1);
     // A's handshake and its failure, late: they are A's, and A is accounted for.
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
     w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "net::ERR_CONNECTION_CLOSED" }, "S1");
     await until(() => w.link.of("wsAdmit").length === 2, 3000, "B asked");
@@ -597,13 +618,13 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("Astra's round 6: the same with CDP silent fails closed — nothing admitted after it until Chrome starts again", async () => {
     const w = await world({ timings: { accountWaitMs: 200 } });
-    const connecting = siteOpens(w, "WS1");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 96, deadlineMono: monoMs() + 300 });
     const client = await connecting;
     await client.tls();
     client.socket.resume();
-    const next = siteOpens(w, "WS2");
+    const next = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.stops.length === 1, 3000, "the stop");
     expect(w.stops[0]).toMatchObject({ reason: "ws_unaccounted" });
     // B was never asked for (its CONNECT went with the closed exit).
@@ -614,11 +635,12 @@ describe("the handshake's outcome (wsDone)", () => {
   it("Astra's round 6: Chrome lost before the first 101 is told — the browser's gap covers what the socket carried, open in the stream or not", async () => {
     const w = await world();
     await w.sockets.afterRestart();
-    const connecting = siteOpens(w, "WS1");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 97 });
     const client = await connecting;
     await client.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
     client.request();
     await until(() => w.server.received().includes(SOCKET_FILL.request));
@@ -686,11 +708,12 @@ describe("the handshake's outcome (wsDone)", () => {
   it("Astra's round 7: a late first 101 after its tunnel ended — the frames lost before it are under the next gap, whose boundary is unknown, never the moment the 101 was taken", async () => {
     const w = await world();
     await w.sockets.afterRestart();
-    const connecting = siteOpens(w, "WS1");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     const connectionId = w.answer({ admit: true, attemptId: 101 });
     const client = await connecting;
     await client.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
     client.request();
     await until(() => w.server.received().includes(SOCKET_FILL.request));
@@ -713,7 +736,7 @@ describe("the handshake's outcome (wsDone)", () => {
 
   it("a tunnel that is not TLS is cut before anything goes", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 84 });
     const client = await connecting;
@@ -797,7 +820,7 @@ describe("frames (plan §4.4)", () => {
     const w = await world();
     w.session.fingerprint = null;
     w.session.token = null;
-    const client = await siteOpens(w);
+    const client = await SocketTunnelClient.connect(w.proxyPort);
     expect(client.status).toBe(403);
     expect(w.link.of("wsAdmit")).toEqual([]);
     await until(() => w.records.length === 1);
@@ -815,7 +838,7 @@ describe("frames (plan §4.4)", () => {
     expect(w.events().map((event) => event.kind)).toEqual(["ws.open", "ws.in"]);
     expect(w.egress.openTunnels).toBe(1);
     // ...and no new one is admitted.
-    const next = await siteOpens(w, "WS2");
+    const next = await SocketTunnelClient.connect(w.proxyPort);
     expect(next.status).toBe(403);
     expect(w.link.of("wsAdmit")).toHaveLength(1);
   });
@@ -863,14 +886,14 @@ describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
 describe("the end of the page", () => {
   it("refuses what waits, ends what was admitted (not sent), closes what is open", async () => {
     const w = await world();
-    const waiting = siteOpens(w, "WS1");
+    const waiting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.sockets.endAll("control lost");
     expect((await waiting).status).toBe(403);
     // Nothing is admitted before a new Chrome.
-    expect((await siteOpens(w, "WS2")).status).toBe(403);
+    expect((await SocketTunnelClient.connect(w.proxyPort)).status).toBe(403);
     await w.sockets.chromeStarting();
-    const connecting = siteOpens(w, "WS3");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 2);
     w.answer({ admit: true, attemptId: 91 });
     const client = await connecting;
@@ -883,7 +906,7 @@ describe("the end of the page", () => {
 
   it("a new owner's quiesce: an earlier owner's admitted socket that has not sent its request never goes", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 92, ownerGeneration: 1 });
     const client = await connecting;
@@ -897,7 +920,7 @@ describe("the end of the page", () => {
 
   it("the engine's recover: an admitted socket whose request has not gone is not_sent and never goes; one that went is unknown", async () => {
     const w = await world();
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 93 });
     const client = await connecting;
@@ -1162,7 +1185,7 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
 
   it("a socket whose TLS the gate cannot measure (a CBC suite) is cut before its handshake request", async () => {
     const w = await world({ tls12Suite: 0xc013 });
-    const connecting = siteOpens(w);
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 101 });
     const client = await connecting;
@@ -1298,15 +1321,16 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const ticket = sockets.admit("wsv3.fansly.com", 443);
     if (typeof ticket === "string") throw new Error(ticket);
     sockets.onAdmitResult({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: ticket.id, admit: true, deadlineMono: monoMs() + 5000, attemptId });
+    expect(await ticket.granted).not.toBeNull();
     ticket.event({ kind: "open" });
     tunnelOf = ticket;
     return ticket.id;
   }
 
-  /** The site's socket as Chrome reports it: created, its handshake — and
+  /** The site's socket as Chrome reports its handshake — and
    *  the request up its tunnel, as the proxy sees it; then the 101. */
   function handshake(chrome: FakeChrome, requestId: string): void {
-    chrome.event("Network.webSocketCreated", { requestId, url: "wss://wsv3.fansly.com/?v=3" }, "S1");
+    chrome.event("Network.webSocketCreated", { requestId, url: URL_WS }, "S1");
     chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId, timestamp: monoMs() / 1000 }, "S1");
     tunnelOf?.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
   }
@@ -1356,7 +1380,10 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const controlled = new ControlledBuffer(first);
     const a = await operatorSide(holder, controlled);
     const connectionId = await admitted(a.sockets, 61);
+    const handshaken = new Promise<void>((resolve) => a.cdp.on("Network.webSocketWillSendHandshakeRequest", () => resolve()));
     handshake(chrome, "WS1");
+    await handshaken;
+    await until(() => a.sockets.clockOf("S1") !== null, 3000, "the calibration replies before counting socket events");
     await until(() => first.connections().length === 1 && stored() === 0, 3000, "the admission kept");
     const steps = [() => answered(chrome, "WS1"), () => frame(chrome, "frame-1"), () => frame(chrome, "frame-2")];
     for (const step of steps.slice(0, kept)) {
@@ -1494,7 +1521,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     answer();
     chrome.handlers.set("Performance.getMetrics", metrics);
     await until(() => sockets.clockOf("S1") !== null, 3000, "the session calibrated");
-    return { chrome, buffer, sockets, t, wallT, chromeAt };
+    return { chrome, buffer, sockets, holder, t, wallT, chromeAt };
   }
 
   it.for([
@@ -1502,7 +1529,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     { chrome: "an hour ahead", shift: 3_600_000 },
     { chrome: "an hour behind", shift: -3_600_000 },
   ])("Astra's round 7: the first batch told five minutes late, before its session's calibration (Chrome's clock $chrome): stamped no later than its handshake — the next gap from there, a message missed four minutes ago inside the repair's window", async ({ shift }) => {
-    const { chrome, buffer, sockets, t, wallT, chromeAt } = await lateFirstBatch(shift);
+    const { chrome, buffer, sockets, holder, t, wallT, chromeAt } = await lateFirstBatch(shift);
     const late = eventsOf(buffer);
     for (const [kind, seen] of [["ws.open", t - 304_000], ["ws.in", t - 300_000], ["ws.close", t - 299_000]] as const) {
       const event = late.find((one) => one.kind === kind)!;
@@ -1610,7 +1637,7 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const { cdp, sockets } = await operatorSide(holder, buffer, { timings: { bindWaitMs: 100 }, stop: (reason) => stops.push(reason), targetType: (sessionId) => (sessionId === "W0" && restarted ? null : "worker") });
     cleanups.push(() => cdp.close());
     const connectionA = await admitted(sockets, 81);
-    // A's request up its tunnel; the worker's CDP events do not come.
+    // A's request up its tunnel; the worker's handshake event does not come.
     tunnelOf!.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
     await until(() => stops.length === 1, 3000, "the stop");
     expect(stops).toEqual(["ws_unaccounted"]);
@@ -1782,7 +1809,7 @@ describe("document boundaries of socket admissions (lilly-1)", () => {
       } };
     } });
     try {
-      const connecting = siteOpens(w, "slow-durable");
+      const connecting = SocketTunnelClient.connect(w.proxyPort);
       await until(() => w.link.of("wsAdmit").length === 1);
       w.answer({ admit: true, attemptId: 9005 });
       expect((await connecting).status).toBe(403);
@@ -1797,7 +1824,7 @@ describe("document boundaries of socket admissions (lilly-1)", () => {
   it("a replayed navigation does not retire the current document or its waiting admission", async () => {
     const w = await world();
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
-    const connecting = siteOpens(w, "live");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "old-loader" } }, "S1", true);
     expect(w.link.of("admissionCancel")).toEqual([]);
@@ -1809,7 +1836,8 @@ describe("document boundaries of socket admissions (lilly-1)", () => {
   it("revokes a pending CONNECT on navigation; its late grant and handshake cannot steal the new document's tunnel", async () => {
     const w = await world();
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
-    const old = siteOpens(w, "old");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "old", url: URL_WS }, "S1");
+    const old = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     const id = String(w.link.of("wsAdmit")[0]!.connectionId);
     w.sockets.documentChanging();
@@ -1831,30 +1859,83 @@ describe("document boundaries of socket admissions (lilly-1)", () => {
     live.destroy();
   });
 
-  it("navigation is not evidence that a worker ended: its old handshake cannot bind to a new tunnel", async () => {
+  it("a unique retired candidate's late CONNECT is refused without an admission or ws_unaccounted; the current socket still opens", async () => {
+    const w = await world({ timings: { bindWaitMs: 50, accountWaitMs: 50 } });
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "old", url: URL_WS }, "S1");
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
+    const old = await SocketTunnelClient.connect(w.proxyPort);
+    expect(old.status).toBe(403);
+    expect(w.link.of("wsAdmit")).toEqual([]);
+    expect(w.socks.connects).toEqual([]);
+    expect(w.sockets.pending).toBe(0);
+    expect(w.sockets.busy).toBe(false);
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "old" }, "S1");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(w.stops).toEqual([]);
+
+    const live = await opened(w, "new", 9006);
+    await until(() => w.outcome(9006) !== null);
+    expect(w.outcome(9006)).toMatchObject({ sent: true, status: 101 });
+    expect(w.sockets.openConnections).toBe(1);
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "old" }, "S1");
+    expect(w.stops).toEqual([]);
+    w.cdp.emit("Network.webSocketClosed", { requestId: "new" }, "S1");
+    live.destroy();
+  });
+
+  it.each(["S1", "W1"])("multiple candidates, including an older socket in %s, do not prevent the current document's CONNECT", async (oldSession) => {
     const w = await world();
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
-    w.cdp.emit("Network.webSocketCreated", { requestId: "worker-old", url: URL_WS }, "W1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "old", url: URL_WS }, oldSession);
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
-    const connecting = siteOpens(w, "new");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "new", url: URL_WS }, "S1");
+    const live = await opened(w, "new", 9003);
+    expect(w.link.of("wsAdmit")[0]).toMatchObject({ url: URL_WS, context: "page" });
+    expect(w.stops).toEqual([]);
+    expect(w.sockets.openConnections).toBe(1);
+    w.cdp.emit("Network.webSocketClosed", { requestId: "new" }, "S1");
+    live.destroy();
+  });
+
+  it("a retired candidate CDP never ends stops blocking CONNECT after its retirement bound", async () => {
+    let now = monoMs();
+    const w = await world({ now: () => now });
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
+    w.cdp.emit("Network.webSocketCreated", { requestId: "silent-old", url: URL_WS }, "S1");
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
+    now += RETIRED_CONNECT_WAIT_MS / 2;
+    // Another navigation must not renew an already retired candidate.
+    w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L3" } }, "S1");
+    now += RETIRED_CONNECT_WAIT_MS / 2;
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
-    w.answer({ admit: true, attemptId: 9003 });
-    const tunnel = await connecting;
-    await tunnel.tls();
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "worker-old" }, "W1");
-    expect(w.stops).toContainEqual(expect.objectContaining({ reason: "ws_unaccounted" }));
-    expect(w.events().some((event) => event.kind === "ws.open")).toBe(false);
-    tunnel.destroy();
+    w.answer({ admit: true, attemptId: 9008, deadlineMono: now + 5000 });
+    const live = await connecting;
+    expect(live.status).toBe(200);
+    await live.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "new", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "new", timestamp: monoMs() / 1000 }, "S1");
+    live.request();
+    await until(() => w.server.received().includes(SOCKET_FILL.request));
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "new", response: { status: 101 } }, "S1");
+    await until(() => w.outcome(9008) !== null);
+    expect(w.outcome(9008)).toMatchObject({ sent: true, status: 101 });
+    expect(w.sockets.openConnections).toBe(1);
+    expect(w.stops).toEqual([]);
+    w.cdp.emit("Network.webSocketClosed", { requestId: "new" }, "S1");
+    live.destroy();
   });
 
   it("a document boundary cannot account for an opened unbound tunnel by guessing its CDP socket", async () => {
     const w = await world({ timings: { accountWaitMs: 100 } });
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L1" } }, "S1");
-    const connecting = siteOpens(w, "unbound");
+    const connecting = SocketTunnelClient.connect(w.proxyPort);
     await until(() => w.link.of("wsAdmit").length === 1);
     w.answer({ admit: true, attemptId: 9004, deadlineMono: monoMs() + 150 });
     const tunnel = await connecting;
     await tunnel.tls();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "unbound", url: URL_WS }, "S1");
     w.cdp.emit("Page.frameNavigated", { frame: { id: "F1", loaderId: "L2" } }, "S1");
     expect(w.sockets.busy).toBe(true);
     tunnel.socket.resume();

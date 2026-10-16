@@ -235,6 +235,8 @@ describe("the site path over the operator's RPC", () => {
       const result = await testDb!.pool.query("select credentials_generation from sync_pages where page_id=$1", [r.page.pageId]);
       return result.rows[0]?.credentials_generation === expected && browser.client.state?.step === "ready";
     }, 5_000, "fresh identity and ready after the restart");
+    // The page is ready on the answer itself; its outcome is journaled just after.
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.id > answer.attemptId && row.origin === "engine" && row.outcome !== "admitted"), 5_000, "the identity read's outcome");
     const after = (await attempts(r.page.pageId)).filter((row) => row.id > answer.attemptId && row.origin === "engine");
     expect(after[0]).toMatchObject({ operation: "account.me", outcome: "response", httpStatus: 200 });
     // Ready ends this startup demand even when the trusted digest never
