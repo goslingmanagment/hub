@@ -30,6 +30,16 @@ services:
     hostname: pb-${PB_PROFILE_ID}
     restart: unless-stopped
     stop_grace_period: 20s
+    # Bounded like Hub's own services (docker-compose.production.yml): the
+    # operator writes a line per passed site request, and Chrome and KasmVNC
+    # write to the same stream. Without a cap the daemon default (json-file,
+    # unrotated) grows for the container's whole life. `local` compresses
+    # rotated files; the facts stay in Hub's journal, not in this log.
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       pb-control:
         ipv4_address: ${PB_CONTROL_IP:?the address in pb-control}
