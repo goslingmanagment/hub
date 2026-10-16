@@ -67,8 +67,11 @@ const BROWSER_HEADERS = new Set([
 /** The session's own headers: from the live session, never the engine's. */
 export const SESSION_HEADERS = new Set(["authorization", "fansly-client-id", "fansly-session-id", "fansly-client-ts", "fansly-client-check"]);
 
-/** Left out of the parity: they follow the cache and the cookie jar. */
-const PARITY_IGNORED = new Set(["cookie", "if-none-match", "if-modified-since"]);
+/** Left out of the parity: they follow the cache and the cookie jar — and
+ *  fansly-session-id the site's socket: a document sends it only once its
+ *  socket is up, so the site's own requests to one path differ in it over a
+ *  document's life (pilot 2, 2026-10-16). Hub's follow the latest template. */
+const PARITY_IGNORED = new Set(["cookie", "if-none-match", "if-modified-since", "fansly-session-id"]);
 
 /** cyrb53, as Fansly's bundle computes fansly-client-check. */
 export function cyrb53(text: string, seed = 0): number {
@@ -212,7 +215,8 @@ export class SiteSession {
   headersFor(pathname: string, extra: Record<string, string>): BuiltHeaders {
     const template = this.#template;
     const fingerprint = this.#fingerprint;
-    if (template === null || fingerprint === null) return { ok: false, why: "no live session of the site yet: it made no API request with authorization" };
+    if (fingerprint === null) return { ok: false, why: "no live session of the site yet: it made no API request with authorization" };
+    if (template === null) return { ok: false, why: "the site's new document made no API request with authorization yet" };
     if (this.#checkOk === false) return { ok: false, why: "the site computes fansly-client-check another way than the operator: the transport is not ready" };
     if (this.#parityBroken) return { ok: false, why: "a Hub request's headers differed from the site's: the transport is not ready" };
     const clientId = header(template, "fansly-client-id") ?? "";
@@ -245,6 +249,17 @@ export class SiteSession {
     this.#parityBroken = true;
     const [hubNames, siteNames] = hub ? [kept, other] : [other, kept];
     this.#options.onHeaderMismatch?.(path, hubNames, siteNames);
+  }
+
+  /** The work tab's document was replaced: the session goes on (its
+   *  fingerprint stays), but the headers were the old document's — the new
+   *  one has no socket yet, so no fansly-session-id. Hub requests wait for
+   *  its first API request with authorization, and the names it sent are
+   *  compared afresh. A broken parity stays broken. */
+  newDocument(): void {
+    this.#template = null;
+    this.#siteNames.clear();
+    this.#hubNames.clear();
   }
 
   /** A new browser: nothing of the old session is kept. */
