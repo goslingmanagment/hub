@@ -10,6 +10,7 @@ import {
   endChatUnavailability,
   getOpenWorkForKey,
   hasUnconfirmedDmLiveChatMessage,
+  hasUnparsedPageObservationBefore,
   isDmArchiveScopeFenced,
   latestClosedWorkForKey,
   listArchiveMaterialHeads,
@@ -1059,7 +1060,19 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   // dropped — appending it would only copy the same material again (with a
   // checkpoint) and rewrite the row. Changed material, including a change
   // back to an earlier version, differs from that head and is appended.
-  const storedHeads = await listArchiveMaterialHeads(tx, {
+  // Not while an EARLIER read of the page is still unparsed (deferred,
+  // quarantined, racing the driver): its events would land after this read's
+  // and win over a state this read saw again but dropped. Then every draft is
+  // appended with its clock, as before.
+  const earlierUnparsed = await hasUnparsedPageObservationBefore(tx, {
+    accountId: input.pageId,
+    source: "pull",
+    kind: "dm_messages",
+    before: input.observation.receivedAt,
+    since: new Date(input.observation.receivedAt.getTime() - UNPARSED_LOOKBACK_MS),
+    exceptId: input.observation.id,
+  });
+  const storedHeads = earlierUnparsed ? new Map<string, Record<string, unknown>>() : await listArchiveMaterialHeads(tx, {
     accountId: input.pageId,
     platform: "fansly",
     messageRefs: pageMessageRefs(payload),
@@ -1119,6 +1132,10 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   const archived = await applyMessageEventsToArchive(tx, { accountId: input.pageId, platform: "fansly", events });
   bump(input.counters, "archive_inserted", archived.inserted);
 }
+
+/** How far back an unparsed earlier read keeps re-reads from being dropped:
+ *  deferrals and the driver's backstop settle in minutes to hours. */
+const UNPARSED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 
 /** The message ids of a `/message` page, as the canonicalizer reads them. */
 function pageMessageRefs(payload: unknown): string[] {

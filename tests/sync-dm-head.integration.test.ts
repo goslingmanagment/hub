@@ -752,6 +752,34 @@ describe("dm-messages.head", () => {
       .toBe(eventsBefore + 3);
   });
 
+  it("drops no re-read while an earlier read of the page is still unparsed (its events could land later)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedThread(pageId, { n: 11, stored: range(1, 3), chain: true });
+    const registry = await registryFor(pageId);
+    const materialCount = () => scalar(
+      "select count(*)::int as n from domain_events where account_id = $1 and type = 'message.material_observed'", [pageId],
+    );
+    await demand(pageId, "dm-messages.head", 11, [msg(5)]);
+    await runLive(pageId, registry, serve(groupOf(11), range(1, 5)),
+      async () => (await workRow(pageId, "dm-messages.head", 11))?.state === "done");
+    expect(await materialCount()).toBe(5);
+    // The first read as if its apply were still pending (deferred, quarantined).
+    await testDb.pool.query(
+      "update observations set parse_version = 0 where account_id = $1 and kind = 'dm_messages'",
+      [pageId],
+    );
+
+    await demand(pageId, "dm-messages.head", 11, [msg(6)]);
+    await runLive(pageId, registry, serve(groupOf(11), range(1, 6)),
+      async () => {
+        const work = await workRow(pageId, "dm-messages.head", 11);
+        return work?.state === "done" && work.demand.messageIds.length === 0;
+      });
+    // Every draft appended with its own clock, as before the drop existed.
+    expect(await materialCount()).toBe(11);
+  });
+
   it("material that changes and changes back (A → B → A) lands in the archive with the last read", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
