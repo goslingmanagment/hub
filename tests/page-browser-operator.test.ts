@@ -11,6 +11,7 @@ import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
+import { SITE_STALE_IN_FLIGHT_MS } from "../apps/page-browser/src/intercept/observe.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
@@ -106,8 +107,6 @@ async function setUp(
     slotLimitMs?: number;
     /** How long a request of the site in flight is waited out (30 s in the operator). */
     reloadWaitMs?: number;
-    /** The longer wait for a quiet site before restarting an unended slot. */
-    unendedQuietWaitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
@@ -173,7 +172,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.unendedQuietWaitMs ? { unendedQuietWaitMs: options.unendedQuietWaitMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -202,6 +201,19 @@ function command(engine: FakeEngine, kind: string): Promise<Record<string, unkno
 async function started(s: SetUp): Promise<void> {
   expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
   await until(() => s.operator.page.step === "site_loaded", START_MS, "the open exit");
+}
+
+/** Advance both clocks while the real CDP and RPC sockets keep running. */
+function shiftedClock(s: SetUp): (ms: number) => void {
+  const wall = Date.now.bind(Date);
+  const mono = process.hrtime.bigint.bind(process.hrtime);
+  let offsetMs = 0;
+  const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wall() + offsetMs);
+  const monoClock = vi.spyOn(process.hrtime, "bigint").mockImplementation(() => mono() + BigInt(offsetMs) * 1_000_000n);
+  // A simulated jump is not a missing heartbeat from the live fake engine.
+  s.operator.rpc.setTiming(100, 60 * 60_000);
+  cleanups.push(() => { wallClock.mockRestore(); monoClock.mockRestore(); });
+  return (ms) => { offsetMs += ms; };
 }
 
 function journal(logDir: string, kind: string): Array<Record<string, unknown>> {
@@ -1407,8 +1419,8 @@ describe("the buffer under stress (Astra's review of PR 11)", () => {
 });
 
 describe("a planned restart for an unended Hub slot (plan-b §4.1.10)", () => {
-  async function waiting(unendedQuietWaitMs = 2000) {
-    const s = await setUp({ slotLimitMs: 100, reloadWaitMs: 50, unendedQuietWaitMs, params: { restartBackoffMs: [60_000] } });
+  async function waiting() {
+    const s = await setUp({ slotLimitMs: 100, reloadWaitMs: 50, params: { restartBackoffMs: [60_000] } });
     await started(s);
     const tab = s.operator.control.workTab!.sessionId;
     // The site's API request remains in flight while the Hub slot's bound passes.
@@ -1449,14 +1461,34 @@ describe("a planned restart for an unended Hub slot (plan-b §4.1.10)", () => {
     expect(s.lines.map((line) => JSON.parse(line))).toContainEqual(expect.objectContaining({ e: "slot.restart", operation: "hub:unended", quiet: true, siteInFlight: 0 }));
   });
 
-  it("a site that never settles is waited out up to the named bound, with the wait and forced restart logged", async () => {
-    const s = await waiting(200);
-    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 3000, "the quiet wait bound");
+  it("never restarts while fresh site requests keep flying, even beyond the former five-minute wait", async () => {
+    const s = await waiting();
+    const advance = shiftedClock(s);
+    for (let n = 1; n <= 8; n++) {
+      // Overlap fresh requests: the previous one is still younger than 60 s.
+      advance(SITE_STALE_IN_FLIGHT_MS * 3 / 4);
+      s.chrome.event("Network.requestWillBeSent", { requestId: `site-busy-${n}`, request: { url: "https://apiv3.fansly.com/api/v1/notifications", method: "GET" } }, s.tab);
+      await until(() => s.operator.observer.inFlight === n + 1, 3000, "the next fresh site request");
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(s.operator.observer.activeSince(monoMs() - SITE_STALE_IN_FLIGHT_MS)).toBeGreaterThan(0);
+      expect(s.operator.page.snapshot.stopReason).toBeNull();
+      expect(s.operator.egress.gate.slotOwner).toBe("hub:unended");
+      expect(s.operator.egress.exitOpen).toBe(true);
+      expect(s.chrome.sent("Browser.close")).toEqual([]);
+    }
+    expect(s.lines.some((line) => line.includes('"e":"slot.restart"'))).toBe(false);
+  });
+
+  it("a hung or lost site request older than the named bound does not hold the quiet restart", async () => {
+    const s = await waiting();
+    const advance = shiftedClock(s);
+    advance(SITE_STALE_IN_FLIGHT_MS + 1);
+    await until(() => s.operator.page.snapshot.stopReason === "request_unended", 3000, "the stale request ignored");
     const logs = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(logs).toContainEqual(expect.objectContaining({ e: "slot.wait_quiet", operation: "hub:unended", waitMs: 200, siteInFlight: 1 }));
+    expect(logs).toContainEqual(expect.objectContaining({ e: "slot.wait_quiet", operation: "hub:unended", freshInFlight: 1, staleIgnored: 0, staleInFlightMs: SITE_STALE_IN_FLIGHT_MS }));
     const restart = logs.find((line) => line.e === "slot.restart")!;
-    expect(restart).toMatchObject({ quiet: false, siteInFlight: 1 });
-    expect(restart.waitedMs).toBeGreaterThanOrEqual(200);
+    expect(restart).toMatchObject({ quiet: true, freshInFlight: 0, staleIgnored: 1, siteInFlight: 1 });
+    expect(restart.waitedMs).toBeGreaterThanOrEqual(SITE_STALE_IN_FLIGHT_MS);
     await until(() => s.operator.egress.gate.slotOwner === null, 3000, "Chrome gone, the slot free");
     expect(s.chrome.sent("Browser.close")).toHaveLength(1);
   });
@@ -2031,9 +2063,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the slot free once answered");
   });
 
-  it("the page's slot past its bound with a released request's end unknown: once no request of the site flies (here: past the wait for it), Chrome goes and the page starts again (request_unended); only then is the slot free", async () => {
+  it("the page's slot past its bound with a released request's end unknown: once the site's request is stale, Chrome goes (request_unended); only then is the slot free", async () => {
     let attempt = 9700;
-    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, unendedQuietWaitMs: 500, params: { restartBackoffMs: [60_000] } });
+    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
     // Admissions of 1 s here.
     const answer = s.engine.onMessage;
     s.engine.onMessage = (message) => {
@@ -2046,6 +2078,10 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     const owner = s.operator.egress.gate.slotOwner;
     expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
     expect(s.operator.egress.gate.slotOwner).toBe(owner);
+    await until(() => s.lines.some((line) => line.includes('"e":"slot.wait_quiet"')), 5000, "waiting for the site's request");
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    const advance = shiftedClock(s);
+    advance(SITE_STALE_IN_FLIGHT_MS + 1);
     await until(() => s.operator.page.snapshot.stopReason === "request_unended", 5000, "the stop past the bound");
     expect(s.lines.join("\n")).toContain('"e":"slot.unended"');
     expect(s.lines.join("\n")).toContain('"e":"slot.restart"');

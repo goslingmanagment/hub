@@ -6,7 +6,7 @@ import type { PausedRequest } from "../apps/page-browser/src/cdp/paused.ts";
 import type { GroupItem } from "../apps/page-browser/src/buffer/buffer.ts";
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
-import { OBSERVED_EARLY_MS, OBSERVED_KEPT, OBSERVED_OUTBOX_MAX, SiteObserver } from "../apps/page-browser/src/intercept/observe.ts";
+import { OBSERVED_EARLY_MS, OBSERVED_KEPT, OBSERVED_OUTBOX_MAX, SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../apps/page-browser/src/intercept/observe.ts";
 import type { RequestLine } from "../apps/page-browser/src/logs/journal.ts";
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
 import type { OperatorToEngine } from "../apps/page-browser/src/rpc/protocol.ts";
@@ -77,6 +77,27 @@ function request(w: ReturnType<typeof world>, id: string, path: string, method =
 }
 
 describe("the site's own API traffic, observed (variant Б)", () => {
+  it.each(["GET", "OPTIONS"])("counts fresh %s requests from their observed start, without forgetting stale ones or renewing them on ExtraInfo", (method) => {
+    let now = 1_000;
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+    const w = world();
+    request(w, "old", "/api/v1/notifications", method);
+    now += SITE_STALE_IN_FLIGHT_MS;
+    request(w, "fresh", "/api/v1/notifications", method);
+    // The cutoff is inclusive; neither request needs ExtraInfo to count.
+    expect(w.observer.activeSince(now - SITE_STALE_IN_FLIGHT_MS)).toBe(2);
+    now += 1;
+    expect(w.observer.activeSince(now - SITE_STALE_IN_FLIGHT_MS)).toBe(1);
+    expect(w.observer.inFlight).toBe(2);
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "old", headers: {} }, "S1");
+    expect(w.observer.activeSince(now - SITE_STALE_IN_FLIGHT_MS)).toBe(1);
+    w.cdp.emit("Network.loadingFinished", { requestId: "fresh" }, "S1");
+    expect(w.observer.activeSince(now - SITE_STALE_IN_FLIGHT_MS)).toBe(0);
+    expect(w.observer.inFlight).toBe(1);
+    w.observer.reset();
+    expect(w.observer.activeSince(0)).toBe(0);
+  });
+
   it("what left and how it ended goes to the engine; the session is learned as it left; the body is kept as the site's", async () => {
     const w = world();
     request(w, "r1", "/api/v1/account/me?ngsw-bypass=true");

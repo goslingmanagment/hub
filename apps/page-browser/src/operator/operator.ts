@@ -113,7 +113,7 @@ import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
-import { SiteObserver } from "../intercept/observe.ts";
+import { SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -175,9 +175,6 @@ export interface OperatorTimings {
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
-  /** Past an unended Hub slot's bound, wait up to this long for the site's
-   *  API requests to finish before a planned Chrome restart. */
-  unendedQuietWaitMs: number;
   /** The page's slot past its admission's deadline (egress/gate.ts). */
   slotLimitMs: number;
   /** A profile no page has (page 0): how long its mode's document may stand
@@ -202,7 +199,6 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
-  unendedQuietWaitMs: 5 * 60_000,
   slotLimitMs: SLOT_LIMIT_MS,
   sessionShowWaitMs: 3_000,
 };
@@ -1615,21 +1611,23 @@ export class Operator {
     }
   }
 
-  /** A Hub request without a proven end: wait for a quiet moment, with a
-   *  generous bound for a site that never settles. A proven end meanwhile
+  /** A Hub request without a proven end: wait without a deadline for fresh
+   *  site requests, ignoring hung or lost ends. A proven Hub end meanwhile
    *  cancels this restart; another operation's slot is never touched. */
   async #restartUnended(operation: string, note: string): Promise<void> {
     const run = this.#run;
     const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.egress.gate.slotOwner !== operation;
     if (stale()) return;
     const began = monoMs();
-    if (this.observer.inFlight > 0) this.#log("slot.wait_quiet", { operation, siteInFlight: this.observer.inFlight, waitMs: this.#timings.unendedQuietWaitMs });
-    const quiet = await this.#waitUntil(() => stale() || this.observer.inFlight === 0, this.#timings.unendedQuietWaitMs);
+    const fresh = () => this.observer.activeSince(monoMs() - SITE_STALE_IN_FLIGHT_MS);
+    const freshInFlight = fresh();
+    this.#log("slot.wait_quiet", { operation, freshInFlight, staleIgnored: this.observer.inFlight - freshInFlight, staleInFlightMs: SITE_STALE_IN_FLIGHT_MS });
+    while (!stale() && fresh() > 0) await sleep(25);
     if (stale()) {
       if (this.egress.gate.slotOwner !== operation) this.#log("slot.restart_skipped", { operation, owner: this.egress.gate.slotOwner, why: "the slot is no longer this operation's" });
       return;
     }
-    this.#log("slot.restart", { operation, quiet, siteInFlight: this.observer.inFlight, waitedMs: monoMs() - began });
+    this.#log("slot.restart", { operation, quiet: true, freshInFlight: 0, staleIgnored: this.observer.inFlight, siteInFlight: this.observer.inFlight, waitedMs: monoMs() - began });
     void this.#fail("request_unended", note);
   }
 
