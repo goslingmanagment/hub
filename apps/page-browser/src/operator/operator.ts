@@ -208,6 +208,10 @@ export const SITE_URL = `${SITE_ORIGIN}/`;
 
 /** The work tab's storage events the site's sign-out shows in (DOMStorage). */
 const SITE_STORAGE_EVENTS = ["DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated", "DOMStorage.domStorageItemRemoved", "DOMStorage.domStorageItemsCleared"] as const;
+// Fansly's StorageHelper("session_") prefixes these keys; see
+// artifacts/fansly-app-bundle-2026-10-08/analysis/main.2e6b96097a4bb73b.pretty.js:35051 (helper :863).
+const SITE_ACTIVE_SESSION_KEY = "session_active_session";
+const SITE_ACTIVE_SESSION_CLEAR_INFO_KEY = "session_active_session_clear_info";
 /** An identity answer is read for its account id up to this size. */
 const IDENTITY_BODY_MAX = 1024 * 1024;
 /** A discarded work tab's blank document comes within this, or the
@@ -1619,12 +1623,12 @@ export class Operator {
   }
 
   /** The work tab's localStorage of the site changed (plan-b §4.1.6). The
-   *  site signing itself out — its `active_session` cleared, an
-   *  `active_session_clear_info` written, its storage cleared — while the
+   *  site signing itself out — its `session_active_session` cleared, a
+   *  `session_active_session_clear_info` written, its storage cleared — while the
    *  automation runs it is the owner's to log in again: the page halts
    *  `login_required`, which the owner's login clears once the expected
-   *  account is confirmed. Only the keys and the event are read: a value
-   *  is compared with "null" and never kept. In the manual login a person
+   *  account is confirmed. Values are only compared with "null" or the empty
+   *  string and never kept. In the manual login a person
    *  signs in and out: nothing is decided then. */
   #onSiteStorage(event: string, message: CdpEvent): void {
     const tab = this.control.workTab;
@@ -1634,10 +1638,10 @@ export class Operator {
     const origin = (p.storageId.securityOrigin ?? p.storageId.storageKey ?? "").replace(/\/$/, "");
     if (origin !== SITE_ORIGIN) return;
     const cleared = event === "DOMStorage.domStorageItemsCleared";
-    const sessionGone = p.key === "active_session" && (event === "DOMStorage.domStorageItemRemoved" || p.newValue === "null" || p.newValue === "");
-    const clearInfo = p.key === "active_session_clear_info" && (event === "DOMStorage.domStorageItemAdded" || event === "DOMStorage.domStorageItemUpdated");
+    const sessionGone = p.key === SITE_ACTIVE_SESSION_KEY && (event === "DOMStorage.domStorageItemRemoved" || p.newValue === "null" || p.newValue === "");
+    const clearInfo = p.key === SITE_ACTIVE_SESSION_CLEAR_INFO_KEY && (event === "DOMStorage.domStorageItemAdded" || event === "DOMStorage.domStorageItemUpdated");
     if (!cleared && !sessionGone && !clearInfo) return;
-    const what = cleared ? "the site's storage was cleared" : sessionGone ? "its active_session was cleared" : "it wrote active_session_clear_info";
+    const what = cleared ? "the site's storage was cleared" : sessionGone ? `its ${SITE_ACTIVE_SESSION_KEY} was cleared` : `it wrote ${SITE_ACTIVE_SESSION_CLEAR_INFO_KEY}`;
     this.#log("site.login_lost", { what, mode: this.#mode, step: this.page.step });
     if (this.#mode !== "automation" || this.page.halted || this.#stopped || !atLeast(this.page.step, "exit_open")) return;
     void this.#halt("login_required", `Fansly signed the browser out: ${what}`, "stop");

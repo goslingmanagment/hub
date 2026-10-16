@@ -1519,33 +1519,47 @@ describe("variant Б: the site goes on as it is (plan-b Б4, §4.1.6)", () => {
     expect(s.operator.page.step).toBe("site_loaded");
   });
 
-  it("the site signs itself out in the automation (its active_session cleared): the page halts login_required; in the manual login nothing is decided; no value is kept", async () => {
+  it("the site signs itself out in the automation (its session_active_session cleared): the page halts login_required; in the manual login nothing is decided; no value is kept", async () => {
     const s = await setUp({ minor: 4 });
     await started(s);
     const tab = s.operator.control.workTab!.sessionId;
     // Another key, another origin, another tab, a session set: nothing.
-    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session", { oldValue: "null", newValue: SECRET }), tab);
-    s.model.chrome.event("DOMStorage.domStorageItemUpdated", { ...storage("active_session", { oldValue: SECRET, newValue: "null" }), storageId: { storageKey: "https://example.com/", isLocalStorage: true } }, tab);
-    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session", { oldValue: SECRET, newValue: "null" }), "another-tab");
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: "null", newValue: SECRET }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", { ...storage("session_active_session", { oldValue: SECRET, newValue: "null" }), storageId: { storageKey: "https://example.com/", isLocalStorage: true } }, tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: SECRET, newValue: "null" }), "another-tab");
     s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("metrics_session", { oldValue: SECRET, newValue: "null" }), tab);
     // A person in the page signs in and out: nothing.
     expect(await commandWith(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
-    s.model.chrome.event("DOMStorage.domStorageItemRemoved", storage("active_session"), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemRemoved", storage("session_active_session"), tab);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(s.operator.page.halted).toBe(false);
     expect(await commandWith(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
-    // Fansly's setActiveSession(null) in the automation: the owner's login.
-    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session", { oldValue: SECRET, newValue: "null" }), tab);
+    // Fansly's setActiveSession(null) writes "null" under the session_ prefix.
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: SECRET, newValue: "null" }), tab);
     await until(() => s.operator.heldHalt?.reason === "login_required", 10_000, "the login_required halt");
     expect(s.operator.page.snapshot).toMatchObject({ halted: true, stopReason: "login_required" });
     expect(s.lines.join("\n")).toContain('"e":"site.login_lost"');
     expect(s.lines.join("\n")).not.toContain(SECRET);
   });
 
-  it("an active_session_clear_info written in the automation halts login_required too", async () => {
+  it("unprefixed active_session and active_session_clear_info keys decide nothing in the automation", async () => {
     const s = await setUp({ minor: 4 });
     await started(s);
-    s.model.chrome.event("DOMStorage.domStorageItemAdded", storage("active_session_clear_info", { newValue: '{"type":2}' }), s.operator.control.workTab!.sessionId);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session", { oldValue: SECRET, newValue: "null" }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemRemoved", storage("active_session"), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemAdded", storage("active_session_clear_info", { newValue: '{"type":2}' }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session_clear_info", { oldValue: '{"type":1}', newValue: '{"type":2}' }), tab);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.page.halted).toBe(false);
+    expect(s.operator.heldHalt).toBeNull();
+    expect(s.lines.join("\n")).not.toContain('"e":"site.login_lost"');
+  });
+
+  it("a session_active_session_clear_info written in the automation halts login_required too", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    s.model.chrome.event("DOMStorage.domStorageItemAdded", storage("session_active_session_clear_info", { newValue: '{"type":2}' }), s.operator.control.workTab!.sessionId);
     await until(() => s.operator.heldHalt?.reason === "login_required", 10_000, "the login_required halt");
   });
 });
