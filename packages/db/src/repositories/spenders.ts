@@ -152,6 +152,15 @@ export async function rebuildSpenderDailyFacts(
   `);
 }
 
+/** `and <alias>.fan_id = any(<fanIds>)` as ONE bound array, or nothing for
+ *  all fans: a page's affected fans can run to tens of thousands, past the
+ *  65 535 bind parameters of one statement if each were its own parameter. */
+function fanFilter(alias: "sdf" | "l" | "pf", fanIds: readonly number[] | null) {
+  return fanIds === null
+    ? sql``
+    : sql`and ${sql.raw(alias)}.fan_id = any(${sql.param([...fanIds])}::bigint[])`;
+}
+
 /** Diff-applies fan_spend_lifetime for one page from fan_spend_daily: all of
  *  the page's fans, or only `fanIds`. Same contract as rebuildSpenderDailyFacts. */
 async function applySpenderLifetimeRows(
@@ -159,9 +168,6 @@ async function applySpenderLifetimeRows(
   platformAccountId: number,
   fanIds: readonly number[] | null,
 ) {
-  const fanClause = (alias: string) => fanIds === null
-    ? sql``
-    : sql`and ${sql.raw(alias)}.fan_id in (${sql.join(fanIds.map((fanId) => sql`${fanId}`), sql`, `)})`;
   await db.execute(sql`
     with fresh as (
       select sdf.platform_account_id,
@@ -171,7 +177,7 @@ async function applySpenderLifetimeRows(
              max(sdf.last_transaction_at) as last_transaction_at
       from fan_spend_daily sdf
       where sdf.platform_account_id = ${platformAccountId}
-        ${fanClause("sdf")}
+        ${fanFilter("sdf", fanIds)}
       group by 1, 2
     ),
     written as (
@@ -207,7 +213,7 @@ async function applySpenderLifetimeRows(
     )
     delete from fan_spend_lifetime l
     where l.platform_account_id = ${platformAccountId}
-      ${fanClause("l")}
+      ${fanFilter("l", fanIds)}
       and not exists (select 1 from fresh f where f.fan_id = l.fan_id)
   `);
 }
@@ -219,9 +225,6 @@ async function applyPageFanLifetimeTotals(
   platformAccountId: number,
   fanIds: readonly number[] | null,
 ) {
-  const fanClause = fanIds === null
-    ? sql``
-    : sql`and pf.fan_id in (${sql.join(fanIds.map((fanId) => sql`${fanId}`), sql`, `)})`;
   await db.execute(sql`
     update page_fans fp
     set total_creator_net_mills = totals.total_creator_net_mills
@@ -233,7 +236,7 @@ async function applyPageFanLifetimeTotals(
         on slp.platform_account_id = pf.platform_account_id
        and slp.fan_id = pf.fan_id
       where pf.platform_account_id = ${platformAccountId}
-        ${fanClause}
+        ${fanFilter("pf", fanIds)}
     ) totals
     where fp.id = totals.id
       and fp.total_creator_net_mills is distinct from totals.total_creator_net_mills
