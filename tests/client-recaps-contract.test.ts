@@ -223,7 +223,7 @@ describe("usableFanSummaryPredicate", () => {
   });
 });
 
-describe("[R20 HF-10] the recaps of one conversation of one fan", () => {
+describe("[AI-061] [R20 HF-10] the recaps of one conversation of one fan", () => {
   const render = (fanRef: string) => new PgDialect().sqlToQuery(generationOfFanPredicate(fanRef));
 
   it("a row is the fan's when it names the fan, or names no fan and is keyed by the fan: the dossier proof's rule", () => {
