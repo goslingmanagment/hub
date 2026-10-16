@@ -1,5 +1,6 @@
 import {
   countSendsSince,
+  gaugeSample,
   listPageBrowsersOfPages,
   listSyncPages,
   readSyncHistoryMetrics,
@@ -168,13 +169,8 @@ export const SYNC_METRICS_SAMPLE_EVERY_MINUTES = 5;
 /** The window of the sampled families. */
 export const SYNC_METRICS_WINDOW_MS = 60 * 60_000;
 
-/** A single reading is one sample, in the p95 slot (as the golden-signal
- *  gauges): it used to be written twice, an identical p50 and p95. */
-function gauge(metric: string, value: number | null): OpsMetricSampleInput[] {
-  return value === null || !Number.isFinite(value)
-    ? []
-    : [{ metric, quantile: "p95", valueMs: value }];
-}
+/** A single reading: one p95 sample (gaugeSample, ops-metrics.ts). */
+const gauge = gaugeSample;
 
 function pair(metric: string, p50: number | null, p95: number | null): OpsMetricSampleInput[] {
   return [

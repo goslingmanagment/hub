@@ -122,6 +122,10 @@ function appStub(overrides?: {
         }
         return { rows: [] };
       }),
+      // The census runs in a transaction; the stub hands the same db back.
+      async transaction<T>(this: { execute: unknown }, run: (tx: unknown) => Promise<T>): Promise<T> {
+        return run(this);
+      },
     },
     logger: { warn: vi.fn(), info: vi.fn() },
   } as never;
@@ -167,9 +171,9 @@ describe("runDbDiskUsageCheck", () => {
 
     expect(result).toMatchObject({ breached: true, thresholdPercent: 80, databaseBytes: 2 * GIB });
     expect(result).toMatchObject({ healthy: false, usedBytes: 90 * GIB, availableBytes: 10 * GIB });
-    // health upsert + capacity gauges + pg_database_size + its gauge
-    // + the daily census (day probe, then the census itself) + runway history
-    expect(executeMock(app)).toHaveBeenCalledTimes(7);
+    // health upsert + capacity gauges + pg_database_size + its gauge + runway
+    // history, then the daily census: day probe, two timeouts, the census
+    expect(executeMock(app)).toHaveBeenCalledTimes(9);
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
@@ -308,8 +312,12 @@ describe("runDbDiskUsageCheck", () => {
     const gauge = executeMock(app).mock.calls[3]![0] as { queryChunks?: unknown[] };
     expect(extractQueryParams(gauge)).toEqual(["disk_pg_database_bytes", 3 * GIB, "p50", now]);
     expect(texts.filter((text) => text.includes("insert into storage_relation_daily"))).toHaveLength(1);
-    expect(extractQueryParams(executeMock(app).mock.calls[4]![0] as { queryChunks?: unknown[] }))
+    const probe = texts.findIndex((text) => text.includes("select exists (select 1 from storage_relation_daily"));
+    expect(extractQueryParams(executeMock(app).mock.calls[probe]![0] as { queryChunks?: unknown[] }))
       .toEqual(["2026-07-05"]);
+    // After every alert query: the census is last, under its lock timeout.
+    expect(probe).toBeGreaterThan(texts.findIndex((text) => text.includes("from ops_metric_samples")));
+    expect(texts).toContain("set local lock_timeout = '2s'");
 
     // The day is already recorded: one probe, no census.
     const again = appStub();

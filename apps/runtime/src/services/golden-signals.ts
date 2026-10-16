@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 
 import {
+  gaugeSample,
   insertOpsMetricSamples,
   listNotificationIncidents,
   listRecentOpsMetricSamples,
@@ -120,13 +121,6 @@ function toSamples(metric: string, pair: QuantilePair): OpsMetricSampleInput[] {
     samples.push({ metric, quantile: "p95", valueMs: pair.p95 });
   }
   return samples;
-}
-
-/** A single reading (an age, a count, a size) is one sample, in the p95 slot
- *  the breach latch reads. It used to be written twice, as an identical p50
- *  and p95 — every gauge, every minute (storage audit 2026-10-16). */
-function gaugeSample(metric: string, value: number | null): OpsMetricSampleInput[] {
-  return value === null || !Number.isFinite(value) ? [] : [{ metric, quantile: "p95", valueMs: value }];
 }
 
 async function quantiles(app: Pick<AppContext, "db">, query: ReturnType<typeof sql>): Promise<QuantilePair> {
@@ -528,10 +522,29 @@ export interface GoldenSignalsReport {
   smoke: { framesSeen: number; gapCount: number; duplicateCount: number; updatedAt: string | null } | null;
 }
 
+/** A gauge's p50 series stopped when gauges became one p95 sample; its old
+ *  rows stay until the 90-day prune. A p50 series whose newest sample is over
+ *  an hour older than its metric's live p95 series is that frozen half and is
+ *  left out of the report. A real distribution writes both quantiles in the
+ *  same run, so its p50 never trails like that. */
+function withoutRetiredGaugeHalves(rows: OpsMetricSampleRow[]): OpsMetricSampleRow[] {
+  const newest = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.metric}\u0000${row.quantile}`;
+    newest.set(key, Math.max(newest.get(key) ?? 0, row.sampledAt.getTime()));
+  }
+  return rows.filter((row) => {
+    if (row.quantile !== "p50") return true;
+    const p50 = newest.get(`${row.metric}\u0000p50`) ?? 0;
+    const p95 = newest.get(`${row.metric}\u0000p95`);
+    return p95 === undefined || p95 - p50 <= 60 * 60_000;
+  });
+}
+
 export async function getGoldenSignalsReport(
   app: Pick<AppContext, "db">,
 ): Promise<GoldenSignalsReport> {
-  const rows = await listRecentOpsMetricSamples(app.db, { perSeries: 30 });
+  const rows = withoutRetiredGaugeHalves(await listRecentOpsMetricSamples(app.db, { perSeries: 30 }));
   const samples = rows.map((sample) => ({ ...sample, sampledAt: sample.sampledAt.toISOString() }));
   const smoke = await app.db.execute<{
     frames_seen: string;

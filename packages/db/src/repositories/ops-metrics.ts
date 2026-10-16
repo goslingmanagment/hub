@@ -15,6 +15,13 @@ export interface OpsMetricSampleInput {
   sampledAt?: Date;
 }
 
+/** A single reading (an age, a count, a size) is ONE sample, in the p95 slot
+ *  the golden-signal breach latch reads. Gauges used to be written twice, as
+ *  an identical p50 and p95 (storage audit 2026-10-16). */
+export function gaugeSample(metric: string, value: number | null): OpsMetricSampleInput[] {
+  return value === null || !Number.isFinite(value) ? [] : [{ metric, quantile: "p95", valueMs: value }];
+}
+
 export async function insertOpsMetricSamples(
   db: Database,
   samples: readonly OpsMetricSampleInput[],

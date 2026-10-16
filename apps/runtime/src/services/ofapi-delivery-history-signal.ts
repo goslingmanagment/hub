@@ -1,4 +1,4 @@
-import { getWebhookDeliveryHistoryCoverage, type OpsMetricSampleInput } from "@agency_hub_core/db";
+import { gaugeSample, getWebhookDeliveryHistoryCoverage, type OpsMetricSampleInput } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -21,8 +21,7 @@ export async function sampleOfapiDeliveryHistoryAge(
   try {
     const coverage = await getWebhookDeliveryHistoryCoverage(app.db);
     const valueMs = coverage ? Math.max(0, now - coverage.since.getTime()) : 0;
-    // One reading, one sample: the p95 slot the breach latch reads.
-    return [{ metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p95", valueMs }];
+    return gaugeSample(OFAPI_DELIVERY_HISTORY_AGE_METRIC, valueMs);
   } catch {
     return null;
   }

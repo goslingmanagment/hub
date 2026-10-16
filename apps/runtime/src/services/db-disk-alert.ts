@@ -499,7 +499,6 @@ export async function runDbDiskUsageCheck(
   if (databaseBytes !== null) {
     await persistDatabaseSizeGauge(app, { checkedAt, databaseBytes });
   }
-  await recordDailyStorageCensus(app, checkedAt);
 
   // G1.5: the gauges this check just wrote plus the last 7 days of them.
   const history = await loadDiskFreeHistory(app, checkedAt);
@@ -560,6 +559,9 @@ export async function runDbDiskUsageCheck(
       checkedAt,
     });
   }
+
+  // Last, after every alert: the census is context, never on the alert's path.
+  await recordDailyStorageCensus(app, checkedAt);
 
   return {
     healthy: !gateBreached,
