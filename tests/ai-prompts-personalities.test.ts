@@ -27,7 +27,7 @@ describe('createBundledPersonalities', () => {
     expect(lora.name).toBe('Lora');
     expect(lora.builtin).toBe(true);
     expect(lora.builtinVersion).toBe(BUNDLED_LORA_PERSONALITY_VERSION);
-    expect(lora.builtinVersion).toBe(3);
+    expect(lora.builtinVersion).toBe(4);
   });
 
   it('defaults updatedAt to 0 and honors the provided build timestamp', () => {
@@ -36,14 +36,27 @@ describe('createBundledPersonalities', () => {
     expect(lora?.updatedAt).toBe(1750000000000);
   });
 
+  // Persona v4 (Lora persona audit, 2026-10-16) names no platform at all, so
+  // the Fansly page's wording swap has nothing to rewrite in it.
   it('carries the platform rename (no Fansly mentions)', () => {
     const lora = bundledLora();
     expect(lora.content).not.toMatch(/fansly/i);
-    expect(lora.content).toContain("You're on OnlyFans because honestly?");
+    expect(lora.content).toContain("You're on here because you like it, it pays, and you like the attention.");
+  });
+
+  // Persona v4 voice (owner-approved after the all-feature bench): fluent plain
+  // English without American slang, few emoji, laughing only when it is funny.
+  it('writes fluent plain English, few emoji and laughs only when something is funny', () => {
+    const lora = bundledLora();
+    expect(lora.content).toContain("You're from Belarus and write fluent, simple everyday English");
+    expect(lora.content).toContain('most of your messages have none');
+    expect(lora.content).toContain('Most of your messages have no laugh at all.');
+    expect(lora.content).not.toContain('English is your second language');
   });
 
   // Legacy behavior fact: bundled content must answer pricing questions
-  // without fabricating numbers — no leftover TODO placeholders.
+  // without fabricating numbers — no leftover TODO placeholders. Persona v4:
+  // she names no price at all; the chatter does.
   it('does not leak TODO pricing placeholders from bundled personalities', () => {
     const bundledContent = createBundledPersonalities()
       .map((personality) => personality.content)
@@ -51,7 +64,7 @@ describe('createBundledPersonalities', () => {
 
     expect(bundledContent).not.toContain('[TODO: fill in actual prices]');
     expect(bundledContent).not.toContain('Prices: [TODO');
-    expect(bundledContent).toContain('without making up numbers');
+    expect(bundledContent).toContain('Never name a number yourself.');
   });
 
   it('returns fresh objects on every call (callers may mutate safely)', () => {

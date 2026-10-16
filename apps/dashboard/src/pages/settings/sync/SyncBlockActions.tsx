@@ -8,8 +8,9 @@ import {
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { toast } from "sonner";
-import { getBlockLabel, getStreamLabel } from "./syncBlockDisplay.js";
+import { getBlockLabel, syncResetConfirmText } from "./syncBlockDisplay.js";
 import type { SyncBlockKey, SyncBlockState } from "./syncBlockDisplay.js";
+import { SYNC_LEVER_LABELS, syncStreamLabel } from "./syncVocabulary.js";
 
 // Detailed status keeps compatibility rows visible for auditability, but they
 // must not create a fake recovery action: OnlyFans `light` and `transactions`
@@ -47,8 +48,8 @@ function canReset(state: SyncBlockState): boolean {
 }
 
 /** The buttons of a block of a page the legacy page-sync executor serves
- *  (OnlyFans). A Fansly page's blocks have their own on «Синк»
- *  (`engine/EngineBlocks.tsx`). */
+ *  (OnlyFans). A Fansly page's blocks have their own on the Fansly screen
+ *  (`engine/EngineBlocks.tsx`), with the same verbs. */
 export function getSyncBlockActionPresentation(block: SyncBlockStatus) {
   const pausedSubstreams = block.substreams.filter((substream) => (
     substream.state === "paused" && !ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
@@ -62,9 +63,9 @@ export function getSyncBlockActionPresentation(block: SyncBlockStatus) {
     showResume,
     showReset: canReset(block.state),
     resumeLabel: hasPartialPause && pausedSubstreams.length === 1
-      ? `Resume ${getStreamLabel(pausedSubstreams[0]!.stream)}`
-      : "Resume",
-    resetLabel: "Reset",
+      ? `${SYNC_LEVER_LABELS.resume}: ${syncStreamLabel(pausedSubstreams[0]!.stream)}`
+      : SYNC_LEVER_LABELS.resume,
+    resetLabel: SYNC_LEVER_LABELS.reset,
   };
 }
 
@@ -92,37 +93,37 @@ export function SyncBlockActions({
   async function handleTrigger() {
     try {
       await triggerMut.mutateAsync({ pageLabel, block: blockKey });
-      toast.success(`Sync triggered for ${label}`);
+      toast.success(`${label}: обновление поставлено в очередь`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to trigger sync");
+      toast.error(e instanceof Error ? e.message : "Не удалось запустить обновление");
     }
   }
 
   async function handlePause() {
     try {
       await pauseMut.mutateAsync({ pageLabel, block: blockKey });
-      toast.success(`${label} paused`);
+      toast.success(`${label}: на паузе`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to pause");
+      toast.error(e instanceof Error ? e.message : "Не удалось поставить на паузу");
     }
   }
 
   async function handleResume() {
     try {
       await resumeMut.mutateAsync({ pageLabel, block: blockKey });
-      toast.success(`${label} resumed`);
+      toast.success(`${label}: пауза снята`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to resume");
+      toast.error(e instanceof Error ? e.message : "Не удалось снять паузу");
     }
   }
 
   async function handleReset() {
     try {
       await resetMut.mutateAsync({ pageLabel, block: blockKey });
-      toast.success(`${label} reset`);
+      toast.success(`${label}: сброшено, загрузка начнётся заново`);
       setShowResetConfirm(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to reset");
+      toast.error(e instanceof Error ? e.message : "Не удалось сбросить");
     }
   }
 
@@ -137,53 +138,43 @@ export function SyncBlockActions({
 
   return (
     <>
-      <div className="flex items-center gap-2">
-        {showTrigger && (
-          <button
-            type="button"
-            onClick={handleTrigger}
-            disabled={anyPending || canTriggerDisabled(state)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40"
-          >
-            Sync Now
-          </button>
-        )}
-        {showPause && (
-          <button
-            type="button"
-            onClick={handlePause}
-            disabled={anyPending}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-40"
-          >
-            Pause
-          </button>
-        )}
-        {showResume && (
-          <button
-            type="button"
-            onClick={handleResume}
-            disabled={anyPending}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-40"
-          >
-            {resumeLabel}
-          </button>
-        )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {showReset && (
           <button
             type="button"
             onClick={() => setShowResetConfirm(true)}
             disabled={anyPending}
-            className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+            className="btn btn-ghost btn-sm text-danger"
           >
             {resetLabel}
+          </button>
+        )}
+        {showPause && (
+          <button type="button" onClick={handlePause} disabled={anyPending} className="btn btn-sm">
+            {SYNC_LEVER_LABELS.pause}
+          </button>
+        )}
+        {showResume && (
+          <button type="button" onClick={handleResume} disabled={anyPending} className="btn btn-sm">
+            {resumeLabel}
+          </button>
+        )}
+        {showTrigger && (
+          <button
+            type="button"
+            onClick={handleTrigger}
+            disabled={anyPending || canTriggerDisabled(state)}
+            className="btn btn-primary btn-sm"
+          >
+            {SYNC_LEVER_LABELS.trigger}
           </button>
         )}
       </div>
 
       {showResetConfirm && (
         <ConfirmModal
-          title={`Reset ${label}?`}
-          message={`This will clear all sync state for ${label} on ${pageLabel}. The block will re-sync from scratch.`}
+          title={`Сбросить «${label}»?`}
+          message={syncResetConfirmText(blockKey, pageLabel)}
           confirmLabel={resetLabel}
           isPending={resetMut.isPending}
           onConfirm={handleReset}

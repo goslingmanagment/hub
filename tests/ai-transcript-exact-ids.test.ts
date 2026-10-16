@@ -100,6 +100,7 @@ describe("Fansly ids past 2^53 up to the prompt", () => {
     const messages = normalizeTranscriptMessages(rows);
     expect(messages.map((message) => message.id)).toEqual([PAIR_EVEN[0], PAIR_EVEN[1], PAIR_STEP[0], PAIR_STEP[1]]);
     expect(formatTranscript(messages)).toBe([
+      "--- 2026-10-12 ---",
       "[10:00] Fan: first of the even pair",
       "[10:01] Fan: second of the even pair",
       "[10:02] Model: the smaller id of the step pair",
@@ -172,6 +173,7 @@ describe("Fansly ids past 2^53 up to the prompt", () => {
     });
     expect(merge.window.map((message) => message.messageRef)).toEqual([PAIR_STEP[0], PAIR_STEP[1], PAIR_EVEN[1]]);
     expect(formatTranscript(merge.messages)).toBe([
+      "--- 2026-10-12 ---",
       "[10:00] Fan: held by the hub",
       "[10:03] Fan: fresh, same double",
       "[10:03] Model: fresh, same instant",
@@ -199,6 +201,7 @@ describe("Fansly ids past 2^53 up to the prompt", () => {
       limits: QUICK_FEATURE_MEDIA_NOTE_LIMITS,
     });
     expect(formatTranscript(applied.messages)).toBe([
+      "--- 2026-10-12 ---",
       "[10:00] Fan: [Photo #1] first",
       "[10:01] Fan: [Photo #2: A beach.] second",
     ].join("\n"));

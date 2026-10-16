@@ -47,3 +47,37 @@ function reportedValue(item: ConfigItem, expectedRoles: string[]): string | numb
   if (!item.running.every((entry) => entry.value === first)) return undefined;
   return first ?? undefined;
 }
+
+/** The one status a feature row shows: the applied state, unless it disagrees
+ *  with the catalog's advice — then the advice speaks and the state becomes
+ *  the muted note. Never a claim about usage or business effect. */
+export type FeatureStatusTone = "success" | "warning" | "info" | "neutral";
+export interface FeatureStatus { label: string; tone: FeatureStatusTone; note: string }
+
+export const FEATURE_ADVICE_NOTE: Record<HubFeature["advice"], string> = {
+  keep: "Совет: оставить",
+  optional: "Совет: по потребности",
+  diagnostic: "Совет: на время проверки",
+  off: "Совет: держать выключенным",
+};
+
+export function featureStatus(feature: HubFeature, state: FeatureState): FeatureStatus {
+  const advice = FEATURE_ADVICE_NOTE[feature.advice];
+  switch (state.kind) {
+    case "pending":
+    case "unknown":
+      return { label: state.label, tone: "warning", note: advice };
+    case "unavailable":
+      return { label: state.label, tone: "neutral", note: advice };
+    case "limited":
+      return { label: state.label, tone: feature.advice === "off" ? "warning" : "info", note: advice };
+    case "off":
+      return feature.advice === "keep"
+        ? { label: "Стоит включить", tone: "warning", note: `Сейчас: ${state.label.toLocaleLowerCase("ru-RU")}` }
+        : { label: state.label, tone: "neutral", note: advice };
+    case "on":
+      return feature.advice === "off" || feature.advice === "diagnostic"
+        ? { label: feature.advice === "off" ? "Стоит выключить" : "Завершить проверку", tone: "warning", note: "Сейчас: включено" }
+        : { label: state.label, tone: "success", note: advice };
+  }
+}

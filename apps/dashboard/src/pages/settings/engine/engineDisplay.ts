@@ -2,7 +2,7 @@ import type { AgentHistoryRequest, AgentSyncPageStatus, SyncEngineStop } from "@
 
 import { ruPlural } from "@/lib/plural";
 
-// The words of the «Синк» tab: the Fansly Sync Engine's page status
+// The words of the Fansly screen (System → «Сбор данных → Fansly»): the Fansly Sync Engine's page status
 // (`/api/v1/sync/pages`) and its history requests
 // (`/api/v1/sync/history-requests`) as the owner reads them. No engine rule
 // lives here: every count, bound and estimate is the server's; the tab names
@@ -65,7 +65,7 @@ const WAIT_LABELS: Record<string, Record<EngineWordsLanguage, string>> = {
   quarantined: { ru: "карантин", en: "quarantined" },
   paused: { ru: "пауза владельца", en: "paused" },
   dependency: { ru: "ждёт другую работу", en: "waiting for other work" },
-  ownership_unconfirmed: { ru: "нет владельца", en: "no owner" },
+  ownership_unconfirmed: { ru: "нет обработчика", en: "no owner" },
   running: { ru: "читает", en: "reading" },
 };
 
@@ -90,7 +90,7 @@ const CREDENTIALS_HOLDS: ReadonlySet<string> = new Set(["auth", "identity_mismat
 const REQUESTER_LABELS: Record<EngineHistoryRequest["requesterKind"], string> = {
   agent_key: "агент",
   owner_session: "владелец",
-  owner_cli: "владелец (CLI)",
+  owner_cli: "владелец, из консоли",
   legacy_hydration_wrapper: "старый маршрут заявок",
   switch_migration: "перенос при переключении",
 };
@@ -149,8 +149,16 @@ export function engineClockText(iso: string, now: number = Date.now()): string {
   return `${at.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} ${time}`;
 }
 
+const MODE_LABELS: Record<EnginePageStatus["mode"], string> = {
+  live: "включён",
+  handover: "переключение",
+  shadow: "пробный режим",
+  off: "выключен",
+};
+
+/** The page's mode in the screen's words. */
 export function engineModeLabel(mode: EnginePageStatus["mode"]): string {
-  return mode === "handover" ? "переключение" : mode;
+  return MODE_LABELS[mode] ?? mode;
 }
 
 export function engineHoldText(status: EnginePageStatus, now: number = Date.now()): string | null {
@@ -160,16 +168,18 @@ export function engineHoldText(status: EnginePageStatus, now: number = Date.now(
   return `${PAGE_HOLD_WORDS[hold.kind]?.ru ?? hold.kind}, ${until}`;
 }
 
-/** Who runs the page. Without a running owner nothing of it is read, whatever
- *  its mode says: the last heartbeat is given so its age is plain. */
+/** Who runs the page — the sync host, "обработчик сбора" on screen (the
+ *  human owner is "владелец"). Without a running one nothing of the page is
+ *  read, whatever its mode says: the last heartbeat is given so its age is
+ *  plain. */
 export function engineOwnerText(status: EnginePageStatus, now: number): string {
   const age = engineAgeText(status.owner.heartbeatAt, now);
   if (!status.owner.running) {
     return age === null
-      ? "владельца нет: страницу никто не читает"
-      : `владельца нет: страницу никто не читает (последний ответ ${age} назад)`;
+      ? "обработчика нет: страницу никто не читает"
+      : `обработчика нет: страницу никто не читает (последний ответ ${age} назад)`;
   }
-  return age === null ? "владелец работает" : `владелец отвечал ${age} назад`;
+  return age === null ? "обработчик работает" : `обработчик отвечал ${age} назад`;
 }
 
 /** The page's socket: connected or not, since when, and how long intake had
@@ -314,23 +324,23 @@ export function engineReadingState(facts: EngineReadingFacts): EngineReadingStat
 
 const READING_STATE_WORDS: Record<EngineReadingState, Record<EngineWordsLanguage, { text: string; detail: string }>> = {
   no_owner: {
-    ru: { text: "не читается: нет владельца", detail: "Страницу не ведёт ни один sync-хост: из неё ничего не читается." },
+    ru: { text: "не читается: нет обработчика", detail: "Страницу не ведёт ни один обработчик сбора: из неё ничего не читается." },
     en: { text: "not running: no owner", detail: "No sync host owns the page: nothing of it is read." },
   },
   switching: {
-    ru: { text: "не читается: переключение", detail: "Страница переключается на движок: до конца переключения из неё ничего не читается." },
+    ru: { text: "не читается: переключение", detail: "Страница переключается на новый сбор: до конца переключения из неё ничего не читается." },
     en: { text: "not running: switching", detail: "The page is switching to the engine: nothing of it is read until the switch completes." },
   },
   paused: {
-    ru: { text: "пауза владельца", detail: "Владелец поставил на паузу страницу или каждый ключ." },
+    ru: { text: "пауза владельца", detail: "Владелец поставил на паузу всю страницу или все потоки блока." },
     en: { text: "paused", detail: "The owner paused the page or every key of this stream." },
   },
   page_held: {
-    ru: { text: "страница удержана", detail: "Движок удерживает страницу целиком: до конца удержания запросы не уходят." },
+    ru: { text: "страница удержана", detail: "Сбор удерживает страницу целиком: до конца удержания запросы не уходят." },
     en: { text: "page held", detail: "The engine holds the whole page: nothing of it is sent until the hold ends." },
   },
   held: {
-    ru: { text: "удержано", detail: "Ни один ключ сейчас не может отправить запрос: что их держит, сказано ниже." },
+    ru: { text: "удержано", detail: "Сейчас ни один поток блока не может отправить запрос: что их держит, сказано ниже." },
     en: { text: "held", detail: "No key of this stream can send now: what holds them is said below." },
   },
   attention: {
@@ -338,15 +348,15 @@ const READING_STATE_WORDS: Record<EngineReadingState, Record<EngineWordsLanguage
     en: { text: "needs attention", detail: "Some of its work is quarantined or refused by Fansly." },
   },
   partly_paused: {
-    ru: { text: "частично на паузе", detail: "Часть ключей на паузе владельца, остальные читаются." },
+    ru: { text: "частично на паузе", detail: "Часть потоков на паузе владельца, остальные читаются." },
     en: { text: "partly paused", detail: "The owner paused some of its keys; the others are read." },
   },
   partly_held: {
-    ru: { text: "частично удержано", detail: "Часть ключей сейчас не может отправить запрос, остальные читаются." },
+    ru: { text: "частично удержано", detail: "Часть потоков сейчас не может отправить запрос, остальные читаются." },
     en: { text: "partly held", detail: "Some of its keys cannot send now; the others are read." },
   },
   reading: {
-    ru: { text: "читается", detail: "Sync-хост ведёт страницу, работа открыта и её ничто не держит." },
+    ru: { text: "читается", detail: "Обработчик ведёт страницу, работа открыта, и её ничто не держит." },
     en: { text: "reading", detail: "A sync host runs the page, work of this stream is open and nothing holds it." },
   },
   idle: {

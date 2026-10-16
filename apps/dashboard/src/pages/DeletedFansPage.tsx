@@ -6,11 +6,12 @@ import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { formatDateTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
 const LIMIT = 50;
 
-function joinAliases(values: Array<string | null>) {
-  const unique = [...new Set(values.filter(Boolean))] as string[];
+function joinAliases(values: Array<string | null>, exclude: string | null) {
+  const unique = [...new Set(values.filter((value): value is string => Boolean(value) && value !== exclude))];
   return unique.length > 0 ? unique.join(" / ") : null;
 }
 
@@ -37,99 +38,86 @@ export function DeletedFansPage() {
     if (isError) {
       return (
         <StatusPanel
-          title="Deleted fans failed to load"
-          description="The deleted fan audit could not be fetched for this page."
+          title="Не удалось загрузить удалённых фанов"
+          description="Список удалённых аккаунтов этой страницы сейчас недоступен."
           tone="error"
           action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
       );
     }
-    return <TableSkeleton rows={6} columns={5} />;
+    return <TableSkeleton rows={6} columns={4} />;
   }
 
   return (
     <div>
       <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">
-          Deleted Fans &mdash; {pageLabel}
-        </h1>
-        <p className="mt-1 text-sm text-text-muted">{offset > 0 && data.items.length === 0 ? "Число записей пока недоступно" : `${data.total} total`}</p>
-        <p className="mt-2 text-xs text-text-muted">Аккаунты, удаление которых зафиксировал Hub. Даты показывают обнаружение, а не точное время удаления; сохранённые операции остаются в истории.</p>
+      <div className="mb-3 text-[13px] text-text-secondary">
+        <p className="tabular-nums">
+          {offset > 0 && data.items.length === 0
+            ? "Число записей пока недоступно"
+            : `${data.total} ${ruPlural(data.total, "аккаунт", "аккаунта", "аккаунтов")}`}
+        </p>
+        <p className="mt-1">Даты показывают, когда Hub заметил удаление, а не точное время. Операции этих фанов остаются в истории.</p>
       </div>
 
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full min-w-[720px] border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {[
-                "Last Known",
-                "Platform ID",
-                "Aliases",
-                "First Detected",
-                "Last Confirmed",
-              ].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.items.length === 0 && (
+      <section className="card overflow-hidden" aria-label="Удалённые фаны">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  {offset > 0 ? "На этой странице списка записей нет." : "No deleted fans recorded."}
-                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => setOffset(0)}>К началу списка</button>}
-                </td>
+                <th>Фан</th>
+                <th>Другие имена</th>
+                <th>Замечено</th>
+                <th>Последняя проверка</th>
               </tr>
-            )}
-            {data.items.map((item) => {
-              const aliases = joinAliases([
-                item.latestHistoricalPageAlias,
-                item.latestHistoricalUsername,
-                item.pageAlias,
-                item.displayName,
-                item.username,
-              ]);
-
-              return (
-                <tr key={item.platformUserId} className="border-t border-border">
-                  <td className="px-4 py-3">
-                    <div className="text-[15px] font-semibold text-text-primary">
-                      {item.latestKnownLabel ?? item.platformUserId}
-                    </div>
-                    {item.latestKnownLabel && (
-                      <div className="text-xs text-text-muted">{item.platformUserId}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                    {item.platformUserId}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {aliases ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {formatDateTime(item.deletedDetectedAt)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {item.deletedLastDetectedAt ? formatDateTime(item.deletedLastDetectedAt) : "\u2014"}
+            </thead>
+            <tbody>
+              {data.items.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="py-8 text-center text-text-secondary">
+                    {offset > 0 ? "На этой странице списка записей нет." : "Удалённых аккаунтов не найдено."}
+                    {offset > 0 && <button type="button" className="link ml-2" onClick={() => setOffset(0)}>К началу списка</button>}
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {data.items.map((item) => {
+                const aliases = joinAliases([
+                  item.latestHistoricalPageAlias,
+                  item.latestHistoricalUsername,
+                  item.pageAlias,
+                  item.displayName,
+                  item.username,
+                ], item.latestKnownLabel);
+
+                return (
+                  <tr key={item.platformUserId}>
+                    <td>
+                      {item.latestKnownLabel ? (
+                        <>
+                          <div className="font-medium">{item.latestKnownLabel}</div>
+                          <div className="text-xs text-text-muted tabular-nums" title="ID на площадке">{item.platformUserId}</div>
+                        </>
+                      ) : (
+                        <div className="text-text-secondary tabular-nums" title="ID на площадке">{item.platformUserId}</div>
+                      )}
+                    </td>
+                    <td className="muted">{aliases ?? "—"}</td>
+                    <td className="muted">{formatDateTime(item.deletedDetectedAt)}</td>
+                    <td className="muted">
+                      {item.deletedLastDetectedAt ? formatDateTime(item.deletedLastDetectedAt) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination
           offset={offset}
           limit={LIMIT}
           total={data.total}
           onPageChange={setOffset}
-          emptyLabel="0 fans"
         />
       </section>
     </div>

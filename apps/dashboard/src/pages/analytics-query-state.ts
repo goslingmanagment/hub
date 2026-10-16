@@ -43,7 +43,7 @@ export type AnalyticsQueryLike<T> = {
   readonly error?: unknown;
 };
 
-const DEFAULT_ERROR_MESSAGE = "The request failed.";
+const DEFAULT_ERROR_MESSAGE = "Причина неизвестна.";
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) {
@@ -114,13 +114,13 @@ export type AnalyticsQueryId =
  * means nothing to the person reading the page.
  */
 const ANALYTICS_QUERY_SURFACES: Readonly<Record<AnalyticsQueryId, readonly string[]>> = {
-  profileTraffic: ["Traffic by source"],
-  mediaTraffic: ["FYP vs direct media views", "Content performance · Avg. watch"],
-  media: ["Top media", "Content performance"],
-  tags: ["Top FYP tags"],
-  coverage: ["Coverage", "every coverage badge"],
-  comments: ["Comments per post", "Likers"],
-  revenue: ["Revenue mix", "Month totals"],
+  profileTraffic: ["Трафик по источникам"],
+  mediaTraffic: ["Просмотры: FYP и прямые", "Эффективность контента · средний досмотр"],
+  media: ["Топ медиа", "Эффективность контента"],
+  tags: ["Топ тегов FYP"],
+  coverage: ["Покрытие данных", "отметки полноты на всех панелях"],
+  comments: ["Комментарии к постам", "Лайки"],
+  revenue: ["Структура дохода", "Итоги по месяцам"],
 };
 
 export type AnalyticsQueryEntry = {

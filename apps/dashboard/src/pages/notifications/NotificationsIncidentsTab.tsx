@@ -2,83 +2,107 @@ import { useState } from "react";
 import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { useNotificationIncidents, useResolveIncident } from "@/api/queries";
+import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
-import { formatRelativeTime } from "@/lib/format";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { syncStreamLabel } from "../settings/sync/syncVocabulary.js";
 
 const LIMIT = 50;
 
 type IncidentKind = NotificationsIncidentItem["kind"];
 
+/** Short Russian names; the engineering kinds keep a technical name, in Russian. */
 const INCIDENT_KIND_LABELS = {
-  auth_blocked: "Auth Blocked",
-  proxy_failed: "Proxy Failed",
-  proxy_missing: "Proxy Missing",
-  stream_failed_threshold: "Stream Failed 3x",
-  ofapi_auth: "OFAPI Auth",
-  ofapi_binding_conflict: "OFAPI Binding Conflict",
-  ofapi_low_credit: "OFAPI Low Credit",
-  ofapi_webhook_silence: "OFAPI Webhook Silence",
-  ofapi_burn_rate: "OFAPI Burn Rate",
-  db_disk_usage: "Database Disk Usage",
-  observations_partitions: "Observations Partitions",
-  wrong_transactions_writer: "Wrong Transactions Writer",
-  read_gateway_capture: "Read Gateway Capture",
-  golden_signal_lag: "Golden Signal Lag",
-  scheduler_silent: "Scheduler Silent",
-  ops_sampler_silent: "Ops Sampler Silent",
-  sync_silent: "Fansly Sync Silent",
-  fansly_sync_engine: "Fansly Sync Engine",
-  ofapi_chargebacks_reconcile_failed: "OFAPI Chargebacks Reconcile",
-  ofapi_link_stats_reconcile_failed: "OFAPI Link Stats Reconcile",
-  ai_provider_billing: "AI Provider Billing",
-  ai_provider_failed: "AI Provider Failed",
-  capture_payload_parity: "Capture Payload Parity",
+  auth_blocked: "Вход заблокирован",
+  proxy_failed: "Прокси не работает",
+  proxy_missing: "Нет прокси",
+  stream_failed_threshold: "Сбор падает 3 раза подряд",
+  ofapi_auth: "OnlyFans API: доступ отклонён",
+  ofapi_binding_conflict: "OnlyFans API: конфликт привязки",
+  ofapi_low_credit: "Мало кредитов OnlyFans API",
+  ofapi_webhook_silence: "Вебхуки замолчали",
+  ofapi_burn_rate: "Кредиты сгорают необычно быстро",
+  db_disk_usage: "База данных: мало места",
+  observations_partitions: "База данных: разделы журнала",
+  wrong_transactions_writer: "Операции пишет не тот процесс",
+  read_gateway_capture: "Шлюз чтения: сбор данных",
+  golden_signal_lag: "Отставание ключевых метрик",
+  scheduler_silent: "Планировщик молчит",
+  ops_sampler_silent: "Сбор метрик молчит",
+  sync_silent: "Сбор Fansly молчит",
+  fansly_sync_engine: "Сбор Fansly: сбой",
+  ofapi_chargebacks_reconcile_failed: "Сверка возвратов OnlyFans",
+  ofapi_link_stats_reconcile_failed: "Сверка статистики ссылок OnlyFans",
+  ai_provider_billing: "AI: проблема с оплатой",
+  ai_provider_failed: "AI-провайдер не отвечает",
+  capture_payload_parity: "Расхождение сохранённых данных",
 } satisfies Record<IncidentKind, string>;
 
+/** The type filter, grouped so the business kinds come first. */
+const KIND_GROUPS: ReadonlyArray<{ label: string; kinds: readonly IncidentKind[] }> = [
+  { label: "Страницы и сбор данных", kinds: ["auth_blocked", "proxy_failed", "proxy_missing", "stream_failed_threshold", "sync_silent", "fansly_sync_engine"] },
+  { label: "OnlyFans API", kinds: ["ofapi_auth", "ofapi_binding_conflict", "ofapi_low_credit", "ofapi_burn_rate", "ofapi_webhook_silence", "ofapi_chargebacks_reconcile_failed", "ofapi_link_stats_reconcile_failed"] },
+  { label: "AI", kinds: ["ai_provider_billing", "ai_provider_failed"] },
+  { label: "Система", kinds: ["db_disk_usage", "observations_partitions", "wrong_transactions_writer", "read_gateway_capture", "golden_signal_lag", "scheduler_silent", "ops_sampler_silent", "capture_payload_parity"] },
+];
+
+const STATUS_FILTERS: ReadonlyArray<{ value: string | undefined; label: string }> = [
+  { value: undefined, label: "Все" },
+  { value: "open", label: "Открытые" },
+  { value: "resolved", label: "Закрытые" },
+];
+
+function attempts(item: NotificationsIncidentItem): string {
+  return `Попыток: ${item.outboxAttemptCount ?? 0}.`;
+}
+
+/** The Telegram alert of an incident, as one small badge; the detail is in its tooltip. */
 function deliveryState(item: NotificationsIncidentItem): {
   label: string;
   className: string;
-  title?: string;
+  title: string;
 } {
   switch (item.outboxState) {
     case null:
       return {
-        label: String(item.notificationCount),
-        className: "text-text-muted",
+        label: item.notificationCount > 0 ? `отправлено: ${item.notificationCount}` : "—",
+        className: "text-[13px] text-text-secondary",
+        title: "Сколько оповещений об этом инциденте отправлено в Telegram",
       };
     case "pending":
       return {
-        label: `Queued (${item.outboxAttemptCount ?? 0})`,
-        className: "text-warning",
-        title: item.outboxLastError ?? "Waiting for the notification worker",
+        label: "в очереди",
+        className: "badge badge-warning",
+        title: `${item.outboxLastError ?? "Оповещение ждёт отправки."} ${attempts(item)}`,
       };
     case "leased":
       return {
-        label: `Sending (${item.outboxAttemptCount ?? 0})`,
-        className: "text-warning",
-        title: item.outboxLastError ?? "Notification delivery is leased",
+        label: "отправляется",
+        className: "badge badge-warning",
+        title: `${item.outboxLastError ?? "Оповещение сейчас отправляется."} ${attempts(item)}`,
       };
     case "delivered":
       return {
-        label: `Delivered (${item.outboxAttemptCount ?? 0})`,
-        className: "text-green",
+        label: "доставлено",
+        className: "badge badge-success",
+        title: `Оповещение доставлено в Telegram. ${attempts(item)}`,
       };
     case "suppressed":
       return {
-        label: "Suppressed",
-        className: "text-warning",
+        label: "не отправлялось",
+        className: "badge",
         title: item.outboxSuppressionReason === "ai_critical_alerts_disabled"
-          ? "AI critical paging was off when this transition was recorded"
+          ? "Критичные оповещения AI были выключены, когда инцидент изменился"
           : item.outboxSuppressionReason === "sync_failure_alerts_disabled"
-            ? "Sync failure paging was off when this transition was recorded"
-            : "Notifications were off when this transition was recorded",
+            ? "Оповещения о сбоях сбора были выключены, когда инцидент изменился"
+            : "Уведомления были выключены, когда инцидент изменился",
       };
     case "exhausted":
       return {
-        label: `Exhausted (${item.outboxAttemptCount ?? 0})`,
-        className: "text-danger",
-        ...(item.outboxLastError == null ? {} : { title: item.outboxLastError }),
+        label: "не доставлено",
+        className: "badge badge-danger",
+        title: `${item.outboxLastError ?? "Все попытки отправки исчерпаны."} ${attempts(item)}`,
       };
   }
 }
@@ -100,142 +124,130 @@ export function NotificationsIncidentsTab() {
 
   function handleResolve(incidentId: number) {
     resolveIncident.mutate(incidentId, {
-      onSuccess: () => toast.success("Incident resolved"),
-      onError: () => toast.error("Failed to resolve incident"),
+      onSuccess: () => toast.success("Инцидент закрыт"),
+      onError: () => toast.error("Не удалось закрыть инцидент"),
     });
   }
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <select
-          aria-label="Incident status"
-          value={status ?? ""}
-          onChange={(event) => { setStatus(event.target.value || undefined); setOffset(0); }}
-          className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
-        >
-          <option value="">All Statuses</option>
-          <option value="open">Open</option>
-          <option value="resolved">Resolved</option>
-        </select>
+    <div className="space-y-4">
+      <p className="text-sm text-text-secondary">
+        Сбои сбора данных, OnlyFans API, AI и сервера. Инцидент можно закрыть вручную, когда причина устранена.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="segmented" role="group" aria-label="Статус инцидента">
+          {STATUS_FILTERS.map((filter) => (
+            <button
+              key={filter.value ?? "all"}
+              type="button"
+              aria-pressed={status === filter.value}
+              onClick={() => { setStatus(filter.value); setOffset(0); }}
+              className="segment"
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
 
         <select
-          aria-label="Incident type"
+          aria-label="Тип инцидента"
           value={kind ?? ""}
           onChange={(event) => { setKind(event.target.value || undefined); setOffset(0); }}
-          className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
+          className="select w-auto min-h-[36px] py-1.5"
         >
-          <option value="">All Types</option>
-          {(Object.entries(INCIDENT_KIND_LABELS) as Array<[IncidentKind, string]>)
-            .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <option value="">Все типы</option>
+          {KIND_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.kinds.map((value) => <option key={value} value={value}>{INCIDENT_KIND_LABELS[value]}</option>)}
+            </optgroup>
+          ))}
         </select>
 
         <input
-          aria-label="Incident page"
-          type="text"
-          placeholder="Filter by page..."
+          aria-label="Страница инцидента"
+          type="search"
+          placeholder="Страница…"
           value={pageLabel ?? ""}
           onChange={(event) => { setPageLabel(event.target.value || undefined); setOffset(0); }}
-          className="w-48 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted"
+          className="input w-48 min-h-[36px] py-1.5"
         />
       </div>
 
-      {isError && data && <StaleDataNotice error={error} className="mb-3" />}
+      {isError && data && <StaleDataNotice error={error} />}
       {isLoading && !data ? (
-        <StatusPanel title="Loading incidents" description="Fetching notification incidents." />
+        <StatusPanel title="Загружаем инциденты…" />
       ) : !data ? (
         <StatusPanel
-          title="Incidents failed to load"
-          description="The notification incidents feed could not be fetched."
+          title="Инциденты не загрузились"
+          description="Сервер не ответил. Попробуйте обновить страницу."
           tone="error"
         />
       ) : data.items.length === 0 ? (
         <StatusPanel
-          title="No incidents match this view"
-          description="Try another status, type or page. An empty filtered list does not describe the whole system."
-          action={offset > 0 ? <button type="button" onClick={() => setOffset(0)} className="text-sm text-accent underline">Back to first page</button> : undefined}
+          title="Под эти фильтры инцидентов нет"
+          description="Попробуйте другой статус, тип или страницу. Пустой отфильтрованный список ничего не говорит о системе в целом."
+          action={offset > 0 ? <button type="button" onClick={() => setOffset(0)} className="btn btn-sm">К первой странице</button> : undefined}
         />
       ) : (
-        <>
-          <div className="overflow-x-auto rounded-xl border border-border bg-card">
-            <table className="w-full border-collapse">
+        <div className="card">
+          <div className="overflow-x-auto">
+            <table className="data-table">
               <thead>
-                <tr className="bg-hover-alt">
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Status</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Page</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Type</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Stream</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Opened</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Error</th>
-                  <th className="px-4 py-2.5 text-right text-[12px] font-semibold uppercase text-text-muted tracking-wider">Alerts</th>
-                  <th className="px-4 py-2.5 text-[12px] font-semibold uppercase text-text-muted tracking-wider" />
+                <tr>
+                  <th>Статус</th>
+                  <th>Тип</th>
+                  <th>Страница</th>
+                  <th>Открыт</th>
+                  <th>Ошибка</th>
+                  <th title="Оповещение в Telegram">Telegram</th>
+                  <th className="relative"><span className="sr-only">Действие</span></th>
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((item) => (
-                  <tr key={item.id} className="border-t border-border hover:bg-hover">
-                    <td className="px-4 py-2.5">
-                      <div className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${
-                        item.status === "open" ? "text-danger" : "text-green"
-                      }`}>
-                        <div className={`h-2 w-2 rounded-full ${item.status === "open" ? "bg-danger" : "bg-green"}`} />
-                        {item.status === "open" ? "Open" : "Resolved"}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel ?? "Global"}</td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-secondary">
-                      {INCIDENT_KIND_LABELS[item.kind]}
-                    </td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-muted">{item.stream ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatRelativeTime(item.openedAt)}</td>
-                    <td title={item.errorSummary ?? undefined} className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ?? "—"}</td>
-                    <td
-                      className={`px-4 py-2.5 text-right text-[12px] tabular-nums ${
-                        deliveryState(item).className
-                      }`}
-                      title={deliveryState(item).title}
-                    >
-                      {deliveryState(item).label}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {item.status === "open" && (
-                        <button
-                          onClick={() => handleResolve(item.id)}
-                          disabled={resolveIncident.isPending || isError}
-                          className="rounded-lg border border-border bg-card px-2.5 py-1 text-[11px] font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
-                        >
-                          Resolve
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {data.items.map((item) => {
+                  const delivery = deliveryState(item);
+                  return (
+                    <tr key={item.id}>
+                      <td>
+                        <span className={item.status === "open" ? "badge badge-danger" : "badge badge-success"}>
+                          <span className={`status-dot ${item.status === "open" ? "status-dot-error" : "status-dot-ok"}`} aria-hidden="true" />
+                          {item.status === "open" ? "Открыт" : "Закрыт"}
+                        </span>
+                      </td>
+                      <td>
+                        <span title={item.kind}>{INCIDENT_KIND_LABELS[item.kind] ?? item.kind}</span>
+                        {item.stream && <div className="mt-0.5 text-xs text-text-secondary">поток: {syncStreamLabel(item.stream)}</div>}
+                      </td>
+                      <td className="font-medium">{item.pageLabel ?? <span className="font-normal text-text-secondary">Вся система</span>}</td>
+                      <td className="muted whitespace-nowrap" title={formatDateTime(item.openedAt)}>{formatRelativeTime(item.openedAt)}</td>
+                      <td title={item.errorSummary ?? undefined} className="muted max-w-[280px] truncate text-[13px]">{item.errorSummary ?? "—"}</td>
+                      <td>
+                        <span className={delivery.className} title={delivery.title}>{delivery.label}</span>
+                      </td>
+                      <td className="text-right">
+                        {item.status === "open" && (
+                          <button
+                            type="button"
+                            onClick={() => handleResolve(item.id)}
+                            disabled={resolveIncident.isPending || isError}
+                            className="btn btn-sm"
+                            title="Отметить инцидент решённым"
+                          >
+                            Закрыть
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-
           {data.total > LIMIT && (
-            <div className="mt-3 flex items-center justify-between text-[12px] text-text-muted">
-              <span>{offset + 1}–{Math.min(offset + LIMIT, data.total)} of {data.total}</span>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setOffset(Math.max(0, offset - LIMIT))}
-                  disabled={offset === 0}
-                  className="rounded border border-border px-2.5 py-1 disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setOffset(offset + LIMIT)}
-                  disabled={offset + LIMIT >= data.total}
-                  className="rounded border border-border px-2.5 py-1 disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
+            <Pagination offset={offset} limit={LIMIT} total={data.total} onPageChange={setOffset} />
           )}
-        </>
+        </div>
       )}
     </div>
   );

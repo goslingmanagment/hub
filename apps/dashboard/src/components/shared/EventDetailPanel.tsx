@@ -1,10 +1,32 @@
 import { Link } from "react-router";
 
-export const SEVERITY_STYLES: Record<string, string> = {
-  info: "bg-[#e5e7eb] text-[#374151]",
-  warn: "bg-[#fef3c7] text-[#92400e]",
-  error: "bg-[#fee2e2] text-[#991b1b]",
+// A sync event as the System screens show it (the log, the sync anomalies):
+// its severity as a badge, and the row's detail — the message, the run it
+// belongs to, what to do about it, and its raw data.
+
+const SEVERITY_BADGES: Record<string, string> = {
+  info: "badge",
+  warn: "badge badge-warning",
+  error: "badge badge-danger",
 };
+
+const SEVERITY_LABELS: Record<string, string> = {
+  info: "Инфо",
+  warn: "Предупреждение",
+  error: "Ошибка",
+};
+
+export function severityLabel(severity: string): string {
+  return SEVERITY_LABELS[severity] ?? severity;
+}
+
+export function SeverityBadge({ severity }: { severity: string }) {
+  return (
+    <span className={SEVERITY_BADGES[severity] ?? SEVERITY_BADGES.info} data-severity={severity}>
+      {severityLabel(severity)}
+    </span>
+  );
+}
 
 function isLegacyBenignAfterFilterAnomaly(input: {
   eventCode?: string | null;
@@ -24,40 +46,48 @@ export function getEventDisplaySeverity(input: {
   return isLegacyBenignAfterFilterAnomaly(input) ? "warn" : input.severity;
 }
 
-const RECOMMENDATION_MAP: Record<string, { text: string; color: string }> = {
+type RecommendationTone = "neutral" | "warning" | "danger";
+
+const RECOMMENDATION_MAP: Record<string, { text: string; tone: RecommendationTone }> = {
   checkpoint_stalled: {
-    text: "Page has no new data since last sync. Usually means the page is inactive. No action needed.",
-    color: "border-[#9ca3af]",
+    text: "Новых данных со времени прошлого сбора нет. Обычно это значит, что страница неактивна. Ничего делать не нужно.",
+    tone: "neutral",
   },
   after_ineffective: {
-    text: "The provider ignored the lower-bound filter and older transactions were rescanned. Sync handled it automatically; investigate only if the scan window keeps growing.",
-    color: "border-[#f59e0b]",
+    text: "Источник проигнорировал нижнюю границу фильтра, и старые операции просмотрены заново. Сбор справился сам; разбирайтесь, только если окно просмотра продолжает расти.",
+    tone: "warning",
   },
   auth_blocked: {
-    text: "Session token expired or invalid. Update credentials in page settings.",
-    color: "border-[#ef4444]",
+    text: "Сессия истекла или недействительна. Обновите данные входа в настройках страницы.",
+    tone: "danger",
   },
   anomaly: {
-    text: "Follower count from API doesn't match local data. A reconciliation sync has been triggered automatically.",
-    color: "border-[#f59e0b]",
+    text: "Число фолловеров от платформы не совпадает с данными Hub. Сверка запущена автоматически.",
+    tone: "warning",
   },
   follower_count_mismatch: {
-    text: "Follower count from API doesn't match local data. A reconciliation sync has been triggered automatically.",
-    color: "border-[#f59e0b]",
+    text: "Число фолловеров от платформы не совпадает с данными Hub. Сверка запущена автоматически.",
+    tone: "warning",
   },
   rate_limited: {
-    text: "Platform API rate limit hit. Sync will retry automatically on next cycle.",
-    color: "border-[#f59e0b]",
+    text: "Платформа ограничила частоту запросов. Сбор повторит попытку в следующем цикле.",
+    tone: "warning",
   },
   timeout: {
-    text: "API request timed out. Usually a temporary platform issue. Will retry.",
-    color: "border-[#f59e0b]",
+    text: "Платформа не ответила вовремя. Обычно это временный сбой: попытка повторится.",
+    tone: "warning",
   },
 };
 
 const DEFAULT_RECOMMENDATION = {
-  text: "No automated recommendation. Check details below.",
-  color: "border-[#9ca3af]",
+  text: "Готовой рекомендации нет — смотрите данные события ниже.",
+  tone: "neutral" as RecommendationTone,
+};
+
+const RECOMMENDATION_NOTICE: Record<RecommendationTone, string> = {
+  neutral: "notice",
+  warning: "notice notice-warning",
+  danger: "notice notice-danger",
 };
 
 export function getEventRecommendation(eventCode?: string | null) {
@@ -81,35 +111,34 @@ export function EventDetailPanel({
   const rec = getEventRecommendation(eventCode);
 
   return (
-    <div className="px-6 py-4 bg-hover-alt/40 space-y-3">
-      {/* Full message */}
+    // Sticky at the table's left edge and no wider than the phone's screen:
+    // the table scrolls sideways, its detail stays in view.
+    <div className="sticky left-0 max-w-[calc(100vw-50px)] space-y-3 bg-hover-alt px-4 py-4 sm:px-6 lg:max-w-none">
       {message && (
-        <p className="text-sm text-text-primary whitespace-pre-wrap">{message}</p>
+        <p className="whitespace-pre-wrap break-words text-sm text-text-primary">{message}</p>
       )}
 
-      {/* Sync run link */}
+      <p className={`${RECOMMENDATION_NOTICE[rec.tone]} block whitespace-normal`}>{rec.text}</p>
+
       {syncRunId != null && (
         <Link
           to={`/dev/sync-status?runId=${syncRunId}`}
-          className="inline-block text-sm text-accent hover:underline"
+          className="link inline-block text-sm"
           onClick={(e) => e.stopPropagation()}
         >
-          View sync run →
+          Открыть запуск синка &rarr;
         </Link>
       )}
 
-      {/* Recommendation banner */}
-      <div className={`border-l-4 ${rec.color} bg-bg rounded-r-lg px-4 py-2`}>
-        <p className="text-sm text-text-secondary">{rec.text}</p>
-      </div>
-
-      {/* Raw details */}
       {details && Object.keys(details).length > 0 ? (
-        <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 overflow-x-auto">
-          {JSON.stringify(details, null, 2)}
-        </pre>
+        <div>
+          <p className="mb-1 text-xs font-medium text-text-secondary">Данные события</p>
+          <pre className="overflow-x-auto rounded-lg border border-border-light bg-card p-3 font-mono text-xs text-text-secondary">
+            {JSON.stringify(details, null, 2)}
+          </pre>
+        </div>
       ) : (
-        <p className="text-xs text-text-muted">No additional details.</p>
+        <p className="text-xs text-text-muted">Других данных нет.</p>
       )}
     </div>
   );

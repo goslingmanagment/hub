@@ -1,62 +1,85 @@
+import type { ReactNode } from "react";
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { buildSettingsRoute, type SyncSettingsTab } from "@/lib/navigation";
 
-// What the page details of the two sync tabs share: the way back, the page's
-// name, and the pointer shown when a page is opened on the tab of the other
-// engine (the section links carry `?page=` across, and so do old bookmarks).
+// What the two sync screens (Fansly and OnlyFans) share: the way back, the
+// page's name, the one status line every page opens with, and the pointer
+// shown when a page is opened on the other platform's screen (the side
+// navigation carries `?page=` across, and so do old bookmarks).
+
+export type PageStatusTone = "success" | "warning" | "danger" | "info" | "neutral";
+
+/** A page in one line: "Работает", "На паузе", "Нужен вход", "Нет прокси",
+ *  "Отстаёт"… with why, in a few words. */
+export interface PageStatus {
+  kind: string;
+  label: string;
+  tone: PageStatusTone;
+  reason: string | null;
+}
+
+const BADGES: Record<PageStatusTone, string> = {
+  success: "badge badge-success",
+  warning: "badge badge-warning",
+  danger: "badge badge-danger",
+  info: "badge badge-info",
+  neutral: "badge",
+};
+
+export function statusBadgeClass(tone: PageStatusTone): string {
+  return BADGES[tone];
+}
+
+export function PageStatusLine({ status }: { status: PageStatus }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1" data-page-status={status.kind}>
+      <span className={statusBadgeClass(status.tone)}>{status.label}</span>
+      {status.reason && <span className="min-w-0 text-sm text-text-secondary">{status.reason}</span>}
+    </div>
+  );
+}
 
 export function SyncBackButton({ onBack, label }: { onBack: () => void; label: string }) {
   return (
-    <button
-      type="button"
-      onClick={onBack}
-      className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
-    >
+    <button type="button" onClick={onBack} className="btn btn-ghost btn-sm -ml-2.5 mb-3">
       &larr; {label}
     </button>
   );
 }
 
-export function SyncPageTitle({ page }: { page: SyncBlocksPage }) {
+/** The page's name with its platform and account, and the screen's actions on the right. */
+export function SyncPageTitle({ page, actions }: { page: SyncBlocksPage; actions?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-sm font-bold text-text-primary">{page.pageLabel}</span>
-      <PlatformBadge platform={page.platform} />
-      {page.username && <span className="text-xs text-text-muted">@{page.username}</span>}
-      {page.displayName && page.displayName !== page.username && (
-        <span className="text-xs text-text-muted">{page.displayName}</span>
-      )}
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <h3 className="text-base font-semibold text-text-primary">{page.pageLabel}</h3>
+        <PlatformBadge platform={page.platform} />
+        {page.username && <span className="text-sm text-text-muted">@{page.username}</span>}
+        {page.displayName && page.displayName !== page.username && (
+          <span className="text-sm text-text-muted">{page.displayName}</span>
+        )}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
 
-const OTHER_TAB_COPY: Record<SyncSettingsTab, { title: (pageLabel: string) => string; text: string; link: string }> = {
-  engine: {
-    title: (pageLabel) => `Страницу ${pageLabel} читает Fansly Sync Engine`,
-    text: "Её состояние, очередь, заявки на историю и кнопки — на вкладке «Синк».",
-    link: "Открыть в «Синк»",
-  },
-  sync: {
-    title: (pageLabel) => `Страницу ${pageLabel} Fansly Sync Engine не читает`,
-    text: "Её блоки и кнопки — на вкладке «Синхронизация».",
-    link: "Открыть в «Синхронизация»",
-  },
+const OTHER_SCREEN: Record<SyncSettingsTab, { platform: string; screen: string }> = {
+  engine: { platform: "Fansly", screen: "Fansly" },
+  sync: { platform: "OnlyFans", screen: "OnlyFans" },
 };
 
-/** The page belongs to the other sync tab: say where it is and link there. */
+/** The page is the other platform's: say where its sync is and link there. */
 export function SyncPageOnOtherTab({ pageLabel, tab }: { pageLabel: string; tab: SyncSettingsTab }) {
-  const copy = OTHER_TAB_COPY[tab];
+  const copy = OTHER_SCREEN[tab];
   return (
-    <div className="rounded-xl border border-border bg-card px-5 py-4">
-      <p className="text-sm font-semibold text-text-primary">{copy.title(pageLabel)}</p>
-      <p className="mt-0.5 text-xs text-text-secondary">{copy.text}</p>
-      <Link
-        to={buildSettingsRoute(tab, pageLabel)}
-        className="mt-2 inline-block text-xs font-semibold text-accent hover:underline"
-      >
-        {copy.link} &rarr;
+    <div className="card card-body" data-sync-other-screen={tab}>
+      <p className="text-sm font-semibold text-text-primary">{pageLabel} — страница {copy.platform}</p>
+      <p className="mt-1 text-sm text-text-secondary">Её сбор данных показан в разделе «{copy.screen}».</p>
+      <Link to={buildSettingsRoute(tab, pageLabel)} className="link mt-3 inline-block text-sm">
+        Открыть в разделе «{copy.screen}» &rarr;
       </Link>
     </div>
   );

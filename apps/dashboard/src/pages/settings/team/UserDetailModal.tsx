@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import type { AccountLinkItem, AdminUser, DeviceTokenItem } from "@agency_hub_core/contracts";
 
@@ -36,6 +37,7 @@ import {
   TEAM_PAGE_LABELS,
   TEAM_STATUS_LABEL,
   teamStatus,
+  type TeamStatus,
 } from "./teamView.js";
 
 /**
@@ -45,7 +47,9 @@ import {
  * old console offered a single "revoke" that left dashboard sessions and keys
  * alive while calling itself "signed out everywhere"; here each button says
  * exactly how far it reaches, so the owner firing someone can pick the one
- * that matches the situation.
+ * that matches the situation. The everyday cut-off — «Отключить доступ» — sits
+ * in the card's footer; the wider revocations and the deletion are grouped
+ * at the bottom, apart from the everyday sections.
  *
  * The link-creating mutation is owned by the TAB and passed in: it carries the
  * only copy of a fresh link in its result, and a mutation owned by a modal
@@ -68,6 +72,12 @@ function ownerIsProtected(user: AdminUser): boolean {
   return user.role === "owner";
 }
 
+const STATUS_BADGE: Readonly<Record<TeamStatus, string>> = {
+  invited: "badge badge-warning",
+  active: "badge badge-success",
+  disabled: "badge",
+};
+
 export function UserDetailModal({
   user,
   createLink,
@@ -83,6 +93,7 @@ export function UserDetailModal({
   const status = teamStatus(user);
   const { data: auth } = useAuthMe();
   const canDelete = Boolean(auth?.user) && !ownerIsProtected(user) && auth?.user.id !== user.id;
+  const disabled = status === "disabled";
 
   return (
     <>
@@ -95,41 +106,36 @@ export function UserDetailModal({
         }}
       >
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
-            <span className="rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs">
-              {ROLE_LABEL[user.role]}
-            </span>
-            <span className="rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs">
-              {TEAM_STATUS_LABEL[status]}
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="badge">{ROLE_LABEL[user.role]}</span>
+            <span className={STATUS_BADGE[status]}>{TEAM_STATUS_LABEL[status]}</span>
             {user.lastActiveAt && (
-              <span className="text-xs text-text-muted">
+              <span className="text-xs text-text-secondary">
                 последняя активность {formatRelativeRu(user.lastActiveAt)}
               </span>
             )}
           </div>
 
-          {status === "disabled" && (
-            <AccountStateSection
-              user={user}
-              onDeactivate={() => setConfirmation("deactivate")}
-              onReactivate={() => setConfirmation("reactivate")}
-            />
+          {disabled && user.disabledAt && (
+            <div className="notice flex-wrap items-center">
+              <p className="min-w-0 flex-1">
+                Доступ отключён {formatDateTime(user.disabledAt)}. Логин и история сохранены — восстановите
+                доступ, если возвращается тот же человек.
+              </p>
+              <button type="button" onClick={() => setConfirmation("reactivate")} className="btn btn-primary btn-sm">
+                Восстановить доступ
+              </button>
+            </div>
           )}
 
           {status === "invited" && (
-            <p className="rounded-lg border border-border bg-hover-alt px-3 py-2 text-sm text-text-secondary">
+            <p className="notice">
               Человек ещё не открыл приглашение и не придумал пароль. Пока этого не
               случилось, войти он не может.
             </p>
           )}
 
-          <DevicesSection
-            userId={user.id}
-            disabled={status === "disabled"}
-            onRevokeAll={() => setConfirmation("revokeAllDevices")}
-            onTerminate={ownerIsProtected(user) ? null : () => setConfirmation("terminateAccess")}
-          />
+          {disabled ? <SavedPagesSection user={user} /> : <PagesSection user={user} />}
 
           <LinksSection
             user={user}
@@ -137,48 +143,30 @@ export function UserDetailModal({
             onLinkCreated={onLinkCreated}
           />
 
-          {status === "disabled" ? <SavedPagesSection user={user} /> : <PagesSection user={user} />}
+          <DevicesSection userId={user.id} />
 
-          {!ownerIsProtected(user) && status !== "disabled" && (
-            <AccountStateSection
-              user={user}
-              onDeactivate={() => setConfirmation("deactivate")}
-              onReactivate={() => setConfirmation("reactivate")}
-            />
-          )}
-
-          {canDelete && (
-            <div className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-3">
-              <h3 className="text-sm font-semibold text-text-primary">Удаление аккаунта</h3>
-              <p className="mt-1 text-xs text-text-muted">
-                Удаление необратимо. Все входы и ссылки перестанут работать, а логин освободится.
-                История работы сохранится за прежним участником.
-              </p>
-              <button
-                type="button"
-                disabled={createLink.isPending}
-                onClick={() => setConfirmation("deleteAccount")}
-                className="mt-3 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-              >
-                Удалить аккаунт
-              </button>
-            </div>
-          )}
+          <DangerZone
+            onRevokeAll={disabled ? null : () => setConfirmation("revokeAllDevices")}
+            onTerminate={disabled || ownerIsProtected(user) ? null : () => setConfirmation("terminateAccess")}
+            onDelete={canDelete ? () => setConfirmation("deleteAccount") : null}
+            deleteDisabled={createLink.isPending}
+          />
 
           {ownerIsProtected(user) && (
-            <p className="rounded-lg border border-border bg-hover-alt px-3 py-2.5 text-xs text-text-muted">
+            <p className="text-xs text-text-secondary">
               Владельца нельзя деактивировать и нельзя завершить все его входы —
               иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
             </p>
           )}
         </div>
 
-        <div className="mt-6 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-          >
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-border-light pt-4">
+          {!ownerIsProtected(user) && !disabled ? (
+            <button type="button" onClick={() => setConfirmation("deactivate")} className="btn text-danger">
+              Отключить доступ
+            </button>
+          ) : <span />}
+          <button type="button" onClick={onClose} className="btn">
             Закрыть
           </button>
         </div>
@@ -197,21 +185,82 @@ export function UserDetailModal({
 }
 
 /* ------------------------------------------------------------------ */
+/*  The wider revocations and the deletion, apart from everyday work   */
+/* ------------------------------------------------------------------ */
+
+function DangerZone({
+  onRevokeAll,
+  onTerminate,
+  onDelete,
+  deleteDisabled,
+}: {
+  onRevokeAll: (() => void) | null;
+  /** null for an owner: the kernel refuses to terminate their access. */
+  onTerminate: (() => void) | null;
+  onDelete: (() => void) | null;
+  deleteDisabled: boolean;
+}) {
+  const rows = [
+    onRevokeAll && {
+      key: "revokeAll",
+      text: "Расширение и приложение на всех устройствах попросят войти заново. Консоль и пароль не затрагиваются.",
+      label: REVOCATION_LABEL.allDevices,
+      onClick: onRevokeAll,
+      danger: false,
+      disabled: false,
+    },
+    onTerminate && {
+      key: "terminate",
+      text: "Завершатся входы на всех устройствах, в консоли и все ссылки. Пароль продолжит работать.",
+      label: REVOCATION_LABEL.allAccess,
+      onClick: onTerminate,
+      danger: false,
+      disabled: false,
+    },
+    onDelete && {
+      key: "delete",
+      text: "Необратимо, логин освободится. История работы сохранится за прежним участником.",
+      label: "Удалить аккаунт",
+      onClick: onDelete,
+      danger: true,
+      disabled: deleteDisabled,
+    },
+  ].filter((row) => row !== null);
+  if (rows.length === 0) return null;
+  // Collapsed: these are rare and wide; the everyday cut-off is the footer's
+  // «Отключить доступ». The rows stay in the page, so nothing is out of reach.
+  return (
+    <details className="help rounded-xl border border-border">
+      <summary className="flex flex-wrap px-4 py-3 text-text-primary">
+        Опасная зона
+        <span className="font-normal text-text-secondary">
+          {rows.map((row) => row.label.toLowerCase()).join(", ")}
+        </span>
+      </summary>
+      <ul className="divide-y divide-border-light border-t border-border-light">
+        {rows.map((row) => (
+          <li key={row.key} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
+            <p className="min-w-[14rem] flex-1 text-sm text-text-secondary">{row.text}</p>
+            <button
+              type="button"
+              disabled={row.disabled}
+              onClick={row.onClick}
+              className={`btn btn-sm ${row.danger ? "text-danger" : ""}`}
+            >
+              {row.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Devices                                                            */
 /* ------------------------------------------------------------------ */
 
-function DevicesSection({
-  userId,
-  disabled,
-  onRevokeAll,
-  onTerminate,
-}: {
-  userId: number;
-  disabled: boolean;
-  onRevokeAll: () => void;
-  /** null for an owner: the kernel refuses to terminate their access. */
-  onTerminate: (() => void) | null;
-}) {
+function DevicesSection({ userId }: { userId: number }) {
   const { data: devices, isLoading, isError, error } = useUserDevices(userId);
   const revokeDevice = useRevokeDevice(userId);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -229,7 +278,7 @@ function DevicesSection({
 
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">Устройства</h3>
+      <h3 className="card-title mb-2">Устройства</h3>
       {isError && (
         <StaleDataNotice
           title={devices ? "Список устройств не обновился" : "Список устройств недоступен"}
@@ -237,37 +286,36 @@ function DevicesSection({
           className="mb-2"
         />
       )}
-      {isLoading && !devices && <p className="text-sm text-text-muted">Загружаем…</p>}
+      {isLoading && !devices && <p className="text-sm text-text-secondary">Загружаем…</p>}
       {devices && active.length === 0 && (
-        <p className="text-sm text-text-muted">Сейчас ни одного входа.</p>
+        <p className="text-sm text-text-secondary">Сейчас ни одного входа.</p>
       )}
 
-      <div className="space-y-1.5">
-        {active.map((device) => (
-          <div
-            key={device.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-bg px-3 py-2"
-          >
-            <div className="min-w-0">
-              <div className="text-sm text-text-primary">{device.label}</div>
-              <div className="text-xs text-text-muted">
-                {device.lastUsedAt
-                  ? `вход использован ${formatRelativeRu(device.lastUsedAt)}`
-                  : "ещё ни разу не использовался"}
-                {device.lastClientVersion && <span> · версия {device.lastClientVersion}</span>}
+      {active.length > 0 && (
+        <ul className="divide-y divide-border-light rounded-lg border border-border">
+          {active.map((device) => (
+            <li key={device.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-sm text-text-primary">{device.label}</div>
+                <div className="text-xs text-text-secondary">
+                  {device.lastUsedAt
+                    ? `вход использован ${formatRelativeRu(device.lastUsedAt)}`
+                    : "ещё ни разу не использовался"}
+                  {device.lastClientVersion && <span> · версия {device.lastClientVersion}</span>}
+                </div>
               </div>
-            </div>
-            <button
-              type="button"
-              disabled={revokeDevice.isPending}
-              onClick={() => handleRevoke(device)}
-              className="shrink-0 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
-            >
-              {REVOCATION_LABEL.device}
-            </button>
-          </div>
-        ))}
-      </div>
+              <button
+                type="button"
+                disabled={revokeDevice.isPending}
+                onClick={() => handleRevoke(device)}
+                className="btn btn-ghost btn-sm"
+              >
+                {REVOCATION_LABEL.device}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {history.length > 0 && (
         <div className="mt-2">
@@ -275,15 +323,15 @@ function DevicesSection({
             type="button"
             aria-expanded={historyOpen}
             onClick={() => setHistoryOpen((open) => !open)}
-            className="flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-text-primary"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary hover:text-text-primary"
           >
-            <span className={`inline-block transition-transform ${historyOpen ? "rotate-90" : ""}`}>{"▸"}</span>
+            <ChevronRight size={14} aria-hidden className={`transition-transform ${historyOpen ? "rotate-90" : ""}`} />
             Завершённые входы ({history.length})
           </button>
           {historyOpen && (
-            <div className="mt-1.5 space-y-1">
+            <ul className="mt-1.5 space-y-1">
               {history.map((device) => (
-                <div key={device.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-1 text-xs text-text-muted">
+                <li key={device.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-1 text-xs text-text-secondary">
                   <span>{device.label}</span>
                   <span>
                     {deviceRevokedReasonLabel(device.revokedReason)
@@ -291,30 +339,9 @@ function DevicesSection({
                     {" · "}
                     {formatDateTime(device.revokedAt ?? device.expiresAt)}
                   </span>
-                </div>
+                </li>
               ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!disabled && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onRevokeAll}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover"
-          >
-            {REVOCATION_LABEL.allDevices}
-          </button>
-          {onTerminate && (
-            <button
-              type="button"
-              onClick={onTerminate}
-              className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
-            >
-              {REVOCATION_LABEL.allAccess}
-            </button>
+            </ul>
           )}
         </div>
       )}
@@ -370,7 +397,7 @@ function LinksSection({
 
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">Ссылки</h3>
+      <h3 className="card-title mb-2">Ссылки</h3>
       {isError && (
         <StaleDataNotice
           title={links ? "История ссылок не обновилась" : "История ссылок недоступна"}
@@ -378,45 +405,44 @@ function LinksSection({
           className="mb-2"
         />
       )}
-      {isLoading && !links && <p className="text-sm text-text-muted">Загружаем…</p>}
-      {links && links.length === 0 && <p className="text-sm text-text-muted">Ссылок ещё не было.</p>}
+      {isLoading && !links && <p className="text-sm text-text-secondary">Загружаем…</p>}
+      {links && links.length === 0 && <p className="text-sm text-text-secondary">Ссылок ещё не было.</p>}
 
-      <div className="space-y-1.5">
-        {(links ?? []).map((link) => (
-          <div
-            key={link.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-bg px-3 py-2"
-          >
-            <div className="min-w-0 text-sm">
-              <span className="text-text-primary">{LINK_KIND_LABEL[link.kind]}</span>
-              <span className="ml-2 text-xs text-text-muted">
-                {linkStateLabel(link, formatDateTime)} · создана {formatDateTime(link.createdAt)}
-              </span>
-            </div>
-            {link.state === "active" && !disabled && (
-              <button
-                type="button"
-                disabled={revokeLink.isPending}
-                onClick={() => handleRevoke(link)}
-                className="shrink-0 rounded px-2 py-0.5 text-xs font-medium text-danger hover:bg-hover disabled:opacity-50"
-              >
-                Отозвать ссылку
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
+      {(links ?? []).length > 0 && (
+        <ul className="divide-y divide-border-light rounded-lg border border-border">
+          {(links ?? []).map((link) => (
+            <li key={link.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <div className="min-w-0 text-sm">
+                <span className="text-text-primary">{LINK_KIND_LABEL[link.kind]}</span>
+                <span className="ml-2 text-xs text-text-secondary">
+                  {linkStateLabel(link, formatDateTime)} · создана {formatDateTime(link.createdAt)}
+                </span>
+              </div>
+              {link.state === "active" && !disabled && (
+                <button
+                  type="button"
+                  disabled={revokeLink.isPending}
+                  onClick={() => handleRevoke(link)}
+                  className="btn btn-ghost btn-sm"
+                >
+                  Отозвать ссылку
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {disabled ? (
-        <p className="mt-3 text-xs text-text-muted">Новые ссылки можно создать после восстановления доступа.</p>
+        <p className="field-hint">Новые ссылки можно создать после восстановления доступа.</p>
       ) : (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-3 space-y-1.5">
           {invited ? (
             <button
               type="button"
               disabled={createLink.isPending}
               onClick={() => handleCreate("invite")}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
+              className="btn btn-sm"
             >
               {createLink.isPending ? "Создаём…" : "Отправить приглашение заново"}
             </button>
@@ -425,12 +451,12 @@ function LinksSection({
               type="button"
               disabled={createLink.isPending}
               onClick={() => handleCreate("password_reset")}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
+              className="btn btn-sm"
             >
               {createLink.isPending ? "Создаём…" : "Сбросить пароль ссылкой"}
             </button>
           )}
-          <p className="text-xs text-text-muted">
+          <p className="field-hint">
             Новая ссылка отменяет прежнюю. Когда человек задаст пароль, все прежние
             входы завершатся.
           </p>
@@ -447,14 +473,17 @@ function LinksSection({
 function SavedPagesSection({ user }: { user: AdminUser }) {
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">Сохранённые страницы</h3>
-      <p className="text-xs text-text-muted">
+      <h3 className="card-title mb-1">Сохранённые страницы</h3>
+      <p className="text-sm text-text-secondary">
         После восстановления доступа участник снова сможет работать с этими страницами.
       </p>
-      <ul className="mt-2 space-y-1 text-sm text-text-secondary">
-        {user.assignedPages.map((page) => <li key={page.id}>{page.label} · {page.modelName}</li>)}
-      </ul>
-      {user.assignedPages.length === 0 && <p className="mt-2 text-sm text-text-muted">Страниц пока нет.</p>}
+      {user.assignedPages.length === 0 ? (
+        <p className="mt-2 text-sm text-text-secondary">Страниц пока нет.</p>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {user.assignedPages.map((page) => <span key={page.id} className="badge">{page.label} · {page.modelName}</span>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -510,54 +539,6 @@ function PagesSection({ user }: { user: AdminUser }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Account state                                                      */
-/* ------------------------------------------------------------------ */
-
-function AccountStateSection({
-  user,
-  onDeactivate,
-  onReactivate,
-}: {
-  user: AdminUser;
-  onDeactivate: () => void;
-  onReactivate: () => void;
-}) {
-  if (user.disabledAt) {
-    return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-hover-alt px-3 py-2.5">
-        <p className="text-xs text-text-muted">
-          Доступ отключён {formatDateTime(user.disabledAt)}. Логин и история сохранены.
-          Восстановите доступ, если возвращается тот же человек.
-        </p>
-        <button
-          type="button"
-          onClick={onReactivate}
-          className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90"
-        >
-          Восстановить доступ
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2.5">
-      <p className="text-xs text-text-muted">
-        Отключение завершит все входы {user.username}. Участник перейдёт в раздел
-        «Отключённые участники». Его логин и история сохранятся; доступ можно восстановить.
-      </p>
-      <button
-        type="button"
-        onClick={onDeactivate}
-        className="shrink-0 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
-      >
-        Отключить доступ
-      </button>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Confirmations                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -581,8 +562,8 @@ export function ConfirmationDialog({
   const dialogs = {
     revokeAllDevices: {
       title: `${REVOCATION_LABEL.allDevices} — ${user.username}?`,
-      message: "Расширение и приложение на всех устройствах перестанут работать и попросят "
-        + "войти заново. Вход в консоль и пароль не затрагиваются.",
+      message: "Расширение и приложение на всех устройствах перестанут работать и попросят войти заново. "
+        + "Вход в консоль и пароль не затрагиваются.",
       confirmLabel: "Отозвать",
       isPending: revokeAllDevices.isPending,
       run: async () => {
@@ -594,9 +575,8 @@ export function ConfirmationDialog({
     },
     terminateAccess: {
       title: `${REVOCATION_LABEL.allAccess} — ${user.username}?`,
-      message: "Завершаются входы на всех устройствах, вход в консоль и все действующие "
-        + "ссылки. Человек остаётся в команде, пароль продолжает работать — он сможет "
-        + "войти заново сам.",
+      message: "Завершатся входы на всех устройствах, вход в консоль и все действующие ссылки. "
+        + "Человек останется в команде и сможет войти заново со своим паролем.",
       confirmLabel: "Завершить",
       isPending: terminateAccess.isPending,
       run: async () => {
@@ -606,9 +586,8 @@ export function ConfirmationDialog({
     },
     deactivate: {
       title: `Отключить доступ ${user.username}?`,
-      message: "Все входы и ссылки перестанут работать. Участник появится в разделе "
-        + "«Отключённые участники». Его логин, история, роль и страницы сохранятся. "
-        + "Позже можно восстановить доступ тому же человеку. Пока аккаунт сохранён, его логин остаётся занят.",
+      message: "Все входы и ссылки перестанут работать, участник перейдёт в «Отключённые участники». "
+        + "Логин (он останется занят), история, роль и страницы сохранятся — доступ можно будет восстановить.",
       confirmLabel: "Отключить доступ",
       isPending: deactivate.isPending,
       run: async () => {
@@ -618,10 +597,9 @@ export function ConfirmationDialog({
     },
     deleteAccount: {
       title: `Удалить аккаунт ${user.username}?`,
-      message: `Аккаунт ${user.username} будет удалён без возможности восстановления. `
-        + "Все его входы, ссылки и доступ к страницам будут отозваны. "
-        + "Логин освободится: новый участник с этим логином получит отдельный аккаунт. "
-        + "История работы и финансовые записи останутся за прежним участником.",
+      message: "Все его входы, ссылки и доступ к страницам будут отозваны, аккаунт удалится без возможности восстановления. "
+        + "Логин освободится — новый участник с этим логином получит отдельный аккаунт, "
+        + "а история работы и финансовые записи останутся за прежним участником.",
       confirmLabel: "Удалить навсегда",
       isPending: deleteAccount.isPending,
       run: async () => {

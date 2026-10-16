@@ -63,12 +63,13 @@ describe("SubscribersPage", () => {
     const html = renderPage();
 
     // Header shows the page population, not the current result-set size.
-    expect(html).toContain("500 total");
-    expect(html).not.toContain("12 total");
+    expect(html).toContain("500 подписчиков");
+    expect(html).not.toContain("12 подписчиков");
+    expect(html).not.toContain("Найдено 12");
     // Each chip carries its own population count.
-    expect(html).toMatch(/>All<span[^>]*>500<\/span>/);
-    expect(html).toMatch(/>Expiring ≤7d<span[^>]*>12<\/span>/);
-    expect(html).toMatch(/>New 24h<span[^>]*>3<\/span>/);
-    expect(html).toMatch(/>Auto-renew Off<span[^>]*>7<\/span>/);
+    expect(html).toMatch(/>Все<span[^>]*>500<\/span>/);
+    expect(html).toMatch(/>Истекают ≤7 дн<span[^>]*>12<\/span>/);
+    expect(html).toMatch(/>Новые за 24 ч<span[^>]*>3<\/span>/);
+    expect(html).toMatch(/>Без автопродления<span[^>]*>7<\/span>/);
   });
 });

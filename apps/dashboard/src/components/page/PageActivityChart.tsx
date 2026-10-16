@@ -50,19 +50,19 @@ function getChartMode(
 const gridProps = {
   strokeDasharray: "3 3",
   vertical: false,
-  stroke: "var(--color-border, #333)",
+  stroke: "var(--color-border)",
 } as const;
 
 const xAxisProps = {
   dataKey: "businessDate" as const,
-  tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+  tick: { fontSize: 11, fill: "var(--color-text-muted)" },
   axisLine: false,
   tickLine: false,
   interval: "preserveStartEnd" as const,
 };
 
 const yAxisProps = {
-  tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+  tick: { fontSize: 11, fill: "var(--color-text-muted)" },
   axisLine: false,
   tickLine: false,
   width: "auto" as const,
@@ -71,7 +71,7 @@ const yAxisProps = {
 
 const tooltipProps = {
   contentStyle: {
-    backgroundColor: "var(--color-card, #1a1a2e)",
+    backgroundColor: "var(--color-card)",
     border: "1px solid var(--color-border, #333)",
     borderRadius: 8,
     fontSize: 13,
@@ -100,12 +100,13 @@ export function PageActivityChart(props: {
   valueFormatter?: (value: number) => string;
   yAxisWidth?: number;
   height?: number;
+  /** The axis repeats the card title, so it is off unless asked for. */
   showYAxisLabel?: boolean;
   color?: string;
   allowMonthly?: boolean;
 }) {
   const gradientId = useId();
-  const color = props.color ?? "#4ead6b";
+  const color = props.color ?? "var(--color-green)";
   const [allTimeGranularity, setAllTimeGranularity] = useState<"monthly" | "daily">("monthly");
   const granularity = props.allowMonthly === false ? "daily" : allTimeGranularity;
   const mode = getChartMode(props.selectedPeriod, granularity);
@@ -141,30 +142,27 @@ export function PageActivityChart(props: {
   const tooltipOverrides = tooltipFormatter ? { formatter: tooltipFormatter } : {};
 
   return (
-    <div className="bg-card border border-border rounded-xl p-5 mb-6">
-      <div className="mb-4 flex items-baseline justify-between">
-        <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
+    <div className="card card-body">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="card-title">
           {props.title}
         </h2>
         {props.selectedPeriod === "all" && props.allowMonthly !== false ? (
-          <div className="flex rounded-lg overflow-hidden border border-border">
+          <div className="segmented" role="group" aria-label="Шаг графика">
             {(["daily", "monthly"] as const).map((g) => (
               <button
                 key={g}
                 type="button"
+                aria-pressed={allTimeGranularity === g}
                 onClick={() => setAllTimeGranularity(g)}
-                className={`px-3 py-1 text-[11px] font-semibold cursor-pointer transition-colors ${
-                  allTimeGranularity === g
-                    ? "bg-accent text-white"
-                    : "bg-card text-text-muted hover:text-text-secondary"
-                }`}
+                className="segment"
               >
-                {g === "daily" ? "Daily" : "Monthly"}
+                {g === "daily" ? "По дням" : "По месяцам"}
               </button>
             ))}
           </div>
         ) : (
-          <span className="text-[12px] text-text-muted">{props.selectedPeriodLabel}</span>
+          <span className="text-[13px] text-text-secondary">{props.selectedPeriodLabel}</span>
         )}
       </div>
       <ResponsiveContainer width="100%" height={props.height ?? 300}>
@@ -176,11 +174,11 @@ export function PageActivityChart(props: {
             <YAxis
               {...yAxisProps}
               {...yAxisOverrides}
-              label={props.showYAxisLabel === false ? false : {
+              label={props.showYAxisLabel !== true ? false : {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",
-                style: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+                style: { fontSize: 11, fill: "var(--color-text-muted)" },
                 offset: 0,
               }}
             />
@@ -203,11 +201,11 @@ export function PageActivityChart(props: {
             <YAxis
               {...yAxisProps}
               {...yAxisOverrides}
-              label={props.showYAxisLabel === false ? false : {
+              label={props.showYAxisLabel !== true ? false : {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",
-                style: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
+                style: { fontSize: 11, fill: "var(--color-text-muted)" },
                 offset: 0,
               }}
             />

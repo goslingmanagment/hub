@@ -31,15 +31,17 @@ function render(browser: AgentSyncBrowserStatus, options: { compact?: boolean } 
 }
 
 describe("the «Браузер» block (Project Browser PR 17)", () => {
-  it("a browser that works: its rows, in the tab's language, and the CLI that steers it", () => {
+  it("a browser that works: its rows, in the tab's language; the CLI that steers it is the screen's «Для разработчика»", () => {
     const html = render(browserStatus());
     expect(html).toContain('data-browser-state="ready"');
     expect(html).toContain("работает");
     for (const text of [
       "браузер страницы", "оператор сообщал 4 с назад", "готов", "сессия есть · аккаунт 300000000000000001",
       "203.0.113.7 (закреплён)", "1,5 МБ", "p95 180 мс", "последнее событие сокета 3 с назад", "Chrome 155.0.7339.80 · оператор d8cb9ac",
-      "пройдена в", "pnpm cli sync browser status --page lilly-1",
+      "пройдена в",
     ]) expect(html, text).toContain(text);
+    // The console's commands are the screen's, once (tests/dashboard-sync-engine.test.ts).
+    expect(html).not.toContain("pnpm");
     expect(html).not.toContain("data-browser-alerts");
     expect(html).not.toContain("Остановка");
   });
@@ -67,7 +69,8 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     }));
     expect(html).toContain('data-browser-state="stopped"');
     expect(html).toContain("остановлен владельцем в");
-    expect(html).toContain("страница на паузе · pnpm cli sync browser start lilly-1");
+    expect(html).toContain("страница на паузе · запуск — командой из «Для разработчика»");
+    expect(html).not.toContain("pnpm");
     expect(html).toContain("выход закрыт · не готов 2 мин");
   });
 
@@ -106,7 +109,7 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     }));
     expect(html).toContain('data-browser-state="halted"');
     expect(html).toContain("стоит: заголовки запросов расходятся с сайтом");
-    expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: заголовки запросов расходятся с сайтом \(с [^)]+\) · pnpm cli sync browser start lilly-1/);
+    expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: заголовки запросов расходятся с сайтом \(с [^)]+\) · запуск — командой из «Для разработчика»</);
   });
 
   it("a browser Fansly signed out waits for the owner's login, not for a start (PR 17 with PR 15)", () => {
@@ -116,7 +119,7 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
       login: { needed: true, why: "login_required" },
     }));
     expect(html).toMatch(/data-browser-row="halt"[^>]*>ждёт решения владельца: нужен вход \(с [^)]+\) · решается входом в браузер</);
-    expect(html).not.toContain("sync browser start lilly-1<");
+    expect(html).not.toContain("запуск — командой");
   });
 
   it("a number and its percent sign stay on one line", () => {

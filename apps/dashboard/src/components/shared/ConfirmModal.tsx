@@ -3,9 +3,9 @@ import { ModalShell } from "./ModalShell.js";
 export function ConfirmModal({
   title,
   message,
-  confirmLabel = "Delete",
-  cancelLabel = "Cancel",
-  closeLabel = "Close",
+  confirmLabel = "Удалить",
+  cancelLabel = "Отмена",
+  closeLabel = "Закрыть",
   tone = "danger",
   isPending,
   onConfirm,
@@ -23,12 +23,12 @@ export function ConfirmModal({
 }) {
   return (
     <ModalShell title={title} onClose={onClose} closeLabel={closeLabel}>
-      <p className="text-sm text-text-secondary">{message}</p>
+      <p className="text-sm leading-relaxed text-text-secondary">{message}</p>
       <div className="mt-6 flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
+          className="btn"
         >
           {cancelLabel}
         </button>
@@ -36,7 +36,7 @@ export function ConfirmModal({
           type="button"
           disabled={isPending}
           onClick={onConfirm}
-          className={`rounded-lg ${tone === "primary" ? "bg-accent" : "bg-danger"} px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50`}
+          className={`btn ${tone === "primary" ? "btn-primary" : "btn-danger"}`}
         >
           {confirmLabel}
         </button>

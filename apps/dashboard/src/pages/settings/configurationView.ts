@@ -13,9 +13,9 @@ export function configSubsystemOrder(subsystem: string): number {
 }
 
 export const CONFIG_FILTERS = [
+  { key: "all", label: "Все настройки" },
   { key: "live", label: "Без перезапуска" },
   { key: "staged", label: "После перезапуска" },
-  { key: "all", label: "Все настройки" },
   { key: "attention", label: "Нужно проверить" },
 ] as const;
 

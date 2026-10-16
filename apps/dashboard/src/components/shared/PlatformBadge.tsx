@@ -1,21 +1,22 @@
-const config = {
-  fansly: { bg: "#e8f0fe", text: "#3b6fc4", label: "Fansly" },
-  onlyfans: { bg: "#fef3e2", text: "#c27a1a", label: "OF" },
+const LABELS = {
+  fansly: { short: "Fansly", long: "Fansly" },
+  onlyfans: { short: "OF", long: "OnlyFans" },
 } as const;
 
 interface PlatformBadgeProps {
   platform: "fansly" | "onlyfans";
 }
 
+/** The platform of a page, in its brand tint. One look on every screen. */
 export function PlatformBadge({ platform }: PlatformBadgeProps) {
-  const c = config[platform];
+  return <span className={`platform-tag platform-${platform}`}>{LABELS[platform].long}</span>;
+}
 
+/** The compact form for dense lists (the sidebar's page tree). */
+export function PlatformTag({ platform }: PlatformBadgeProps) {
   return (
-    <span
-      className="inline-block rounded-md px-2 py-0.5 font-semibold"
-      style={{ fontSize: 11, backgroundColor: c.bg, color: c.text }}
-    >
-      {c.label}
+    <span className={`platform-tag platform-${platform}`} title={LABELS[platform].long}>
+      {LABELS[platform].short}
     </span>
   );
 }

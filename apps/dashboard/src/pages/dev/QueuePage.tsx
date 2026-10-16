@@ -1,25 +1,49 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useAdminQueueJobs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
+import { DevHeader } from "./DevHeader.js";
 
 const STATE_FILTERS = [
-  { key: "all", label: "All" },
-  { key: "created", label: "Created" },
-  { key: "active", label: "Active" },
-  { key: "completed", label: "Completed" },
-  { key: "failed", label: "Failed" },
+  { key: "all", label: "Все" },
+  { key: "created", label: "Созданы" },
+  { key: "active", label: "Выполняются" },
+  { key: "completed", label: "Завершены" },
+  { key: "failed", label: "С ошибкой" },
 ];
 
-const STATE_STYLES: Record<string, string> = {
-  created: "bg-[#e5e7eb] text-[#374151]",
-  active: "bg-[#dbeafe] text-[#1e40af]",
-  completed: "bg-[#d1fae5] text-[#065f46]",
-  failed: "bg-[#fee2e2] text-[#991b1b]",
+const STATES: Record<string, { label: string; badge: string }> = {
+  created: { label: "Создана", badge: "badge" },
+  retry: { label: "Повтор", badge: "badge badge-warning" },
+  active: { label: "Выполняется", badge: "badge badge-info" },
+  completed: { label: "Завершена", badge: "badge badge-success" },
+  failed: { label: "Ошибка", badge: "badge badge-danger" },
+  cancelled: { label: "Отменена", badge: "badge" },
+  expired: { label: "Истекла", badge: "badge badge-warning" },
 };
 
+const COLUMNS = ["Задача", "Состояние", "Создана", "Запущена", "Завершена", "Повторов"];
+
+function JobState({ state }: { state: string }) {
+  const known = STATES[state];
+  return <span className={known?.badge ?? "badge"} data-job-state={state}>{known?.label ?? state}</span>;
+}
+
+function JsonBlock({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div>
+      <p className="mb-1 text-xs font-medium text-text-secondary">{title}</p>
+      <pre className="overflow-x-auto rounded-lg border border-border-light bg-card p-3 font-mono text-xs text-text-secondary">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+/** System → «Очередь задач»: the server's latest background jobs; a row
+ *  opens its input and result right under it. */
 export function QueuePage() {
   const [stateFilter, setStateFilter] = useState("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -31,13 +55,27 @@ export function QueuePage() {
 
   const { data, isLoading, isError, error } = useAdminQueueJobs(params);
 
+  const header = (
+    <>
+      <DevHeader title="Очередь задач" description="Фоновые задачи сервера: последние 100 записей, не вся история." />
+      <div className="mb-4">
+        <FilterButtons filters={STATE_FILTERS} active={stateFilter} onChange={setStateFilter} />
+      </div>
+    </>
+  );
+
   if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading queue jobs" description="Fetching recent pg-boss jobs." />
-    ) : isError ? (
-      <StatusPanel title="Queue failed to load" description="The job queue view could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Queue unavailable" description="The job queue did not return data." tone="error" />
+    return (
+      <div>
+        {header}
+        {isLoading ? (
+          <StatusPanel title="Загружаем очередь" />
+        ) : isError ? (
+          <StatusPanel title="Очередь не загрузилась" description="Hub не ответил. Попробуйте обновить страницу." tone="error" />
+        ) : (
+          <StatusPanel title="Очередь недоступна" description="Hub не вернул задач." tone="error" />
+        )}
+      </div>
     );
   }
 
@@ -45,120 +83,67 @@ export function QueuePage() {
 
   return (
     <div>
+      {header}
       {isError && <StaleDataNotice error={error} className="mb-4" />}
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Queue</h1>
-        <p className="text-sm text-text-muted mt-1">pg-boss job queue</p>
-      </div>
-
-      <div className="mb-4">
-        <FilterButtons
-          filters={STATE_FILTERS}
-          active={stateFilter}
-          onChange={setStateFilter}
-        />
-      </div>
-
-      <p className="mb-2 text-xs text-text-muted">Up to 100 recent matching records. This is a bounded view, not the full history.</p>
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      <section className="card overflow-x-auto" aria-label="Задачи">
+        <table className="data-table">
           <thead>
-            <tr className="bg-hover-alt">
-              {["Name", "State", "Created", "Started", "Completed", "Retries"].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
+            <tr>
+              {COLUMNS.map((col) => <th key={col} className={col === "Повторов" ? "num" : undefined}>{col}</th>)}
             </tr>
           </thead>
           <tbody>
             {jobs.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No jobs found.
+                <td colSpan={COLUMNS.length} className="py-8 text-center text-text-muted">
+                  Задач нет.
                 </td>
               </tr>
             )}
             {jobs.map((job, idx) => {
               const rowId = job.id != null ? String(job.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
+              const toggle = () => setExpandedId(isExpanded ? null : rowId);
 
               return (
-                <tr
-                  key={rowId}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                  onClick={() => setExpandedId(isExpanded ? null : rowId)}
-                  tabIndex={0}
-                  aria-expanded={isExpanded}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setExpandedId(isExpanded ? null : rowId);
-                    }
-                  }}
-                >
-                  <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                    {job.name ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATE_STYLES[job.state] ?? STATE_STYLES.created}`}
-                    >
-                      {job.state}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {job.createdOn ? formatRelativeTime(job.createdOn) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {job.startedOn ? formatRelativeTime(job.startedOn) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {job.completedOn ? formatRelativeTime(job.completedOn) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {job.retryCount ?? 0}
-                  </td>
-                </tr>
+                <Fragment key={rowId}>
+                  <tr
+                    className="cursor-pointer"
+                    onClick={toggle}
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        toggle();
+                      }
+                    }}
+                  >
+                    <td className="font-mono text-xs font-medium">{job.name ?? "—"}</td>
+                    <td><JobState state={job.state} /></td>
+                    <td className="muted whitespace-nowrap">{job.createdOn ? formatRelativeTime(job.createdOn) : "—"}</td>
+                    <td className="muted whitespace-nowrap">{job.startedOn ? formatRelativeTime(job.startedOn) : "—"}</td>
+                    <td className="muted whitespace-nowrap">{job.completedOn ? formatRelativeTime(job.completedOn) : "—"}</td>
+                    <td className="num">{job.retryCount ?? 0}</td>
+                  </tr>
+                  {isExpanded && (
+                    <tr data-job-detail={rowId}>
+                      <td colSpan={COLUMNS.length} className="bg-hover-alt">
+                        <div className="sticky left-0 max-w-[calc(100vw-66px)] space-y-3 lg:max-w-none">
+                          {job.data != null && <JsonBlock title="Данные" value={job.data} />}
+                          {job.output != null && <JsonBlock title="Результат" value={job.output} />}
+                          {job.data == null && job.output == null && (
+                            <p className="text-sm text-text-muted">У задачи нет ни данных, ни результата.</p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
-
-        {expandedId != null && (() => {
-          const job = jobs.find((entry, index) => (entry.id ?? `${index}`) === expandedId);
-          if (!job) return null;
-          return (
-            <div className="border-t border-border px-4 py-3 space-y-2">
-              {job.data != null && (
-                <div>
-                  <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
-                    Data
-                  </h4>
-                      <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
-                        {JSON.stringify(job.data, null, 2)}
-                      </pre>
-                </div>
-              )}
-              {job.output != null && (
-                <div>
-                  <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
-                    Output
-                  </h4>
-                      <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
-                        {JSON.stringify(job.output, null, 2)}
-                      </pre>
-                </div>
-              )}
-              {job.data == null && job.output == null && (
-                <p className="text-sm text-text-muted">No data or output available.</p>
-              )}
-            </div>
-          );
-        })()}
       </section>
     </div>
   );

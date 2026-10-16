@@ -19,16 +19,39 @@ export function formatTranscriptTime(createdAtMs: number): string {
   return `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
 }
 
-/** Legacy line shape: `[HH:MM] Sender: {labels} {text}`, lines joined with '\n'. */
+/**
+ * The day line before a UTC day's first message: `--- YYYY-MM-DD ---`, the
+ * shape the Fansly extension's notes fill already sends (its E164) and the
+ * notes-fill prompt describes. Without it a window that spans days or weeks
+ * reads as one day: `[HH:MM]` is the time of day only.
+ */
+export function formatTranscriptDayLine(createdAtMs: number): string {
+  const date = new Date(createdAtMs);
+  return `--- ${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} ---`;
+}
+
+/** One message: `[HH:MM] Sender: {labels} {text}`. */
+export function formatTranscriptLine(message: TranscriptMessage): string {
+  const labels = message.labels.join(' ').trim();
+  const payload = [labels, message.text].filter(Boolean).join(' ').trim();
+  return `[${formatTranscriptTime(message.createdAtMs)}] ${message.sender}: ${payload}`;
+}
+
+/** Message lines in order, a day line before each UTC day's first message,
+ *  joined with '\n'. */
 export function formatTranscript(messages: readonly TranscriptMessage[]): string {
   if (messages.length === 0) {
     return EMPTY_TRANSCRIPT_TEXT;
   }
-  return messages
-    .map((message) => {
-      const labels = message.labels.join(' ').trim();
-      const payload = [labels, message.text].filter(Boolean).join(' ').trim();
-      return `[${formatTranscriptTime(message.createdAtMs)}] ${message.sender}: ${payload}`;
-    })
-    .join('\n');
+  const lines: string[] = [];
+  let previousDay: string | null = null;
+  for (const message of messages) {
+    const day = formatTranscriptDayLine(message.createdAtMs);
+    if (day !== previousDay) {
+      lines.push(day);
+      previousDay = day;
+    }
+    lines.push(formatTranscriptLine(message));
+  }
+  return lines.join('\n');
 }

@@ -31,37 +31,38 @@ export function EditPageModal({
 
     try {
       await updatePage.mutateAsync(body);
-      toast.success("Page updated");
+      toast.success("Страница сохранена");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update page");
+      toast.error(error instanceof Error ? error.message : "Не удалось сохранить страницу");
     }
   }
 
   return (
-    <ModalShell title={`Edit page: ${page.label}`} onClose={onClose}>
-      <div className="mb-4 flex items-center gap-2">
-        <PlatformBadge platform={page.platform} />
-        <span className="text-sm text-text-muted">Platform cannot be changed</span>
-      </div>
-
+    <ModalShell title={`Изменить страницу ${page.label}`} onClose={onClose}>
       <div className="space-y-4">
-        <Field label="Label">
+        <p className="flex items-center gap-2 text-sm text-text-secondary">
+          <PlatformBadge platform={page.platform} />
+          Платформу страницы изменить нельзя.
+        </p>
+        <Field label="Название страницы">
           <input
             value={label}
             onChange={(event) => setLabel(event.target.value)}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            autoComplete="off"
+            spellCheck={false}
+            className="input"
           />
         </Field>
-        <Field label="Model">
+        <Field label="Модель">
           <select
             value={modelSlug}
             onChange={(event) => setModelSlug(event.target.value)}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            className="select"
           >
             {models.map((m) => (
               <option key={m.slug} value={m.slug}>
-                {m.name} ({m.slug})
+                {m.name}
               </option>
             ))}
           </select>
@@ -69,20 +70,16 @@ export function EditPageModal({
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Cancel
+        <button type="button" onClick={onClose} className="btn">
+          Отмена
         </button>
         <button
           type="button"
           disabled={updatePage.isPending || !label.trim()}
           onClick={handleSubmit}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="btn btn-primary"
         >
-          Save
+          {updatePage.isPending ? "Сохраняем…" : "Сохранить"}
         </button>
       </div>
     </ModalShell>

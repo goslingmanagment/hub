@@ -121,22 +121,29 @@ describe("UsagePage", () => {
 
     const html = renderPage();
 
-    // pivot table shows feature columns
-    expect(html).toContain(">Fast Reply<");
-    expect(html).toContain(">Scan<");
+    // five columns: who, how many, how much, regenerations, the top feature
+    for (const column of [">Сотрудник<", ">Запросов<", ">Стоимость<", ">Перегенерации<", ">Чаще всего<"]) {
+      expect(html).toContain(column);
+    }
+    // the top feature in the cabinet's Russian name, with its count and share
+    expect(html).toContain("Быстрый ответ");
+    expect(html).toContain("8 · 66.7%");
 
     // chatter name and total
     expect(html).toContain("anton");
     expect(html).toContain(">12<");
     expect(html).toContain("~$2.34");
 
-    // feature request counts shown in cells
-    expect(html).toContain(">8<");
-    expect(html).toContain(">4<");
+    // the per-feature split lives in the person's expandable details
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('id="usage-details-7"');
+    expect(html).toContain("8 запросов");
+    expect(html).toContain("Скан");
+    expect(html).toContain("4 запроса");
 
     // regen rate + warning
     expect(html).toContain("33.3%");
-    expect(html).toContain(">!</");
+    expect(html).toContain(">много</");
   });
 
   it("hides chatters with zero activity", () => {

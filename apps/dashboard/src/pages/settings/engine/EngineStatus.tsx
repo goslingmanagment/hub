@@ -1,3 +1,6 @@
+import type { ReactNode } from "react";
+
+import { ruPlural } from "@/lib/plural";
 import {
   ENGINE_CLASS_LABELS,
   ENGINE_WORK_CLASSES,
@@ -15,22 +18,21 @@ import {
 } from "./engineDisplay.js";
 
 // A page as the Fansly Sync Engine sees it (`/api/v1/sync/pages`, plan §10):
-// who owns it, what holds it, its socket, the pause and how it was kept, and
-// the queue with the hour's requests by class.
+// the processing host that runs it, what holds it, its event channel, the
+// pause and how it was kept, and the queue with the hour's requests by class.
+// The details of a page — the owner reads its one status line first.
 
-/** The page's mode. A page reads as live — green — only while a host runs it:
- *  `live` in the row of a page nobody runs says so beside the mode. */
+/** The page's mode. A page reads as on — green — only while a processing
+ *  host runs it: `live` of a page nobody runs says so beside the mode. */
 export function EngineModeChip({ mode, ownerRunning }: { mode: EnginePageStatus["mode"]; ownerRunning: boolean }) {
   const running = mode === "live" && ownerRunning;
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-        running ? "border-green/30 bg-green/10 text-green" : "border-warning/30 bg-warning/10 text-warning-dark"
-      }`}
+      className={`badge ${running ? "badge-success" : "badge-warning"}`}
       data-engine-mode={mode}
       data-engine-running={running}
     >
-      {mode === "live" && !ownerRunning ? "live · нет владельца" : engineModeLabel(mode)}
+      {mode === "live" && !ownerRunning ? `${engineModeLabel(mode)} · нет обработчика` : engineModeLabel(mode)}
     </span>
   );
 }
@@ -44,14 +46,23 @@ function pauseText(status: EnginePageStatus): string {
   return parts.join(" · ");
 }
 
-/** Owner, holds, socket and the pause record of a page. */
+function Row({ label, warn = false, children }: { label: string; warn?: boolean; children: ReactNode }) {
+  return (
+    <>
+      <dt className="text-text-muted">{label}</dt>
+      <dd className={`min-w-0 break-words ${warn ? "font-medium text-warning-dark" : "text-text-secondary"}`}>{children}</dd>
+    </>
+  );
+}
+
+/** The processing host, holds, event channel and the pause record of a page. */
 export function EngineStatusGrid({
   status,
-  pageLabel,
   now = Date.now(),
 }: {
   status: EnginePageStatus;
-  pageLabel: string;
+  /** Kept for callers; the commands of a page are in the screen's «Для разработчика». */
+  pageLabel?: string | undefined;
   now?: number;
 }) {
   const lastSend = engineAgeText(status.pause.lastSendAt, now);
@@ -60,48 +71,27 @@ export function EngineStatusGrid({
     status.breakers.blockedByVendor > 0 ? `Fansly отказывает: ${engineCount(status.breakers.blockedByVendor)}` : null,
   ].filter((part): part is string => part !== null);
   return (
-    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
-      <span className="text-text-muted">Владелец</span>
-      <span className={status.owner.running ? "text-text-secondary" : "text-warning-dark font-medium"}>
-        {engineOwnerText(status, now)}
-      </span>
-      <span className="text-text-muted">Удержание</span>
-      <span className={status.holds.page === null ? "text-text-secondary" : "text-warning-dark font-medium"}>
-        {engineHoldText(status, now) ?? "нет"}
-      </span>
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+      <Row label="Режим">
+        <EngineModeChip mode={status.mode} ownerRunning={status.owner.running} />
+      </Row>
+      <Row label="Обработчик" warn={!status.owner.running}>{engineOwnerText(status, now)}</Row>
+      <Row label="Удержание" warn={status.holds.page !== null}>{engineHoldText(status, now) ?? "нет"}</Row>
       {status.holds.resources.length > 0 && (
-        <>
-          <span className="text-text-muted">Удержание ресурсов</span>
-          <span className="text-warning-dark font-medium">
-            {status.holds.resources.map((hold) => `${hold.file} до ${engineClockText(hold.until, now)}`).join(", ")}
-          </span>
-        </>
+        <Row label="Удержание ресурсов" warn>
+          {status.holds.resources.map((hold) => `${hold.file} до ${engineClockText(hold.until, now)}`).join(", ")}
+        </Row>
       )}
-      <span className="text-text-muted">Сокет</span>
-      <span className={status.ws?.connected === false ? "text-warning-dark font-medium" : "text-text-secondary"}>
-        {engineSocketText(status, now)}
-      </span>
-      <span className="text-text-muted">Пауза между запросами</span>
-      <span className={status.pause.violationsLastDay > 0 ? "text-warning-dark font-medium" : "text-text-secondary"}>
-        {pauseText(status)}
-      </span>
-      <span className="text-text-muted">Последний запрос</span>
-      <span className="text-text-secondary">{lastSend === null ? "не было" : `${lastSend} назад`}</span>
-      {breakers.length > 0 && (
-        <>
-          <span className="text-text-muted">Предохранители</span>
-          <span className="text-text-secondary">{breakers.join(" · ")}</span>
-        </>
-      )}
+      <Row label="Канал событий" warn={status.ws?.connected === false}>{engineSocketText(status, now)}</Row>
+      <Row label="Пауза между запросами" warn={status.pause.violationsLastDay > 0}>{pauseText(status)}</Row>
+      <Row label="Последний запрос">{lastSend === null ? "не было" : `${lastSend} назад`}</Row>
+      {breakers.length > 0 && <Row label="Защита от ошибок">{breakers.join(" · ")}</Row>}
       {status.quarantined > 0 && (
-        <>
-          <span className="text-text-muted">В карантине</span>
-          <span className="text-warning-dark font-medium">
-            {status.quarantined} · pnpm cli sync work list --page {pageLabel} --state quarantined
-          </span>
-        </>
+        <Row label="В карантине" warn>
+          {engineCount(status.quarantined)} {ruPlural(status.quarantined, "строка", "строки", "строк")}
+        </Row>
       )}
-    </div>
+    </dl>
   );
 }
 
@@ -110,44 +100,35 @@ export function EngineStatusGrid({
 export function EngineQueueTable({ status }: { status: EnginePageStatus }) {
   const runnable = ENGINE_WORK_CLASSES.reduce((sum, workClass) => sum + status.queue[workClass].runnable, 0);
   return (
-    <div className="rounded-lg border border-border overflow-x-auto">
-      <table className="w-full text-xs">
+    <div className="table-wrap">
+      <table className="data-table">
         <thead>
-          <tr className="bg-hover-alt">
-            <th className="px-3 py-1.5 text-left font-medium text-text-muted">Класс</th>
-            <th className="px-3 py-1.5 text-left font-medium text-text-muted">Готово к запуску</th>
-            <th className="px-3 py-1.5 text-left font-medium text-text-muted">Ждёт</th>
-            <th className="px-3 py-1.5 text-right font-medium text-text-muted">Запросов за час</th>
+          <tr>
+            <th>Очередь</th>
+            <th className="num">Готово к запуску</th>
+            <th>Ждёт</th>
+            <th className="num">Запросов за час</th>
           </tr>
         </thead>
         <tbody>
           {ENGINE_WORK_CLASSES.map((workClass) => {
             const queue = status.queue[workClass];
             return (
-              <tr key={workClass} className="border-t border-border">
-                <td className="px-3 py-1.5 text-text-primary font-medium">{ENGINE_CLASS_LABELS[workClass]}</td>
-                <td className="px-3 py-1.5 text-text-secondary tabular-nums">{engineCount(queue.runnable)}</td>
-                <td className="px-3 py-1.5 text-text-secondary">{engineWaitingText(queue) || "—"}</td>
-                <td
-                  className="px-3 py-1.5 text-right text-text-secondary tabular-nums"
-                  data-sends-class={workClass}
-                >
-                  {engineCount(status.sendsLastHour[workClass])}
-                </td>
+              <tr key={workClass}>
+                <td className="font-medium">{ENGINE_CLASS_LABELS[workClass]}</td>
+                <td className="num">{engineCount(queue.runnable)}</td>
+                <td className="muted">{engineWaitingText(queue) || "—"}</td>
+                <td className="num" data-sends-class={workClass}>{engineCount(status.sendsLastHour[workClass])}</td>
               </tr>
             );
           })}
-        </tbody>
-        <tfoot>
-          <tr className="border-t border-border bg-hover-alt">
-            <td className="px-3 py-1.5 text-text-primary font-medium">всего</td>
-            <td className="px-3 py-1.5 text-text-secondary tabular-nums">{engineCount(runnable)}</td>
-            <td className="px-3 py-1.5 text-text-secondary" />
-            <td className="px-3 py-1.5 text-right text-text-primary font-medium tabular-nums" data-sends-class="all">
-              {engineCount(engineSendsLastHour(status))}
-            </td>
+          <tr>
+            <td className="font-semibold">Всего</td>
+            <td className="num font-semibold">{engineCount(runnable)}</td>
+            <td />
+            <td className="num font-semibold" data-sends-class="all">{engineCount(engineSendsLastHour(status))}</td>
           </tr>
-        </tfoot>
+        </tbody>
       </table>
     </div>
   );
@@ -159,15 +140,10 @@ export function EngineSendsByResource({ status }: { status: EnginePageStatus }) 
   if (resources.length === 0) return null;
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
-        Запросов за час по ресурсам
-      </p>
+      <p className="mb-1.5 text-sm font-medium text-text-secondary">Запросов за час по ресурсам</p>
       <ul className="flex flex-wrap gap-1.5">
         {resources.map(({ resource, sends }) => (
-          <li
-            key={resource}
-            className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[11px] text-text-secondary"
-          >
+          <li key={resource} className="badge font-mono">
             {resource} <span className="font-semibold text-text-primary tabular-nums">{engineCount(sends)}</span>
           </li>
         ))}

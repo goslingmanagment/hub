@@ -14,23 +14,20 @@ interface FilterButtonsProps {
 
 export function FilterButtons({ filters, active, onChange }: FilterButtonsProps) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="segmented max-w-full flex-wrap">
       {filters.map((f) => {
         const isActive = active === f.key;
         return (
           <button
             key={f.key}
             type="button"
+            aria-pressed={isActive}
             onClick={() => onChange(f.key)}
-            className={`flex items-center gap-1.5 rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
-              isActive
-                ? "bg-[#1a1a1a] text-white"
-                : "border border-border bg-card text-text-secondary hover:bg-hover"
-            }`}
+            className="segment"
           >
             {f.label}
             {f.count != null && (
-              <span className={isActive ? "text-white/60" : "text-text-muted"}>
+              <span className="segment-count">
                 {f.count}
               </span>
             )}

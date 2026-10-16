@@ -26,7 +26,7 @@ describe("buildCredentialsBody", () => {
         hasAuth: true,
       },
       requireCredentials: false,
-    })).toThrow("Invalid proxy URL");
+    })).toThrow("Не получается прочитать прокси");
   });
 
   it("rejects unsupported proxy protocols before submission", () => {
@@ -38,7 +38,7 @@ describe("buildCredentialsBody", () => {
           proxyRaw,
         },
         requireCredentials: false,
-      })).toThrow("Unsupported proxy protocol");
+      })).toThrow("Такой тип прокси не подходит");
     }
   });
 
@@ -52,14 +52,14 @@ describe("buildCredentialsBody", () => {
         hasAuth: true,
       },
       requireCredentials: false,
-    })).toThrow("Proxy removal is a separate operation");
+    })).toThrow("Прокси нельзя удалить, обновляя данные входа");
   });
 
   it("requires a proxy for standalone Fansly verification/onboarding bodies", () => {
     expect(() => buildCredentialsBody({
       platform: "fansly",
       values: baseFanslyValues,
-    })).toThrow("Proxy is required for Fansly");
+    })).toThrow("Для страницы Fansly нужен прокси");
   });
 
   it("keeps proxy omitted for a session-only credentials update", () => {

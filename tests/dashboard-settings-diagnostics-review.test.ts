@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { agentHydrationRequestDecideBodySchema } from "../packages/contracts/src/routes-agent.ts";
+import { formatDateTime } from "../apps/dashboard/src/lib/format.ts";
 
 const queries = vi.hoisted(() => ({
   useAdminDbStats: vi.fn(), useAdminLogs: vi.fn(), useAdminQueueJobs: vi.fn(), useAdminIncidents: vi.fn(), useAdminSyncRunDetail: vi.fn(),
@@ -31,7 +32,7 @@ import { SyncStatusPage } from "../apps/dashboard/src/pages/dev/SyncStatusPage.t
 import { NotificationsSettingsTab } from "../apps/dashboard/src/pages/notifications/NotificationsSettingsTab.tsx";
 import { NotificationsReportsTab } from "../apps/dashboard/src/pages/notifications/NotificationsReportsTab.tsx";
 import { NotificationsIncidentsTab } from "../apps/dashboard/src/pages/notifications/NotificationsIncidentsTab.tsx";
-import { NotificationsPage } from "../apps/dashboard/src/pages/NotificationsPage.tsx";
+import { notificationsRedirectTarget } from "../apps/dashboard/src/pages/NotificationsPage.tsx";
 
 function render(component: ComponentType, path = "/") {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(component)));
@@ -72,7 +73,7 @@ describe("hydration approval review", () => {
   ])("refuses a stale approval even if only version or coverage changed", (changed) => {
     const draft = { ...createHydrationDraft(request), allowMarkRead: true };
     expect(hydrationDraftMatches(draft, changed)).toBe(false);
-    expect(prepareHydrationDecision(changed, draft, "approve")).toEqual({ error: expect.stringContaining("Review the current version") });
+    expect(prepareHydrationDecision(changed, draft, "approve")).toEqual({ error: expect.stringContaining("Проверьте текущую версию") });
     expect(prepareHydrationDecision(changed, { ...draft, reason: "No need" }, "reject")).toHaveProperty("error");
     expect(draft.expectedVersion).toBe(4);
     expect(draft.coverageFingerprint).toBe(request.coverageFingerprint);
@@ -97,11 +98,11 @@ describe("hydration approval review", () => {
     expect(retry).toEqual(first);
     expect("body" in retry && retry.body).toBe(first.body);
     const summary = frozenHydrationDecisionSummary(first.body);
-    expect(summary).toContain("Frozen approval");
-    expect(summary).toContain("calls 5");
-    expect(summary).toContain(`expires ${first.body.expiresAt}`);
-    expect(summary).toContain("mark-read allowed");
-    expect(summary).not.toContain("calls 200");
+    expect(summary).toContain("Зафиксировано одобрение");
+    expect(summary).toContain("запросов до 5");
+    expect(summary).toContain(`действует до ${formatDateTime(first.body.expiresAt ?? "")}`);
+    expect(summary).toContain("отметка «прочитано»: разрешена");
+    expect(summary).not.toContain("запросов до 200");
   });
 
   it("retains uncertain decisions for timeout, rate limit and server errors", () => {
@@ -127,14 +128,14 @@ describe("hydration approval review", () => {
     expect(prepared.body.reason).toBe("Existing archive is enough");
     expect(prepared.body).not.toHaveProperty("maxCalls");
     expect(prepared.body).not.toHaveProperty("allowMarkReadSideEffect");
-    expect(frozenHydrationDecisionSummary(prepared.body)).toBe("Frozen rejection · v4 · reason: Existing archive is enough");
+    expect(frozenHydrationDecisionSummary(prepared.body)).toBe("Зафиксирован отказ · причина: Existing archive is enough");
   });
 
   it("keeps a stale queue visible and pauses decisions", () => {
     queries.useAgentHydrationRequests.mockReturnValue(query({ items: [] }, true));
     const html = render(AgentHydrationPage);
-    expect(html).toContain("Queue refresh failed; decisions are paused");
-    expect(html).toContain("Refresh requests");
+    expect(html).toContain("Не удалось обновить список — решения на паузе");
+    expect(html).toContain(">Обновить<");
   });
 
   // Step 4, S4-24: the queue has no Fansly lane. A Fansly page's history is the
@@ -175,21 +176,25 @@ describe("hydration approval review", () => {
 
     queries.useAgentHydrationRequests.mockReturnValue(query({ items: [waiting("onlyfans")] }));
     const onlyfans = render(AgentHydrationPage);
-    expect(onlyfans).toContain(">Approve<");
-    expect(onlyfans).toContain(">Reject<");
-    expect(onlyfans).toContain("Max credits");
+    // The default caps ride on the approve button; changing them is one fold away.
+    expect(onlyfans).toContain(">Одобрить · до 5 кредитов, 24 ч<");
+    expect(onlyfans).toContain(">Отклонить<");
+    expect(onlyfans).toContain("<summary>Изменить лимиты</summary>");
+    expect(onlyfans).toContain("Лимит кредитов");
     expect(onlyfans).toContain("vendor_paid_high · ofapi_credits");
-    expect(onlyfans).not.toContain("nothing to approve here");
+    expect(onlyfans).toContain("отметить этот чат прочитанным");
+    expect(onlyfans).not.toContain("#158");
+    expect(onlyfans).not.toContain("одобрять здесь нечего");
 
     queries.useAgentHydrationRequests.mockReturnValue(query({ items: [waiting("fansly")] }));
     const fansly = render(AgentHydrationPage);
-    expect(fansly).not.toContain(">Approve<");
-    expect(fansly).toContain(">Reject<");
-    expect(fansly).not.toContain("Max credits");
-    expect(fansly).not.toContain("mark this chat READ");
-    expect(fansly).toContain("Fansly Sync Engine · history request");
+    expect(fansly).not.toContain(">Одобрить");
+    expect(fansly).toContain(">Отклонить<");
+    expect(fansly).not.toContain("Лимит кредитов");
+    expect(fansly).not.toContain("отметить этот чат прочитанным");
+    expect(fansly).toContain("Сбор данных Fansly · запрос истории");
     expect(fansly).not.toContain("egress_quota_and_ban_risk");
-    expect(fansly).toContain("there is nothing to approve here");
+    expect(fansly).toContain("одобрять здесь нечего");
   });
 });
 
@@ -227,7 +232,8 @@ describe("webhook selection review", () => {
     }, true));
     const html = render(OfapiWebhookRecovery);
     expect(html).toContain("Показан предыдущий срез вебхуков");
-    expect(html).toContain("Состояние: applied");
+    // The raw state stays in a tooltip; the owner reads it in words.
+    expect(html).toContain('Состояние: <span title="applied">применено</span>');
     expect(html).toMatch(/disabled=""[^>]*>Проверить и восстановить события/);
   });
 
@@ -295,7 +301,7 @@ describe("settings and diagnostics error states", () => {
   ] as const)("keeps the %s snapshot with a visible refresh warning", (component, hook, data, path) => {
     queries[hook].mockReturnValue(query(data, true));
     const html = render(component, path);
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("показаны прежние данные");
     expect(html).toContain("Refresh failed");
     expect(html).toContain("overflow-x-auto");
   });
@@ -306,11 +312,11 @@ describe("settings and diagnostics error states", () => {
       migrations: [{ name: "20260322_add_sync_rollups.sql", appliedAt: "2026-03-22T12:00:00.000Z" }],
     }));
     const html = render(DbStatsPage);
-    expect(html).toContain("Rows (estimate)");
-    expect(html).toContain("Migration");
-    expect(html).toContain("Applied");
+    expect(html).toContain("Строк (оценка)");
+    expect(html).toContain("Миграция");
+    expect(html).toContain("Применена");
     expect(html).toContain("20260322_add_sync_rollups.sql");
-    expect(html.match(/0 B/g)).toHaveLength(1);
+    expect(html.match(/0 Б/g)).toHaveLength(1);
     expect(html).toContain("—");
   });
 
@@ -319,17 +325,17 @@ describe("settings and diagnostics error states", () => {
       assignedPages: [], availablePages: [{ id: 1, label: "example", platform: "fansly", modelName: "Model" }], selectedLabel: "example",
       onSelectedLabelChange: vi.fn(), onAssign: vi.fn(), onUnassign: vi.fn(), assignPending: false, unassignPending: false, pagesError: true,
     }));
-    expect(html).toContain("Available pages could not be refreshed");
+    expect(html).toContain("Список страниц не обновился");
     expect(html).toContain('value="example" selected=""');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Assign<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Назначить<\/button>/);
   });
 
   it("preserves the Telegram credential form during refresh errors and explains its send", () => {
     queries.useNotificationsSettings.mockReturnValue(query(notificationSettings, true));
     const html = render(NotificationsSettingsTab);
-    expect(html).toContain("Settings refresh failed; your input is kept");
-    expect(html).toContain('aria-label="Bot Token"');
-    expect(html).toContain("Save &amp; Send Test");
+    expect(html).toContain("Не удалось обновить настройки — введённое сохранено");
+    expect(html).toContain('aria-label="Токен бота"');
+    expect(html).toContain("Сохранить и проверить");
     expect(html).toMatch(/role="switch"[^>]*disabled=""/);
   });
 
@@ -337,24 +343,23 @@ describe("settings and diagnostics error states", () => {
     queries.useReportPreview.mockReturnValue(query({ reportDate: "2026-09-10", text: "Previous report text" }, true));
     queries.useReportHistory.mockReturnValue(query({ items: [{ id: 1, reportDate: "2026-09-10", kind: "daily_report_scheduled", status: "sent", createdAt: "2026-09-11T00:00:00Z" }] }, true));
     const html = render(NotificationsReportsTab);
-    expect(html).toContain("Preview refresh failed");
+    expect(html).toContain("Не удалось обновить предпросмотр");
     expect(html).toContain("Previous report text");
-    expect(html).toContain("Showing cached data");
-    expect(html).toContain("Scheduled");
+    expect(html).toContain("показаны прежние данные");
+    expect(html).toContain("По расписанию");
   });
 
   it("keeps filtered incident emptiness distinct from global system health", () => {
     queries.useNotificationIncidents.mockReturnValue(query({ items: [], total: 0 }, true));
     const html = render(NotificationsIncidentsTab);
-    expect(html).toContain("Showing cached data");
-    expect(html).toContain("No incidents match this view");
-    expect(html).not.toContain("No incidents recorded");
+    expect(html).toContain("показаны прежние данные");
+    expect(html).toContain("Под эти фильтры инцидентов нет");
+    expect(html).not.toContain("Инцидентов нет");
   });
 
-  it("opens notification reports from a shareable tab URL", () => {
-    const html = render(NotificationsPage, "/notifications?tab=reports");
-    expect(html).toContain("Preview Next Report");
-    expect(html).not.toContain("Connect Telegram");
-    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+  it("sends old notification links to the screen that now holds their job", () => {
+    expect(notificationsRedirectTarget(new URLSearchParams("tab=incidents"))).toBe("/incidents");
+    expect(notificationsRedirectTarget(new URLSearchParams("tab=reports"))).toBe("/settings?tab=notifications");
+    expect(notificationsRedirectTarget(new URLSearchParams(""))).toBe("/settings?tab=notifications");
   });
 });

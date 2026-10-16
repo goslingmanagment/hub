@@ -1,7 +1,7 @@
 import { useSearchParams } from "react-router";
 
-/** The page a sync tab shows in detail: `?page=<label>`, shared by «Синк» and
- *  «Синхронизация» (the section links carry it from one to the other). */
+/** The page a sync screen shows in detail: `?page=<label>`, shared by the
+ *  Fansly and OnlyFans screens (the side navigation carries it across). */
 export function useSelectedSyncPage(): {
   selectedPage: string | null;
   selectPage: (pageLabel: string) => void;

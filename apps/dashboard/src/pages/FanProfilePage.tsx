@@ -1,6 +1,6 @@
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { useEffect, useReducer, useState } from "react";
-import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useEffect, useReducer, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import {
   useAuthMe,
   usePageFanDetail,
@@ -14,17 +14,15 @@ import {
 import { ReadSection, type SectionQuery } from "./daily/ReadSection.js";
 import { fanNoteDraftsReducer } from "./daily/fanNoteDrafts.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
-import { RemainingBar } from "@/components/shared/RemainingBar";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from "@/lib/format";
-import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
+import { formatDate, formatDateTime, transactionStateLabel, transactionTypeLabel, daysRemaining } from "@/lib/format";
+import { usePeriodStore, type SpenderPeriodOption } from "@/stores/periodStore";
 import { toast } from "sonner";
-import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
-import { resolveFanProfileBackTarget, resolveSpenderPeriod } from "@/lib/navigation";
+import { isSafeInAppPath, resolveFanProfileBackTarget, resolveSpenderPeriod } from "@/lib/navigation";
 import type {
   FanProfileDocument,
   FanProfileVersionListResponse,
@@ -33,13 +31,30 @@ import type {
 } from "@agency_hub_core/contracts";
 
 const PAGE_SIZE = 50;
-type TimelineEvent = {
-  id: number | string;
-  date: string;
-  label: string;
-  amount: number;
-  type: string;
+
+const SPENT_LABEL: Record<SpenderPeriodOption, string> = {
+  today: "Потратил сегодня",
+  "7d": "Потратил за 7 дней",
+  "30d": "Потратил за 30 дней",
+  "90d": "Потратил за 90 дней",
+  "180d": "Потратил за 180 дней",
+  all: "Потратил за всё время",
 };
+
+/** Whether the fan was opened from a list that remembered where to return. */
+function hasRememberedReturn(state: unknown): boolean {
+  return typeof state === "object"
+    && state !== null
+    && "backTo" in state
+    && typeof state.backTo === "string"
+    && isSafeInAppPath(state.backTo);
+}
+
+function stateClass(state: string): string {
+  if (state === "posted") return "text-green";
+  if (state === "pending") return "text-warning-dark";
+  return "text-text-muted";
+}
 
 export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
@@ -48,7 +63,6 @@ export function FanProfilePage() {
   const [search] = useSearchParams();
   const [txOffset, setTxOffset] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
   const auth = useAuthMe();
@@ -57,14 +71,13 @@ export function FanProfilePage() {
   const noteBody = noteDrafts.principalId === principalId ? noteDrafts.drafts[routeKey] ?? "" : "";
   const setNoteBody = (text: string) => dispatchNoteDraft({ type: "edit", principalId, routeKey, text });
   useEffect(() => { dispatchNoteDraft({ type: "principal", principalId }); }, [principalId]);
-  const { period } = useSpenderPeriodStore();
+  const { period } = usePeriodStore();
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
     setTxOffset(0);
     setHistoryOpen(false);
-    setIntelligenceOpen(false);
     setSelectedProfileVersion(null);
   }, [routeKey]);
 
@@ -90,10 +103,6 @@ export function FanProfilePage() {
     limit: PAGE_SIZE,
     offset: txOffset,
   });
-  const timelineQuery = usePageFanTransactions(pageLabel!, platformUserId!, {
-    limit: 10,
-    offset: 0,
-  });
   const createNote = useCreateFanNote();
   const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
 
@@ -104,10 +113,10 @@ export function FanProfilePage() {
     if (isError) {
       return (
         <StatusPanel
-          title="Fan profile failed to load"
-          description="The fan details could not be fetched for this page."
+          title="Не удалось загрузить профиль фана"
+          description="Данные фана на этой странице сейчас недоступны."
           tone="error"
-          action={<><button type="button" onClick={() => void refetch()}>Повторить</button> · <button type="button" onClick={() => navigate(backTo)}>Назад к списку</button></>}
+          action={<><button type="button" onClick={() => void refetch()}>Повторить</button><button type="button" onClick={() => navigate(backTo)}>Назад к списку</button></>}
         />
       );
     }
@@ -118,7 +127,6 @@ export function FanProfilePage() {
   const fanLabel = resolveFanLabelForScope(fan, "page");
   const spenderDetail = spenderQuery.data;
   const txData = transactionsQuery.data;
-  const timelineTxData = timelineQuery.data;
   const latestProfileData = latestProfileQuery.data;
   const profileVersionsData = versionsQuery.data;
   const selectedProfileData = selectedProfileQuery.data;
@@ -157,228 +165,153 @@ export function FanProfilePage() {
     try {
       await createNote.mutateAsync({ pageLabel: pageLabel!, platformUserId: platformUserId!, body });
       dispatchNoteDraft({ type: "saved", principalId: submittedPrincipalId, routeKey: submittedRoute, submittedText });
-      toast.success("Note added");
+      toast.success("Заметка добавлена");
     } catch {
-      toast.error("Failed to add note");
+      toast.error("Не удалось добавить заметку");
     }
   }
 
   const stats = [
     {
-      label: "Total Spent",
+      label: SPENT_LABEL[selectedPeriod],
       value: totalSpent === null ? "—" : formatUsdFromMills(totalSpent),
       accent: true,
     },
     {
-      label: "Subscriptions",
+      label: "Подписки",
       value: formatUsdFromMills(amountForType("subscription")),
       accent: false,
     },
     {
-      label: "Tips",
+      label: "Чаевые",
       value: formatUsdFromMills(amountForType("tip")),
       accent: false,
     },
     {
-      label: "Messages",
+      label: "Платные сообщения",
       value: formatUsdFromMills(amountForType("message_purchase")),
       accent: false,
     },
   ];
+
   const subscriptionRemainingDays = page.subscriptionExpiresAt
     ? daysRemaining(page.subscriptionExpiresAt)
     : null;
-
-  // Build timeline from its own independent query so paging the table below
-  // does not corrupt the timeline.
-  const timelineEvents = (timelineTxData?.items ?? []).map((tx) => ({
-    id: tx.transactionId,
-    date: tx.occurredAt,
-    label: transactionTypeLabel(tx.canonicalType),
-    amount: tx.netAmountMills,
-    type: tx.canonicalType,
-  }));
-
-  function timelineDotColor(type: string): string {
-    if (type === "subscription") return "bg-accent";
-    if (type === "tip") return "bg-green";
-    if (type === "chargeback" || type === "refund") return "bg-danger";
-    return "bg-text-muted";
+  const metaLine = [
+    fanLabel.secondaryPlatformHandle ? `@${fanLabel.secondaryPlatformHandle}` : null,
+    fan.createdAtExternal ? `на площадке с ${formatDate(fan.createdAtExternal, { includeYear: true })}` : null,
+  ].filter(Boolean).join(" · ");
+  const statusBadges: ReactNode[] = [];
+  if (page.isSubscriber) {
+    statusBadges.push(
+      <span
+        key="subscriber"
+        className="badge badge-success"
+        title={subscriptionRemainingDays !== null ? `Осталось ${subscriptionRemainingDays} дн` : undefined}
+      >
+        Подписчик{page.subscriptionExpiresAt ? ` · до ${formatDate(page.subscriptionExpiresAt, { includeYear: true })}` : ""}
+      </span>,
+    );
+    if (page.autoRenew === false) {
+      statusBadges.push(
+        <span key="renew" className="badge badge-warning">
+          Без автопродления
+          {page.autoRenewOffDetectedAt ? ` с ${formatDate(page.autoRenewOffDetectedAt, { includeYear: true })}` : ""}
+        </span>,
+      );
+    } else if (page.autoRenew === true) {
+      statusBadges.push(<span key="renew" className="badge">Автопродление вкл.</span>);
+    }
   }
-
-  function handleSelectProfileVersion(version: number) {
-    setSelectedProfileVersion(version);
+  if (page.isFollower) {
+    statusBadges.push(<span key="follower" className="badge">Фолловер</span>);
+  }
+  if (page.isSubscriber && page.subscriberSince) {
+    statusBadges.push(
+      <span key="since" className="text-[13px] text-text-secondary">подписан с {formatDate(page.subscriberSince, { includeYear: true })}</span>,
+    );
   }
 
   return (
-    <div>
-      {/* Back button */}
-      <button
-        type="button"
-        onClick={() => navigate(backTo)}
-        className="mb-4 flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
-      >
-        <ArrowLeft size={14} />
-        Back
-      </button>
+    <div className="space-y-6">
+      <div>
+        {hasRememberedReturn(location.state) && (
+          <Link to={backTo} className="link mb-3 inline-flex text-sm">← Назад</Link>
+        )}
+        <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
+        <PageHeader
+          title={fanLabel.label}
+          description={metaLine || statusBadges.length > 0 ? (
+            <>
+              {metaLine}
+              {statusBadges.length > 0 && (
+                <span className={`flex flex-wrap items-center gap-2 ${metaLine ? "mt-2" : ""}`}>{statusBadges}</span>
+              )}
+            </>
+          ) : undefined}
+        />
+      </div>
 
-      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      {/* Header */}
-      <div className="mb-6 flex items-center gap-4">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">
-          {fanLabel.label[0]?.toUpperCase() ?? "?"}
-        </div>
+      <ReadSection title="Доход от фана" query={spenderQuery} skeleton="stats">
         <div>
-          <h1 className="text-2xl font-extrabold text-text-primary">
-            {fanLabel.label}
-          </h1>
-          {fanLabel.secondaryPlatformHandle && (
-            <div className="mt-1 text-sm text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
-          )}
-          <div className="mt-1 flex items-center gap-2 flex-wrap">
-            {page?.isSubscriber && <Badge variant="subscriber">Subscriber</Badge>}
-            {page?.isFollower && <Badge variant="follower">Follower</Badge>}
+          <div className="stat-grid max-sm:grid-cols-2">
+            {stats.map((stat) => (
+              <div key={stat.label} className="stat">
+                <div className="stat-label">{stat.label}</div>
+                <div className={`stat-value ${stat.accent ? "text-accent" : ""}`}>{stat.value}</div>
+              </div>
+            ))}
           </div>
-          <p className="mt-1 text-xs text-text-muted">
-            Platform ID: {platformUserId}
-            {fan?.createdAtExternal && (
-              <> &middot; Joined: {formatDate(fan.createdAtExternal)}</>
-            )}
-          </p>
+          <p className="mt-2 text-[13px] text-text-secondary">После комиссии платформы, по операциям этой страницы. История ниже — за всё время.</p>
         </div>
-      </div>
-
-      {/* Stats Grid */}
-      <ReadSection title="Доход от фана" query={spenderQuery}>
-      <p className="mb-3 text-xs text-text-muted">После комиссии платформы, по сохранённым операциям на этой странице. Период: {selectedPeriod === "all" ? "всё время" : selectedPeriod}. История операций ниже включает все периоды.</p>
-      <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        {stats.map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-[10px] border border-border bg-card p-4"
-          >
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-              {stat.label}
-            </div>
-            <div
-              className={`mt-1 text-2xl font-extrabold tabular-nums ${
-                stat.accent ? "text-accent" : "text-text-primary"
-              }`}
-            >
-              {stat.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
       </ReadSection>
-      {/* Subscription Status */}
-      {page.isSubscriber && (
-        <div className="mb-6 rounded-[10px] border border-border bg-card p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-3">
-            Subscription Status
-          </div>
-          <div className="flex items-center gap-6 flex-wrap">
-            <div className="flex items-center gap-2">
-              <CalendarDays size={14} className="text-text-muted" />
-              <div>
-                <div className="text-xs text-text-muted">Expires</div>
-                <div className="text-sm font-medium text-text-primary">
-                  {page.subscriptionExpiresAt ? formatDate(page.subscriptionExpiresAt) : "—"}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Clock size={14} className="text-text-muted" />
-              <div>
-                <div className="text-xs text-text-muted">Remaining</div>
-                {subscriptionRemainingDays !== null ? (
-                  <div className="w-24"><RemainingBar days={subscriptionRemainingDays} /></div>
-                ) : (
-                  <div className="text-sm font-medium text-text-muted">—</div>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <RefreshCw size={14} className="text-text-muted" />
-              <div>
-                <div className="text-xs text-text-muted">Auto-Renew</div>
-                <div className={`text-sm font-medium ${
-                  page.autoRenew === true
-                    ? "text-green"
-                    : page.autoRenew === false
-                      ? "text-danger"
-                      : "text-text-muted"
-                }`}>
-                  {page.autoRenew === true ? "On" : page.autoRenew === false ? "Off" : "Unknown"}
-                </div>
-                {page.autoRenew === false && page.autoRenewOffDetectedAt && (
-                  <div className="text-xs text-warning-dark">
-                    Detected {formatDate(page.autoRenewOffDetectedAt, { includeYear: true })}
-                  </div>
-                )}
-              </div>
-            </div>
-            {page.subscriberSince && (
-              <div>
-                <div className="text-xs text-text-muted">Since</div>
-                <div className="text-sm font-medium text-text-primary">{formatDate(page.subscriberSince)}</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
-      <FanIntelligenceSection
-        pageLabel={page.pageLabel}
-        latestProfile={latestProfile}
-        latestProfileLoading={latestProfileQuery.isLoading}
-        intelligenceOpen={intelligenceOpen}
-        onOpen={() => setIntelligenceOpen(true)}
-        viewingHistoricalVersion={viewingHistoricalVersion}
-        selectedProfileVersion={selectedProfileVersion}
-        selectedVersionIsCurrent={selectedVersionIsCurrent}
-        onBackToLatest={() => setSelectedProfileVersion(null)}
-        profileLoading={profileLoading}
-        profileQuery={profileQuery}
-        displayedProfile={displayedProfile}
-        historyOpen={historyOpen}
-        onToggleHistory={() => setHistoryOpen((value) => !value)}
-        profileVersionsLoading={versionsQuery.isLoading}
-        versionsQuery={versionsQuery}
-        profileVersions={profileVersions}
-        onSelectProfileVersion={handleSelectProfileVersion}
-      />
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+        <FanDossierCard
+          viewingHistoricalVersion={viewingHistoricalVersion}
+          selectedProfileVersion={selectedProfileVersion}
+          selectedVersionIsCurrent={selectedVersionIsCurrent}
+          onBackToLatest={() => setSelectedProfileVersion(null)}
+          profileLoading={profileLoading}
+          profileQuery={profileQuery}
+          displayedProfile={displayedProfile}
+          historyOpen={historyOpen}
+          onToggleHistory={() => setHistoryOpen((value) => !value)}
+          profileVersionsLoading={versionsQuery.isLoading}
+          versionsQuery={versionsQuery}
+          profileVersions={profileVersions}
+          onSelectProfileVersion={setSelectedProfileVersion}
+        />
 
-      <FanProfileActivityGrid
-        notes={page.notes}
-        noteBody={noteBody}
-        onNoteBodyChange={setNoteBody}
-        onAddNote={handleAddNote}
-        isAddingNote={createNote.isPending}
-        timelineEvents={timelineEvents}
-        timelineQuery={timelineQuery}
-        timelineDotColor={timelineDotColor}
-      />
+        <FanNotesCard
+          notes={page.notes}
+          noteBody={noteBody}
+          onNoteBodyChange={setNoteBody}
+          onAddNote={handleAddNote}
+          isAddingNote={createNote.isPending}
+        />
+      </div>
 
       <ReadSection title="История операций" query={transactionsQuery}>
-      <FanTransactionHistorySection
-        txItems={txItems}
-        txTotal={txTotal}
-        txOffset={txOffset}
-        onPageChange={setTxOffset}
-      />
+        <FanTransactionHistorySection
+          txItems={txItems}
+          txTotal={txTotal}
+          txOffset={txOffset}
+          onPageChange={setTxOffset}
+        />
       </ReadSection>
+
+      <details className="help">
+        <summary>Технические детали</summary>
+        <div className="help-body">
+          <p>ID фана на площадке: <span className="font-medium text-text-primary tabular-nums">{platformUserId}</span></p>
+        </div>
+      </details>
     </div>
   );
 }
 
-function FanIntelligenceSection({
-  pageLabel,
-  latestProfile,
-  latestProfileLoading,
-  intelligenceOpen,
-  onOpen,
+function FanDossierCard({
   viewingHistoricalVersion,
   selectedProfileVersion,
   selectedVersionIsCurrent,
@@ -393,11 +326,6 @@ function FanIntelligenceSection({
   profileVersions,
   onSelectProfileVersion,
 }: {
-  pageLabel: string;
-  latestProfile: FanProfileDocument | null;
-  latestProfileLoading: boolean;
-  intelligenceOpen: boolean;
-  onOpen: () => void;
   viewingHistoricalVersion: boolean;
   selectedProfileVersion: number | null;
   selectedVersionIsCurrent: boolean;
@@ -412,230 +340,152 @@ function FanIntelligenceSection({
   profileVersions: FanProfileVersionListResponse["items"];
   onSelectProfileVersion: (version: number) => void;
 }) {
-  if (!latestProfile && !latestProfileLoading && !profileQuery.isError && !intelligenceOpen) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="mb-6 flex w-full items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-hover-alt"
-      >
-        <span className="text-sm font-bold text-text-primary">Fan Intelligence</span>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-text-muted">No profile available</span>
-          <ChevronDown size={16} className="text-text-muted" />
-        </div>
-      </button>
-    );
-  }
-
   return (
-    <section className="mb-6 rounded-xl border border-border bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
-          <p className="mt-1 text-xs text-text-muted">
-            Latest ChatMuse profile for this fan on {pageLabel}.
-          </p>
+    <section className="card" aria-labelledby="fan-dossier-title">
+      <div className="card-header">
+        <div className="min-w-0">
+          <h2 id="fan-dossier-title" className="card-title">Досье фана</h2>
+          {displayedProfile && !profileLoading && (
+            <p className="card-description">
+              Версия {displayedProfile.version} · {formatDateTime(displayedProfile.createdAt)}
+            </p>
+          )}
         </div>
         {viewingHistoricalVersion && (
-          <div className="flex items-center gap-2">
-            <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-              Viewing version {selectedProfileVersion}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="badge">
+              Версия {selectedProfileVersion}{selectedVersionIsCurrent ? " · текущая" : ""}
             </span>
-            {selectedVersionIsCurrent && (
-              <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
-                Current
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onBackToLatest}
-              className="text-xs font-medium text-accent transition-colors hover:opacity-80"
-            >
-              Back to latest
+            <button type="button" onClick={onBackToLatest} className="link text-sm">
+              К последней версии
             </button>
           </div>
         )}
       </div>
 
-      <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
-        <ReadSection title="Досье фана" query={profileQuery}>
-        {profileLoading ? (
-          <p className="text-sm text-text-muted">
-            {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
-          </p>
-        ) : viewingHistoricalVersion && !displayedProfile ? (
-          <p className="text-sm text-text-muted">Unable to load the selected version.</p>
-        ) : displayedProfile ? (
-          <div>
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-              <span>Version {displayedProfile.version}</span>
-              <span>&middot;</span>
-              <span>{formatDateTime(displayedProfile.createdAt)}</span>
-            </div>
+      <div className="card-body">
+        <ReadSection title="Досье фана" query={profileQuery} skeleton="text">
+          {profileLoading ? (
+            <p className="text-sm text-text-secondary">
+              {viewingHistoricalVersion ? "Загружаем выбранную версию…" : "Загружаем досье…"}
+            </p>
+          ) : viewingHistoricalVersion && !displayedProfile ? (
+            <p className="text-sm text-text-secondary">Не удалось загрузить выбранную версию.</p>
+          ) : displayedProfile ? (
             <FanIntelligenceMarkdown body={displayedProfile.body} />
-          </div>
-        ) : (
-          <p className="text-sm text-text-muted">No intelligence profile yet</p>
-        )}
+          ) : (
+            <p className="text-sm text-text-secondary">Досье пока нет.</p>
+          )}
         </ReadSection>
-      </div>
 
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={onToggleHistory}
-          className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
-          aria-expanded={historyOpen}
-        >
-          <span className="text-[13px] font-medium text-text-secondary">Version History</span>
-          <ChevronDown
-            size={16}
-            className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
-          />
-        </button>
+        <div className="mt-4 border-t border-border-light pt-3">
+          <button
+            type="button"
+            onClick={onToggleHistory}
+            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:text-text-primary"
+            aria-expanded={historyOpen}
+          >
+            История версий
+            <ChevronDown
+              size={14}
+              aria-hidden="true"
+              className={`transition-transform ${historyOpen ? "rotate-180" : ""}`}
+            />
+          </button>
 
-        {historyOpen && (
-          <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-            <ReadSection title="Версии досье" query={versionsQuery}>
-            {profileVersionsLoading ? (
-              <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
-            ) : profileVersions.length === 0 ? (
-              <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
-            ) : (
-              <div>
-                {profileVersions.map((item) => {
-                  const selected = selectedProfileVersion === item.version;
-                  return (
-                    <button
-                      key={item.version}
-                      type="button"
-                      onClick={() => onSelectProfileVersion(item.version)}
-                      className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
-                        selected ? "bg-hover" : "hover:bg-hover-alt"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-text-primary">
-                          Version {item.version}
-                        </span>
-                        {item.isCurrent && (
-                          <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                            Current
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-text-muted">
-                        {formatDateTime(item.createdAt)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            </ReadSection>
-          </div>
-        )}
+          {historyOpen && (
+            <div className="mt-2">
+              <ReadSection title="Версии досье" query={versionsQuery} skeleton="text">
+                {profileVersionsLoading ? (
+                  <p className="text-sm text-text-secondary">Загружаем версии…</p>
+                ) : profileVersions.length === 0 ? (
+                  <p className="text-sm text-text-secondary">Сохранённых версий пока нет.</p>
+                ) : (
+                  <ul className="divide-y divide-border-light overflow-hidden rounded-lg border border-border">
+                    {profileVersions.map((item) => {
+                      const selected = selectedProfileVersion === item.version;
+                      return (
+                        <li key={item.version}>
+                          <button
+                            type="button"
+                            onClick={() => onSelectProfileVersion(item.version)}
+                            aria-pressed={selected}
+                            className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
+                              selected ? "bg-hover" : "hover:bg-hover-alt"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span className="font-medium text-text-primary">Версия {item.version}</span>
+                              {item.isCurrent && <span className="badge">текущая</span>}
+                            </span>
+                            <span className="text-xs text-text-secondary">{formatDateTime(item.createdAt)}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </ReadSection>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
 }
 
-function FanProfileActivityGrid({
+function FanNotesCard({
   notes,
   noteBody,
   onNoteBodyChange,
   onAddNote,
   isAddingNote,
-  timelineEvents,
-  timelineQuery,
-  timelineDotColor,
 }: {
   notes: PageFanDetailResponse["page"]["notes"];
   noteBody: string;
   onNoteBodyChange: (value: string) => void;
   onAddNote: () => void;
   isAddingNote: boolean;
-  timelineEvents: TimelineEvent[];
-  timelineQuery: SectionQuery;
-  timelineDotColor: (type: string) => string;
 }) {
   return (
-    <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div className="rounded-xl border border-border bg-card p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-text-primary">Notes</h2>
-          <button
-            onClick={onAddNote}
-            disabled={!noteBody.trim() || isAddingNote}
-            className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Add Note
-          </button>
-        </div>
-
-        <div className="space-y-2 mb-3">
-          {notes.length === 0 && (
-            <p className="text-xs text-text-muted">No notes yet.</p>
-          )}
-          {notes.map((note) => (
-            <div
-              key={note.id}
-              className="rounded-md border-l-[3px] border-border bg-hover-alt p-2.5"
-            >
-              <div className="text-[11px] text-text-muted">
-                Note &middot; {formatDateTime(note.createdAt)}
-              </div>
-              <div className="mt-1 text-sm text-text-primary">{note.body}</div>
-            </div>
-          ))}
-        </div>
-
+    <section className="card" aria-labelledby="fan-notes-title">
+      <div className="card-header">
+        <h2 id="fan-notes-title" className="card-title">Заметки</h2>
+      </div>
+      <div className="card-body space-y-3">
         <textarea
           aria-label="Новая заметка о фане"
           value={noteBody}
           onChange={(event) => onNoteBodyChange(event.target.value)}
-          placeholder="Write a note..."
+          placeholder="Напишите заметку…"
           rows={3}
-          className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+          className="textarea resize-y"
         />
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="mb-3 text-sm font-bold text-text-primary">Timeline</h2>
-        <p className="mb-3 text-xs text-text-muted">Последние 10 сохранённых операций.</p>
-        <ReadSection title="Последние операции" query={timelineQuery}>
-        {timelineEvents.length === 0 && (
-          <p className="text-xs text-text-muted">Сохранённых операций нет.</p>
-        )}
-        <div className="relative">
-          {timelineEvents.length > 0 && (
-            <div className="absolute left-[5px] top-2 bottom-2 w-px bg-border" />
-          )}
-          <div className="space-y-3">
-            {timelineEvents.map((event) => (
-              <div key={event.id} className="flex items-start gap-3 pl-0">
-                <div
-                  className={`mt-1.5 h-[11px] w-[11px] flex-shrink-0 rounded-full ${timelineDotColor(event.type)}`}
-                />
-                <div>
-                  <div className="text-[11px] text-text-muted">
-                    {formatDateTime(event.date)}
-                  </div>
-                  <div className="text-sm text-text-primary">
-                    {event.label}{" "}
-                    <span className="font-semibold tabular-nums">
-                      {formatUsdFromMills(event.amount)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onAddNote}
+            disabled={!noteBody.trim() || isAddingNote}
+            className="btn btn-primary btn-sm"
+          >
+            {isAddingNote ? "Сохраняем…" : "Добавить заметку"}
+          </button>
         </div>
-        </ReadSection>
+
+        {notes.length === 0 ? (
+          <p className="text-sm text-text-secondary">Заметок пока нет.</p>
+        ) : (
+          <ul className="space-y-2 border-t border-border-light pt-3">
+            {notes.map((note) => (
+              <li key={note.id} className="rounded-lg bg-hover-alt px-3 py-2">
+                <div className="text-xs text-text-secondary">{formatDateTime(note.createdAt)}</div>
+                <div className="mt-0.5 whitespace-pre-wrap break-words text-sm text-text-primary">{note.body}</div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -651,70 +501,49 @@ function FanTransactionHistorySection({
   onPageChange: (offset: number) => void;
 }) {
   return (
-    <section className="overflow-x-auto rounded-xl border border-border bg-card">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-bold text-text-primary">
-          Transaction History
-          <span className="ml-2 text-xs font-normal text-text-muted">{txTotal} total</span>
-        </h2>
+    <section className="card overflow-hidden" aria-labelledby="fan-history-title">
+      <div className="card-header">
+        <div>
+          <h2 id="fan-history-title" className="card-title">
+            История операций <span className="ml-1 font-normal text-text-secondary tabular-nums">{txTotal}</span>
+          </h2>
+          <p className="card-description">Все операции фана на этой странице, после комиссии платформы.</p>
+        </div>
       </div>
-      <table className="w-full border-collapse">
-        <thead>
-          <tr className="bg-hover-alt">
-            {["Date", "Type", "Status", "Amount"].map((col) => (
-              <th
-                key={col}
-                className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
-                  col === "Amount" ? "text-right" : "text-left"
-                }`}
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {txItems.length === 0 && (
+      <div className="overflow-x-auto">
+        <table className="data-table">
+          <thead>
             <tr>
-              <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                {txOffset > 0 ? "На этой странице списка записей нет." : "No transactions found."}
-                {txOffset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => onPageChange(0)}>К началу списка</button>}
-              </td>
+              <th>Дата</th>
+              <th>Тип</th>
+              <th>Статус</th>
+              <th className="num">Сумма</th>
             </tr>
-          )}
-          {txItems.map((tx) => {
-            const stateColor =
-              TRANSACTION_STATE_COLORS[tx.transactionState] ?? "#a8a29e";
-            return (
-              <tr
-                key={tx.transactionId}
-                className="border-t border-border transition-colors hover:bg-hover"
-              >
-                <td className="px-4 py-3 text-sm text-text-secondary">
-                  {formatDateTime(tx.occurredAt)}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                  {transactionTypeLabel(tx.canonicalType)}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: stateColor }}
-                    />
-                    <span className="text-sm text-text-secondary capitalize">
-                      {tx.transactionState}
-                    </span>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                  {formatUsdFromMills(tx.netAmountMills)}
+          </thead>
+          <tbody>
+            {txItems.length === 0 && (
+              <tr>
+                <td colSpan={4} className="py-8 text-center text-text-secondary">
+                  {txOffset > 0 ? "На этой странице списка записей нет." : "Операций пока нет."}
+                  {txOffset > 0 && <button type="button" className="link ml-2" onClick={() => onPageChange(0)}>К началу списка</button>}
                 </td>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            )}
+            {txItems.map((tx) => (
+              <tr key={tx.transactionId}>
+                <td className="muted">{formatDateTime(tx.occurredAt)}</td>
+                <td>{transactionTypeLabel(tx.canonicalType)}</td>
+                <td>
+                  <span className={stateClass(tx.transactionState)}>
+                    {transactionStateLabel(tx.transactionState)}
+                  </span>
+                </td>
+                <td className="num font-medium">{formatUsdFromMills(tx.netAmountMills)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <Pagination
         offset={txOffset}
@@ -728,19 +557,16 @@ function FanTransactionHistorySection({
 
 function FanProfileSkeleton() {
   return (
-    <div>
-      <div className="mb-6 flex items-center gap-4">
-        <div className="h-14 w-14 rounded-full bg-hover animate-pulse" />
-        <div>
-          <div className="h-6 w-40 rounded bg-hover-alt animate-pulse" />
-          <div className="mt-2 h-3 w-24 rounded bg-hover-alt animate-pulse" />
-        </div>
+    <div className="space-y-6" aria-label="Загружаем профиль фана" aria-busy="true">
+      <div>
+        <div className="h-7 w-48 rounded bg-hover animate-pulse" />
+        <div className="mt-2 h-4 w-32 rounded bg-hover animate-pulse" />
       </div>
-      <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+      <div className="stat-grid max-sm:grid-cols-2">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="rounded-[10px] border border-border bg-card p-4">
-            <div className="h-3 w-16 rounded bg-hover-alt animate-pulse" />
-            <div className="mt-3 h-7 w-24 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
+          <div key={i} className="stat">
+            <div className="h-3 w-20 rounded bg-hover animate-pulse" />
+            <div className="mt-3 h-7 w-24 rounded bg-hover animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
           </div>
         ))}
       </div>

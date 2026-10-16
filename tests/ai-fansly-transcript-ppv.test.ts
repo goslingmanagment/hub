@@ -153,6 +153,7 @@ describe("the normalizer with bodies that carry their own marks", () => {
       mediaLabelBodiesCarryPpv: new Set(["1", "3"]),
     });
     expect(formatTranscript(messages).split("\n")).toEqual([
+      "--- 2026-10-01 ---",
       "[10:00] Model: [Video - PPV $20.00, purchased] [Photo] [Media Bundle: 1 Photo, 1 Video - PPV $30.00, unknown] three things",
       "[10:00] Model: [Video - PPV $15.00, unknown] unlock me",
       "[10:00] Model: [Photo] free now",

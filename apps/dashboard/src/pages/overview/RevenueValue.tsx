@@ -1,5 +1,7 @@
-import { signedMoney } from "./presentation.js";
+import { formatPct, signedMoney } from "./presentation.js";
 
+/** The change against the previous window: signed dollars, then percent.
+ *  Without a comparison it is a dash; without a non-zero base, no percent. */
 export function RevenueDelta({
   deltaNetMills,
   deltaPct,
@@ -7,18 +9,21 @@ export function RevenueDelta({
   deltaNetMills?: number | null | undefined;
   deltaPct?: number | null | undefined;
 }) {
+  if (deltaNetMills == null)
+    return (
+      <span className="ov-delta ov-delta-flat">
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">нет сравнения</span>
+      </span>
+    );
   return (
     <span
-      className={`v1-delta ${deltaNetMills == null || deltaNetMills === 0 ? "v1-delta-flat" : deltaNetMills < 0 ? "v1-delta-down" : "v1-delta-up"}`}
+      className={`ov-delta ${deltaNetMills === 0 ? "ov-delta-flat" : deltaNetMills < 0 ? "ov-delta-down" : "ov-delta-up"}`}
     >
-      {deltaNetMills == null ? "—" : signedMoney(deltaNetMills)}
-      <span className="v1-delta-pct">
-        {deltaNetMills == null
-          ? "нет сравнения"
-          : deltaPct == null
-            ? "нет базы"
-            : `${deltaPct > 0 ? "+" : ""}${deltaPct.toFixed(1)}%`}
-      </span>
+      <span>{signedMoney(deltaNetMills)}</span>
+      {deltaPct != null && (
+        <span className="ov-delta-pct">{formatPct(deltaPct)}</span>
+      )}
     </span>
   );
 }

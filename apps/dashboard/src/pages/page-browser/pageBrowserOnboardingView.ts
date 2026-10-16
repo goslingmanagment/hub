@@ -81,7 +81,7 @@ const STOPS: Record<string, string> = {
 export function browserStatusOf(profile: PageBrowserProfileSummary): { label: string; tone: Tone; detail: string } {
   const operator = profile.operator;
   if (operator.linkError !== null) {
-    return { label: "Браузер не принял Hub", tone: "danger", detail: operator.linkError === "token" ? "Токен браузера не совпал: профиль создан не тем запуском add-profile." : "Версии Hub и браузера несовместимы." };
+    return { label: "Браузер не принял Hub", tone: "danger", detail: operator.linkError === "token" ? "Браузер не узнал Hub: профиль создан другим запуском на сервере." : "Версии Hub и браузера несовместимы." };
   }
   if (operator.lastStateAt === null || operator.step === null) {
     return { label: "Ещё не запускался", tone: "neutral", detail: "Браузер запустится, когда вы начнёте вход: сначала он сам проверит свой выходной IP." };
@@ -95,7 +95,7 @@ export function browserStatusOf(profile: PageBrowserProfileSummary): { label: st
     return { label: "Выход открыт", tone: "good", detail: `Браузер сам проверил свой выходной IP: ${operator.exitIp}${pinned}${test}` };
   }
   if (operator.stopReason === "owner_stop") return { label: "Остановлен", tone: "neutral", detail: "Браузер остановлен; профиль и сессия в нём сохранены." };
-  return { label: "Запускается", tone: "progress", detail: `Шаг запуска: ${operator.step}.` };
+  return { label: "Запускается", tone: "progress", detail: "Браузер запускается и сам проверит свой выходной IP." };
 }
 
 /** The onboarding's chip in the list of profiles. */

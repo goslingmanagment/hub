@@ -6,6 +6,7 @@ import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { PageHeader } from "@/components/ui/PageHeader";
 import {
   buildFanProfileNavigation,
   resolveSpenderPeriod,
@@ -13,32 +14,19 @@ import {
 import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDate, formatDateTime } from "@/lib/format";
-import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
+import { ruPlural } from "@/lib/plural";
+import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
+import { isPlainRowClick } from "./daily/rowClick.js";
 
 const LIMIT = 50;
-
-function statusBadgeClass(tone: "green" | "danger" | "warning" | "muted") {
-  if (tone === "green") return "bg-green/15 text-green";
-  if (tone === "danger") return "bg-danger/15 text-danger";
-  if (tone === "warning") return "bg-warning/15 text-warning-dark";
-  return "bg-hover-alt text-text-muted";
-}
-
-function StatusBadge({ tone, children }: { tone: "green" | "danger" | "warning" | "muted"; children: string }) {
-  return (
-    <span className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${statusBadgeClass(tone)}`}>
-      {children}
-    </span>
-  );
-}
 
 export function SpenderAutoListPage() {
   const { pageLabel, bucketKey } = useParams<{ pageLabel: string; bucketKey: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const storedPeriod = useSpenderPeriodStore((s) => s.period);
+  const { period: storedPeriod } = usePeriodStore();
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), storedPeriod);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const searchQuery = search.get("query") ?? "";
@@ -71,8 +59,8 @@ export function SpenderAutoListPage() {
     if (isError) {
       return (
         <StatusPanel
-          title="Auto list failed to load"
-          description="The spender auto-list could not be fetched for this page."
+          title="Не удалось загрузить список спендеров"
+          description="Список этой страницы сейчас недоступен."
           tone="error"
           action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
@@ -82,139 +70,122 @@ export function SpenderAutoListPage() {
   }
 
   const pageRoute = `${location.pathname}?${new URLSearchParams({ ...Object.fromEntries(search), period: selectedPeriod })}`;
+  const countLine = offset > 0 && data.items.length === 0
+    ? "Число записей в фильтре пока недоступно"
+    : `${data.total} ${ruPlural(data.total, "фан", "фана", "фанов")}`;
 
   return (
     <div>
       <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">
-          {data.bucket.label}
-        </h1>
-        <p className="text-sm text-text-muted mt-1">
-          {offset > 0 && data.items.length === 0 ? "Число записей в фильтре пока недоступно" : `${data.total} entries`} on {pageLabel}
-        </p>
-      </div>
+      <PageHeader
+        title={data.bucket.label}
+        description={`Список спендеров страницы ${pageLabel ?? ""} · ${countLine}`}
+      />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold text-text-secondary">
+        <label className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm text-text-primary hover:border-border-strong">
           <input
             type="checkbox"
             checked={excludeNonFollowers}
             onChange={(event) => update("followersOnly", event.target.checked ? "true" : "")}
             className="h-4 w-4 accent-accent"
           />
-          Exclude non-followers
+          Только фолловеры
         </label>
         <SearchInput
           value={searchQuery}
           onChange={(value) => update("query", value)}
-          placeholder="Search fan..."
+          placeholder="Поиск фана"
         />
       </div>
 
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full min-w-[680px] border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {[
-                { label: "Fan", align: "text-left" },
-                { label: "Status", align: "text-left" },
-                { label: "Gross Spent", align: "text-right" },
-                { label: "Creator Net", align: "text-right" },
-                { label: "Last Txn", align: "text-left" },
-              ].map((col) => (
-                <th
-                  key={col.label}
-                  className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${col.align}`}
-                >
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.items.length === 0 && (
+      <section className="card overflow-hidden" aria-label="Фаны списка">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  {offset > 0 ? "На этой странице списка записей нет." : "No fans found in this auto list."}
-                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
-                </td>
+                <th>Фан</th>
+                <th>Статус</th>
+                <th className="num">Всего потрачено</th>
+                <th className="num">После комиссии</th>
+                <th>Последняя операция</th>
               </tr>
-            )}
-            {data.items.map((item) => {
-              const fanLabel = resolveFanLabelForScope(item.fan, "page");
-              const fanNavigation = buildFanProfileNavigation(
-                pageLabel!,
-                data.page.platform,
-                item.fan.platformUserId,
-                pageRoute,
-                fanLabel.label,
-              );
-              const fanRoute = `${fanNavigation.to}?${new URLSearchParams({ period: selectedPeriod })}`;
-
-              return (
-                <tr
-                  key={item.fan.platformUserId}
-                  onClick={(event) => {
-                    if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-                    if ((event.target as Element | null)?.closest?.("a, button, input, select, textarea, [role='button'], [contenteditable]:not([contenteditable='false'])")) return;
-                    navigate(fanRoute, { state: fanNavigation.state });
-                  }}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                      <Link to={fanRoute} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
-                        {fanLabel.label}
-                      </Link>
-                      <FanNotVisibleMark missAt={item.accountLookupMissAt} />
-                    </div>
-                    {fanLabel.secondaryPlatformHandle && (
-                      <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1.5">
-                      {item.isFollower ? (
-                        <StatusBadge tone="green">Follower</StatusBadge>
-                      ) : (
-                        <StatusBadge tone="danger">Non-follower</StatusBadge>
-                      )}
-                      {item.subscriptionStatus === "active" && (
-                        <StatusBadge tone="green">Active sub</StatusBadge>
-                      )}
-                      {item.subscriptionStatus === "expired" && (
-                        <StatusBadge tone="warning">Expired sub</StatusBadge>
-                      )}
-                      {item.subscriptionStatus === "never" && (
-                        <StatusBadge tone="muted">No sub</StatusBadge>
-                      )}
-                    </div>
-                    {item.subscriptionStatus === "expired" && item.lastSubscriptionEndedAt && (
-                      <div className="mt-1 text-xs text-text-muted">
-                        Ended {formatDate(item.lastSubscriptionEndedAt, { includeYear: true })}
-                      </div>
-                    )}
-                    {item.subscriptionStatus === "active" && item.subscriptionExpiresAt && (
-                      <div className="mt-1 text-xs text-text-muted">
-                        Expires {formatDate(item.subscriptionExpiresAt, { includeYear: true })}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                    {formatUsdFromMills(item.grossAmountMills)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
-                    {formatUsdFromMills(item.creatorNetAmountMills)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {item.lastTransactionAt ? formatDateTime(item.lastTransactionAt) : "\u2014"}
+            </thead>
+            <tbody>
+              {data.items.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-text-secondary">
+                    {offset > 0 ? "На этой странице списка записей нет." : "В этом списке фанов нет."}
+                    {offset > 0 && <button type="button" className="link ml-2" onClick={() => update("offset", "")}>К началу списка</button>}
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {data.items.map((item) => {
+                const fanLabel = resolveFanLabelForScope(item.fan, "page");
+                const fanNavigation = buildFanProfileNavigation(
+                  pageLabel!,
+                  data.page.platform,
+                  item.fan.platformUserId,
+                  pageRoute,
+                  fanLabel.label,
+                );
+                const fanRoute = `${fanNavigation.to}?${new URLSearchParams({ period: selectedPeriod })}`;
+
+                return (
+                  <tr
+                    key={item.fan.platformUserId}
+                    onClick={(event) => {
+                      if (!isPlainRowClick(event)) return;
+                      navigate(fanRoute, { state: fanNavigation.state });
+                    }}
+                    className="cursor-pointer"
+                  >
+                    <td>
+                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                        <Link to={fanRoute} state={fanNavigation.state} className="font-medium text-text-primary hover:text-accent hover:underline underline-offset-2">
+                          {fanLabel.label}
+                        </Link>
+                        <FanNotVisibleMark missAt={item.accountLookupMissAt} />
+                      </div>
+                      {fanLabel.secondaryPlatformHandle && (
+                        <div className="text-xs text-text-secondary">@{fanLabel.secondaryPlatformHandle}</div>
+                      )}
+                    </td>
+                    <td>
+                      <div className="flex flex-wrap gap-1.5">
+                        {item.isFollower
+                          ? <span className="badge badge-success">Фолловер</span>
+                          : <span className="badge">Не фолловер</span>}
+                        {item.subscriptionStatus === "active" && <span className="badge badge-success">Подписка активна</span>}
+                        {item.subscriptionStatus === "expired" && <span className="badge badge-warning">Подписка истекла</span>}
+                        {item.subscriptionStatus === "never" && <span className="badge">Без подписки</span>}
+                      </div>
+                      {item.subscriptionStatus === "expired" && item.lastSubscriptionEndedAt && (
+                        <div className="mt-1 text-xs text-text-secondary">
+                          Закончилась {formatDate(item.lastSubscriptionEndedAt, { includeYear: true })}
+                        </div>
+                      )}
+                      {item.subscriptionStatus === "active" && item.subscriptionExpiresAt && (
+                        <div className="mt-1 text-xs text-text-secondary">
+                          До {formatDate(item.subscriptionExpiresAt, { includeYear: true })}
+                        </div>
+                      )}
+                    </td>
+                    <td className="num font-medium">
+                      {formatUsdFromMills(item.grossAmountMills)}
+                    </td>
+                    <td className="num muted">
+                      {formatUsdFromMills(item.creatorNetAmountMills)}
+                    </td>
+                    <td className="muted">
+                      {item.lastTransactionAt ? formatDateTime(item.lastTransactionAt) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         <Pagination
           offset={offset}

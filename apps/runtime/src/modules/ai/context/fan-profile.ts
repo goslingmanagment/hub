@@ -18,6 +18,25 @@ export const FAN_PROFILE_HARD_CAP_CHARS = 20_000;
 
 const TRUNCATION_MARKER = "\n\n[dossier truncated]";
 
+/** The lite dossier's whole budget (fast-reply; Lora persona audit,
+ * 2026-10-16): target and hard cap at once. */
+export const FAN_PROFILE_LITE_MAX_CHARS = 5_000;
+/** Under size pressure the lite dossier never drops OPEN LOOPS (they feed the
+ * reply's callbacks); it cuts a longer one down to this, at a line boundary. */
+export const FAN_PROFILE_LITE_LOOPS_MAX_CHARS = 1_500;
+
+/** Ends a lite section that was cut at a line boundary. */
+const SECTION_CUT_MARKER = "\n[section truncated]";
+
+/** Features that read the lite dossier: a quick reply needs the fan's facts,
+ * how he talks and what is still open; the portrait, stage and strategy are the
+ * chatter's analysis of him, not material for the model's next text. */
+const LITE_DOSSIER_FEATURES: ReadonlySet<string> = new Set(["fast-reply"]);
+
+export function usesLiteDossier(feature: string): boolean {
+  return LITE_DOSSIER_FEATURES.has(feature);
+}
+
 /** The section vocabulary of the fan-summary template (templates/fan-summary.md
  * "## Sections"). The template instructs "Write in Russian", so PRODUCTION
  * dossiers carry Russian headings in the dashboard-pinned markdown shape
@@ -32,10 +51,14 @@ const TRUNCATION_MARKER = "\n\n[dossier truncated]";
  * `volatile` label is retained for documentation — those sections (stage, open
  * loops, strategy) are NOT age-dropped: the prompt already stamps the dossier's
  * generation date and marks it possibly-stale-history, so the model weighs
- * their age rather than losing the context outright (Decision #136 addendum). */
+ * their age rather than losing the context outright (Decision #136 addendum).
+ * `lite` marks the sections the lite dossier keeps (facts, communication
+ * dynamics, open loops); it drops the portrait, stage and strategy as well as
+ * the financial profile. */
 const DOSSIER_SECTIONS = [
   {
     label: "DOSSIER",
+    lite: true,
     kind: "stable",
     keepPriority: 0,
     aliases: ["DOSSIER", "ДОСЬЕ"],
@@ -43,6 +66,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "PSYCHOLOGICAL PORTRAIT",
+    lite: false,
     kind: "stable",
     keepPriority: 4,
     aliases: ["PSYCHOLOGICAL PORTRAIT", "ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ", "ПОРТРЕТ"],
@@ -50,6 +74,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "STAGE AND TRAJECTORY",
+    lite: false,
     kind: "volatile",
     keepPriority: 5,
     aliases: ["STAGE AND TRAJECTORY", "СТАДИЯ И ТРАЕКТОРИЯ", "ЭТАП И ТРАЕКТОРИЯ"],
@@ -57,6 +82,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "COMMUNICATION DYNAMICS",
+    lite: true,
     kind: "stable",
     keepPriority: 1,
     aliases: ["COMMUNICATION DYNAMICS", "ДИНАМИКА ОБЩЕНИЯ", "КОММУНИКАЦИОННАЯ ДИНАМИКА"],
@@ -64,6 +90,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "FINANCIAL PROFILE",
+    lite: false,
     kind: "dropped",
     keepPriority: 6,
     aliases: ["FINANCIAL PROFILE", "ФИНАНСОВЫЙ ПРОФИЛЬ"],
@@ -71,6 +98,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "OPEN LOOPS",
+    lite: true,
     kind: "volatile",
     keepPriority: 2,
     aliases: ["OPEN LOOPS", "ОТКРЫТЫЕ ПЕТЛИ", "НЕЗАКРЫТЫЕ ТЕМЫ", "ОТКРЫТЫЕ ВОПРОСЫ"],
@@ -78,6 +106,7 @@ const DOSSIER_SECTIONS = [
   },
   {
     label: "STRATEGY",
+    lite: false,
     kind: "volatile",
     keepPriority: 3,
     aliases: ["STRATEGY", "СТРАТЕГИЯ"],
@@ -139,14 +168,120 @@ export interface CompiledDossier {
 export interface CompileDossierOptions {
   targetChars?: number;
   hardCapChars?: number;
+  /** The lite dossier (see usesLiteDossier): only the `lite` sections under
+   * their own size policy (compileLiteSections), both budgets default to
+   * FAN_PROFILE_LITE_MAX_CHARS, and every markdown heading of the body is
+   * demoted below the prompt's own `##` level. */
+  lite?: boolean;
+}
+
+/** Shift every markdown heading of a dossier body two levels down (H1 -> H3,
+ * H2 -> H4, deeper ones down to H6), so no line of the injected body reads as a
+ * `#` or `##` heading at the prompt's own level while the section hierarchy is
+ * kept. Lines without the ATX heading form are untouched. */
+export function demoteDossierHeadings(text: string): string {
+  return text.replace(/^([ \t]*)(#{1,6})(?=\s)/gm, (_match, indent: string, hashes: string) =>
+    indent + "#".repeat(Math.min(6, hashes.length + 2)),
+  );
+}
+
+/** The longest head of `text` of at most `maxChars` UTF-16 units that never
+ * splits a code point (an emoji stays whole). */
+function headOnCodePoints(text: string, maxChars: number): string {
+  let head = "";
+  for (const codePoint of text) {
+    if (head.length + codePoint.length > maxChars) {
+      break;
+    }
+    head += codePoint;
+  }
+  return head;
+}
+
+/** Head-cut on a code point boundary, preferring the last line break in the
+ * second half of the budget so a bullet is not cut mid-sentence. */
+function cutLiteBody(body: string, maxChars: number): string {
+  const head = headOnCodePoints(body, maxChars);
+  const lineBreak = head.lastIndexOf("\n");
+  return (lineBreak > maxChars / 2 ? head.slice(0, lineBreak) : head).trimEnd();
+}
+
+/** Cut one lite section to at most `maxChars`, marker included, at the last
+ * line boundary that fits (its heading line always stays when it fits). Null
+ * when not even the marker fits. */
+function cutSectionAtLine(text: string, maxChars: number): string | null {
+  const room = maxChars - SECTION_CUT_MARKER.length;
+  if (room <= 0) {
+    return null;
+  }
+  const head = headOnCodePoints(text, room);
+  const lineBreak = head.lastIndexOf("\n");
+  return (lineBreak > 0 ? head.slice(0, lineBreak) : head).trimEnd() + SECTION_CUT_MARKER;
+}
+
+/** The lite dossier's size policy (Lora persona audit, 2026-10-16). Over the
+ * budget it first drops COMMUNICATION DYNAMICS; still over, it cuts OPEN LOOPS
+ * down to FAN_PROFILE_LITE_LOOPS_MAX_CHARS and then cuts the facts (DOSSIER) at
+ * a line boundary to fit. OPEN LOOPS is never dropped. The kept sections keep
+ * their order. Only a preamble too long for the budget ever reaches the final
+ * whole-body cut. */
+function compileLiteSections(
+  preamble: string,
+  sections: ReadonlyArray<{ label: string; text: string }>,
+  budget: number,
+  hardCapChars: number,
+  dropped: Set<string>,
+): { body: string; truncated: boolean } {
+  let parts = sections.map((section) => ({ ...section }));
+  const join = (): string =>
+    [preamble, ...parts.map((part) => part.text)].filter((part) => part.length > 0).join("\n\n");
+  let truncated = false;
+
+  if (join().length > budget && parts.some((part) => part.label === "COMMUNICATION DYNAMICS")) {
+    parts = parts.filter((part) => part.label !== "COMMUNICATION DYNAMICS");
+    dropped.add("COMMUNICATION DYNAMICS");
+  }
+  if (join().length > budget) {
+    for (const part of parts) {
+      if (part.label === "OPEN LOOPS" && part.text.length > FAN_PROFILE_LITE_LOOPS_MAX_CHARS) {
+        part.text = cutSectionAtLine(part.text, FAN_PROFILE_LITE_LOOPS_MAX_CHARS)!;
+        truncated = true;
+      }
+    }
+  }
+  // The facts take the cut that is left, the last facts section first.
+  for (let index = parts.length - 1; index >= 0 && join().length > budget; index -= 1) {
+    const part = parts[index]!;
+    if (part.label !== "DOSSIER") {
+      continue;
+    }
+    const cut = cutSectionAtLine(part.text, part.text.length - (join().length - budget));
+    if (cut === null) {
+      parts.splice(index, 1);
+      dropped.add("DOSSIER");
+    } else {
+      part.text = cut;
+    }
+    truncated = true;
+  }
+
+  let body = join();
+  if (body.length > hardCapChars) {
+    body = cutLiteBody(body, hardCapChars) + TRUNCATION_MARKER;
+    truncated = true;
+  }
+  return { body, truncated };
 }
 
 export function compileDossierForPrompt(
   raw: string,
   options: CompileDossierOptions = {},
 ): CompiledDossier {
-  const targetChars = options.targetChars ?? FAN_PROFILE_TARGET_CHARS;
-  const hardCapChars = options.hardCapChars ?? FAN_PROFILE_HARD_CAP_CHARS;
+  const lite = options.lite === true;
+  const targetChars =
+    options.targetChars ?? (lite ? FAN_PROFILE_LITE_MAX_CHARS : FAN_PROFILE_TARGET_CHARS);
+  const hardCapChars =
+    options.hardCapChars ?? (lite ? FAN_PROFILE_LITE_MAX_CHARS : FAN_PROFILE_HARD_CAP_CHARS);
   const trimmedRaw = raw.trim();
 
   const lines = trimmedRaw.split(/\r?\n/);
@@ -168,6 +303,16 @@ export function compileDossierForPrompt(
   if (sections.length === 0) {
     // Unknown shape (hand-written or a future template): bounded head, never
     // the full body — the tail-heavy sections we'd want are unidentifiable.
+    if (lite) {
+      const demoted = demoteDossierHeadings(trimmedRaw);
+      const truncated = demoted.length > targetChars;
+      return {
+        body: truncated ? cutLiteBody(demoted, targetChars) + TRUNCATION_MARKER : demoted,
+        truncated,
+        droppedSections: [],
+        sectioned: false,
+      };
+    }
     const truncated = trimmedRaw.length > targetChars;
     return {
       body: truncated ? trimmedRaw.slice(0, targetChars) + TRUNCATION_MARKER : trimmedRaw,
@@ -181,13 +326,29 @@ export function compileDossierForPrompt(
   // Only FINANCIAL PROFILE is dropped by rule (it duplicates the live spending
   // blocks); volatile sections are kept and the prompt marks them possibly-stale
   // by generation date. Everything else is subject only to size pressure below.
+  // The lite dossier also drops every section outside its `lite` set.
   let kept = sections.filter(({ def }) => {
-    const drop = def.kind === "dropped";
+    const drop = def.kind === "dropped" || (lite && !def.lite);
     if (drop) {
       dropped.add(def.label);
     }
     return !drop;
   });
+
+  if (lite) {
+    // The lite body is measured as injected, demoted headings included.
+    const compiled = compileLiteSections(
+      demoteDossierHeadings(parsed[0]!.lines.join("\n").trim()),
+      kept.map((entry) => ({
+        label: entry.def.label,
+        text: demoteDossierHeadings(entry.lines.join("\n").trim()),
+      })),
+      targetChars,
+      hardCapChars,
+      dropped,
+    );
+    return { ...compiled, droppedSections: [...dropped], sectioned: true };
+  }
 
   const preamble = parsed[0]!.lines.join("\n").trim();
   const assemble = (entries: typeof kept): string => {
@@ -278,6 +439,9 @@ export async function loadFanProfileContext(
     fanRef: string;
     platform: "fansly" | "onlyfans";
     now: number;
+    /** The generating feature: fast-reply reads the lite dossier
+     * (usesLiteDossier); every other feature the full compile. */
+    feature: string;
   },
 ): Promise<FanProfilePromptContext | undefined> {
   const fan = await findPlatformFan(app.db, input.platform, input.fanRef);
@@ -299,7 +463,7 @@ export async function loadFanProfileContext(
   // but neither proves that the stored body was complete and non-exhausted.
   const generatedAt = profile.proofCreatedAt;
   const ageDays = Math.max(0, Math.floor((input.now - generatedAt.getTime()) / DAY_MS));
-  const compiled = compileDossierForPrompt(profile.body, {});
+  const compiled = compileDossierForPrompt(profile.body, { lite: usesLiteDossier(input.feature) });
   if (compiled.body.length === 0) {
     return undefined;
   }

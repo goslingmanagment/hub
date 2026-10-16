@@ -14,7 +14,7 @@ export function DeltaIndicator({ pct }: DeltaIndicatorProps) {
   const { text, direction } = formatDelta(pct);
 
   return (
-    <span className={`text-[12px] font-semibold ${directionColors[direction]}`}>
+    <span className={`whitespace-nowrap text-[13px] font-semibold tabular-nums ${directionColors[direction]}`}>
       {text}
     </span>
   );

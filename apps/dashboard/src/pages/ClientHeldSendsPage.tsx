@@ -36,17 +36,26 @@ import {
 
 // Tighter cells below a wide window: with «Разобрать» pinned at the right edge, the columns up to
 // «Когда» have to fit beside it at 1024 px, or the minutes of the time end up under the button.
-const HEAD_CELL = "whitespace-nowrap px-3 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted xl:px-4";
-const CELL = "px-3 py-3 align-top text-sm text-text-secondary xl:px-4";
-const CELL_MAIN = `${CELL} font-medium text-text-primary`;
+const HEAD_CELL = "whitespace-nowrap px-3 xl:px-4";
+const CELL_BASE = "px-3 align-top xl:px-4";
+const CELL = `${CELL_BASE} text-text-secondary`;
+const CELL_MAIN = `${CELL_BASE} font-medium text-text-primary`;
 const SUB = "mt-0.5 text-xs text-text-muted";
-const INPUT = "w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent";
 /**
  * The column of «Разобрать» stays at the right edge while a narrow window
  * scrolls the table sideways: the one thing to do with a row is never off
  * screen. The cell brings its own background (the head's, the body's).
  */
 const ACTION_COLUMN = "sticky right-0 border-l border-border";
+/** The one line under the tabs; the rest of how holding works is one click away. */
+const HOW_IT_WORKS = [
+  "Когда сотрудник отправляет сообщение из превью, расширение сообщает Hub, ушло оно или нет. Если отчёт не пришёл, "
+    + "Hub этого не знает и держит фана: из превью ему больше не отправят, а нового подписчика не поприветствуют, пока "
+    + "человек не посмотрит чат и не запишет здесь, что произошло.",
+  "Само удержание не снимается никогда: ни со временем, ни после нового входа. На этой странице текста нет: Hub не знает, какой текст ушёл.",
+  "Под именем сотрудника — установка расширения, с которой ушла отправка: у одного человека их может быть несколько. "
+    + "Время на странице ваше местное, как в чате. Список обновляется сам раз в полминуты.",
+];
 
 /** The fan's OnlyFans id, as a link to what the hub knows of the fan. */
 function FanLink({ pageLabel, fanRef, backTo }: { pageLabel: string; fanRef: string; backTo: string }) {
@@ -76,9 +85,9 @@ function HeldTable({ rows, backTo, onResolve }: {
   onResolve: (item: ClientSendCustodyListItem) => void;
 }) {
   return (
-    <table className="w-full min-w-[920px] border-collapse">
+    <table className="data-table min-w-[920px]">
       <thead>
-        <tr className="bg-hover-alt">
+        <tr>
           <th className={HEAD_CELL}>Страница и фан</th>
           <th className={HEAD_CELL}>Что отправляли</th>
           <th className={HEAD_CELL}>Кто отправлял</th>
@@ -89,7 +98,7 @@ function HeldTable({ rows, backTo, onResolve }: {
       </thead>
       <tbody>
         {rows.map((row) => (
-          <tr key={row.key} className="border-t border-border">
+          <tr key={row.key}>
             <td className={CELL_MAIN}>
               {row.pageLabel}
               <div className={SUB}>фан <FanLink pageLabel={row.pageLabel} fanRef={row.fanRef} backTo={backTo} /></div>
@@ -120,11 +129,7 @@ function HeldTable({ rows, backTo, onResolve }: {
               )}
             </td>
             <td className={`${CELL} ${ACTION_COLUMN} whitespace-nowrap bg-card text-right`}>
-              <button
-                type="button"
-                onClick={() => onResolve(row.item)}
-                className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-primary hover:bg-hover"
-              >
+              <button type="button" onClick={() => onResolve(row.item)} className="btn btn-primary btn-sm">
                 Разобрать
               </button>
             </td>
@@ -137,9 +142,9 @@ function HeldTable({ rows, backTo, onResolve }: {
 
 function ResolvedTable({ rows, backTo }: { rows: ResolvedSendRow[]; backTo: string }) {
   return (
-    <table className="w-full min-w-[920px] border-collapse">
+    <table className="data-table min-w-[920px]">
       <thead>
-        <tr className="bg-hover-alt">
+        <tr>
           <th className={HEAD_CELL}>Страница и фан</th>
           <th className={HEAD_CELL}>Что отправляли</th>
           <th className={HEAD_CELL}>Итог</th>
@@ -149,7 +154,7 @@ function ResolvedTable({ rows, backTo }: { rows: ResolvedSendRow[]; backTo: stri
       </thead>
       <tbody>
         {rows.map((row) => (
-          <tr key={row.key} className="border-t border-border">
+          <tr key={row.key}>
             <td className={CELL_MAIN}>
               {row.pageLabel}
               <div className={SUB}>фан <FanLink pageLabel={row.pageLabel} fanRef={row.fanRef} backTo={backTo} /></div>
@@ -226,7 +231,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           if (form.body !== null && !isPending && !gone) onSubmit(draft);
         }}
       >
-        <dl className="rounded-lg border border-border bg-hover-alt/50 px-4 py-2">
+        <dl className="rounded-lg border border-border bg-hover-alt px-4 py-2">
           <SummaryLine label="Страница">{row.pageLabel}</SummaryLine>
           <SummaryLine label="Фан"><span className="font-mono">{row.fanRef}</span></SummaryLine>
           <SummaryLine label="Что отправляли">{row.purpose}, {row.part}</SummaryLine>
@@ -283,15 +288,17 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
         </fieldset>
 
         {draft.outcome === "not_sent" && (
-          <div role="note" className="rounded-lg border border-warning-dark/50 bg-warning/10 px-3 py-2.5 text-sm text-text-secondary">
-            <p className="font-semibold text-warning-dark">Проверьте, прежде чем записать «не ушло»</p>
-            {notSentWarning(item).map((line) => <p key={line} className="mt-1">{line}</p>)}
+          <div role="note" className="notice notice-warning">
+            <div>
+              <p className="font-semibold">Проверьте, прежде чем записать «не ушло»</p>
+              {notSentWarning(item).map((line) => <p key={line} className="mt-1">{line}</p>)}
+            </div>
           </div>
         )}
 
         {draft.outcome === "sent" && (
           <label className="block">
-            <div className="mb-1 text-sm text-text-secondary">ID сообщения в OnlyFans, если вы его знаете (необязательно)</div>
+            <div className="field-label">ID сообщения в OnlyFans, если вы его знаете (необязательно)</div>
             <input
               value={draft.platformMessageId}
               inputMode="numeric"
@@ -300,16 +307,16 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
               disabled={isPending || gone}
               aria-invalid={form.platformMessageIdError !== null}
               onChange={(event) => setDraft((current) => ({ ...current, platformMessageId: event.target.value }))}
-              className={`${INPUT} font-mono`}
+              className="input font-mono"
             />
             {form.platformMessageIdError !== null && (
-              <p role="alert" className="mt-1 text-xs text-danger">{form.platformMessageIdError}</p>
+              <p role="alert" className="field-hint text-danger">{form.platformMessageIdError}</p>
             )}
           </label>
         )}
 
         <label className="block">
-          <div className="mb-1 text-sm text-text-secondary">Почему вы так решили (обязательно)</div>
+          <div className="field-label">Почему вы так решили (обязательно)</div>
           <textarea
             value={draft.note}
             rows={2}
@@ -317,15 +324,15 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
             aria-describedby={noteHintId}
             onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
             placeholder="например: посмотрел чат, сообщение от 14:02 на месте"
-            className={INPUT}
+            className="textarea"
           />
-          <p id={noteHintId} className={`mt-1 text-xs ${form.noteLeft < 0 ? "text-danger" : "text-text-muted"}`}>
+          <p id={noteHintId} className={`field-hint ${form.noteLeft < 0 ? "text-danger" : ""}`}>
             Заметка сохранится в журнале разборов вместе с вашим именем. До {RESOLVE_NOTE_MAX} знаков, осталось {form.noteLeft}.
           </p>
         </label>
 
         {failure !== null && (
-          <p role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-text-primary">
+          <p role="alert" className="notice notice-danger">
             {failure.message}
           </p>
         )}
@@ -334,21 +341,14 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
             the form, so they are on screen at any height and in any state of the form. */}
         <div className="sticky -bottom-6 -mx-6 -mb-6 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-card px-6 py-4">
           {!gone && form.missing !== null && <span className="mr-auto text-xs text-text-muted">{form.missing}</span>}
-          <button
-            type="button"
-            onClick={closeUnlessPending}
-            disabled={isPending}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
+          <button type="button" onClick={closeUnlessPending} disabled={isPending} className="btn">
             {gone ? "Закрыть" : "Отмена"}
           </button>
           {!gone && (
             <button
               type="submit"
               disabled={form.body === null || isPending}
-              className={`rounded-lg px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 ${
-                draft.outcome === "not_sent" ? "bg-danger" : "bg-accent"
-              }`}
+              className={draft.outcome === "not_sent" ? "btn btn-danger" : "btn btn-primary"}
             >
               {isPending ? "Записываем…"
                 : draft.outcome === "sent" ? "Записать: сообщение ушло"
@@ -416,14 +416,17 @@ export function ClientHeldSendsPage() {
 
   const backTo = `${location.pathname}${location.search}`;
   const header = (
-    <div className="mb-5 px-4 md:px-0">
-      <h1 className="text-xl font-extrabold text-text-primary">Зависшие отправки расширения</h1>
-      <p className="mt-1 max-w-3xl text-sm text-text-muted">
-        Когда сотрудник отправляет сообщение из превью, расширение сообщает Hub, ушло оно или нет. Если отчёт не
-        пришёл, Hub этого не знает и держит фана: из превью ему больше не отправят, а нового подписчика не
-        поприветствуют, пока человек не посмотрит чат и не запишет здесь, что произошло. Само удержание не снимается
-        никогда: ни со временем, ни после нового входа. На этой странице текста нет: Hub не знает, какой текст ушёл.
+    <div className="mb-5">
+      <p className="max-w-3xl text-sm text-text-secondary">
+        Отправки из превью, о которых расширение не сообщило, ушли ли они: пока человек не проверит чат и не запишет итог,
+        фану не отправят из превью и не поприветствуют его.
       </p>
+      <details className="help mt-1">
+        <summary>Как это работает</summary>
+        <div className="help-body">
+          {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
+        </div>
+      </details>
       <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
         <FilterButtons
           filters={HELD_SENDS_TABS.map(({ key, label }) => ({ key, label }))}
@@ -436,7 +439,7 @@ export function ClientHeldSendsPage() {
             id={pageFilterId}
             value={view.pageLabel ?? ""}
             onChange={(event) => show({ pageLabel: event.target.value === "" ? null : event.target.value })}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
+            className="select w-auto min-h-[34px] py-1.5"
           >
             <option value="">Все страницы</option>
             {pageLabels.map((label) => <option key={label} value={label}>{label}</option>)}
@@ -446,12 +449,7 @@ export function ClientHeldSendsPage() {
     </div>
   );
   const retry = (
-    <button
-      type="button"
-      onClick={() => void refetch()}
-      disabled={isFetching}
-      className="rounded-lg border border-border px-3 py-2 text-sm"
-    >
+    <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">
       Повторить
     </button>
   );
@@ -476,7 +474,7 @@ export function ClientHeldSendsPage() {
     <div>
       {header}
       {isError && (
-        <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning-dark/50 p-3 text-sm text-text-secondary">
+        <div role="alert" className="notice notice-warning mb-3 flex-wrap items-center justify-between">
           <span>Обновить не получилось. Показан список прошлой загрузки: он мог устареть.</span>
           {retry}
         </div>
@@ -498,26 +496,32 @@ export function ClientHeldSendsPage() {
         )
       ) : (
         // Rows of the previous page or filter stay on screen while the asked ones load, dimmed.
-        <section aria-busy={isPlaceholderData} className={`overflow-x-auto rounded-xl border border-border bg-card ${isPlaceholderData ? "opacity-60" : ""}`}>
-          <div className="border-b border-border px-4 py-3">
-            <h2 className="text-sm font-semibold text-text-primary">
-              {held ? heldCountLabel(data.total) : `Разобрано вручную: ${data.total}`}
-            </h2>
-            <p className="mt-1 max-w-3xl text-[13px] text-text-muted">
-              {held
-                ? "Сверху те, что ждут дольше всех. Под именем сотрудника — установка расширения, с которой ушла отправка: у одного человека их может быть несколько. Время на странице ваше местное, как в чате. Список обновляется сам раз в полминуты."
-                : "Журнал разборов: сверху последние. Каждый разбор записан и в журнале аудита Hub."}
-            </p>
+        <section aria-busy={isPlaceholderData} className={`card ${isPlaceholderData ? "opacity-60" : ""}`}>
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">
+                {held ? heldCountLabel(data.total) : `Разобрано вручную: ${data.total}`}
+              </h2>
+              <p className="card-description">
+                {held
+                  ? "Сверху те, что ждут дольше всех. Время ваше местное, как в чате."
+                  : "Журнал разборов: сверху последние. Каждый разбор записан и в журнале аудита Hub."}
+              </p>
+            </div>
           </div>
           {empty ? (
-            <p className="px-4 py-8 text-center text-sm text-text-muted">
+            <p className="px-4 py-8 text-center text-sm text-text-secondary">
               На этой странице списка записей нет.
-              <button type="button" className="ml-2 text-accent" onClick={() => show({})}>К началу списка</button>
+              <button type="button" className="link ml-2" onClick={() => show({})}>К началу списка</button>
             </p>
-          ) : held ? (
-            <HeldTable rows={heldRows} backTo={backTo} onResolve={(item) => { setFailure(null); setResolving({ item, serverNow: data.serverNow }); }} />
           ) : (
-            <ResolvedTable rows={resolvedRows} backTo={backTo} />
+            <div className="overflow-x-auto">
+              {held ? (
+                <HeldTable rows={heldRows} backTo={backTo} onResolve={(item) => { setFailure(null); setResolving({ item, serverNow: data.serverNow }); }} />
+              ) : (
+                <ResolvedTable rows={resolvedRows} backTo={backTo} />
+              )}
+            </div>
           )}
           <Pagination
             offset={view.offset}
@@ -525,8 +529,6 @@ export function ClientHeldSendsPage() {
             total={data.total}
             onPageChange={(offset) => show({ offset })}
             emptyLabel="0 отправок"
-            previousLabel="Назад"
-            nextLabel="Дальше"
             formatRange={(start, end, total) => `${start}–${end} из ${total}`}
           />
         </section>

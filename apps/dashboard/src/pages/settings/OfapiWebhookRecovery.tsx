@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useOfapiWebhookRecovery, ofapiWebhookRecoveryActions } from "@/api/adminOfapiWebhookRecovery";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
+import { formatDateTime } from "@/lib/format";
 
 export interface WebhookSelectionDraft {
   version: number;
@@ -23,7 +24,26 @@ const labels: Record<string, string> = {
 const scanLabels: Record<string, string> = {
   pending: "частично", running: "идёт сбор", failed: "остановлено", complete: "завершено",
 };
-const button = "rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-hover disabled:opacity-50";
+/** Server enums in words; the raw value stays in a tooltip for debugging. */
+const applyStateLabels: Record<string, string> = {
+  never: "ещё не применялось", none: "нет данных", pending: "ждёт применения", applying: "применяется",
+  applied: "применено", failed: "ошибка применения",
+};
+const captureStateLabels: Record<string, string> = {
+  accepted: "принято", raw_captured: "получено, не разобрано", quarantined_malformed: "отложено: неверный формат",
+};
+const projectionLabels: Record<string, string> = {
+  none: "не требуется", pending: "ожидает", projected: "выполнена", failed: "ошибка", skipped: "пропущена", blocked: "заблокирована",
+};
+const redeliveryLabels: Record<string, string> = {
+  preview: "проверка", dispatching: "отправляется", accepted: "принят провайдером", indeterminate: "исход неизвестен",
+  failed: "ошибка", rejected: "отклонён",
+};
+const applyStateLabel = (state: string) => applyStateLabels[state] ?? state;
+const redeliveryLabel = (state: string) => redeliveryLabels[state] ?? state;
+const localTime = (iso: string) => formatDateTime(iso, { yearUnlessCurrent: true });
+
+const button = "btn btn-sm";
 type WebhookPolicy = NonNullable<ReturnType<typeof useOfapiWebhookRecovery>["data"]>["policy"];
 
 export function webhookApplyIsRunning(state: string): boolean {
@@ -53,8 +73,9 @@ export function webhookCanPrepareNewAction(
     && JSON.stringify(reviewed) === JSON.stringify(current);
 }
 
-/** Owner-only consumer mounted by the OFAPI collection/settings page. Reads are
- * DB-only. Vendor history capture, remote replay and registration are explicit. */
+/** Owner-only consumer mounted in System › OnlyFans API. Reads are DB-only.
+ * Vendor history capture, remote replay and registration are explicit. The
+ * card around it (title, description) belongs to the screen. */
 export function OfapiWebhookRecovery() {
   const query = useOfapiWebhookRecovery();
   const [draft, setDraft] = useState<WebhookSelectionDraft | null>(null);
@@ -98,7 +119,7 @@ export function OfapiWebhookRecovery() {
         const resolved = webhookReadbackResolvesAction(readbackRequired?.applyBaseline, policy);
         if (resolved) setReadbackRequired(null);
         else setReviewedReadback(policy);
-        setMessage(`Прочитан срез v${policy.version}; состояние применения: ${policy.applyState}. ${resolved ? "Проверьте его перед новым действием." : "По этому срезу нельзя установить исход прежнего применения. Автоматического повтора не будет."}`);
+        setMessage(`Прочитан срез v${policy.version}; состояние применения: ${applyStateLabel(policy.applyState)}. ${resolved ? "Проверьте его перед новым действием." : "По этому срезу нельзя установить исход прежнего применения. Автоматического повтора не будет."}`);
       } else {
         setMessage("Повторное чтение не удалось; результат остаётся неизвестным.");
       }
@@ -106,8 +127,13 @@ export function OfapiWebhookRecovery() {
       setMessage(error instanceof Error ? error.message : "Повторное чтение не удалось; результат остаётся неизвестным.");
     } finally { busyRef.current = false; setBusy(false); }
   }
-  if (query.isPending) return <p className="text-sm text-text-secondary">Загрузка истории вебхуков…</p>;
-  if (!query.data) return <p role="alert" className="text-sm text-text-secondary">Не удалось прочитать состояние вебхуков. <button type="button" className={button} onClick={() => void query.refetch()}>Повторить</button></p>;
+  if (query.isPending) return <p className="text-sm text-text-secondary">Загружаем историю вебхука…</p>;
+  if (!query.data) return (
+    <div role="alert" className="notice notice-danger flex-wrap items-center justify-between">
+      <span>Не удалось прочитать состояние вебхука.</span>
+      <button type="button" className={button} onClick={() => void query.refetch()}>Повторить</button>
+    </div>
+  );
   const { history } = query.data;
   const saved = receipt && receipt.version >= query.data.policy.version ? receipt : query.data.policy;
   const groups = draft?.desiredGroups ?? saved.desiredGroups;
@@ -117,67 +143,88 @@ export function OfapiWebhookRecovery() {
   const unavailable = busy || query.isError || readbackRequired !== null;
   const canPrepareNew = webhookCanPrepareNewAction(reviewedReadback, query.data.policy, newActionAcknowledged, busy || query.isError || query.isFetching);
   const applied = new Set(saved.appliedGroups);
-  return <section className="space-y-4 rounded-xl border border-border bg-card p-5">
+  const catalogObservedAt = query.data.catalog?.observedAt ?? null;
+  return <div className="space-y-5 text-sm">
     {query.isError && <StaleDataNotice title="Показан предыдущий срез вебхуков" error={query.error} />}
-    {readbackRequired && <div role="alert" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-text-primary">
-      {readbackRequired.label}: перед следующим действием нужно прочитать результат. Выбор сохранён на экране.{receipt ? " Подтверждённая квитанция также сохранена." : ""}
-      <button type="button" className={`${button} mt-2 block`} disabled={busy} onClick={() => void readBack()}>Сверить состояние после запроса</button>
-      {reviewedReadback && <div className="mt-3 space-y-2 border-t border-border pt-3">
-        <p>Исход применения не установлен. Даже состояние «applied» или «failed» может относиться к прежней попытке. Новый запрос может повторить уже выполненное платное действие.</p>
-        <label className="flex items-start gap-2">
-          <input type="checkbox" checked={newActionAcknowledged} disabled={busy || query.isError || query.isFetching} onChange={event => setNewActionAcknowledged(event.target.checked)} />
-          <span>Я проверил текущий срез и хочу подготовить отдельное новое действие, принимая неизвестный исход предыдущего.</span>
-        </label>
-        <button type="button" className={button} disabled={!canPrepareNew} onClick={() => {
-          if (!canPrepareNew || busyRef.current) return;
-          const previous = readbackRequired.label;
-          setReadbackRequired(null); setReviewedReadback(null); setNewActionAcknowledged(false);
-          setPreview(null);
-          setMessage(`${previous}: исход остался неизвестным. Подготовка нового действия разрешена; запрос ещё не отправлен. Выберите и подтвердите его отдельно.`);
-        }}>Подготовить новое действие</button>
-        <p className="text-xs text-text-secondary">Эта кнопка не отправляет запрос. Для применения событий или платного повтора потребуется отдельное нажатие.</p>
+    {readbackRequired && <div role="alert" className="notice notice-warning">
+      <div className="min-w-0 space-y-2">
+        <p>{readbackRequired.label}: перед следующим действием нужно прочитать результат. Выбор сохранён на экране.{receipt ? " Подтверждённая квитанция также сохранена." : ""}</p>
+        <button type="button" className={button} disabled={busy} onClick={() => void readBack()}>Сверить состояние после запроса</button>
+        {reviewedReadback && <div className="space-y-2 border-t border-current/20 pt-3">
+          <p>Исход применения не установлен. Даже состояние «применено» или «ошибка» может относиться к прежней попытке. Новый запрос может повторить уже выполненное платное действие.</p>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1 accent-accent" checked={newActionAcknowledged} disabled={busy || query.isError || query.isFetching} onChange={event => setNewActionAcknowledged(event.target.checked)} />
+            <span>Я проверил текущий срез и хочу подготовить отдельное новое действие, принимая неизвестный исход предыдущего.</span>
+          </label>
+          <button type="button" className={button} disabled={!canPrepareNew} onClick={() => {
+            if (!canPrepareNew || busyRef.current) return;
+            const previous = readbackRequired.label;
+            setReadbackRequired(null); setReviewedReadback(null); setNewActionAcknowledged(false);
+            setPreview(null);
+            setMessage(`${previous}: исход остался неизвестным. Подготовка нового действия разрешена; запрос ещё не отправлен. Выберите и подтвердите его отдельно.`);
+          }}>Подготовить новое действие</button>
+          <p className="text-xs">Эта кнопка не отправляет запрос. Для применения событий или платного повтора потребуется отдельное нажатие.</p>
+        </div>}
+      </div>
+    </div>}
+    {receipt && <p role="status" className="text-text-secondary">Сервер вернул выбор версии {receipt.version}. Ниже показана эта квитанция; независимое чтение ещё не подтверждено.</p>}
+
+    <section className="space-y-3" aria-label="Дополнительные события">
+      <p className="text-text-secondary">Базовый поток сохраняется. Дополнительные события включайте по одному: сохраните выбор и примените его у провайдера.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {saved.groups.map(group => <label key={group.id} className="flex items-center gap-2 text-text-primary">
+          <input type="checkbox" className="accent-accent" checked={groups.includes(group.id)} disabled={busy} onChange={event => setDraft(current => editWebhookSelection(current, saved, { desiredGroups: event.target.checked ? [...groups, group.id] : groups.filter(id => id !== group.id) }))} />
+          {labels[group.id] ?? group.id}
+          <span className={applied.has(group.id) ? "badge badge-success" : "badge"}>{applied.has(group.id) ? "применено" : "выключено"}</span>
+        </label>)}
+      </div>
+      <label className="flex items-start gap-2 text-text-primary">
+        <input type="checkbox" className="mt-1 accent-accent" checked={historyEnabled} disabled={busy} onChange={event => setDraft(current => editWebhookSelection(current, saved, { historyEnabled: event.target.checked }))} />
+        <span>Сохранять историю доставок<span className="field-hint block">Бесплатное чтение раз в 5 минут, до 100 попыток за запрос. Начинает действовать после сохранения.</span></span>
+      </label>
+      {dirty && <div className="notice" role="status">
+        <div className="min-w-0 space-y-2">
+          <p>{draftChanged ? `На сервере уже версия ${saved.version}; ваш выбор сделан по версии ${draft.version}. Сравните актуальный набор ниже перед новым выбором.` : "Выбор не сохранён. Применение у провайдера станет доступно после сохранения."}</p>
+          {draftChanged && <p>Сохранено сейчас: {saved.desiredGroups.map(group => labels[group] ?? group).join(", ") || "без дополнительных групп"}; история доставок {saved.historyEnabled ? "включена" : "выключена"}.</p>}
+          <button type="button" className={button} disabled={busy} onClick={() => setDraft(null)}>Сбросить к сохранённому выбору</button>
+        </div>
       </div>}
-    </div>}
-    {receipt && <p role="status" className="text-sm text-text-secondary">Сервер вернул политику v{receipt.version}. Ниже показана эта квитанция; независимое чтение ещё не подтверждено.</p>}
-    <div><h2 className="text-base font-semibold text-text-primary">События и восстановление</h2>
-      <p className="mt-1 text-sm text-text-secondary">Базовый поток сохраняется. Дополнительные события включайте по одному: сохраните выбор и примените его у провайдера.</p></div>
-    <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm text-text-primary">Каталог событий провайдера · {query.data.catalog?.events.length??0}</summary>
-      <p className="my-2 text-xs text-text-secondary">Сохранённый ответ: {query.data.catalog?.observedAt??"ещё не получен"}. Каталог может меняться; новые события не включаются автоматически. {query.data.catalog?.state==='invalid'?'Последний ответ не прошёл проверку; исходные байты сохранены.':''}</p>
-      <button type="button" className={button} disabled={unavailable} onClick={()=>void run(async()=>{const result=await ofapiWebhookRecoveryActions.refreshCatalog({body:{}});return result.state==='captured'?`Сохранено событий: ${result.events.length}. Подписки не изменены.`:'Ответ сохранён, но формат каталога не подтверждён.';})}>Обновить каталог · бесплатно</button>
-      <ul className="mt-2 max-h-64 overflow-auto text-xs text-text-secondary">{query.data.catalog?.events.map(event=><li key={event.value} className="py-1"><span className="font-mono text-text-primary">{event.value}</span> · {event.description} · {event.requested?'запрошено':'не запрошено'} · {event.supported?'обработчик готов':'обработчик не подключён'}</li>)}</ul>
-    </details>
-    <div className="grid gap-2 sm:grid-cols-2">
-      {saved.groups.map(group => <label key={group.id} className="flex items-center gap-2 text-sm text-text-primary">
-        <input type="checkbox" checked={groups.includes(group.id)} disabled={busy} onChange={event => setDraft(current => editWebhookSelection(current, saved, { desiredGroups: event.target.checked ? [...groups, group.id] : groups.filter(id => id !== group.id) }))} />
-        {labels[group.id] ?? group.id}<span className="text-xs text-text-secondary">{applied.has(group.id) ? "применено" : "выключено"}</span>
-      </label>)}
-    </div>
-    <label className="flex items-start gap-2 text-sm text-text-primary">
-      <input type="checkbox" checked={historyEnabled} disabled={busy} onChange={event => setDraft(current => editWebhookSelection(current, saved, { historyEnabled: event.target.checked }))} />
-      <span>Сохранять историю доставок<span className="block text-xs text-text-secondary">Бесплатное чтение раз в 5 минут, до 100 попыток за запрос. Локальная настройка действует после сохранения.</span></span>
-    </label>
-    {dirty && <div className="rounded-lg border border-border bg-hover p-3 text-sm text-text-secondary" role="status">
-      {draftChanged ? `На сервере уже v${saved.version}; ваш выбор сделан по v${draft.version}. Сравните актуальный набор ниже перед новым выбором.` : `Несохранённый выбор по v${draft.version}. Применение у провайдера доступно после сохранения.`}
-      {draftChanged && <p>Сохранено сейчас: {saved.desiredGroups.map(group => labels[group] ?? group).join(", ") || "без дополнительных групп"}; история доставок {saved.historyEnabled ? "включена" : "выключена"}.</p>}
-      <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => setDraft(null)}>Сбросить черновик к сохранённому выбору</button>
-    </div>}
-    <div className="flex flex-wrap items-center gap-2">
-      <button type="button" className={button} disabled={unavailable || !dirty || draftChanged} onClick={() => void run(async () => {
-        const result = await ofapiWebhookRecoveryActions.save({ body: { expectedVersion: draft?.version ?? saved.version, groups: groups as Array<"subscription_expiry" | "account_lifecycle" | "media_uploads" | "data_exports" | "engagement">, historyEnabled } });
-        setReceipt(result);
-        setDraft(null);
-        return "Выбор сохранён. Примените дополнительные события у провайдера отдельным действием.";
-      })}>Сохранить выбор</button>
-      <button type="button" className={button} disabled={unavailable || query.isFetching || dirty || webhookApplyIsRunning(saved.applyState)} onClick={() => void run(async () => {
-        const result = await ofapiWebhookRecoveryActions.apply({ body: { expectedVersion: saved.version } });
-        setReceipt(result);
-        return result.applyState === "applied" ? "Состав событий подтверждён повторным чтением у провайдера." : `Применение не подтверждено: ${result.errorCode ?? result.applyState}`;
-      }, `Применение событий v${saved.version}`, { version: saved.version, applyState: saved.applyState })}>{saved.applyState === "applied" ? "Проверить и восстановить события · платный поток" : "Применить события · платный поток"}</button>
-      <span className="text-xs text-text-secondary">Состояние: {saved.applyState}{saved.errorCode ? ` · ${saved.errorCode}` : ""}</span>
-    </div>
-    {saved.applyState === "applied" && <p className="text-xs text-text-secondary">Hub хранит результат прежнего применения. Проверка у провайдера — отдельный запрос; при расхождении она восстановит сохранённый состав событий.</p>}
-    <div className="border-t border-border pt-4">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-text-primary">Попытки доставки</h3>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={button} disabled={unavailable || !dirty || draftChanged} onClick={() => void run(async () => {
+          const result = await ofapiWebhookRecoveryActions.save({ body: { expectedVersion: draft?.version ?? saved.version, groups: groups as Array<"subscription_expiry" | "account_lifecycle" | "media_uploads" | "data_exports" | "engagement">, historyEnabled } });
+          setReceipt(result);
+          setDraft(null);
+          return "Выбор сохранён. Примените дополнительные события у провайдера отдельным действием.";
+        })}>Сохранить выбор</button>
+        <button type="button" className={button} disabled={unavailable || query.isFetching || dirty || webhookApplyIsRunning(saved.applyState)} onClick={() => void run(async () => {
+          const result = await ofapiWebhookRecoveryActions.apply({ body: { expectedVersion: saved.version } });
+          setReceipt(result);
+          return result.applyState === "applied" ? "Состав событий подтверждён повторным чтением у провайдера." : `Применение не подтверждено: ${result.errorCode ?? applyStateLabel(result.applyState)}`;
+        }, `Применение событий, версия ${saved.version}`, { version: saved.version, applyState: saved.applyState })}>{saved.applyState === "applied" ? "Проверить и восстановить события · платный поток" : "Применить события · платный поток"}</button>
+        <span className="text-xs text-text-secondary">
+          Состояние: <span title={saved.applyState}>{applyStateLabel(saved.applyState)}</span>
+          {saved.errorCode ? <> · код ошибки <span className="font-mono">{saved.errorCode}</span></> : ""}
+        </span>
+      </div>
+      {saved.applyState === "applied" && <p className="text-xs text-text-secondary">Hub хранит результат прежнего применения. Проверка у провайдера — отдельный запрос; при расхождении она восстановит сохранённый состав событий.</p>}
+      <details className="help">
+        <summary>Каталог событий провайдера · {query.data.catalog?.events.length ?? 0}</summary>
+        <div className="help-body max-w-none">
+          <p>
+            Сохранённый ответ: {catalogObservedAt ? <span title={catalogObservedAt}>{localTime(catalogObservedAt)}</span> : "ещё не получен"}. Каталог может меняться; новые события не включаются автоматически.
+            {query.data.catalog?.state === "invalid" ? " Последний ответ не прошёл проверку; исходные данные сохранены." : ""}
+          </p>
+          <div><button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => { const result = await ofapiWebhookRecoveryActions.refreshCatalog({ body: {} }); return result.state === "captured" ? `Сохранено событий: ${result.events.length}. Подписки не изменены.` : "Ответ сохранён, но формат каталога не подтверждён."; })}>Обновить каталог · бесплатно</button></div>
+          <ul className="max-h-64 divide-y divide-border-light overflow-auto text-xs">
+            {query.data.catalog?.events.map(event => <li key={event.value} className="py-1.5"><span className="font-mono text-text-primary">{event.value}</span> · {event.description} · {event.requested ? "запрошено" : "не запрошено"} · {event.supported ? "обработчик готов" : "обработчик не подключён"}</li>)}
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section className="space-y-3 border-t border-border pt-5" aria-labelledby="webhook-attempts-heading">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 id="webhook-attempts-heading" className="text-sm font-semibold text-text-primary">Попытки доставки</h4>
         <button type="button" className={button} disabled={unavailable || !history.webhookId} onClick={() => void run(async () => {
           const last = history.latestScan;
           const continuation = last && ["pending", "failed"].includes(last.state);
@@ -186,23 +233,28 @@ export function OfapiWebhookRecovery() {
             id: continuation ? last.id : crypto.randomUUID(), from: continuation ? last.from : new Date(to.getTime() - 86_400_000).toISOString(),
             to: continuation ? last.to : to.toISOString(), maxPages: 20,
           } });
-          return result.state === "complete" ? `История сохранена: ${result.capturedAttempts} новых попыток.` : `История частичная: ${result.state}. ${result.errorCode ?? "Продолжите чтение следующей порции."}`;
+          return result.state === "complete" ? `История сохранена: ${result.capturedAttempts} новых попыток.` : `История частичная: ${scanLabels[result.state] ?? result.state}. ${result.errorCode ?? "Продолжите чтение следующей порции."}`;
         })}>{history.latestScan && ["pending", "failed"].includes(history.latestScan.state) ? "Продолжить сбор истории" : "Прочитать последние сутки · бесплатно"}</button>
       </div>
-      <p className="my-2 text-xs text-text-secondary">Провайдер хранит попытки 7 дней; Hub сохраняет прочитанные записи. Доступ ограничен областью текущего ключа. Во время паузы события могут отсутствовать у самого провайдера.</p>
-      {history.latestScan && <div role="status" aria-label="Состояние чтения истории" className="mb-3 space-y-1 text-xs text-text-secondary">
+      <p className="text-xs text-text-secondary">Провайдер хранит попытки 7 дней; Hub сохраняет прочитанные записи. Видно только то, что доступно текущему ключу. Во время паузы события могут отсутствовать у самого провайдера.</p>
+      {history.latestScan && <div role="status" aria-label="Состояние чтения истории" className="space-y-1 text-xs text-text-secondary">
         <p>Чтение истории: {scanLabels[history.latestScan.state] ?? history.latestScan.state} · просмотрено {history.latestScan.nextOffset} записей · сохранено {history.latestScan.capturedAttempts} новых попыток.</p>
-        <p>Период UTC: {history.latestScan.from.slice(0, 19).replace("T", " ")} — {history.latestScan.to.slice(0, 19).replace("T", " ")}.</p>
-        {history.latestScan.errorCode && <p>Причина остановки: {history.latestScan.errorCode}.</p>}
+        <p>Период: {localTime(history.latestScan.from)} — {localTime(history.latestScan.to)}.</p>
+        {history.latestScan.errorCode && <p>Причина остановки: <span className="font-mono">{history.latestScan.errorCode}</span>.</p>}
       </div>}
-      <div className="overflow-x-auto"><table className="w-full text-left text-xs">
-        <thead className="text-text-secondary"><tr><th className="p-2">Событие / UTC</th><th className="p-2">Провайдер</th><th className="p-2">Hub</th><th className="p-2">Действие</th></tr></thead>
-        <tbody>{history.attempts.map(attempt => <tr key={attempt.attemptId} className="border-t border-border-light">
-          <td className="p-2 text-text-primary">{attempt.eventType}<span className="block text-text-secondary">{attempt.createdAt.slice(0, 19).replace("T", " ")} · #{attempt.attemptNumber}</span></td>
-          <td className="p-2 text-text-primary">{attempt.succeeded ? "Доставлено" : attempt.deliveryRecovered ? "Восстановлено следующей попыткой" : `Ошибка ${attempt.statusCode ?? "сети"}`}
-            {attempt.redeliveryState && <span className="block text-text-secondary">Повтор доставки: {attempt.redeliveryState} · {attempt.redeliverySucceeded === null ? "результат ожидается" : attempt.redeliverySucceeded ? "доставлено" : "пока без успеха"}</span>}</td>
-          <td className="p-2 text-text-primary">{attempt.localEventId ? `${attempt.captureState} · проекция: ${attempt.projectionStatus} · разбор: ${attempt.canonicalVersion ?? "ожидает"}` : "Совпадающий receipt не найден"}</td>
-          <td className="p-2">{attempt.localEventId ? <button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => {
+      {history.attempts.length > 0 && <div className="table-wrap"><table className="data-table min-w-[640px]">
+        <thead><tr><th>Событие</th><th>Провайдер</th><th>Hub</th><th>Действие</th></tr></thead>
+        <tbody>{history.attempts.map(attempt => <tr key={attempt.attemptId}>
+          <td className="align-top"><span className="font-mono text-xs">{attempt.eventType}</span><span className="block text-xs text-text-secondary" title={attempt.createdAt}>{localTime(attempt.createdAt)} · попытка {attempt.attemptNumber}</span></td>
+          <td className="align-top">{attempt.succeeded ? "Доставлено" : attempt.deliveryRecovered ? "Восстановлено следующей попыткой" : `Ошибка ${attempt.statusCode ?? "сети"}`}
+            {attempt.redeliveryState && <span className="block text-xs text-text-secondary"><span title={attempt.redeliveryState}>Повтор доставки: {redeliveryLabel(attempt.redeliveryState)}</span> · {attempt.redeliverySucceeded === null ? "результат ожидается" : attempt.redeliverySucceeded ? "доставлено" : "пока без успеха"}</span>}</td>
+          <td className="align-top">{attempt.localEventId
+            ? <span title={`capture: ${attempt.captureState ?? "—"} · projection: ${attempt.projectionStatus ?? "—"} · canonical: ${attempt.canonicalVersion ?? "—"}`}>
+              {attempt.captureState ? captureStateLabels[attempt.captureState] ?? attempt.captureState : "—"}
+              <span className="block text-xs text-text-secondary">обработка: {attempt.projectionStatus ? projectionLabels[attempt.projectionStatus] ?? attempt.projectionStatus : "—"} · {attempt.canonicalVersion === null ? "разбор ожидается" : `разбор, версия ${attempt.canonicalVersion}`}</span>
+            </span>
+            : <span className="text-text-secondary">Запись в Hub не найдена</span>}</td>
+          <td className="align-top">{attempt.localEventId ? <button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => {
             await ofapiWebhookRecoveryActions.replay({ body: { eventId: attempt.localEventId!, dryRun: false } });
             return "Локальная обработка выполнена; результат виден в колонке Hub.";
           })}>Повторить локально</button> : <button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => {
@@ -211,16 +263,18 @@ export function OfapiWebhookRecovery() {
             setPreview(selected); return "Доставка доступна для ручного повтора. Подтвердите платную отправку ниже.";
           })}>Проверить повтор</button>}</td>
         </tr>)}</tbody>
-      </table></div>
-      {!history.attempts.length && <p className="py-3 text-sm text-text-secondary">Сохранённых попыток пока нет. Прочитайте историю или включите её сбор.</p>}
-    </div>
-    {preview && <div className="rounded-lg border border-border bg-hover p-3 text-sm text-text-primary">
-      Повтор попытки {preview.attemptId}: ориентир 0,01 кредита за событие. Ответ «принято» означает очередь; итог проверяется по новой доставке и проекции Hub.
-      <div className="mt-2 flex gap-2"><button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => {
-        const result = await ofapiWebhookRecoveryActions.redeliver({ body: { ...preview, dryRun: false } });
-        setPreview(null); return `Повтор: ${result.state}${result.errorCode ? ` · ${result.errorCode}` : ""}${result.redeliveryUuid ? ` · доставка ${result.redeliveryUuid}` : ""}.`;
-      }, `Платный повтор попытки ${preview.attemptId} · запрос ${preview.id}`)}>Запросить платный повтор</button><button type="button" className={button} disabled={busy || readbackRequired !== null} onClick={() => setPreview(null)}>Отмена</button></div>
+      </table></div>}
+      {!history.attempts.length && <p className="text-text-secondary">Сохранённых попыток пока нет. Прочитайте историю или включите её сбор.</p>}
+    </section>
+    {preview && <div className="notice notice-warning">
+      <div className="min-w-0 space-y-2">
+        <p>Повтор попытки {preview.attemptId}: ориентир 0,01 кредита за событие. Ответ «принято» означает очередь; итог проверяется по новой доставке и обработке в Hub.</p>
+        <div className="flex flex-wrap gap-2"><button type="button" className="btn btn-sm btn-primary" disabled={unavailable} onClick={() => void run(async () => {
+          const result = await ofapiWebhookRecoveryActions.redeliver({ body: { ...preview, dryRun: false } });
+          setPreview(null); return `Повтор: ${redeliveryLabel(result.state)}${result.errorCode ? ` · ${result.errorCode}` : ""}.`;
+        }, `Платный повтор попытки ${preview.attemptId}`)}>Запросить платный повтор</button><button type="button" className={button} disabled={busy || readbackRequired !== null} onClick={() => setPreview(null)}>Отмена</button></div>
+      </div>
     </div>}
-    {message && <p role="status" className="text-sm text-text-secondary">{message}</p>}
-  </section>;
+    {message && <p role="status" className="text-text-secondary">{message}</p>}
+  </div>;
 }

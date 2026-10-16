@@ -32,7 +32,8 @@ describe("SyncStatusPage", () => {
   it("shows an explicit invalid-run state when the query string is missing", () => {
     const html = renderPage("/dev/sync-status");
 
-    expect(html).toContain("Sync run not selected");
+    expect(html).toContain("Запуск не выбран");
+    expect(html).toContain('href="/dev/log"');
     expect(queryMocks.useAdminSyncRunDetail).toHaveBeenCalledWith(0);
   });
 
@@ -93,13 +94,15 @@ describe("SyncStatusPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("Sync Run #42");
+    expect(html).toContain("Запуск синка #42");
+    // The way back to the log it was opened from.
+    expect(html).toContain('href="/dev/log"');
     expect(html).toContain(">lana<");
-    expect(html).toContain(">fansly<");
-    expect(html).toContain(">Completed<");
+    expect(html).toContain(">Fansly<");
+    expect(html).toContain(">Завершён<");
     expect(html).toContain("Started sync run");
     expect(html).toContain(">messages<");
-    expect(html).toContain(">succeeded<");
-    expect(html).toContain("1800ms");
+    expect(html).toContain(">успешно<");
+    expect(html).toContain("1\u00a0800 мс");
   });
 });

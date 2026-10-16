@@ -1,18 +1,32 @@
 import { useState, useEffect } from "react";
-import { formatProxyPreview, buildProxyConfig, getProxyStringError } from "@agency_hub_core/shared";
+import { buildProxyConfig, getProxyStringError } from "@agency_hub_core/shared";
 import { useAdminTestProxy } from "@/api/queries";
 import { Field } from "./Field.js";
+
+/** The proxy parser's verdict in the owner's words. The parser itself speaks
+ *  English (it is shared with the server), so its two messages are mapped. */
+export function proxyErrorText(error: string): string {
+  if (error.startsWith("Unsupported proxy protocol")) {
+    return "Такой тип прокси не подходит: нужен socks5://, http:// или https://.";
+  }
+  if (error === "Invalid proxy URL") {
+    return "Не получается прочитать прокси. Формат: логин:пароль@адрес:порт.";
+  }
+  return error;
+}
 
 export function ProxyInput({
   value,
   onChange,
   initialStoredProxy,
   required = false,
+  label = "Прокси",
 }: {
   value: string;
   onChange: (value: string) => void;
-  initialStoredProxy?: { url: string; hasAuth: boolean } | null;
-  required?: boolean;
+  initialStoredProxy?: { url: string; hasAuth: boolean } | null | undefined;
+  required?: boolean | undefined;
+  label?: string | undefined;
 }) {
   const testProxy = useAdminTestProxy();
   const [testResult, setTestResult] = useState<{ ip: string } | null>(null);
@@ -24,9 +38,10 @@ export function ProxyInput({
     setTestError("");
   }, [value]);
 
-  const preview = formatProxyPreview(value);
   const proxyConfig = buildProxyConfig(value);
   const proxyError = getProxyStringError(value);
+  const keepsStoredAuth = Boolean(initialStoredProxy?.hasAuth && value === initialStoredProxy.url);
+  const hasAuth = proxyConfig ? proxyConfig.username !== null || proxyConfig.password !== null : false;
 
   async function handleTest() {
     if (!proxyConfig) return;
@@ -36,52 +51,54 @@ export function ProxyInput({
       const result = await testProxy.mutateAsync({ proxy: proxyConfig });
       setTestResult(result);
     } catch (error) {
-      setTestError(error instanceof Error ? error.message : "Test failed");
+      setTestError(error instanceof Error ? error.message : "Проверка не удалась");
     }
   }
 
   return (
     <div className="space-y-2">
-      <Field label={`Proxy${required || initialStoredProxy ? "" : " (optional)"}`}>
+      <Field label={`${label}${required || initialStoredProxy ? "" : " (необязательно)"}`}>
         <div className="flex gap-2">
           <input
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="user:pass@host:port"
-            className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            placeholder="логин:пароль@адрес:порт"
+            spellCheck={false}
+            autoComplete="off"
+            className="input flex-1"
           />
           <button
             type="button"
             disabled={!proxyConfig || Boolean(proxyError) || testProxy.isPending}
             onClick={handleTest}
-            className="shrink-0 rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
+            className="btn"
           >
-            {testProxy.isPending ? "Testing..." : "Test"}
+            {testProxy.isPending ? "Проверяем…" : "Проверить"}
           </button>
         </div>
       </Field>
 
-      {preview && (
-        <div className="px-1 text-xs text-text-tertiary">
-          {preview}
-          {initialStoredProxy?.hasAuth && value === initialStoredProxy.url && (
-            <span> &middot; stored auth will be preserved</span>
-          )}
-        </div>
+      {proxyConfig && !proxyError && (
+        <p className="field-hint">
+          {proxyConfig.url}
+          {keepsStoredAuth
+            ? " · сохранённые логин и пароль прокси останутся"
+            : hasAuth ? " · с логином и паролем" : " · без логина"}
+        </p>
       )}
       {proxyError && (
-        <div className="px-1 text-xs text-danger">
-          {proxyError}
-        </div>
+        <p role="alert" className="field-hint text-danger">
+          {proxyErrorText(proxyError)}
+        </p>
       )}
 
       {testResult && (
-        <div className="rounded-lg border border-green/30 bg-green/5 px-3 py-2 text-sm text-green">
-          Proxy OK &middot; IP: {testResult.ip}
+        <div className="notice notice-success">
+          Прокси работает · выходной IP {testResult.ip}
         </div>
       )}
       {testError && (
-        <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+        <div role="alert" className="notice notice-danger">
           {testError}
         </div>
       )}

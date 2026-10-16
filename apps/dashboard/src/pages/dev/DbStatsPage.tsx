@@ -1,131 +1,145 @@
+import { useState } from "react";
 import { useAdminDbStats } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime } from "@/lib/format";
+import { DevHeader } from "./DevHeader.js";
 
-function formatBytes(bytes: number | null | undefined): string {
-  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "—";
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+const UNITS = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+/** The largest tables shown before «Показать все» (the server lists them largest first). */
+const TABLES_SHOWN = 15;
+/** The latest migrations shown before «Показать все» (the server lists them oldest first). */
+const MIGRATIONS_SHOWN = 10;
+
+function ShowAll({ total, shown, open, onToggle }: { total: number; shown: number; open: boolean; onToggle: () => void }) {
+  if (total <= shown) return null;
+  return (
+    <div className="card-footer">
+      <span>{open ? `Показаны все: ${total}` : `Показано ${shown} из ${total}`}</span>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={onToggle} aria-expanded={open}>
+        {open ? "Свернуть" : "Показать все"}
+      </button>
+    </div>
+  );
 }
 
+/** A size the way a person reads it ("1,5 МБ"); an unknown one is a dash, never zero. */
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes === 0) return "0 Б";
+  const i = Math.min(UNITS.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toLocaleString("ru-RU", { maximumFractionDigits: i === 0 ? 0 : 1 })} ${UNITS[i]}`;
+}
+
+/** System → «База данных»: table sizes and the migrations applied. */
 export function DbStatsPage() {
   const { data, isLoading, isError, error } = useAdminDbStats();
+  const [allTables, setAllTables] = useState(false);
+  const [allMigrations, setAllMigrations] = useState(false);
+
+  const header = <DevHeader title="База данных" description="Размер таблиц и применённые миграции." />;
 
   if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading database stats" description="Fetching table sizes and migration history." />
-    ) : isError ? (
-      <StatusPanel title="Database stats failed to load" description="The database diagnostics could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Database stats unavailable" description="The database diagnostics did not return data." tone="error" />
+    return (
+      <div>
+        {header}
+        {isLoading ? (
+          <StatusPanel title="Загружаем данные о базе" />
+        ) : isError ? (
+          <StatusPanel title="Данные о базе не загрузились" description="Hub не ответил. Попробуйте обновить страницу." tone="error" />
+        ) : (
+          <StatusPanel title="Данные о базе недоступны" description="Hub не вернул данных." tone="error" />
+        )}
+      </div>
     );
   }
 
   const tables = data.tables ?? [];
   const migrations = data.migrations ?? [];
+  const shownTables = allTables ? tables : tables.slice(0, TABLES_SHOWN);
+  // The latest first: the one applied last is what a deploy is checked against.
+  const latestFirst = [...migrations].reverse();
+  const shownMigrations = allMigrations ? latestFirst : latestFirst.slice(0, MIGRATIONS_SHOWN);
 
   return (
-    <div>
-      {isError && <StaleDataNotice error={error} className="mb-4" />}
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Database Stats</h1>
-        <p className="text-sm text-text-muted mt-1">Table sizes and migrations</p>
-      </div>
+    <div className="space-y-5">
+      {header}
+      {isError && <StaleDataNotice error={error} />}
 
-      {/* Tables */}
-      <section className="overflow-x-auto rounded-xl border border-border bg-card mb-8">
-        <div className="px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-text-primary">Tables</h2>
+      <section className="card" aria-labelledby="db-tables-title">
+        <div className="card-header">
+          <div>
+            <h3 id="db-tables-title" className="card-title">Таблицы</h3>
+            <p className="card-description">Самые большие сверху.</p>
+          </div>
         </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {["Table", "Rows (estimate)", "Total Size", "Index Size"].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {tables.length === 0 && (
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No table data available.
-                </td>
+                <th>Таблица</th>
+                <th className="num">Строк (оценка)</th>
+                <th className="num">Всего</th>
+                <th className="num">Индексы</th>
               </tr>
-            )}
-            {tables.map((t) => (
-              <tr
-                key={t.table}
-                className="border-t border-border transition-colors hover:bg-hover"
-              >
-                <td className="px-4 py-3 text-sm text-text-primary font-medium font-mono">
-                  {t.table}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                  {t.rowEstimate != null ? Number(t.rowEstimate).toLocaleString() : "\u2014"}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                  {formatBytes(t.totalBytes)}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                  {formatBytes(t.indexBytes)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tables.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="py-8 text-center text-text-muted">Данных о таблицах нет.</td>
+                </tr>
+              )}
+              {shownTables.map((t) => (
+                <tr key={t.table}>
+                  <td className="font-mono text-xs font-medium">{t.table}</td>
+                  <td className="num">{t.rowEstimate != null ? Number(t.rowEstimate).toLocaleString("ru-RU") : "—"}</td>
+                  <td className="num">{formatBytes(t.totalBytes)}</td>
+                  <td className="num">{formatBytes(t.indexBytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <ShowAll total={tables.length} shown={TABLES_SHOWN} open={allTables} onToggle={() => setAllTables((value) => !value)} />
       </section>
 
-      {/* Migrations */}
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <div className="px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-text-primary">Migrations</h2>
+      <section className="card" aria-labelledby="db-migrations-title">
+        <div className="card-header">
+          <div>
+            <h3 id="db-migrations-title" className="card-title">Миграции</h3>
+            <p className="card-description">Последние применённые сверху.</p>
+          </div>
         </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {["Migration", "Applied"].map((col) => (
-                <th
-                  key={col}
-                  className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {migrations.length === 0 && (
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={2} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No migrations found.
-                </td>
+                <th>Миграция</th>
+                <th>Применена</th>
               </tr>
-            )}
-            {migrations.map((m) => (
-              <tr
-                key={m.name ?? "unknown-migration"}
-                className="border-t border-border transition-colors hover:bg-hover"
-              >
-                <td className="px-4 py-3 text-sm text-text-primary font-medium font-mono">
-                  {m.name ?? "\u2014"}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-secondary">
-                  {m.appliedAt ? formatDateTime(m.appliedAt) : "\u2014"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {migrations.length === 0 && (
+                <tr>
+                  <td colSpan={2} className="py-8 text-center text-text-muted">Миграций нет.</td>
+                </tr>
+              )}
+              {shownMigrations.map((m) => (
+                <tr key={m.name ?? "unknown-migration"}>
+                  <td className="font-mono text-xs font-medium">{m.name ?? "—"}</td>
+                  <td className="muted whitespace-nowrap">{m.appliedAt ? formatDateTime(m.appliedAt) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <ShowAll
+          total={migrations.length}
+          shown={MIGRATIONS_SHOWN}
+          open={allMigrations}
+          onToggle={() => setAllMigrations((value) => !value)}
+        />
       </section>
     </div>
   );

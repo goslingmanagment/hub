@@ -26,6 +26,8 @@ import {
   buildPrompt,
   fanLanguageEvidenceOf,
   formatTranscript,
+  formatTranscriptDayLine,
+  formatTranscriptLine,
   loadAiContextFrameBody,
   resolveKnownFanMessages,
   servedWindowOf,
@@ -322,9 +324,11 @@ describe("transcript cut by the prompt budget", () => {
     message(3, "Fan", "third 🎉"),
     message(4, "Fan", "fourth"),
   ];
-  const lines = messages.map((one) => formatTranscript([one]));
+  const lines = messages.map(formatTranscriptLine);
   const transcript = formatTranscript(messages);
-  const startOf = (index: number) => lines.slice(0, index).join("\n").length + (index > 0 ? 1 : 0);
+  // All four are sent on one day: its line opens the text.
+  const head = formatTranscriptDayLine(messages[0]!.createdAtMs).length + 1;
+  const startOf = (index: number) => head + lines.slice(0, index).join("\n").length + (index > 0 ? 1 : 0);
   const omittedBy = (omittedChars: number, text = transcript) =>
     transcriptMessagesOmittedByBudget({ transcript: text, messages, omittedChars });
 
@@ -338,9 +342,12 @@ describe("transcript cut by the prompt budget", () => {
     expect(omittedBy(startOf(1))).toBe(1);
     expect(omittedBy(startOf(1) - 1)).toBe(1);
     expect(omittedBy(startOf(2))).toBe(2);
+    // A cut through the day line alone leaves every message whole.
+    expect(omittedBy(1)).toBe(0);
+    expect(omittedBy(startOf(0))).toBe(0);
     // One unit into a line and it is no longer whole. A newline inside a
     // message is not a boundary.
-    expect(omittedBy(1)).toBe(1);
+    expect(omittedBy(startOf(0) + 1)).toBe(1);
     expect(omittedBy(startOf(1) + 1)).toBe(2);
     expect(omittedBy(startOf(2) - 3)).toBe(2);
     expect(omittedBy(startOf(3) + 1)).toBe(4);
@@ -385,9 +392,9 @@ describe("transcript cut by the prompt budget", () => {
     expect(omitted).toBeGreaterThan(0);
     expect(omitted).toBeLessThan(long.length);
     // The oldest counted message is in the prompt whole; the one before it is not.
-    expect(built.user).toContain(formatTranscript([long[omitted]!]));
-    expect(built.user).not.toContain(formatTranscript([long[omitted - 1]!]));
-    expect(built.user).toContain(formatTranscript(long.slice(omitted)));
+    expect(built.user).toContain(formatTranscriptLine(long[omitted]!));
+    expect(built.user).not.toContain(formatTranscriptLine(long[omitted - 1]!));
+    expect(built.user).toContain(long.slice(omitted).map(formatTranscriptLine).join("\n"));
   });
 });
 

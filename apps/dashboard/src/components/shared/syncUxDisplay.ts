@@ -44,3 +44,37 @@ export function getSyncUxDisplayMode(
       return "home";
   }
 }
+
+/** The server describes a sync in English; the console speaks Russian. The
+ *  state is the contract, so the words are chosen here from it. */
+export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>> = {
+  healthy: "Данные обновляются",
+  syncing: "Идёт обновление",
+  catching_up: "Догоняет",
+  retrying: "Повторяет попытку",
+  attention: "Нужна проверка",
+  setup: "Первая загрузка",
+  off: "Не обновляется",
+};
+
+/** An OnlyFans page is reached through OFAPI, so "needs action" there means
+ *  the OFAPI connection, not a login the owner can renew in Hub. Short on
+ *  purpose: the label sits in a badge inside a table row on a phone. */
+const NEEDS_ACTION_LABELS: Readonly<Record<"fansly" | "onlyfans", string>> = {
+  fansly: "Нужен вход",
+  onlyfans: "Нет доступа",
+};
+
+export function syncStateLabel(summary: SyncUxSummary, platform?: "fansly" | "onlyfans"): string {
+  if (summary.requiresAction) return NEEDS_ACTION_LABELS[platform ?? "fansly"];
+  return SYNC_STATE_LABELS[summary.state];
+}
+
+export type SyncTone = "ok" | "warn" | "error" | "muted";
+
+export function syncTone(summary: SyncUxSummary): SyncTone {
+  if (summary.requiresAction || summary.state === "attention") return "error";
+  if (summary.state === "off") return "warn";
+  if (summary.state === "retrying" || summary.state === "setup" || summary.state === "catching_up") return "muted";
+  return "ok";
+}

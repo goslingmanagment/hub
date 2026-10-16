@@ -217,9 +217,9 @@ function useEditorMutations() {
   };
 }
 
-const secondaryButton = "settings-button";
-const primaryButton = "settings-button settings-button-primary";
-const confirmButton = "settings-button settings-button-danger";
+const secondaryButton = "btn";
+const primaryButton = "btn btn-primary";
+const confirmButton = "btn btn-danger";
 
 function ChangeWarning({ item, action, before, after }: {
   item: ConfigItem;
@@ -229,7 +229,7 @@ function ChangeWarning({ item, action, before, after }: {
 }) {
   const warning = CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning;
   return (
-    <div className="space-y-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700">
+    <div className="notice notice-warning flex-col gap-1">
       <p className="font-medium">
         {action === "revert"
           ? "Убрать ваше ручное значение и вернуть настройку сервера?"
@@ -263,7 +263,7 @@ function MutationStatus({ pending, pendingApply, error, success, conflict }: {
     <>
       {message && <p role="status" aria-live="polite" className="text-xs text-text-muted">{message}</p>}
       {visibleError && (
-        <p role="alert" className="text-xs text-red-600">
+        <p role="alert" className="text-xs text-danger">
           {error instanceof Error ? error.message : "Не удалось сохранить. Повторите попытку."}
         </p>
       )}
@@ -290,7 +290,10 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
   const label = copy?.title ?? item.label;
   const unit = item.kind === "number" ? copy?.unit : undefined;
   const showCancel = (draft !== null || confirm !== null) && !needsReview;
-  const useChoices = friendly && Boolean(CONFIG_MODE_CHOICES[item.key] || configPageScope(item.key));
+  // Mode keys get their friendly select everywhere. Page lists become
+  // checkboxes only in a feature's view: the full list stays the expert
+  // editor for a custom CSV (unknown labels, a numeric storage scope).
+  const useChoices = Boolean(CONFIG_MODE_CHOICES[item.key]) || (friendly && Boolean(configPageScope(item.key)));
   function changeInput(next: string) {
     setDraft((previous) => ({ input: next, snapshot: previous?.snapshot ?? captureConfigSnapshot(item) }));
     setConfirm(null);
@@ -364,7 +367,7 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
             value={input}
             disabled={pending}
             onChange={(event) => changeInput(event.target.value)}
-            className="settings-input min-w-0 flex-1 font-mono"
+            className={`input min-w-0 flex-1 ${item.kind === "string" ? "font-mono text-[13px]" : "tabular-nums"}`}
             style={unit ? { paddingRight: Math.min(106, 20 + unit.length * 6) } : undefined}
           />}
           {unit && <span className="settings-unit" aria-hidden="true">{unit}</span>}
@@ -398,10 +401,10 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
           )}
         </div>
       )}
-      {draft !== null && !parsed.valid && <p role="alert" className="text-xs text-red-600">{parsed.message}</p>}
+      {draft !== null && !parsed.valid && <p role="alert" className="text-xs text-danger">{parsed.message}</p>}
       {dirty && !needsReview && <p className="text-xs text-text-muted">Изменение ещё не сохранено.</p>}
       {needsReview && (
-        <div role="alert" className="space-y-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700">
+        <div role="alert" className="notice notice-warning flex-col gap-2">
           <p>Пока вы редактировали, настройку изменили. Сравните значения и выберите, что оставить.</p>
           <p>Сохранено на сервере: <strong className="break-all font-mono">{savedValue(item)}</strong></p>
           {draft !== null && <p>Ваше значение: <strong className="break-all font-mono">{displayValue(input)}</strong></p>}
@@ -489,10 +492,10 @@ export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
             className="inline-flex h-10 w-11 shrink-0 items-center disabled:opacity-50"
           >
             <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${current ? "bg-accent" : "bg-border"}`}>
-              <span className={`inline-block h-5 w-5 rounded-full bg-white transition-transform ${current ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+              <span className={`inline-block h-5 w-5 rounded-full bg-card shadow-sm transition-transform ${current ? "translate-x-[22px]" : "translate-x-0.5"}`} />
             </span>
           </button>
-          <span className="text-xs text-text-primary">{current ? "Включено" : "Выключено"}</span>
+          <span className="text-sm text-text-primary">{current ? "Включено" : "Выключено"}</span>
         </div>
         {confirm?.action === "save" && !needsReview && (
           <button type="button" onClick={toggle} disabled={pending} className={confirmButton}>
@@ -519,7 +522,7 @@ export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
         </div>
       )}
       {needsReview && (
-        <div role="alert" className="space-y-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700">
+        <div role="alert" className="notice notice-warning flex-col gap-2">
           <p>Пока вы выбирали действие, настройку изменили. Проверьте значения перед повторной попыткой.</p>
           <p>Сохранено на сервере: <strong>{savedValue(item)}</strong>.</p>
           {confirm?.action === "save" && <p>Вы выбрали: <strong>{displayValue(confirm.target)}</strong>.</p>}

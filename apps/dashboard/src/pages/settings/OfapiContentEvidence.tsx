@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { useAdminOfapiContentEvents } from "@/api/adminOfapiContentEvents";
-/** Owner-local evidence. Mounting/refreshing this report never collects vendor data. */
+import { formatDateTime } from "@/lib/format";
+
+/** A provider instant in local time; the raw value stays in a tooltip. */
+function Instant({ iso }: { iso: string }) {
+  return <span title={iso}>{formatDateTime(iso, { yearUnlessCurrent: true })}</span>;
+}
+
+/** Owner-local evidence. Mounting/refreshing this report never collects vendor data.
+ *  The card around it (title, description) belongs to the screen. */
 export function OfapiContentEvidence({
   pages,
 }: {
@@ -12,135 +20,122 @@ export function OfapiContentEvidence({
   const boolean = (value: unknown) =>
     value === true ? "да" : value === false ? "нет" : "неизвестно";
   return (
-    <details className="rounded-xl border border-border bg-card p-4">
-      <summary className="cursor-pointer text-sm font-semibold text-text-primary">
-        Очередь сообщений и лайки постов · сохранённые события
-      </summary>
-      <div className="mt-3 space-y-3 text-sm text-text-secondary">
-        <p>
-          Только полученные события OFAPI, без запроса к провайдеру. Лайки не
-          образуют полный список. Завершение очереди не подтверждает доставку
-          каждому фану.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <select
-            aria-label="Страница для истории контента"
-            className="rounded border border-border bg-card p-2"
-            value={pageId ?? ""}
-            disabled={pages.length === 0}
-            onChange={(event) => setSelected(Number(event.target.value))}
-          >
-            {pages.length === 0 && <option value="">Нет страниц OnlyFans</option>}
-            {pages.map((page) => (
-              <option key={page.id} value={page.id}>
-                {page.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="rounded border border-border px-3 py-2"
-            disabled={pageId === undefined || query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            Обновить из Hub
-          </button>
-        </div>
-        {pages.length === 0 && <p>Добавьте страницу OnlyFans, чтобы просматривать её сохранённые события.</p>}
-        {query.isLoading && pageId !== undefined && <p role="status">Чтение сохранённой истории…</p>}
-        {query.isError && (
-          <p role="alert">
-            Не удалось обновить сохранённую историю. Повторите чтение; ниже остаётся предыдущий срез, если он был загружен.
-          </p>
-        )}
-        {query.data && (
-          <>
-            <h3 className="font-medium text-text-primary">
-              Очередь · {query.data.queues.length}
-              {query.data.queuesHasMore ? " из последних записей" : ""}
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr>
-                    <th className="p-2">Queue ID / получено UTC</th>
-                    <th className="p-2">Событие</th>
-                    <th className="p-2">Ожидает / всего</th>
-                    <th className="p-2">Отменена / ошибка</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {query.data.queues.map((row) => (
-                    <tr key={row.queueId} className="border-t border-border">
-                      <td className="p-2">
-                        {row.queueId}
-                        <br />
-                        {row.observedAt}
-                      </td>
-                      <td className="p-2">
-                        {row.phase === "finished" ? "Завершение" : "Обновление"}
-                      </td>
-                      <td className="p-2">
-                        {String(row.state.pending ?? "?")} /{" "}
-                        {String(row.state.total ?? "?")}
-                      </td>
-                      <td className="p-2">
-                        {boolean(row.state.isCanceled)} /{" "}
-                        {boolean(row.state.hasError)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-xs">
-              Порядок прогресса основан на получении: провайдер не документирует
-              отдельное время изменения. Флаг завершения сохраняется при
-              запоздалом обновлении.
-            </p>
-            <h3 className="font-medium text-text-primary">
-              Лайки · {query.data.likes.length}
-              {query.data.likesHasMore ? " из последних записей" : ""}
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr>
-                    <th className="p-2">Пост</th>
-                    <th className="p-2">Фан</th>
-                    <th className="p-2">Время провайдера UTC</th>
-                    <th className="p-2">Получено UTC</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {query.data.likes.map((row) => (
-                    <tr
-                      key={`${row.postRef}:${row.fanRef}`}
-                      className="border-t border-border"
-                    >
-                      <td className="p-2">{row.postRef}</td>
-                      <td className="p-2">{row.fanRef}</td>
-                      <td className="p-2">{row.sourceAt}</td>
-                      <td className="p-2">{row.observedAt}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p>
-              Без надёжной ссылки на пост: {query.data.unattributedLikes}.
-              Источник сохранён; ID уведомления не подставляется вместо ID
-              поста.
-            </p>
-            {!query.data.queues.length && !query.data.likes.length && (
-              <p>
-                Событий пока нет. Дополнительные лайки включаются владельцем в
-                составе вебхука.
-              </p>
-            )}
-          </>
-        )}
+    <div className="space-y-4 text-sm">
+      <p className="text-text-secondary">
+        Только события, которые уже пришли от провайдера, — без новых запросов. Лайки не образуют полный список.
+        Завершение очереди не подтверждает доставку каждому фану.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          aria-label="Страница для истории контента"
+          className="select w-auto min-w-[200px]"
+          value={pageId ?? ""}
+          disabled={pages.length === 0}
+          onChange={(event) => setSelected(Number(event.target.value))}
+        >
+          {pages.length === 0 && <option value="">Нет страниц OnlyFans</option>}
+          {pages.map((page) => (
+            <option key={page.id} value={page.id}>
+              {page.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="btn"
+          disabled={pageId === undefined || query.isFetching}
+          onClick={() => void query.refetch()}
+        >
+          Обновить
+        </button>
       </div>
-    </details>
+      {pages.length === 0 && <p className="text-text-secondary">Добавьте страницу OnlyFans, чтобы просматривать её сохранённые события.</p>}
+      {query.isLoading && pageId !== undefined && <p role="status" className="text-text-secondary">Читаем сохранённую историю…</p>}
+      {query.isError && (
+        <p role="alert" className="notice notice-warning">
+          Не удалось обновить сохранённую историю. Повторите чтение; ниже остаётся предыдущий срез, если он был загружен.
+        </p>
+      )}
+      {query.data && (
+        <>
+          <h4 className="font-semibold text-text-primary">
+            Очередь рассылок · {query.data.queues.length}
+            {query.data.queuesHasMore ? " из последних записей" : ""}
+          </h4>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Очередь</th>
+                  <th>Событие</th>
+                  <th className="num">Ожидает / всего</th>
+                  <th>Отменена / ошибка</th>
+                </tr>
+              </thead>
+              <tbody>
+                {query.data.queues.map((row) => (
+                  <tr key={row.queueId}>
+                    <td>
+                      <span className="font-mono text-xs">{row.queueId}</span>
+                      <span className="block text-xs text-text-secondary">получено <Instant iso={row.observedAt} /></span>
+                    </td>
+                    <td>
+                      {row.phase === "finished" ? "Завершение" : "Обновление"}
+                    </td>
+                    <td className="num">
+                      {String(row.state.pending ?? "?")} /{" "}
+                      {String(row.state.total ?? "?")}
+                    </td>
+                    <td>
+                      {boolean(row.state.isCanceled)} /{" "}
+                      {boolean(row.state.hasError)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="field-hint">
+            Порядок прогресса основан на времени получения: провайдер не сообщает время изменения. Флаг завершения
+            сохраняется при запоздалом обновлении.
+          </p>
+          <h4 className="font-semibold text-text-primary">
+            Лайки · {query.data.likes.length}
+            {query.data.likesHasMore ? " из последних записей" : ""}
+          </h4>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Пост</th>
+                  <th>Фан</th>
+                  <th>Время у провайдера</th>
+                  <th>Получено</th>
+                </tr>
+              </thead>
+              <tbody>
+                {query.data.likes.map((row) => (
+                  <tr key={`${row.postRef}:${row.fanRef}`}>
+                    <td className="font-mono text-xs">{row.postRef}</td>
+                    <td className="font-mono text-xs">{row.fanRef}</td>
+                    <td className="muted"><Instant iso={row.sourceAt} /></td>
+                    <td className="muted"><Instant iso={row.observedAt} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-text-secondary">
+            Без надёжной ссылки на пост: {query.data.unattributedLikes}. Источник сохранён; ID уведомления не
+            подставляется вместо ID поста.
+          </p>
+          {!query.data.queues.length && !query.data.likes.length && (
+            <p className="text-text-secondary">
+              Событий пока нет. Лайки постов включаются в разделе «События и восстановление» выше.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }

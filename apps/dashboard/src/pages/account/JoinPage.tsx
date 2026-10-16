@@ -105,7 +105,7 @@ export function JoinPage() {
             <a
               key={offer.platform}
               href={offer.href}
-              className="flex min-h-11 items-center justify-center rounded-lg bg-accent px-4 text-center text-sm font-semibold text-white hover:opacity-90"
+              className="flex min-h-11 items-center justify-center rounded-lg bg-accent px-4 text-center text-sm font-semibold text-on-accent hover:opacity-90"
             >
               {offer.label}
             </a>
@@ -194,7 +194,7 @@ export function JoinPage() {
         <button
           type="submit"
           disabled={redeem.isPending || !password || !confirmation}
-          className="min-h-11 w-full rounded-lg bg-accent py-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="min-h-11 w-full rounded-lg bg-accent py-2.5 font-semibold text-on-accent hover:opacity-90 disabled:opacity-50"
         >
           {redeem.isPending ? "Сохраняем…" : "Сохранить пароль"}
         </button>

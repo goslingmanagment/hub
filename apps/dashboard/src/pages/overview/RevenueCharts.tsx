@@ -1,12 +1,10 @@
 import { lazy, Suspense } from "react";
 import type { OverviewRevenueResponse } from "@agency_hub_core/contracts";
-import { useOverviewRevenueByModel, useRevenueChart } from "@/api/overview";
-import { TrendSparkline } from "@/components/shared/TrendSparkline";
+import { useRevenueChart } from "@/api/overview";
 import { PERIOD_LABELS } from "@/lib/overviewNavigation";
 import type { PeriodOption } from "@/stores/periodStore";
-import { calendarSeries, money, describeWindows } from "./presentation.js";
+import { calendarSeries, money } from "./presentation.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { RevenueDelta } from "./RevenueValue.js";
 
 const PageActivityChart = lazy(() =>
   import("@/components/page/PageActivityChart").then((module) => ({
@@ -14,6 +12,16 @@ const PageActivityChart = lazy(() =>
   })),
 );
 
+function ChartSkeleton() {
+  return (
+    <div role="status" className="h-[300px] animate-pulse rounded-lg bg-hover-alt">
+      <span className="sr-only">Загружаем график…</span>
+    </div>
+  );
+}
+
+/** One card: daily revenue of the agency, a model or a page, picked in one
+ *  select. The choice lives in the URL (`chart`). */
 export function RevenueCharts({
   report,
   period,
@@ -23,7 +31,7 @@ export function RevenueCharts({
   report: OverviewRevenueResponse;
   period: PeriodOption;
   scope: string;
-  selectScope: (scope: string, scroll?: boolean) => void;
+  selectScope: (scope: string) => void;
 }) {
   const models = [...report.models].sort(
     (a, b) =>
@@ -46,9 +54,6 @@ export function RevenueCharts({
     report.windowAt,
     valid && Boolean(report.windowAt),
   );
-  const byModel = useOverviewRevenueByModel(period, report.windowAt);
-  const name =
-    selectedPage?.pageLabel ?? selectedModel?.modelName ?? "Агентство";
   const windows = selectedPage?.platform
     ? report.platformWindows.filter(
         (window) => window.platform === selectedPage.platform,
@@ -64,166 +69,88 @@ export function RevenueCharts({
       : report.platformWindows;
 
   return (
-    <>
-      <section
-        className="v1-chart-section"
-        id="overview-chart"
-        aria-label="График дохода"
-      >
-        <div className="v1-chart-controls">
-          <label htmlFor="overview-chart-scope">График</label>
-          <select
-            id="overview-chart-scope"
-            className="v1-chart-select"
-            value={scope}
-            onChange={(event) => selectScope(event.target.value)}
-          >
-            <option value="agency">Всё агентство</option>
-            {!valid && (
-              <option value={scope}>Выбранная область недоступна</option>
-            )}
-            <optgroup label="Модели">
-              {models.map((model) => (
-                <option
-                  key={model.modelSlug}
-                  value={`model:${model.modelSlug}`}
-                >
-                  {model.modelName}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="Страницы">
-              {report.pages
-                .filter((page) => page.status !== "deleted")
-                .map((page) => (
-                  <option key={page.pageId} value={`page:${page.pageLabel}`}>
-                    {page.pageLabel}
-                  </option>
-                ))}
-            </optgroup>
-          </select>
-          {scope !== "agency" && (
-            <button
-              type="button"
-              className="v1-text-button"
-              onClick={() => selectScope("agency")}
-            >
-              Вернуть агентство
-            </button>
-          )}
+    <section
+      className="card"
+      id="overview-chart"
+      aria-labelledby="overview-chart-title"
+    >
+      <div className="card-header">
+        <div className="min-w-0">
+          <h2 id="overview-chart-title" className="card-title">
+            Доход по дням
+          </h2>
           {valid && (
-            <span className="v1-chart-scope-total">
-              За окно{" "}
-              <strong>
-                {money(
-                  (selectedPage ?? selectedModel ?? report).netEarningsMills,
-                )}
-              </strong>
-            </span>
+            <p className="card-description">
+              Итого за период:{" "}
+              <span className="font-medium text-text-primary tabular-nums">
+                {money((selectedPage ?? selectedModel ?? report).netEarningsMills)}
+              </span>
+            </p>
           )}
         </div>
+        <select
+          id="overview-chart-scope"
+          className="select w-auto max-w-full sm:min-w-56"
+          aria-label="Что показать на графике"
+          value={scope}
+          onChange={(event) => selectScope(event.target.value)}
+        >
+          <option value="agency">Всё агентство</option>
+          {!valid && <option value={scope}>Выбор недоступен</option>}
+          <optgroup label="Модели">
+            {models.map((model) => (
+              <option key={model.modelSlug} value={`model:${model.modelSlug}`}>
+                {model.modelName}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Страницы">
+            {report.pages
+              .filter((page) => page.status !== "deleted")
+              .map((page) => (
+                <option key={page.pageId} value={`page:${page.pageLabel}`}>
+                  {page.pageLabel}
+                </option>
+              ))}
+          </optgroup>
+        </select>
+      </div>
+      <div className="card-body">
         <QueryNotice
           error={daily.isError}
           stale={Boolean(daily.data)}
           retry={daily.refetch}
         />
         {!valid || !report.windowAt ? (
-          <p className="v1-chart-missing">
-            Подневный ряд выбранной области недоступен.
+          <p className="empty-text ov-chart-empty">
+            Для этого выбора график недоступен.
           </p>
         ) : daily.isLoading ? (
-          <p className="v1-chart-missing" role="status">
-            Загружаем график…
-          </p>
+          <ChartSkeleton />
         ) : (
           daily.data &&
           (daily.data.series.length > 0 ? (
-            <Suspense fallback={<p role="status">Загружаем график…</p>}>
-              <PageActivityChart
-                title={`Доход · ${name}`}
-                selectedPeriod={period}
-                selectedPeriodLabel={PERIOD_LABELS[period]}
-                points={calendarSeries(daily.data.series, windows)}
-                allowMonthly={false}
-                valueFormatter={money}
-                yAxisWidth={72}
-                color="var(--color-accent)"
-              />
-            </Suspense>
+            <div className="ov-chart-plot">
+              <Suspense fallback={<ChartSkeleton />}>
+                <PageActivityChart
+                  title="Доход"
+                  selectedPeriod={period}
+                  selectedPeriodLabel={PERIOD_LABELS[period]}
+                  points={calendarSeries(daily.data.series, windows)}
+                  allowMonthly={false}
+                  valueFormatter={money}
+                  yAxisWidth={72}
+                  color="var(--color-accent)"
+                />
+              </Suspense>
+            </div>
           ) : (
-            <p className="v1-chart-missing">
-              В этом окне операций не записано.
+            <p className="empty-text ov-chart-empty">
+              За этот период операций нет.
             </p>
           ))
         )}
-        {valid && (
-          <p className="v1-chart-footnote">
-            {describeWindows(windows)}. Даты UTC; ноль — нулевой итог
-            сохранённых операций за дату. Полнота захвата не подтверждена.
-          </p>
-        )}
-      </section>
-      <section className="v1-models" aria-label="Доход по моделям">
-        <div className="v1-models-header">
-          Доход по моделям · {PERIOD_LABELS[period]}
-        </div>
-        <QueryNotice
-          error={byModel.isError}
-          stale={Boolean(byModel.data)}
-          retry={byModel.refetch}
-        />
-        {models.map((model) => {
-          const trend = report.windowAt
-            ? byModel.data?.models.find(
-                (item) => item.modelSlug === model.modelSlug,
-              )
-            : undefined;
-          return (
-            <div className="v1-model-row" key={model.modelSlug}>
-              <div className="v1-model-info">
-                <button
-                  type="button"
-                  id={`model-chart-${model.modelId}`}
-                  onClick={() => selectScope(`model:${model.modelSlug}`, true)}
-                >
-                  {model.modelName}
-                  {model.status === "retired" ? " · архив" : ""}
-                </button>
-                <p>
-                  {model.pageCount} стр.
-                  {trend
-                    ? ` · ${trend.transactionCount.toLocaleString("ru-RU")} операций`
-                    : ""}
-                </p>
-              </div>
-              <div className="v1-sparkline">
-                {trend ? (
-                  <TrendSparkline
-                    values={calendarSeries(
-                      trend.series,
-                      report.platformWindows.filter((window) =>
-                        report.pages.some(
-                          (page) =>
-                            page.modelSlug === model.modelSlug &&
-                            page.platform === window.platform,
-                        ),
-                      ),
-                    ).map((point) => point.value)}
-                  />
-                ) : (
-                  <span aria-label="Тренд недоступен">—</span>
-                )}
-              </div>
-              <div className="v1-model-money">
-                {money(model.netEarningsMills)}
-              </div>
-              <div className="v1-model-delta">
-                <RevenueDelta {...model} />
-              </div>
-            </div>
-          );
-        })}
-      </section>
-    </>
+      </div>
+    </section>
   );
 }

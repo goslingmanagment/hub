@@ -17,7 +17,8 @@ describe("event detail display", () => {
   });
 
   it("shows a targeted recommendation for after_ineffective anomalies", () => {
-    expect(getEventRecommendation("after_ineffective").text).toContain("provider ignored the lower-bound filter");
-    expect(getEventRecommendation("after_ineffective").text).not.toContain("No automated recommendation");
+    expect(getEventRecommendation("after_ineffective").text).toContain("Источник проигнорировал нижнюю границу фильтра");
+    expect(getEventRecommendation("after_ineffective").text).not.toContain("Готовой рекомендации нет");
+    expect(getEventRecommendation("an_unknown_code").text).toContain("Готовой рекомендации нет");
   });
 });

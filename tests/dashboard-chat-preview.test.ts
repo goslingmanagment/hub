@@ -62,8 +62,8 @@ describe("ChatPreviewPanel", () => {
 
     const html = renderPanel();
 
-    expect(html).toContain("Preview failed to load.");
-    expect(html).not.toContain("No messages to show.");
+    expect(html).toContain("Не удалось загрузить переписку.");
+    expect(html).not.toContain("Сообщений нет.");
   });
 
   it("keeps the empty state for genuinely empty conversations", () => {
@@ -81,8 +81,8 @@ describe("ChatPreviewPanel", () => {
 
     const html = renderPanel();
 
-    expect(html).toContain("No messages to show.");
-    expect(html).not.toContain("Preview failed to load.");
+    expect(html).toContain("Сообщений нет.");
+    expect(html).not.toContain("Не удалось загрузить переписку.");
     expect(html).not.toContain("Conversation history is ready");
   });
 
@@ -108,7 +108,7 @@ describe("ChatPreviewPanel", () => {
     const html = renderPanel();
 
     expect(html).not.toContain("Conversation history is ready");
-    expect(html).not.toContain("Preview may be incomplete while conversation history loads.");
+    expect(html).not.toContain("Превью может быть неполным, пока переписка загружается.");
   });
 
   it("formats stored tip amounts as cents in the preview bubble", () => {
@@ -132,7 +132,7 @@ describe("ChatPreviewPanel", () => {
 
     const html = renderPanel();
 
-    expect(html).toContain("Tip $20.00");
+    expect(html).toContain("Чаевые $20.00");
   });
 
   it("renders stored HTML message bodies as plain text", () => {
@@ -204,45 +204,45 @@ describe("ChatPreviewPanel", () => {
       mockPreview({ ...established, ownerNote: "06.10: the profile does not open from lora-1" }, [restMessage, socketMessage]);
       const html = renderPanel();
       expect(html).toContain('role="note"');
-      expect(html).toContain("Fansly no longer serves this chat to the page.");
-      expect(html).toContain("The fan deleted their account or blocked the page.");
-      expect(html).toContain("New messages still arrive over the socket, but they can&#x27;t be confirmed.");
-      expect(html).toContain("Since Oct 6");
-      expect(html).toContain("Owner&#x27;s note:</span> 06.10: the profile does not open from lora-1");
+      expect(html).toContain("Fansly больше не отдаёт этот чат странице.");
+      expect(html).toContain("Фан удалил аккаунт или заблокировал страницу.");
+      expect(html).toContain("Новые сообщения ещё приходят в реальном времени, но Fansly их не подтверждает.");
+      expect(html).toContain("С 6 окт.");
+      expect(html).toContain("Заметка владельца:</span> 06.10: the profile does not open from lora-1");
 
       mockPreview({ ...established, cause: "probably_blocked" }, [restMessage]);
       const blocked = renderPanel();
-      expect(blocked).toContain("The fan&#x27;s account still exists — they have probably blocked this page.");
-      expect(blocked).not.toContain("Owner&#x27;s note");
-      expect(blocked).not.toContain("over the socket");
+      expect(blocked).toContain("Аккаунт фана существует — скорее всего, он заблокировал страницу.");
+      expect(blocked).not.toContain("Заметка владельца");
+      expect(blocked).not.toContain("в реальном времени");
 
       mockPreview({ ...established, cause: "probably_deleted" }, [restMessage]);
-      expect(renderPanel()).toContain("The fan&#x27;s account was not found on Fansly — it was probably deleted.");
+      expect(renderPanel()).toContain("Аккаунт фана не найден на Fansly — скорее всего, он удалён.");
     });
 
     it("shows the banner over an empty preview too", () => {
       mockPreview(established, []);
       const html = renderPanel();
-      expect(html).toContain("Fansly no longer serves this chat to the page.");
-      expect(html).toContain("No messages to show.");
+      expect(html).toContain("Fansly больше не отдаёт этот чат странице.");
+      expect(html).toContain("Сообщений нет.");
     });
 
     it("has no banner while the chat is only being refused, nor without an episode", () => {
       mockPreview({ ...established, state: "refusing", establishedAt: null, refusals: 2 }, [restMessage, socketMessage]);
-      expect(renderPanel()).not.toContain("Fansly no longer serves this chat");
+      expect(renderPanel()).not.toContain("Fansly больше не отдаёт этот чат");
       mockPreview(undefined, [restMessage, socketMessage]);
-      expect(renderPanel()).not.toContain("Fansly no longer serves this chat");
+      expect(renderPanel()).not.toContain("Fansly больше не отдаёт этот чат");
     });
 
     it("marks every socket-only message as not confirmed, and a chat excluded from sync as API unavailable", () => {
       mockPreview(undefined, [restMessage, socketMessage, { ...socketMessage, platformMessageId: "msg-excluded", apiUnavailable: true }]);
       const html = renderPanel();
-      expect(html.match(/From socket · not confirmed/g)).toHaveLength(1);
-      expect(html.match(/From socket · API unavailable/g)).toHaveLength(1);
-      expect(html).toContain("Fansly&#x27;s API will never confirm this message");
+      expect(html.match(/>Не подтверждено</g)).toHaveLength(1);
+      expect(html.match(/>Не будет подтверждено</g)).toHaveLength(1);
+      expect(html).toContain("Fansly никогда не подтвердит это сообщение");
 
       mockPreview(undefined, [restMessage, { ...socketMessage, source: undefined }]);
-      expect(renderPanel()).not.toContain("From socket");
+      expect(renderPanel()).not.toContain("подтверждено");
     });
   });
 
@@ -264,8 +264,8 @@ describe("ChatPreviewPanel", () => {
 
     const html = renderPanel();
 
-    expect(html).toContain("Conversation history is still loading.");
-    expect(html).toContain("This preview will fill in automatically as more messages arrive.");
+    expect(html).toContain("Переписка ещё загружается.");
+    expect(html).toContain("Превью заполнится само, когда придут сообщения.");
     expect(html).not.toContain("Conversation history is still syncing");
   });
 });

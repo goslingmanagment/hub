@@ -1,6 +1,10 @@
+import type { ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
 import { formatDateTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
 import {
   engineReadingState,
@@ -15,8 +19,15 @@ import {
   AnalyticsEmpty,
   AnalyticsError,
   AnalyticsLoading,
-  AnalyticsPanel,
+  CachedBadge,
 } from "./AnalyticsPanel.js";
+import {
+  captureProofWords,
+  captureStatusWords,
+  formatCount,
+  planeLabel,
+  projectionLabel,
+} from "./analytics-words.js";
 
 type FloorRow = StatsCoverageResponse["planes"][number];
 type Engine = NonNullable<StatsCoverageResponse["engine"]>;
@@ -29,13 +40,16 @@ function instant(value: string | null): string {
 }
 
 function count(value: number | null): string {
-  return value === null ? "—" : value.toLocaleString("en-US");
+  return value === null ? "—" : formatCount(value);
 }
 
 /** A floor's scope as a person reads it: the planes kept per page (media
- *  statistics, post replies) store the page's own id there. */
+ *  statistics, post replies) store the page's own id there, and the account
+ *  statistics keep their recent window apart as `steady`. */
 function scopeText(row: FloorRow, pageId: number | null): string {
-  return pageId !== null && row.scopeRef === String(pageId) ? "this page" : row.scopeRef;
+  if (pageId !== null && row.scopeRef === String(pageId)) return "эта страница";
+  if (row.scopeRef === "steady") return "свежие данные";
+  return row.scopeRef;
 }
 
 type EngineBadge = { text: string; tone: "off" | "on"; detail: string };
@@ -62,7 +76,7 @@ export function engineStreamBadge(engine: Pick<Engine, "mode" | "ownerRunning">,
   });
   // The owner's pause is said as loudly as a hold: the stream is not read.
   const off = engineReadingTone(state) === "warn" || state === "paused";
-  return { ...engineReadingWords(state, "en"), tone: off ? "off" : "on" };
+  return { ...engineReadingWords(state, "ru"), tone: off ? "off" : "on" };
 }
 
 /** The reasons a stop says for every key it stops: a stream's waiting line
@@ -72,18 +86,24 @@ const STOP_REASONS: ReadonlySet<string> = new Set(["paused", "page_hold", "resou
 /** Why a stream's earliest work waits, in the words every sync surface uses
  *  for the engine's reasons and the time format of this panel. */
 function waitingText(waiting: NonNullable<EngineStreamRow["waiting"]>): string {
-  const until = waiting.until === null ? "" : ` until ${instant(waiting.until)}`;
-  return `${waiting.resource}: ${engineWaitLabel(waiting.reason, "en")}${until}`;
+  const until = waiting.until === null ? "" : ` до ${instant(waiting.until)}`;
+  return `${waiting.resource}: ${engineWaitLabel(waiting.reason, "ru")}${until}`;
 }
 
 /** What stops keys of a stream, one line a cause; the keys are named unless
  *  it stops them all. */
 function stopLines(stream: EngineStreamRow): string[] {
   return stream.stops.map((stop) => engineStopText(stop, {
-    language: "en",
+    language: "ru",
     until: instant,
     listKeys: stop.resources.length < stream.resources.length,
   }));
+}
+
+/** What needs the owner, in the server's sentence — without the command line
+ *  it may end with: a terminal command is not something this page asks for. */
+function attentionText(reason: string): string {
+  return reason.split(/;\s*pnpm\s/)[0]!.trim();
 }
 
 /** A stream's name as the sync tabs give it, as a card title. */
@@ -92,66 +112,64 @@ function streamTitle(stream: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-const FLOOR_HEAD = "pb-2 pr-4 font-semibold last:pr-0";
-const FLOOR_CELL = "py-2 pr-4 align-top last:pr-0";
-
 /** The capture floors: a table where its six columns fit, and one labelled
  *  block per floor where they would run together (a phone, a narrow window). */
 function CaptureFloors({ rows, pageId }: { rows: readonly FloorRow[]; pageId: number | null }) {
   const floors = rows.map((row) => ({
     key: `${row.plane}:${row.scopeRef}`,
     plane: row.plane,
+    planeLabel: planeLabel(row.plane),
     scope: scopeText(row, pageId),
-    status: row.status.replace(/_/g, " "),
-    proof: row.proof.replace(/_/g, " "),
+    status: captureStatusWords(row.status),
+    proof: captureProofWords(row.proof),
     reachesBackTo: instant(row.oldestCapturedAt),
     seen: `${count(row.observedUniqueCount)} / ${count(row.expectedCount)}`,
   }));
   return (
-    <div className="@container overflow-x-auto">
-      <table className="hidden w-full text-[13px] @2xl:table" data-floors="table">
-        <thead>
-          <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-            <th className={FLOOR_HEAD}>Plane</th>
-            <th className={FLOOR_HEAD}>Scope</th>
-            <th className={FLOOR_HEAD}>Status</th>
-            <th className={FLOOR_HEAD}>Proof</th>
-            <th className={`${FLOOR_HEAD} whitespace-nowrap`}>Reaches back to</th>
-            <th className={`${FLOOR_HEAD} whitespace-nowrap text-right`}>Seen / expected</th>
-          </tr>
-        </thead>
-        <tbody>
-          {floors.map((floor) => (
-            <tr key={floor.key} className="border-t border-border">
-              <td className={`${FLOOR_CELL} whitespace-nowrap`}>{floor.plane}</td>
-              <td className={`${FLOOR_CELL} break-all font-mono text-[12px] text-text-secondary`}>
-                {floor.scope}
-              </td>
-              <td className={FLOOR_CELL}>{floor.status}</td>
-              <td className={`${FLOOR_CELL} text-text-secondary`}>{floor.proof}</td>
-              <td className={`${FLOOR_CELL} whitespace-nowrap tabular-nums`}>{floor.reachesBackTo}</td>
-              <td className={`${FLOOR_CELL} whitespace-nowrap text-right tabular-nums`}>{floor.seen}</td>
+    <div className="@container">
+      <div className="@2xl:overflow-x-auto @2xl:rounded-[10px] @2xl:border @2xl:border-border">
+        <table className="hidden data-table @2xl:table" data-floors="table">
+          <thead>
+            <tr>
+              <th>Раздел</th>
+              <th>Область</th>
+              <th>Статус</th>
+              <th>Подтверждение</th>
+              <th>Собрано с</th>
+              <th className="num">Получено / ожидалось</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {floors.map((floor) => (
+              <tr key={floor.key}>
+                <td className="whitespace-nowrap" title={floor.plane}>{floor.planeLabel}</td>
+                <td className="muted break-all">{floor.scope}</td>
+                <td>{floor.status}</td>
+                <td className="muted">{floor.proof}</td>
+                <td className="whitespace-nowrap tabular-nums">{floor.reachesBackTo}</td>
+                <td className="num">{floor.seen}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <ul className="text-[13px] @lg:grid @lg:grid-cols-2 @lg:gap-x-8 @2xl:hidden" data-floors="list">
         {floors.map((floor) => (
-          <li key={floor.key} className="border-t border-border py-2">
+          <li key={floor.key} className="border-t border-border-light py-2.5 first:border-t-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-              <span className="font-medium text-text-primary">{floor.plane}</span>
+              <span className="font-medium text-text-primary" title={floor.plane}>{floor.planeLabel}</span>
               {floor.scope ? (
-                <span className="break-all font-mono text-[12px] text-text-secondary">{floor.scope}</span>
+                <span className="break-all text-xs text-text-secondary">{floor.scope}</span>
               ) : null}
             </div>
-            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px] text-text-secondary">
-              <dt className="text-text-muted">Status</dt>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-secondary">
+              <dt className="text-text-muted">Статус</dt>
               <dd className="text-text-primary">{floor.status}</dd>
-              <dt className="text-text-muted">Proof</dt>
+              <dt className="text-text-muted">Подтверждение</dt>
               <dd>{floor.proof}</dd>
-              <dt className="text-text-muted">Reaches back to</dt>
+              <dt className="text-text-muted">Собрано с</dt>
               <dd className="tabular-nums">{floor.reachesBackTo}</dd>
-              <dt className="text-text-muted">Seen / expected</dt>
+              <dt className="text-text-muted">Получено / ожидалось</dt>
               <dd className="tabular-nums">{floor.seen}</dd>
             </dl>
           </li>
@@ -164,73 +182,125 @@ function CaptureFloors({ rows, pageId }: { rows: readonly FloorRow[]; pageId: nu
 function EngineStreamCard({ engine, stream }: { engine: Engine; stream: EngineStreamRow }) {
   const badge = engineStreamBadge(engine, stream);
   return (
-    <div className="rounded-lg border border-border p-3" data-engine-stream={stream.stream}>
-      <div className="mb-1 flex items-center justify-between gap-2">
+    <div className="rounded-[10px] bg-hover-alt px-3.5 py-3" data-engine-stream={stream.stream}>
+      <div className="mb-1.5 flex items-start justify-between gap-2">
         <span className="text-[13px] font-medium text-text-primary" title={stream.stream}>
           {streamTitle(stream.stream)}
         </span>
-        <span
-          title={badge.detail}
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
-            badge.tone === "off"
-              ? "border-warning-dark/60 text-warning-dark"
-              : "border-border text-text-muted"
-          }`}
-        >
+        <span title={badge.detail} className={badge.tone === "off" ? "badge badge-warning" : "badge"}>
           {badge.text}
         </span>
       </div>
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] text-text-secondary">
-        <dt className="text-text-muted">Last read</dt>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-secondary">
+        <dt className="text-text-muted">Последний сбор</dt>
         <dd className="tabular-nums">{instant(stream.succeededAt)}</dd>
-        <dt className="text-text-muted">Next due</dt>
+        <dt className="text-text-muted">Следующий сбор</dt>
         <dd className="tabular-nums">{instant(stream.nextDueAt)}</dd>
         {stream.consecutiveFailures > 0 ? (
           <>
-            <dt className="text-text-muted">Failures</dt>
+            <dt className="text-text-muted">Ошибок подряд</dt>
             <dd className="tabular-nums text-warning-dark">
               {count(stream.consecutiveFailures)}
             </dd>
           </>
         ) : null}
       </dl>
-      {/* What needs attention is the server's sentence (counts, keys and the
-          command that lists them); what stops the stream's keys and why its
-          work waits are worded here. */}
+      {/* What needs attention is the server's sentence (counts and keys);
+          what stops the stream's keys and why its work waits are worded here. */}
       {stream.needsAttention && stream.reason ? (
-        <p className="mt-2 break-words text-[12px] text-warning-dark">{stream.reason}</p>
+        <p className="mt-2 break-words text-xs text-warning-dark">{attentionText(stream.reason)}</p>
       ) : null}
       {stopLines(stream).map((line) => (
-        <p key={line} className="mt-2 break-words text-[12px] text-warning-dark" data-engine-stop>{line}</p>
+        <p key={line} className="mt-2 break-words text-xs text-warning-dark" data-engine-stop>{line}</p>
       ))}
       {!stream.needsAttention && stream.waiting && !(stream.stops.length > 0 && STOP_REASONS.has(stream.waiting.reason)) ? (
-        <p className="mt-2 break-words text-[12px] text-text-secondary">{waitingText(stream.waiting)}</p>
+        <p className="mt-2 break-words text-xs text-text-secondary">{waitingText(stream.waiting)}</p>
       ) : null}
-      <p className="mt-1 break-words font-mono text-[11px] text-text-muted">
+      <p className="mt-1.5 break-words font-mono text-xs text-text-muted">
         {stream.resources.join(", ")}
       </p>
     </div>
   );
 }
 
+/** The one line the collapsed card shows: is this page's data being read. */
+export function coverageSummary(state: AnalyticsPanelState<StatsCoverageResponse>): string {
+  if (state.status === "loading") return "Загружаем сведения о том, какие данные собраны.";
+  if (state.status === "error") return "Не удалось загрузить сведения о сборе данных.";
+  const engine = state.data.engine;
+  if (engine === null) return "Сбор данных Fansly не ведёт эту страницу — новые данные не поступают.";
+  if (!engine.ownerRunning) {
+    return engine.mode === "handover"
+      ? "Страница переключается на новый сбор данных — пока ничего не читается."
+      : "Сбор данных остановлен: страницу сейчас никто не читает.";
+  }
+  const total = engine.streams.length;
+  const off = engine.streams.filter((stream) => engineStreamBadge(engine, stream).tone === "off").length;
+  const streams = (value: number) => `${formatCount(value)} ${ruPlural(value, "поток", "потока", "потоков")}`;
+  if (off === 0) return `Сбор данных работает: ${streams(total)} без остановок.`;
+  return `Сбор данных работает с ограничениями: ${formatCount(off)} из ${streams(total)} `
+    + "на паузе, удержаны или требуют внимания.";
+}
+
+function SubTitle({ children }: { children: ReactNode }) {
+  return <h3 className="mb-3 text-sm font-semibold text-text-primary">{children}</h3>;
+}
+
 /**
- * Panel 8 — the honesty panel.
+ * Panel 8 — the honesty panel, collapsed at the bottom of the page.
  *
  * It answers the questions that make every other panel on this page
- * readable: what do we hold, how far back does it reach, and is the Fansly Sync
- * Engine still reading it — when it last did, when it reads next, and why it
- * waits. A chart above with no rows means one thing when its data is read and
- * the world was empty, and a completely different thing when nobody reads it —
- * and only this panel can tell them apart.
+ * readable: is the Fansly Sync Engine still reading this page's data — when it
+ * last did, when it reads next, and why it waits — how far back each kind of
+ * data reaches, and what we hold. A chart above with no rows means one thing
+ * when its data is read and the world was empty, and a completely different
+ * thing when nobody reads it — and only this panel can tell them apart. Its
+ * one-line summary stays visible while it is collapsed.
  */
 export function CoveragePanel({
   state,
   pageId = null,
   onRetry,
+  likers,
 }: {
   state: AnalyticsPanelState<StatsCoverageResponse>;
   /** The page's id, to recognise a floor scoped by the page itself. */
-  pageId?: number | null;
+  pageId?: number | null | undefined;
+  onRetry: () => void;
+  /** The likers note: an empty-by-design surface, named here, not in the grid. */
+  likers?: ReactNode;
+}) {
+  return (
+    <details className="group card xl:col-span-2" data-coverage>
+      <summary className="card-header cursor-pointer list-none border-b-0 group-open:border-b [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="card-title">Покрытие данных</h2>
+            {state.status === "ready" && state.refreshFailed ? <CachedBadge /> : null}
+          </div>
+          <p className="card-description">{coverageSummary(state)}</p>
+        </div>
+        <span className="flex items-center gap-1 text-[13px] font-medium text-text-secondary">
+          <span className="group-open:hidden">Подробнее</span>
+          <span className="hidden group-open:inline">Свернуть</span>
+          <ChevronDown size={16} aria-hidden="true" className="transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <div className="card-body space-y-7">
+        <CoverageBody state={state} pageId={pageId} onRetry={onRetry} />
+        {likers}
+      </div>
+    </details>
+  );
+}
+
+function CoverageBody({
+  state,
+  pageId,
+  onRetry,
+}: {
+  state: AnalyticsPanelState<StatsCoverageResponse>;
+  pageId: number | null;
   onRetry: () => void;
 }) {
   // The old shape took `data | undefined` and mapped `!data` to "No coverage
@@ -239,18 +309,10 @@ export function CoveragePanel({
   // make holes visible, that was the worst possible conflation: the panel that
   // explains every other panel's emptiness was itself lying about its own.
   if (state.status === "loading") {
-    return (
-      <AnalyticsPanel title="Coverage">
-        <AnalyticsLoading what="Loading coverage…" />
-      </AnalyticsPanel>
-    );
+    return <AnalyticsLoading what="Загружаем сведения о сборе…" />;
   }
   if (state.status === "error") {
-    return (
-      <AnalyticsPanel title="Coverage">
-        <AnalyticsError message={state.message} onRetry={onRetry} />
-      </AnalyticsPanel>
-    );
+    return <AnalyticsError message={state.message} onRetry={onRetry} />;
   }
 
   const data = state.data;
@@ -259,83 +321,66 @@ export function CoveragePanel({
   const empty = data.holdings.filter((row) => row.rowCount === 0);
 
   return (
-    <AnalyticsPanel
-      title="Coverage — what this page actually holds"
-      cached={state.refreshFailed}
-      subtitle={
-        "Read this before believing any chart above. An empty chart over data the "
-        + "engine reads means the world was empty; the same chart over data it does "
-        + "not read means nobody looked."
-      }
-    >
-      <div className="space-y-6">
-        <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Capture floors
-          </h3>
-          {data.planes.length === 0 ? (
-            <AnalyticsEmpty reason="No capture floors: the engine has recorded none for this page yet." />
-          ) : (
-            <CaptureFloors rows={data.planes} pageId={pageId} />
-          )}
-        </div>
+    <>
+      <div>
+        <SubTitle>Что сейчас собирается</SubTitle>
+        {engine === null ? (
+          <AnalyticsEmpty reason="Сбор данных Fansly не ведёт эту страницу: её данные никто не читает." />
+        ) : (
+          <>
+            {engine.ownerRunning ? null : (
+              <p className="notice notice-warning mb-3" data-engine-not-running>
+                {engine.mode === "handover"
+                  ? "Страница переключается на новый сбор данных: пока переключение не закончится, ничего не читается."
+                  : "Страницу не ведёт ни один обработчик сбора: ни один поток ниже сейчас не читается."}
+              </p>
+            )}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {engine.streams.map((stream) => (
+                <EngineStreamCard key={stream.stream} engine={engine} stream={stream} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
 
-        <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Fansly Sync Engine — what it reads
-          </h3>
-          {engine === null ? (
-            <AnalyticsEmpty reason="The Fansly Sync Engine does not own this page: nothing reads its data." />
-          ) : (
-            <>
-              {engine.ownerRunning ? null : (
-                <p
-                  className="mb-3 rounded-lg border border-warning-dark/60 px-3 py-2 text-[12px] text-warning-dark"
-                  data-engine-not-running
-                >
-                  {engine.mode === "handover"
-                    ? "The page is switching to the engine (handover): nothing of it is read until the switch completes."
-                    : "No sync host owns this page: none of the streams below is being read "
-                      + "(pnpm cli sync ownership status)."}
-                </p>
-              )}
-              <div className="grid gap-3 md:grid-cols-2">
-                {engine.streams.map((stream) => (
-                  <EngineStreamCard key={stream.stream} engine={engine} stream={stream} />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+      <div>
+        <SubTitle>Глубина собранных данных</SubTitle>
+        {data.planes.length === 0 ? (
+          <AnalyticsEmpty reason="Сведений о глубине сбора для этой страницы пока нет." />
+        ) : (
+          <CaptureFloors rows={data.planes} pageId={pageId} />
+        )}
+      </div>
 
-        <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Rows held
-          </h3>
+      <div>
+        <SubTitle>Хранится в Hub</SubTitle>
+        {holdings.length === 0 ? (
+          <p className="text-[13px] text-text-secondary">Для этой страницы пока ничего не сохранено.</p>
+        ) : (
           <div className="flex flex-wrap gap-2">
             {holdings.map((row) => (
               <span
                 key={row.projection}
-                className="rounded-lg border border-border px-2.5 py-1 text-[12px] text-text-secondary"
-                title={`${instant(row.oldestAt)} → ${instant(row.newestAt)}`}
+                className="badge"
+                title={`${row.projection}: ${instant(row.oldestAt)} → ${instant(row.newestAt)}`}
               >
-                {row.projection}{" "}
+                {projectionLabel(row.projection)}{" "}
                 <span className="font-semibold tabular-nums text-text-primary">
-                  {row.rowCount.toLocaleString("en-US")}
+                  {formatCount(row.rowCount)}
                 </span>
               </span>
             ))}
           </div>
-          {empty.length > 0 ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
-              Empty here, and named rather than hidden:{" "}
-              {empty.map((row) => row.projection).join(", ")}. Zero rows is a fact about
-              this system, not about the platform — check what the engine reads above
-              before reading any of these as an absence in the world.
-            </p>
-          ) : null}
-        </div>
+        )}
+        {empty.length > 0 ? (
+          <p className="mt-3 text-xs leading-relaxed text-text-muted">
+            Пока пусто: {empty.map((row) => projectionLabel(row.projection)).join(", ")}. Ноль
+            записей — это факт о Hub, а не о Fansly: сначала проверьте выше, читается ли
+            нужный поток.
+          </p>
+        ) : null}
       </div>
-    </AnalyticsPanel>
+    </>
   );
 }

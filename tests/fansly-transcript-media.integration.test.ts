@@ -96,7 +96,11 @@ async function fixture() {
   const mediaPlane = () => runMediaPlaneProjection(app, { accountId: page.id });
   const transcript = async (liveOverlay: "off" | "serve" = "off") => {
     const loaded = await loadTranscriptContext(app, { pageId: page.id, conversationRef: GROUP, limit: 100, liveOverlay });
-    return { loaded, lines: loaded.transcript.split("\n") };
+    // Every message of the page is of one UTC day: the hub's day line opens
+    // the text (2.10.1 sends none), then the message lines.
+    const [day, ...lines] = loaded.transcript.split("\n");
+    expect(day).toBe("--- 2026-10-01 ---");
+    return { loaded, lines };
   };
   /** A socket message the archive does not hold yet, as the live decoder stores it. */
   const socketMessage = async (id: string, input: {

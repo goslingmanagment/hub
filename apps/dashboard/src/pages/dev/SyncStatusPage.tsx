@@ -1,22 +1,48 @@
 import { useMemo } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useAdminSyncRunDetail } from "@/api/queries";
-import { getEventDisplaySeverity } from "@/components/shared/EventDetailPanel";
+import { getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import type { SyncRunDetailResponse } from "@agency_hub_core/contracts";
 
-function formatRunState(state: string) {
-  return state
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+const RUN_STATES: Record<string, { label: string; badge: string }> = {
+  running: { label: "Идёт", badge: "badge badge-info" },
+  success: { label: "Успешно", badge: "badge badge-success" },
+  completed: { label: "Завершён", badge: "badge badge-success" },
+  partial: { label: "Частично", badge: "badge badge-warning" },
+  failed: { label: "Ошибка", badge: "badge badge-danger" },
+  skipped: { label: "Пропущен", badge: "badge" },
+};
+
+const ATTEMPT_STATES: Record<string, string> = {
+  started: "начата",
+  success: "успешно",
+  succeeded: "успешно",
+  retry: "повтор",
+  failed: "ошибка",
+};
+
+function runState(state: string) {
+  return RUN_STATES[state] ?? { label: state.replaceAll("_", " "), badge: "badge" };
 }
 
 function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
   return typeof details?.code === "string" ? details.code : fallback;
 }
 
+function BackToLog() {
+  return (
+    <Link to="/dev/log" className="btn btn-ghost btn-sm -ml-2.5 mb-3">
+      &larr; Журнал
+    </Link>
+  );
+}
+
+/** System → a sync run, opened from a row of «Журнал»: its events and the
+ *  HTTP attempts of each stream. */
 export function SyncStatusPage() {
   const [searchParams] = useSearchParams();
   const runId = Number(searchParams.get("runId") ?? "0");
@@ -41,147 +67,138 @@ export function SyncStatusPage() {
 
   if (!isValidRunId) {
     return (
-      <StatusPanel
-        title="Sync run not selected"
-        description="Open this page with a valid run ID to inspect sync events and attempts."
-        tone="error"
-      />
+      <div>
+        <BackToLog />
+        <StatusPanel
+          title="Запуск не выбран"
+          description="Откройте запуск из журнала: строка события → «Открыть запуск синка»."
+          tone="error"
+        />
+      </div>
     );
   }
 
   if (isLoading && !data) {
     return (
-      <StatusPanel
-        title="Loading sync run"
-        description="Fetching run details, events, and request attempts."
-      />
+      <div>
+        <BackToLog />
+        <StatusPanel title="Загружаем запуск" />
+      </div>
     );
   }
 
   if (!data) {
     return (
-      <StatusPanel
-        title="Sync run failed to load"
-        description="The requested sync run details could not be fetched."
-        tone="error"
-      />
+      <div>
+        <BackToLog />
+        <StatusPanel title="Запуск не загрузился" description="Hub не вернул данные этого запуска." tone="error" />
+      </div>
     );
   }
 
+  const state = runState(data.run.status);
+
   return (
-    <div className="space-y-6">
-      {isError && <StaleDataNotice error={error} />}
-      <div>
-        <h1 className="text-xl font-extrabold text-text-primary">Sync Run #{data.run.runId}</h1>
-        <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-text-muted">
-          <span>{data.run.pageLabel}</span>
-          <span>{data.run.platform}</span>
-          <span>{formatRunState(data.run.status)}</span>
-          <span>Started {formatDateTime(data.run.startedAt)}</span>
-          {data.run.finishedAt && <span>Finished {formatDateTime(data.run.finishedAt)}</span>}
+    <div>
+      <BackToLog />
+      <div className="mb-5">
+        <h2 className="section-title">Запуск синка #{data.run.runId}</h2>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-text-secondary">
+          <span className="font-medium text-text-primary">{data.run.pageLabel}</span>
+          <PlatformBadge platform={data.run.platform} />
+          <span className={state.badge} data-run-state={data.run.status}>{state.label}</span>
+          <span>Начат {formatDateTime(data.run.startedAt)}</span>
+          {data.run.finishedAt && <span>Завершён {formatDateTime(data.run.finishedAt)}</span>}
         </div>
       </div>
 
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold text-text-primary">Events</h2>
-        </div>
-        {data.events.length === 0 ? (
-          <div className="px-4 py-6">
-            <StatusPanel
-              title="No events recorded"
-              description="This run has no emitted events."
-            />
+      <div className="space-y-5">
+        {isError && <StaleDataNotice error={error} />}
+
+        <section className="card" aria-labelledby="run-events-title">
+          <div className="card-header">
+            <h3 id="run-events-title" className="card-title">События</h3>
           </div>
-        ) : (
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-hover-alt">
-                {["When", "Stream", "Severity", "Type", "Message"].map((label) => (
-                  <th
-                    key={label}
-                    className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                  >
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.events.map((event) => (
-                (() => {
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  {["Когда", "Поток", "Важность", "Тип", "Сообщение"].map((label) => <th key={label}>{label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {data.events.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-text-muted">У этого запуска нет событий.</td>
+                  </tr>
+                )}
+                {data.events.map((event) => {
                   const eventCode = resolveEventCode(event.details, event.eventType);
                   const displaySeverity = getEventDisplaySeverity({
                     eventCode,
                     severity: event.severity,
                     details: event.details,
                   });
-
                   return (
-                    <tr key={event.id} className="border-t border-border">
-                      <td className="px-4 py-3 text-sm text-text-muted">{formatRelativeTime(event.emittedAt)}</td>
-                      <td className="px-4 py-3 text-sm text-text-primary">{event.stream}</td>
-                      <td className="px-4 py-3 text-sm text-text-secondary">{displaySeverity}</td>
-                      <td className="px-4 py-3 text-sm text-text-secondary">{event.eventType}</td>
-                      <td className="px-4 py-3 text-sm text-text-secondary">{event.message}</td>
+                    <tr key={event.id}>
+                      <td className="muted whitespace-nowrap">{formatRelativeTime(event.emittedAt)}</td>
+                      <td>{event.stream}</td>
+                      <td><SeverityBadge severity={displaySeverity} /></td>
+                      <td className="muted font-mono text-xs">{event.eventType}</td>
+                      <td className="muted">{event.message}</td>
                     </tr>
                   );
-                })()
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold text-text-primary">Attempts</h2>
-        </div>
-        {data.attempts.length === 0 ? (
-          <div className="px-4 py-6">
-            <StatusPanel
-              title="No attempts recorded"
-              description="This run has no request-attempt details."
-            />
+        <section className="card" aria-labelledby="run-attempts-title">
+          <div className="card-header">
+            <div>
+              <h3 id="run-attempts-title" className="card-title">Попытки запросов</h3>
+              <p className="card-description">HTTP-запросы запуска по потокам.</p>
+            </div>
           </div>
-        ) : (
-          <div className="space-y-4 px-4 py-4">
-            {[...attemptsByStream.entries()].map(([stream, attempts]) => (
-              <div key={stream} className="rounded-xl border border-border">
-                <div className="border-b border-border bg-hover-alt px-4 py-2 text-sm font-semibold text-text-primary">
-                  {stream}
+          {data.attempts.length === 0 ? (
+            <p className="card-body text-sm text-text-muted">У этого запуска нет попыток запросов.</p>
+          ) : (
+            <div className="space-y-4 p-4 sm:p-5">
+              {[...attemptsByStream.entries()].map(([stream, attempts]) => (
+                <div key={stream} className="overflow-hidden rounded-lg border border-border">
+                  <p className="border-b border-border bg-hover-alt px-4 py-2 text-sm font-semibold text-text-primary">{stream}</p>
+                  <div className="overflow-x-auto">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {["Попытка", "Состояние", "HTTP", "Начата", "Длительность", "Ошибка"].map((label) => (
+                            <th key={label} className={label === "Длительность" ? "num" : undefined}>{label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attempts.map((attempt) => (
+                          <tr key={attempt.attemptId}>
+                            <td>#{attempt.attemptNumber}</td>
+                            <td className="muted">{ATTEMPT_STATES[attempt.state] ?? attempt.state}</td>
+                            <td className="muted tabular-nums">{attempt.httpStatus ?? "—"}</td>
+                            <td className="muted whitespace-nowrap">{formatDateTime(attempt.startedAt)}</td>
+                            <td className="num">
+                              {attempt.durationMs != null ? `${attempt.durationMs.toLocaleString("ru-RU")} мс` : "—"}
+                            </td>
+                            <td className="muted">{attempt.errorMessage ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-hover-alt/50">
-                      {["Attempt", "State", "HTTP", "Started", "Duration", "Error"].map((label) => (
-                        <th
-                          key={label}
-                          className="px-4 py-2 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
-                        >
-                          {label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {attempts.map((attempt) => (
-                      <tr key={attempt.attemptId} className="border-t border-border">
-                        <td className="px-4 py-2 text-sm text-text-primary">#{attempt.attemptNumber}</td>
-                        <td className="px-4 py-2 text-sm text-text-secondary">{attempt.state}</td>
-                        <td className="px-4 py-2 text-sm text-text-secondary">{attempt.httpStatus ?? "—"}</td>
-                        <td className="px-4 py-2 text-sm text-text-muted">{formatDateTime(attempt.startedAt)}</td>
-                        <td className="px-4 py-2 text-sm text-text-muted">{attempt.durationMs != null ? `${attempt.durationMs}ms` : "—"}</td>
-                        <td className="px-4 py-2 text-sm text-text-secondary">{attempt.errorMessage ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
