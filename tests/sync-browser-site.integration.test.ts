@@ -317,7 +317,7 @@ describe("the site path over the operator's RPC", () => {
     expect(protocolSiteRefusal("waited_too_long")).toBe("wait_expired");
     expect(protocolSiteRefusal("route_held")).toBe("route_hold");
     expect(protocolSiteRefusal("hour_ceiling")).toBe("site_hour_cap");
-    expect(protocolSiteRefusal("credentials")).toBe("held");
+    expect(protocolSiteRefusal("credentials")).toBe("credentials");
     expect(protocolSiteRefusal("write")).toBe("mode");
   });
 });

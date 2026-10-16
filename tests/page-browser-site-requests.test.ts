@@ -231,6 +231,29 @@ async function run(w: World, path: string, script: SiteScript): Promise<SiteDone
 const JSON_BODY = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "300000000000000001", username: "lora" } } }));
 
 describe("a read of the API (plan §4.3)", () => {
+  it("journals the final transferred total when Chrome reports zero encoded bytes for a 11645-byte body stream", async () => {
+    const w = await world();
+    const body = Buffer.concat([JSON_BODY, Buffer.alloc(11_645 - JSON_BODY.length, 0x20)]);
+    w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: {
+      chunks: [body], headers: [{ name: "content-encoding", value: "gzip" }], contentLength: 1500,
+      encodedChunkBytes: 0, encodedTotalBytes: 1700,
+    } });
+    await doneOf(w);
+    expect(w.journal).toContainEqual(expect.objectContaining({ decision: "ended", path: "/api/v1/account/me", bytes: 1700, bytesSource: "loading_finished", bodyBytes: 11_645 }));
+    expect(siteResponses(w.buffer)[0]?.body.decodedBytes).toBe(11_645);
+  });
+
+  it("keeps an unknown transferred size distinct from a real zero reported by Chrome", async () => {
+    const w = await world();
+    for (const [i, total] of [null, 0].entries()) {
+      w.chrome.request(`${API}/account/me`, { headers: siteHeaders("/api/v1/account/me"), script: { chunks: [JSON_BODY], encodedChunkBytes: 0, encodedTotalBytes: total } });
+      await doneOf(w, i + 1);
+    }
+    expect(w.journal.filter((line) => line.decision === "ended").map((line) => [line.bytes, line.bytesSource, line.bodyBytes])).toEqual([
+      [null, null, JSON_BODY.length], [0, "loading_finished", JSON_BODY.length],
+    ]);
+  });
+
   it("is asked of the engine with its route and session, its stream armed before the ask, released through the gate's window under the admission, and its answer kept whole before siteDone goes", async () => {
     const w = await world();
     // Chrome's own timing an hour ahead of the operator's clock: another

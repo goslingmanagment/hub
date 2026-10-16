@@ -120,7 +120,8 @@ export type { Step, StopReason };
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id.
 // Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
-export const PROTOCOL = { major: 1, minor: 2 } as const;
+// Minor 3 distinguishes credentials refusals; engines send held to older operators.
+export const PROTOCOL = { major: 1, minor: 3 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -348,7 +349,7 @@ export interface SiteAdmit {
 }
 export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteRequestId: SiteRequestId } & (
     | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: "paused" | "held" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
+    | { admit: false; reason: "paused" | "held" | "credentials" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
   );
 export interface SiteDone {
   type: "siteDone";
@@ -689,7 +690,7 @@ function parseWsAdmitResult(m: Record<string, unknown>): WsAdmitResult {
   return { ...base, admit: false, reason: str(m.reason, "reason", 128), retryNotBeforeWall: retry };
 }
 
-const SITE_REFUSALS = new Set<string>(["paused", "held", "mode", "route_hold", "site_hour_cap", "buffer_full", "session_mismatch", "wait_expired"]);
+const SITE_REFUSALS = new Set<string>(["paused", "held", "credentials", "mode", "route_hold", "site_hour_cap", "buffer_full", "session_mismatch", "wait_expired"]);
 
 function parseSiteAdmitResult(m: Record<string, unknown>): SiteAdmitResult {
   const siteRequestId = str(m.siteRequestId, "siteRequestId", 64);

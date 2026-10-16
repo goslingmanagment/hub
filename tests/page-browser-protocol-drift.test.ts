@@ -204,6 +204,7 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   { type: "recover", ownerGeneration: 2, attemptIds: [9, 10] },
   { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: true, deadlineMono: 10, attemptId: 12 },
   { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: false, reason: "site_hour_cap" },
+  { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: false, reason: "credentials" },
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: true, deadlineMono: 10, attemptId: 13 },
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: false, reason: "mode", retryNotBeforeWall: null },
   { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "stopPage" } },
