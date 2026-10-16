@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 25 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (311)
+## Routes (313)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -271,6 +271,7 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/page-browser/pages/:pageLabel/login` | `pageBrowserLoginGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/code` | `pageBrowserLoginCode` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/finish` | `pageBrowserLoginFinish` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/pages/:pageLabel/login/open` | `pageBrowserLoginOpen` | `owner-session` | — | — | no |
 | GET | `/api/v1/page-browser/pages/:pageLabel/login/screenshot` | `pageBrowserLoginScreenshot` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/start` | `pageBrowserLoginStart` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/pages/:pageLabel/login/submit` | `pageBrowserLoginSubmit` | `owner-session` | — | — | no |
@@ -280,6 +281,7 @@ both enforcement modes. A full device token is not affected.
 | POST | `/api/v1/page-browser/profiles/:profileId/close` | `pageBrowserProfileClose` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/profiles/:profileId/login/code` | `pageBrowserProfileLoginCode` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/profiles/:profileId/login/finish` | `pageBrowserProfileLoginFinish` | `owner-session` | — | — | no |
+| POST | `/api/v1/page-browser/profiles/:profileId/login/open` | `pageBrowserProfileLoginOpen` | `owner-session` | — | — | no |
 | GET | `/api/v1/page-browser/profiles/:profileId/login/screenshot` | `pageBrowserProfileLoginScreenshot` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/profiles/:profileId/login/start` | `pageBrowserProfileLoginStart` | `owner-session` | — | — | no |
 | POST | `/api/v1/page-browser/profiles/:profileId/login/submit` | `pageBrowserProfileLoginSubmit` | `owner-session` | — | — | no |

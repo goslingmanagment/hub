@@ -26,6 +26,7 @@ export interface FakeContainer {
   id: string;
   service: string;
   workingDir: string;
+  project?: string;
   oneoff?: boolean;
   created?: string;
   running?: boolean;
@@ -171,6 +172,7 @@ export function createFakeDockerHost(root: string, options: FakeHostOptions): Fa
     mkdirSync(dir);
     writeFileSync(path.join(dir, "labels"), [
       `com.docker.compose.project.working_dir=${container.workingDir}`,
+      `com.docker.compose.project=${container.project ?? "agency-hub"}`,
       `com.docker.compose.service=${container.service}`,
       `com.docker.compose.oneoff=${container.oneoff ? "True" : "False"}`,
       "",

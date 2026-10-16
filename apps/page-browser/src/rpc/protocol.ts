@@ -119,7 +119,9 @@ export type { Step, StopReason };
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id.
-export const PROTOCOL = { major: 1, minor: 1 } as const;
+// Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
+// Minor 3 distinguishes credentials refusals; engines send held to older operators.
+export const PROTOCOL = { major: 1, minor: 3 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -322,6 +324,15 @@ export interface RecoverResult {
   attempts: { attemptId: AttemptId; state: "outcome_resent" | "not_sent" | "unknown" }[];
 }
 // ── the site's requests (plan §4.3; PR 7) ──
+/** Withdraw a still-waiting admission on the connection it was asked on.
+ *  Once the operator accepted a grant it reports the ordinary end instead:
+ *  a cancellation never retracts a possible send. */
+export interface AdmissionCancel {
+  type: "admissionCancel";
+  kind: "site" | "ws";
+  id: string;
+  reason: "request_ended" | "document_replaced" | "wait_expired" | "page_stopped";
+}
 export interface SiteAdmit {
   type: "siteAdmit";
   siteRequestId: SiteRequestId;
@@ -338,7 +349,7 @@ export interface SiteAdmit {
 }
 export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteRequestId: SiteRequestId } & (
     | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: "paused" | "held" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
+    | { admit: false; reason: "paused" | "held" | "credentials" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
   );
 export interface SiteDone {
   type: "siteDone";
@@ -461,9 +472,10 @@ export interface Alarm {
   kind: AlarmKind;
 }
 // ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
-export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
 export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string }
@@ -486,6 +498,7 @@ export type OperatorToEngine =
   | Sent
   | Result
   | RecoverResult
+  | AdmissionCancel
   | SiteAdmit
   | SiteDone
   | WsAdmit
@@ -678,7 +691,7 @@ function parseWsAdmitResult(m: Record<string, unknown>): WsAdmitResult {
   return { ...base, admit: false, reason: str(m.reason, "reason", 128), retryNotBeforeWall: retry };
 }
 
-const SITE_REFUSALS = new Set<string>(["paused", "held", "mode", "route_hold", "site_hour_cap", "buffer_full", "session_mismatch", "wait_expired"]);
+const SITE_REFUSALS = new Set<string>(["paused", "held", "credentials", "mode", "route_hold", "site_hour_cap", "buffer_full", "session_mismatch", "wait_expired"]);
 
 function parseSiteAdmitResult(m: Record<string, unknown>): SiteAdmitResult {
   const siteRequestId = str(m.siteRequestId, "siteRequestId", 64);
@@ -783,6 +796,7 @@ export function parseLoginRequest(value: unknown): ParsedLogin {
     };
     switch (m.type) {
       case "login.state":
+      case "login.open":
       case "login.screenshot":
         return { ok: true, request: { type: m.type, callId, token } };
       case "login.submit":

@@ -10,6 +10,7 @@ import type { PageBrowserLoginStepResponse } from "@agency_hub_core/contracts";
 // (the dashboard's copy of @tanstack/react-query), the API client mocked.
 
 const sdk = vi.hoisted(() => ({
+  pageBrowserLoginOpen: vi.fn(),
   pageBrowserLoginSubmit: vi.fn(),
   pageBrowserLoginCode: vi.fn(),
 }));
@@ -80,4 +81,12 @@ describe("the login form's steps and the query client (Astra's review of PR 15, 
     // The login's state is read anew after each step.
     expect(qc.getQueryCache().find({ queryKey: pageBrowserLoginKey("lilly-1") })?.state.isInvalidated).toBe(true);
   });
+});
+
+
+it("opens the login dialog without typed values or a retry cache", async () => {
+  const qc = new QueryClient(); sdk.pageBrowserLoginOpen.mockResolvedValue(ANSWER);
+  expect(await sendPageBrowserLoginStep(qc, "lilly-1", { kind: "open" })).toEqual(ANSWER);
+  expect(sdk.pageBrowserLoginOpen).toHaveBeenCalledWith({ params: { pageLabel: "lilly-1" } });
+  expect(qc.getMutationCache().getAll()).toEqual([]);
 });

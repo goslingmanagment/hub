@@ -118,7 +118,7 @@ import { engineHeaders, isPreflight } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { hostAndPath, type RequestLine } from "../logs/journal.ts";
 import { classifyHost, decide as mapDecide, type MapDecision, type OperatorMode } from "../policy/operations.ts";
-import type { BodyRef, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
+import type { AdmissionCancel, BodyRef, ResponseSource, SiteAdmit, SiteAdmitResult, SiteDone } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, wallMs, type Logger } from "../shared/util.ts";
 import { Documents, type DocumentMark } from "./documents.ts";
 
@@ -170,7 +170,7 @@ export interface SiteLink {
   /** Changes with the connection. */
   epoch(): number;
   generation(): number;
-  send(message: SiteAdmit | SiteDone): boolean;
+  send(message: SiteAdmit | SiteDone | AdmissionCancel): boolean;
 }
 
 export interface SiteDeps {
@@ -213,6 +213,7 @@ interface Physical {
   answered: boolean;
   ended: boolean;
   firstBytesMono: number | null;
+  encodedBytes: number | null;
   status: number | null;
   headers: Array<{ name: string; value: string }>;
 }
@@ -897,7 +898,7 @@ export class SiteRequests {
       op.held.add(request);
       return this.#finish(op, { status: null, headers: [], preflightAnswer: false, whole: null, error: sent ? `its request did not go: ${why}` : `not used: ${why}` });
     }
-    const phys: Physical = { role, networkId: request.networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, status: null, headers: [] };
+    const phys: Physical = { role, networkId: request.networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, encodedBytes: null, status: null, headers: [] };
     // The window right before the release (spec §9).
     const opened = this.#deps.gate.open(phys.window, op.deadline!, request.bodyBytes, request.networkId);
     if (!opened.ok) {
@@ -1137,11 +1138,15 @@ export class SiteRequests {
     // Chrome's end of this very request, for the page's slot (gate.ts) —
     // whatever became of its operation.
     if (typeof params.requestId === "string") this.#deps.gate.requestEnded(params.requestId);
-    if (typeof params.requestId === "string") this.#passedEnd(params.requestId, "finished", typeof params.encodedDataLength === "number" ? params.encodedDataLength : null);
+    const bytes = typeof params.encodedDataLength === "number" && Number.isFinite(params.encodedDataLength) && params.encodedDataLength >= 0 ? params.encodedDataLength : null;
+    if (typeof params.requestId === "string") this.#passedEnd(params.requestId, "finished", bytes);
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { op, phys } = found;
     phys.ended = true;
+    // Streaming chunks can report encodedDataLength=0 and bufferedData has
+    // no encoded size. Only this final CDP total proves transferred bytes.
+    phys.encodedBytes = bytes;
     this.#deps.gate.close(phys.window);
     if (op.done || !phys.released) return;
     if (phys.role === "preflight") {
@@ -1316,7 +1321,14 @@ export class SiteRequests {
     this.#journalEnd(op, end, keep ? (whole ? "buffered" : "incomplete") : null);
     const gone: GroupItem = { siteRequest: { siteRequestId: op.id, gone: true } };
     if (op.attemptId === null) {
-      // Never admitted: nothing to tell the engine (it drops what waits).
+      // Only the connection this ask belongs to may withdraw it. A grant
+      // already accepted has an attemptId and follows the normal end path.
+      if (stage === "asked" && op.askedEpoch === this.#deps.link.epoch() && !end.error?.startsWith("refused by the engine:")) {
+        const reason: AdmissionCancel["reason"] = end.reload || this.documents.replaced(op.document) ? "document_replaced"
+          : monoMs() >= op.waitDeadline ? "wait_expired" : this.#deps.notUp() !== null ? "page_stopped" : "request_ended";
+        const withdrawn = this.#deps.link.send({ type: "admissionCancel", kind: "site", id: op.id, reason });
+        this.#log("admit.cancel", { siteRequestId: op.id, epoch: op.askedEpoch, reason, withdrawn });
+      }
       if (op.kept) this.#write(`gone:${op.id}`, () => [gone], null);
       return;
     }
@@ -1372,6 +1384,7 @@ export class SiteRequests {
 
   #journalEnd(op: SiteOp, end: End, body: string | null): void {
     const { host, path } = hostAndPath(op.url.href);
+    const physical = end.preflightAnswer ? op.preflight : op.main;
     this.#deps.journal({
       method: op.method,
       host,
@@ -1381,7 +1394,9 @@ export class SiteRequests {
       decision: "ended",
       result: end.error ?? `${end.status ?? "?"}${end.preflightAnswer ? " (its preflight's)" : ""}${body === null ? "" : `, body ${body}`}`,
       status: end.status,
-      bytes: op.capture?.encoded ?? null,
+      bytes: physical?.encodedBytes ?? null,
+      bytesSource: physical?.encodedBytes == null ? null : "loading_finished",
+      bodyBytes: op.capture?.armed ? op.capture.decoded : null,
       durationMs: Math.round(this.#now() - op.pausedMono),
     });
   }
@@ -1473,7 +1488,7 @@ export class SiteRequests {
     if (phys !== null && phys.networkId === networkId) return { op, phys };
     if (role === undefined) return null;
     // A request of the operation not released (yet): its failure counts.
-    return { op, phys: { role, networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, status: null, headers: [] } };
+    return { op, phys: { role, networkId, window: `site:${op.id}:${role}`, released: false, answered: false, ended: false, firstBytesMono: null, encodedBytes: null, status: null, headers: [] } };
   }
 
   /** Did anything of the operation leave? The gate's word. */

@@ -42,6 +42,7 @@ interface Pairs {
   resultAck: [Engine.ResultAck, Operator.ResultAck];
   recover: [Engine.Recover, Operator.Recover];
   recoverResult: [Engine.RecoverResult, Operator.RecoverResult];
+  admissionCancel: [Engine.AdmissionCancel, Operator.AdmissionCancel];
   siteAdmit: [Engine.SiteAdmit, Operator.SiteAdmit];
   siteAdmitResult: [Engine.SiteAdmitResult, Operator.SiteAdmitResult];
   siteDone: [Engine.SiteDone, Operator.SiteDone];
@@ -91,6 +92,7 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   resultAck: true,
   recover: true,
   recoverResult: true,
+  admissionCancel: true,
   siteAdmit: true,
   siteAdmitResult: true,
   siteDone: true,
@@ -156,6 +158,8 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "result", attemptId: 9, sessionFingerprint: FP, outcome: { kind: "timeout", sent: true, message: "x" } },
   { type: "result", attemptId: 9, sessionFingerprint: FP, outcome: { kind: "aborted_before_send", refusal: "session_mismatch" } },
   { type: "recoverResult", attempts: [{ attemptId: 9, state: "not_sent" }] },
+  { type: "admissionCancel", kind: "site", id: UUID, reason: "document_replaced" },
+  { type: "admissionCancel", kind: "ws", id: UUID, reason: "wait_expired" },
   { type: "siteAdmit", siteRequestId: UUID, method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", query: "", resourceType: "XHR", route: "account.me", operation: "read", sessionFingerprint: null, pausedMono: 1, waitDeadlineMono: 2 },
   { type: "siteDone", siteRequestId: UUID, attemptId: 10, sent: true, sentMono: 1, sentWall: 2, connectionReused: null, status: 200, retryAfter: null, error: null, body: "buffered" },
   { type: "wsAdmit", connectionId: UUID, url: "wss://wsv3.fansly.com/", context: "worker", sessionFingerprint: FP, requestedMono: 1, waitDeadlineMono: 2 },
@@ -200,6 +204,7 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   { type: "recover", ownerGeneration: 2, attemptIds: [9, 10] },
   { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: true, deadlineMono: 10, attemptId: 12 },
   { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: false, reason: "site_hour_cap" },
+  { type: "siteAdmitResult", ownerGeneration: 2, siteRequestId: UUID, admit: false, reason: "credentials" },
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: true, deadlineMono: 10, attemptId: 13 },
   { type: "wsAdmitResult", ownerGeneration: 2, connectionId: UUID, admit: false, reason: "mode", retryNotBeforeWall: null },
   { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "stopPage" } },
@@ -211,6 +216,7 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
 /** The login form's calls (API → operator) and answers (PR 15). */
 const LOGIN_CALLS: Engine.LoginRequest[] = [
   { type: "login.state", callId: "c-1", token: "t" },
+  { type: "login.open", callId: "c-open", token: "t" },
   { type: "login.screenshot", callId: "c-2", token: "t" },
   { type: "login.submit", callId: "c-3", token: "t", login: "someone", password: "pw" },
   { type: "login.code", callId: "c-4", token: "t", code: "123456" },
@@ -222,6 +228,7 @@ const LOGIN_REPLIES: Operator.LoginReply[] = [
   { type: "login.stateResult", callId: "c-1", screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" },
   { type: "login.screenshotResult", callId: "c-2", jpeg: { bodyId: UUID, decodedBytes: 10, sha256: FP } },
   { type: "login.refused", callId: "c-3", reason: "not_manual_login" },
+  { type: "login.stateResult", callId: "c-open", screen: "landing", screenVersion: "fansly-login/3", fields: [], siteError: null },
 ];
 
 describe("the engine's mirror of the operator protocol", () => {

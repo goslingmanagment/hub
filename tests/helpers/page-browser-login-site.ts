@@ -148,7 +148,7 @@ export class FakeLoginSite {
     const base = { origin: "https://fansly.com", path: "/", readyState: "complete", outside: false };
     switch (this.screen) {
       case "landing":
-        return { ...base, captcha: false, forms: [] };
+        return { ...base, captcha: false, forms: [], landing: { roots: 1, login: 1, windows: 0 } };
       case "login":
         return { ...base, captcha: false, forms: [form({ password: 1, login: 1 })] };
       case "code":
@@ -163,6 +163,7 @@ export class FakeLoginSite {
   }
 
   #locate(role: string): string | null {
+    if (this.screen === "landing" && role === "open") return "submit";
     if (this.screen === "login" && (role === "login" || role === "password" || role === "submit")) return role;
     if (this.screen === "code" && (role === "code" || role === "submit")) return role;
     return null;
@@ -181,6 +182,7 @@ export class FakeLoginSite {
   }
 
   async #pressed(): Promise<void> {
+    if (this.screen === "landing") { this.screen = "login"; return; }
     if (this.screen === "login") {
       const body = JSON.stringify({ username: this.fields.login, password: this.fields.password, deviceId: "fake-device-1" });
       const request = this.#model.pause("https://apiv3.fansly.com/api/v1/login", "POST", this.#tab(), "XHR", { Accept: "application/json, text/plain, */*", "content-type": "application/json" }, body);
