@@ -1880,19 +1880,39 @@ async function recordIdentityProof(
   }
   // Known by its sender's word, else its admission: an unknown send proves
   // nothing fenced after it was admitted (Astra's review of PR 15, round 6).
-  const sentAt = provenSentAt(attempt);
+  return recordIdentityProofOf(tx, d, page, {
+    attemptId: attempt.id,
+    resource: attempt.resource,
+    accountId,
+    credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+    sentAt: provenSentAt(attempt),
+  });
+}
+
+/** The proof itself, by its facts: the page's identity and the credentials
+ *  generation the request carried, sent no earlier than `sentAt` — unless a
+ *  newer proof is recorded — and the credentials hold whose latest refusal
+ *  came before that send, cleared with its audit row. The page row is held
+ *  FOR NO KEY UPDATE. */
+async function recordIdentityProofOf(
+  tx: Database,
+  d: CommitDeps,
+  page: SyncPageRow,
+  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date; observed?: boolean },
+): Promise<IdentityProofWrite> {
+  const { attemptId, sentAt } = facts;
   const recorded = await recordSyncPageIdentityProof(tx, {
     pageId: d.pageId,
     generation: d.generation,
-    accountId,
-    credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+    accountId: facts.accountId,
+    credentialsGeneration: facts.credentialsGeneration,
     sentAt,
   });
   // `superseded`: an answer applied late — a newer proof stands; the hold
   // rule below still judges this one by its own send.
   const proof = { cleared: null, superseded: !recorded };
   const { credentials: held } = holdSetOf(page.holds).page;
-  if (held === null || !proofClearsCredentialsHold(held, { attemptId: attempt.id, sentAt })) return proof;
+  if (held === null || !proofClearsCredentialsHold(held, facts)) return proof;
   // The credentials hold alone: a network hold beside it stands until its end.
   await clearPageHold(tx, { pageId: d.pageId, generation: d.generation, kinds: [held.kind] });
   await insertAuditEvent(tx, {
@@ -1900,10 +1920,10 @@ async function recordIdentityProof(
     source: "sync",
     eventType: SYNC_CREDENTIALS_HOLD_CLEARED_AUDIT_EVENT,
     metadata: {
-      attemptId: attempt.id,
-      resource: attempt.resource,
+      attemptId,
+      resource: facts.resource,
       sentAt: sentAt.toISOString(),
-      credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+      credentialsGeneration: facts.credentialsGeneration,
       cleared: {
         kind: held.kind,
         since: held.since?.toISOString() ?? null,
@@ -1914,6 +1934,40 @@ async function recordIdentityProof(
     },
   });
   return { ...proof, cleared: held.kind };
+}
+
+/**
+ * Variant Б (plan-b §4.2.3): the proof of the site's own `GET /account/me` —
+ * observed by the page's browser, answered from the network (not a cache or
+ * a service worker), whole, 200, under the live session it names — judged as
+ * an applied identity read of the engine's own: the page's identity and the
+ * credentials generation of the browser under that session, sent no earlier
+ * than `sentNotBefore` (a lower bound: a fence after it is not passed). Its
+ * attempt is the site's observed one: only its send lower bound orders it
+ * against a credentials failure, never its after-the-fact id. An account
+ * other than the page's proves nothing (the engine's own read then meets
+ * the mismatch).
+ */
+export async function commitSiteIdentity(
+  d: CommitDeps,
+  input: { attemptId: number; accountId: string; credentialsGeneration: string; sentNotBefore: Date },
+): Promise<"recorded" | "superseded" | "foreign_account" | "no_account_ref"> {
+  if (d.ownRef === null) return "no_account_ref";
+  if (input.accountId !== d.ownRef) return "foreign_account";
+  return inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const page = await getSyncPage(tx, d.pageId);
+    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+    const written = await recordIdentityProofOf(tx, d, page, {
+      attemptId: input.attemptId,
+      resource: "site",
+      accountId: input.accountId,
+      credentialsGeneration: input.credentialsGeneration,
+      sentAt: input.sentNotBefore,
+      observed: true,
+    });
+    return written.superseded ? "superseded" : "recorded";
+  });
 }
 
 async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown): Promise<ApplyErrorKind> {

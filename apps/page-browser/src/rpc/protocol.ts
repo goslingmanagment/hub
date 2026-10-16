@@ -121,7 +121,9 @@ export type { Step, StopReason };
 // it by its id.
 // Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
 // Minor 3 distinguishes credentials refusals; engines send held to older operators.
-export const PROTOCOL = { major: 1, minor: 3 } as const;
+// Minor 4 (variant Б): the site observed, not admitted (`siteSent`,
+// `siteEnded`, `siteIdentity`); such an operator sends no `siteAdmit`/`wsAdmit`.
+export const PROTOCOL = { major: 1, minor: 4 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -390,6 +392,45 @@ export interface WsDone {
    *  and nothing tells whether the handshake went. */
   fate?: "unknown";
 }
+// ── the site observed, not admitted (variant Б, minor 4) ──
+// An operator of minor 4 lets the site's own requests and socket go as any
+// browser does: nothing of the site waits for the engine or is refused by it.
+// It tells the engine what left and how it ended, so the engine counts the
+// site's sends in the page's pause before its own requests, holds its routes
+// on the site's 429, 401 and 403, and journals the site's traffic. It never
+// sends `siteAdmit` or `wsAdmit`.
+export interface SiteSent {
+  type: "siteSent";
+  siteRequestId: SiteRequestId;
+  method: string;
+  host: string;
+  /** The path only: a query may carry what the journal must not keep. */
+  path: string;
+  /** The operations map's route, or `ws.upgrade` for the socket's handshake. */
+  route: string;
+  sessionFingerprint: Sha256Hex | null;
+  /** When the operator saw it leave (CLOCK_MONOTONIC). */
+  sentMono: MonoMs;
+}
+export interface SiteEnded {
+  type: "siteEnded";
+  siteRequestId: SiteRequestId;
+  endedMono: MonoMs;
+  status: number | null;
+  retryAfter: string | null;
+  error: string | null;
+}
+/** The site's own `GET /account/me`, answered from the network (not a cache
+ *  or a service worker), whole, 200, under the session the operator names:
+ *  the account it names. `sentNotBeforeMono` is a lower bound of its send,
+ *  on the operator's clock; the engine judges the proof by it. */
+export interface SiteIdentity {
+  type: "siteIdentity";
+  siteRequestId: SiteRequestId;
+  accountId: string;
+  sessionFingerprint: Sha256Hex;
+  sentNotBeforeMono: MonoMs;
+}
 // ── the event stream (plan §4.4; PR 11) ──
 export interface EventsSubscribe extends FromEngine {
   type: "events.subscribe";
@@ -503,6 +544,9 @@ export type OperatorToEngine =
   | SiteDone
   | WsAdmit
   | WsDone
+  | SiteSent
+  | SiteEnded
+  | SiteIdentity
   | Events
   | EventsRefused
   | CommandResult

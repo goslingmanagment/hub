@@ -31,6 +31,9 @@ import {
   type Sent,
   type SiteAdmitResult,
   type SiteDone,
+  type SiteEnded,
+  type SiteIdentity,
+  type SiteSent,
   type State,
   type WsAdmitResult,
   type WsDone,
@@ -80,6 +83,9 @@ import {
 //   `answerWsAdmit`) go only on the connection they were asked on. A
 //   `siteDone`/`wsDone` goes to the site path's claim (`onEnd`, PR 14); one
 //   it does not claim is an outcome nobody waits for (`onUnclaimedOutcome`).
+// - Variant Б (minor 4): `siteSent`, `siteEnded`, `siteIdentity` — the site's
+//   own traffic an operator let go and observed — go to their own listener
+//   (`onSiteObserved`), never to the site path's.
 // - `command` (PR 14): one id each, its `commandResult` awaited; a link that
 //   goes before the result answers null (whether it ran is not known).
 
@@ -260,7 +266,10 @@ export interface PageBrowserRpcOptions {
   monoNow?: () => number;
 }
 
-type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" | "events" | "events.refused" | "commandResult" }>;
+type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced" | "state" | "ping" | "pong" | "check" | "sent" | "result" | "recoverResult" | "alarm" | "events" | "events.refused" | "commandResult" | "siteSent" | "siteEnded" | "siteIdentity" }>;
+
+/** What an operator of minor 4 tells of the site's own traffic (variant Б). */
+export type SiteObservedMessage = SiteSent | SiteEnded | SiteIdentity;
 
 /** `Omit` over each member of a union. */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -324,6 +333,7 @@ export class PageBrowserRpcClient {
   #events: ((delivered: DeliveredEvents) => void) | null = null;
   #eventsRefused: ((refused: EventsRefused) => void) | null = null;
   #other: ((message: OtherMessage) => void) | null = null;
+  #observed: ((message: SiteObservedMessage) => void) | null = null;
   #endClaim: ((end: SiteDone | WsDone) => boolean) | null = null;
   readonly #quiescedListeners = new Set<(quiesced: Quiesced) => void>();
   /** Commands awaiting their result, by id. */
@@ -425,6 +435,13 @@ export class PageBrowserRpcClient {
   /** The operator refused a subscription or an ack (`events.refused`). */
   onEventsRefused(listener: ((refused: EventsRefused) => void) | null): void {
     this.#eventsRefused = listener;
+  }
+
+  /** Variant Б (minor 4): the site's own traffic the operator let go and
+   *  observed — `siteSent`, `siteEnded`, `siteIdentity`. Dropped with no
+   *  listener (nothing waits for them). */
+  onSiteObserved(listener: ((message: SiteObservedMessage) => void) | null): void {
+    this.#observed = listener;
   }
 
   /** The site path's messages: `siteAdmit`, `wsAdmit` (PR 14). */
@@ -822,6 +839,14 @@ export class PageBrowserRpcClient {
       case "siteDone":
       case "wsDone":
         return this.#onEnd(message);
+      case "siteSent":
+      case "siteEnded":
+      case "siteIdentity":
+        if (this.#observed !== null) {
+          const listener = this.#observed;
+          safely(() => listener(message));
+        }
+        return;
       default:
         return this.#toOther(message);
     }

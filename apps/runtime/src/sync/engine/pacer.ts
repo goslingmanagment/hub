@@ -36,6 +36,9 @@ export const TAKEOVER_FACTOR = 1.2;
 /** A waiting pacer re-reads S at least this often, so an owner who raises S
  *  lengthens the wait already in progress. */
 export const SETTING_RECHECK_MS = 1_000;
+/** Decision Б8: prolonged site traffic only warns; it never shortens the
+ *  pause or opens an own slot early. Once per wait, after five minutes. */
+export const SLOT_WAIT_WARN_MS = 5 * 60_000;
 /** Admission issue (monotonic, taken before the admission transaction) →
  *  `onRequestStart`. Later than this, the dispatch is refused: no bytes. */
 export const SEND_WINDOW_MS = 15_000;
@@ -47,6 +50,12 @@ export const CONNECT_TIMEOUT_MS = 10_000;
 /** Unfinished attempts older than this cannot still be sending (≫ send window
  *  + request timeout); the takeover floor looks back this far. */
 export const FLOOR_LOOKBACK_MS = 600_000;
+/** A send of the page's browser on its own (variant Б) that has not ended
+ *  holds the next own slot at most this long after it left: an end that is
+ *  never told does not stop the page's own work for good. */
+export const FOREIGN_IN_FLIGHT_MAX_MS = REQUEST_TIMEOUT_MS;
+/** Sends in flight remembered at most; the oldest is forgotten first. */
+export const FOREIGN_IN_FLIGHT_KEPT = 256;
 
 export interface SlotGrant {
   /** S as read for this admission (≥ FANSLY_PAUSE_MIN_MS in production). */
@@ -151,6 +160,9 @@ interface PacerState {
   inFlight: Admission | null;
   /** u of the next pause: kept across re-waits, cleared after a completed send. */
   pendingU: number | null;
+  /** Sends of the page's browser on its own not ended yet (variant Б): id →
+   *  the instant it left. */
+  foreign: Map<string, number>;
 }
 
 export class Pacer {
@@ -162,6 +174,7 @@ export class Pacer {
     floorMono: Number.POSITIVE_INFINITY,
     inFlight: null,
     pendingU: null,
+    foreign: new Map(),
   };
   #initialized = false;
   #stopping = false;
@@ -204,6 +217,27 @@ export class Pacer {
     this.#st.floorMono = Math.max(this.#st.floorMono, atMono);
   }
 
+  /**
+   * A send the page's browser made on its own (variant Б: the site's own
+   * request or socket handshake — observed, never admitted, owner decision
+   * Б2): the next own slot waits S from it as from an own send, and none
+   * opens while it has not ended (at most `FOREIGN_IN_FLIGHT_MAX_MS`).
+   * `atMono` on this pacer's clock. An own admission in flight is not
+   * touched: its gap stays the one it was armed with.
+   */
+  observeForeignSend(id: string, atMono: number): void {
+    if (!Number.isFinite(atMono)) throw new PacerInvariantError("floor_invalid", String(atMono));
+    if (this.#st.lastSendMono === null || atMono > this.#st.lastSendMono) this.#st.lastSendMono = atMono;
+    this.#st.foreign.delete(id);
+    this.#st.foreign.set(id, atMono);
+    if (this.#st.foreign.size > FOREIGN_IN_FLIGHT_KEPT) this.#st.foreign.delete(this.#st.foreign.keys().next().value!);
+  }
+
+  /** The end of a send `observeForeignSend` was told of (an unknown id: nothing). */
+  observeForeignEnd(id: string): void {
+    this.#st.foreign.delete(id);
+  }
+
   /** No new admission from now on; a dispatch not yet started is refused. */
   stop(): void {
     this.#stopping = true;
@@ -219,10 +253,18 @@ export class Pacer {
    * least every SETTING_RECHECK_MS), so a raised setting lengthens a wait in
    * progress; u is drawn once per send and kept across re-waits.
    */
-  async waitForSlot(signal: AbortSignal): Promise<SlotGrant> {
+  async waitForSlot(signal: AbortSignal, observers: {
+    /** Each loop turn, including when site sends keep extending the wait. */
+    onWaiting?: () => void;
+    /** Once per wait longer than SLOT_WAIT_WARN_MS; admission stays closed. */
+    onLongWait?: (waitMs: number) => void;
+  } = {}): Promise<SlotGrant> {
+    const startedMono = this.#deps.clock.monoNow();
+    let warned = false;
     for (;;) {
       signal.throwIfAborted();
       this.#assertCanAdmit();
+      observers.onWaiting?.();
       const settingMs = this.#effectiveSetting(await this.#deps.pause.readSettingMs());
       signal.throwIfAborted();
       this.#assertCanAdmit();
@@ -230,6 +272,10 @@ export class Pacer {
       const pauseMs = Math.ceil(settingMs * (1 + jitterU));
       const earliestMono = this.#earliestMono(pauseMs);
       const now = this.#deps.clock.monoNow();
+      if (!warned && now - startedMono > SLOT_WAIT_WARN_MS) {
+        warned = true;
+        observers.onLongWait?.(now - startedMono);
+      }
       if (now >= earliestMono) {
         return { settingMs, jitterU, pauseMs, earliestMono };
       }
@@ -291,6 +337,8 @@ export class Pacer {
     if (this.#st.lastSendMono !== null && now - this.#st.lastSendMono < admission.pauseMs) {
       return this.#refuse(admission, "pace");
     }
+    // A send of the browser on its own still in flight (variant Б).
+    if (this.#foreignUntil() > now) return this.#refuse(admission, "pace");
     this.#markSent(admission, now, "request_start");
     return null;
   }
@@ -321,6 +369,8 @@ export class Pacer {
     if (this.#st.lastSendMono !== null && now - this.#st.lastSendMono < admission.pauseMs) {
       return this.#refuse(admission, "pace");
     }
+    // A send of the browser on its own still in flight (variant Б).
+    if (this.#foreignUntil() > now) return this.#refuse(admission, "pace");
     admission.grantedMono = now;
     return null;
   }
@@ -408,7 +458,22 @@ export class Pacer {
       this.#st.lastSendMono === null ? Number.NEGATIVE_INFINITY : this.#st.lastSendMono + pauseMs,
       this.#st.lastCompletionMono ?? Number.NEGATIVE_INFINITY,
       this.#st.floorMono,
+      this.#foreignUntil(),
     );
+  }
+
+  /** While a send of the browser on its own is in flight: the latest bound of
+   *  the ones not ended (each at most `FOREIGN_IN_FLIGHT_MAX_MS` after it
+   *  left; an expired one is forgotten). */
+  #foreignUntil(): number {
+    const now = this.#deps.clock.monoNow();
+    let until = Number.NEGATIVE_INFINITY;
+    for (const [id, at] of this.#st.foreign) {
+      const bound = at + FOREIGN_IN_FLIGHT_MAX_MS;
+      if (bound <= now) this.#st.foreign.delete(id);
+      else if (bound > until) until = bound;
+    }
+    return until;
   }
 
   /** The send of `admission` at `at` (monotonic); `now` is the instant of
@@ -421,7 +486,9 @@ export class Pacer {
     now: number = at,
   ): void {
     admission.gapPrevMs = admission.prevSendMono === null ? null : at - admission.prevSendMono;
-    this.#st.lastSendMono = at;
+    // Never earlier than a send of the browser on its own told meanwhile
+    // (variant Б): the pause runs from the latest send of any origin.
+    this.#st.lastSendMono = this.#st.lastSendMono === null ? at : Math.max(this.#st.lastSendMono, at);
     admission.sentMono = at;
     const wall = this.#deps.clock.wallNow();
     admission.sentWall = at === now ? wall : new Date(wall.getTime() - (now - at));

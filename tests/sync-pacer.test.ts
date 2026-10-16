@@ -7,6 +7,7 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
 import {
+  FOREIGN_IN_FLIGHT_MAX_MS,
   JITTER_MAX,
   Pacer,
   PacerInvariantError,
@@ -14,6 +15,7 @@ import {
   REQUEST_TIMEOUT_MS,
   SEND_WINDOW_MS,
   SETTING_RECHECK_MS,
+  SLOT_WAIT_WARN_MS,
   TAKEOVER_FACTOR,
   type Admission,
   type SlotGrant,
@@ -568,5 +570,123 @@ describe("sync pacer: constants and the test-only floor", () => {
     };
     walk(root);
     expect(offenders).toEqual([path.join("sync", "engine", "pacer.ts")]);
+  });
+});
+
+describe("sync pacer: sends of the page's browser on its own (variant Б, owner decision Б2)", () => {
+  const reported = (sentMono: number): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono });
+
+  it("the next own slot opens S after the site's last send, as after an own one", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    await sendOne(ctx);
+    ctx.clock.advance(5_000);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    ctx.clock.advance(100);
+    ctx.pacer.observeForeignEnd("site-1");
+    const grant = await ctx.pacer.waitForSlot(live());
+    expect(grant.earliestMono).toBe(siteAt + grant.pauseMs);
+  });
+
+  it("no own slot while the site's request is in flight — at most FOREIGN_IN_FLIGHT_MAX_MS after it left", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    await ctx.pacer.waitForSlot(live());
+    // The slot opened only once the bound passed (the forgotten send's own
+    // pause, S, was long over by then).
+    expect(ctx.clock.monoNow()).toBeGreaterThanOrEqual(siteAt + FOREIGN_IN_FLIGHT_MAX_MS);
+    expect(ctx.clock.monoNow()).toBeLessThan(siteAt + FOREIGN_IN_FLIGHT_MAX_MS + 1_100);
+  });
+
+  it("reports every wait turn through continuous site traffic beyond the watchdog bound, without shortening S or jitter", async () => {
+    const ctx = setup({ settingMs: 60_000, rng: new ScriptedRng([0.5]) });
+    ctx.pacer.initTakeover(0);
+    const started = ctx.clock.monoNow();
+    let lastSiteSend = started;
+    const sendSite = () => {
+      lastSiteSend = ctx.clock.monoNow();
+      ctx.pacer.observeForeignSend("busy-site", lastSiteSend);
+      ctx.pacer.observeForeignEnd("busy-site");
+    };
+    sendSite();
+    ctx.clock.onSleep = () => {
+      if (ctx.clock.monoNow() - started <= 180_000) sendSite();
+    };
+    const progress: number[] = [];
+    const grant = await ctx.pacer.waitForSlot(live(), { onWaiting: () => { progress.push(ctx.clock.monoNow()); } });
+    expect(progress.length).toBe(ctx.clock.sleeps.length + 1);
+    expect(progress[0]).toBe(started);
+    expect(progress.at(-1)! - started).toBeGreaterThan(120_000);
+    expect(Math.max(...progress.slice(1).map((at, i) => at - progress[i]!))).toBeLessThanOrEqual(SETTING_RECHECK_MS);
+    expect(grant.pauseMs).toBe(Math.ceil(60_000 * 1.1));
+    expect(ctx.clock.monoNow()).toBe(lastSiteSend + grant.pauseMs);
+  });
+
+  it("warns only once per wait after five minutes of site traffic, keeps yielding, and warns again on a new wait", async () => {
+    const ctx = setup({ settingMs: 60_000 });
+    ctx.pacer.initTakeover(0);
+    const warnings: number[] = [];
+    for (let wait = 1; wait <= 2; wait += 1) {
+      const started = ctx.clock.monoNow();
+      let lastSiteSend = started;
+      const sendSite = () => {
+        lastSiteSend = ctx.clock.monoNow();
+        ctx.pacer.observeForeignSend("busy-site", lastSiteSend);
+        ctx.pacer.observeForeignEnd("busy-site");
+      };
+      sendSite();
+      ctx.clock.onSleep = () => {
+        if (ctx.clock.monoNow() - started <= 2 * SLOT_WAIT_WARN_MS) sendSite();
+      };
+      const grant = await ctx.pacer.waitForSlot(live(), { onLongWait: (waitMs) => { warnings.push(waitMs); } });
+      expect(warnings).toHaveLength(wait);
+      expect(warnings.at(-1)).toBeGreaterThan(5 * 60_000);
+      expect(warnings.at(-1)).toBeLessThanOrEqual(5 * 60_000 + SETTING_RECHECK_MS);
+      expect(ctx.clock.monoNow() - started).toBeGreaterThan(2 * SLOT_WAIT_WARN_MS);
+      expect(ctx.clock.monoNow()).toBe(lastSiteSend + grant.pauseMs);
+    }
+  });
+
+  it("a wait of exactly five minutes raises no long-wait warning", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(5 * 60_000);
+    const warnings: number[] = [];
+    await ctx.pacer.waitForSlot(live(), { onLongWait: (waitMs) => { warnings.push(waitMs); } });
+    expect(warnings).toEqual([]);
+  });
+
+  it("the check refuses an own send when the site sent within the pause or has a request in flight", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    ctx.pacer.observeForeignSend("site-1", ctx.clock.monoNow());
+    expect(ctx.pacer.check(admission)?.reason).toBe("pace");
+    ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "pace" });
+    // In flight, past the pause: still refused.
+    ctx.clock.advance(3_000);
+    const next = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 2, ctx.clock.monoNow());
+    ctx.pacer.observeForeignSend("site-2", ctx.clock.monoNow() - 2_500);
+    expect(ctx.pacer.checkRemoteGrant(next)?.reason).toBe("pace");
+  });
+
+  it("an own send reported for an instant before a later site send does not move the pause back", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    expect(ctx.pacer.checkRemoteGrant(admission)).toBeNull();
+    const ownAt = ctx.clock.monoNow() + 10;
+    ctx.clock.advance(50);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    ctx.pacer.observeForeignEnd("site-1");
+    ctx.clock.advance(200);
+    ctx.pacer.complete(admission, reported(ownAt));
+    expect(admission.sentMono).toBe(ownAt);
+    expect(ctx.pacer.snapshot().lastSendMono).toBe(siteAt);
   });
 });

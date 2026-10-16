@@ -20,6 +20,9 @@ import {
   type SiteAdmit,
   type SiteAdmitResult,
   type SiteDone,
+  type SiteEnded,
+  type SiteIdentity,
+  type SiteSent,
   type State,
   type WsAdmit,
   type WsAdmitResult,
@@ -560,6 +563,49 @@ export class FakeOperator {
     this.holdEnd(done);
     this.server.send(done);
     return done;
+  }
+
+  /** Variant Б (minor 4): a request of the site that left on its own — observed, not admitted. */
+  siteSent(input: Partial<Omit<SiteSent, "type">> & { path: string }): SiteSent {
+    const message: SiteSent = {
+      type: "siteSent",
+      siteRequestId: input.siteRequestId ?? randomUUID(),
+      method: input.method ?? "GET",
+      host: input.host ?? "apiv3.fansly.com",
+      path: input.path,
+      route: input.route ?? "site.other",
+      sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
+      sentMono: input.sentMono ?? monoMs(),
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** Variant Б: how an observed site request ended. */
+  siteEnded(sent: SiteSent, end: Partial<Omit<SiteEnded, "type" | "siteRequestId">> = {}): SiteEnded {
+    const message: SiteEnded = {
+      type: "siteEnded",
+      siteRequestId: sent.siteRequestId,
+      endedMono: end.endedMono ?? monoMs(),
+      status: end.status === undefined ? 200 : end.status,
+      retryAfter: end.retryAfter ?? null,
+      error: end.error ?? null,
+    };
+    this.server.send(message);
+    return message;
+  }
+
+  /** Variant Б: the site's own `/account/me` named this account, from the network. */
+  siteIdentity(sent: SiteSent, accountId: string, input: Partial<Omit<SiteIdentity, "type" | "siteRequestId" | "accountId">> = {}): SiteIdentity {
+    const message: SiteIdentity = {
+      type: "siteIdentity",
+      siteRequestId: sent.siteRequestId,
+      accountId,
+      sessionFingerprint: input.sessionFingerprint ?? sent.sessionFingerprint ?? this.live!,
+      sentNotBeforeMono: input.sentNotBeforeMono ?? sent.sentMono - 5,
+    };
+    this.server.send(message);
+    return message;
   }
 
   static async start(options: FakeOperatorOptions = {}): Promise<FakeOperator> {
