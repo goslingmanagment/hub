@@ -286,6 +286,48 @@ describe("the page's slot: one admitted operation at a time, from its first rele
   });
   const refused = (id: string, owner: string) => expect(gate.open(id, now + 15_000, 0, "R-x")).toEqual({ ok: false, reason: `${IN_FLIGHT_REFUSAL} (${owner})`, inFlight: owner });
 
+  it("media takes the same slot without an API window; only its operation and every physical end free it", () => {
+    expect(gate.takeSlot("hub:media", now + 15_000, "P-media")).toEqual({ ok: true });
+    expect(gate.state).toEqual({ phase: "closed", window: null, deadline: null });
+    expect(heldCuts).toEqual([]);
+    refused("hub:api:main", "hub:media");
+    expect(gate.takeSlot("hub:other-media", now + 15_000, "R-other")).toEqual({ ok: false, reason: `${IN_FLIGHT_REFUSAL} (hub:media)`, inFlight: "hub:media" });
+    expect(gate.takeSlot("hub:media", now + 15_000, "R-media")).toEqual({ ok: true });
+    gate.operationEnded("hub:media");
+    gate.requestEnded("R-unrelated");
+    gate.requestEnded("P-media");
+    expect(gate.slotOwner).toBe("hub:media");
+    expect(gate.slotPending).toEqual(["R-media"]);
+    gate.requestEnded("R-media");
+    expect(gate.slotOwner).toBeNull();
+    expect(gate.open("hub:api:main", now + 15_000, 0, "R-api")).toEqual({ ok: true });
+    expect(gate.takeSlot("hub:media2", now + 15_000, "R-media2")).toMatchObject({ ok: false, inFlight: "hub:api" });
+    expect(gate.state.window).toBe("hub:api:main");
+  });
+
+  it("a media admission past its deadline takes no slot", () => {
+    expect(gate.takeSlot("hub:media", now, "R-media")).toEqual({ ok: false, reason: "the admission's deadline has passed" });
+    expect(gate.slotOwner).toBeNull();
+  });
+
+  it("media has the same unended bound; a reset keeps its slot, Chrome gone frees it", () => {
+    gate.takeSlot("hub:media", now + 6000, "R-media");
+    gate.operationEnded("hub:media");
+    gate.reset();
+    advance(6000 + SLOT_LIMIT_MS - 1);
+    expect(unended).toEqual([]);
+    advance(1);
+    expect(unended).toEqual([{ operation: "hub:media", pending: ["R-media"] }]);
+    expect(gate.slotOwner).toBe("hub:media");
+    gate.browserGone();
+    expect(gate.slotOwner).toBeNull();
+    expect(gate.takeSlot("hub:media2", now + 6000, "R-media2")).toEqual({ ok: true });
+    gate.requestEnded("R-media2");
+    gate.operationEnded("hub:media2");
+    advance(6000 + SLOT_LIMIT_MS);
+    expect(unended).toHaveLength(1);
+  });
+
   it("a preflight and its request are one operation; another operation is refused while it owns the slot — open, holding, answering", () => {
     expect(operationOf("hub:12:preflight")).toBe("hub:12");
     expect(operationOf("site:3f2e:main")).toBe("site:3f2e");

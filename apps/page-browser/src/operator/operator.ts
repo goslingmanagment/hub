@@ -175,6 +175,9 @@ export interface OperatorTimings {
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
+  /** Past an unended Hub slot's bound, wait up to this long for the site's
+   *  API requests to finish before a planned Chrome restart. */
+  unendedQuietWaitMs: number;
   /** The page's slot past its admission's deadline (egress/gate.ts). */
   slotLimitMs: number;
   /** A profile no page has (page 0): how long its mode's document may stand
@@ -199,6 +202,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
   reloadWaitMs: 30_000,
+  unendedQuietWaitMs: 5 * 60_000,
   slotLimitMs: SLOT_LIMIT_MS,
   sessionShowWaitMs: 3_000,
 };
@@ -777,7 +781,7 @@ export class Operator {
     // meanwhile: the slot stays the operation's until Chrome is gone.
     this.egress.gate.onUnended = (operation, pending) => {
       this.#log("slot.unended", { operation, pending: pending.length });
-      void this.#restartUnended(`${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
+      void this.#restartUnended(operation, `${operation}: a request it released has no end past its admission's deadline and the operation's limit`);
     };
     if (this.#held !== null) {
       this.#log("halt.held", { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall, from: "the volume" });
@@ -1611,14 +1615,21 @@ export class Operator {
     }
   }
 
-  /** A Hub request without a proven end (above): once no request of the
-   *  site is in flight — or after `reloadWaitMs` all the same — Chrome goes
-   *  and the page starts again (`#fail`). */
-  async #restartUnended(note: string): Promise<void> {
+  /** A Hub request without a proven end: wait for a quiet moment, with a
+   *  generous bound for a site that never settles. A proven end meanwhile
+   *  cancels this restart; another operation's slot is never touched. */
+  async #restartUnended(operation: string, note: string): Promise<void> {
     const run = this.#run;
-    const quiet = await this.#waitUntil(() => run !== this.#run || this.observer.inFlight === 0, this.#timings.reloadWaitMs);
-    if (run !== this.#run || this.#stopped || this.page.halted) return;
-    this.#log("slot.restart", { quiet, siteInFlight: this.observer.inFlight });
+    const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.egress.gate.slotOwner !== operation;
+    if (stale()) return;
+    const began = monoMs();
+    if (this.observer.inFlight > 0) this.#log("slot.wait_quiet", { operation, siteInFlight: this.observer.inFlight, waitMs: this.#timings.unendedQuietWaitMs });
+    const quiet = await this.#waitUntil(() => stale() || this.observer.inFlight === 0, this.#timings.unendedQuietWaitMs);
+    if (stale()) {
+      if (this.egress.gate.slotOwner !== operation) this.#log("slot.restart_skipped", { operation, owner: this.egress.gate.slotOwner, why: "the slot is no longer this operation's" });
+      return;
+    }
+    this.#log("slot.restart", { operation, quiet, siteInFlight: this.observer.inFlight, waitedMs: monoMs() - began });
     void this.#fail("request_unended", note);
   }
 

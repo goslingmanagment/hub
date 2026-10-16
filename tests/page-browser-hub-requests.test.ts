@@ -86,7 +86,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
   const chrome = new HubChrome(cdp, gate);
   gate.cut = () => chrome.cut("api");
   gate.cutHeld = () => 0;
-  cleanups.push(() => gate.reset());
+  cleanups.push(() => { gate.reset(); gate.browserGone(); });
   const engine = new FakeHubEngine();
   const outcomes = new Map<number, Stored>();
   const alarms: World["alarms"] = [];
@@ -628,15 +628,83 @@ describe("a Hub request whose end is unknown holds the page's slot, and never st
     expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
   });
 
-  it("a released request the page cancels before its answer (an F5): its end is unknown, the slot stays held; the page goes on", async () => {
+  it.each(["Network.loadingFinished", "Network.loadingFailed"])("repeated cancels before the answer keep the slot until a proven %s; the page goes on", async (endEvent) => {
     const w = await world();
     const message = send(w, {}, { then: "cancel_after_send" });
     expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the page cancelled the request before its answer: its end is unknown" });
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    for (let i = 0; i < 2; i++) {
+      w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+      expect(w.gate.slotPending).toEqual([request.networkId]);
+      expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    }
     expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
     expect(w.exit.open).toBe(true);
     const next = send(w);
     expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    w.cdp.emit(endEvent, { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET", encodedDataLength: 0 }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
+    const after = send(w);
+    expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
+  });
+
+  it.each([true, false])("endAll(browserGone=%s) before Chrome is confirmed gone keeps ownership and the slot through subsequent cancels", async (browserGone) => {
+    const w = await world();
+    const message = send(w, {}, { then: "hang_after_send" });
+    await until(() => w.chrome.wire.some((request) => request.attemptId === message.attemptId), 2000, "the released request");
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    w.hub.endAll("the exit closed, Chrome is still up", browserGone);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "transport_error", sent: true });
+    expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    for (let i = 0; i < 2; i++) {
+      w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+      expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+      expect(w.gate.slotPending).toEqual([request.networkId]);
+    }
     w.gate.browserGone();
+    expect(w.gate.slotOwner).toBeNull();
+  });
+
+  it("a cancel of a Hub-owned request without a physical entry is no proven end either", async () => {
+    const w = await world();
+    // Chrome rejects the release: the physical entry is dropped, but it
+    // has not reported the request's end and the Hub ownership remains.
+    w.cdp.handlers.set("Fetch.continueRequest", () => ({ error: { code: -32602, message: "Invalid InterceptionId." } }));
+    const message = send(w);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "transport_error", sent: false });
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    expect(w.hub.ownsNetworkId(request.networkId)).toBe(true);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
+  });
+
+  it.each(["image", "video"] as const)("a %s with an unknown end holds the same slot without an API window, paces API and media, and raises onUnended", async (kind) => {
+    const w = await world({ passive: true, timings: { opLimitMs: 300 }, slotLimitMs: 300 });
+    const unended: string[] = [];
+    w.gate.onUnended = (operation) => unended.push(operation);
+    let deadlineMs = 400;
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
+    const media = { kind, url: `https://cdn3.fansly.com/unknown.${kind === "image" ? "jpg" : "mp4"}`, maxBodyBytes: MEDIA_BODY_LIMIT };
+    const message = send(w, media, { then: "hang_after_send" });
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "timeout", sent: true });
+    await until(() => w.chrome.requestsOf(message.attemptId).every((request) => request.ended), 2000, "the media cancel");
+    const request = w.chrome.requestsOf(message.attemptId)[0]!;
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
+    expect(w.gate.slotPending).toEqual([request.networkId]);
+    expect(w.gate.state).toEqual({ phase: "closed", window: null, deadline: null });
+    expect(w.exit.open).toBe(true);
+    deadlineMs = 15_000;
+    for (const next of [send(w), send(w, media)]) {
+      expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+      expect(w.chrome.wire.some((entry) => entry.attemptId === next.attemptId)).toBe(false);
+    }
+    await until(() => unended.length === 1, 5000, "the media slot's bound");
+    expect(unended).toEqual([`hub:${message.attemptId}`]);
+    w.cdp.emit("Network.loadingFailed", { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET" }, w.chrome.session);
+    expect(w.gate.slotOwner).toBeNull();
     const after = send(w);
     expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "response", status: 200 });
   });

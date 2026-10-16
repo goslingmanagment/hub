@@ -66,10 +66,10 @@
 //   until Chrome reports a real end of it, or until Chrome is gone; past the
 //   slot's bound the operator restarts Chrome in a quiet moment.
 //
-// What is not on the stand yet: media. The CDN hosts are not under the gate
-// (spec §9: their tunnels serve the site's images too): a media request's
-// deadline is checked when it is released, and its tunnels are cut by its
-// request deadline and its limit, but a record of it is not held. Its `sent`
+// What is not on the stand yet: media. The CDN hosts have no API window
+// (spec §9: their tunnels serve the site's images too), but a media request
+// holds Hub's same slot until its proven end. Its deadlines cancel it only
+// in the page, and a record of it is not held. Its `sent`
 // is CDP's word, and a released one counts as sent. Whether an Image and a
 // video element ask as the site's own do, and a video in one request, the
 // stand and the test account must show.
@@ -510,13 +510,14 @@ export class HubRequests {
     }
     if (browserGone) {
       this.session.reset();
-      this.#releasedPhys.clear();
       this.#navigations.clear();
       this.#byFetch.clear();
-      this.#byNetwork.clear();
       this.#sessionOf.clear();
       this.#pathOf.clear();
     }
+    // This can run before Chrome is gone. Keep released requests and their
+    // ownership for later end events (both maps are bounded by remember).
+    // The gate's browserGone, after Chrome's confirmed exit, frees its slot.
   }
 
   // ── the interception ───────────────────────────────────────────────────
@@ -569,7 +570,7 @@ export class HubRequests {
   /** Whether a network request is one of Hub's own (variant Б: the site's
    *  observer leaves Hub's requests to this path). */
   ownsNetworkId(networkId: string): boolean {
-    return this.#byNetwork.has(networkId);
+    return this.#releasedPhys.has(networkId) || this.#byNetwork.has(networkId);
   }
 
   /** A request of the site's own to the API, as it stopped: the session is
@@ -725,18 +726,18 @@ export class HubRequests {
       status: null,
       headers: [],
     };
-    if (phys.window !== null) {
-      // The window right before the release: the request's records go up
-      // only in it, and only before the deadline (spec §9).
-      const opened = this.#deps.gate.open(phys.window, deadline!, 0, request.networkId);
-      if (!opened.ok) {
-        // Another admitted request of the page unfinished (egress/gate.ts):
-        // not released, not sent — the engine's not-sent outcome, as its
-        // pacer's one place in flight says ("pace").
-        const why = `the gate refused the request: ${opened.reason}`;
-        const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
-        return this.#refuseAt(attempt, request, outcome, why);
-      }
+    // Every Hub request takes the same slot; only API requests also open
+    // a window for the API's records (spec §9).
+    const opened = phys.window !== null
+      ? this.#deps.gate.open(phys.window, deadline!, 0, request.networkId)
+      : this.#deps.gate.takeSlot(`hub:${attempt.id}`, deadline!, request.networkId);
+    if (!opened.ok) {
+      // Another admitted request of the page unfinished (egress/gate.ts):
+      // not released, not sent — the engine's not-sent outcome, as its
+      // pacer's one place in flight says ("pace").
+      const why = `the gate refused the request: ${opened.reason}`;
+      const outcome: Outcome = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: why } : { kind: "aborted_before_send", refusal: opened.inFlight !== undefined ? "pace" : "send_deadline_passed" };
+      return this.#refuseAt(attempt, request, outcome, why);
     }
     if (role === "preflight") attempt.preflight = phys;
     else attempt.main = phys;
@@ -965,9 +966,11 @@ export class HubRequests {
     // (amendment 37). The page's slot stays held — only a real end, or
     // Chrome gone, frees it (plan-b §4.1.10).
     const released = this.#releasedPhys.get(params.requestId);
-    this.#releasedPhys.delete(params.requestId);
-    const unproven = params.canceled === true && released !== undefined && !released.answered;
-    if (!unproven) this.#deps.gate.requestEnded(params.requestId);
+    const unproven = params.canceled === true && (released === undefined ? this.ownsNetworkId(params.requestId) : !released.answered);
+    if (!unproven) {
+      this.#releasedPhys.delete(params.requestId);
+      this.#deps.gate.requestEnded(params.requestId);
+    }
     const found = this.#physical(params.requestId);
     if (!found) return;
     const { attempt, phys } = found;

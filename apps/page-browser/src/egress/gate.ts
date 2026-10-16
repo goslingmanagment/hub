@@ -141,6 +141,8 @@ interface Slot {
   timer: NodeJS.Timeout | null;
 }
 
+type SlotAdmission = { ok: true } | { ok: false; reason: string; inFlight?: string };
+
 export interface GateOptions {
   /** CLOCK_MONOTONIC ms (tests use their own clock). */
   now?: () => number;
@@ -205,19 +207,11 @@ export class ApiGate {
    *  follows): its window, until `deadlineMono`. `bodyBytes`: its body
    *  (0 = none, null = of unknown length). Refused — the request must then
    *  not be released — for a body the gate cannot count or a deadline gone. */
-  open(id: string, deadlineMono: number, bodyBytes: number | null, request: string | null = null): { ok: true } | { ok: false; reason: string; inFlight?: string } {
+  open(id: string, deadlineMono: number, bodyBytes: number | null, request: string | null = null): SlotAdmission {
     if (bodyBytes === null) return { ok: false, reason: "a body of unknown length" };
     if (bodyBytes > MAX_BODY_BYTES) return { ok: false, reason: `a body of ${bodyBytes} bytes, over ${MAX_BODY_BYTES}` };
-    const now = this.#now();
-    if (!(deadlineMono > now)) return { ok: false, reason: "the admission's deadline has passed" };
-    const operation = operationOf(id);
-    const owned = this.#slot;
-    if (owned !== null && owned.operation !== operation) {
-      // Nothing is changed: the slot stays its owner's.
-      this.onEvent({ kind: "in_flight_refused", window: id, detail: { owner: owned.operation, pending: owned.pending.size, ended: owned.ended, phase: this.#phase } });
-      return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${owned.operation})`, inFlight: owned.operation };
-    }
-    this.#take(operation, deadlineMono, request ?? `window ${id}`);
+    const admission = this.#reserveSlot(operationOf(id), deadlineMono, request ?? `window ${id}`, id);
+    if (!admission.ok) return admission;
     this.#clearTimers();
     // Whatever a tunnel still holds was never admitted (a passive gate holds nothing).
     const cut = this.#passive ? 0 : this.cutHeld("gate: bytes held from before this window");
@@ -235,7 +229,7 @@ export class ApiGate {
       sentAt: null,
     };
     this.#phase = "open";
-    if (!this.#passive) this.#deadlineTimer = setTimeout(() => this.#onDeadline(id), Math.max(0, deadlineMono - now));
+    if (!this.#passive) this.#deadlineTimer = setTimeout(() => this.#onDeadline(id), Math.max(0, deadlineMono - this.#now()));
     return { ok: true };
   }
 
@@ -357,6 +351,12 @@ export class ApiGate {
     return [...(this.#slot?.pending ?? [])];
   }
 
+  /** A media request shares Hub's one slot without opening an API window.
+   *  Its bound and proven-end rules are the same as an API request's. */
+  takeSlot(operation: string, deadlineMono: number, request: string | null): SlotAdmission {
+    return this.#reserveSlot(operation, deadlineMono, request ?? `operation ${operation}`, null);
+  }
+
   /** A request released under the slot has its end confirmed: Chrome's
    *  loadingFinished or loadingFailed for it, or its answer resolved at the
    *  response stage and that resolution answered by Chrome. */
@@ -380,6 +380,17 @@ export class ApiGate {
   browserGone(): void {
     if (this.#slot?.timer) clearTimeout(this.#slot.timer);
     this.#slot = null;
+  }
+
+  #reserveSlot(operation: string, deadlineMono: number, request: string, window: string | null): SlotAdmission {
+    if (!(deadlineMono > this.#now())) return { ok: false, reason: "the admission's deadline has passed" };
+    const owned = this.#slot;
+    if (owned !== null && owned.operation !== operation) {
+      this.onEvent({ kind: "in_flight_refused", window, detail: { owner: owned.operation, pending: owned.pending.size, ended: owned.ended, phase: this.#phase } });
+      return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${owned.operation})`, inFlight: owned.operation };
+    }
+    this.#take(operation, deadlineMono, request);
+    return { ok: true };
   }
 
   #take(operation: string, deadlineMono: number, request: string): void {
