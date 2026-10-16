@@ -2276,8 +2276,8 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     const before = server.received().length;
     client.request();
     await until(() => server.received().subarray(before).includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
-    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${n}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     await client.answered();
+    s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: `WS${n}`, timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     return { client };
   }
 

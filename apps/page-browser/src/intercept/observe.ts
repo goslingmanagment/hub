@@ -188,7 +188,7 @@ export class SiteObserver {
     };
     this.#sockets.delete(handshake.id);
     this.#sockets.set(handshake.id, sent);
-    if (this.#sockets.size > SOCKETS_KEPT) this.#sockets.delete(this.#sockets.keys().next().value!);
+    if (this.#sockets.size > SOCKETS_KEPT) this.socketEnded({ id: this.#sockets.keys().next().value!, status: null, error: "the operator followed too many handshakes" });
     this.#send({ message: sent, sent });
   }
 

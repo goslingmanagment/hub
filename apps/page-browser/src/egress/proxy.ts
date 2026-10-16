@@ -73,6 +73,7 @@ export interface TunnelRecord {
 export type SocketTunnelEvent =
   | { kind: "open" }
   | { kind: "handshake_sent"; mono: number; wall: number }
+  | { kind: "answered"; mono: number }
   /** The socket gate holds a record that may be the authorization under a
    *  token not observed yet: the site's session is to be read again. */
   | { kind: "holding"; recordBytes: number; why: string }
@@ -642,7 +643,10 @@ export class Egress {
           }
           // The server answers the socket's request: what Chrome writes from
           // now on is frames.
-          if (tunnel.socket?.phase === "request") tunnel.socket.phase = "frames";
+          if (tunnel.socket?.phase === "request") {
+            tunnel.socket.phase = "frames";
+            this.#tell(tunnel.socket, { kind: "answered", mono: monoMs() });
+          }
           // Before Chrome can react to them (a refusal it would repeat on).
           if (cls === "api") this.gate.noteServerBytes(tunnel.record.id);
           if (!client.write(chunk)) upstream.pause();

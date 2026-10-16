@@ -320,6 +320,24 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.sent.at(-1)).toMatchObject({ type: "siteSent", siteRequestId: `outbox-${OBSERVED_OUTBOX_MAX}` });
   });
 
+  it.each([true, false])("65 socket sends get 65 ends, including the one evicted before its answer (link up: %s)", (up) => {
+    const w = world({ up });
+    const ids = Array.from({ length: 65 }, (_, n) => `socket-${n}`);
+    for (const id of ids) w.observer.socketSent({ id, url: new URL("wss://wsv3.fansly.com/"), sentMono: 1_000 });
+    if (up) expect(w.sent.filter((message) => message.type === "siteEnded")).toMatchObject([{ siteRequestId: ids[0], status: null, error: "the operator followed too many handshakes" }]);
+    for (const id of ids) w.observer.socketEnded({ id, status: 101, error: null });
+    w.link.up = true;
+    w.observer.linkChanged(true);
+    const sends = w.sent.filter((message) => message.type === "siteSent");
+    const ends = w.sent.filter((message) => message.type === "siteEnded");
+    expect(sends.map((message) => message.siteRequestId)).toEqual(ids);
+    expect(ends.map((message) => message.siteRequestId)).toEqual(ids);
+    expect(ends[0]).toMatchObject({ status: null, error: "the operator followed too many handshakes" });
+    expect(ends.slice(1).every((message) => message.status === 101 && message.error === null)).toBe(true);
+    w.observer.linkChanged(true);
+    expect(w.sent).toHaveLength(130);
+  });
+
   it.each([true, false])("the operator reconnect hook runs and quiesced uses the latest send of either origin (site latest: %s)", async (siteLatest) => {
     const w = world();
     request(w, "floor", "/api/v1/account/me");

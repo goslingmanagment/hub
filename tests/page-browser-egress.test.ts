@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { checkExitIp, ExitIpError } from "../apps/page-browser/src/egress/exit-ip.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
-import { Egress, localOrPrivate, type TunnelRecord } from "../apps/page-browser/src/egress/proxy.ts";
+import { Egress, localOrPrivate, type EgressOptions, type SocketTunnelEvent, type TunnelRecord } from "../apps/page-browser/src/egress/proxy.ts";
 import { SocksError, socksConnect, type SocksConfig } from "../apps/page-browser/src/egress/socks5.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
-import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, SOCKS_PASSWORD, SOCKS_USER, until } from "./helpers/page-browser-fakes.ts";
+import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, socketServer, SocketTunnelClient, SOCKS_PASSWORD, SOCKS_USER, tlsRecord, until } from "./helpers/page-browser-fakes.ts";
 
 // The operator's local proxy (Project Browser plan §4.5; stage 3, PR 4):
 // Chrome's only way out, through the page's SOCKS5 with its password. It
@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setUp() {
+async function setUp(options: Pick<EgressOptions, "openSocket"> = {}) {
   const socks = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
   await socks.start();
   cleanups.push(() => socks.stop());
@@ -33,6 +33,7 @@ async function setUp() {
     onSocksFailure: (kind) => socksFailures.push(kind),
     socksTimeoutMs: 2000,
     log: quiet,
+    ...options,
   });
   const port = await egress.listen(0);
   cleanups.push(() => egress.close());
@@ -73,6 +74,33 @@ describe("the closed exit", () => {
 });
 
 describe("the open exit", () => {
+  it("tells a socket's answer on its first server bytes after the request, once, before Chrome can see them", async () => {
+    const events: SocketTunnelEvent[] = [];
+    const { egress, port, socks, config } = await setUp({ openSocket: () => ({ id: "socket", event: (event) => events.push(event), rules: () => ({ authorizationBytes: null }) }) });
+    const server = await socketServer();
+    cleanups.push(server.close);
+    socks.routes.set("wsv3.fansly.com:443", server.port);
+    egress.setSocks(config);
+    egress.openExit();
+    const client = await SocketTunnelClient.connect(port);
+    cleanups.push(() => client.destroy());
+    await client.tls();
+    expect(events.map((event) => event.kind)).toEqual(["open"]);
+    const before = monoMs();
+    client.request();
+    await client.answered();
+    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent", "answered"]);
+    const answer = events.find((event) => event.kind === "answered")!;
+    expect(answer.mono).toBeGreaterThanOrEqual(before);
+    expect(answer.mono).toBeLessThanOrEqual(monoMs());
+    const received = client.inbound.length;
+    server.send(tlsRecord(23, 100, 0x55));
+    await until(() => client.inbound.length > received);
+    expect(events.filter((event) => event.kind === "answered")).toHaveLength(1);
+    egress.closeExit("test complete");
+    expect(events.at(-1)).toMatchObject({ kind: "ended", handshakeSent: true });
+  });
+
   it("tunnels a site host through the SOCKS5 with its password; closing the exit cuts the tunnel", async () => {
     const { egress, port, socks, records, config } = await setUp();
     const echo = await echoServer();

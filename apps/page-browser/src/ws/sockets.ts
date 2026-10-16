@@ -10,9 +10,10 @@
 // word that its request went up tells the engine `siteSent`, under the
 // tunnel's id and at the proxy's moment (the observer's outbox,
 // intercept/observe.ts), even when CDP never shows that socket. CDP tells
-// only the answer: `siteEnded` of the oldest tunnel still owed an end. A
-// tunnel that ends first waits 2 s for that answer, then ends with its
-// status unknown. So the engine counts the write in the page's pause before
+// only the status: `siteEnded` of the oldest send the proxy saw answered
+// and still owed an end. From that answer it waits 2 s for CDP, then ends
+// with its status unknown; a tunnel that ends unanswered ends at once. So
+// the engine counts the write in the page's pause before
 // its own requests and holds `ws.upgrade` on the site's 401/429. The
 // connection CDP shows has its own id, separate from the tunnel's.
 //
@@ -132,10 +133,12 @@ export const OBSERVED_SOCKET_ATTEMPT = 0;
 // and its events wait for that first calibration — at most
 // CALIBRATION_WAIT_MS, every socket event after them waiting behind them (the
 // stream keeps CDP's order); the holder keeps them unacknowledged meanwhile.
-// One stamped without a calibration (refused, or past the wait) is stamped no
-// later than the latest calibrated event of its socket, else at its take.
-// The take proves no boundary before a loss: that stamp's mark keeps its
-// wall time unknown.
+// A slow reading still gives a lower bound: kept when the session has no
+// clock, then tried again for a tight one. One stamped without any reading
+// (failed, or past the wait) is stamped no later than the latest calibrated
+// event of its socket, else at its take. The take proves no boundary before
+// a loss: that stamp's mark keeps the previous mark's wall, else Chrome's
+// start — every event of this Chrome comes after it.
 
 export { CALIBRATION_MAX_MS } from "../cdp/chrome-clock.ts";
 /** A session's calibration is taken again this often (the tightest kept). */
@@ -147,7 +150,7 @@ const CALIBRATION_READINGS = 3;
 const CALIBRATION_RETRY_MS = [250, 1_000, 5_000, 30_000];
 /** How long socket events wait for their session's first calibration. */
 export const CALIBRATION_WAIT_MS = 2_000;
-/** A tunnel may close before CDP tells its handshake's answer. */
+/** From the proxy's answer, how long its send waits for CDP's status. */
 export const SOCKET_ANSWER_GRACE_MS = 2_000;
 
 /** The buffer as the socket uses it. */
@@ -249,6 +252,7 @@ interface SocketSend {
   id: string;
   host: string;
   sent: boolean;
+  answered: boolean;
   timer: NodeJS.Timeout | null;
 }
 
@@ -346,6 +350,8 @@ export class SiteSockets {
   #retryTimer: NodeJS.Timeout | null = null;
   #retryStep = 0;
   #chromeGaps = 0;
+  /** Every event of this Chrome comes after its start. */
+  #chromeStartedWall = wallMs();
   /** The last event of the socket's stream (ws.open, ws.in, ws.close). */
   #last: Mark | null = null;
   /** The last event of the socket's stream that is durable. */
@@ -492,7 +498,7 @@ export class SiteSockets {
    *  records are decided by the socket gate under this ticket. */
   openTunnel(host: string, port: number): SocketTicket {
     const id = randomUUID();
-    const send: SocketSend = { id, host, sent: false, timer: null };
+    const send: SocketSend = { id, host, sent: false, answered: false, timer: null };
     this.#log("tunnel.opened", { tunnelId: id, host, port });
     return { id, event: (event) => this.#onTunnel(send, event), rules: () => ({ authorizationBytes: this.#deps.authorizationBytes() }) };
   }
@@ -511,6 +517,17 @@ export class SiteSockets {
         this.#sends.set(tunnelId, send);
         if (this.#lastHandshake === null || event.mono > this.#lastHandshake.mono) this.#lastHandshake = { mono: event.mono, wall: event.wall };
         this.#deps.observe.sent({ id: tunnelId, url: new URL(`wss://${send.host}/`), sentMono: event.mono });
+        return;
+      case "answered":
+        if (!this.#sends.has(tunnelId) || send.answered) return;
+        send.answered = true;
+        send.timer = setTimeout(() => {
+          // CDP's answer may already be waiting for a calibration: take it
+          // before declaring the status unknown, keeping only proven marks.
+          this.#drain(true);
+          this.#endObserved(send, null, "CDP told no answer within the grace");
+        }, Math.max(0, Math.ceil(event.mono + SOCKET_ANSWER_GRACE_MS - monoMs())));
+        send.timer.unref();
         return;
       case "holding":
         // It may be the authorization under a token not observed yet: the
@@ -546,17 +563,10 @@ export class SiteSockets {
     }
   }
 
-  /** The server's answer and its close pass the proxy before Chrome tells
-   *  them. Keep a closed tunnel in order for that answer during the grace. */
+  /** No answer passed the proxy: none of CDP's answers can be this send's.
+   *  One already answered keeps its grace from that answer, not the close. */
   #tunnelEnded(send: SocketSend, result: string): void {
-    if (!this.#sends.has(send.id) || send.timer !== null) return;
-    send.timer = setTimeout(() => {
-      // The answer may already be waiting for a calibration: take it before
-      // declaring it unknown. Its stamp keeps only what is proven.
-      this.#drain(true);
-      this.#endObserved(send, null, `the tunnel ended (${result}) and CDP told no answer`);
-    }, SOCKET_ANSWER_GRACE_MS);
-    send.timer.unref();
+    if (!send.answered) this.#endObserved(send, null, `the tunnel ended before any answer (${result})`);
   }
 
   /** Its send's end, to the engine, once. */
@@ -569,10 +579,14 @@ export class SiteSockets {
 
   /** Both handshakes are the same page's `ws.upgrade`: if concurrent ones'
    *  answers swap, their status still holds the same route. CDP gives no
-   *  tunnel id, so the oldest send still owed an end takes the answer. */
+   *  tunnel id, so the oldest send the proxy saw answered and still owed
+   *  an end takes the status. */
   #answered(status: number, error: string | null): void {
-    const send = this.#sends.values().next().value;
-    if (send !== undefined) this.#endObserved(send, status, error);
+    for (const send of this.#sends.values()) {
+      if (!send.answered) continue;
+      this.#endObserved(send, status, error);
+      return;
+    }
   }
 
   // ── the page's lifetime ────────────────────────────────────────────────
@@ -630,6 +644,7 @@ export class SiteSockets {
   /** A new Chrome starts: whatever is left of the one before goes with it. */
   async chromeStarting(): Promise<void> {
     this.#chromeGone("the previous Chrome is gone");
+    this.#chromeStartedWall = wallMs();
   }
 
   /** The page stops or its browser goes (the exit is closed already): every
@@ -802,6 +817,7 @@ export class SiteSockets {
         // A slow round trip: the link is loaded — the rest wait for a retry.
         if ("refused" in reading) {
           why = reading.refused;
+          if (reading.reading !== undefined && !this.#clocks.has(sessionId)) this.#clocks.set(sessionId, reading.reading);
           break;
         }
         readings.push(reading);
@@ -953,7 +969,7 @@ export class SiteSockets {
     const items = (): GroupItem[] => (uncovered === null ? opened : [{ gap: "ws_reconnect", from: { seq: uncovered.seq, wall: uncovered.wall } }, ...opened]);
     this.#open.set(id, socket);
     this.#uncovered = null;
-    const mark: Mark = { seq: null, wall: at.proven ? at.wall : null };
+    const mark: Mark = { seq: null, wall: at.proven ? at.wall : (this.#last?.wall ?? this.#chromeStartedWall) };
     this.#last = mark;
     const durable = this.#write(`open:${id}`, items, (written) => this.#saved_(written, mark));
     if (durable !== null) this.#settled = Promise.all([this.#settled, durable]);
@@ -979,7 +995,7 @@ export class SiteSockets {
       this.#log("event.unkept", { kind: "ws.in", reason: appended.reason });
       return null;
     }
-    const mark: Mark = { seq: null, wall: at.proven ? at.wall : null };
+    const mark: Mark = { seq: null, wall: at.proven ? at.wall : (this.#last?.wall ?? this.#chromeStartedWall) };
     this.#last = mark;
     const durable = appended.durable.then((written) => {
       this.#saved_(written, mark);
@@ -1083,8 +1099,8 @@ export class SiteSockets {
     // and, as a boundary, the moment of the last event received before it
     // (the open or a frame): a close moves no boundary later (Astra's
     // review of PR 15, round 6).
-    const previousWall = this.#last?.wall ?? null;
-    const mark: Mark = { seq: null, wall: stamp.proven && previousWall !== null ? Math.min(stamp.wall, previousWall) : previousWall };
+    const previousWall = this.#last?.wall ?? this.#chromeStartedWall;
+    const mark: Mark = { seq: null, wall: stamp.proven ? Math.min(stamp.wall, previousWall) : previousWall };
     this.#last = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
