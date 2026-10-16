@@ -129,6 +129,7 @@ export * from "./repositories/notification-outbox.ts";
 export * from "./repositories/notification-paging.ts";
 export * from "./repositories/observations.ts";
 export * from "./repositories/ops-metrics.ts";
+export * from "./repositories/storage-census.ts";
 export * from "./repositories/access-grants.ts";
 export * from "./repositories/domain-events.ts";
 export * from "./repositories/domain-event-supersession.ts";

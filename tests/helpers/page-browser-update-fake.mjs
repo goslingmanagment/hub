@@ -498,6 +498,13 @@ function docker(argv) {
     }
     return 2;
   }
+  if (sub === "builder") {
+    const [action] = rest;
+    if (action !== "prune") return 2;
+    if (behaviour.builderPruneFails) return 1;
+    state.builderPrunes = [...(state.builderPrunes ?? []), rest.slice(1).join(" ")];
+    return 0;
+  }
   if (sub === "network") {
     const [action, ...names] = rest;
     state.networks ??= ["pb-control", "pb-egress"];

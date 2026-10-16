@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import type { RunningSnapshot } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -46,7 +46,15 @@ export async function upsertInstanceHeartbeat(
         startedAt: input.startedAt,
         lastSeenAt: now,
         imageTag: input.imageTag ?? null,
-        running: input.running,
+        // The snapshot (every config key, several KB) is the same on almost
+        // every beat. Keeping the stored datum when it is unchanged lets the
+        // new row version reuse it as is instead of compressing and writing
+        // the whole document again each minute; with no index on last_seen_at
+        // (0284) the beat is then a HOT update of a few bytes.
+        running: sql`case
+          when ${runtimeInstances.running} is distinct from excluded.running then excluded.running
+          else ${runtimeInstances.running}
+        end`,
       },
     });
 }

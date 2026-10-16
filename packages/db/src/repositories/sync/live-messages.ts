@@ -413,7 +413,10 @@ async function markDeleted(database: Database, input: {
 }
 
 /** The ack, in the apply transaction. The legacy metadata receipt is settled
- * here too (only while still pending), so no second writer touches the row. */
+ * here too (only while still pending), so no second writer touches the row.
+ * The decoded nodes decide the receipt's state and are not stored: nothing
+ * reads them, and they are decodeFanslyWsCapture(frame) of the journaled
+ * observation, rebuilt on demand (storage audit 2026-10-16). */
 async function ackReceipt(
   database: Database,
   observationId: number,
@@ -426,8 +429,6 @@ async function ackReceipt(
       live_state = ${state},
       live_decoder_version = ${FANSLY_WS_LIVE_DECODER_VERSION},
       live_applied_at = clock_timestamp(),
-      nodes = case when state = 'pending' and ${metadataState}::text is not null
-        then ${nodes === null ? null : JSON.stringify(nodes)}::jsonb else nodes end,
       decoded_at = case when state = 'pending' and ${metadataState}::text is not null
         then clock_timestamp() else decoded_at end,
       state = case when state = 'pending' and ${metadataState}::text is not null

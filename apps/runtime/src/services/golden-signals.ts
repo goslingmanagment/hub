@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 
 import {
+  gaugeSample,
   insertOpsMetricSamples,
   listNotificationIncidents,
   listRecentOpsMetricSamples,
@@ -302,7 +303,7 @@ export async function computeGoldenSignals(
   for (const floor of HEALTH_FLOOR_REGISTRY) {
     try {
       const backlogMs = await computeHealthFloorBacklogMs(app.db, floor);
-      floorSamples.push(...toSamples(floor.name, { p50: backlogMs, p95: backlogMs }));
+      floorSamples.push(...gaugeSample(floor.name, backlogMs));
     } catch {
       failedProbes.push(floor.name);
     }
@@ -321,9 +322,9 @@ export async function computeGoldenSignals(
     const live = await readFanslyWsLiveGauges(app.db, { windowMinutes: SAMPLE_WINDOW_MINUTES });
     liveSamples.push(
       ...toSamples("dm_visible_lag", { p50: live.visibleLagP50Ms, p95: live.visibleLagP95Ms }),
-      ...toSamples("ws_live_pending_age", { p50: live.pendingAgeMs, p95: live.pendingAgeMs }),
-      ...toSamples("dm_live_parity_bp", { p50: live.parityBasisPoints, p95: live.parityBasisPoints }),
-      ...toSamples("ws_decode_debt", { p50: live.decodeDebt24h, p95: live.decodeDebt24h }),
+      ...gaugeSample("ws_live_pending_age", live.pendingAgeMs),
+      ...gaugeSample("dm_live_parity_bp", live.parityBasisPoints),
+      ...gaugeSample("ws_decode_debt", live.decodeDebt24h),
     );
   } catch {
     failedProbes.push("ws_live_pending_age");
@@ -335,16 +336,13 @@ export async function computeGoldenSignals(
       ...toSamples("canonicalize", canonicalize),
       ...toSamples("projection", projection),
       ...toSamples("command_settle", commandSettle),
-      ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
-      ...toSamples("capture_pending_age", { p50: capturePendingAge, p95: capturePendingAge }),
-      ...toSamples("command_queued_age", { p50: commandQueuedAge, p95: commandQueuedAge }),
-      ...toSamples("notification_outbox_age", {
-        p50: notificationOutboxAge,
-        p95: notificationOutboxAge,
-      }),
-      ...toSamples("acceptance_events_1h", { p50: acceptanceEvents1h, p95: acceptanceEvents1h }),
-      ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
-      ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
+      ...gaugeSample("sse_delivery", staleness),
+      ...gaugeSample("capture_pending_age", capturePendingAge),
+      ...gaugeSample("command_queued_age", commandQueuedAge),
+      ...gaugeSample("notification_outbox_age", notificationOutboxAge),
+      ...gaugeSample("acceptance_events_1h", acceptanceEvents1h),
+      ...gaugeSample("ai_content_rows", aiRows),
+      ...gaugeSample("ai_content_bytes", aiBytes),
       ...floorSamples,
       ...(deliveryHistorySamples ?? []),
       ...liveSamples,
@@ -524,10 +522,29 @@ export interface GoldenSignalsReport {
   smoke: { framesSeen: number; gapCount: number; duplicateCount: number; updatedAt: string | null } | null;
 }
 
+/** A gauge's p50 series stopped when gauges became one p95 sample; its old
+ *  rows stay until the 90-day prune. A p50 series whose newest sample is over
+ *  an hour older than its metric's live p95 series is that frozen half and is
+ *  left out of the report. A real distribution writes both quantiles in the
+ *  same run, so its p50 never trails like that. */
+function withoutRetiredGaugeHalves(rows: OpsMetricSampleRow[]): OpsMetricSampleRow[] {
+  const newest = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.metric}\u0000${row.quantile}`;
+    newest.set(key, Math.max(newest.get(key) ?? 0, row.sampledAt.getTime()));
+  }
+  return rows.filter((row) => {
+    if (row.quantile !== "p50") return true;
+    const p50 = newest.get(`${row.metric}\u0000p50`) ?? 0;
+    const p95 = newest.get(`${row.metric}\u0000p95`);
+    return p95 === undefined || p95 - p50 <= 60 * 60_000;
+  });
+}
+
 export async function getGoldenSignalsReport(
   app: Pick<AppContext, "db">,
 ): Promise<GoldenSignalsReport> {
-  const rows = await listRecentOpsMetricSamples(app.db, { perSeries: 30 });
+  const rows = withoutRetiredGaugeHalves(await listRecentOpsMetricSamples(app.db, { perSeries: 30 }));
   const samples = rows.map((sample) => ({ ...sample, sampledAt: sample.sampledAt.toISOString() }));
   const smoke = await app.db.execute<{
     frames_seen: string;

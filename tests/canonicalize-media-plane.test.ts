@@ -36,6 +36,7 @@ import {
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   canonicalizeSyncPullObservation,
+  fanslyMaterialContentHash,
   SYNC_PULL_CANONICALIZER_VERSION,
 } from "../apps/runtime/src/services/canonicalize/sync-pull.ts";
 import type {
@@ -636,6 +637,30 @@ describe("replay determinism and payload sanity", () => {
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     // Key stability is the property that makes a re-parse append NOTHING.
     expect(second.map((event) => event.dedupKey)).toEqual(first.map((event) => event.dedupKey));
+  });
+
+  it("a message read again has the same material hash and its own key; changed material, a different hash", () => {
+    // Every head read returns the chat's newest 25 messages, so one message is
+    // read many times. The read's clock stays in the key (A → B → A must land
+    // with the last read's clock); the engine drops a re-read of unchanged
+    // material by its material hash, which leaves the clock out.
+    const material = (payload: unknown, receivedAt: Date) => only(
+      canonicalizeSyncPullObservation(dmObservation(payload, receivedAt), CONTEXT),
+      "message.material_observed",
+    );
+    const headOf = (event: CanonicalEventDraft) => event.data.head as Record<string, unknown>;
+    const firstRead = material(paidVideoPayload(), RECEIVED_AT);
+    const laterRead = material(paidVideoPayload(), new Date(RECEIVED_AT.getTime() + 3_600_000));
+    expect(laterRead.dedupKey).not.toBe(firstRead.dedupKey);
+    expect(fanslyMaterialContentHash(headOf(laterRead))).toBe(fanslyMaterialContentHash(headOf(firstRead)));
+
+    const edited = paidVideoPayload();
+    (edited.messages[0] as Record<string, unknown>).content = "<p>changed</p>";
+    expect(fanslyMaterialContentHash(headOf(material(edited, new Date(RECEIVED_AT.getTime() + 7_200_000)))))
+      .not.toBe(fanslyMaterialContentHash(headOf(firstRead)));
+    // A head read back from jsonb (keys reordered) hashes the same.
+    const roundTripped = JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(headOf(firstRead)).reverse()))) as Record<string, unknown>;
+    expect(fanslyMaterialContentHash(roundTripped)).toBe(fanslyMaterialContentHash(headOf(firstRead)));
   });
 
   it("mints a NEW key when the price or the sale counters move, and only then", () => {

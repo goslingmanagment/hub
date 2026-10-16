@@ -76,11 +76,20 @@ describe("golden signals (Stage 25)", () => {
 
   it("samples persist, the report serves them with thresholds, and healthy signals keep the latch closed", async () => {
     const result = await runGoldenSignalSample(appStub());
-    expect(result.sampled).toBeGreaterThanOrEqual(4); // capture p50/p95 + sse p50/p95 (+ projection when watermarks exist)
+    expect(result.sampled).toBeGreaterThanOrEqual(4); // capture p50/p95 + the sse gauge and the other always-emitted gauges
     expect(result.breaches).toEqual([]);
 
+    // A gauge's p50 half, frozen before gauges became one p95 sample, stays in
+    // the table until the prune but not in the report; a distribution keeps both.
+    await harness.pool.query(
+      `insert into ops_metric_samples (metric, value_ms, quantile, sampled_at)
+       values ('capture_pending_age', 7, 'p50', now() - interval '3 hours')`,
+    );
     const report = await getGoldenSignalsReport(appStub());
     expect(report.samples.length).toBeGreaterThanOrEqual(4);
+    expect(report.samples.some((s) => s.metric === "capture_pending_age" && s.quantile === "p50")).toBe(false);
+    expect(report.samples.some((s) => s.metric === "capture_pending_age" && s.quantile === "p95")).toBe(true);
+    expect(report.samples.some((s) => s.metric === "capture" && s.quantile === "p50")).toBe(true);
     expect(report.thresholdsMs.capture).toBe(60_000);
     expect(report.smoke).toMatchObject({ framesSeen: 10, gapCount: 0, duplicateCount: 0 });
 

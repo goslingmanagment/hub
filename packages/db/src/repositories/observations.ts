@@ -388,6 +388,32 @@ export async function listHarvestTransactionResidue(
   };
 }
 
+/**
+ * Whether the page journaled an observation of `kind` before `before` (and
+ * after `since`) that was never parsed (`parse_version = 0`): its events are
+ * not in the ledger yet and can still be appended later, out of order. Read
+ * on the health-floor index (parse_version, source, kind, received_at), where
+ * never-parsed rows are few.
+ */
+export async function hasUnparsedPageObservationBefore(
+  db: Database,
+  input: { accountId: number; source: string; kind: string; before: Date; since: Date; exceptId: number },
+): Promise<boolean> {
+  const result = await db.execute<{ found: boolean }>(sql`
+    select exists (
+      select 1 from observations
+      where parse_version = 0
+        and source = ${input.source}
+        and kind = ${input.kind}
+        and received_at >= ${input.since}
+        and received_at < ${input.before}
+        and account_id = ${input.accountId}
+        and id <> ${input.exceptId}
+    ) as found
+  `);
+  return result.rows[0]?.found === true;
+}
+
 export async function findObservationByKey(
   db: Database,
   source: ObservationSource,

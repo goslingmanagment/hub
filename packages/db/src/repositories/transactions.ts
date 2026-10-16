@@ -10,9 +10,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import {
-  dailyFollowers,
   dailyRevenue,
-  dailySubscribers,
   pages,
   transactions,
 } from "../schema.ts";
@@ -393,50 +391,81 @@ export async function rebuildRevenueRollups(
       ? sql`and t.occurred_at >= ${affectedFrom}`
       : sql``;
 
-    await tx.delete(dailyRevenue).where(affectedFrom
-      ? and(
-        eq(dailyRevenue.platformAccountId, platformAccountId),
-        gte(dailyRevenue.businessDate, toBusinessDate(affectedFrom, timeZone)),
-      )
-      : eq(dailyRevenue.platformAccountId, platformAccountId));
+    const staleWindowClause = affectedFrom
+      ? sql`and d.business_date >= ${toBusinessDate(affectedFrom, timeZone)}::date`
+      : sql``;
+
+    // Diff-applied, like the spender rollups (see rebuildSpenderDailyFacts):
+    // only rows whose numbers moved are written; rows the window no longer
+    // produces are deleted.
     await tx.execute(sql`
-      insert into revenue_daily (
-        platform_account_id,
-        business_date,
-        canonical_type,
-        transaction_state,
-        transaction_count,
-        gross_amount_mills,
-        creator_net_amount_mills,
-        updated_at
+      with fresh as (
+        select t.platform_account_id,
+               (
+                 timezone('UTC', t.occurred_at)::date
+               ) as business_date,
+               t.canonical_type,
+               t.transaction_state,
+               count(*)::int as transaction_count,
+               coalesce(sum(t.gross_amount_mills), 0)::bigint as gross_amount_mills,
+               coalesce(sum(t.creator_net_amount_mills), 0)::bigint as creator_net_amount_mills
+        from transactions t
+        join pages pa on pa.id = t.platform_account_id
+        where t.platform_account_id = ${platformAccountId}
+          and t.is_active = true
+          and t.canonical_type in (${reportableTransactionTypeSql})
+          ${fromClause}
+        group by 1, 2, 3, 4
+      ),
+      written as (
+        insert into revenue_daily (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          updated_at
+        )
+        select f.platform_account_id,
+               f.business_date,
+               f.canonical_type,
+               f.transaction_state,
+               f.transaction_count,
+               f.gross_amount_mills,
+               f.creator_net_amount_mills,
+               now()
+        from fresh f
+        on conflict (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state
+        ) do update set
+          transaction_count = excluded.transaction_count,
+          gross_amount_mills = excluded.gross_amount_mills,
+          creator_net_amount_mills = excluded.creator_net_amount_mills,
+          updated_at = excluded.updated_at
+        where (
+          revenue_daily.transaction_count,
+          revenue_daily.gross_amount_mills,
+          revenue_daily.creator_net_amount_mills
+        ) is distinct from (
+          excluded.transaction_count,
+          excluded.gross_amount_mills,
+          excluded.creator_net_amount_mills
+        )
       )
-      select t.platform_account_id,
-             (
-               timezone('UTC', t.occurred_at)::date
-             ) as business_date,
-             t.canonical_type,
-             t.transaction_state,
-             count(*)::int,
-             coalesce(sum(t.gross_amount_mills), 0)::bigint,
-             coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
-             now()
-      from transactions t
-      join pages pa on pa.id = t.platform_account_id
-      where t.platform_account_id = ${platformAccountId}
-        and t.is_active = true
-        and t.canonical_type in (${reportableTransactionTypeSql})
-        ${fromClause}
-      group by 1, 2, 3, 4
-      on conflict (
-        platform_account_id,
-        business_date,
-        canonical_type,
-        transaction_state
-      ) do update set
-        transaction_count = excluded.transaction_count,
-        gross_amount_mills = excluded.gross_amount_mills,
-        creator_net_amount_mills = excluded.creator_net_amount_mills,
-        updated_at = excluded.updated_at
+      delete from revenue_daily d
+      where d.platform_account_id = ${platformAccountId}
+        ${staleWindowClause}
+        and not exists (
+          select 1 from fresh f
+          where f.business_date = d.business_date
+            and f.canonical_type = d.canonical_type
+            and f.transaction_state = d.transaction_state
+        )
     `);
   });
 }
@@ -447,8 +476,8 @@ export async function rebuildRevenueRollups(
  * `new_followers` is fully derived and is recomputed from scratch, as it
  * always was. `known_total_followers` is NOT derivable from `page_follows` —
  * the live sync only ever knows TODAY's total — so the rebuild must not
- * destroy a historical value it cannot recreate. It used to: the DELETE below
- * cleared every row and the INSERT re-created historical days with a NULL
+ * destroy a historical value it cannot recreate. It used to: a DELETE
+ * cleared every row and an INSERT re-created historical days with a NULL
  * total, which silently erased the per-day totals the Fansly replay backfills
  * from the `page.identity_observed` ledger (slice D). Now the rebuild
  * PRESERVES any total it did not produce, so the two writers agree instead of
@@ -462,16 +491,48 @@ export async function rebuildFollowerRollups(
   platformAccountId: number,
   knownTotalFollowers: number | null,
 ) {
-  await db.transaction(async (tx) => {
-    const preserved = await tx.execute<{ business_date: string; known_total_followers: number }>(sql`
-      select business_date::text as business_date, known_total_followers
-      from daily_followers
-      where platform_account_id = ${platformAccountId}
-        and known_total_followers is not null
-        and business_date < (now() at time zone 'UTC')::date
-    `);
-    await tx.delete(dailyFollowers).where(eq(dailyFollowers.platformAccountId, platformAccountId));
-    await tx.execute(sql`
+  // One diff-applied statement (see rebuildSpenderDailyFacts) that ends in
+  // exactly the rows the old delete-everything-and-reinsert produced:
+  //   - a day with follows: its derived `new_followers`; its total is today's
+  //     live value for today, the stored value for a past day (preserved, as
+  //     above), unknown for a future day;
+  //   - today with no follows but a known total: a zero-new bucket;
+  //   - any other stored day is deleted.
+  // Every rollup row used to be rewritten after each followers walk; now only
+  // the days whose numbers moved are.
+  await db.execute(sql`
+    with today as (
+      select (now() at time zone 'UTC')::date as business_date
+    ),
+    derived as (
+      select ((pf.followed_at at time zone 'UTC')::date) as business_date,
+             count(*)::int as new_followers
+      from page_follows pf
+      where pf.platform_account_id = ${platformAccountId}
+      group by 1
+    ),
+    desired as (
+      select d.business_date,
+             d.new_followers,
+             case
+               when d.business_date = (select business_date from today)
+                 then ${knownTotalFollowers}::integer
+               when d.business_date < (select business_date from today)
+                 then stored.known_total_followers
+               else null::integer
+             end as known_total_followers
+      from derived d
+      left join daily_followers stored
+        on stored.platform_account_id = ${platformAccountId}
+       and stored.business_date = d.business_date
+      union all
+      select (select business_date from today), 0, ${knownTotalFollowers}::integer
+      where ${knownTotalFollowers}::integer is not null
+        and not exists (
+          select 1 from derived d where d.business_date = (select business_date from today)
+        )
+    ),
+    written as (
       insert into daily_followers (
         platform_account_id,
         business_date,
@@ -479,19 +540,8 @@ export async function rebuildFollowerRollups(
         known_total_followers,
         updated_at
       )
-      select pf.platform_account_id,
-             ((pf.followed_at at time zone 'UTC')::date) as business_date,
-             count(*)::int,
-             case
-               when ((pf.followed_at at time zone 'UTC')::date) =
-                    ((now() at time zone 'UTC')::date)
-                 then ${knownTotalFollowers}::integer
-               else null::integer
-             end,
-             now()
-      from page_follows pf
-      where pf.platform_account_id = ${platformAccountId}
-      group by 1, 2
+      select ${platformAccountId}, x.business_date, x.new_followers, x.known_total_followers, now()
+      from desired x
       on conflict (
         platform_account_id,
         business_date
@@ -499,98 +549,71 @@ export async function rebuildFollowerRollups(
         new_followers = excluded.new_followers,
         known_total_followers = excluded.known_total_followers,
         updated_at = excluded.updated_at
-    `);
-    if (knownTotalFollowers !== null) {
-      // The live sync owns today's headline even when no stored relationship
-      // has a `followed_at` date today. The aggregate INSERT above has no row
-      // to hang that fact on in that case, so mint exactly today's zero-new
-      // bucket. On conflict, preserve the derived `new_followers` count.
-      await tx.execute(sql`
-        insert into daily_followers (
-          platform_account_id,
-          business_date,
-          new_followers,
-          known_total_followers,
-          updated_at
-        ) values (
-          ${platformAccountId},
-          (now() at time zone 'UTC')::date,
-          0,
-          ${knownTotalFollowers},
-          now()
-        )
-        on conflict (
-          platform_account_id,
-          business_date
-        ) do update set
-          known_total_followers = excluded.known_total_followers,
-          updated_at = excluded.updated_at
-      `);
-    }
-    if (preserved.rows.length > 0) {
-      // Restore only where the rebuild left a hole: today's value stays the
-      // live one, and a day that no longer has any follows simply has no row
-      // to restore into (absence already means "unknown").
-      await tx.execute(sql`
-        update daily_followers df
-        set known_total_followers = x.known_total_followers,
-            updated_at = now()
-        from jsonb_to_recordset(${JSON.stringify(preserved.rows)}::jsonb) as x(
-          business_date date, known_total_followers integer
-        )
-        where df.platform_account_id = ${platformAccountId}
-          and df.business_date = x.business_date
-          and df.known_total_followers is null
-      `);
-    }
-  });
+      where (daily_followers.new_followers, daily_followers.known_total_followers)
+        is distinct from (excluded.new_followers, excluded.known_total_followers)
+    )
+    delete from daily_followers df
+    where df.platform_account_id = ${platformAccountId}
+      and not exists (select 1 from desired x where x.business_date = df.business_date)
+  `);
 }
 
 export async function rebuildSubscriberRollups(db: Database, platformAccountId: number) {
-  await db.transaction(async (tx) => {
-    await tx.delete(dailySubscribers).where(eq(dailySubscribers.platformAccountId, platformAccountId));
-    await tx.execute(sql`
-      with date_series as (
-        select generate_series(
-          coalesce(
-            (select min((source_created_at at time zone 'UTC')::date)
-             from page_subscriptions
-             where platform_account_id = ${platformAccountId}),
-            (now() at time zone 'UTC')::date
-          ),
-          (now() at time zone 'UTC')::date,
-          interval '1 day'
-        )::date as business_date
-      ),
-      new_subscribers as (
-        select ((source_created_at at time zone 'UTC')::date) as business_date,
-               count(*)::int as new_subscribers
-        from page_subscriptions
-        where platform_account_id = ${platformAccountId}
-        group by 1
-      ),
-      active_subscribers as (
-        -- Historical dates must count subscriptions that were active THEN,
-        -- not only rows still in the platform's current set: is_current=false
-        -- means "retired by a later sweep", and gating on it made every past
-        -- day's count decay as fans churned. For retired rows the effective
-        -- end is least(ends_at, last_seen_at) — last_seen_at is the
-        -- retirement stamp (deactivate sets it; retired rows are never
-        -- touched again), which covers early cancellation (ends_at still in
-        -- the future) and natural expiry (retirement lagging ends_at) alike.
-        select ds.business_date,
-               count(ps.id)::int as active_subscribers
-        from date_series ds
-        left join page_subscriptions ps
-          on ps.platform_account_id = ${platformAccountId}
-         and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
-         and (case
-                when ps.is_current
-                  then coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date)
-                else (least(ps.ends_at, ps.last_seen_at) at time zone 'UTC')::date
-              end) >= ds.business_date
-        group by ds.business_date
-      )
+  // Diff-applied (see rebuildSpenderDailyFacts): every day since the first
+  // subscription used to be deleted and re-inserted after each subscribers
+  // poll; now only the days whose counts moved are written, and days outside
+  // the series are deleted.
+  await db.execute(sql`
+    with date_series as (
+      select generate_series(
+        coalesce(
+          (select min((source_created_at at time zone 'UTC')::date)
+           from page_subscriptions
+           where platform_account_id = ${platformAccountId}),
+          (now() at time zone 'UTC')::date
+        ),
+        (now() at time zone 'UTC')::date,
+        interval '1 day'
+      )::date as business_date
+    ),
+    new_subscribers as (
+      select ((source_created_at at time zone 'UTC')::date) as business_date,
+             count(*)::int as new_subscribers
+      from page_subscriptions
+      where platform_account_id = ${platformAccountId}
+      group by 1
+    ),
+    active_subscribers as (
+      -- Historical dates must count subscriptions that were active THEN,
+      -- not only rows still in the platform's current set: is_current=false
+      -- means "retired by a later sweep", and gating on it made every past
+      -- day's count decay as fans churned. For retired rows the effective
+      -- end is least(ends_at, last_seen_at) — last_seen_at is the
+      -- retirement stamp (deactivate sets it; retired rows are never
+      -- touched again), which covers early cancellation (ends_at still in
+      -- the future) and natural expiry (retirement lagging ends_at) alike.
+      select ds.business_date,
+             count(ps.id)::int as active_subscribers
+      from date_series ds
+      left join page_subscriptions ps
+        on ps.platform_account_id = ${platformAccountId}
+       and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
+       and (case
+              when ps.is_current
+                then coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date)
+              else (least(ps.ends_at, ps.last_seen_at) at time zone 'UTC')::date
+            end) >= ds.business_date
+      group by ds.business_date
+    ),
+    desired as (
+      select ds.business_date,
+             coalesce(ns.new_subscribers, 0) as new_subscribers,
+             coalesce(ac.active_subscribers, 0) as active_subscribers
+      from date_series ds
+      left join new_subscribers ns on ns.business_date = ds.business_date
+      left join active_subscribers ac on ac.business_date = ds.business_date
+    ),
+    written as (
       insert into daily_subscribers (
         platform_account_id,
         business_date,
@@ -599,13 +622,11 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
         updated_at
       )
       select ${platformAccountId},
-             ds.business_date,
-             coalesce(ns.new_subscribers, 0),
-             coalesce(ac.active_subscribers, 0),
+             x.business_date,
+             x.new_subscribers,
+             x.active_subscribers,
              now()
-      from date_series ds
-      left join new_subscribers ns on ns.business_date = ds.business_date
-      left join active_subscribers ac on ac.business_date = ds.business_date
+      from desired x
       on conflict (
         platform_account_id,
         business_date
@@ -613,8 +634,13 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
         new_subscribers = excluded.new_subscribers,
         active_subscribers = excluded.active_subscribers,
         updated_at = excluded.updated_at
-    `);
-  });
+      where (daily_subscribers.new_subscribers, daily_subscribers.active_subscribers)
+        is distinct from (excluded.new_subscribers, excluded.active_subscribers)
+    )
+    delete from daily_subscribers d
+    where d.platform_account_id = ${platformAccountId}
+      and not exists (select 1 from desired x where x.business_date = d.business_date)
+  `);
 }
 
 export async function getRevenueBreakdown(

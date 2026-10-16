@@ -51,6 +51,15 @@ function transactionTypeListSql(transactionTypes: TransactionType[]) {
 
 const spenderTransactionTypeSql = transactionTypeListSql(spenderAnalyticsTransactionTypes);
 
+// The rollup rebuilds below apply a DIFF, not a DELETE + INSERT of the whole
+// window. Every transactions page a sync applies rebuilds its window, and most
+// of those rebuilds change nothing (the 15-minute insurance walk, the hourly
+// rescan): a delete-and-reinsert still wrote a new heap tuple and an entry in
+// every index for each row, and left as many dead ones for vacuum. The final
+// rows are the same either way. Only the rows whose numbers moved are written,
+// and the rows the window no longer produces are deleted; `updated_at` moves
+// only with them (nothing reads it as a rebuild clock — the watermark is
+// projection_watermarks).
 export async function rebuildSpenderDailyFacts(
   db: Database,
   platformAccountId: number,
@@ -62,43 +71,175 @@ export async function rebuildSpenderDailyFacts(
   const fromClause = affectedFrom
     ? sql`and t.occurred_at >= ${affectedFrom}`
     : sql``;
+  const staleWindowClause = affectedFrom
+    ? sql`and d.business_date >= ${toBusinessDate(affectedFrom, UTC_TIME_ZONE)}::date`
+    : sql``;
 
-  await db.delete(spenderDailyFacts).where(affectedFrom
-    ? and(
-      eq(spenderDailyFacts.platformAccountId, platformAccountId),
-      gte(spenderDailyFacts.businessDate, toBusinessDate(affectedFrom, UTC_TIME_ZONE)),
-    )
-    : eq(spenderDailyFacts.platformAccountId, platformAccountId));
+  // One statement: `fresh` is referenced twice, so it is computed once, and
+  // the upsert and the delete touch disjoint rows (in `fresh` / not in it).
   await db.execute(sql`
-    insert into fan_spend_daily (
-      platform_account_id,
-      fan_id,
-      business_date,
-      canonical_type,
-      transaction_state,
-      transaction_count,
-      gross_amount_mills,
-      creator_net_amount_mills,
-      last_transaction_at,
-      updated_at
+    with fresh as (
+      select t.platform_account_id,
+             t.fan_id,
+             (timezone('UTC', t.occurred_at)::date) as business_date,
+             t.canonical_type,
+             t.transaction_state,
+             count(*)::int as transaction_count,
+             coalesce(sum(t.gross_amount_mills), 0)::bigint as gross_amount_mills,
+             coalesce(sum(t.creator_net_amount_mills), 0)::bigint as creator_net_amount_mills,
+             max(t.occurred_at) as last_transaction_at
+      from transactions t
+      where t.platform_account_id = ${platformAccountId}
+        and t.is_active = true
+        and t.fan_id is not null
+        and t.canonical_type in (${spenderTransactionTypeSql})
+        ${fromClause}
+      group by 1, 2, 3, 4, 5
+    ),
+    written as (
+      insert into fan_spend_daily (
+        platform_account_id,
+        fan_id,
+        business_date,
+        canonical_type,
+        transaction_state,
+        transaction_count,
+        gross_amount_mills,
+        creator_net_amount_mills,
+        last_transaction_at,
+        updated_at
+      )
+      select f.platform_account_id,
+             f.fan_id,
+             f.business_date,
+             f.canonical_type,
+             f.transaction_state,
+             f.transaction_count,
+             f.gross_amount_mills,
+             f.creator_net_amount_mills,
+             f.last_transaction_at,
+             now()
+      from fresh f
+      on conflict (platform_account_id, fan_id, business_date, canonical_type, transaction_state)
+      do update set
+        transaction_count = excluded.transaction_count,
+        gross_amount_mills = excluded.gross_amount_mills,
+        creator_net_amount_mills = excluded.creator_net_amount_mills,
+        last_transaction_at = excluded.last_transaction_at,
+        updated_at = excluded.updated_at
+      where (
+        fan_spend_daily.transaction_count,
+        fan_spend_daily.gross_amount_mills,
+        fan_spend_daily.creator_net_amount_mills,
+        fan_spend_daily.last_transaction_at
+      ) is distinct from (
+        excluded.transaction_count,
+        excluded.gross_amount_mills,
+        excluded.creator_net_amount_mills,
+        excluded.last_transaction_at
+      )
     )
-    select t.platform_account_id,
-           t.fan_id,
-           (timezone('UTC', t.occurred_at)::date) as business_date,
-           t.canonical_type,
-           t.transaction_state,
-           count(*)::int,
-           coalesce(sum(t.gross_amount_mills), 0)::bigint,
-           coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
-           max(t.occurred_at),
-           now()
-    from transactions t
-    where t.platform_account_id = ${platformAccountId}
-      and t.is_active = true
-      and t.fan_id is not null
-      and t.canonical_type in (${spenderTransactionTypeSql})
-      ${fromClause}
-    group by 1, 2, 3, 4, 5
+    delete from fan_spend_daily d
+    where d.platform_account_id = ${platformAccountId}
+      ${staleWindowClause}
+      and not exists (
+        select 1 from fresh f
+        where f.fan_id = d.fan_id
+          and f.business_date = d.business_date
+          and f.canonical_type = d.canonical_type
+          and f.transaction_state = d.transaction_state
+      )
+  `);
+}
+
+/** `and <alias>.fan_id = any(<fanIds>)` as ONE bound array, or nothing for
+ *  all fans: a page's affected fans can run to tens of thousands, past the
+ *  65 535 bind parameters of one statement if each were its own parameter. */
+function fanFilter(alias: "sdf" | "l" | "pf", fanIds: readonly number[] | null) {
+  return fanIds === null
+    ? sql``
+    : sql`and ${sql.raw(alias)}.fan_id = any(${sql.param([...fanIds])}::bigint[])`;
+}
+
+/** Diff-applies fan_spend_lifetime for one page from fan_spend_daily: all of
+ *  the page's fans, or only `fanIds`. Same contract as rebuildSpenderDailyFacts. */
+async function applySpenderLifetimeRows(
+  db: Database,
+  platformAccountId: number,
+  fanIds: readonly number[] | null,
+) {
+  await db.execute(sql`
+    with fresh as (
+      select sdf.platform_account_id,
+             sdf.fan_id,
+             coalesce(sum(sdf.gross_amount_mills), 0)::bigint as gross_amount_mills,
+             coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint as creator_net_amount_mills,
+             max(sdf.last_transaction_at) as last_transaction_at
+      from fan_spend_daily sdf
+      where sdf.platform_account_id = ${platformAccountId}
+        ${fanFilter("sdf", fanIds)}
+      group by 1, 2
+    ),
+    written as (
+      insert into fan_spend_lifetime (
+        platform_account_id,
+        fan_id,
+        gross_amount_mills,
+        creator_net_amount_mills,
+        last_transaction_at,
+        updated_at
+      )
+      select f.platform_account_id,
+             f.fan_id,
+             f.gross_amount_mills,
+             f.creator_net_amount_mills,
+             f.last_transaction_at,
+             now()
+      from fresh f
+      on conflict (platform_account_id, fan_id) do update set
+        gross_amount_mills = excluded.gross_amount_mills,
+        creator_net_amount_mills = excluded.creator_net_amount_mills,
+        last_transaction_at = excluded.last_transaction_at,
+        updated_at = excluded.updated_at
+      where (
+        fan_spend_lifetime.gross_amount_mills,
+        fan_spend_lifetime.creator_net_amount_mills,
+        fan_spend_lifetime.last_transaction_at
+      ) is distinct from (
+        excluded.gross_amount_mills,
+        excluded.creator_net_amount_mills,
+        excluded.last_transaction_at
+      )
+    )
+    delete from fan_spend_lifetime l
+    where l.platform_account_id = ${platformAccountId}
+      ${fanFilter("l", fanIds)}
+      and not exists (select 1 from fresh f where f.fan_id = l.fan_id)
+  `);
+}
+
+/** page_fans.total_creator_net_mills from fan_spend_lifetime, written only
+ *  where it differs (all of the page's fans, or only `fanIds`). */
+async function applyPageFanLifetimeTotals(
+  db: Database,
+  platformAccountId: number,
+  fanIds: readonly number[] | null,
+) {
+  await db.execute(sql`
+    update page_fans fp
+    set total_creator_net_mills = totals.total_creator_net_mills
+    from (
+      select pf.id,
+             coalesce(slp.creator_net_amount_mills, 0)::bigint as total_creator_net_mills
+      from page_fans pf
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = pf.platform_account_id
+       and slp.fan_id = pf.fan_id
+      where pf.platform_account_id = ${platformAccountId}
+        ${fanFilter("pf", fanIds)}
+    ) totals
+    where fp.id = totals.id
+      and fp.total_creator_net_mills is distinct from totals.total_creator_net_mills
   `);
 }
 
@@ -108,26 +249,7 @@ async function rebuildSpenderLifetimePage(
   from?: Date | null,
 ) {
   if (!from) {
-    await db.delete(spenderLifetimePage).where(eq(spenderLifetimePage.platformAccountId, platformAccountId));
-    await db.execute(sql`
-      insert into fan_spend_lifetime (
-        platform_account_id,
-        fan_id,
-        gross_amount_mills,
-        creator_net_amount_mills,
-        last_transaction_at,
-        updated_at
-      )
-      select sdf.platform_account_id,
-             sdf.fan_id,
-             coalesce(sum(sdf.gross_amount_mills), 0)::bigint,
-             coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint,
-             max(sdf.last_transaction_at),
-             now()
-      from fan_spend_daily sdf
-      where sdf.platform_account_id = ${platformAccountId}
-      group by 1, 2
-    `);
+    await applySpenderLifetimeRows(db, platformAccountId, null);
     return;
   }
 
@@ -148,42 +270,8 @@ async function rebuildSpenderLifetimePage(
     return;
   }
 
-  await db.delete(spenderLifetimePage).where(and(
-    eq(spenderLifetimePage.platformAccountId, platformAccountId),
-    inArray(spenderLifetimePage.fanId, affectedFanIds),
-  ));
-  await db.execute(sql`
-    insert into fan_spend_lifetime (
-      platform_account_id,
-      fan_id,
-      gross_amount_mills,
-      creator_net_amount_mills,
-      last_transaction_at,
-      updated_at
-    )
-    select sdf.platform_account_id,
-           sdf.fan_id,
-           coalesce(sum(sdf.gross_amount_mills), 0)::bigint,
-           coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint,
-           max(sdf.last_transaction_at),
-           now()
-    from fan_spend_daily sdf
-    where sdf.platform_account_id = ${platformAccountId}
-      and sdf.fan_id in (${sql.join(affectedFanIds.map((fanId) => sql`${fanId}`), sql`, `)})
-    group by 1, 2
-  `);
-
-  await db.execute(sql`
-    update page_fans fp
-    set total_creator_net_mills = coalesce((
-          select slp.creator_net_amount_mills
-          from fan_spend_lifetime slp
-          where slp.platform_account_id = fp.platform_account_id
-            and slp.fan_id = fp.fan_id
-        ), 0)::bigint
-    where fp.platform_account_id = ${platformAccountId}
-      and fp.fan_id in (${sql.join(affectedFanIds.map((fanId) => sql`${fanId}`), sql`, `)})
-  `);
+  await applySpenderLifetimeRows(db, platformAccountId, affectedFanIds);
+  await applyPageFanLifetimeTotals(db, platformAccountId, affectedFanIds);
 }
 
 async function upsertSpenderProjectionWatermark(
@@ -221,16 +309,7 @@ export async function rebuildSpenderProjections(
     await rebuildSpenderDailyFacts(dbTx, platformAccountId, from);
     await rebuildSpenderLifetimePage(dbTx, platformAccountId, from);
     if (!from) {
-      await tx.execute(sql`
-        update page_fans fp
-        set total_creator_net_mills = coalesce((
-              select slp.creator_net_amount_mills
-              from fan_spend_lifetime slp
-              where slp.platform_account_id = fp.platform_account_id
-                and slp.fan_id = fp.fan_id
-            ), 0)::bigint
-        where fp.platform_account_id = ${platformAccountId}
-      `);
+      await applyPageFanLifetimeTotals(dbTx, platformAccountId, null);
     }
     await upsertSpenderProjectionWatermark(dbTx, platformAccountId, rebuiltAt);
   });

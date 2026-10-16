@@ -2323,6 +2323,16 @@ prune_all() {
   for dir in "$SNAP_DIR"/*/; do
     [[ -d "$dir" ]] && prune_snapshots "$(basename "$dir")"
   done
+  # The daily Chrome build leaves its BuildKit cache behind, and nothing else
+  # on this host prunes it (Hub's deploy does the same for its own builds,
+  # scripts/deploy-production.sh). The cache, never an image: a kept image's
+  # layers are not cache entries. Same age as the deploy's; a failure is
+  # logged and never stops the prune.
+  if docker builder prune --force --filter until=168h >/dev/null 2>&1; then
+    journal build_cache_pruned "until=168h"
+  else
+    log "warning: the build cache could not be pruned"
+  fi
   return 0
 }
 

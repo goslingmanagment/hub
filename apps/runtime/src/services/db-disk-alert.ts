@@ -2,7 +2,11 @@ import { statfs } from "node:fs/promises";
 
 import { sql } from "drizzle-orm";
 
-import { insertOpsMetricSamples, listOpsMetricSamplesSince } from "@agency_hub_core/db";
+import {
+  insertOpsMetricSamples,
+  listOpsMetricSamplesSince,
+  recordStorageRelationCensus,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -291,6 +295,42 @@ async function persistDiskCapacityGauges(
   }
 }
 
+/** `disk_pg_database_bytes`, hourly, beside the disk gauges and under the same
+ * rules: a `disk_` name the sampler deadman skips, no alert threshold.
+ * Best-effort like them. */
+async function persistDatabaseSizeGauge(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { checkedAt: Date; databaseBytes: number },
+) {
+  try {
+    await insertOpsMetricSamples(app.db, [{
+      metric: "disk_pg_database_bytes",
+      quantile: "p50",
+      valueMs: Math.round(input.databaseBytes),
+      sampledAt: input.checkedAt,
+    }]);
+  } catch (error) {
+    app.logger.warn({ err: error }, "Disk usage check failed to record the database size gauge; continuing");
+  }
+}
+
+/** Once a UTC day: every table's size and write counters (0285,
+ * storage_relation_daily). Later checks of the day find it recorded. Catalog
+ * reads only. Best-effort: a failed census never costs the disk alert. */
+async function recordDailyStorageCensus(
+  app: Pick<AppContext, "db" | "logger">,
+  checkedAt: Date,
+) {
+  try {
+    const rows = await recordStorageRelationCensus(app.db, checkedAt);
+    if (rows !== null) {
+      app.logger.info({ rows }, "Daily storage census recorded");
+    }
+  } catch (error) {
+    app.logger.warn({ err: error }, "Daily storage census failed; continuing");
+  }
+}
+
 /** Best-effort: a history read that fails leaves runway UNKNOWN (empty series
  * ⇒ no latch is opened and none is resolved), never breaks the disk alert. */
 async function loadDiskFreeHistory(
@@ -443,7 +483,9 @@ export async function runDbDiskUsageCheck(
     usedPercent: usage.usedPercent,
   });
 
-  // Postgres size is context for the alert text only; best-effort.
+  // Postgres size: context for the alert text, and its own hourly gauge so
+  // the database's slope is known apart from the disk's (logs, images and
+  // page browsers share the disk). Best-effort.
   let databaseBytes: number | null = null;
   try {
     const result = await app.db.execute<{ bytes: string }>(
@@ -453,6 +495,9 @@ export async function runDbDiskUsageCheck(
     databaseBytes = raw == null ? null : Number(raw);
   } catch (error) {
     app.logger.warn({ err: error }, "Disk usage check failed to read pg_database_size; continuing");
+  }
+  if (databaseBytes !== null) {
+    await persistDatabaseSizeGauge(app, { checkedAt, databaseBytes });
   }
 
   // G1.5: the gauges this check just wrote plus the last 7 days of them.
@@ -514,6 +559,9 @@ export async function runDbDiskUsageCheck(
       checkedAt,
     });
   }
+
+  // Last, after every alert: the census is context, never on the alert's path.
+  await recordDailyStorageCensus(app, checkedAt);
 
   return {
     healthy: !gateBreached,

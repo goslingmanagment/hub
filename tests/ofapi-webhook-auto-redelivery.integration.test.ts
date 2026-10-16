@@ -509,7 +509,8 @@ describe("OFAPI delivery-history collector catch-up", () => {
     const metric = "ofapi_delivery_history_age";
     await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=false");
     // No collection, no coverage to age: a neutral zero.
-    expect((await computeGoldenSignals(app)).samples.filter(sample => sample.metric === metric).map(sample => sample.valueMs)).toEqual([0, 0]);
+    // One reading, one sample (the p95 slot the latch reads), no p50 twin.
+    expect((await computeGoldenSignals(app)).samples.filter(sample => sample.metric === metric).map(sample => [sample.quantile, sample.valueMs])).toEqual([["p95", 0]]);
 
     await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=true");
     await completeScan({ endMinutesAgo: 50, updatedMinutesAgo: 49 });
