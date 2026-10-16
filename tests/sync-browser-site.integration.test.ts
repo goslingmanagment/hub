@@ -382,3 +382,56 @@ describe("the hand-over: the operator's quiesced", () => {
     expect((await findPageBrowser(db(), r.profileId))!.handoverQuiescedAt).toBeInstanceOf(Date);
   }, 60_000);
 });
+
+// Variant Б (plan-b-browser-host §4.2): an operator of protocol minor 4 lets
+// the site's own requests go and tells the engine what left (`siteSent`),
+// how it ended (`siteEnded`) and whose account the site's own `/account/me`
+// named (`siteIdentity`). Nothing of the site is admitted or refused.
+describe("variant Б: the site's own traffic, observed", () => {
+  async function pageRow(pageId: number) {
+    const result = await testDb!.pool.query<{ credentialsGeneration: string | null; identityAccountId: string | null }>(
+      `select credentials_generation as "credentialsGeneration", identity_account_id as "identityAccountId" from sync_pages where page_id = $1`,
+      [pageId],
+    );
+    return result.rows[0]!;
+  }
+
+  it("journals the site's send and its end, and the site's own account read proves the page's identity under the browser's session", async () => {
+    const r = await rig();
+    // Not trusted yet: the proof is the site's.
+    await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
+    r.operator.siteEnded(sent, { status: 200 });
+    r.operator.siteIdentity(sent, HARNESS_OWN_REF);
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId && row.outcome === "response"), 5_000, "the observed attempt and its end");
+    const row = (await attempts(r.page.pageId)).find((a) => a.browserRequestId === sent.siteRequestId)!;
+    expect(row).toMatchObject({ origin: "site", operation: "account.me", httpStatus: 200, sendMark: "transport_reported" });
+    const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
+    await until(async () => (await pageRow(r.page.pageId)).credentialsGeneration === expected, 5_000, "the identity proof");
+    expect((await pageRow(r.page.pageId)).identityAccountId).toBe(HARNESS_OWN_REF);
+    // Nothing of the site was asked or answered on the admission path.
+    expect(r.operator.siteAnswers).toEqual([]);
+  }, 30_000);
+
+  it("an account other than the page's proves nothing; the site's 429 holds the route for the engine's own requests", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const foreign = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
+    r.operator.siteEnded(foreign, { status: 200 });
+    r.operator.siteIdentity(foreign, "999999999999999999");
+    const limited = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
+    r.operator.siteEnded(limited, { status: 429, retryAfter: "60" });
+    await until(async () => {
+      const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
+      return held.rows.length === 1;
+    }, 5_000, "the route hold of the site's 429");
+    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site").map((a) => a.httpStatus)).toEqual([200, 429]);
+    const page = await pageRow(r.page.pageId);
+    expect(page.credentialsGeneration).toBeNull();
+    expect(page.identityAccountId).toBeNull();
+  }, 30_000);
+});

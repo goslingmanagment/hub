@@ -27,6 +27,7 @@ function stubLink() {
       other = listener;
     },
     onEnd(listener: typeof end) { end = listener; },
+    onSiteObserved() {},
     onLink(listener: (status: LinkStatus) => void) {
       onLink = listener;
       return () => undefined;

@@ -146,6 +146,58 @@ export async function admitSite(
   });
 }
 
+/**
+ * Variant Б (plan-b §4.2.2): a send of the site's own the page's browser let
+ * go and observed — never admitted, never refused. Its attempt is journaled
+ * after the fact under this owner as a site row (`origin` site), with the
+ * owner's minimum S and no jitter (nothing paced it), so the route clocks, the
+ * takeover floor and the hour count see it. Its end goes through
+ * `commitSiteEnd` (`observedSend`): the site's 429, 401 and 403 hold the
+ * engine's own routes as an admitted request's do.
+ */
+export async function recordObservedSiteSend(
+  d: CommitDeps,
+  input: { id: string; method: string; host: string; path: string; route: string; settingMs: number },
+): Promise<{ attemptId: number }> {
+  return inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const admitted = await insertSiteAdmission(tx, {
+      pageId: d.pageId,
+      generation: d.generation,
+      origin: "site",
+      operation: input.route,
+      request: {
+        method: input.method.toUpperCase(),
+        host: input.host,
+        // The path only: a query may carry what the journal must not keep.
+        path: input.path.split("?", 1)[0],
+        siteRequestId: input.id,
+        observed: true,
+      },
+      browserRequestId: input.id,
+      settingMs: input.settingMs,
+      jitterU: 0,
+      pauseMs: input.settingMs,
+    });
+    return { attemptId: admitted.attemptId };
+  });
+}
+
+/** The send facts of an observed site request for `commitSiteEnd`: it went,
+ *  at the instant the browser reported. */
+export function observedSend(sentWall: Date, settingMs: number): CaptureSend {
+  return {
+    sent: true,
+    sentWall,
+    sendMark: "transport_reported",
+    sendMonoOffsetMs: null,
+    gapPrevMs: null,
+    durationMs: null,
+    pauseMs: settingMs,
+    settingMs,
+  };
+}
+
 /** The end of an admitted request, or — when the page's browser says
  *  nothing in `SITE_END_WAIT_MS` — a request that may have gone out. */
 export async function siteEnd(site: SiteAdmissionPort, id: string, signal: AbortSignal): Promise<SiteRequestEnd> {

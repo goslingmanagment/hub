@@ -12,7 +12,7 @@ import {
 import type { CommandKind, CommandResult, Mode, State } from "../../services/egress/page-browser-protocol.ts";
 import type { MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
-import type { Clock, Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
+import type { Clock, Metrics, PendingSiteRequest, SiteAdmissionPort, SiteObservation, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
 import { BrowserControl, browserStands, browserStandsForLogin, browserStartRefusal } from "./browser-control.ts";
 import { browserIntakeOf, openBrowserLink, type BrowserPageDeps } from "./browser-page.ts";
 import { BrowserRecorder } from "./browser-record.ts";
@@ -271,13 +271,23 @@ export class BrowserLoginDriver {
  *  bound (sent). */
 export class LoginSitePort implements SiteAdmissionPort {
   #site: BrowserSiteAdmission | null = null;
+  #observed: ((event: SiteObservation) => void) | null = null;
 
   attach(site: BrowserSiteAdmission): void {
     this.#site = site;
+    site.onObserved(this.#observed);
   }
 
   detach(): void {
+    this.#site?.onObserved(null);
     this.#site = null;
+  }
+
+  /** Variant Б: what the login's browser observed of the site's own traffic
+   *  goes to the Node page's actor (its pause counts the site's sends). */
+  onObserved(listener: ((event: SiteObservation) => void) | null): void {
+    this.#observed = listener;
+    this.#site?.onObserved(listener);
   }
 
   pending(): readonly PendingSiteRequest[] {

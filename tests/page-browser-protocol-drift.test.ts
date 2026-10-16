@@ -49,6 +49,9 @@ interface Pairs {
   wsAdmit: [Engine.WsAdmit, Operator.WsAdmit];
   wsAdmitResult: [Engine.WsAdmitResult, Operator.WsAdmitResult];
   wsDone: [Engine.WsDone, Operator.WsDone];
+  siteSent: [Engine.SiteSent, Operator.SiteSent];
+  siteEnded: [Engine.SiteEnded, Operator.SiteEnded];
+  siteIdentity: [Engine.SiteIdentity, Operator.SiteIdentity];
   eventsSubscribe: [Engine.EventsSubscribe, Operator.EventsSubscribe];
   events: [Engine.Events, Operator.Events];
   ack: [Engine.Ack, Operator.Ack];
@@ -99,6 +102,9 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   wsAdmit: true,
   wsAdmitResult: true,
   wsDone: true,
+  siteSent: true,
+  siteEnded: true,
+  siteIdentity: true,
   eventsSubscribe: true,
   events: true,
   ack: true,
@@ -164,6 +170,11 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "siteDone", siteRequestId: UUID, attemptId: 10, sent: true, sentMono: 1, sentWall: 2, connectionReused: null, status: 200, retryAfter: null, error: null, body: "buffered" },
   { type: "wsAdmit", connectionId: UUID, url: "wss://wsv3.fansly.com/", context: "worker", sessionFingerprint: FP, requestedMono: 1, waitDeadlineMono: 2 },
   { type: "wsDone", connectionId: UUID, attemptId: 11, sent: false, sentMono: null, status: null, error: null, fate: "unknown" },
+  { type: "siteSent", siteRequestId: "425.17", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", route: "account.me", sessionFingerprint: "a".repeat(64), sentMono: 1234.5 },
+  { type: "siteSent", siteRequestId: "ws:425.18", method: "GET", host: "wsv3.fansly.com", path: "/", route: "ws.upgrade", sessionFingerprint: null, sentMono: 1240 },
+  { type: "siteEnded", siteRequestId: "425.17", endedMono: 1300, status: 429, retryAfter: "30", error: null },
+  { type: "siteEnded", siteRequestId: "425.19", endedMono: 1301, status: null, retryAfter: null, error: "net::ERR_FAILED" },
+  { type: "siteIdentity", siteRequestId: "425.17", accountId: "643579795946348544", sessionFingerprint: "a".repeat(64), sentNotBeforeMono: 1234 },
   {
     type: "events",
     bufferId: UUID,

@@ -7,6 +7,7 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
 import {
+  FOREIGN_IN_FLIGHT_MAX_MS,
   JITTER_MAX,
   Pacer,
   PacerInvariantError,
@@ -568,5 +569,66 @@ describe("sync pacer: constants and the test-only floor", () => {
     };
     walk(root);
     expect(offenders).toEqual([path.join("sync", "engine", "pacer.ts")]);
+  });
+});
+
+describe("sync pacer: sends of the page's browser on its own (variant Б, owner decision Б2)", () => {
+  const reported = (sentMono: number): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono });
+
+  it("the next own slot opens S after the site's last send, as after an own one", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    await sendOne(ctx);
+    ctx.clock.advance(5_000);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    ctx.clock.advance(100);
+    ctx.pacer.observeForeignEnd("site-1");
+    const grant = await ctx.pacer.waitForSlot(live());
+    expect(grant.earliestMono).toBe(siteAt + grant.pauseMs);
+  });
+
+  it("no own slot while the site's request is in flight — at most FOREIGN_IN_FLIGHT_MAX_MS after it left", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    await ctx.pacer.waitForSlot(live());
+    // The slot opened only once the bound passed (the forgotten send's own
+    // pause, S, was long over by then).
+    expect(ctx.clock.monoNow()).toBeGreaterThanOrEqual(siteAt + FOREIGN_IN_FLIGHT_MAX_MS);
+    expect(ctx.clock.monoNow()).toBeLessThan(siteAt + FOREIGN_IN_FLIGHT_MAX_MS + 1_100);
+  });
+
+  it("the check refuses an own send when the site sent within the pause or has a request in flight", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    ctx.pacer.observeForeignSend("site-1", ctx.clock.monoNow());
+    expect(ctx.pacer.check(admission)?.reason).toBe("pace");
+    ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "pace" });
+    // In flight, past the pause: still refused.
+    ctx.clock.advance(3_000);
+    const next = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 2, ctx.clock.monoNow());
+    ctx.pacer.observeForeignSend("site-2", ctx.clock.monoNow() - 2_500);
+    expect(ctx.pacer.checkRemoteGrant(next)?.reason).toBe("pace");
+  });
+
+  it("an own send reported for an instant before a later site send does not move the pause back", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    expect(ctx.pacer.checkRemoteGrant(admission)).toBeNull();
+    const ownAt = ctx.clock.monoNow() + 10;
+    ctx.clock.advance(50);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    ctx.pacer.observeForeignEnd("site-1");
+    ctx.clock.advance(200);
+    ctx.pacer.complete(admission, reported(ownAt));
+    expect(admission.sentMono).toBe(ownAt);
+    expect(ctx.pacer.snapshot().lastSendMono).toBe(siteAt);
   });
 });

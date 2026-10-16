@@ -245,6 +245,11 @@ export interface PageTransport {
    *  `unknown`, and those nothing waits for taken every lap. Absent where the
    *  transport keeps none (undici): recovery is as it always was. */
   held?: HeldOutcomeSource;
+  /** A browser page's transport (variant Б): the credentials generation of
+   *  the page's browser under the live session `sessionFingerprint` — what a
+   *  proof of the site's own `/account/me` proves. Absent (Node): the site's
+   *  identity proves nothing of this transport. */
+  siteCredentialsGeneration?(sessionFingerprint: string): Promise<string | null>;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
    *  compares it with the trusted digest (checks-only, G2) and with the
@@ -476,4 +481,33 @@ export interface SiteAdmissionPort {
   /** The end of `id` (its attempt `attemptId`) is committed: a browser that
    *  keeps the end until it is acknowledged may drop it now. Never throws. */
   settled?(id: string, attemptId: number): void;
+  /** Variant Б (protocol minor 4): what the page's browser tells of the
+   *  site's own traffic it let go — observed, never admitted. One listener;
+   *  null removes it. */
+  onObserved?(listener: ((event: SiteObservation) => void) | null): void;
 }
+
+/** One fact of the site's own traffic, observed (variant Б), on the engine's
+ *  clocks. */
+export type SiteObservation =
+  | {
+    kind: "sent";
+    id: string;
+    method: string;
+    host: string;
+    path: string;
+    route: string;
+    sessionFingerprint: string | null;
+    /** The send, monotonic — rounded late: the pause never runs from before it. */
+    sentMono: number;
+    sentWall: Date;
+  }
+  | { kind: "ended"; id: string; status: number | null; retryAfterMs: number | null; error: string | null }
+  | {
+    kind: "identity";
+    id: string;
+    accountId: string;
+    sessionFingerprint: string;
+    /** A lower bound of the request's send: a proof is judged by it. */
+    sentNotBeforeWall: Date;
+  };

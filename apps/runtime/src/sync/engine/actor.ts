@@ -28,6 +28,7 @@ import {
   capture,
   captureSendOf,
   commitNoHttp,
+  commitSiteIdentity,
   deferAfterPlanError,
   deferForRoute,
   drainDueApplies,
@@ -44,7 +45,8 @@ import {
   type RequestTurn,
   type SyncFaultPoint,
 } from "./commit.ts";
-import { routeOfWireId } from "../fansly/routes.ts";
+import { isFanslyRoute, routeOfWireId, type FanslyRoute } from "../fansly/routes.ts";
+import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
 import { reconcileHeldOutcomes, takeLateHeldOutcomes } from "./held-outcomes.ts";
 import { heldByScope, holdSetOf, resourceFilesHeld, whyHeld, type HoldSet } from "./admission.ts";
 import { CREDENTIALS_CHECK_KEYS, isResourceHoldExempt, resourceFileOf } from "./errors.ts";
@@ -57,12 +59,14 @@ import {
   type OwnershipSession,
   type PageTransport,
   type SiteAdmissionPort,
+  type SiteObservation,
   type SiteRequestEnd,
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
 import { isSiteSocket, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
-import { admitSite, commitSiteEnd, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
+import { admitSite, commitSiteEnd, observedSend, recordObservedSiteSend, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
+import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 import {
   beforeGateKeys,
   pollsFor,
@@ -126,6 +130,12 @@ export const ROUTE_STATE_RECHECK_MS = 5_000;
  *  it goes on next lap, so a step that leaves its work due at once (an
  *  overflowed deletion batch) never keeps the page from its requests. */
 export const STEPS_BEFORE_GATE_PER_LAP = 10;
+/** Variant Б: observed site requests remembered (their attempt, for an end
+ *  or an identity proof that comes after); the oldest is forgotten first. */
+export const OBSERVED_SITE_KEPT = 512;
+/** Variant Б: the site's own sends in an hour past which the owner is warned
+ *  (decision Б8: a warning, never a refusal; spec §3's ceiling). */
+export const OBSERVED_SITE_HOUR_WARN = 300;
 
 export interface ActorDeps extends CommitDeps {
   pacer: Pacer;
@@ -216,6 +226,13 @@ export class SyncActor {
   #lapState = { workId: null as string | null, resource: null as string | null, prepare: "not_run", siteCandidate: false, phase: "idle" as ActorPhase };
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
+  /** Variant Б: observed site requests by their browser id. */
+  readonly #observed = new Map<string, { attemptId: number | null; route: FanslyRoute; sentWall: Date }>();
+  /** Variant Б: the journal of observed facts, one commit at a time, in order. */
+  #observedChain: Promise<void> = Promise.resolve();
+  /** Variant Б: the monotonic instants of this hour's observed sends. */
+  #observedHour: number[] = [];
+  #observedWarnedMono = Number.NEGATIVE_INFINITY;
 
   constructor(deps: ActorDeps) {
     this.#d = deps;
@@ -228,6 +245,93 @@ export class SyncActor {
   /** Run until stopped, ownership is lost, the mode changes or a commit after
    *  a send keeps failing. A `SyncCrashFault` (tests) rejects. */
   async run(signals: ActorSignals): Promise<ActorExit> {
+    const site = this.#d.site;
+    site?.onObserved?.((event) => this.#onSiteObserved(event));
+    try {
+      return await this.#runOwned(signals);
+    } finally {
+      site?.onObserved?.(null);
+      await this.#observedChain;
+    }
+  }
+
+  // ── variant Б: the site's own traffic, observed (plan-b §4.2.2–4.2.3) ──
+
+  /** At once: the pause counts the site's send, and an end lets the next own
+   *  slot open. Then, in order, the journal: the attempt, its end with the
+   *  holds it sets, the identity proof. */
+  #onSiteObserved(event: SiteObservation): void {
+    const d = this.#d;
+    switch (event.kind) {
+      case "sent": {
+        d.pacer.observeForeignSend(event.id, event.sentMono);
+        this.#countObservedSend(event.sentMono);
+        // A route the catalogue does not know is the site's other read.
+        const route: FanslyRoute = isFanslyRoute(event.route) ? event.route : SITE_OTHER_ROUTE;
+        this.#journalObserved(async () => {
+          const { attemptId } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS });
+          this.#rememberObserved(event.id, { attemptId, route, sentWall: event.sentWall });
+        });
+        return;
+      }
+      case "ended":
+        d.pacer.observeForeignEnd(event.id);
+        this.#journalObserved(async () => {
+          const sent = this.#observed.get(event.id);
+          if (sent?.attemptId == null) return;
+          const end: SiteRequestEnd = event.status !== null
+            ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
+            : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
+          await commitSiteEnd(d, { attemptId: sent.attemptId, send: observedSend(sent.sentWall, FANSLY_PAUSE_MIN_MS), end, classified: { route: sent.route, exempt: false } });
+        });
+        return;
+      case "identity":
+        this.#journalObserved(async () => {
+          const sent = this.#observed.get(event.id);
+          const generationOf = d.transport.siteCredentialsGeneration;
+          if (sent?.attemptId == null || generationOf === undefined) return;
+          const credentialsGeneration = await generationOf.call(d.transport, event.sessionFingerprint);
+          if (credentialsGeneration === null) return;
+          const outcome = await commitSiteIdentity(d, { attemptId: sent.attemptId, accountId: event.accountId, credentialsGeneration, sentNotBefore: event.sentNotBeforeWall });
+          d.metrics.increment("sync_site_identity", { outcome });
+          if (outcome !== "recorded") {
+            d.logger.warn({ pageId: d.pageId, outcome, attemptId: sent.attemptId }, "Fansly sync actor: the site's own account read proves nothing of this page");
+          }
+        });
+        return;
+    }
+  }
+
+  #journalObserved(commit: () => Promise<void>): void {
+    const d = this.#d;
+    this.#observedChain = this.#observedChain.then(commit).catch((error: unknown) => {
+      if (error instanceof OwnershipLostError) return;
+      d.metrics.increment("sync_site_observed_commit_failed", { error: errorName(error) });
+      d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: an observed site request could not be journaled");
+    });
+  }
+
+  #rememberObserved(id: string, entry: { attemptId: number | null; route: FanslyRoute; sentWall: Date }): void {
+    this.#observed.delete(id);
+    this.#observed.set(id, entry);
+    if (this.#observed.size > OBSERVED_SITE_KEPT) this.#observed.delete(this.#observed.keys().next().value!);
+  }
+
+  /** Decision Б8: past the hour's ceiling a warning (once per ten minutes) —
+   *  the site is never refused; the engine's own work yields in the pacer. */
+  #countObservedSend(atMono: number): void {
+    const d = this.#d;
+    const hourAgo = atMono - 3_600_000;
+    this.#observedHour = this.#observedHour.filter((at) => at > hourAgo);
+    this.#observedHour.push(atMono);
+    d.metrics.increment("sync_site_observed_sends", {});
+    if (this.#observedHour.length > OBSERVED_SITE_HOUR_WARN && atMono - this.#observedWarnedMono >= 600_000) {
+      this.#observedWarnedMono = atMono;
+      d.logger.warn({ pageId: d.pageId, sendsInHour: this.#observedHour.length }, "Fansly sync actor: the site's own requests passed the hour's ceiling (a warning; nothing is refused)");
+    }
+  }
+
+  async #runOwned(signals: ActorSignals): Promise<ActorExit> {
     const d = this.#d;
     this.#phase("recover");
     try {

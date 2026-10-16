@@ -1,8 +1,8 @@
 import type { AdmissionCancel, SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
 import type { SyncLogger } from "../engine/commit.ts";
-import type { LinkStatus, MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
+import type { LinkStatus, MonoBridge, PageBrowserRpcClient, SiteObservedMessage } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
-import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
+import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteObservation, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
 import { classifySiteRequest } from "../engine/site-admission.ts";
 
 // The site path of a browser page over its operator's RPC (Project Browser,
@@ -149,6 +149,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
   readonly #finished = new Set<string>();
   readonly #unlisten: Array<() => void> = [];
   #closed = false;
+  #observed: ((event: SiteObservation) => void) | null = null;
 
   constructor(options: BrowserSiteAdmissionOptions) {
     this.#o = options;
@@ -159,7 +160,8 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       else if (message.type === "admissionCancel") this.#onCancel(message);
     });
     client.onEnd((end) => this.#onEnd(end));
-    this.#unlisten.push(() => client.onOtherMessage(null), () => client.onEnd(null));
+    client.onSiteObserved((message) => this.#onObservedMessage(message));
+    this.#unlisten.push(() => client.onOtherMessage(null), () => client.onEnd(null), () => client.onSiteObserved(null));
     this.#unlisten.push(client.onLink((status) => this.#onLink(status)));
   }
 
@@ -245,6 +247,60 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       for (const waiter of entry.waiters.splice(0)) waiter({ kind: "transport_error", sent: true, message: "the site path closed before the end" });
     }
     this.#entries.clear();
+  }
+
+  /** Variant Б: the site's own traffic an operator of minor 4 observed, on
+   *  the engine's clocks (the actor counts it in the pause, journals it and
+   *  holds routes on it). */
+  onObserved(listener: ((event: SiteObservation) => void) | null): void {
+    this.#observed = listener;
+  }
+
+  #onObservedMessage(message: SiteObservedMessage): void {
+    const listener = this.#observed;
+    if (this.#closed || listener === null) return;
+    const bridge = this.#o.bridge;
+    // Wall time of an engine-monotonic instant: now, moved back by how long ago it was.
+    const wallOf = (engineMono: number) => new Date(Date.now() - Math.max(0, this.#o.monoNow() - engineMono));
+    switch (message.type) {
+      case "siteSent": {
+        // Rounded late, as a reported end's: the pause never runs from before the send.
+        const sentMono = Math.min(this.#o.monoNow(), bridge.fromKernel(message.sentMono) + SEND_REPORT_GUARD_MS);
+        listener({
+          kind: "sent",
+          id: message.siteRequestId,
+          method: message.method,
+          host: message.host,
+          path: message.path,
+          route: message.route,
+          sessionFingerprint: message.sessionFingerprint,
+          sentMono,
+          sentWall: wallOf(sentMono),
+        });
+        return;
+      }
+      case "siteEnded":
+        listener({
+          kind: "ended",
+          id: message.siteRequestId,
+          status: message.status,
+          retryAfterMs: message.status === null ? null : retryAfterDelayMs(message.retryAfter, null, new Date()),
+          error: message.error,
+        });
+        return;
+      case "siteIdentity": {
+        // A lower bound stays one: rounded early, never later than now.
+        const at = Math.min(this.#o.monoNow(), bridge.fromKernel(message.sentNotBeforeMono) - SEND_REPORT_GUARD_MS);
+        listener({
+          kind: "identity",
+          id: message.siteRequestId,
+          accountId: message.accountId,
+          sessionFingerprint: message.sessionFingerprint,
+          sentNotBeforeWall: wallOf(at),
+        });
+        return;
+      }
+    }
   }
 
   // ── the operator's messages ──────────────────────────────────────────────

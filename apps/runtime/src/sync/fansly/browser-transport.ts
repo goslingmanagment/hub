@@ -790,6 +790,15 @@ export async function createBrowserPageTransport(
         return null;
       }
     },
+    // Variant Б: what a proof of the site's own `/account/me` under that
+    // session proves — the generation of the page's browser with it.
+    async siteCredentialsGeneration(sessionFingerprint: string): Promise<string | null> {
+      try {
+        return await readBrowserCredentialsGeneration(ctx.db, page.pageId, sessionFingerprint);
+      } catch {
+        return null;
+      }
+    },
     async close() {
       closed = true;
       await client.close();
