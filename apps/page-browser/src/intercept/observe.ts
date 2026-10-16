@@ -15,8 +15,9 @@
 // - journals each request with its end.
 //
 // The site's socket's handshake is a send of the site's too (route
-// `ws.upgrade`, Б-2d): ws/sockets.ts tells it here from CDP's socket events,
-// and it goes to the engine the same way, through the same outbox.
+// `ws.upgrade`, Б-2d): ws/sockets.ts tells its send here from the proxy's
+// write, under the tunnel's id; CDP gives the answer. It goes to the engine
+// the same way, through the same outbox.
 //
 // Hub's own requests (its placeholder host, then its real one) are not the
 // site's: the caller says which network ids are Hub's. A request answered

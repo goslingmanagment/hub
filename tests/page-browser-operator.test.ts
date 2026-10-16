@@ -2298,7 +2298,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     expect(bindingOf(s)).toMatch(/^pb[0-9a-f]{18}$/);
   });
 
-  it("end to end: the CONNECT goes on at once — no wsAdmit — the handshake is the site's send (siteSent and siteEnded, ws.upgrade), its frames to the engine in order; nothing secret in a log", async () => {
+  it("end to end: the CONNECT goes on at once — no wsAdmit — the proxy's handshake write is the site's send (siteSent and siteEnded, ws.upgrade), CDP gives its status, its frames to the engine in order; nothing secret in a log", async () => {
     const s = await setUp({ minor: 4 });
     const server = await socketServer();
     cleanups.push(server.close);
@@ -2328,7 +2328,10 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     const events = () => s.engine.of("events").flatMap((message) => message.events as Array<Record<string, unknown>>);
     await until(() => events().length === 7, 5000, "7 events");
     expect(events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.in", "ws.in", "ws.in", "ws.in"]);
-    expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: sent.siteRequestId, attemptId: 0, sessionFingerprint: fingerprint });
+    expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: expect.any(String), attemptId: 0, sessionFingerprint: fingerprint });
+    const connectionId = events()[1]!.connectionId;
+    expect(connectionId).not.toBe(sent.siteRequestId);
+    expect(events().slice(2).every((event) => event.connectionId === connectionId)).toBe(true);
     expect(s.engine.of("wsAdmit")).toEqual([]);
     expect(s.engine.of("wsDone")).toEqual([]);
     expect(s.operator.page.snapshot.stopReason).toBeNull();
@@ -2507,6 +2510,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     expect(s.operator.page.snapshot.stopReason).toBeNull();
     expect(s.operator.egress.exitOpen).toBe(true);
     client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+    await until(() => server.received().includes(SOCKET_FILL.authorization), 3000, "the authorization at the server");
     client.message(52, SOCKET_FILL.forbidden);
     await until(() => s.operator.page.snapshot.stopReason === "unknown_ws_message", 5000, "the stop");
     expect(server.received().includes(SOCKET_FILL.authorization)).toBe(true);

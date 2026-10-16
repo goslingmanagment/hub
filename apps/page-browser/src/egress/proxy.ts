@@ -363,6 +363,12 @@ export class Egress {
     if (bytes.length === 0 || !upstream) return;
     tunnel.record.up += bytes.length;
     if (!upstream.write(bytes)) tunnel.client.pause();
+    const socket = tunnel.socket;
+    if (socket !== null && socket.phase === "request" && !socket.handshakeSent) {
+      // Its request's bytes went up, not just its header through the gate.
+      socket.handshakeSent = true;
+      this.#tell(socket, { kind: "handshake_sent", mono: monoMs(), wall: wallMs() });
+    }
   }
 
   #onClientData(tunnel: Tunnel, chunk: Buffer): void {
@@ -463,9 +469,7 @@ export class Egress {
         // TLS 1.3: the client's Finished is application data too — unless
         // the request rides early data, before the server's hello.
         if (tunnel.tls13 === true && socket.appRecords < 2) return null;
-        socket.handshakeSent = true;
         socket.phase = "request";
-        this.#tell(socket, { kind: "handshake_sent", mono: monoMs(), wall: wallMs() });
         return null;
       }
       case "request":
