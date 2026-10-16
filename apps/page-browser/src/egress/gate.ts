@@ -146,6 +146,13 @@ export interface GateOptions {
   now?: () => number;
   noResponseMs?: number;
   slotLimitMs?: number;
+  /** Variant Б (plan-b §4.1.8): the site's own requests go free on the very
+   *  connections Hub's use (HTTP/2 shares them), so no record can be told to
+   *  be a window's. The gate then never holds a record, refuses a tunnel or
+   *  cuts one; it keeps the page's one-operation slot for Hub's requests,
+   *  marks a window's first bytes at the first big record after it opened,
+   *  and says when bytes last went up to the API. */
+  passive?: boolean;
 }
 
 export class ApiGate {
@@ -169,11 +176,20 @@ export class ApiGate {
   #noResponseTimer: NodeJS.Timeout | null = null;
   #lastSend: { mono: number; wall: number } | null = null;
   #slot: Slot | null = null;
+  readonly #passive: boolean;
+  #lastApiWriteMono: number | null = null;
 
   constructor(options: GateOptions = {}) {
     this.#now = options.now ?? monoMs;
     this.#noResponseMs = options.noResponseMs ?? NO_RESPONSE_MS;
     this.#slotLimitMs = options.slotLimitMs ?? SLOT_LIMIT_MS;
+    this.#passive = options.passive === true;
+  }
+
+  /** Variant Б: when a big application record last went up to the API, of
+   *  any origin (CLOCK_MONOTONIC; null: none yet). */
+  get lastApiWriteMono(): number | null {
+    return this.#lastApiWriteMono;
   }
 
   get state(): { phase: GatePhase; window: string | null; deadline: number | null } {
@@ -203,8 +219,8 @@ export class ApiGate {
     }
     this.#take(operation, deadlineMono, request ?? `window ${id}`);
     this.#clearTimers();
-    // Whatever a tunnel still holds was never admitted.
-    const cut = this.cutHeld("gate: bytes held from before this window");
+    // Whatever a tunnel still holds was never admitted (a passive gate holds nothing).
+    const cut = this.#passive ? 0 : this.cutHeld("gate: bytes held from before this window");
     if (cut > 0) this.onEvent({ kind: "unadmitted_cut", window: id, detail: { cut, phase: this.#phase } });
     this.#window = {
       id,
@@ -219,7 +235,7 @@ export class ApiGate {
       sentAt: null,
     };
     this.#phase = "open";
-    this.#deadlineTimer = setTimeout(() => this.#onDeadline(id), Math.max(0, deadlineMono - now));
+    if (!this.#passive) this.#deadlineTimer = setTimeout(() => this.#onDeadline(id), Math.max(0, deadlineMono - now));
     return { ok: true };
   }
 
@@ -227,6 +243,19 @@ export class ApiGate {
    *  there). `big`: larger than a control record; `appData`: TLS application
    *  data (type 23); `tls13`: what the tunnel's server chose. */
   record(tunnel: number, big: boolean, appData: boolean, tls13: boolean | null): RecordVerdict {
+    if (this.#passive) {
+      if (big && appData) {
+        this.#lastApiWriteMono = this.#now();
+        const open = this.#window;
+        // The first big record after a Hub window opened: its request may
+        // be out (it may as well be the site's; the window counts as sent).
+        if (this.#phase === "open" && open !== null && open.sentAt === null) {
+          open.tunnel ??= tunnel;
+          this.#sent(open);
+        }
+      }
+      return "up";
+    }
     const w = this.#window;
     if (this.#phase !== "open" || w === null || this.#now() >= w.deadline) return big ? "hold" : "up";
     if (w.tunnel === tunnel) {
@@ -267,6 +296,7 @@ export class ApiGate {
   /** May Chrome open a new tunnel to the API now? Only for the request just
    *  released, before it went up anywhere, once per window. */
   admitsTunnel(): boolean {
+    if (this.#passive) return true;
     const w = this.#window;
     return this.#phase === "open" && w !== null && !w.announced && w.newTunnel === null && w.tunnel === null && this.#now() < w.deadline;
   }
@@ -287,7 +317,7 @@ export class ApiGate {
     if (!w || w.id !== id || w.announced) return;
     w.announced = true;
     this.onEvent({ kind: "announced", window: id, detail: {} });
-    if (this.#phase === "open" || this.#phase === "holding") this.#armNoResponse(w);
+    if (!this.#passive && (this.#phase === "open" || this.#phase === "holding")) this.#armNoResponse(w);
   }
 
   /** The response headers arrived. */
@@ -305,7 +335,7 @@ export class ApiGate {
     this.#clearTimers();
     this.#phase = "closed";
     this.#window = null;
-    if (w.newTunnel !== null && w.used <= this.#setupRecords(w) && this.cutTunnel(w.newTunnel, "gate: a connection its window's request never went up")) {
+    if (!this.#passive && w.newTunnel !== null && w.used <= this.#setupRecords(w) && this.cutTunnel(w.newTunnel, "gate: a connection its window's request never went up")) {
       this.onEvent({ kind: "unused_cut", window: id, detail: { tunnel: w.newTunnel } });
     }
   }
@@ -389,7 +419,8 @@ export class ApiGate {
     w.sentAt = this.#now();
     this.#lastSend = { mono: w.sentAt, wall: Date.now() };
     this.onEvent({ kind: "first_bytes", window: w.id, detail: { newTunnel: w.newTunnel !== null } });
-    this.#armNoResponse(w);
+    // A passive gate cuts nothing: the request's own limit ends it.
+    if (!this.#passive) this.#armNoResponse(w);
   }
 
   #armNoResponse(w: Window): void {

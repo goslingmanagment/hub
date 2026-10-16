@@ -113,6 +113,7 @@ import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
+import { SiteObserver } from "../intercept/observe.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -229,6 +230,9 @@ export interface OperatorDeps {
   socketTimings?: Partial<SocketTimings>;
   /** Tests: the site requests' waits and limits. */
   siteTimings?: Partial<SiteTimings>;
+  /** TESTS ONLY: false keeps the strict gate of the site's admitted path
+   *  (variant Б's production gate is passive). */
+  gatePassive?: boolean;
   /** Tests: the login desk's waits. */
   loginTimings?: Partial<LoginTimings>;
   /** Tests: where the held halt is kept (else `stateDir/halt.json`). */
@@ -295,6 +299,8 @@ export class Operator {
   /** The site's own requests: the map, the engine's admission, the
    *  answers (plan §4.3). */
   readonly site: SiteRequests;
+  /** Variant Б: the site's own API traffic, observed. */
+  readonly observer: SiteObserver;
   /** The login form's desk (plan §4.8): the screen, its screenshot, the
    *  owner's input. */
   readonly login: LoginDesk;
@@ -452,7 +458,8 @@ export class Operator {
     // The rules extension's package, for Chrome's policy (PR 6).
     this.extension = new ExtensionFiles(this.config.extensionDir, this.#log);
     this.egress = new Egress({
-      gate: new ApiGate({ slotLimitMs: this.#timings.slotLimitMs }),
+      // Variant Б: the site's own requests go free on the API's connections.
+      gate: new ApiGate({ slotLimitMs: this.#timings.slotLimitMs, passive: deps.gatePassive ?? true }),
       classify: this.#classify,
       serve: (req, res) => this.extension.serve(req, res),
       admitSocket: (host, port) => this.sockets.admit(host, port),
@@ -685,18 +692,7 @@ export class Operator {
       notUp: () => this.#siteNotUp(),
       session: {
         fingerprint: () => this.hub.session.fingerprint,
-        note: (request) => {
-          const documents = this.site.documents;
-          const loader = documents.loaderOfRequest(request.networkId);
-          const current = documents.currentLoader(this.control.workTab?.mainFrameId ?? null);
-          // Only the work tab's current document supplies Hub headers.
-          // Unknown loaders keep their old behaviour, unless the tracker
-          // already knows the request's document was replaced.
-          if ((loader === null || loader === current) && !documents.replaced(documents.mark(request))) {
-            this.hub.noteSiteRequest(request);
-          }
-          this.#siteShowedSession(request);
-        },
+        note: (request) => this.#noteSiteSession(request),
       },
       mode: () => this.#mode,
       fault: (reason, note) => this.#requestFault(reason, note),
@@ -704,6 +700,22 @@ export class Operator {
       loginEnded: (end) => this.login.loginEnded(end),
       readEnded: (end) => this.login.readEnded(end),
       ...(deps.siteTimings ? { timings: deps.siteTimings } : {}),
+    });
+    // Variant Б: the site's own API traffic, observed — never paused.
+    this.observer = new SiteObserver({
+      cdp: this.cdp,
+      isApiHost: (host) => this.#classify(host) === "api",
+      isHubRequest: (networkId) => this.hub.ownsNetworkId(networkId),
+      mode: () => this.#mode,
+      link: { send: (message) => this.rpc.send(message) },
+      session: {
+        fingerprint: () => this.hub.session.fingerprint,
+        note: (request) => this.#noteSiteSession(request),
+      },
+      buffer: this.buffer,
+      journal: (line) => this.journals.request(line),
+      readEnded: (end) => this.login.readEnded(end),
+      log: makeLog("observe"),
     });
     // A GET whose document Chrome named after it paused (page 0's
     // confirmation, `#siteShowedSession`).
@@ -838,6 +850,7 @@ export class Operator {
     this.#identity = null;
     this.hub.endAll(note);
     this.site.endAll(note);
+    this.observer.reset();
     this.sockets.endAll(note);
   }
 
@@ -1207,6 +1220,20 @@ export class Operator {
    *  document the operator loaded in this mode (its loader; page 0's
    *  confirmation, `#identityConfirms`). A request of any other document
    *  feeds nothing of it (the session's headers follow PR 15's rules). */
+  /** The live session from a request of the site's own (paused, or observed
+   *  as it left): only the work tab's current document supplies Hub's
+   *  headers — unknown loaders keep their old behaviour, unless the tracker
+   *  already knows the request's document was replaced. */
+  #noteSiteSession(request: PausedRequest): void {
+    const documents = this.site.documents;
+    const loader = documents.loaderOfRequest(request.networkId);
+    const current = documents.currentLoader(this.control.workTab?.mainFrameId ?? null);
+    if ((loader === null || loader === current) && !documents.replaced(documents.mark(request))) {
+      this.hub.noteSiteRequest(request);
+    }
+    this.#siteShowedSession(request);
+  }
+
   #siteShowedSession(request: { networkId: string | null; frameId: string | null; method: string; headers: Record<string, string> }): void {
     if (this.#mode !== "automation" || request.method.toUpperCase() !== "GET" || request.networkId === null) return;
     // The top frame's documents only: a child frame's is never the mode's.
