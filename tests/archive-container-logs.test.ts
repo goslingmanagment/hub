@@ -74,6 +74,18 @@ describe("archive-container-logs.sh", () => {
     return readFileSync(fake.dockerLog, "utf8").trim().split("\n").filter(Boolean);
   }
 
+  it("narrows a shared working directory to the named Compose project (page browsers)", () => {
+    const fake = host({ containers: [
+      { id: apiId, service: "browser", project: "page-browser-lilly-1", workingDir: projectDir, log: "lilly only\n" },
+      { id: workerId, service: "browser", project: "page-browser-ari-1", workingDir: projectDir, log: "another page\n" },
+    ] });
+    const result = run(fake, ["browser"], ["--project-name", "page-browser-lilly-1"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(archives("browser")).toHaveLength(1);
+    expect(read("browser", archives("browser")[0]!).header.id).toBe(apiId);
+    expect(dockerCalls(fake).some((line) => line.includes("logs") && line.includes(workerId))).toBe(false);
+  });
+
   it("archives the whole log of every container of the named services, header first, gzip, mode 0600, dir 0700", () => {
     const fake = host();
     const result = run(fake, ["api", "worker"]);

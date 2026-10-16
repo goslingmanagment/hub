@@ -159,6 +159,7 @@ async function setUp(
         operatorVersion: "test",
       },
       chrome: control,
+      display: async () => control.geometry,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       ...(options.extension ? { extension: options.extension } : {}),
       ...(options.buffer ? { buffer: options.buffer } : {}),
@@ -179,7 +180,7 @@ async function setUp(
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
+  engine.send(hello({ protocol: { majors: [1], minor: 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
@@ -330,7 +331,7 @@ describe("the start (plan §4.1)", () => {
     await until(() => s.operator.page.snapshot.stopReason === "selftest_failed");
     expect(s.operator.page.snapshot.retryAtWall).not.toBeNull();
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     // The retry runs the start again (and fails again).
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
@@ -867,8 +868,54 @@ describe("the halt held for the owner's decision (PR 17, Astra round 3)", () => 
   });
 });
 
+describe("a failed Chrome's profile-writing quit (F7)", () => {
+  it("finishes the old quit before a concurrent restart can start a new Chrome", async () => {
+    const s = await setUp(); s.model.shows.timeZone = "UTC";
+    let release: () => void = () => undefined; let closing = false;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const previous = s.chrome.handlers.get("Browser.close");
+    s.chrome.handlers.set("Browser.close", async (c) => { closing = true; await waiting; return previous?.(c) ?? {}; });
+    await command(s.engine, "restartBrowser");
+    await until(() => closing, 5000, "old Chrome asked to quit");
+    delete s.model.shows.timeZone;
+    const restart = command(s.engine, "restartBrowser");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(s.control.calls.filter((c) => c === "start")).toHaveLength(1);
+    release(); await restart;
+    await until(() => s.control.calls.filter((c) => c === "start").length === 2 && s.operator.page.step === "site_loaded", START_MS, "new Chrome loaded the site");
+    expect(s.control.calls).not.toContain("kill");
+    expect(s.operator.egress.exitOpen).toBe(true);
+  });
+
+  it("closes the exit, then asks Browser.close before forcing a failed startup down", async () => {
+    const s = await setUp();
+    s.model.shows.timeZone = "UTC";
+    const previous = s.chrome.handlers.get("Browser.close");
+    let closedExit = false;
+    s.chrome.handlers.set("Browser.close", (c) => { closedExit = !s.operator.egress.exitOpen; return previous?.(c) ?? {}; });
+    await command(s.engine, "restartBrowser");
+    await until(() => s.operator.page.snapshot.stopReason === "env_mismatch" && !s.chrome.running, 5000, "failed Chrome down");
+    expect(s.chrome.sent("Browser.close")).toHaveLength(1);
+    expect(closedExit).toBe(true);
+    expect(s.control.calls).not.toContain("kill");
+  });
+});
+
 describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
   const evaluations = (s: SetUp, marker: string) => s.chrome.sent("Runtime.evaluate").filter((command) => String(command.params.expression).includes(marker));
+
+  it("halts before Chrome when X retained the pilot's resized screen, with a restart-X reason", async () => {
+    const s = await setUp();
+    s.control.geometry = { width: 1728, height: 936, depth: 24 };
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.halted, 4000, "the changed X screen is held");
+    expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", stopReason: "env_mismatch", retryAtWall: null });
+    expect(s.control.calls).not.toContain("start");
+    await expect.poll(() => journal(s.logDir, "states"), SETTLED).toContainEqual(expect.objectContaining({ note: expect.stringContaining("restart the container's X server") }));
+    const geometry = s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "x.geometry");
+    expect(geometry).toMatchObject({ width: 1728, height: 936, depth: 24, matches: false });
+    expect(s.socks.connects).toEqual([]);
+  });
 
   it("goes to Chrome's start from the hello, its position to every tab before it runs, and is verified in the browser", async () => {
     const s = await setUp();
@@ -913,7 +960,6 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
   it.each([
     ["a time zone", { timeZone: "UTC" }, "time zone UTC, not Europe/Berlin"],
     ["languages Chrome extends with its UI language's defaults", { languages: ["en-US", "en", "en-GB"] }, "Chrome adds its UI language's defaults"],
-    ["a screen", { screen: { width: 800, height: 600 } }, "screen 800×600, not 1920×1080"],
     ["a position", { position: { latitude: 0, longitude: 0, accuracy: 50 } }, "position 0, 0 ±50 m, not 52.5, 13.4 ±50 m"],
   ])("%s the browser does not show as set fails the start: env_mismatch, the exit never opens, and it is tried again", async (_what, shows, reason) => {
     const s = await setUp();
@@ -930,8 +976,17 @@ describe("the page's environment (plan §4.1, step 2; PR 5)", () => {
     expect(s.engine.of("state").some((state) => state.exitOpen === true)).toBe(false);
     // No self-test, no exit IP: the start stopped at the check.
     expect(s.socks.connects).toEqual([]);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2, 5000, "a retry");
+  });
+
+  it("holds a screen mismatch found after Chrome starts with the same restart-X explanation", async () => {
+    const s = await setUp();
+    s.model.shows.screen = { width: 800, height: 600 };
+    await command(s.engine, "restartBrowser");
+    await until(() => s.operator.page.snapshot.halted, 5000, "screen mismatch held");
+    expect(s.operator.page.snapshot).toMatchObject({ stopReason: "env_mismatch", retryAtWall: null });
+    await expect.poll(() => journal(s.logDir, "states"), SETTLED).toContainEqual(expect.objectContaining({ note: expect.stringContaining("Chrome sees 800×600") }));
   });
 
   it("is verified again on every start: after Chrome crashed, and then a difference fails that start", async () => {
@@ -1688,11 +1743,20 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => closed.outcome === "failed", 3000, "the closed write");
     expect(s.operator.site.failures).toBe(2);
     // The engine's identity read: the session is confirmed, the engine admits.
+    const pendingSocket = s.operator.sockets.admit("wsv3.fansly.com", 443);
+    if (typeof pendingSocket === "string") throw new Error(pendingSocket);
+    const socketAsk = await s.engine.waitFor("wsAdmit");
     admitting = true;
     s.model.hubBody = account("123456789");
     s.engine.send(identity(9501, FINGERPRINT));
     await s.engine.waitFor("result", (message) => message.attemptId === 9501, 10_000);
     await until(() => s.operator.page.step === "ready", START_MS, "the page ready");
+    expect(await s.engine.waitFor("admissionCancel", (m) => m.id === socketAsk.connectionId, 1_000)).toMatchObject({ kind: "ws", reason: "document_replaced" });
+    expect(await pendingSocket.granted).toBeNull();
+    // The old document's late grant cannot open a tunnel in the new one.
+    s.engine.send({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: socketAsk.connectionId, admit: true, deadlineMono: monoMs() + 15_000, attemptId: 9599 });
+    expect(await s.engine.waitFor("wsDone", (m) => m.attemptId === 9599)).toMatchObject({ sent: false });
+    expect(s.operator.sockets.busy).toBe(false);
     // Loaded anew, once: the navigation of step 8, and this one.
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
     await expect.poll(() => stateNotes(s), SETTLED).toContain("site_loaded>exit_open: the session is confirmed; 2 API requests of the site failed before it, none sent: the work tab is loaded anew, once");
@@ -2193,7 +2257,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3)
     client.request();
     await until(() => s.operator.page.snapshot.stopReason === "ws_unaccounted", 5000, "the failure");
     expect(s.operator.egress.exitOpen).toBe(false);
-    expect(s.control.calls).toContain("kill");
+    await until(() => s.chrome.sent("Browser.close").length > 0, 5000, "failed Chrome asked to quit");
     expect(await s.engine.waitFor("wsDone")).toMatchObject({ attemptId: 4500, sent: true, status: null, error: expect.stringContaining("not accounted for") });
     await until(() => s.control.calls.filter((call) => call === "start").length >= 2 && s.operator.page.step === "site_loaded", 10_000, "Chrome started again");
     client.destroy();

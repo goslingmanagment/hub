@@ -138,6 +138,23 @@ container_status() {
   fi
 }
 
+# Recreate/down delete Docker's local stdout/stderr log. Archive only this
+# page's Compose project, outside its removable pages/ files. A failed archive
+# is explicit and partial output is kept; recovery is not blocked by disk full.
+archive_browser() {
+  local why="$1" state rc=0
+  state="$(container_status)" || { echo "page: warning: $PAGE logs cannot be located before $why" >&2; return 0; }
+  [[ "$state" != absent ]] || return 0
+  if [[ ! -x "$PB_BASE/archive-container-logs.sh" ]]; then
+    echo "page: warning: $PAGE log archive helper is missing before $why (deploy host files)" >&2
+    return 0
+  fi
+  "$PB_BASE/archive-container-logs.sh" --dir "$PB_BASE/container-logs/$PAGE" \
+    --project-dir "$PB_BASE" --project-name "page-browser-$PAGE" --reason "$why $PAGE" browser || rc=$?
+  ((rc == 0)) || echo "page: warning: $PAGE log archive incomplete before $why (status $rc); partial files kept" >&2
+  return 0
+}
+
 # Every start of a page's container goes through here — `up`, `rollback`,
 # the way back after a failed switch, and so every start
 # page-browser-update.sh makes: never an older Chrome on a profile a newer
@@ -145,6 +162,7 @@ container_status() {
 start_state() {
   local env="$1"
   compatible "$(value PB_IMAGE "$env")" "$(value PB_PROFILE_ID "$env")" || return 2
+  archive_browser recreate
   compose_with "$env" up -d --force-recreate --no-build >/dev/null
 }
 
@@ -187,6 +205,7 @@ switch_to() {
     ((rc == 0)) && healthy && fail "$what failed; page-browser-$PAGE is back on $(value PB_IMAGE "$(env_file)")"
     fail "$what failed, and page-browser-$PAGE did not come back healthy on $(value PB_IMAGE "$(env_file)")"
   fi
+  archive_browser failed_switch
   docker rm -f "page-browser-$PAGE" >/dev/null 2>&1 || true
   "$PB_BASE/egress-rules.sh" apply || echo "page: warning: the host's rules still admit the removed page" >&2
   fail "$what failed; the new page was removed"
@@ -413,6 +432,7 @@ remove_profile() {
   profile="$(value PB_PROFILE_ID "$(env_file)")"
   [[ "$profile" =~ ^[0-9a-f-]{36}$ ]] || fail "$PAGE names no profile"
   [[ "$profile" == "$PROFILE" ]] || fail "$PAGE's files name profile $profile, not $PROFILE: nothing removed"
+  archive_browser remove_profile
   compose_with "$(env_file)" down >/dev/null 2>&1 || true
   # Gone means Docker says so (as forget): a state it cannot read is never
   # taken for absent.
@@ -441,6 +461,7 @@ rollback() {
 
 down() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
+  archive_browser down
   compose_with "$(env_file)" down >/dev/null
   echo "page: page-browser-$PAGE removed; profile $(value PB_PROFILE_ID "$(env_file)") kept"
 }

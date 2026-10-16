@@ -213,7 +213,7 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     && downFor > SYNC_BROWSER_DOWN_MS) {
     add({
       kind: "browser_down",
-      detail: reason ?? `not_up:${browser.step ?? "unknown"}`,
+      detail: reason ?? (browser.step === "site_loaded" && browser.sessionFingerprint === null ? "session_unknown" : `not_up:${browser.step ?? "unknown"}`),
       since: browser.downSince,
       seenAt: now,
       context: { step: browser.step, retryAt: browser.retryAt?.toISOString() ?? null },

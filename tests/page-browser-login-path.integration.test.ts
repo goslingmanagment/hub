@@ -246,6 +246,7 @@ async function rig(): Promise<Rig> {
       operatorVersion: "test",
     },
     chrome: control,
+      display: async () => control.geometry,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
     timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
@@ -333,12 +334,18 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     expect(closed.json()).toMatchObject({ transport: "node", login: { state: "off" }, browser: { ready: true, problem: null, reachable: null }, screen: null });
     expect((await r.server.inject({ method: "POST", url: `${base}/submit`, headers: as(r.cookie), payload: { login: LOGIN_MARKER, password: PASSWORD_MARKER } })).json()).toMatchObject({ error: "login_not_open" });
 
+    r.site.screen = "landing";
     // Open: the page paused, its browser into the manual login and started.
     expect((await r.server.inject({ method: "POST", url: `${base}/start`, headers: as(r.cookie) })).json()).toEqual({ state: "wanted", changed: true });
     await until(() => r.operator.page.step === "site_loaded" && r.operator.state.mode === "manual_login", 60_000, "the login screen up");
     r.site.setTab(r.operator.control.workTab!.sessionId);
     const shown = await r.server.inject({ method: "GET", url: base, headers: as(r.cookie) });
-    expect(shown.json()).toMatchObject({ login: { state: "wanted" }, browser: { reachable: true }, screen: { screen: "login", fields: ["login", "password"] }, refused: null });
+    expect(shown.json()).toMatchObject({ login: { state: "wanted" }, browser: { reachable: true }, screen: { screen: "landing", fields: [] }, refused: null });
+    expect((await r.server.inject({ method: "POST", url: `${base}/open`, headers: as(r.leadCookie) })).statusCode).toBe(403);
+    expect((await r.server.inject({ method: "POST", url: `${base}/open`, headers: { cookie: r.cookie, host: "hub.test", origin: "https://evil.test" } })).statusCode).toBe(403);
+    expect((await r.server.inject({ method: "POST", url: `${base}/open`, headers: as(r.cookie) })).json()).toMatchObject({ screen: { screen: "login", fields: ["login", "password"] }, refused: null });
+    expect(r.site.inserted).toEqual([]);
+    expect(r.site.posts).toEqual([]);
     const shot = await r.server.inject({ method: "GET", url: `${base}/screenshot`, headers: as(r.cookie) });
     expect(shot.statusCode).toBe(200);
     expect(shot.headers["content-type"]).toBe("image/jpeg");
@@ -428,7 +435,7 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     const audit = (await testDb.pool.query<{ metadata: Record<string, unknown> }>(
       "select metadata from audit_events where event_type = 'admin.page_browser_login' order by id",
     )).rows.map((row) => `${String(row.metadata.step)}:${String(row.metadata.screen ?? row.metadata.to)}`);
-    expect(audit).toEqual(["open:wanted", "submit:error", "submit:code", "code:success", "close:ending"]);
+    expect(audit).toEqual(["open:wanted", "open_dialog:login", "submit:error", "submit:code", "code:success", "close:ending"]);
     expect(r.apiLines.length).toBeGreaterThan(0);
     expect(r.engineLines.join("")).toContain("Fansly sync browser login");
   }, 240_000);
@@ -445,14 +452,14 @@ describe("the owner's login through the whole path (plan §4.8; PR 15)", () => {
     await until(() => r.operator.page.step === "site_loaded" && r.operator.state.mode === "manual_login", 60_000, "the login screen up");
     r.site.setTab(r.operator.control.workTab!.sessionId);
     const submitted = await r.server.inject({ method: "POST", url: `${base}/submit`, headers: as, payload: { login: LOGIN_MARKER, password: PASSWORD_MARKER } });
-    expect(submitted.json()).toEqual({ screen: { screen: "code", screenVersion: "fansly-login/2", fields: ["code"], siteError: null, codeFrom: "email" }, refused: null, unreachable: false });
+    expect(submitted.json()).toEqual({ screen: { screen: "code", screenVersion: "fansly-login/3", fields: ["code"], siteError: null, codeFrom: "email" }, refused: null, unreachable: false });
     // The login's page as the dashboard reads it says so too.
     expect((await r.server.inject({ method: "GET", url: base, headers: as })).json()).toMatchObject({ screen: { screen: "code", codeFrom: "email" } });
     // A wrong code: the site's error at the same form, still the e-mail's code.
     const wrong = await r.server.inject({ method: "POST", url: `${base}/code`, headers: as, payload: { code: WRONG_CODE_MARKER } });
     expect(wrong.json()).toMatchObject({ screen: { screen: "error", fields: ["code"], siteError: "Invalid code", codeFrom: "email" } });
     const coded = await r.server.inject({ method: "POST", url: `${base}/code`, headers: as, payload: { code: CODE_MARKER } });
-    expect(coded.json()).toEqual({ screen: { screen: "success", screenVersion: "fansly-login/2", fields: [], siteError: null }, refused: null, unreachable: false });
+    expect(coded.json()).toEqual({ screen: { screen: "success", screenVersion: "fansly-login/3", fields: [], siteError: null }, refused: null, unreachable: false });
     // The site's own login requests went under the engine's admission: the
     // e-mail's code by the 2FA code's operation, the manual login's only.
     const logins = (await testDb.pool.query<{ path: string; route: string }>(

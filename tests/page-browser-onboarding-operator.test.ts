@@ -125,6 +125,7 @@ async function setUp(options: { sessionShowWaitMs?: number } = {}): Promise<SetU
       operatorVersion: "test",
     },
     chrome: control,
+      display: async () => control.geometry,
     exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
     loginTimings: { settleMs: 3000, pollMs: 20 },
     timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, reloadWaitMs: 300, ...(options.sessionShowWaitMs === undefined ? {} : { sessionShowWaitMs: options.sessionShowWaitMs }) },

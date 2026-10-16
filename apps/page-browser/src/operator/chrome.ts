@@ -56,7 +56,10 @@ export class S6Chrome implements ChromeControl {
   }
 
   async isUp(): Promise<boolean> {
-    return (await run("/command/s6-svstat", ["-o", "up", this.#service])).trim() === "true";
+    const state = (await run("/command/s6-svstat", ["-o", "up", this.#service])).trim();
+    if (state === "true") return true;
+    if (state === "false") return false;
+    throw new Error("s6 did not report whether Chrome is up");
   }
 
   async #waitDown(timeoutMs: number): Promise<void> {

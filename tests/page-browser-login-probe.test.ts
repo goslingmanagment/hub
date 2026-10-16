@@ -160,7 +160,7 @@ async function probe(html: string): Promise<PageMarks> {
 }
 
 /** The tag of the element the locator finds for `role` (null: none). */
-async function located(role: "login" | "password" | "code" | "submit"): Promise<string | null> {
+async function located(role: "login" | "password" | "code" | "submit" | "open"): Promise<string | null> {
   return page!.evaluate<string | null>(`(() => { const el = ${locateExpression(role)}; return el ? el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") : null; })()`);
 }
 
@@ -266,6 +266,44 @@ describe("the login desk over Fansly's windows, in Chrome (Astra's review of the
       expect(await desk.submit("someone", "pw-marker", () => null)).toEqual({ kind: "refused", reason: "screen_changed" });
       expect((await typed()).every((value) => value === "")).toBe(true);
       expect(await clicks()).toBe(0);
+    }
+  });
+});
+
+
+// Public main.1c19146fbffb67a3.js (2026-10-15): the two div.btn actions in
+// .right-content call openLoginModal(0) and openLoginModal(1). The Login
+// action has no input field. Render locally; every request is fulfilled.
+const LANDING = `<app-landing-page-new style="display:flex;width:100%;min-height:500px">
+  <div class="right-content"><div class="btn solid-blue large" data-menu-item="login"><xd-localization-string>Sign up</xd-localization-string></div>
+  <div class="btn solid-blue large" data-menu-item="login" id="open-login"><xd-localization-string>Login</xd-localization-string></div></div>
+</app-landing-page-new>`;
+
+describe("the current public landing, before the login modal", () => {
+  it("recognizes and locates only Login, then re-probes the locally opened modal", async (context) => {
+    if (!page) { context.skip(); return; }
+    const marks = await probe(pageOf(LANDING));
+    expect(marks.landing).toEqual({ roots: 1, login: 1, windows: 0 });
+    expect(recognize(marks, { live: null, atStart: null }).screen).toBe("landing");
+    expect(await located("open")).toBe("div#open-login");
+    for (const role of ["login", "password", "code", "submit"] as const) expect(await located(role)).toBeNull();
+    await show(pageOf(LANDING + `<script>document.getElementById("open-login").addEventListener("click", () => { document.body.innerHTML = ${JSON.stringify(loginState({ loading: false })).replace(/</g, "\\u003c")}; });</script>`));
+    const desk = await deskOver(); desk.begin();
+    expect(await desk.open(() => null)).toMatchObject({ kind: "state", screen: "login", fields: ["login", "password"] });
+    expect(await page!.evaluate("window.clicks")).toBe(1);
+    expect(await page!.evaluate('[...document.querySelectorAll("input")].map((el) => el.value)')).toEqual(["", ""]);
+  });
+  it("refuses duplicate Login actions, a modal or challenge, and a Login button outside the landing", async (context) => {
+    if (!page) { context.skip(); return; }
+    for (const html of [
+      LANDING.replace('</div></div>', '<div class="btn" data-menu-item="login">Login</div></div>'),
+      LANDING + '<div class="modal">Another modal</div>',
+      LANDING + '<div class="captcha">Challenge</div>',
+      '<div class="right-content"><div class="btn" data-menu-item="login">Login</div></div>',
+    ]) {
+      const marks = await probe(pageOf(html));
+      expect(recognize(marks, { live: null, atStart: null }).screen).toBe("unknown");
+      expect(await located("open")).toBeNull();
     }
   });
 });

@@ -17,7 +17,9 @@
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
 // it by its id (sent only to an operator whose state says `halt`).
-export const PROTOCOL = { major: 1, minor: 1 } as const;
+// Minor 2: withdrawal of pending HTTP/WS admissions (`admissionCancel`).
+// Minor 3 distinguishes credentials refusals; engines send held to older operators.
+export const PROTOCOL = { major: 1, minor: 3 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -238,6 +240,15 @@ export interface RecoverResult {
   attempts: { attemptId: AttemptId; state: "outcome_resent" | "not_sent" | "unknown" }[];
 }
 // ── the site's requests ──
+/** Withdraw a still-waiting admission on the connection it was asked on.
+ *  Once the operator accepted a grant it reports the ordinary end instead:
+ *  a cancellation never retracts a possible send. */
+export interface AdmissionCancel {
+  type: "admissionCancel";
+  kind: "site" | "ws";
+  id: string;
+  reason: "request_ended" | "document_replaced" | "wait_expired" | "page_stopped";
+}
 export interface SiteAdmit {
   type: "siteAdmit";
   siteRequestId: SiteRequestId;
@@ -254,7 +265,7 @@ export interface SiteAdmit {
 }
 export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteRequestId: SiteRequestId } & (
     | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: "paused" | "held" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
+    | { admit: false; reason: "paused" | "held" | "credentials" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
   );
 export interface SiteDone {
   type: "siteDone";
@@ -360,9 +371,10 @@ export interface Alarm {
   kind: AlarmKind;
 }
 // ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
-export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
 export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string }
@@ -385,6 +397,7 @@ export type OperatorToEngine =
   | Sent
   | Result
   | RecoverResult
+  | AdmissionCancel
   | SiteAdmit
   | SiteDone
   | WsAdmit
@@ -650,6 +663,13 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
       return parseResult(m);
     case "recoverResult":
       return parseRecoverResult(m);
+    case "admissionCancel": {
+      const kind = str(m.kind, "kind", 16);
+      if (kind !== "site" && kind !== "ws") throw new Invalid("an unknown admission kind");
+      const reason = str(m.reason, "reason", 32);
+      if (reason !== "request_ended" && reason !== "document_replaced" && reason !== "wait_expired" && reason !== "page_stopped") throw new Invalid("an unknown cancellation reason");
+      return { type, kind, id: kind === "ws" ? uuid(m.id, "id") : str(m.id, "id", 64), reason };
+    }
     case "siteAdmit": {
       const operation = str(m.operation, "operation", 16);
       if (operation !== "read" && operation !== "login") throw new Invalid(`an unknown operation ${operation}`);
@@ -762,7 +782,7 @@ export function parseOperatorMessage(text: string): ParsedOperatorMessage {
 
 // ── the login form's answers (PR 15): the API reads them ─────────────────────
 
-const LOGIN_SCREENS: ReadonlySet<string> = new Set(["login", "code", "error", "success", "unknown"]);
+const LOGIN_SCREENS: ReadonlySet<string> = new Set(["landing", "login", "code", "error", "success", "unknown"]);
 const LOGIN_FIELDS: ReadonlySet<string> = new Set(["login", "password", "code"]);
 const LOGIN_REFUSALS: ReadonlySet<string> = new Set(["token", "not_manual_login", "screen_changed", "busy"]);
 

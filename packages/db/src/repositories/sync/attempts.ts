@@ -328,7 +328,8 @@ export interface InsertSiteAdmissionInput {
 
 /**
  * The admission of a page's own site request (after `lockOwnedPage`): its
- * attempt — class `site`, no work, no cycle slot — and the page's last
+ * attempt — class `urgent` for a site WS upgrade, otherwise `site`; no
+ * work or cycle slot — and the page's last
  * admission, under the page's generation. The cycle pointer stays: the site's
  * share is counted apart (`engine/site-admission.ts`). Throws
  * `OwnershipLostError` when the generation no longer owns the page.
@@ -351,7 +352,7 @@ export async function insertSiteAdmission(
       setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms, origin,
       browser_request_id
     )
-    select page.page_id, null, 'site', '', 'site', null,
+    select page.page_id, null, 'site', '', ${input.origin === "site" && input.operation === "ws.upgrade" ? "urgent" : "site"}::text, null,
            ${generationParam(input.generation)}, null,
            ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
            ${input.operation}::text, ${jsonParam(input.request)}, false,
@@ -372,7 +373,8 @@ export async function insertSiteAdmission(
 }
 
 /**
- * The page's site and login sends since `since` (the site's hour ceiling,
+ * The page's API site/login sends since `since` (WS upgrades excluded,
+ * including legacy class-site rows; the site's hour ceiling,
  * spec §3), counted as the route clocks count them: a recorded send, or an
  * attempt that may have gone out (`admitted`, `sent`, `unknown`). A short
  * range scan of `sync_attempts_page_admitted`.
@@ -384,6 +386,7 @@ export async function countSiteSendsSince(db: Database, input: { pageId: number;
      where a.page_id = ${input.pageId}
        and a.admitted_at >= ${input.since}::timestamptz
        and a.origin in ('site', 'login')
+       and (a.origin <> 'site' or a.operation is distinct from 'ws.upgrade')
        and not a.shadow
        and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown'))
   `);

@@ -121,6 +121,7 @@ interface Conn {
   ws: WsConnection;
   greeted: boolean;
   generation: number;
+  engineMinor: number;
   /** The API's connection of the login form (its first message a call). */
   api: boolean;
 }
@@ -251,6 +252,9 @@ export class RpcServer {
   send(message: OperatorToEngine): boolean {
     const conn = this.#active;
     if (!conn || conn.ws.closed) return false;
+    // Older engines parse operator messages strictly. Keep their legacy
+    // timeout/late-result path instead of breaking the link on a new type.
+    if (message.type === "admissionCancel" && conn.engineMinor < 2) return false;
     return conn.ws.sendText(JSON.stringify(message));
   }
 
@@ -340,7 +344,7 @@ export class RpcServer {
   }
 
   #adopt(ws: WsConnection): void {
-    const conn: Conn = { ws, greeted: false, generation: 0, api: false };
+    const conn: Conn = { ws, greeted: false, generation: 0, engineMinor: 0, api: false };
     const helloTimer = setTimeout(() => {
       if (!conn.greeted) ws.close(CLOSE_PROTOCOL);
     }, this.#options.helloTimeoutMs ?? 5000);
@@ -510,6 +514,7 @@ export class RpcServer {
     }
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
+    conn.engineMinor = hello.protocol.minor;
     this.#pageId = hello.pageId;
     this.#setActive(conn);
     this.#lastHeard = monoMs();

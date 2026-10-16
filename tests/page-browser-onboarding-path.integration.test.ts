@@ -188,6 +188,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
         operatorVersion: "test",
       },
       chrome: control,
+      display: async () => control.geometry,
       exitIpTarget: { host: "api.ipify.org", port: 443, path: "/", wrap: (socket: Socket) => socket },
       loginTimings: { settleMs: 3000, pollMs: 20 },
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000 },
@@ -315,6 +316,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
     expect(exit).toMatchObject({ ok: true, exit: { ip: "203.0.113.7" } });
     expect((await server.inject({ method: "POST", url: `${base}/pin`, headers: as(cookie), payload: { ip: exit.exit.ip } })).json()).toEqual({ pinnedExitIp: "203.0.113.7" });
 
+    site.screen = "landing";
     // The login: the engine puts the browser into the manual login and starts it.
     expect((await server.inject({ method: "POST", url: `${base}/login/start`, headers: as(cookie) })).json()).toEqual({ state: "login", changed: true });
     await until(() => operator.page.step === "site_loaded" && operator.state.mode === "manual_login", 20_000, "the login screen up");
@@ -332,9 +334,12 @@ describe("a new page connected through its own browser, the whole path (plan §3
       proxy: { url: `socks5://127.0.0.1:${socks.port}`, username: SOCKS_USER },
       login: { state: "login" },
       browser: { ready: true, problem: null, reachable: true },
-      screen: { screen: "login", fields: ["login", "password"] },
+      screen: { screen: "landing", fields: [] },
     });
     expect(shown.body).not.toContain(SOCKS_PASSWORD);
+    expect((await server.inject({ method: "POST", url: `${base}/login/open`, headers: as(cookie) })).json()).toMatchObject({ screen: { screen: "login", fields: ["login", "password"] } });
+    expect(site.inserted).toEqual([]);
+    expect(site.posts).toEqual([]);
     const shot = await server.inject({ method: "GET", url: `${base}/login/screenshot`, headers: as(cookie) });
     expect(shot.statusCode).toBe(200);
     expect(shot.rawPayload.toString()).toBe("FAKEJPEG:login");
@@ -418,7 +423,7 @@ describe("a new page connected through its own browser, the whole path (plan §3
     const audit = (await testDb.pool.query<{ metadata: Record<string, unknown> }>(
       "select metadata from audit_events where event_type = 'admin.page_browser_onboarding' order by id",
     )).rows.map((row) => `${String(row.metadata.step)}:${String(row.metadata.screen ?? row.metadata.to ?? "")}`);
-    expect(audit).toEqual(["draft:", "proxy:", "pin:", "open:login", "submit:error", "submit:code", "code:success", "close:open", "bind:"]);
+    expect(audit).toEqual(["draft:", "proxy:", "pin:", "open:login", "open_dialog:login", "submit:error", "submit:code", "code:success", "close:open", "bind:"]);
     expect(engineLines.join("")).toContain("Fansly sync browser onboarding");
   }, 180_000);
 });
