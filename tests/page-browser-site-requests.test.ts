@@ -158,6 +158,7 @@ async function world(options: { timings?: Partial<SiteTimings>; capBytes?: numbe
     cdp,
     resolve: (request, decision) => paused.resolve(request, decision),
     gate,
+    isHubRequest: () => false,
     cutApi: () => chrome.cut(),
     buffer: {
       ...bufferPort(buffer, options.holdRelease),

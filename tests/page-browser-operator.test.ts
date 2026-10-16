@@ -1535,6 +1535,44 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     }
   });
 
+  it.each(["Network.loadingFailed", "Network.loadingFinished"])("the old site path cannot free a cancelled Hub request's slot; only Hub confirms its later %s", async (endEvent) => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.engine.onMessage = (message) => {
+      if (message.type === "siteAdmit") s.engine.send({ type: "siteAdmitResult", ownerGeneration: 1, siteRequestId: message.siteRequestId, admit: false, reason: "route_hold" });
+      if (message.type === "check") s.engine.send({ type: "checkResult", ownerGeneration: 1, attemptId: message.attemptId, admit: true, deadlineMono: monoMs() + 15_000 });
+    };
+    const site = s.model.pause(`https://apiv3.fansly.com${ME}`, "GET", tab, "XHR", {
+      Accept: "application/json, text/plain, */*",
+      authorization: TOKEN,
+      "fansly-client-check": fanslyClientCheck(ME, CLIENT_ID),
+      "fansly-client-id": CLIENT_ID,
+      "fansly-client-ts": String(Date.now()),
+      "fansly-session-id": SESSION_ID,
+    });
+    await until(() => site.outcome === "failed", 3000, "the site's session learned");
+    // Chrome accepts the release but reports no answer or end yet.
+    s.chrome.handlers.set("Fetch.continueRequest", () => ({}));
+    s.engine.send(sendOf(s.engine, 9150));
+    await until(() => s.operator.egress.gate.slotOwner === "hub:9150", 3000, "the Hub slot");
+    const request = s.model.hubRequests.find((entry) => entry.attemptId === 9150)!;
+    const ended = vi.spyOn(s.operator.egress.gate, "requestEnded");
+    s.chrome.event("Network.loadingFailed", { requestId: request.networkId, canceled: true, errorText: "net::ERR_ABORTED" }, tab);
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9150)).outcome).toEqual({ kind: "transport_error", sent: true, message: "the page cancelled the request before its answer: its end is unknown" });
+    expect(ended.mock.calls.filter(([id]) => id === request.networkId)).toEqual([]);
+    expect(s.operator.egress.gate.slotOwner).toBe("hub:9150");
+    expect(s.operator.egress.gate.slotPending).toEqual([request.networkId]);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    s.engine.send(sendOf(s.engine, 9151));
+    expect((await s.engine.waitFor("result", (message) => message.attemptId === 9151)).outcome).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    // A later, proven end reaches both listeners; Hub alone frees the slot.
+    s.chrome.event(endEvent, { requestId: request.networkId, canceled: false, errorText: "net::ERR_CONNECTION_RESET", encodedDataLength: 0 }, tab);
+    await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the Hub request's confirmed end");
+    expect(ended.mock.calls.filter(([id]) => id === request.networkId)).toEqual([[request.networkId]]);
+  });
+
   it("recover: not_sent of a request the buffer says was never released, unknown of one that was", async () => {
     const s = await setUp({
       prepare: ({ bufferDir, stateDir }) => {

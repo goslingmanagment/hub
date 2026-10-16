@@ -9,7 +9,7 @@ import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cd
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, type HubTimings } from "../apps/page-browser/src/hub-requests/hub.ts";
-import { attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
+import { ABORT, attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
 import { cyrb53, fanslyClientCheck, sessionFingerprint, SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -388,17 +388,21 @@ describe("a Hub request (plan §4.2)", () => {
     // Failed at the response stage, its body never asked for.
     expect(w.cdp.sent("Network.streamResourceContent")).toEqual([]);
     expect(w.cdp.sent("Fetch.continueResponse")).toEqual([]);
-    const chunked = send(w, { maxBodyBytes: 1000 }, { chunked: true, chunks: [Buffer.alloc(600, 1), Buffer.alloc(600, 2), Buffer.alloc(600, 3)] });
+    const chunked = send(w, { maxBodyBytes: 1000 }, { chunked: true, chunks: [Buffer.alloc(600, 1), Buffer.alloc(600, 2), Buffer.alloc(600, 3)], chunkDelayMs: 50 });
     expect(await outcomeOf(w, chunked.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the response body is over 1000 bytes (1200 bytes received)" });
     // Cancelled in the page — never by its tunnels, which the site's own
     // requests share (variant Б); no body kept.
     await until(() => w.chrome.requestsOf(chunked.attemptId).every((request) => request.ended), 2000, "the cancel");
     expect(w.chrome.abortedInPage).toEqual([chunked.attemptId]);
+    expect(w.chrome.releasedInPage).not.toContain(chunked.attemptId);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(readdirSync(join(w.dir, "buffer", "bodies"))).toEqual([]);
     // Media over 5 MiB: the old bodyOverflow, an answer with no body.
-    const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/big.jpg", maxBodyBytes: 100 }, { chunked: true, chunks: [Buffer.alloc(80), Buffer.alloc(80)] });
+    const media = send(w, { kind: "image", url: "https://cdn3.fansly.com/big.jpg", maxBodyBytes: 100 }, { chunked: true, chunks: [Buffer.alloc(80), Buffer.alloc(80), Buffer.alloc(80)], chunkDelayMs: 50 });
     expect(await outcomeOf(w, media.attemptId)).toMatchObject({ kind: "response", status: 200, bodyOverflow: true, body: { decodedBytes: 0 } });
+    expect(w.chrome.abortedInPage).toContain(media.attemptId);
+    expect(w.chrome.releasedInPage).not.toContain(media.attemptId);
+    expect(w.chrome.requestsOf(media.attemptId).every((request) => request.ended)).toBe(true);
   });
 
   it("is whole only when it ended with loadingFinished and every chunk was there as long as it said", async () => {
@@ -608,6 +612,8 @@ describe("a Hub request whose end is unknown holds the page's slot, and never st
     const message = send(w, {}, { then: "hang_after_send" });
     expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: "no answer and no end of the request within its limit: its end is unknown" });
     await until(() => w.chrome.abortedInPage.includes(message.attemptId), 2000, "the cancel");
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
     // The page's cancel is no end: the slot is still the operation's.
     expect(w.gate.slotOwner).toBe(`hub:${message.attemptId}`);
     expect(w.exit.open).toBe(true);
@@ -640,9 +646,35 @@ describe("a Hub request whose end is unknown holds the page's slot, and never st
     const message = send(w, {}, { chunks: [Buffer.from("a"), Buffer.from("b"), Buffer.from("c")], chunkDelayMs: 150 });
     expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: "the body did not finish within the request's limit" });
     await until(() => w.chrome.abortedInPage.includes(message.attemptId), 2000, "the cancel");
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
     await until(() => w.gate.slotOwner === null, 2000, "the slot freed");
     const next = send(w);
     expect(await outcomeOf(w, next.attemptId)).toMatchObject({ kind: "response", status: 200 });
+  });
+
+  it.each([false, true])("the request deadline cancels in the page without RELEASE first (answered: %s)", async (answered) => {
+    const w = await world({ timings: { opLimitMs: 2000 } });
+    const outcomeAtAbort: boolean[] = [];
+    const call = w.cdp.handlers.get("Runtime.callFunctionOn")!;
+    w.cdp.handlers.set("Runtime.callFunctionOn", (command) => {
+      if (command.params.functionDeclaration === ABORT) {
+        const [{ value: attemptId }] = command.params.arguments as [{ value: number }];
+        outcomeAtAbort.push(w.buffer.attempt(attemptId)?.outcome === true);
+      }
+      return call(command);
+    });
+    const now = monoMs();
+    const message = send(w, { sendDeadlineMono: now + 300, requestDeadlineMono: now + 500 }, answered ? { chunks: [Buffer.from("a"), Buffer.from("b")], chunkDelayMs: 400 } : { then: "hang_after_send" });
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "timeout", sent: true, message: answered ? "the body did not finish by the request's deadline" : "no answer by the request's deadline" });
+    expect(w.chrome.abortedInPage).toEqual([message.attemptId]);
+    expect(w.chrome.releasedInPage).not.toContain(message.attemptId);
+    expect(w.chrome.requestsOf(message.attemptId).every((request) => request.ended)).toBe(true);
+    // With an answer already in, the timeout is stored before ABORT.
+    // Without one, Chrome's cancellation still determines the outcome.
+    expect(outcomeAtAbort).toEqual([answered]);
+    await until(() => answered ? w.gate.slotOwner === null : w.gate.slotOwner === `hub:${message.attemptId}`, 2000, "the slot after cancellation");
+    expect(w.exit.open).toBe(true);
   });
 
   it("a passive gate (variant Б) cannot say a released request did not leave: a network failure after the release is possibly sent", async () => {

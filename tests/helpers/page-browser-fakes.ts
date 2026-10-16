@@ -1273,6 +1273,8 @@ export class HubChrome {
   readonly armed = new Set<string>();
   readonly session = "S1";
   readonly #requests: HubModelRequest[] = [];
+  /** Entries retained in the isolated world's __pbHub map. */
+  readonly #inPage = new Set<number>();
   #n = 0;
   #tunnels = 100;
 
@@ -1335,12 +1337,14 @@ export class HubChrome {
     const declaration = String(command.params.functionDeclaration ?? "");
     const args = (command.params.arguments as Array<{ value: unknown }>).map((arg) => arg.value);
     if (declaration === RELEASE) {
-      this.releasedInPage.push(Number(args[0]));
-      return { result: { type: "boolean", value: true } };
+      const attemptId = Number(args[0]);
+      this.releasedInPage.push(attemptId);
+      return { result: { type: "boolean", value: this.#inPage.delete(attemptId) } };
     }
     if (declaration === ABORT) {
       // The page's XHR cancelled: what of it has not ended fails as cancelled.
       const attemptId = Number(args[0]);
+      if (!this.#inPage.delete(attemptId)) return { result: { type: "boolean", value: false } };
       this.abortedInPage.push(attemptId);
       for (const request of this.#requests) {
         if (request.attemptId === attemptId && !request.ended) this.#end(request, "net::ERR_ABORTED", true);
@@ -1348,6 +1352,8 @@ export class HubChrome {
       return { result: { type: "boolean", value: true } };
     }
     const [attemptId, url, kind, headers] = args as [number, string, string, Array<[string, string]>];
+    if (this.#inPage.has(attemptId)) return { result: { type: "boolean", value: false } };
+    this.#inPage.add(attemptId);
     this.issued.push({ attemptId, url, kind, headers });
     const script = this.#script(attemptId);
     if (script.then === "never_pauses") return { result: { type: "boolean", value: true } };

@@ -680,6 +680,7 @@ export class Operator {
       cdp: this.cdp,
       resolve: (request, decision) => this.paused.resolve(request, decision),
       gate: this.egress.gate,
+      isHubRequest: (networkId) => this.hub.ownsNetworkId(networkId),
       cutApi: (reason) => this.egress.cutClass("api", reason),
       buffer: this.buffer,
       link: {

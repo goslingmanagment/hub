@@ -219,6 +219,8 @@ interface Attempt {
   timedOut: boolean;
   expired: boolean;
   noResponse: boolean;
+  /** A limit requires ABORT at the attempt's end, never RELEASE first. */
+  abortInPage: string | null;
   /** This process cancelled it in the page (a limit): a cancel then is ours. */
   abortedByUs: boolean;
   done: boolean;
@@ -417,6 +419,7 @@ export class HubRequests {
       timedOut: false,
       expired: false,
       noResponse: false,
+      abortInPage: null,
       abortedByUs: false,
       done: false,
       ended: new Promise<void>((resolve) => (end = resolve)),
@@ -1044,10 +1047,9 @@ export class HubRequests {
   #overflow(attempt: Attempt, what: string, abort: boolean): void {
     if (attempt.done) return;
     this.#log("body.over_limit", { attemptId: attempt.id, limit: attempt.limit, what });
-    attempt.abortedByUs = true;
+    if (abort) attempt.abortInPage = "a Hub response over its body limit";
     if (attempt.send.kind === "api") this.#finish(attempt, { kind: "transport_error", sent: true, message: `the response body is over ${attempt.limit} bytes (${what})` });
     else this.#respond(attempt, { empty: true, overflow: true });
-    if (abort) void this.#abort(attempt, "a Hub response over its body limit");
   }
 
   /** A response outcome: the body captured (sealed now), or an empty one
@@ -1154,7 +1156,6 @@ export class HubRequests {
     for (const request of [...attempt.held]) void this.#failHeld(attempt, request, "Aborted", "its attempt ended");
     attempt.waiting = null;
     this.#live.delete(attempt.id);
-    this.#releaseInPage(attempt);
     attempt.end();
     this.#log("result", {
       attemptId: attempt.id,
@@ -1165,6 +1166,7 @@ export class HubRequests {
       bodyBytes: body?.bytes ?? null,
     });
     this.#store(attempt.id, attempt.fingerprint, outcome, body);
+    this.#releaseInPage(attempt);
   }
 
   /** Stored durably, then sent by the operator. A buffer that takes no
@@ -1187,6 +1189,10 @@ export class HubRequests {
   }
 
   #releaseInPage(attempt: Attempt): void {
+    if (attempt.abortInPage !== null) {
+      void this.#abort(attempt, attempt.abortInPage);
+      return;
+    }
     const tab = this.#deps.site.tabSession();
     if (attempt.world === null || tab === null) return;
     this.#deps.cdp
@@ -1251,32 +1257,33 @@ export class HubRequests {
     this.#timer(attempt, attempt.send.requestDeadlineMono - this.#now(), () => {
       if (attempt.done) return;
       attempt.timedOut = true;
-      attempt.abortedByUs = true;
+      attempt.abortInPage = "a Hub request past its deadline";
       if (attempt.main?.answered) this.#finish(attempt, { kind: "timeout", sent: true, message: "the body did not finish by the request's deadline" });
-      void this.#abort(attempt, "a Hub request past its deadline");
+      else void this.#abort(attempt, attempt.abortInPage);
     });
   }
 
   #onLimit(attempt: Attempt): void {
     attempt.limitTimer = null;
     if (attempt.done) return;
-    attempt.abortedByUs = true;
     if (attempt.main?.answered) {
+      attempt.abortInPage = "a Hub response over its time limit";
       this.#finish(attempt, { kind: "timeout", sent: true, message: "the body did not finish within the request's limit" });
-      void this.#abort(attempt, "a Hub response over its time limit");
       return;
     }
     // No answer and no end: Chrome may still hold the request (amendment
     // 23). Its outcome now, possibly sent; the page's slot stays held until
     // Chrome reports a real end, or is gone (plan-b §4.1.10).
+    attempt.abortInPage = "a Hub request without an answer or an end within its limit";
     this.#finish(attempt, { kind: "timeout", sent: this.#sent(attempt), message: "no answer and no end of the request within its limit: its end is unknown" });
-    void this.#abort(attempt, "a Hub request without an answer or an end within its limit");
   }
 
   /** Cancels the request in the page (page.ts ABORT): it ends there, never
    *  by its tunnels. The world may be gone with its document: then so is the
    *  request. */
   async #abort(attempt: Attempt, why: string): Promise<void> {
+    if (attempt.abortedByUs) return;
+    attempt.abortedByUs = true;
     const tab = this.#deps.site.tabSession();
     this.#log("request.abort", { attemptId: attempt.id, why });
     if (attempt.world === null || tab === null) return;

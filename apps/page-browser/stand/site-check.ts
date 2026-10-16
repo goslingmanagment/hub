@@ -531,6 +531,8 @@ const site: SiteRequests = new SiteRequests({
   cdp,
   resolve: (request, decision) => paused.resolve(request, decision),
   gate: egress.gate,
+  // The stand sends no Hub request.
+  isHubRequest: () => false,
   cutApi: (reason) => egress.cutClass("api", reason),
   buffer,
   link: {
