@@ -643,3 +643,46 @@ SHA256 JS `bc9083b8e068c0f37fc01d5a16f22b54e4cc84b5ecbaef16b060c1bd435d6b3e`.
 различаются надписью и вызовом openLoginModal(0/1). Старые поля
 fansly_login/fansly_password/fansly_twofa, app-button.auth-submit и
 app-login-modal присутствуют. API/вход/сокеты при сверке не запрашивались.
+
+### Остановка после сбоя и фоновые модели Chrome (F7)
+
+При #fail выход закрывается до остановки Chrome. Оператор под своим
+последовательным владением процессом пробует Browser.close; команда и
+ожидание фактического завершения имеют один общий срок не более 2 с.
+По сроку или без CDP — kill через s6. До подтверждённого завершения не
+освобождается владение gate; неуспех kill не выдаётся за browserGone.
+Новый старт ждёт завершения остановки прежнего Chrome. Лог
+chrome.failure_quit сообщает исход, answered, deadlineMs и elapsedMs.
+Это возможность записать профиль, а не обещание сохранности при сбое диска.
+
+Решение владельца от 2026-10-16: фоновые загрузки компонентов, моделей и
+Safe Browsing отключены. hub.json задаёт ComponentUpdatesEnabled=false,
+SafeBrowsingProtectionLevel=0 и GenAILocalFoundationalModelSettings=1.
+Цена: нет проверок Safe Browsing на фишинг/опасные страницы и файлы, нет
+автоматического обновления обычных компонентов и локальных GenAI-моделей.
+Это принято владельцем; обновление самого Chrome остаётся прежним.
+
+Для Optimization Guide в pinned155 нет действующей fetching policy:
+OptimizationGuideFetchingEnabled была поддержана только в Chrome101–103.
+Поэтому run задаёт --disable-features=OptimizationHints:
+отключён сервис hints. Загрузки prediction-моделей, в том числе моделей
+защиты, проверяют ComponentUpdatesEnabled в ShouldFetchModels, поэтому для
+них достаточно действующей политики и дополнительного флага нет. Имя и
+место проверки feature gate сверены с исходниками тега155.
+
+TLS/проверка сертификатов не ослаблены. ComponentUpdatesEnabled намеренно
+сохраняет предусмотренные Chrome исключения для критичных компонентов без
+исполняемого кода (включая списки отзыва сертификатов). Нет blanket флага
+--disable-background-networking/--disable-component-update и блокировки
+хостов Google: один CDN может отдавать и модель, и нужный CRL.
+Отсутствие запросов на коротком тихом локальном старте — ограниченный smoke,
+а не доказательство отсутствия всех служебных загрузок на любом сроке.
+
+Проверенные исходники pinned155.0.8059.39:
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/Miscellaneous/ComponentUpdatesEnabled.yaml
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/SafeBrowsing/SafeBrowsingProtectionLevel.yaml
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/GenerativeAI/GenAILocalFoundationalModelSettings.yaml
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/policy/resources/templates/policy_definitions/Miscellaneous/OptimizationGuideFetchingEnabled.yaml
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/optimization_guide/core/optimization_guide_features.cc
+- https://github.com/chromium/chromium/blob/155.0.8059.39/components/optimization_guide/core/delivery/prediction_model_download_manager.cc
+- https://github.com/chromium/chromium/blob/155.0.8059.39/chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.cc

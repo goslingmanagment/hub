@@ -97,6 +97,11 @@ done
 # gone (stage 1, amendment 33), and still refuses a profile another Chrome
 # holds.
 
+# Owner decision (2026-10-16): no Optimization Guide background hints or
+# prediction-model fetches. The hints fetching policy supported only Chrome101-103;
+# pinned155 uses this feature gate. Model downloads and Safe Browsing use
+# hub.json policies instead. Do not disable all background networking: CRL
+# and other critical non-code security components remain Chrome's job.
 exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin DISPLAY=:99 \
   TZ="$TIME_ZONE" LANGUAGE="$LANGUAGE_LIST" LANG="$LOCALE" \
   /command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable \
@@ -105,5 +110,6 @@ exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin DISPLAY=:99 \
   --window-size=1920,1080 \
   --lang="$FIRST" \
   --no-first-run \
+  --disable-features=OptimizationHints \
   --ignore-gpu-blocklist \
   about:blank
