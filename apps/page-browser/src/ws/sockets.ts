@@ -7,15 +7,14 @@
 // for the engine. What the operator does around it:
 //
 // The handshake is a send of the site's (route `ws.upgrade`): the proxy's
-// word that its request went up tells the engine `siteSent`, under the
-// tunnel's id and at the proxy's moment (the observer's outbox,
-// intercept/observe.ts), even when CDP never shows that socket. CDP tells
-// only the status: `siteEnded` of the oldest send the proxy saw answered
-// and still owed an end. From that answer it waits 2 s for CDP, then ends
-// with its status unknown; a tunnel that ends unanswered ends at once. So
-// the engine counts the write in the page's pause before
+// word that its request went up gives its moment; CDP's announcement of
+// the handshake claims it and tells the engine `siteSent`, under the
+// connection's id (the observer's outbox, intercept/observe.ts). Its own
+// answer, failure or close tells `siteEnded`. A write no socket claims in
+// 2 s is told under the tunnel's id, then ended with its status unknown. So
+// the engine counts every write in the page's pause before
 // its own requests and holds `ws.upgrade` on the site's 401/429. The
-// connection CDP shows has its own id, separate from the tunnel's.
+// connection CDP shows keeps its own status, even when handshakes overlap.
 //
 // Frames (plan §4.4), from CDP's Network.webSocket* — not from the page's
 // JS — into the buffer, in the order CDP gives them; each is durable before
@@ -135,10 +134,10 @@ export const OBSERVED_SOCKET_ATTEMPT = 0;
 // stream keeps CDP's order); the holder keeps them unacknowledged meanwhile.
 // A slow reading still gives a lower bound: kept when the session has no
 // clock, then tried again for a tight one. One stamped without any reading
-// (failed, or past the wait) is stamped no later than the latest calibrated
-// event of its socket, else at its take. The take proves no boundary before
-// a loss: that stamp's mark keeps the previous mark's wall, else Chrome's
-// start — every event of this Chrome comes after it.
+// (failed, or past the wait) is stamped at the latest of its socket's last
+// calibrated event and Chrome's start — every event of this Chrome comes
+// after that start. The stamp itself proves a boundary before a loss, in
+// memory and in the buffer alike.
 
 export { CALIBRATION_MAX_MS } from "../cdp/chrome-clock.ts";
 /** A session's calibration is taken again this often (the tightest kept). */
@@ -149,9 +148,9 @@ const CALIBRATION_READINGS = 3;
  *  repeats). */
 const CALIBRATION_RETRY_MS = [250, 1_000, 5_000, 30_000];
 /** How long socket events wait for their session's first calibration. */
-export const CALIBRATION_WAIT_MS = 2_000;
-/** From the proxy's answer, how long its send waits for CDP's status. */
-export const SOCKET_ANSWER_GRACE_MS = 2_000;
+export const CALIBRATION_WAIT_MS = 6_000;
+/** How long a proxy write waits for a socket CDP shows. */
+export const SOCKET_PAIR_WAIT_MS = 2_000;
 
 /** The buffer as the socket uses it. */
 export interface SocketBuffer {
@@ -240,20 +239,18 @@ interface Mark {
   wall: number | null;
 }
 
-/** An event's moment; only one proven before a loss can bound its gap. */
+/** An event's moment, proven no later than when Chrome saw it. */
 interface Stamp {
   mono: number;
   wall: number;
-  proven: boolean;
 }
 
-/** A tunnel's handshake: once sent, owed one end, with time for CDP's answer. */
-interface SocketSend {
+/** A tunnel's handshake write, not yet claimed by a socket CDP showed. */
+interface HandshakeMoment {
   id: string;
   host: string;
-  sent: boolean;
-  answered: boolean;
-  timer: NodeJS.Timeout | null;
+  mono: number;
+  timer: NodeJS.Timeout;
 }
 
 /** A gap's boundary when no moment saved before the loss is known: left
@@ -274,6 +271,9 @@ interface CdpSocket {
   state: "new" | "handshaking" | "open" | "answered" | "ended";
   /** CDP told its answer already: a later error must not end another send. */
   answerSeen: boolean;
+  /** Its observation needs no calibration: followed at CDP's take, while
+   *  the stream's events may still wait for their stamps. */
+  sendState: "new" | "waiting" | "sent" | "ended";
   /** Open: its ws.open is written (or on its way); false — no live session
    *  was known at its 101: opened in the stream once one is. */
   kept: boolean;
@@ -333,8 +333,12 @@ export class SiteSockets {
   /** CDP's sockets of this Chrome to the socket host, oldest first: only
    *  ended ones ever make room for new ones. */
   readonly #sockets = new Map<string, CdpSocket>();
-  /** Handshakes sent by the proxy and still owed an end, oldest send first. */
-  readonly #sends = new Map<string, SocketSend>();
+  /** Proxy writes no socket claimed yet, oldest first; each waits at most
+   *  SOCKET_PAIR_WAIT_MS. */
+  readonly #moments = new Map<string, HandshakeMoment>();
+  /** Sockets whose handshake CDP announced before a proxy write, oldest
+   *  announcement first. */
+  readonly #handshakes = new Map<string, CdpSocket>();
   /** CDP's sockets of this Chrome to other hosts: known only to be none of
    *  this path's (bounded on their own). */
   readonly #others = new Map<string, true>();
@@ -351,7 +355,7 @@ export class SiteSockets {
   #retryStep = 0;
   #chromeGaps = 0;
   /** Every event of this Chrome comes after its start. */
-  #chromeStartedWall = wallMs();
+  #chromeStarted = { mono: monoMs(), wall: wallMs() };
   /** The last event of the socket's stream (ws.open, ws.in, ws.close). */
   #last: Mark | null = null;
   /** The last event of the socket's stream that is durable. */
@@ -394,7 +398,7 @@ export class SiteSockets {
     this.#timings = { ...DEFAULT_TIMINGS, ...deps.timings };
     const cdp = deps.cdp;
     const handlers: Record<(typeof SOCKET_EVENTS)[number], (event: CdpEvent) => Taken> = {
-      "Network.webSocketCreated": (event) => this.#onCreated(event),
+      "Network.webSocketCreated": () => null,
       "Network.webSocketWillSendHandshakeRequest": (event) => this.#onWillSendHandshake(event),
       "Network.webSocketHandshakeResponseReceived": (event) => this.#onHandshakeResponse(event),
       "Network.webSocketFrameReceived": (event) => this.#onFrameReceived(event),
@@ -416,6 +420,12 @@ export class SiteSockets {
    *  after it. */
   #take(event: CdpEvent, handle: (event: CdpEvent) => Taken): void {
     this.#targetTypes.set(event, this.#deps.targetType(event.sessionId ?? null));
+    if (!event.replayed) {
+      // Pair at the take, before a calibration can hold the stream behind
+      // it: a write waits only 2 s, a clock reading may take 5 s.
+      if (event.method === "Network.webSocketCreated") this.#onCreated(event);
+      this.#observeHandshake(event, monoMs());
+    }
     if (!event.replayed && event.sessionId !== undefined) this.#ensureClock(event.sessionId);
     if (!event.replayed && (this.#waiting.length > 0 || this.#awaitsClock(event))) {
       this.#waiting.push({ event, handle });
@@ -498,36 +508,25 @@ export class SiteSockets {
    *  records are decided by the socket gate under this ticket. */
   openTunnel(host: string, port: number): SocketTicket {
     const id = randomUUID();
-    const send: SocketSend = { id, host, sent: false, answered: false, timer: null };
     this.#log("tunnel.opened", { tunnelId: id, host, port });
-    return { id, event: (event) => this.#onTunnel(send, event), rules: () => ({ authorizationBytes: this.#deps.authorizationBytes() }) };
+    let sent = false;
+    return {
+      id,
+      event: (event) => {
+        if (event.kind === "handshake_sent") {
+          if (sent) return;
+          sent = true;
+          this.#handshakeSent(id, host, event);
+        } else this.#onTunnel(id, event);
+      },
+      rules: () => ({ authorizationBytes: this.#deps.authorizationBytes() }),
+    };
   }
 
-  #onTunnel(send: SocketSend, event: SocketTunnelEvent): void {
-    const tunnelId = send.id;
+  #onTunnel(tunnelId: string, event: Exclude<SocketTunnelEvent, { kind: "handshake_sent" }>): void {
     switch (event.kind) {
       case "open":
-        return;
       case "ended":
-        this.#tunnelEnded(send, event.result);
-        return;
-      case "handshake_sent":
-        if (send.sent) return;
-        send.sent = true;
-        this.#sends.set(tunnelId, send);
-        if (this.#lastHandshake === null || event.mono > this.#lastHandshake.mono) this.#lastHandshake = { mono: event.mono, wall: event.wall };
-        this.#deps.observe.sent({ id: tunnelId, url: new URL(`wss://${send.host}/`), sentMono: event.mono });
-        return;
-      case "answered":
-        if (!this.#sends.has(tunnelId) || send.answered) return;
-        send.answered = true;
-        send.timer = setTimeout(() => {
-          // CDP's answer may already be waiting for a calibration: take it
-          // before declaring the status unknown, keeping only proven marks.
-          this.#drain(true);
-          this.#endObserved(send, null, "CDP told no answer within the grace");
-        }, Math.max(0, Math.ceil(event.mono + SOCKET_ANSWER_GRACE_MS - monoMs())));
-        send.timer.unref();
         return;
       case "holding":
         // It may be the authorization under a token not observed yet: the
@@ -540,7 +539,6 @@ export class SiteSockets {
         }
         return;
       case "refused": {
-        this.#tunnelEnded(send, event.why);
         const detail: Record<string, string | number | boolean> = { at: "proxy", recordBytes: event.recordBytes, why: event.why, left: false };
         if (event.late) {
           // Not proven forbidden: the authorization's size did not come in
@@ -563,29 +561,91 @@ export class SiteSockets {
     }
   }
 
-  /** No answer passed the proxy: none of CDP's answers can be this send's.
-   *  One already answered keeps its grace from that answer, not the close. */
-  #tunnelEnded(send: SocketSend, result: string): void {
-    if (!send.answered) this.#endObserved(send, null, `the tunnel ended before any answer (${result})`);
-  }
-
-  /** Its send's end, to the engine, once. */
-  #endObserved(send: SocketSend, status: number | null, error: string | null): void {
-    if (!this.#sends.delete(send.id)) return;
-    if (send.timer !== null) clearTimeout(send.timer);
-    send.timer = null;
-    this.#deps.observe.ended({ id: send.id, status, error });
-  }
-
-  /** Both handshakes are the same page's `ws.upgrade`: if concurrent ones'
-   *  answers swap, their status still holds the same route. CDP gives no
-   *  tunnel id, so the oldest send the proxy saw answered and still owed
-   *  an end takes the status. */
-  #answered(status: number, error: string | null): void {
-    for (const send of this.#sends.values()) {
-      if (!send.answered) continue;
-      this.#endObserved(send, status, error);
+  /** Chrome writes just after announcing its handshake. Announcements and
+   *  writes may arrive in either order: one waiting socket takes the next
+   *  write, else it waits for an announcement. Concurrent handshakes may
+   *  swap moments; the set is still every write, so the page's pace holds.
+   *  Their answers never swap: each socket ends its own send. */
+  #handshakeSent(id: string, host: string, event: Extract<SocketTunnelEvent, { kind: "handshake_sent" }>): void {
+    if (this.#lastHandshake === null || event.mono > this.#lastHandshake.mono) this.#lastHandshake = { mono: event.mono, wall: event.wall };
+    const waiting = this.#handshakes.values().next().value;
+    if (waiting !== undefined) {
+      this.#sentObserved(waiting, event.mono);
       return;
+    }
+    const moment: HandshakeMoment = {
+      id, host, mono: event.mono,
+      timer: setTimeout(() => this.#unshown(moment), Math.max(0, Math.ceil(event.mono + SOCKET_PAIR_WAIT_MS - monoMs()))),
+    };
+    moment.timer.unref();
+    this.#moments.set(id, moment);
+  }
+
+  /** CDP did not show the socket that wrote this: its write still counts. */
+  #unshown(moment: HandshakeMoment): void {
+    if (!this.#moments.delete(moment.id)) return;
+    clearTimeout(moment.timer);
+    this.#deps.observe.sent({ id: moment.id, url: new URL(`wss://${moment.host}/`), sentMono: moment.mono });
+    this.#deps.observe.ended({ id: moment.id, status: null, error: "a socket CDP did not show" });
+  }
+
+  /** Its send, once, under its CDP connection's id, at a proxy write. */
+  #sentObserved(socket: CdpSocket, mono: number): void {
+    this.#handshakes.delete(socket.id);
+    socket.sendState = "sent";
+    this.#deps.observe.sent({ id: socket.id, url: new URL(socket.url), sentMono: mono });
+  }
+
+  /** Its own answer, failure or close ends its send, once. One still
+   *  waiting failed before a write: nothing is reported. */
+  #endObserved(socket: CdpSocket, status: number | null, error: string | null): void {
+    this.#handshakes.delete(socket.id);
+    const sent = socket.sendState === "sent";
+    socket.sendState = "ended";
+    if (sent) this.#deps.observe.ended({ id: socket.id, status, error });
+  }
+
+  /** Handshake observations use CDP's take only to pair a write, never as
+   *  its moment. Frames keep their order while waiting for calibration. */
+  #observeHandshake(event: CdpEvent, take: number): void {
+    const socket = this.#socket(event);
+    if (typeof socket === "string" || socket.sendState === "ended") return;
+    switch (event.method) {
+      case "Network.webSocketWillSendHandshakeRequest": {
+        if (socket.sendState !== "new") return;
+        let latest: HandshakeMoment | null = null;
+        for (const moment of this.#moments.values()) {
+          if (moment.mono < take - SOCKET_PAIR_WAIT_MS) this.#unshown(moment);
+          else if (moment.mono <= take && (latest === null || moment.mono >= latest.mono)) latest = moment;
+        }
+        if (latest !== null) {
+          this.#moments.delete(latest.id);
+          clearTimeout(latest.timer);
+          this.#sentObserved(socket, latest.mono);
+        } else {
+          socket.sendState = "waiting";
+          this.#handshakes.set(socket.id, socket);
+        }
+        return;
+      }
+      case "Network.webSocketHandshakeResponseReceived": {
+        if (socket.sendState === "waiting") {
+          // Its answer passed the proxy after its write: the latest write
+          // seen is no earlier than its own, even if another socket took it.
+          this.#sentObserved(socket, this.#lastHandshake?.mono ?? take);
+        }
+        const status = Number((event.params as { response?: { status?: unknown } }).response?.status);
+        this.#endObserved(socket, Number.isInteger(status) ? status : null, null);
+        return;
+      }
+      case "Network.webSocketFrameError": {
+        const message = String((event.params as { errorMessage?: unknown }).errorMessage ?? "").slice(0, 160);
+        const code = Number(/response code: (\d{3})/.exec(message)?.[1] ?? NaN);
+        this.#endObserved(socket, Number.isInteger(code) ? code : null, message || "the handshake failed");
+        return;
+      }
+      case "Network.webSocketClosed":
+        this.#endObserved(socket, null, "the socket closed before its handshake's answer");
     }
   }
 
@@ -644,7 +704,7 @@ export class SiteSockets {
   /** A new Chrome starts: whatever is left of the one before goes with it. */
   async chromeStarting(): Promise<void> {
     this.#chromeGone("the previous Chrome is gone");
-    this.#chromeStartedWall = wallMs();
+    this.#chromeStarted = { mono: monoMs(), wall: wallMs() };
   }
 
   /** The page stops or its browser goes (the exit is closed already): every
@@ -659,7 +719,7 @@ export class SiteSockets {
   sessionKnown(): void {
     if (this.#deps.sessionFingerprint() === null) return;
     for (const socket of this.#sockets.values()) {
-      if (socket.state === "open" && !socket.kept) this.#keep(socket, { mono: monoMs(), wall: wallMs(), proven: false });
+      if (socket.state === "open" && !socket.kept) this.#keep(socket, { mono: monoMs(), wall: wallMs() });
     }
   }
 
@@ -670,7 +730,9 @@ export class SiteSockets {
   #chromeGone(why: string): void {
     // A new Chrome's sessions are new: their clocks are taken anew.
     this.clocksInvalidated(why);
-    for (const send of this.#sends.values()) this.#endObserved(send, null, why);
+    for (const moment of this.#moments.values()) this.#unshown(moment);
+    for (const socket of this.#sockets.values()) this.#endObserved(socket, null, why);
+    this.#handshakes.clear();
     // A socket that may have spoken and whose frames are not in the stream:
     // what it carried is lost with Chrome (its 101 and frames may still be
     // on their way).
@@ -755,21 +817,21 @@ export class SiteSockets {
 
   /** An event's stamp, on this process's clock: its timestamp mapped by its
    *  session's calibration (at most the calibration's spread early, never
-   *  late) — or, its session not calibrated yet, no later than its socket's
-   *  latest calibrated event, else its take (no gap boundary proven). */
+   *  late) — or, with no clock, the latest of its socket's last calibrated
+   *  event and Chrome's start: both are proven before this event. */
   #at(event: CdpEvent, socket: CdpSocket | null): Stamp {
     const take = monoMs();
     const wall = wallMs();
-    const stamp = (mono: number, proven: boolean): Stamp => ({ mono, wall: Math.round(wall - (take - mono)), proven });
+    const stamp = (mono: number): Stamp => ({ mono, wall: Math.round(wall - (take - mono)) });
     const seen = Number((event.params as { timestamp?: unknown }).timestamp) * 1000;
     const clock = event.sessionId === undefined ? undefined : this.#clocks.get(event.sessionId);
     if (clock !== undefined && Number.isFinite(seen) && seen > 0) {
       const mono = chromeToOperator(seen / 1000, clock, take);
       if (socket !== null && (socket.provenMono === null || mono > socket.provenMono)) socket.provenMono = mono;
-      return stamp(mono, true);
+      return stamp(mono);
     }
-    const proven = socket?.provenMono ?? null;
-    return stamp(Math.min(take, proven ?? take), proven !== null);
+    const mono = Math.max(socket?.provenMono ?? this.#chromeStarted.mono, this.#chromeStarted.mono);
+    return { mono, wall: Math.round(this.#chromeStarted.wall + (mono - this.#chromeStarted.mono)) };
   }
 
   // ── Chrome's clock (rounds 5–7 of Astra's review of PR 15) ─────────────
@@ -892,7 +954,7 @@ export class SiteSockets {
       this.#log("socket.not_followed", { why: `more than ${MAX_SOCKETS} sockets of the host alive at once` });
       return this.#drop("a socket past the bound of those followed");
     }
-    const socket: CdpSocket = { key, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, kept: false, provenMono: null };
+    const socket: CdpSocket = { key, id: randomUUID(), url, context: contextOf(type), state: "new", answerSeen: false, sendState: "new", kept: false, provenMono: null };
     this.#sockets.set(key, socket);
     this.#socketLog(event, socket, "created");
     return null;
@@ -928,9 +990,7 @@ export class SiteSockets {
     const status = Number(response?.status);
     const known = Number.isInteger(status) ? status : null;
     socket.answerSeen = true;
-    if (known !== null) this.#answered(known, null);
-    // A close without an answer ended its CDP life, not the proxy's send.
-    // A late answer still tells the status, but cannot open it again.
+    // A close ended its CDP life: a late answer cannot open it again.
     if (socket.state === "ended") return null;
     if (known !== 101) {
       // Its handshake failed: its end is Chrome's word on it (the error, the
@@ -969,7 +1029,7 @@ export class SiteSockets {
     const items = (): GroupItem[] => (uncovered === null ? opened : [{ gap: "ws_reconnect", from: { seq: uncovered.seq, wall: uncovered.wall } }, ...opened]);
     this.#open.set(id, socket);
     this.#uncovered = null;
-    const mark: Mark = { seq: null, wall: at.proven ? at.wall : (this.#last?.wall ?? this.#chromeStartedWall) };
+    const mark: Mark = { seq: null, wall: at.wall };
     this.#last = mark;
     const durable = this.#write(`open:${id}`, items, (written) => this.#saved_(written, mark));
     if (durable !== null) this.#settled = Promise.all([this.#settled, durable]);
@@ -995,7 +1055,7 @@ export class SiteSockets {
       this.#log("event.unkept", { kind: "ws.in", reason: appended.reason });
       return null;
     }
-    const mark: Mark = { seq: null, wall: at.proven ? at.wall : (this.#last?.wall ?? this.#chromeStartedWall) };
+    const mark: Mark = { seq: null, wall: at.wall };
     this.#last = mark;
     const durable = appended.durable.then((written) => {
       this.#saved_(written, mark);
@@ -1040,7 +1100,6 @@ export class SiteSockets {
     const code = Number(/response code: (\d{3})/.exec(message)?.[1] ?? NaN);
     if (!socket.answerSeen && Number.isInteger(code)) {
       socket.answerSeen = true;
-      this.#answered(code, message || "the handshake failed");
     }
     if (socket.state !== "handshaking") {
       socket.state = "ended";
@@ -1099,8 +1158,8 @@ export class SiteSockets {
     // and, as a boundary, the moment of the last event received before it
     // (the open or a frame): a close moves no boundary later (Astra's
     // review of PR 15, round 6).
-    const previousWall = this.#last?.wall ?? this.#chromeStartedWall;
-    const mark: Mark = { seq: null, wall: stamp.proven ? Math.min(stamp.wall, previousWall) : previousWall };
+    const previousWall = this.#last?.wall ?? this.#chromeStarted.wall;
+    const mark: Mark = { seq: null, wall: Math.min(stamp.wall, previousWall) };
     this.#last = mark;
     this.#log("socket.closed", { connectionId, why });
     this.#deps.journal({ connectionId, event: "closed", detail: why });
@@ -1271,10 +1330,9 @@ export class SiteSockets {
 
   /** Stops the timers (the operator stops). */
   close(): void {
-    for (const send of this.#sends.values()) {
-      if (send.timer !== null) clearTimeout(send.timer);
-      send.timer = null;
-    }
+    for (const moment of this.#moments.values()) clearTimeout(moment.timer);
+    this.#moments.clear();
+    this.#handshakes.clear();
     if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
     if (this.#waitTimer !== null) clearTimeout(this.#waitTimer);

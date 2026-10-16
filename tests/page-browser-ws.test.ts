@@ -29,7 +29,7 @@ import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/uti
 import { guardExpression } from "../apps/page-browser/src/ws/guard.ts";
 import { GuardInstaller } from "../apps/page-browser/src/ws/install.ts";
 import { BoundaryFile } from "../apps/page-browser/src/ws/boundary.ts";
-import { CALIBRATION_MAX_MS, CALIBRATION_WAIT_MS, SOCKET_ANSWER_GRACE_MS, SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
+import { CALIBRATION_MAX_MS, CALIBRATION_WAIT_MS, SOCKET_PAIR_WAIT_MS, SiteSockets, type SocketBuffer, type SocketDeps, type SocketTimings } from "../apps/page-browser/src/ws/sockets.ts";
 import {
   FakeCdpPort,
   FakeChrome,
@@ -43,6 +43,7 @@ import {
   SOCKS_USER,
   tempDir,
   TLS13_OVERHEAD,
+  tlsRecord,
   UNANSWERED,
   until,
 } from "./helpers/page-browser-fakes.ts";
@@ -50,9 +51,8 @@ import {
 // The site's socket, observed — never admitted (variant Б, plan-b §4.1.9;
 // Project Browser plan §4.4; spec §2.6, §6.1; mandatory condition №3): each
 // socket's CONNECT goes on at once; its handshake is told to the engine as a
-// send of the site's (`ws.upgrade`) at the proxy's write, under the tunnel's
-// id; CDP gives the status, with a grace from the proxy's answer. The
-// connection's own id is separate. Its frames come from CDP into the
+// send of the site's (`ws.upgrade`) at the proxy's write, under the CDP
+// connection's id; its own answer, failure or close gives the status. Its frames come from CDP into the
 // buffer, durable and in order; gaps mark where frames may be missing; the
 // socket gate lets up only spec §2.6's messages, holding one that may be the
 // authorization until the site's session is observed; nothing of a frame, a
@@ -105,17 +105,17 @@ interface World {
   /** The site's session read again (the socket gate holds a record). */
   refreshes: { count: number };
   events: () => Array<Record<string, unknown>>;
-  /** The connection id of a socket CDP showed (separate from its tunnel). */
+  /** The connection id of a socket CDP showed (also its observed send). */
   connectionOf: (index?: number) => string;
 }
 
-async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number; authHoldMs?: number } = {}): Promise<World> {
+async function world(options: { timings?: Partial<SocketTimings>; buffer?: (buffer: EventBuffer) => SocketBuffer; tls12Suite?: number; serverAnswer?: boolean; authHoldMs?: number } = {}): Promise<World> {
   const temp = tempDir("pb-ws-");
   cleanups.push(temp.remove);
   const lines: string[] = [];
   setLogSink((line) => lines.push(line));
   const cdp = new FakeCdpPort();
-  const server = await socketServer(options.tls12Suite === undefined ? {} : { tls12Suite: options.tls12Suite });
+  const server = await socketServer({ ...(options.tls12Suite === undefined ? {} : { tls12Suite: options.tls12Suite }), ...(options.serverAnswer === undefined ? {} : { answer: options.serverAnswer }) });
   cleanups.push(server.close);
   const socks = new FakeSocks(SOCKS_USER, SOCKS_PASSWORD);
   await socks.start();
@@ -226,7 +226,7 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     const client = await opened(w);
     // The engine heard the send and its 101; nothing was asked of it.
     expect(w.observed).toEqual([
-      { type: "sent", id: expect.any(String), url: "wss://wsv3.fansly.com/", sentMono: expect.any(Number) },
+      { type: "sent", id: expect.any(String), url: URL_WS, sentMono: expect.any(Number) },
       { type: "ended", id: w.observed[0]!.id, status: 101, error: null },
     ]);
     const sent = w.observed[0] as Extract<Observed, { type: "sent" }>;
@@ -234,7 +234,7 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     expect(sent.sentMono).toBeLessThanOrEqual(monoMs());
     await w.buffer.flush();
     await until(() => w.events().length === 1, 3000, "the open durable");
-    expect(w.connectionOf()).not.toBe(sent.id);
+    expect(w.connectionOf()).toBe(sent.id);
     expect(w.events()[0]).toEqual({ seq: 1, atMono: expect.any(Number), atWall: expect.any(Number), kind: "ws.open", connectionId: w.connectionOf(), attemptId: 0, sessionFingerprint: FINGERPRINT });
     // Kept in the buffer from its open: a restart ends it.
     expect(w.buffer.connections()).toEqual([{ connectionId: w.connectionOf(), attemptId: 0, opened: true }]);
@@ -275,187 +275,214 @@ describe("the site's socket goes as a browser's (variant Б, plan-b §4.1.9)", (
     client.destroy();
   });
 
-  it("sentMono is the proxy's moment, even when CDP announces the handshake before the write; neither announcement is told twice", async () => {
+  it.each(["before", "after"])("sentMono is the proxy's write when CDP announces the handshake %s it; neither is told twice", async (when) => {
     const w = await world();
     const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    const proxyMono = monoMs() - (when === "after" ? 100 : 0);
+    if (when === "after") ticket.event({ kind: "handshake_sent", mono: proxyMono, wall: Date.now() });
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
-    await settle();
-    expect(w.observed).toEqual([]);
-    const proxyMono = monoMs();
-    ticket.event({ kind: "handshake_sent", mono: proxyMono, wall: Date.now() });
-    expect(w.observed).toEqual([{ type: "sent", id: ticket.id, url: "wss://wsv3.fansly.com/", sentMono: proxyMono }]);
-    ticket.event({ kind: "answered", mono: monoMs() });
+    if (when === "before") {
+      expect(w.observed).toEqual([]);
+      ticket.event({ kind: "handshake_sent", mono: proxyMono, wall: Date.now() });
+    }
+    const id = w.observed[0]!.id;
+    expect(id).not.toBe(ticket.id);
+    expect(w.observed).toEqual([{ type: "sent", id, url: URL_WS, sentMono: proxyMono }]);
     w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, "S1");
     ticket.event({ kind: "handshake_sent", mono: proxyMono + 100, wall: Date.now() });
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    await settle();
     expect(w.observed).toHaveLength(2);
-    expect(w.observed[1]).toEqual({ type: "ended", id: ticket.id, status: 101, error: null });
-    expect(w.connectionOf()).not.toBe(ticket.id);
+    expect(w.observed[1]).toEqual({ type: "ended", id, status: 101, error: null });
+    expect(w.connectionOf()).toBe(id);
   });
 
-  it.each(["answer", "error with a response code"])("an answered 429's tunnel ends before CDP's %s: the grace keeps its status", async (how) => {
-    const w = await world();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+  it("a NewSessionTicket-like record before the 101 ends nothing and gives no other socket its status", async () => {
+    const w = await world({ serverAnswer: false });
+    const client = await SocketTunnelClient.connect(w.proxyPort);
+    cleanups.push(() => client.destroy());
+    await client.tls();
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
-    ticket.event({ kind: "answered", mono: monoMs() });
-    ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS - 1);
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    client.request();
+    await until(() => w.observed.length === 1, 3000, "the proxy's write");
+    w.server.send(tlsRecord(23, 100, 0x66));
+    await until(() => Buffer.concat(client.inbound).includes(0x66), 3000, "the ticket at Chrome");
+    const first = w.observed[0]!.id;
     expect(w.observed.map((one) => one.type)).toEqual(["sent"]);
-    if (how === "answer") w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 429 } }, "S1");
-    else w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "Unexpected response code: 429" }, "S1");
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed).toHaveLength(2);
-    expect(w.observed[1]).toEqual({ type: "ended", id: ticket.id, status: 429, error: how === "answer" ? null : "Unexpected response code: 429" });
+    const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS2" }, "S1");
+    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    const second = w.observed[1]!.id;
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", response: { status: 101 } }, "S1");
+    expect(w.observed.filter((one) => one.type === "ended")).toEqual([{ type: "ended", id: second, status: 101, error: null }]);
+    w.server.send(tlsRecord(23, 150, 0x55));
+    await client.answered();
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 101 } }, "S1");
+    expect(w.observed.at(-1)).toEqual({ type: "ended", id: first, status: 101, error: null });
   });
 
-  it.each(["close", "error"])("CDP's %s without an answer ends no send; an unanswered tunnel's end tells status null at once", async (how) => {
+  it.each(["close", "error"])("an unanswered tunnel's end waits for its own CDP %s; another socket's 101 ends only that socket", async (how) => {
+    const w = await world();
+    const a = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    const b = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    for (const [requestId, ticket] of [["WS-A", a], ["WS-B", b]] as const) {
+      w.cdp.emit("Network.webSocketCreated", { requestId, url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId }, "S1");
+      ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    }
+    const [first, second] = w.observed;
+    a.event({ kind: "ended", result: "server closed", handshakeSent: true });
+    expect(w.observed.map((one) => one.type)).toEqual(["sent", "sent"]);
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-B", response: { status: 101 } }, "S1");
+    if (how === "close") w.cdp.emit("Network.webSocketClosed", { requestId: "WS-A" }, "S1");
+    else w.cdp.emit("Network.webSocketFrameError", { requestId: "WS-A", errorMessage: "connection reset" }, "S1");
+    expect(w.observed.filter((one) => one.type === "ended")).toEqual([
+      { type: "ended", id: second!.id, status: 101, error: null },
+      { type: "ended", id: first!.id, status: null, error: how === "close" ? "the socket closed before its handshake's answer" : "connection reset" },
+    ]);
+  });
+
+  it.each(["close", "error"])("a socket's %s while waiting wrote nothing: no send and no end; the next write stays unclaimed", async (how) => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
     if (how === "close") w.cdp.emit("Network.webSocketClosed", { requestId: "WS1" }, "S1");
     else w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "connection reset" }, "S1");
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed.map((one) => one.type)).toEqual(["sent"]);
-    ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    expect(w.observed[1]).toEqual({ type: "ended", id: ticket.id, status: null, error: "the tunnel ended before any answer (server closed)" });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed).toHaveLength(2);
+    expect(w.observed).toEqual([]);
+    const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    expect(w.observed).toEqual([]);
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS);
+    expect(w.observed).toMatchObject([{ type: "sent", id: ticket.id }, { type: "ended", id: ticket.id, status: null, error: "a socket CDP did not show" }]);
   });
 
-  it("a 401 already told by CDP but queued for a calibration is taken before the tunnel's grace declares its status unknown", async () => {
+  it("a 401 taken while its frames wait for a calibration ends its own send at once", async () => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     w.cdp.handlers.set("Performance.getMetrics", () => new Promise(() => undefined));
     const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    ticket.event({ kind: "answered", mono: monoMs() });
-    ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    await vi.advanceTimersByTimeAsync(500);
+    const sentMono = monoMs();
+    ticket.event({ kind: "handshake_sent", mono: sentMono, wall: Date.now() });
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1", timestamp: monoMs() / 1000 }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
     w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 401 } }, "S1");
-    expect(w.observed.map((one) => one.type)).toEqual(["sent"]);
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS - 500);
-    expect(w.observed[1]).toEqual({ type: "ended", id: ticket.id, status: 401, error: null });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
+    expect(w.observed).toEqual([
+      { type: "sent", id: expect.any(String), url: URL_WS, sentMono },
+      { type: "ended", id: w.observed[0]!.id, status: 401, error: null },
+    ]);
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS);
     expect(w.observed).toHaveLength(2);
   });
 
-  it.each(["ended", "refused"])("an unanswered tunnel CDP never shows is told at its write and ended at once (%s)", async (how) => {
+  it.each([false, true])("an answer while waiting uses the latest proxy moment, else its take (a moment seen: %s)", async (seen) => {
+    const w = await world();
+    let latest: number | null = null;
+    if (seen) {
+      w.cdp.emit("Network.webSocketCreated", { requestId: "WS-A", url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-A" }, "S1");
+      latest = monoMs() - 100;
+      w.sockets.openTunnel("wsv3.fansly.com", 443).event({ kind: "handshake_sent", mono: latest, wall: Date.now() });
+    }
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS-B", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-B" }, "S1");
+    const before = monoMs();
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-B", response: { status: 429 } }, "S1");
+    const send = w.observed.at(-2) as Extract<Observed, { type: "sent" }>;
+    if (latest !== null) expect(send.sentMono).toBe(latest);
+    else {
+      expect(send.sentMono).toBeGreaterThanOrEqual(before);
+      expect(send.sentMono).toBeLessThanOrEqual(monoMs());
+    }
+    expect(w.observed.at(-1)).toEqual({ type: "ended", id: send.id, status: 429, error: null });
+  });
+
+  it.each(["open", "ended", "refused"])("a socket CDP never shows is reported and ended after 2 s, even if its tunnel is %s", async (how) => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
     const sentMono = monoMs();
     ticket.event({ kind: "handshake_sent", mono: sentMono, wall: Date.now() });
     if (how === "ended") ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    else ticket.event({ kind: "refused", recordBytes: 100, why: "authorization wait expired", late: true });
+    if (how === "refused") ticket.event({ kind: "refused", recordBytes: 100, why: "authorization wait expired", late: true });
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS - 1);
+    expect(w.observed).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
     expect(w.observed).toEqual([
       { type: "sent", id: ticket.id, url: "wss://wsv3.fansly.com/", sentMono },
-      { type: "ended", id: ticket.id, status: null, error: `the tunnel ended before any answer (${how === "ended" ? "server closed" : "authorization wait expired"})` },
+      { type: "ended", id: ticket.id, status: null, error: "a socket CDP did not show" },
     ]);
-    // The proxy may tell the refusal and the end: the send ends only once.
     ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed).toHaveLength(2);
-    expect(w.events()).toEqual([]);
-  });
-
-  it.each([true, false])("B's 101 ends B while A has no answer (A already closed: %s)", async (closed) => {
-    const w = await world();
-    const a = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    const b = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    a.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    if (closed) {
-      a.event({ kind: "ended", result: "server closed", handshakeSent: true });
-      expect(w.observed[1]).toEqual({ type: "ended", id: a.id, status: null, error: "the tunnel ended before any answer (server closed)" });
-    }
-    b.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    b.event({ kind: "answered", mono: monoMs() });
-    w.cdp.emit("Network.webSocketCreated", { requestId: "WS-B", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-B" }, "S1");
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-B", response: { status: 101 } }, "S1");
-    await settle();
-    expect(w.observed.filter((one) => one.type === "ended" && one.id === b.id)).toEqual([{ type: "ended", id: b.id, status: 101, error: null }]);
-    if (!closed) a.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    expect(w.observed.filter((one) => one.type === "ended")).toHaveLength(2);
-  });
-
-  it.each([true, false])("the proxy's answer gets one grace for CDP, even on an open 101 tunnel (stays open: %s)", async (open) => {
-    const w = await world();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    ticket.event({ kind: "answered", mono: monoMs() });
-    await vi.advanceTimersByTimeAsync(1_000);
-    if (!open) ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    ticket.event({ kind: "answered", mono: monoMs() });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS - 1_001);
-    expect(w.observed.map((one) => one.type)).toEqual(["sent"]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(w.observed[1]).toEqual({ type: "ended", id: ticket.id, status: null, error: "CDP told no answer within the grace" });
-    ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS);
     expect(w.observed).toHaveLength(2);
   });
 
-  it("two answered tunnels take CDP's statuses in send order; a repeated answer cannot end the next send", async () => {
+  it.each(["writes first", "CDP first"])("two concurrent handshakes (%s): every write moment is reported, each socket keeps its 401/429", async (order) => {
     const w = await world();
     const a = w.sockets.openTunnel("wsv3.fansly.com", 443);
     const b = w.sockets.openTunnel("wsv3.fansly.com", 443);
-    b.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    a.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    a.event({ kind: "answered", mono: monoMs() });
-    b.event({ kind: "answered", mono: monoMs() });
+    const moments = [monoMs() - 20, monoMs() - 10];
+    const write = () => {
+      a.event({ kind: "handshake_sent", mono: moments[0]!, wall: Date.now() });
+      b.event({ kind: "handshake_sent", mono: moments[1]!, wall: Date.now() });
+    };
+    if (order === "writes first") write();
     for (const requestId of ["WS1", "WS2"]) {
       w.cdp.emit("Network.webSocketCreated", { requestId, url: URL_WS }, "S1");
-      w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId, timestamp: monoMs() / 1000 }, "S1");
+      w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId }, "S1");
     }
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 401 } }, "S1");
+    if (order === "CDP first") write();
+    const sends = w.observed.filter((one) => one.type === "sent");
+    expect(sends.map((one) => one.sentMono)).toEqual(order === "writes first" ? [...moments].reverse() : moments);
+    expect(new Set(sends.map((one) => one.id)).size).toBe(2);
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", response: { status: 429 } }, "S1");
+    w.cdp.emit("Network.webSocketFrameError", { requestId: "WS2", errorMessage: "Unexpected response code: 429" }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", response: { status: 429 } }, "S1");
     w.cdp.emit("Network.webSocketFrameError", { requestId: "WS1", errorMessage: "Unexpected response code: 401" }, "S1");
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", response: { status: 401 } }, "S1");
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS2", response: { status: 101 } }, "S1");
-    await settle();
     expect(w.observed.filter((one) => one.type === "ended")).toEqual([
-      { type: "ended", id: b.id, status: 401, error: null },
-      { type: "ended", id: a.id, status: 101, error: null },
+      { type: "ended", id: sends[1]!.id, status: 429, error: null },
+      { type: "ended", id: sends[0]!.id, status: 401, error: "Unexpected response code: 401" },
     ]);
   });
 
-  it("Chrome gone ends every send still owed an end, including a tunnel CDP never showed and one waiting for its answer; its timers are cleared", async () => {
+  it("Chrome gone reports unclaimed writes first, ends every reported socket, drops waiters and clears timers", async () => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const tickets = Array.from({ length: 3 }, () => w.sockets.openTunnel("wsv3.fansly.com", 443));
-    for (const ticket of tickets) ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    for (const ticket of tickets.slice(0, 2)) ticket.event({ kind: "answered", mono: monoMs() });
-    tickets[0]!.event({ kind: "ended", result: "server closed", handshakeSent: true });
-    tickets[1]!.event({ kind: "refused", recordBytes: 100, why: "authorization wait expired", late: true });
-    expect(vi.getTimerCount()).toBe(2);
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS1" }, "S1");
+    w.sockets.openTunnel("wsv3.fansly.com", 443).event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    const reported = w.observed[0]!.id;
+    const unshown = w.sockets.openTunnel("wsv3.fansly.com", 443);
+    unshown.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
+    await vi.advanceTimersByTimeAsync(0);
     w.sockets.endAll("control lost");
     expect(vi.getTimerCount()).toBe(0);
-    expect(w.observed.filter((one) => one.type === "ended")).toEqual(tickets.map((ticket) => ({ type: "ended", id: ticket.id, status: null, error: "the page stopped: control lost" })));
+    expect(w.observed.slice(1)).toMatchObject([
+      { type: "sent", id: unshown.id },
+      { type: "ended", id: unshown.id, status: null, error: "a socket CDP did not show" },
+      { type: "ended", id: reported, status: null, error: "the page stopped: control lost" },
+    ]);
     await w.sockets.chromeStarting();
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed).toHaveLength(6);
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS2" }, "S1");
+    w.sockets.endAll("control lost again");
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS);
+    expect(w.observed).toHaveLength(4);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("closing the observer clears the tunnels' answer timers", async () => {
+  it("closing the observer clears unclaimed writes' timers", async () => {
     const w = await world();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const ticket = w.sockets.openTunnel("wsv3.fansly.com", 443);
     ticket.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
-    ticket.event({ kind: "answered", mono: monoMs() });
-    ticket.event({ kind: "ended", result: "server closed", handshakeSent: true });
     w.sockets.close();
     expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(SOCKET_ANSWER_GRACE_MS);
-    expect(w.observed.map((one) => one.type)).toEqual(["sent"]);
+    await vi.advanceTimersByTimeAsync(SOCKET_PAIR_WAIT_MS);
+    expect(w.observed).toEqual([]);
   });
 
   it("two sockets at once each go and each are their own connection; a socket of another host is none of this path's", async () => {
@@ -644,47 +671,89 @@ describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
     { reading: "never answers", previous: false },
     { reading: "never answers", previous: true },
     { reading: "has no Timestamp", previous: false },
-  ])("no reading ($reading), a batch five minutes late: the next gap keeps the previous proven wall, else Chrome's start (previous mark: $previous)", async ({ reading, previous }) => {
+  ].flatMap((test) => [ { ...test, next: "reconnect" }, { ...test, next: "restart" } ]))("no reading ($reading), a batch five minutes late: stamps and the $next gap are no later than the lost frame (a calibrated moment of this socket: $previous)", async ({ reading, previous, next }) => {
     const w = await world();
-    const chromeStartedWall = Date.now() - 600_000;
-    const date = vi.spyOn(Date, "now").mockReturnValue(chromeStartedWall);
-    await w.sockets.chromeStarting();
-    date.mockRestore();
+    const clock = await import("../apps/page-browser/src/shared/util.ts");
+    const chromeStarted = { mono: monoMs() - 600_000, wall: Date.now() - 600_000 };
+    const date = vi.spyOn(Date, "now").mockReturnValue(chromeStarted.wall);
+    const mono = vi.spyOn(clock, "monoMs").mockReturnValue(chromeStarted.mono);
+    try {
+      await w.sockets.chromeStarting();
+    } finally {
+      date.mockRestore();
+      mono.mockRestore();
+    }
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let boundaryWall = chromeStartedWall;
+    let boundaryWall = chromeStarted.wall;
     if (previous) {
-      w.cdp.emit("Network.webSocketCreated", { requestId: "WS-P", url: URL_WS }, "S2");
-      w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-P", timestamp: (monoMs() - 365_000) / 1000, response: { status: 101 } }, "S2");
-      w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS-P", timestamp: (monoMs() - 360_000) / 1000, response: { opcode: 1, payloadData: '{"t":2,"d":"previous"}' } }, "S2");
-      w.cdp.emit("Network.webSocketClosed", { requestId: "WS-P" }, "S2");
+      w.cdp.emit("Network.webSocketCreated", { requestId: "WS-L", url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-L", timestamp: (monoMs() - 365_000) / 1000, response: { status: 101 } }, "S1");
+      w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS-L", timestamp: (monoMs() - 360_000) / 1000, response: { opcode: 1, payloadData: '{"t":2,"d":"previous"}' } }, "S1");
       await vi.advanceTimersByTimeAsync(0);
       await w.buffer.flush();
       boundaryWall = w.events().find((event) => event.kind === "ws.in")!.atWall as number;
+      w.sockets.clocksInvalidated("a new CDP link");
     }
     w.cdp.handlers.set("Performance.getMetrics", () => {
       if (reading === "fails") throw new Error("Chrome did not give its clock");
       if (reading === "never answers") return new Promise(() => undefined);
       return { metrics: [] };
     });
-    const takeWall = Date.now();
-    w.cdp.emit("Network.webSocketCreated", { requestId: "WS-L", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-L", timestamp: (monoMs() - 305_000) / 1000, response: { status: 101 } }, "S1");
-    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS-L", timestamp: (monoMs() - 300_000) / 1000, response: { opcode: 1, payloadData: '{"t":2,"d":"late"}' } }, "S1");
-    w.cdp.emit("Network.webSocketClosed", { requestId: "WS-L", timestamp: (monoMs() - 299_000) / 1000 }, "S1");
+    const seen = { mono: monoMs() - 300_000, wall: Date.now() - 300_000 };
+    const lostWall = seen.wall + 60_000;
+    if (!previous) {
+      w.cdp.emit("Network.webSocketCreated", { requestId: "WS-L", url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-L", timestamp: (seen.mono - 5_000) / 1000, response: { status: 101 } }, "S1");
+    }
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS-L", timestamp: seen.mono / 1000, response: { opcode: 1, payloadData: '{"t":2,"d":"late"}' } }, "S1");
     await vi.advanceTimersByTimeAsync(CALIBRATION_WAIT_MS);
     await w.buffer.flush();
     expect(w.sockets.clockOf("S1")).toBeNull();
     const lateFrame = w.events().find((event) => event.frame === '{"t":2,"d":"late"}')!;
-    // The event may keep its take, but that proves no boundary before the
-    // message missed four minutes ago (outside a repair from the take).
-    expect(lateFrame.atWall as number).toBeGreaterThanOrEqual(takeWall);
-    w.cdp.emit("Network.webSocketCreated", { requestId: "WS-N", url: URL_WS }, "S1");
-    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-N", timestamp: monoMs() / 1000, response: { status: 101 } }, "S1");
-    await vi.advanceTimersByTimeAsync(CALIBRATION_WAIT_MS);
+    expect(lateFrame.atMono as number).toBeLessThanOrEqual(seen.mono);
+    expect(lateFrame.atWall as number).toBeLessThanOrEqual(seen.wall);
+    expect(Math.abs((lateFrame.atWall as number) - boundaryWall)).toBeLessThanOrEqual(1);
+    // The durable stamp, too: a crash rebuilds its boundary from lastWall,
+    // and the engine may have advanced lossSince by that very stamp.
+    expect(w.buffer.lastWall).toBe(lateFrame.atWall);
+    expect(w.buffer.lastWall!).toBeLessThanOrEqual(lostWall);
+    if (next === "restart") {
+      w.sockets.close();
+      const restarted = new SiteSockets({
+        cdp: new FakeCdpPort(), buffer: w.buffer, observe: observing().observe,
+        sessionFingerprint: () => FINGERPRINT, authorizationBytes: () => null,
+        targetType: () => null, journal: () => undefined, alarm: () => undefined,
+        stop: () => undefined, log: quiet,
+      });
+      cleanups.push(() => restarted.close());
+      await restarted.afterRestart();
+    } else {
+      w.cdp.emit("Network.webSocketClosed", { requestId: "WS-L", timestamp: (seen.mono + 1_000) / 1000 }, "S1");
+      w.cdp.emit("Network.webSocketCreated", { requestId: "WS-N", url: URL_WS }, "S1");
+      w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS-N", timestamp: monoMs() / 1000, response: { status: 101 } }, "S1");
+      await vi.advanceTimersByTimeAsync(CALIBRATION_WAIT_MS);
+    }
     await w.buffer.flush();
     const gap = w.events().filter((event) => event.kind === "gap").at(-1)!;
-    expect(gap).toMatchObject({ reason: "ws_reconnect", fromSeq: lateFrame.seq, fromWall: boundaryWall });
-    expect(gap.fromWall as number).toBeLessThanOrEqual(takeWall - 240_000);
+    expect(gap).toMatchObject({ reason: next === "restart" ? "operator_start" : "ws_reconnect", fromSeq: lateFrame.seq, fromWall: lateFrame.atWall });
+    expect(gap.fromWall as number).toBeLessThanOrEqual(lostWall);
+  });
+
+  it("with no clock, Chrome's start is later than an old calibrated lower bound: the stamp takes the start", async () => {
+    const w = await world();
+    const started = monoMs();
+    await w.sockets.chromeStarting();
+    w.cdp.emit("Network.webSocketCreated", { requestId: "WS1", url: URL_WS }, "S1");
+    w.cdp.emit("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: (started - 10_000) / 1000, response: { status: 101 } }, "S1");
+    await settle();
+    w.sockets.clocksInvalidated("a new CDP link");
+    w.cdp.handlers.set("Performance.getMetrics", () => { throw new Error("no clock"); });
+    w.cdp.emit("Network.webSocketFrameReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { opcode: 1, payloadData: "after the start" } }, "S1");
+    await settle();
+    await w.buffer.flush();
+    const frame = w.events().find((event) => event.kind === "ws.in")!;
+    expect(frame.atMono as number).toBeGreaterThanOrEqual(started);
+    expect(frame.atMono as number).toBeLessThanOrEqual(monoMs());
   });
 
   it("at the operator's start, before a connection that follows a closed one, and before the closes when the browser goes — each from the last event of the socket before the break", async () => {
@@ -730,7 +799,7 @@ describe("gaps (plan §4.4, step 6; spec §6.1)", () => {
     w.cdp.emit("Network.webSocketCreated", { requestId: "WS2", url: URL_WS }, "S1");
     w.cdp.emit("Network.webSocketWillSendHandshakeRequest", { requestId: "WS2", timestamp: monoMs() / 1000 }, "S1");
     w.sockets.endAll("control lost");
-    expect(w.observed.filter((one) => one.type === "ended").at(-1)).toEqual({ type: "ended", id: ticket.id, status: null, error: "the page stopped: control lost" });
+    expect(w.observed.filter((one) => one.type === "ended").at(-1)).toEqual({ type: "ended", id: w.observed.filter((one) => one.type === "sent").at(-1)!.id, status: null, error: "the page stopped: control lost" });
     await until(() => w.events().length === 3, 3000, "the open, the gap, the close");
     expect(w.events().map((event) => `${String(event.kind)}${event.kind === "gap" ? `:${String(event.reason)}` : ""}`)).toEqual(["ws.open", "gap:chrome_restart", "ws.close"]);
     // What CDP still says of either is dropped.
@@ -1230,7 +1299,6 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     tunnelOf?.event({ kind: "handshake_sent", mono: monoMs(), wall: Date.now() });
   }
   function answered(chrome: FakeChrome, requestId: string): void {
-    tunnelOf?.event({ kind: "answered", mono: monoMs() });
     chrome.event("Network.webSocketHandshakeResponseReceived", { requestId, timestamp: monoMs() / 1000, response: { status: 101, headers: {} } }, "S1");
   }
   function frame(chrome: FakeChrome, text: string, requestId = "WS1"): void {
@@ -1455,7 +1523,6 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const wallT = Date.now();
     tunnel(sockets);
     tunnelOf!.event({ kind: "handshake_sent", mono: t - 305_000, wall: wallT - 305_000 });
-    tunnelOf!.event({ kind: "answered", mono: monoMs() });
     // Chrome saw its handshake, its answer, a frame and the close five
     // minutes ago; CDP tells them all only now.
     chrome.event("Network.webSocketCreated", { requestId: "WS-L", url: URL_WS }, "S1");
@@ -1519,8 +1586,8 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     handshake(chrome, "WS-H");
     answered(chrome, "WS-H");
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(observed.map((one) => one.type)).toEqual(["sent"]);
-    await until(() => eventsOf(buffer).some((event) => event.kind === "ws.open"), 4000, "the open past the wait");
+    expect(observed.map((one) => one.type)).toEqual(["sent", "ended"]);
+    await until(() => eventsOf(buffer).some((event) => event.kind === "ws.open"), CALIBRATION_WAIT_MS + 1000, "the open past the wait");
     expect(observed.map((one) => one.type)).toEqual(["sent", "ended"]);
     expect(eventsOf(buffer)[0]!.atMono as number).toBeLessThanOrEqual(monoMs());
   });
@@ -1532,12 +1599,11 @@ describe("the holder's acknowledgement, and a restart after a crash (Astra's rev
     const lines: string[] = [];
     const { cdp, sockets } = await operatorSide(holder, buffer, { log: (event, fields) => lines.push(`${event} ${JSON.stringify(fields ?? {})}`) });
     cleanups.push(() => cdp.close());
-    chrome.clockDelayMs = CALIBRATION_MAX_MS + 300;
+    chrome.clockDelayMs = CALIBRATION_MAX_MS + 2_000;
     const t = monoMs();
     const wallT = Date.now();
     tunnel(sockets);
     tunnelOf!.event({ kind: "handshake_sent", mono: t - 305_000, wall: wallT - 305_000 });
-    tunnelOf!.event({ kind: "answered", mono: monoMs() });
     chrome.event("Network.webSocketCreated", { requestId: "WS-S", url: URL_WS }, "S1");
     chrome.event("Network.webSocketWillSendHandshakeRequest", { requestId: "WS-S", timestamp: (t - 305_000) / 1000 }, "S1");
     chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS-S", timestamp: (t - 304_000) / 1000, response: { status: 101 } }, "S1");

@@ -73,7 +73,6 @@ export interface TunnelRecord {
 export type SocketTunnelEvent =
   | { kind: "open" }
   | { kind: "handshake_sent"; mono: number; wall: number }
-  | { kind: "answered"; mono: number }
   /** The socket gate holds a record that may be the authorization under a
    *  token not observed yet: the site's session is to be read again. */
   | { kind: "holding"; recordBytes: number; why: string }
@@ -641,11 +640,11 @@ export class Egress {
             if (tunnel.serverFirst !== null) this.#serverHello(tunnel, chunk);
             if (!this.#tunnels.has(tunnel)) return;
           }
-          // The server answers the socket's request: what Chrome writes from
-          // now on is frames.
+          // What Chrome writes after the server speaks goes through the
+          // frame gate. These bytes prove no answer to the request: TLS 1.3
+          // may send a NewSessionTicket first; CDP tells the socket's status.
           if (tunnel.socket?.phase === "request") {
             tunnel.socket.phase = "frames";
-            this.#tell(tunnel.socket, { kind: "answered", mono: monoMs() });
           }
           // Before Chrome can react to them (a refusal it would repeat on).
           if (cls === "api") this.gate.noteServerBytes(tunnel.record.id);

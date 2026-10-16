@@ -74,10 +74,10 @@ describe("the closed exit", () => {
 });
 
 describe("the open exit", () => {
-  it("tells a socket's answer on its first server bytes after the request, once, before Chrome can see them", async () => {
+  it("tells the socket's handshake write; server records, including a ticket before the 101, tell no status", async () => {
     const events: SocketTunnelEvent[] = [];
     const { egress, port, socks, config } = await setUp({ openSocket: () => ({ id: "socket", event: (event) => events.push(event), rules: () => ({ authorizationBytes: null }) }) });
-    const server = await socketServer();
+    const server = await socketServer({ answer: false });
     cleanups.push(server.close);
     socks.routes.set("wsv3.fansly.com:443", server.port);
     egress.setSocks(config);
@@ -88,15 +88,16 @@ describe("the open exit", () => {
     expect(events.map((event) => event.kind)).toEqual(["open"]);
     const before = monoMs();
     client.request();
-    await client.answered();
-    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent", "answered"]);
-    const answer = events.find((event) => event.kind === "answered")!;
-    expect(answer.mono).toBeGreaterThanOrEqual(before);
-    expect(answer.mono).toBeLessThanOrEqual(monoMs());
-    const received = client.inbound.length;
+    await until(() => events.some((event) => event.kind === "handshake_sent"));
+    const write = events.find((event) => event.kind === "handshake_sent")!;
+    expect(write.mono).toBeGreaterThanOrEqual(before);
+    expect(write.mono).toBeLessThanOrEqual(monoMs());
+    server.send(tlsRecord(23, 100, 0x66));
+    await until(() => Buffer.concat(client.inbound).includes(0x66));
+    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent"]);
     server.send(tlsRecord(23, 100, 0x55));
-    await until(() => client.inbound.length > received);
-    expect(events.filter((event) => event.kind === "answered")).toHaveLength(1);
+    await client.answered();
+    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent"]);
     egress.closeExit("test complete");
     expect(events.at(-1)).toMatchObject({ kind: "ended", handshakeSent: true });
   });

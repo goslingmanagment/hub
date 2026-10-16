@@ -2330,7 +2330,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     expect(events().map((event) => event.kind)).toEqual(["gap", "ws.open", "ws.in", "ws.in", "ws.in", "ws.in", "ws.in"]);
     expect(events()[1]).toMatchObject({ kind: "ws.open", connectionId: expect.any(String), attemptId: 0, sessionFingerprint: fingerprint });
     const connectionId = events()[1]!.connectionId;
-    expect(connectionId).not.toBe(sent.siteRequestId);
+    expect(connectionId).toBe(sent.siteRequestId);
     expect(events().slice(2).every((event) => event.connectionId === connectionId)).toBe(true);
     expect(s.engine.of("wsAdmit")).toEqual([]);
     expect(s.engine.of("wsDone")).toEqual([]);
