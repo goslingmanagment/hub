@@ -12,7 +12,7 @@ import type { ApiGate } from "../../apps/page-browser/src/egress/gate.ts";
 import { clientFrameBytes } from "../../apps/page-browser/src/egress/socket-gate.ts";
 import { unzip, verifyCrx3 } from "../../apps/page-browser/src/extension/crx.ts";
 import { buildPackage, EXTENSION_ORIGIN, PACKAGE_FILES, UPDATE_PATH } from "../../apps/page-browser/src/extension/package.ts";
-import { ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
+import { ABORT, ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
 import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
@@ -762,7 +762,7 @@ export class BrowserModel {
     chrome.handlers.set("Page.createIsolatedWorld", () => ({ executionContextId: ++this.#contexts }));
     chrome.handlers.set("Runtime.evaluate", (command) => ({ result: { type: "object", value: this.#evaluate(String(command.params.expression ?? ""), command.sessionId) } }));
     chrome.handlers.set("Runtime.callFunctionOn", (command) => {
-      if (command.params.functionDeclaration === RELEASE) return { result: { type: "boolean", value: true } };
+      if (command.params.functionDeclaration === RELEASE || command.params.functionDeclaration === ABORT) return { result: { type: "boolean", value: true } };
       if (command.params.functionDeclaration === ISSUE) {
         const [attemptId, url, , headers] = (command.params.arguments as Array<{ value: unknown }>).map((arg) => arg.value) as [number, string, string, Array<[string, string]>];
         setTimeout(() => this.#hubStart(attemptId, url, headers, command.sessionId), 0);
@@ -1268,6 +1268,8 @@ export class HubChrome {
   readonly issued: Array<{ attemptId: number; url: string; kind: string; headers: Array<[string, string]> }> = [];
   readonly wire: HubWireRequest[] = [];
   readonly releasedInPage: number[] = [];
+  /** Attempts cancelled in the page (page.ts ABORT). */
+  readonly abortedInPage: number[] = [];
   readonly armed = new Set<string>();
   readonly session = "S1";
   readonly #requests: HubModelRequest[] = [];
@@ -1334,6 +1336,15 @@ export class HubChrome {
     const args = (command.params.arguments as Array<{ value: unknown }>).map((arg) => arg.value);
     if (declaration === RELEASE) {
       this.releasedInPage.push(Number(args[0]));
+      return { result: { type: "boolean", value: true } };
+    }
+    if (declaration === ABORT) {
+      // The page's XHR cancelled: what of it has not ended fails as cancelled.
+      const attemptId = Number(args[0]);
+      this.abortedInPage.push(attemptId);
+      for (const request of this.#requests) {
+        if (request.attemptId === attemptId && !request.ended) this.#end(request, "net::ERR_ABORTED", true);
+      }
       return { result: { type: "boolean", value: true } };
     }
     const [attemptId, url, kind, headers] = args as [number, string, string, Array<[string, string]>];

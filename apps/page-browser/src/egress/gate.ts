@@ -342,6 +342,11 @@ export class ApiGate {
 
   // ── the page's slot ────────────────────────────────────────────────────
 
+  /** Variant Б: watches, holds and cuts nothing (`GateOptions.passive`). */
+  get passive(): boolean {
+    return this.#passive;
+  }
+
   /** The operation that owns the page's slot, if any. */
   get slotOwner(): string | null {
     return this.#slot?.operation ?? null;

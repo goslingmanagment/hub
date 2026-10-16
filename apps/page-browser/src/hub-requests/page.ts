@@ -24,9 +24,10 @@
 // - What started is held from the isolated world's global object until the
 //   operator lets go of it (`RELEASE`): garbage collection does not cancel a
 //   Hub request (stage 1, `hub-gc-body`). Letting go never cancels anything
-//   — the operator stops a transfer by cutting its tunnels, not by asking
-//   the page (stage 1, amendment 25) — except a video element's further
-//   loading, after the attempt's end.
+//   — except a video element's further loading, after the attempt's end.
+// - A Hub request past its deadline or its body limit is cancelled here
+//   (`ABORT`), never by cutting tunnels: the site's own requests share them
+//   (variant Б, plan-b §4.1.10).
 
 /** The isolated world's name in the work tab. */
 export const WORLD = "pb-hub";
@@ -89,6 +90,19 @@ export const ISSUE = `function (id, url, kind, headers) {
   v.muted = true;
   v.preload = "auto";
   v.src = url;
+  return true;
+}`;
+
+/** (id) → true if it was held: the request is cancelled in the page. */
+export const ABORT = `function (id) {
+  const live = globalThis.__pbHub;
+  const entry = live && live.get(id);
+  if (!entry) return false;
+  live.delete(id);
+  try {
+    if (entry.kind === "api") entry.el.abort();
+    else { entry.el.removeAttribute("src"); if (entry.kind === "video") entry.el.load(); }
+  } catch (e) { /* gone with its document */ }
   return true;
 }`;
 

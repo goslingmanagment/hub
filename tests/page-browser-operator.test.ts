@@ -104,6 +104,8 @@ async function setUp(
     siteLoadMs?: number;
     /** The page's slot past its admission's deadline (22 s in the operator). */
     slotLimitMs?: number;
+    /** How long a request of the site in flight is waited out (30 s in the operator). */
+    reloadWaitMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
@@ -169,7 +171,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -1933,9 +1935,9 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.operator.egress.gate.slotOwner === null, 3000, "the slot free once answered");
   });
 
-  it("the page's slot past its bound with a released request's end unknown: the page stops (request_unended), Chrome goes, and only then is the slot free", async () => {
+  it("the page's slot past its bound with a released request's end unknown: once no request of the site flies (here: past the wait for it), Chrome goes and the page starts again (request_unended); only then is the slot free", async () => {
     let attempt = 9700;
-    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, params: { restartBackoffMs: [60_000] } });
+    const s = await siteSetUp(() => ({ admit: ++attempt }), { slotLimitMs: 300, reloadWaitMs: 500, params: { restartBackoffMs: [60_000] } });
     // Admissions of 1 s here.
     const answer = s.engine.onMessage;
     s.engine.onMessage = (message) => {
@@ -1950,6 +1952,7 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     expect(s.operator.egress.gate.slotOwner).toBe(owner);
     await until(() => s.operator.page.snapshot.stopReason === "request_unended", 5000, "the stop past the bound");
     expect(s.lines.join("\n")).toContain('"e":"slot.unended"');
+    expect(s.lines.join("\n")).toContain('"e":"slot.restart"');
     await until(() => s.operator.egress.gate.slotOwner === null, 5000, "Chrome gone, the slot free");
   });
 

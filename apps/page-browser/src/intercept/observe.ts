@@ -129,6 +129,12 @@ export class SiteObserver {
     for (const id of this.#early.keys()) this.#takeEarly(id);
   }
 
+  /** The site's API requests in flight — seen to start, not to end: a quiet
+   *  moment has none. */
+  get inFlight(): number {
+    return this.#requests.size;
+  }
+
   /** Kept across Chrome resets, like the gate's last send: a takeover floor. */
   get lastSend(): { mono: number; wall: number } | null {
     return this.#lastSend;
