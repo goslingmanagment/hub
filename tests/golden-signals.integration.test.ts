@@ -76,7 +76,7 @@ describe("golden signals (Stage 25)", () => {
 
   it("samples persist, the report serves them with thresholds, and healthy signals keep the latch closed", async () => {
     const result = await runGoldenSignalSample(appStub());
-    expect(result.sampled).toBeGreaterThanOrEqual(4); // capture p50/p95 + sse p50/p95 (+ projection when watermarks exist)
+    expect(result.sampled).toBeGreaterThanOrEqual(4); // capture p50/p95 + the sse gauge and the other always-emitted gauges
     expect(result.breaches).toEqual([]);
 
     const report = await getGoldenSignalsReport(appStub());

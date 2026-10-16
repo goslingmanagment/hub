@@ -21,10 +21,8 @@ export async function sampleOfapiDeliveryHistoryAge(
   try {
     const coverage = await getWebhookDeliveryHistoryCoverage(app.db);
     const valueMs = coverage ? Math.max(0, now - coverage.since.getTime()) : 0;
-    return [
-      { metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p50", valueMs },
-      { metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p95", valueMs },
-    ];
+    // One reading, one sample: the p95 slot the breach latch reads.
+    return [{ metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p95", valueMs }];
   } catch {
     return null;
   }

@@ -122,6 +122,13 @@ function toSamples(metric: string, pair: QuantilePair): OpsMetricSampleInput[] {
   return samples;
 }
 
+/** A single reading (an age, a count, a size) is one sample, in the p95 slot
+ *  the breach latch reads. It used to be written twice, as an identical p50
+ *  and p95 — every gauge, every minute (storage audit 2026-10-16). */
+function gaugeSample(metric: string, value: number | null): OpsMetricSampleInput[] {
+  return value === null || !Number.isFinite(value) ? [] : [{ metric, quantile: "p95", valueMs: value }];
+}
+
 async function quantiles(app: Pick<AppContext, "db">, query: ReturnType<typeof sql>): Promise<QuantilePair> {
   const result = await app.db.execute<{ p50: string | null; p95: string | null }>(query);
   const row = result.rows[0];
@@ -302,7 +309,7 @@ export async function computeGoldenSignals(
   for (const floor of HEALTH_FLOOR_REGISTRY) {
     try {
       const backlogMs = await computeHealthFloorBacklogMs(app.db, floor);
-      floorSamples.push(...toSamples(floor.name, { p50: backlogMs, p95: backlogMs }));
+      floorSamples.push(...gaugeSample(floor.name, backlogMs));
     } catch {
       failedProbes.push(floor.name);
     }
@@ -321,9 +328,9 @@ export async function computeGoldenSignals(
     const live = await readFanslyWsLiveGauges(app.db, { windowMinutes: SAMPLE_WINDOW_MINUTES });
     liveSamples.push(
       ...toSamples("dm_visible_lag", { p50: live.visibleLagP50Ms, p95: live.visibleLagP95Ms }),
-      ...toSamples("ws_live_pending_age", { p50: live.pendingAgeMs, p95: live.pendingAgeMs }),
-      ...toSamples("dm_live_parity_bp", { p50: live.parityBasisPoints, p95: live.parityBasisPoints }),
-      ...toSamples("ws_decode_debt", { p50: live.decodeDebt24h, p95: live.decodeDebt24h }),
+      ...gaugeSample("ws_live_pending_age", live.pendingAgeMs),
+      ...gaugeSample("dm_live_parity_bp", live.parityBasisPoints),
+      ...gaugeSample("ws_decode_debt", live.decodeDebt24h),
     );
   } catch {
     failedProbes.push("ws_live_pending_age");
@@ -335,16 +342,13 @@ export async function computeGoldenSignals(
       ...toSamples("canonicalize", canonicalize),
       ...toSamples("projection", projection),
       ...toSamples("command_settle", commandSettle),
-      ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
-      ...toSamples("capture_pending_age", { p50: capturePendingAge, p95: capturePendingAge }),
-      ...toSamples("command_queued_age", { p50: commandQueuedAge, p95: commandQueuedAge }),
-      ...toSamples("notification_outbox_age", {
-        p50: notificationOutboxAge,
-        p95: notificationOutboxAge,
-      }),
-      ...toSamples("acceptance_events_1h", { p50: acceptanceEvents1h, p95: acceptanceEvents1h }),
-      ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
-      ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
+      ...gaugeSample("sse_delivery", staleness),
+      ...gaugeSample("capture_pending_age", capturePendingAge),
+      ...gaugeSample("command_queued_age", commandQueuedAge),
+      ...gaugeSample("notification_outbox_age", notificationOutboxAge),
+      ...gaugeSample("acceptance_events_1h", acceptanceEvents1h),
+      ...gaugeSample("ai_content_rows", aiRows),
+      ...gaugeSample("ai_content_bytes", aiBytes),
       ...floorSamples,
       ...(deliveryHistorySamples ?? []),
       ...liveSamples,
