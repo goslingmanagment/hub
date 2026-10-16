@@ -21,7 +21,7 @@ import {
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
-import { Card, Chip, INPUT, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN, ToneChip } from "./loginParts.js";
+import { Card, Chip, INPUT, LiveScreenshot, LoginForm, OpenLoginDialog, PLAIN, PRIMARY, SCREEN, ToneChip } from "./loginParts.js";
 import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
 import { ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
 import { asSocks5Text, envLine, maskedLine, proxyPreviewOf } from "./proxyEntryView.js";
@@ -223,6 +223,9 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
         main = halted
           ? <p role="alert" className="text-sm text-danger">Браузер стоит и экран входа не открыл: причина и что сделать — в шаге «Выходной IP».</p>
           : <p role="alert" className="text-sm text-danger">Hub не достучался до браузера. Подождите несколько секунд.</p>;
+        break;
+      case "landing":
+        main = <OpenLoginDialog step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
         break;
       case "form":
         main = <LoginForm view={view} step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;

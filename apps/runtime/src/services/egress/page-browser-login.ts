@@ -46,6 +46,7 @@ export const PAGE_BROWSER_ENDPOINTS: PageBrowserEndpoints = {
 
 export type LoginCall =
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string };

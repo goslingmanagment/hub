@@ -11,6 +11,7 @@ import type { PageBrowserLoginStepResponse } from "@agency_hub_core/contracts";
 
 const sdk = vi.hoisted(() => ({
   pageBrowserProfileProxy: vi.fn(),
+  pageBrowserProfileLoginOpen: vi.fn(),
   pageBrowserProfileLoginSubmit: vi.fn(),
   pageBrowserProfileLoginCode: vi.fn(),
   pageBrowserProxyCheck: vi.fn(),
@@ -91,4 +92,12 @@ describe("a new page's onboarding and the query client (PR 16)", () => {
     // The drafts are read anew after a save.
     expect(qc.getQueryCache().find({ queryKey: pageBrowserDraftsKey })?.state.isInvalidated).toBe(true);
   });
+});
+
+
+it("opens the login dialog without typed values or a retry cache", async () => {
+  const qc = new QueryClient(); sdk.pageBrowserProfileLoginOpen.mockResolvedValue(ANSWER);
+  expect(await sendPageBrowserProfileLoginStep(qc, "0b5c1f7e-6c2a-4f0e-9d61-2a1f3c4d5e6f", { kind: "open" })).toEqual(ANSWER);
+  expect(sdk.pageBrowserProfileLoginOpen).toHaveBeenCalledWith({ params: { profileId: "0b5c1f7e-6c2a-4f0e-9d61-2a1f3c4d5e6f" } });
+  expect(qc.getMutationCache().getAll()).toEqual([]);
 });

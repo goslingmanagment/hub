@@ -13,7 +13,7 @@ import {
 import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildSettingsRoute, decodeRouteSegment } from "@/lib/navigation";
-import { Card, Chip, LiveScreenshot, LoginForm, PLAIN, PRIMARY, SCREEN } from "./loginParts.js";
+import { Card, Chip, LiveScreenshot, LoginForm, OpenLoginDialog, PLAIN, PRIMARY, SCREEN } from "./loginParts.js";
 import { loginViewOf, stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 
 // The owner logs a page's server browser in (Project Browser plan §4.8,
@@ -65,6 +65,9 @@ function Body({ data, view, pageLabel }: { data: PageBrowserLoginResponse; view:
       break;
     case "unreachable":
       main = <p role="alert" className="text-sm text-danger">Hub не достучался до браузера страницы. Подождите несколько секунд или завершите вход.</p>;
+      break;
+    case "landing":
+      main = <OpenLoginDialog step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
       break;
     case "form":
       main = <LoginForm view={view} step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;

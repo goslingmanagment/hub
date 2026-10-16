@@ -184,3 +184,17 @@ export function LoginForm({
     </form>
   );
 }
+
+/** The site is on its landing page: opening the modal is its own step. */
+export function OpenLoginDialog({ step, onAnswer }: {
+  step: { pending: boolean; send: (step: PageBrowserLoginStep) => Promise<PageBrowserLoginStepResponse> };
+  onAnswer: (answer: PageBrowserLoginStepResponse) => void;
+}) {
+  return <div className="flex flex-col gap-3">
+    <p className="text-sm text-text-secondary">Fansly открыт, окно входа ещё закрыто. Сначала откройте его, затем появятся поля логина и пароля.</p>
+    <button type="button" className={PRIMARY} disabled={step.pending} onClick={() => {
+      if (step.pending) return;
+      void step.send({ kind: "open" }).then(onAnswer, () => onAnswer({ screen: null, refused: null, unreachable: true }));
+    }}>{step.pending ? "Открываем…" : "Открыть окно входа"}</button>
+  </div>;
+}

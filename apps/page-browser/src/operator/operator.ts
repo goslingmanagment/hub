@@ -1989,6 +1989,8 @@ export class Operator {
         return this.login.state();
       case "login.screenshot":
         return this.login.screenshot();
+      case "login.open":
+        return this.login.open(this.#loginGuard());
       case "login.submit":
         return this.login.submit(request.login, request.password, this.#loginGuard());
       case "login.code":

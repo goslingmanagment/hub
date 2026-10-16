@@ -371,9 +371,10 @@ export interface Alarm {
   kind: AlarmKind;
 }
 // ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
-export type LoginScreen = "login" | "code" | "error" | "success" | "unknown";
+export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
 export type LoginRequest = { callId: string; token: string } & (
   | { type: "login.state" }
+  | { type: "login.open" }
   | { type: "login.screenshot" }
   | { type: "login.submit"; login: string; password: string }
   | { type: "login.code"; code: string }
@@ -781,7 +782,7 @@ export function parseOperatorMessage(text: string): ParsedOperatorMessage {
 
 // ── the login form's answers (PR 15): the API reads them ─────────────────────
 
-const LOGIN_SCREENS: ReadonlySet<string> = new Set(["login", "code", "error", "success", "unknown"]);
+const LOGIN_SCREENS: ReadonlySet<string> = new Set(["landing", "login", "code", "error", "success", "unknown"]);
 const LOGIN_FIELDS: ReadonlySet<string> = new Set(["login", "password", "code"]);
 const LOGIN_REFUSALS: ReadonlySet<string> = new Set(["token", "not_manual_login", "screen_changed", "busy"]);
 
