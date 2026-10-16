@@ -991,6 +991,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # else altered. The previous image never names it; a draft it leaves
   # unconsumed stays so (its add-profile still takes --socks and --env).
   "0282_page_browser_drafts.sql"
+  # Storage audit 2026-10-16: nine indexes dropped CONCURRENTLY (prefixes of
+  # other indexes, or read by nothing) and fillfactor 90 on fans/page_fans.
+  # The previous image reads no index by name and runs the same queries on
+  # the covering indexes; fillfactor only spaces new pages.
+  "0283_drop_redundant_indexes.sql"
+  # The new storage_relation_daily table (one row per table per day, written
+  # by the disk check). The previous image never names it.
+  "0284_storage_relation_daily.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
