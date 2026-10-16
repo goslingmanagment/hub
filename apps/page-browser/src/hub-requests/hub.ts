@@ -553,6 +553,12 @@ export class HubRequests {
     return `hub attempt ${id}${isPreflight(request) ? " (preflight)" : ""}`;
   }
 
+  /** Whether a network request is one of Hub's own (variant Б: the site's
+   *  observer leaves Hub's requests to this path). */
+  ownsNetworkId(networkId: string): boolean {
+    return this.#byNetwork.has(networkId);
+  }
+
   /** A request of the site's own to the API, as it stopped: the session is
    *  learned from it (session.ts). */
   noteSiteRequest(request: PausedRequest): void {

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Cdp, CdpError, CdpUnanswered } from "../apps/page-browser/src/cdp/client.ts";
-import { BrowserControl } from "../apps/page-browser/src/cdp/control.ts";
+import { FETCH_PATTERNS, BrowserControl } from "../apps/page-browser/src/cdp/control.ts";
 import { PausedRequests, type PausedRequest } from "../apps/page-browser/src/cdp/paused.ts";
 
 const POSITION = { latitude: 48.137, longitude: 11.575, accuracyM: 25 };
@@ -221,7 +221,8 @@ describe("the control", () => {
     expect(tab).toMatchObject({ targetId: "T1", sessionId: "S1", type: "page" });
     const order = chrome.commands.map((command) => `${command.method}${command.sessionId ? `@${command.sessionId}` : ""}`);
     expect(order.indexOf("Fetch.enable")).toBe(0);
-    expect(chrome.commands[0]?.params).toEqual({ patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+    // Variant Б: only the operator's own requests stop in Fetch.
+    expect(chrome.commands[0]?.params).toEqual({ patterns: [...FETCH_PATTERNS] });
     expect(order.indexOf("Fetch.enable")).toBeLessThan(order.indexOf("Target.createTarget"));
     expect(chrome.sent("Target.setAutoAttach")[0]?.params).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     // The site may read the page's position (nobody would answer a prompt):

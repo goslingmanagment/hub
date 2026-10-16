@@ -255,6 +255,9 @@ export class RpcServer {
     // Older engines parse operator messages strictly. Keep their legacy
     // timeout/late-result path instead of breaking the link on a new type.
     if (message.type === "admissionCancel" && conn.engineMinor < 2) return false;
+    // Variant Б's observations exist from minor 4 on; an older engine admits
+    // and counts nothing of them (and would break the link on the type).
+    if ((message.type === "siteSent" || message.type === "siteEnded" || message.type === "siteIdentity") && conn.engineMinor < 4) return false;
     return conn.ws.sendText(JSON.stringify(message));
   }
 

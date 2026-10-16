@@ -27,6 +27,8 @@
 
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
 import { FANSLY_HOSTS } from "../egress/hosts.ts";
+import { CHECK_PATH } from "../env/check.ts";
+import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 import type { Geolocation } from "../env/rules.ts";
 import { errorMessage, makeLog, sleep, urlForLogLine, type Logger } from "../shared/util.ts";
 
@@ -73,6 +75,15 @@ export function targetGone(error: unknown): boolean {
   return error instanceof CdpError && /session with given id not found|target closed|no target with given id|not attached to an active page/i.test(error.message);
 }
 
+/** What stops in Fetch (variant Б): Hub's requests by their placeholder
+ *  host (hub-requests/page.ts), the environment check's page
+ *  (env/check.ts), the self-test's probes by their mark (selftest/probes.ts). */
+export const FETCH_PATTERNS = [
+  { urlPattern: `*://*${PLACEHOLDER_SUFFIX}/*`, requestStage: "Request" },
+  { urlPattern: `http://127.0.0.1${CHECK_PATH}*`, requestStage: "Request" },
+  { urlPattern: "*?pbst=*", requestStage: "Request" },
+] as const;
+
 export class BrowserControl {
   readonly #cdp: Cdp;
   readonly #options: ControlOptions;
@@ -114,7 +125,10 @@ export class BrowserControl {
    *  Fetch.enable; the others are closed. */
   async attach(timeoutMs = 5000): Promise<TargetInfo> {
     if (this.geolocation === null) throw new Error("no position of the page for its tabs");
-    await this.#cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+    // Variant Б (plan-b §4.1.1): only the operator's own requests stop in
+    // Fetch — Hub's (its placeholder host), the environment check's page and
+    // the self-test's probes. The site's own requests go as a browser's do.
+    await this.#cdp.send("Fetch.enable", { patterns: FETCH_PATTERNS });
     await this.#cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: this.#options.siteOrigin ?? SITE_ORIGIN });
     await this.#cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const created = await this.#cdp.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });

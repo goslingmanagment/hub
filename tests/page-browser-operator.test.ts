@@ -107,6 +107,8 @@ async function setUp(
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
+    /** The strict gate of the site's admitted path (variant Б's is passive). */
+    strictGate?: boolean;
   } = {},
 ): Promise<SetUp> {
   const temp = tempDir();
@@ -165,6 +167,7 @@ async function setUp(
       ...(options.buffer ? { buffer: options.buffer } : {}),
       ...(options.socketTimings ? { socketTimings: options.socketTimings } : {}),
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
+      ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
       timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}) },
     });
@@ -1677,7 +1680,8 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
   /** A started page whose engine answers checks, and each `siteAdmit` as
    *  `site` says: an admission (by attempt id), a refusal, or nothing. */
   async function siteSetUp(site: (ask: Record<string, unknown>) => { admit: number } | { refuse: string } | null, options: Parameters<typeof setUp>[0] = {}): Promise<SetUp & { tab: string }> {
-    const s = await setUp(options);
+    // The site's admitted path (before variant Б) with its strict gate.
+    const s = await setUp({ strictGate: true, ...options });
     const server = await tlsLikeServer();
     cleanups.push(server.close);
     s.socks.routes.set("apiv3.fansly.com:443", server.port);
