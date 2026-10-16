@@ -7,7 +7,13 @@ import {
   createModel,
   ensureSyncPage,
   getNotificationIncidentByKey,
+  getSyncAttempt,
+  listUnfinishedAttempts,
+  paceFloorFromDb,
   readFanslySendAudit,
+  readOpsLiveOldestUnanswered,
+  readRouteJournal,
+  recoverUnfinishedAttempts,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
@@ -18,6 +24,7 @@ import { createPacer, type Admission, type Pacer } from "../apps/runtime/src/syn
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { auditPagePace, auditRouteIntervals } from "../apps/runtime/src/sync/engine/send-audit.ts";
+import { commitSiteEnd, observedSend, recordObservedSiteSend } from "../apps/runtime/src/sync/engine/site-slot.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
@@ -118,6 +125,10 @@ interface EngineSend {
   familyIntervalMs?: number | null;
   /** `unknown`: admitted `secondsAgo` before now, its send never marked. */
   outcome?: "response" | "unknown";
+  /** `site`: a request of the page's own site, admitted (protocol 1.3) or —
+   *  `observed` — only observed (variant Б, protocol 1.4). Default `engine`. */
+  origin?: "engine" | "site";
+  observed?: boolean;
 }
 
 /** A live engine attempt as the actor journals it. */
@@ -127,16 +138,19 @@ async function engineSend(pageId: number, input: EngineSend): Promise<void> {
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                                 admitted_at, sent_at, send_mark, gap_prev_ms, operation, request, outcome,
-                                route_interval_ms, family_interval_ms)
-     values ($1, false, 'test.resource', '', 'urgent', $2, $3, 0, $4,
+                                route_interval_ms, family_interval_ms, origin)
+     values ($1, false, 'test.resource', '', $14, $2, $3, 0, $4,
              clock_timestamp() - make_interval(secs => $5::double precision + case when $6::boolean then 0 else 0.1 end),
              case when $6::boolean then null else clock_timestamp() - make_interval(secs => $5::double precision) end,
-             case when $6::boolean then null else 'request_start' end, $7, $8, '{}'::jsonb, $9, $10, $11)`,
+             case when $6::boolean then null else 'request_start' end, $7, $8, $12::jsonb, $9, $10, $11, $13)`,
     [
       pageId, input.generation ?? 1, input.settingMs ?? S, input.pauseMs ?? input.settingMs ?? S, input.secondsAgo, unknown,
       input.gapPrevMs ?? null, input.operation, unknown ? "unknown" : "response",
       input.routeIntervalMs === undefined ? intervals.routeIntervalMs : input.routeIntervalMs,
       input.familyIntervalMs === undefined ? intervals.familyIntervalMs : input.familyIntervalMs,
+      JSON.stringify(input.observed ? { method: "GET", path: "/api/v1/x", observed: true } : {}), input.origin ?? "engine",
+      // The site's class (sync_attempts_origin_check, 0283), as insertSiteAdmission writes it.
+      input.origin === "site" ? "site" : "urgent",
     ],
   );
 }
@@ -181,6 +195,77 @@ describe("the send audit on recorded rows", () => {
     });
     expect(page.verdict).toBe("fail");
     expect(acceptance.accepted).toBe(false);
+  });
+
+  it("reads the site's observed requests as such: predecessors of Hub's sends, never judged; a site send Hub admitted is judged", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("audit-observed");
+    const since = new Date(Date.now() - 60_000);
+    const observed = { origin: "site", observed: true, operation: "site.other", routeIntervalMs: null, familyIntervalMs: null } as const;
+    await engineSend(pageId, { secondsAgo: 30, operation: "notifications.page" });
+    // The site's own burst, 100 ms apart; Hub's next send 2.8 s after its last.
+    await engineSend(pageId, { secondsAgo: 25, ...observed });
+    await engineSend(pageId, { secondsAgo: 24.9, ...observed });
+    await engineSend(pageId, { secondsAgo: 24.8, ...observed });
+    await engineSend(pageId, { secondsAgo: 22, operation: "notifications.page" });
+
+    const rows = await readFanslySendAudit(db(), { pageId, since });
+    expect(rows.filter((row) => row.observed)).toHaveLength(3);
+    expect(auditPagePace(rows, { start: since, until: null })).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [] });
+    expect(auditRouteIntervals(rows, { start: since, until: null })).toMatchObject({ violations: [], inconclusive: [] });
+
+    // A site send the engine admitted (protocol 1.3) is no observation: judged.
+    await engineSend(pageId, { secondsAgo: 21.5, operation: "site.other", origin: "site" });
+    const admitted = auditPagePace(await readFanslySendAudit(db(), { pageId, since }), { start: since, until: null });
+    expect(admitted.violations).toEqual([expect.objectContaining({ journal: "engine", clock: "wall" })]);
+  });
+
+  it.for(["response", "transport_error", "lost"] as const)("records an observed send before its end (%s), keeping its instant through settlement or recovery", async (endKind, context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage(`audit-observed-${endKind}`);
+    const { deps } = await makeTestActor({ db: db(), pageId, registry: testRegistry([]), settingMs: S });
+    const since = new Date(Date.now() - 60_000);
+    const sentWall = new Date(Date.now() - 1_000);
+    const { attemptId } = await recordObservedSiteSend(deps, {
+      id: "observed-pending", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/notifications",
+      route: "notifications.page", settingMs: S, sentWall,
+    });
+    // A send is known immediately, but there is no outcome or completion.
+    expect(await listUnfinishedAttempts(db(), { pageId, phase: "send" })).toEqual([
+      expect.objectContaining({ id: attemptId, class: "site", outcome: "sent", sentAt: sentWall, sendMark: "transport_reported", completedAt: null, httpStatus: null }),
+    ]);
+    expect(await readOpsLiveOldestUnanswered(db(), { sentAfter: since })).toEqual(sentWall);
+    expect(await readRouteJournal(db(), { pageId, withinMs: 60_000 })).toEqual([
+      { journal: "engine", operation: "notifications.page", lastAt: sentWall },
+    ]);
+    // The pending send must not add a fictitious 15 s send window.
+    expect(await paceFloorFromDb(db(), { pageId, settingMs: S })).toBeLessThan(S * 1.2 + 1_000);
+    const window = { start: since, until: null };
+    const pending = await readFanslySendAudit(db(), { pageId, since });
+    expect(pending).toEqual([expect.objectContaining({ ref: attemptId, observed: true, sentAt: sentWall, countedAt: sentWall, completedAt: null })]);
+
+    // Hub went 1 s after the site's request: fail even if the
+    // site's end never arrives, rather than sorting the site after Hub.
+    await engineSend(pageId, { secondsAgo: 0, operation: "notifications.page" });
+    await testDb.pool.query("update sync_attempts set sent_at = $2 where page_id = $1 and origin = 'engine'", [pageId, new Date(sentWall.getTime() + 1_000)]);
+    expect(auditPagePace(await readFanslySendAudit(db(), { pageId, since }), window))
+      .toMatchObject({ verdict: "fail", violations: [expect.objectContaining({ prevRef: attemptId })], inconclusive: [] });
+
+    if (endKind === "lost") {
+      await db().transaction(async (tx) => recoverUnfinishedAttempts(tx as unknown as Database, { pageId }));
+    } else {
+      await commitSiteEnd(deps, {
+        attemptId, send: observedSend(sentWall, S), observed: true,
+        classified: { route: "notifications.page", exempt: false },
+        end: endKind === "response" ? { kind: "response", status: 200, retryAfterMs: null }
+          : { kind: "transport_error", sent: true, message: "connection closed" },
+      });
+    }
+    expect(await getSyncAttempt(db(), attemptId)).toMatchObject({
+      outcome: endKind === "lost" ? "unknown" : endKind, sentAt: sentWall, sendMark: "transport_reported",
+    });
+    expect(await listUnfinishedAttempts(db(), { pageId, phase: "send" })).toEqual([]);
+    expect(auditPagePace(await readFanslySendAudit(db(), { pageId, since }), window).verdict).toBe("fail");
   });
 
   it("the evaluator latches I1 by the send's own pause and I19 by its recorded interval; a page left in shadow pages nobody", async (context) => {
