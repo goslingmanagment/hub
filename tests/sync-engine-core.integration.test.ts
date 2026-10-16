@@ -18,6 +18,7 @@ import {
   getWorkForStatus,
   heartbeatSyncPageOwner,
   insertAdmission,
+  insertSiteAdmission,
   countRecentFailedSubjects,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
@@ -1178,6 +1179,44 @@ describe("sync_attempts", () => {
     })).toMatchObject({ captured: true, paceGapMs: null });
     expect(await getSyncAttempt(db(), d.attemptId)).toMatchObject({ sentAt: null, sendMark: null });
     expect((await getSyncPage(db(), pageId))!.lastCompletedAt).toEqual(lastCompleted);
+  });
+
+  it("judges a capture against the sends its admission could know: the site's own send after the admission is plan-b Б12, never the predecessor", async (context) => {
+    if (!testDb) return context.skip();
+    const siteSend = (pageId: number, generation: bigint, sentAt: Date) => inTx((tx) => insertSiteAdmission(tx, {
+      pageId, generation, origin: "site", operation: "site.other",
+      request: { method: "OPTIONS", host: "apiv3.fansly.com", path: "/api/v1/notifications", observed: true },
+      sentAt, settingMs: 2_000, jitterU: 0, pauseMs: 2_000,
+    }));
+    const hub = async (pageId: number, generation: bigint, subject: string) => {
+      const work = await upsertDemand(db(), demand(pageId, { subject }));
+      const admitted = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject, class: "urgent" });
+      return { attemptId: admitted.attemptId, admittedAt: (await getSyncAttempt(db(), admitted.attemptId))!.admittedAt };
+    };
+    const capture = (pageId: number, attemptId: number, sentAt: Date) => captureAttempt(db(), {
+      attemptId, pageId, outcome: "response", sent: true, sentAt, sendMark: "transport_reported", httpStatus: 200, applyState: "none",
+    });
+
+    // Hub's previous send 4 s ago; the next one admitted; the site sends
+    // 40 ms after that admission, Hub's request leaves 20 ms after it.
+    const pageId = await seedPage("capture-b12");
+    const generation = await own(pageId);
+    const first = await hub(pageId, generation, "a");
+    const firstSent = new Date(Date.now() - 4_000);
+    await capture(pageId, first.attemptId, firstSent);
+    const next = await hub(pageId, generation, "b");
+    await siteSend(pageId, generation, new Date(next.admittedAt.getTime() + 40));
+    const nextSent = new Date(next.admittedAt.getTime() + 60);
+    expect(await capture(pageId, next.attemptId, nextSent)).toEqual({ captured: true, previousSendAt: firstSent, paceGapMs: nextSent.getTime() - firstSent.getTime() });
+
+    // A site send before the admission was known: it is the predecessor.
+    const other = await seedPage("capture-b12-known");
+    const otherGeneration = await own(other);
+    const known = await hub(other, otherGeneration, "a");
+    const before = new Date(known.admittedAt.getTime() - 30);
+    await siteSend(other, otherGeneration, before);
+    const knownSent = new Date(known.admittedAt.getTime() + 50);
+    expect(await capture(other, known.attemptId, knownSent)).toEqual({ captured: true, previousSendAt: before, paceGapMs: 80 });
   });
 
   it("settles a refused attempt without the send facts", async (context) => {
