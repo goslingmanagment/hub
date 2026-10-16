@@ -112,6 +112,8 @@ async function setUp(
     haltStore?: OperatorDeps["haltStore"];
     /** The strict gate of the site's admitted path (variant Б's is passive). */
     strictGate?: boolean;
+    /** The engine's protocol minor (4: variant Б — it observes the site). */
+    minor?: number;
   } = {},
 ): Promise<SetUp> {
   const temp = tempDir();
@@ -186,12 +188,19 @@ async function setUp(
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ protocol: { majors: [1], minor: 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
+  engine.send(hello({ protocol: { majors: [1], minor: options.minor ?? 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
 
 let commandN = 0;
+/** A command with its arguments (`setMode`, `clearHalt`). */
+function commandWith(engine: FakeEngine, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const commandId = `c-${++commandN}`;
+  engine.send({ type: "command", ownerGeneration: engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: body });
+  return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
+}
+
 function command(engine: FakeEngine, kind: string): Promise<Record<string, unknown>> {
   const commandId = `c-${++commandN}`;
   engine.send({ type: "command", ownerGeneration: engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: { kind } });
@@ -1491,6 +1500,67 @@ describe("a planned restart for an unended Hub slot (plan-b §4.1.10)", () => {
     expect(restart.waitedMs).toBeGreaterThanOrEqual(SITE_STALE_IN_FLIGHT_MS);
     await until(() => s.operator.egress.gate.slotOwner === null, 3000, "Chrome gone, the slot free");
     expect(s.chrome.sent("Browser.close")).toHaveLength(1);
+  });
+});
+
+describe("variant Б: the site goes on as it is (plan-b Б4, §4.1.6)", () => {
+  const storage = (key: string, extra: Record<string, unknown> = {}) => ({ storageId: { storageKey: "https://fansly.com/", isLocalStorage: true }, key, ...extra });
+  const SECRET = "pb-b2c-session-secret-marker";
+
+  it("a live page under an engine that observes the site: the manual login begins and ends without loading the site anew", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    const loads = s.model.navigations.length;
+    expect(await commandWith(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true, detail: "the manual login" });
+    expect(await commandWith(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true, detail: expect.not.stringContaining("loaded anew") });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.model.navigations.length).toBe(loads);
+    // Confirmed again only by an identity read sent from now on.
+    expect(s.operator.page.step).toBe("site_loaded");
+  });
+
+  it("the site signs itself out in the automation (its session_active_session cleared): the page halts login_required; in the manual login nothing is decided; no value is kept", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    // Another key, another origin, another tab, a session set: nothing.
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: "null", newValue: SECRET }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", { ...storage("session_active_session", { oldValue: SECRET, newValue: "null" }), storageId: { storageKey: "https://example.com/", isLocalStorage: true } }, tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: SECRET, newValue: "null" }), "another-tab");
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("metrics_session", { oldValue: SECRET, newValue: "null" }), tab);
+    // A person in the page signs in and out: nothing.
+    expect(await commandWith(s.engine, { kind: "setMode", mode: "manual_login" })).toMatchObject({ ok: true });
+    s.model.chrome.event("DOMStorage.domStorageItemRemoved", storage("session_active_session"), tab);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.page.halted).toBe(false);
+    expect(await commandWith(s.engine, { kind: "setMode", mode: "automation" })).toMatchObject({ ok: true });
+    // Fansly's setActiveSession(null) writes "null" under the session_ prefix.
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("session_active_session", { oldValue: SECRET, newValue: "null" }), tab);
+    await until(() => s.operator.heldHalt?.reason === "login_required", 10_000, "the login_required halt");
+    expect(s.operator.page.snapshot).toMatchObject({ halted: true, stopReason: "login_required" });
+    expect(s.lines.join("\n")).toContain('"e":"site.login_lost"');
+    expect(s.lines.join("\n")).not.toContain(SECRET);
+  });
+
+  it("unprefixed active_session and active_session_clear_info keys decide nothing in the automation", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session", { oldValue: SECRET, newValue: "null" }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemRemoved", storage("active_session"), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemAdded", storage("active_session_clear_info", { newValue: '{"type":2}' }), tab);
+    s.model.chrome.event("DOMStorage.domStorageItemUpdated", storage("active_session_clear_info", { oldValue: '{"type":1}', newValue: '{"type":2}' }), tab);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(s.operator.page.halted).toBe(false);
+    expect(s.operator.heldHalt).toBeNull();
+    expect(s.lines.join("\n")).not.toContain('"e":"site.login_lost"');
+  });
+
+  it("a session_active_session_clear_info written in the automation halts login_required too", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    s.model.chrome.event("DOMStorage.domStorageItemAdded", storage("session_active_session_clear_info", { newValue: '{"type":2}' }), s.operator.control.workTab!.sessionId);
+    await until(() => s.operator.heldHalt?.reason === "login_required", 10_000, "the login_required halt");
   });
 });
 

@@ -158,6 +158,8 @@ export class RpcServer {
   #handover: { pageId: number; generation: number; previousGeneration: number; done: Promise<{ lastSendMono: number | null; lastSendWall: number | null }> } | null = null;
   #server: Server | null = null;
   #active: Conn | null = null;
+  /** The protocol minor of the last engine whose hello was accepted. */
+  #engineMinor = 0;
   /** Changes with the active connection. */
   #epoch = 0;
   /** Waits on the active connection's queue: woken when it changes. */
@@ -182,6 +184,13 @@ export class RpcServer {
    *  hello (0: none yet). An engine that disconnects does not lower it. */
   get generation(): number {
     return this.#pageId === null ? 0 : this.#options.generations.current(this.#pageId);
+  }
+
+  /** Variant Б: the last accepted engine takes the site's traffic observed
+   *  (protocol minor 4 on), not admitted — it holds through a brief loss of
+   *  its link. */
+  get engineObserves(): boolean {
+    return this.#engineMinor >= 4;
   }
 
   /** The engine is connected and was heard within the link-loss time. */
@@ -518,6 +527,7 @@ export class RpcServer {
     conn.greeted = true;
     conn.generation = hello.ownerGeneration;
     conn.engineMinor = hello.protocol.minor;
+    this.#engineMinor = hello.protocol.minor;
     this.#pageId = hello.pageId;
     this.#setActive(conn);
     this.#lastHeard = monoMs();

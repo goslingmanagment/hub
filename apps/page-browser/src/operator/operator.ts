@@ -106,7 +106,7 @@ import { join } from "node:path";
 import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferUnavailable, type FullReason } from "../buffer/buffer.ts";
 import { OutcomeReplay } from "../buffer/replay.ts";
 import { EventStream } from "../buffer/stream.ts";
-import { Cdp, type HolderLink } from "../cdp/client.ts";
+import { Cdp, type CdpEvent, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
@@ -205,6 +205,13 @@ const DEFAULT_TIMINGS: OperatorTimings = {
 
 /** The site the work tab loads (plan §4.1, step 8). */
 export const SITE_URL = `${SITE_ORIGIN}/`;
+
+/** The work tab's storage events the site's sign-out shows in (DOMStorage). */
+const SITE_STORAGE_EVENTS = ["DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated", "DOMStorage.domStorageItemRemoved", "DOMStorage.domStorageItemsCleared"] as const;
+// Fansly's StorageHelper("session_") prefixes these keys; see
+// artifacts/fansly-app-bundle-2026-10-08/analysis/main.2e6b96097a4bb73b.pretty.js:35051 (helper :863).
+const SITE_ACTIVE_SESSION_KEY = "session_active_session";
+const SITE_ACTIVE_SESSION_CLEAR_INFO_KEY = "session_active_session_clear_info";
 /** An identity answer is read for its account id up to this size. */
 const IDENTITY_BODY_MAX = 1024 * 1024;
 /** A discarded work tab's blank document comes within this, or the
@@ -717,6 +724,9 @@ export class Operator {
       readEnded: (end) => this.login.readEnded(end),
       log: makeLog("observe"),
     });
+    // Variant Б (plan-b §4.1.6): the site clearing its own login is seen in
+    // its storage — never a token's value read, kept or written.
+    for (const event of SITE_STORAGE_EVENTS) this.cdp.on(event, (message) => this.#onSiteStorage(event, message));
     // A GET whose document Chrome named after it paused (page 0's
     // confirmation, `#siteShowedSession`).
     this.site.documents.onLoader = (networkId, loaderId) => {
@@ -1129,10 +1139,11 @@ export class Operator {
       if (!atSite) throw new StartFailure("proxy_unavailable", `the site's document did not come within ${this.#timings.siteLoadMs} ms`);
       if (mode === this.#modeChanges) this.#modeDocumentLoadedMono = monoMs();
       this.page.advance("site_loaded", SITE_URL);
-      if (mode !== this.#modeChanges) {
+      if (mode !== this.#modeChanges && this.#reloadsForMode()) {
         // Its load began under the mode before: loaded anew for this one,
         // once it is in (Astra's review of PR 16, round 3) — a mode change
-        // during a load finds no loaded page to reload.
+        // during a load finds no loaded page to reload. A live page under
+        // variant Б is not (#reloadsForMode): confirmed as it is.
         this.#reloadForMode("the site loaded under the mode before: it is loaded anew for this one");
         return;
       }
@@ -1611,6 +1622,31 @@ export class Operator {
     }
   }
 
+  /** The work tab's localStorage of the site changed (plan-b §4.1.6). The
+   *  site signing itself out — its `session_active_session` cleared, a
+   *  `session_active_session_clear_info` written, its storage cleared — while the
+   *  automation runs it is the owner's to log in again: the page halts
+   *  `login_required`, which the owner's login clears once the expected
+   *  account is confirmed. Values are only compared with "null" or the empty
+   *  string and never kept. In the manual login a person
+   *  signs in and out: nothing is decided then. */
+  #onSiteStorage(event: string, message: CdpEvent): void {
+    const tab = this.control.workTab;
+    if (tab === null || message.sessionId !== tab.sessionId) return;
+    const p = message.params as { storageId?: { securityOrigin?: string; storageKey?: string; isLocalStorage?: boolean }; key?: string; newValue?: string };
+    if (p.storageId?.isLocalStorage !== true) return;
+    const origin = (p.storageId.securityOrigin ?? p.storageId.storageKey ?? "").replace(/\/$/, "");
+    if (origin !== SITE_ORIGIN) return;
+    const cleared = event === "DOMStorage.domStorageItemsCleared";
+    const sessionGone = p.key === SITE_ACTIVE_SESSION_KEY && (event === "DOMStorage.domStorageItemRemoved" || p.newValue === "null" || p.newValue === "");
+    const clearInfo = p.key === SITE_ACTIVE_SESSION_CLEAR_INFO_KEY && (event === "DOMStorage.domStorageItemAdded" || event === "DOMStorage.domStorageItemUpdated");
+    if (!cleared && !sessionGone && !clearInfo) return;
+    const what = cleared ? "the site's storage was cleared" : sessionGone ? `its ${SITE_ACTIVE_SESSION_KEY} was cleared` : `it wrote ${SITE_ACTIVE_SESSION_CLEAR_INFO_KEY}`;
+    this.#log("site.login_lost", { what, mode: this.#mode, step: this.page.step });
+    if (this.#mode !== "automation" || this.page.halted || this.#stopped || !atLeast(this.page.step, "exit_open")) return;
+    void this.#halt("login_required", `Fansly signed the browser out: ${what}`, "stop");
+  }
+
   /** A Hub request without a proven end: wait without a deadline for fresh
    *  site requests, ignoring hung or lost ends. A proven Hub end meanwhile
    *  cancels this restart; another operation's slot is never touched. */
@@ -1912,8 +1948,10 @@ export class Operator {
    *  map lets the login operations through beside the interface's reads
    *  (policy/operations.ts), the site's socket and Hub's requests stay out,
    *  the page is never ready.
-   *  A page that is up loads the site anew, so its login screen is shown
-   *  under this mode; one that is not waits for the engine's start. */
+   *  The site is loaded anew so its login screen is shown under this mode —
+   *  but a live page's under variant Б (#reloadsForMode): the person finds
+   *  the site as it is, its login screen when Fansly signed it out. One that
+   *  is not up waits for the engine's start. */
   async #enterManualLogin(generation: number): Promise<CommandOutcome> {
     if (this.#mode === "manual_login") {
       if (this.#modeGeneration !== generation) this.#cancelLogin("the manual login is another owner's now");
@@ -1926,7 +1964,7 @@ export class Operator {
     // Hub's requests that wait for their check are refused (#siteNotReady
     // says so from here); a ready page is no longer ready.
     if (atLeast(this.page.step, "session_confirmed")) this.page.back("site_loaded", "the manual login: a person is in the page");
-    const reload = this.#reloadForMode("the manual login begins: the site is loaded anew for its login screen");
+    const reload = this.#reloadsForMode() && this.#reloadForMode("the manual login begins: the site is loaded anew for its login screen");
     return { ok: true, detail: `the manual login${reload ? "; the site is loaded anew" : ""}` };
   }
 
@@ -1934,8 +1972,8 @@ export class Operator {
    *  before the page resumes the checks of plan §4.8, step 5 — the exit IP
    *  now (a changed one halts the page), the session and the account by the
    *  engine's identity read under the live session (#confirmSession: the
-   *  page is ready only then). A page that is up loads the site anew under
-   *  the automation. */
+   *  page is ready only then). The site is loaded anew under the automation
+   *  — a live page's under variant Б is not (#reloadsForMode). */
   async #leaveManualLogin(why: string): Promise<CommandOutcome> {
     if (this.#mode === "automation") return { ok: true, detail: "the automation: already" };
     this.#setMode("automation", null, why);
@@ -1948,7 +1986,7 @@ export class Operator {
     try {
       const ip = await this.#verifyExitIp();
       if (run !== this.#run) return { ok: true, detail: "the automation; superseded by a new start" };
-      const reload = this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
+      const reload = this.#reloadsForMode() && this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
       const session = this.hub.session.fingerprint === null ? "no live session yet" : "the live session waits for the engine's identity read";
       return { ok: true, detail: `the automation; the exit IP ${ip} is the pinned one; ${session}${reload ? "; the site is loaded anew" : ""}` };
     } catch (error) {
@@ -1978,6 +2016,14 @@ export class Operator {
     this.#log("mode", { mode, generation, why });
     this.journals.state({ from: this.page.step, to: this.page.step, stopReason: this.page.snapshot.stopReason, retryAtWall: this.page.snapshot.retryAtWall, halted: this.page.halted, note: `mode ${mode}: ${why}` });
     this.#sendState();
+  }
+
+  /** Whether a change of the mode loads the site anew: always for page 0
+   *  (its confirmation needs a document of the mode), and under an engine
+   *  that admits the site's traffic (protocol before 1.4). A live page under
+   *  variant Б is never loaded anew (plan-b Б4): its site goes on as it is. */
+  #reloadsForMode(): boolean {
+    return this.#settings?.pageId === 0 || !this.rpc.engineObserves;
   }
 
   /** The work tab of a page that is up is loaded anew for the mode now —

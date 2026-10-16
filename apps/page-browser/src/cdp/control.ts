@@ -209,6 +209,9 @@ export class BrowserControl {
         await this.#cdp.send("Network.enable", { maxTotalBufferSize: totalBytes, maxResourceBufferSize: perResponseBytes }, session);
       }
       if (page) await this.#cdp.send("Page.enable", {}, session);
+      // The site's sign-out shows in its storage (plan-b §4.1.6): a tab's
+      // events only, never a value read by a call.
+      if (page && target.type === "page") await this.#cdp.send("DOMStorage.enable", {}, session);
       if (page && target.type === "page") {
         // The tab's position, which its frames inherit. Chrome keeps the
         // override on the tab itself (its WebContents), whichever session
