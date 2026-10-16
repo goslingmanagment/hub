@@ -171,7 +171,7 @@ export class SiteSession {
     if (request.method.toUpperCase() !== "GET") return;
     const template: Array<[string, string]> = [];
     for (const [name, value] of Object.entries(request.headers)) {
-      if (!BROWSER_HEADERS.has(name.toLowerCase())) template.push([name, value]);
+      if (!name.startsWith(":") && !BROWSER_HEADERS.has(name.toLowerCase())) template.push([name, value]);
     }
     const authorization = header(template, "authorization");
     if (authorization === undefined || authorization === "") return;

@@ -581,6 +581,7 @@ export class Operator {
           // The site's requests still waiting are asked on the new one — or
           // wait for one (plan §4.9).
           this.site.linkChanged(up);
+          this.observer.linkChanged(up);
           this.#log(up ? "engine.linked" : "engine.lost", { reason, admissionsOpen: this.admissionsOpen() });
           if (!up) {
             this.replay.disconnected();
@@ -1775,7 +1776,7 @@ export class Operator {
 
   /** The previous owner's work is over once its queued commands had their
    *  turn — each is refused there now, the generation having moved on — and
-   *  there are no admissions yet: the last send the gate saw is all there is. */
+   *  there are no admissions yet: report the latest send of any origin. */
   async #quiesce(): Promise<{ lastSendMono: number | null; lastSendWall: number | null }> {
     // The login form's step under way was the earlier owner's: it stops at
     // its next input step, and is over before anything else is.
@@ -1795,7 +1796,7 @@ export class Operator {
     // handshake has not gone up never go.
     this.sockets.quiesce(this.rpc.generation);
     await Promise.all([this.hub.quiesce(this.rpc.generation), this.site.quiesce(this.rpc.generation)]);
-    const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend, this.sockets.lastHandshake].filter((send): send is { mono: number; wall: number } => send !== null);
+    const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend, this.sockets.lastHandshake, this.observer.lastSend].filter((send): send is { mono: number; wall: number } => send !== null);
     const last = sends.length === 0 ? null : sends.reduce((a, b) => (b.mono > a.mono ? b : a));
     return { lastSendMono: last?.mono ?? null, lastSendWall: last?.wall ?? null };
   }
