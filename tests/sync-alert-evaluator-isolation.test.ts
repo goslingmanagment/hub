@@ -100,7 +100,7 @@ function resolvedKeys() {
 /** A send of page 1's engine journal `msAgo` with a 2 s pause. */
 function send(ref: number, msAgo: number, gapPrevMs: number | null): FanslySendAuditRow {
   return {
-    journal: "engine", source: null, ref, operation: "notifications.page", ownerGeneration: 1n,
+    journal: "engine", source: null, ref, operation: "notifications.page", observed: false, ownerGeneration: 1n,
     admittedAt: ago(msAgo + 100), sentAt: ago(msAgo), countedAt: ago(msAgo), settingMs: 2_000, pauseMs: 2_000,
     gapPrevMs, routeIntervalMs: null, familyIntervalMs: null, httpStatus: 200, completedAt: ago(msAgo - 50),
   };

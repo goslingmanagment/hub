@@ -31,6 +31,12 @@ import {
 //        independently of the policy that chose it, a recorded interval is
 //        never shorter than the interval of the code's ceiling (`ceiling`).
 //
+// A site request the page's browser sent on its own (variant Б, protocol
+// 1.4: observed, never admitted) is a send of the page: the pause and the
+// route clocks of Hub's sends after it count from it. It is never the later
+// send of a pair: the rule of 2 s holds Hub's sends (plan-b Б2), the site's
+// own pace is the site's.
+//
 // A send whose instant was never recorded (an attempt in flight, or left by a
 // killed process) may have gone out anywhere between its admission and its
 // upper bound. As the EARLIER send of a pair it counts at the upper bound, as
@@ -238,7 +244,7 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
   };
   for (let index = 1; index < sends.length; index += 1) {
     const later = sends[index]!;
-    if (!inWindow(later.laterMs, window)) continue;
+    if (later.row.observed || !inWindow(later.laterMs, window)) continue;
     const prev = sends[index - 1]!;
     const recorded = later.row.sentAt !== null;
     const sameOwner = later.row.journal === "engine" && prev.row.journal === "engine"
@@ -409,7 +415,7 @@ export function auditRouteIntervals(rows: readonly FanslySendAuditRow[], window:
     const family = familyOfRoute(route);
     add("route", route, send);
     if (family !== null) add("family", family, send);
-    if (row.journal !== "engine" || !inWindow(send.laterMs, window)) continue;
+    if (row.journal !== "engine" || row.observed || !inWindow(send.laterMs, window)) continue;
     // The independent bound: no admission may apply an interval shorter than
     // the ceiling's, whatever slowdown or calibration chose it.
     const at = new Date(send.laterMs);
@@ -450,7 +456,7 @@ export function auditRouteIntervals(rows: readonly FanslySendAuditRow[], window:
       if (prev === null || later.ms >= prev.ms) prev = later;
       if (!inWindow(later.laterMs, window)) continue;
       summary.sends += 1;
-      if (clock === null || later.row.journal !== "engine") continue;
+      if (clock === null || later.row.journal !== "engine" || later.row.observed) continue;
       const recorded = group.kind === "route"
         ? later.row.routeIntervalMs
         // A family interval only from an admission that recorded its route's:

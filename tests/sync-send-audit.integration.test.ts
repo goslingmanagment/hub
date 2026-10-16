@@ -118,6 +118,10 @@ interface EngineSend {
   familyIntervalMs?: number | null;
   /** `unknown`: admitted `secondsAgo` before now, its send never marked. */
   outcome?: "response" | "unknown";
+  /** `site`: a request of the page's own site, admitted (protocol 1.3) or —
+   *  `observed` — only observed (variant Б, protocol 1.4). Default `engine`. */
+  origin?: "engine" | "site";
+  observed?: boolean;
 }
 
 /** A live engine attempt as the actor journals it. */
@@ -127,16 +131,17 @@ async function engineSend(pageId: number, input: EngineSend): Promise<void> {
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                                 admitted_at, sent_at, send_mark, gap_prev_ms, operation, request, outcome,
-                                route_interval_ms, family_interval_ms)
+                                route_interval_ms, family_interval_ms, origin)
      values ($1, false, 'test.resource', '', 'urgent', $2, $3, 0, $4,
              clock_timestamp() - make_interval(secs => $5::double precision + case when $6::boolean then 0 else 0.1 end),
              case when $6::boolean then null else clock_timestamp() - make_interval(secs => $5::double precision) end,
-             case when $6::boolean then null else 'request_start' end, $7, $8, '{}'::jsonb, $9, $10, $11)`,
+             case when $6::boolean then null else 'request_start' end, $7, $8, $12::jsonb, $9, $10, $11, $13)`,
     [
       pageId, input.generation ?? 1, input.settingMs ?? S, input.pauseMs ?? input.settingMs ?? S, input.secondsAgo, unknown,
       input.gapPrevMs ?? null, input.operation, unknown ? "unknown" : "response",
       input.routeIntervalMs === undefined ? intervals.routeIntervalMs : input.routeIntervalMs,
       input.familyIntervalMs === undefined ? intervals.familyIntervalMs : input.familyIntervalMs,
+      JSON.stringify(input.observed ? { method: "GET", path: "/api/v1/x", observed: true } : {}), input.origin ?? "engine",
     ],
   );
 }
@@ -181,6 +186,29 @@ describe("the send audit on recorded rows", () => {
     });
     expect(page.verdict).toBe("fail");
     expect(acceptance.accepted).toBe(false);
+  });
+
+  it("reads the site's observed requests as such: predecessors of Hub's sends, never judged; a site send Hub admitted is judged", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("audit-observed");
+    const since = new Date(Date.now() - 60_000);
+    const observed = { origin: "site", observed: true, operation: "site.other", routeIntervalMs: null, familyIntervalMs: null } as const;
+    await engineSend(pageId, { secondsAgo: 30, operation: "notifications.page" });
+    // The site's own burst, 100 ms apart; Hub's next send 2.8 s after its last.
+    await engineSend(pageId, { secondsAgo: 25, ...observed });
+    await engineSend(pageId, { secondsAgo: 24.9, ...observed });
+    await engineSend(pageId, { secondsAgo: 24.8, ...observed });
+    await engineSend(pageId, { secondsAgo: 22, operation: "notifications.page" });
+
+    const rows = await readFanslySendAudit(db(), { pageId, since });
+    expect(rows.filter((row) => row.observed)).toHaveLength(3);
+    expect(auditPagePace(rows, { start: since, until: null })).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [] });
+    expect(auditRouteIntervals(rows, { start: since, until: null })).toMatchObject({ violations: [], inconclusive: [] });
+
+    // A site send the engine admitted (protocol 1.3) is no observation: judged.
+    await engineSend(pageId, { secondsAgo: 21.5, operation: "site.other", origin: "site" });
+    const admitted = auditPagePace(await readFanslySendAudit(db(), { pageId, since }), { start: since, until: null });
+    expect(admitted.violations).toEqual([expect.objectContaining({ journal: "engine", clock: "wall" })]);
   });
 
   it("the evaluator latches I1 by the send's own pause and I19 by its recorded interval; a page left in shadow pages nobody", async (context) => {

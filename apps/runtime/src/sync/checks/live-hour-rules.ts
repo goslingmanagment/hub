@@ -323,7 +323,7 @@ export function routeSlowdowns(sends: readonly FanslySendAuditRow[], window: Acc
     audit.rateLimited += limits.length;
     if (limits.length === 0) continue;
     for (const row of rows) {
-      if (row.journal !== "engine" || row.admittedAt.getTime() >= window.observedUntil.getTime()) continue;
+      if (row.journal !== "engine" || row.observed || row.admittedAt.getTime() >= window.observedUntil.getTime()) continue;
       const before = limits.filter((limit) => limit !== row && doneAtOf(limit).getTime() < row.admittedAt.getTime());
       if (before.length === 0) continue;
       let requiredMs: number | null = null;

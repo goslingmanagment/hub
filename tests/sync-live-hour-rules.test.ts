@@ -105,6 +105,7 @@ function audited(seconds: number, operation: string, overrides: Partial<FanslySe
     source: null,
     ref,
     operation,
+    observed: false,
     ownerGeneration: 1n,
     admittedAt: at(seconds - 0.05),
     sentAt: at(seconds),
@@ -218,6 +219,12 @@ describe("the slowdown after a 429 (A2), on the intervals the admissions recorde
     expect(audit.violations).toEqual([expect.objectContaining({ intervalMs: 8_000, requiredMs: 15_999, after: expect.objectContaining({ ref: second.ref }) })]);
     // A 429 answered before the window is not the window's.
     expect(routeSlowdowns([audited(-100, "messages.page", { httpStatus: 429 }), audited(10, "messages.page")], window()).rateLimited).toBe(0);
+  });
+
+  it("takes no observed site request for an admission after a 429", () => {
+    const limited = audited(100, "messages.page", { httpStatus: 429 });
+    const observed = audited(200, "messages.page", { observed: true, routeIntervalMs: null });
+    expect(routeSlowdowns([limited, observed], window())).toMatchObject({ rateLimited: 1, admissions: 0, violations: [], inconclusive: [] });
   });
 
   it("is inconclusive, never a pass, without the recorded numbers: a 429'd attempt or an admission before 0237, a legacy 429", () => {

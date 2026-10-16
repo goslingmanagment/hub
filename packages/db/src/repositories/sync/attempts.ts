@@ -950,6 +950,12 @@ export interface FanslySendAuditRow {
   ref: number;
   /** A wire id (`engine`) or the legacy adapter's operation (`legacy`). */
   operation: string;
+  /** A request the page's browser sent on its own, which the engine only
+   *  observed (variant Б, protocol 1.4: `origin = 'site'`, `request.observed`).
+   *  Hub admitted nothing of it: the sends after it count from it, it is never
+   *  judged itself. A site request the engine admitted (protocol 1.3) is not
+   *  one. */
+  observed: boolean;
   /** The engine attempt's owner generation; null for a legacy row. */
   ownerGeneration: bigint | null;
   /** The admission (`admitted_at`; a legacy row's capture): no byte of the
@@ -1003,6 +1009,7 @@ export async function readFanslySendAudit(
     source: string | null;
     ref: string;
     operation: string;
+    observed: boolean;
     ownerGeneration: string | null;
     admittedAt: Date | string;
     sentAt: Date | string | null;
@@ -1016,6 +1023,7 @@ export async function readFanslySendAudit(
     completedAt: Date | string | null;
   }>(sql`
     select 'engine'::text as journal, null::text as source, a.id::text as ref, a.operation,
+           (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false)) as observed,
            a.owner_generation::text as "ownerGeneration", a.admitted_at as "admittedAt", a.sent_at as "sentAt",
            case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown')
                 then coalesce(a.sent_at, a.admitted_at + ${sendWindow}) end as "countedAt",
@@ -1028,7 +1036,7 @@ export async function readFanslySendAudit(
        and a.admitted_at >= ${from}
        and a.admitted_at < ${until}
     union all
-    select 'legacy'::text, l.source, l.id::text, l.operation, null::text, l.captured_at, l.sent_at,
+    select 'legacy'::text, l.source, l.id::text, l.operation, false, null::text, l.captured_at, l.sent_at,
            case when l.sent_at is not null or l.outcome is distinct from 'aborted_before_send'
                 then coalesce(l.sent_at, l.completed_at, l.lease_until, l.captured_at + ${sendWindow}) end,
            l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer,
@@ -1044,6 +1052,7 @@ export async function readFanslySendAudit(
     source: row.source,
     ref: Number(row.ref),
     operation: row.operation,
+    observed: row.observed === true,
     ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
     admittedAt: toRequiredDate(row.admittedAt),
     sentAt: toDate(row.sentAt),

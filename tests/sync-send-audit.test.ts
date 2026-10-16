@@ -37,6 +37,7 @@ function engine(seconds: number, operation: string, overrides: Partial<FanslySen
     source: null,
     ref,
     operation,
+    observed: false,
     ownerGeneration: 1n,
     admittedAt: at(seconds - 0.05),
     sentAt: at(seconds),
@@ -70,6 +71,15 @@ function legacy(seconds: number, operation: string, overrides: Partial<FanslySen
     routeIntervalMs: null,
     familyIntervalMs: null,
     ...overrides,
+  });
+}
+
+/** A request the page's browser sent on its own `seconds` after T0, observed
+ *  by the engine (variant Б): journaled at its send, at the floor pause, with
+ *  no interval of its own. */
+function site(seconds: number, operation: string, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow {
+  return engine(seconds, operation, {
+    observed: true, admittedAt: at(seconds), settingMs: 2_000, pauseMs: 2_000, routeIntervalMs: null, ...overrides,
   });
 }
 
@@ -188,6 +198,24 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 0 });
     expect(auditPagePace([...rows, engine(0.4, "notifications.page")], WINDOW).verdict).toBe("fail");
     expect(auditPagePace([engine(3_599, "notifications.page"), engine(3_600.5, "notifications.page")], WINDOW).pairs).toBe(0);
+  });
+
+  it("an observed site request is the predecessor of Hub's next send, never judged itself (plan-b Б2)", () => {
+    // The site's own burst: 100 ms apart, right after Hub's send. Hub's next
+    // send keeps its pause from the newest of them.
+    const rows = [engine(10, "notifications.page"), site(10.2, "site.other"), site(10.3, "site.other"), site(10.4, "site.other"), engine(13, "notifications.page")];
+    const audit = auditPagePace(rows, WINDOW);
+    expect(audit).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [] });
+    expect(Math.round(audit.minGapMs!)).toBe(2_600);
+    // The same rows as sends Hub admitted (protocol 1.3): each is judged.
+    expect(auditPagePace(rows.map((row) => ({ ...row, observed: false })), WINDOW).violations).toHaveLength(3);
+  });
+
+  it("fails Hub's send closer than its pause to an observed site request", () => {
+    const siteSend = site(20, "account.me");
+    const hub = engine(21.5, "notifications.page");
+    const audit = auditPagePace([engine(10, "notifications.page"), siteSend, hub], WINDOW);
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_500, clock: "wall" })]);
   });
 });
 
@@ -308,6 +336,16 @@ describe("I19: every pair of adjacent sends of a route and of a family ≥ the i
     expect(auditRouteIntervals(drift, WINDOW)).toMatchObject({
       verdict: "inconclusive", pairs: 1, inconclusive: [expect.objectContaining({ kind: "family", scope: "messaging" })],
     });
+  });
+
+  it("counts an observed site request on its route's clock, never judges it: no interval of its own is no open pair", () => {
+    const siteSend = site(104, "notifications.page");
+    const audit = auditRouteIntervals([engine(100, "notifications.page"), siteSend, engine(106, "notifications.page")], WINDOW);
+    expect(audit).toMatchObject({ verdict: "fail", pairs: 1, inconclusive: [], ceiling: [] });
+    expect(audit.violations).toEqual([expect.objectContaining({ kind: "route", prevRef: siteSend.ref, intervalMs: 4_000 })]);
+    // The site's own requests alone: nothing to judge, nothing open.
+    expect(auditRouteIntervals(stream("site.other", 100, 0.2, 10, { observed: true, routeIntervalMs: null }), WINDOW))
+      .toMatchObject({ verdict: "pass", pairs: 0, inconclusive: [] });
   });
 
   it("a send this build places on no route leaves the audit inconclusive", () => {
