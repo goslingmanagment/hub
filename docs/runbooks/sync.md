@@ -259,7 +259,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   only while the stop in force is the update's own; a stop or start of yours since stays yours and the update holds;
   never a halt cleared),
   waits for the engine's record of the operator: ready on the new Chrome, the self-test passed, the exit IP the
-  pinned one, the same account and session — then the window, ending with `sync check live-hour`. Any failure: the
+  pinned one, the same account and session — then the window, ending with `sync check live-hour`: accepted, or open
+  only because a quiet hour left its sample checks short (the SLOs, confirm mismatches, the media start — none of
+  their samples over its bound, nothing failed, nothing else open; `jq` on the server reads the report). Any failure: the
   page goes back to its previous image **with its snapshot**; before the new image ran, simply as it was. Follow it
   with `journalctl -fu <unit>` (the command prints the unit); `status --page <page>` shows where it stands.
 - **What it never does**: update a page whose browser stands for your decision (a halt Hub mirrors, or one the

@@ -306,7 +306,8 @@ function hubCli(cli) {
     return 0;
   }
   if (cli[0] === "sync" && cli[1] === "check" && cli[2] === "live-hour") {
-    out(`${JSON.stringify({ verdict: behaviour.liveHourExit ?? 0 })}\n`);
+    // The report as the CLI prints it (liveHourReport), or a stand-in.
+    out(`${JSON.stringify(behaviour.liveHourReport ?? { verdict: behaviour.liveHourExit ?? 0 }, null, 2)}\n`);
     return behaviour.liveHourExit ?? 0;
   }
   err(`unknown hub command ${cli.join(" ")}\n`);

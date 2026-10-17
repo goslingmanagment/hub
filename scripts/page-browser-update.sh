@@ -75,7 +75,9 @@
 #     exit IP the pinned one, the site loaded, the session confirmed by the
 #     engine's identity read: the same account and session fingerprint as
 #     before, no new login;
-#  8. the window (first page): ready all along, then `sync check live-hour`.
+#  8. the window (first page): ready all along, then `sync check live-hour`
+#     accepts it — or leaves it open only for a quiet hour's want of
+#     samples, nothing failed (quiet_hour; jq reads its report).
 # Any failure before the new image ran puts the page back as it was (its
 # old container, its transport); after it, a rollback — reading the page as
 # it is then, never the update's old hand-over: its own confirmed stop of a
@@ -575,14 +577,15 @@ host_checks() {
 
 hub_compose() { (cd "$HUB_DIR" && docker compose --env-file .env.production -f docker-compose.production.yml "$@"); }
 
-# A lever of the Hub's CLI; its output to the operator's terminal, its
-# refusal journaled.
+# A lever of the Hub's CLI; its output to the operator's terminal (and in
+# HUB_OUT), its refusal journaled.
+HUB_OUT=""
 hub_lever() {
-  local out rc=0
-  out="$(hub_compose exec -T api node apps/runtime/dist/cli.js "$@" </dev/null 2>&1)" || rc=$?
-  [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+  local rc=0
+  HUB_OUT="$(hub_compose exec -T api node apps/runtime/dist/cli.js "$@" </dev/null 2>&1)" || rc=$?
+  [[ -z "$HUB_OUT" ]] || printf '%s\n' "$HUB_OUT" >&2
   if ((rc != 0)); then
-    journal hub_refused "$* → exit $rc: $(printf '%s' "$out" | tail -n 3 | scrub)"
+    journal hub_refused "$* → exit $rc: $(printf '%s' "$HUB_OUT" | tail -n 3 | scrub)"
     return "$rc"
   fi
 }
@@ -1328,6 +1331,40 @@ step_engine_checks() {
   esac
 }
 
+# A quiet hour: `sync check live-hour` left the window open (exit 2) only
+# because the hour gave some checks too few samples — no fan wrote, no
+# media request was due (lilly-1, 2026-10-17 19:47 UTC: rolled back on a
+# clean hour). Read from its report on stdin (JSON, by jq): every page with
+# its window complete, no check failed, at most one route with a 429 (two
+# are the owner's review), and each open check one of
+#  - a latency SLO (slo_*) under its minimum of samples, none of them over
+#    its bound (none at all, or a few within it);
+#  - confirm_mismatches with no message confirmed;
+#  - media_start with no media request in the window (the walk not paused).
+# Anything else open — a pair the pace audit could not judge, the hand-over
+# boundary, a route's budget, a 429's recovery unproven — is not a quiet
+# hour. Only the window reads it so: `sync check live-hour` and its exit
+# code stay as strict as ever. Prints the open checks; 1 when the hour is
+# not a quiet one, or the report or jq cannot be read (the window fails, as
+# before).
+quiet_hour() {
+  command -v jq >/dev/null 2>&1 || return 1
+  sed -n '/^{$/,/^}$/p' | jq -er '
+    def quiet:
+      ((.name | startswith("slo_")) and (.detail.samples | type) == "number"
+        and (.detail.maxSeconds == null or .detail.maxSeconds <= .detail.boundSeconds))
+      or (.name == "confirm_mismatches" and .detail.confirmed == 0)
+      or (.name == "media_start" and .detail.firstRequestAfterSeconds == null and .detail.paused == false);
+    [.pages[]?.checks[]? | select(.verdict == "inconclusive") | .name] as $open
+    | if .windowComplete == true and (.pages | length) > 0 and ($open | length) > 0
+         and all(.pages[]; any(.checks[]; .name == "window_complete" and .verdict == "pass")
+                           and all(.checks[]; .verdict != "fail")
+                           and all(.checks[] | select(.verdict == "inconclusive"); quiet)
+                           and all(.checks[] | select(.name == "route_429"); .detail.routesWith429 <= 1))
+      then $open | unique | join(", ")
+      else empty end'
+}
+
 step_window() {
   local window until misses=0 blind=0 rc
   window="$(sget WINDOW_S)"
@@ -1367,9 +1404,15 @@ step_window() {
     if ((misses >= 2)); then forward_failed "during the window: $ENGINE_WHY"; return; fi
   done
   if ! hub_read; then hold "the Hub cannot be read: the window's end cannot be judged"; return; fi
-  local since out=0
+  local since out=0 quiet
   since="$(iso_of $(( 10#$(sget READY_MS) / 1000 )))"
   hub_lever sync check live-hour --page "$PAGE" --since "$since" --until "$(iso_of "$until")" || out=$?
+  if ((out == 2)) && quiet="$(quiet_hour <<<"$HUB_OUT")"; then
+    sset WINDOW=passed "WINDOW_QUIET=$quiet"
+    say window "passed: ready all along, sync check live-hour open only for a quiet hour's want of samples ($quiet)"
+    step_to done
+    return
+  fi
   if ((out != 0)); then
     forward_failed "sync check live-hour over the window: exit $out (1 failed, 2 inconclusive)"
     return
