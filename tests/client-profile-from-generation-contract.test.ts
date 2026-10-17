@@ -241,7 +241,7 @@ describe("generationIsOfConversation", () => {
     expect(generationIsOfFan(mixed, { pageId: 1, conversationRef: OTHER_FAN, fanRef: OTHER_FAN })).toBe(false);
   });
 
-  describe("[R20 HF-10] a conversation with an id of its own (a Fansly group)", () => {
+  describe("[AI-067] [R20 HF-10] a conversation with an id of its own (a Fansly group)", () => {
     // Fansly ids are 18-digit snowflakes, past 2^53: compared as exact strings.
     const GROUP = "650000000000000001";
     const OTHER_GROUP = "650000000000000002";

@@ -449,7 +449,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("two chatters of one page read the same recap, whoever generated it; text and provenance only", async (context) => {
+  it("[REC-01] two chatters of one page read the same recap, whoever generated it; text and provenance only", async (context) => {
     if (!server) return context.skip();
     await switchRecapOn();
     const fullAt = minutesAgo(90);
