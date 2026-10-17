@@ -818,6 +818,7 @@ export async function prepareAiFeatureStream(
       principal,
       page: stored.page,
       conversationRef: body.conversationRef,
+      feature,
       limit: resolvedMessageLimit,
       transcript: loaded,
       liveTextContext: body.liveTextContext,

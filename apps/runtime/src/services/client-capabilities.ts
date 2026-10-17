@@ -86,6 +86,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // `chat-review` and `coach-chat` too, not only on the four features that
   // draft a message to the fan (AI_LIVE_TEXT_FEATURES). Recap still refuses it.
   "live-text-review-coach-v1",
+  // chat-extension X52: Recap (`fan-summary`, full and short) takes
+  // `liveTextContext` too, and a recap built with it stays shared and a
+  // dossier's proof (AI_LIVE_TEXT_SHARED_FEATURES; owner ruling 2026-10-17).
+  "live-text-recap-v1",
 ];
 
 /**
