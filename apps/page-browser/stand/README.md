@@ -8,7 +8,31 @@ conditions on the prototype's operator; this one runs before every operator
 PR (plan §5, row 19).
 
 `image-check.sh` / `image-check.mjs` in this directory are PR 2's image check
-and are not part of the suites.
+and are not part of the suites; nor is `resource-timing-check.sh` (below).
+
+## The resource-timing check (variant Б)
+
+```sh
+apps/page-browser/stand/resource-timing-check.sh --image hub-page-browser:<tag> [--apparmor unconfined]
+```
+
+Hub's API request is an XMLHttpRequest from the isolated world `pb-hub` of
+the site's tab, started from `<host>.pb-hold.invalid…#hub-N`. Chrome 155
+keeps such a request out of the main world's resource timeline and away
+from the site's service worker; CDP does not promise it. The check runs the
+operator's own `ISSUE` (`src/hub-requests/page.ts`) and Fetch patterns
+against a local site with a service worker, a PerformanceObserver and
+main-world hooks — in a container of the image with no network, headed on
+its Xkasmvnc, the managed policies masked — and prints one line per
+assertion. The main world's own XMLHttpRequest, Image and `<video>` must
+show, so a pass is never a timeline or worker that sees nothing. Hub's
+Image and `<video>` are reported as `info`: on 155.0.8059.39 the video is in
+the timeline under its placeholder name (no media go through the browser
+today; how they would is the owner's decision). It runs on every Chrome
+update (`chrome-update.sh`, step 7), and `tests/page-browser-image.test.ts`
+fails while `PASSED_ON` in `resource-timing-check.ts` is not the
+Dockerfile's Chrome. Without `--image` it runs this machine's Chrome,
+headless.
 
 ## What is here
 
