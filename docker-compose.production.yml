@@ -44,6 +44,12 @@ services:
       # E7/D8-N1 (W3): every naive Date parse must stay UTC even if a future
       # base image ships a local timezone.
       TZ: UTC
+      # glibc lets each allocating thread take a malloc arena of its own (up to
+      # 8 per core) and keeps what was freed in each: prod 2026-10-10 held ~160 MB
+      # in 10-13 arenas across the four roles (worker 87 MB). Node allocates
+      # mostly on its main thread, so two arenas cap that slack without
+      # contention for this load.
+      MALLOC_ARENA_MAX: "2"
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     volumes:
       - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
@@ -79,6 +85,7 @@ services:
     environment:
       SCHEDULER_HEALTH_FILE: /tmp/agency-hub-scheduler-health.json
       TZ: UTC
+      MALLOC_ARENA_MAX: "2"
     command: ["node", "apps/runtime/dist/startup.js", "scheduler"]
     depends_on:
       postgres:
@@ -113,6 +120,7 @@ services:
     environment:
       WORKER_HEALTH_FILE: /tmp/agency-hub-worker-health.json
       TZ: UTC
+      MALLOC_ARENA_MAX: "2"
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     volumes:
       - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
@@ -151,6 +159,7 @@ services:
     environment:
       SYNC_HEALTH_FILE: /tmp/agency-hub-sync-health.json
       TZ: UTC
+      MALLOC_ARENA_MAX: "2"
     command: ["node", "apps/runtime/dist/startup.js", "sync"]
     depends_on:
       postgres:

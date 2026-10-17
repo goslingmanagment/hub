@@ -122,6 +122,35 @@ describe("ops watchdog (W5.2 / A53)", () => {
     expect(await openIncidents()).toEqual([]);
   });
 
+  it("a role's process_* memory gauge is never sampler liveness", async () => {
+    // Every role's heartbeat writes its memory gauges into the same table every
+    // 5 minutes, whether or not the minutely sampler is alive.
+    await harness.pool.query(
+      `insert into runtime_instances (role, instance_id, started_at, last_seen_at, running)
+       values ('scheduler', 'wd-test-1', now(), now(), '{}'::jsonb)
+       on conflict (role, instance_id) do update set last_seen_at = excluded.last_seen_at`,
+    );
+    await harness.pool.query("update ops_metric_samples set sampled_at = now() - interval '1 day'");
+    await insertOpsMetricSamples(harness.db, [
+      { metric: "capture", quantile: "p95", valueMs: 1, sampledAt: new Date(Date.now() - 86_400_000) },
+      { metric: "process_rss_bytes_worker", quantile: "p50", valueMs: 431_000_000 },
+      { metric: "process_heap_used_bytes_api", quantile: "p50", valueMs: 140_000_000 },
+    ]);
+
+    const latest = await getLatestOpsMetricSampleAt(harness.db);
+    expect(latest).not.toBeNull();
+    expect(Date.now() - latest!.getTime()).toBeGreaterThan(OPS_WATCHDOG_SILENCE_MS);
+
+    const silent = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
+    expect(silent.samplerFresh).toBe(false);
+    expect(await openIncidents()).toEqual(["ops_sampler_silent"]);
+
+    await insertOpsMetricSamples(harness.db, [{ metric: "capture", quantile: "p95", valueMs: 1 }]);
+    const recovered = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
+    expect(recovered.samplerFresh).toBe(true);
+    expect(await openIncidents()).toEqual([]);
+  });
+
   it("an hourly disk_* gauge is never sampler liveness", async () => {
     // The disk check writes capacity gauges into the same table once an HOUR.
     // If the deadman counted them, a dead minutely sampler would look alive

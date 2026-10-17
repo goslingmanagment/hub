@@ -1646,6 +1646,10 @@ export const pageFans = pgTable(
       table.platformAccountId,
       table.pageAlias,
     ),
+    // 0267: the public lookup's page_lookup_miss demand (fansly-public-lookup.ts).
+    accountProbeUnresolvedIdx: index("page_fans_account_probe_unresolved_idx")
+      .on(table.fanId)
+      .where(sql`${table.accountProbeResolved} is false`),
   }),
 );
 
@@ -2155,9 +2159,10 @@ export const dmMessageArchive = pgTable(
       .on(table.platformAccountId, table.platformConversationId, table.messageCreatedAt.desc()),
     retainUntilIdx: index("dm_message_archive_retain_until_idx").on(table.retainUntil),
     sourceJournalIdx: index("dm_message_archive_source_journal_idx").on(table.sourceJournalId),
-    repairSignalIdx: index("dm_message_archive_repair_signal_idx")
-      .on(table.platformAccountId, table.id)
-      .where(sql`${table.materialFingerprint} is distinct from ${table.emittedFingerprint}`),
+    // 0265: the reconciler's work list in id order (listDmRepairSignalRows).
+    repairSignalIdx: index("dm_message_archive_repair_signal_id_idx")
+      .on(table.id)
+      .where(sql`${table.materialFingerprint} is distinct from ${table.emittedFingerprint} and ${table.materialFingerprint} is not null`),
     sourceCheck: check("dm_message_archive_source_check", sql`
       ${table.source} in ('webhook', 'command', 'rest_reconcile', 'rest_backfill')
     `),

@@ -20,6 +20,8 @@ export async function runWorkerRuntime() {
     // this to 24h, which would double the 24h heartbeat retention pinned in
     // services/queue-retention.ts. Must match the api and scheduler roles.
     maintenanceIntervalSeconds: 3600,
+    // pg-boss's own pool polls every few seconds: keep its idle connections.
+    ...(app.poolLifetime ?? {}),
   });
   // PgBoss extends EventEmitter: without a listener an 'error' event throws.
   // The worker is nothing without its queue, so fail fast and let Docker's

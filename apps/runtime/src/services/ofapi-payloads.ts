@@ -11,7 +11,10 @@ import { normalizeDmMessageText, truncateUtf16Safe } from "@agency_hub_core/shar
 export const ofapiWebhookEnvelopeSchema = z.object({
   event: z.string().min(1),
   account_id: z.string().min(1).nullish(),
-  payload: z.unknown(),
+  // An absent key passes, as it did under zod 4.3's bare z.unknown(): since
+  // 4.4 it fails one, which would quarantine a body that omits `payload`. The
+  // pass-through transform keeps the parsed type's key required (`unknown`).
+  payload: z.unknown().optional().transform((value) => value),
 });
 
 export type OfapiWebhookEnvelope = z.infer<typeof ofapiWebhookEnvelopeSchema>;

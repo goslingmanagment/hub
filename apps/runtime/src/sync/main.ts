@@ -2,7 +2,7 @@ import { writeSync } from "node:fs";
 
 import pg from "pg";
 
-import { createDb } from "@agency_hub_core/db";
+import { createDb, RUNTIME_POOL_LIFETIME } from "@agency_hub_core/db";
 
 import { fanslyWsLivePayloadResolver } from "../services/fansly-ws/live-apply.ts";
 import { notifySyncEngineIncident } from "../services/notification-incidents.ts";
@@ -263,7 +263,7 @@ export function describeSyncStall(stall: SyncStall): string {
 
 export async function runSyncRuntime(): Promise<void> {
   const startedAt = new Date();
-  const context = await createSyncContext({ poolTimeouts: SYNC_POOL_TIMEOUTS });
+  const context = await createSyncContext({ poolTimeouts: SYNC_POOL_TIMEOUTS, poolLifetime: RUNTIME_POOL_LIFETIME });
   let runtime: SyncRuntime;
   try {
     runtime = await startSyncRuntime(context, {

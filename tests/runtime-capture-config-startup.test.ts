@@ -215,9 +215,14 @@ describe("capture CAS settings at role startup", () => {
 
     await runSyncRuntime();
 
-    // Step 4, 4-3 layer 0: the process's pool is the bounded one.
+    // Step 4, 4-3 layer 0: the process's pool is the bounded one, and it keeps
+    // its idle connections like every long-lived role's.
     const { SYNC_POOL_TIMEOUTS } = await import("../apps/runtime/src/sync/context.ts");
-    expect(h.createSyncContext).toHaveBeenCalledWith({ poolTimeouts: SYNC_POOL_TIMEOUTS });
+    const { RUNTIME_POOL_LIFETIME } = await import("@agency_hub_core/db");
+    expect(h.createSyncContext).toHaveBeenCalledWith({
+      poolTimeouts: SYNC_POOL_TIMEOUTS,
+      poolLifetime: RUNTIME_POOL_LIFETIME,
+    });
     expect(h.snapshots).toEqual([
       { at: "sync:heartbeat", dualWrite: "*", pointerOnly: "*", readMode: "serve" },
     ]);

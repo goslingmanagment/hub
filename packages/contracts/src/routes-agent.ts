@@ -85,9 +85,9 @@ import {
 /**
  * The house `isoTimestamp` is a bare `z.string()` and validates nothing. The
  * plane's timestamps decide window membership and capture floors, so they are
- * checked. `z.iso.datetime()` is deliberately NOT used: there are zero `z.iso.`
- * precedents in this repository and the OpenAPI generator's behaviour on it is
- * unverified; a regex gives the same guarantee on proven house mechanics.
+ * checked, by a regex of the plane's own (agent-read-datasets.ts): seconds and
+ * a zone (Z or ±hh:mm) are required here, where primitives.ts' isoDateTime()
+ * keeps the seconds optional.
  */
 export const agentIsoTimestamp = z.string().regex(
   AGENT_RFC3339_TIMESTAMP_PATTERN,

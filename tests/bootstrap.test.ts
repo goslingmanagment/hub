@@ -100,9 +100,12 @@ describe("bootstrap", () => {
 
     const app = await createAppContext();
 
+    // A one-shot command keeps node-postgres' 10 s idle close: it must exit.
     expect(bootstrapMocks.createPool).toHaveBeenCalledWith(
       "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
+      {},
     );
+    expect(app.poolLifetime).toBeUndefined();
     expect(bootstrapMocks.assertRuntimeSchemaReady).toHaveBeenCalledWith(bootstrapMocks.pool);
     expect(app.fanslySendGuards).toBeDefined();
     expect(app.db).toBe(bootstrapMocks.db);
@@ -128,6 +131,21 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.pool.end).toHaveBeenCalledTimes(1);
     // Nothing is built on a database the guard refused.
     expect(bootstrapMocks.createDb).not.toHaveBeenCalled();
+  });
+
+  it("gives a long-lived role's pool the runtime lifetime and hands it on for its pg-boss", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+    const { RUNTIME_POOL_LIFETIME } = await import("@agency_hub_core/db");
+
+    const app = await createAppContext({ processRole: "scheduler" });
+    await app.close();
+
+    expect(bootstrapMocks.createPool).toHaveBeenCalledWith(
+      "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
+      { lifetime: RUNTIME_POOL_LIFETIME },
+    );
+    expect(app.poolLifetime).toBe(RUNTIME_POOL_LIFETIME);
   });
 
   it("warns a long-lived process that retired Fansly env vars are set and ignored, naming only the ones set", async () => {

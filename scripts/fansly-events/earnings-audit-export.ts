@@ -3,6 +3,8 @@ import { mkdir, open, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 
+import { isoDateTime } from "../../packages/contracts/src/primitives.ts";
+
 import { EarningsAudit } from "./earnings-audit.ts";
 import { earningsAuditScopeSchema } from "./earnings-audit-types.ts";
 import { earningsAuditPages } from "./earnings-audit-pages.ts";
@@ -20,8 +22,8 @@ export async function exportEarningsAudit(
 ) {
   const { page, from, to, outputDirectory } = input;
   z.string().min(1).max(256).parse(page);
-  z.iso.datetime({ offset: true }).parse(from);
-  z.iso.datetime({ offset: true }).parse(to);
+  isoDateTime({ offset: true }).parse(from);
+  isoDateTime({ offset: true }).parse(to);
   const directory = resolve(outputDirectory);
   await mkdir(directory, { mode: 0o700 });
   const output = await open(resolve(directory, "snapshot.jsonl"), "wx", 0o600);
@@ -44,7 +46,7 @@ export async function exportEarningsAudit(
     reader = createReader();
     const identity = z.object({
       role: z.literal("read_only"), readOnly: z.literal("on"),
-      isolation: z.literal("repeatable read"), asOf: z.iso.datetime({ offset: true }),
+      isolation: z.literal("repeatable read"), asOf: isoDateTime({ offset: true }),
       planCacheMode: z.literal("force_custom_plan"),
     }).parse(await reader.read(`
       BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;

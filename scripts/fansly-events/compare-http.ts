@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
+import { isoDateTime } from "../../packages/contracts/src/primitives.ts";
+
 const DAY = 86_400_000;
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const name = z.string().min(1).max(128);
-const timestamp = z.iso.datetime({ offset: true });
+const timestamp = isoDateTime({ offset: true });
 const day = z.iso.date();
 const attemptSchema = z.object({
   page_id: count.positive(), page_label: name, stream: name, operation: name,

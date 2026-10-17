@@ -4,6 +4,7 @@ import {
   createPool,
   readPoolSessionTimeouts,
   type Database,
+  type PoolLifetime,
   type PoolTimeouts,
 } from "@agency_hub_core/db";
 import {
@@ -56,6 +57,10 @@ export interface CreateSyncContextOptions {
    *  passes `SYNC_POOL_TIMEOUTS`; the one-shot CLI commands run without them
    *  (an operator watches each, and a report may need a longer statement). */
   poolTimeouts?: PoolTimeouts;
+  /** How long pooled connections live. The `sync` process passes
+   *  `RUNTIME_POOL_LIFETIME`; a one-shot command keeps node-postgres' 10 s idle
+   *  close so it can exit. */
+  poolLifetime?: PoolLifetime;
 }
 
 export async function createSyncContext(options: CreateSyncContextOptions = {}): Promise<SyncContext> {
@@ -64,7 +69,10 @@ export async function createSyncContext(options: CreateSyncContextOptions = {}):
     : loadConfig(options.env, { loadDotEnv: false });
   const logger = createLogger(rawConfig.logLevel);
   const timeouts = options.poolTimeouts;
-  const pool = createPool(rawConfig.databaseUrl, timeouts === undefined ? {} : { timeouts });
+  const pool = createPool(rawConfig.databaseUrl, {
+    ...(timeouts === undefined ? {} : { timeouts }),
+    ...(options.poolLifetime === undefined ? {} : { lifetime: options.poolLifetime }),
+  });
   try {
     // The image's own latest migration must be applied: an older schema under
     // a newer engine is refused here, before anything reads or writes.
