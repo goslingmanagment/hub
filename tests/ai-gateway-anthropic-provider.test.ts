@@ -164,6 +164,22 @@ describe("Anthropic AI gateway provider", () => {
     ]);
   });
 
+  it.each([undefined, false, true])("disables SDK retries only when requested (disableRetries: %s)", async (disableRetries) => {
+    const create = vi.fn<AnthropicGatewayClient["messages"]["create"]>(async function* () {
+      yield { type: "message_stop" };
+    });
+    const provider = createAnthropicAiGatewayProvider({ client: { messages: { create } } });
+    const input = providerInput(disableRetries === undefined ? {} : { disableRetries });
+
+    await collect(provider.stream(input));
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.anything(), {
+      signal: input.signal,
+      ...(disableRetries ? { maxRetries: 0 } : {}),
+    });
+  });
+
   it("fails unsupported models before creating a provider stream", async () => {
     let createCalls = 0;
     const client: AnthropicGatewayClient = {

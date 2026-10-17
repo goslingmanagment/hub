@@ -70,6 +70,8 @@ export interface AiGatewayProviderInput {
    * tight maxTokens stays a pure output budget (fan-summary short recap). The
    * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
   disableAdaptiveThinking?: boolean;
+  /** Server-only: the bounded completion trim pass must not retry SDK calls. */
+  disableRetries?: boolean;
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
    * completion lane that did was removed with the Workboard (Decision 376) —
@@ -528,6 +530,7 @@ export async function prepareAiGatewayStream(
           quota: quotaFrame,
           signal: callSignal,
           disableAdaptiveThinking: true,
+          disableRetries: true,
         }),
         estimateCostMicroUsd: (prompt) => {
           const body = trimBody(prompt, trimCompletion.maxTokens);
@@ -946,26 +949,34 @@ export async function* trimCompletionStream(
   let usage: Extract<AiGatewayStreamFrame, { type: "usage" }> | null = null;
   let done: Extract<AiGatewayStreamFrame, { type: "done" }> | null = null;
   let passThrough = false;
-  for await (const frame of frames) {
-    if (passThrough) {
-      yield frame;
-    } else if (frame.type === "content_delta") {
-      text += frame.text;
-      yield* keepAlive();
-    } else if (frame.type === "usage") {
-      usage = frame;
-    } else if (frame.type === "done") {
-      done = frame;
-    } else if (frame.type === "error") {
-      // The completion failed: what was held goes out as it came.
-      passThrough = true;
+  try {
+    for await (const frame of frames) {
+      if (passThrough) {
+        yield frame;
+      } else if (frame.type === "content_delta") {
+        text += frame.text;
+        yield* keepAlive();
+      } else if (frame.type === "usage") {
+        usage = frame;
+      } else if (frame.type === "done") {
+        done = frame;
+      } else if (frame.type === "error") {
+        // The completion failed: what was held goes out as it came.
+        passThrough = true;
+        if (text !== "") yield { type: "content_delta", text };
+        if (usage !== null) yield usage;
+        yield frame;
+      } else {
+        lastSentAt = now();
+        yield frame;
+      }
+    }
+  } catch (error) {
+    if (!passThrough) {
       if (text !== "") yield { type: "content_delta", text };
       if (usage !== null) yield usage;
-      yield frame;
-    } else {
-      lastSentAt = now();
-      yield frame;
     }
+    throw error;
   }
   if (passThrough) return;
   if (
@@ -982,18 +993,69 @@ export async function* trimCompletionStream(
   }
 
   const prompt = options.trim.prompt(text);
-  const callSignal = AbortSignal.any([options.signal, AbortSignal.timeout(options.trim.timeoutMs)]);
+  const deadline = new AbortController();
+  const callSignal = AbortSignal.any([options.signal, deadline.signal]);
   const pass = new AiGatewayTerminalStreamConsumer();
   const startedAt = now();
   let callFailed = false;
+  let timedOut = false;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<"aborted">((resolve) => {
+    onAbort = () => resolve("aborted");
+    callSignal.addEventListener("abort", onAbort, { once: true });
+    if (callSignal.aborted) onAbort();
+  });
+  const deadlineTimer = setTimeout(() => {
+    timedOut = true;
+    deadline.abort();
+  }, options.trim.timeoutMs);
+  let keepAliveTimer: ReturnType<typeof setTimeout> | undefined;
+  let iterator: AsyncIterator<AiGatewayStreamFrame> | undefined;
+  let pendingNext: Promise<IteratorResult<AiGatewayStreamFrame>> | undefined;
+  let iteratorDone = false;
   try {
-    for await (const frame of options.callModel(prompt, callSignal)) {
-      pass.note(frame);
+    iterator = options.callModel(prompt, callSignal)[Symbol.asyncIterator]();
+    while (!callSignal.aborted) {
+      // Keep the same next() pending across keepalives: a provider can ignore
+      // abort while sleeping in an SDK retry, so neither it nor return() is
+      // allowed to hold up the completed fill.
+      pendingNext ??= Promise.resolve(iterator.next());
+      const tick = new Promise<"keepalive">((resolve) => {
+        keepAliveTimer = setTimeout(() => resolve("keepalive"), Math.max(0, COMPLETION_TRIM_KEEPALIVE_MS - (now() - lastSentAt)));
+      });
+      const next = await Promise.race([pendingNext, aborted, tick]);
+      clearTimeout(keepAliveTimer);
+      keepAliveTimer = undefined;
+      if (next === "aborted") break;
+      if (next === "keepalive") {
+        lastSentAt = now();
+        yield { type: "reasoning_delta", text: "" };
+        continue;
+      }
+      pendingNext = undefined;
+      if (next.done) {
+        iteratorDone = true;
+        break;
+      }
+      pass.note(next.value);
       yield* keepAlive();
     }
-    pass.finish();
+    if (callSignal.aborted) callFailed = true;
+    else pass.finish();
   } catch {
     callFailed = true;
+  } finally {
+    clearTimeout(deadlineTimer);
+    clearTimeout(keepAliveTimer);
+    if (onAbort) callSignal.removeEventListener("abort", onAbort);
+    void pendingNext?.catch(() => {});
+    if (iterator && !iteratorDone) {
+      try {
+        void iterator.return?.().catch(() => {});
+      } catch {
+        // A synchronous cleanup failure must not discard the completed fill.
+      }
+    }
   }
   const passUsage = pass.usage ?? {
     inputTokens: 0,
@@ -1005,7 +1067,7 @@ export async function* trimCompletionStream(
   };
   let finalText = text;
   let record: Record<string, unknown>;
-  if (!callFailed && pass.outcome === "completed" && NATURAL_STOP_REASONS.has(pass.stopReason ?? "")) {
+  if (!callFailed && !timedOut && !callSignal.aborted && pass.outcome === "completed" && NATURAL_STOP_REASONS.has(pass.stopReason ?? "")) {
     try {
       const applied = options.trim.apply(text, pass.completionText);
       finalText = applied.text;
@@ -1018,7 +1080,6 @@ export async function* trimCompletionStream(
       record = { outcome: "failed", errorCode: "trim_apply_failed" };
     }
   } else {
-    const timedOut = callSignal.aborted && !options.signal.aborted;
     record = {
       outcome: "failed",
       errorCode: timedOut

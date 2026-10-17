@@ -23,7 +23,7 @@ export interface AnthropicGatewayClient {
   messages: {
     create(
       body: AnthropicGatewayStreamRequest,
-      options: { signal?: AbortSignal },
+      options: { signal?: AbortSignal; maxRetries?: number },
     ): Promise<AsyncIterable<unknown>> | AsyncIterable<unknown>;
   };
 }
@@ -296,7 +296,10 @@ export function createAnthropicAiGatewayProvider(
       try {
         let events: AsyncIterable<unknown>;
         try {
-          events = await clientResolution.client.messages.create(request, { signal: input.signal });
+          events = await clientResolution.client.messages.create(request, {
+            signal: input.signal,
+            ...(input.disableRetries ? { maxRetries: 0 } : {}),
+          });
         } catch (error) {
           throw normalizeAnthropicProviderFailure(error, "provider_response");
         }

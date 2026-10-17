@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AiGatewayStreamFrame, AiGatewayUsage } from "@agency_hub_core/contracts";
 
@@ -12,6 +12,8 @@ import {
 } from "../apps/runtime/src/modules/ai/index.ts";
 import {
   COMPLETION_TRIM_KEEPALIVE_MS,
+  AiGatewayTerminalStreamConsumer,
+  buildAiGatewayTerminalRecord,
   sumAiGatewayUsage,
   trimCompletionStream,
   type AiGatewayCompletionTrim,
@@ -183,14 +185,14 @@ const TRIM: AiGatewayCompletionTrim = notesTrimPass(["Работа"], ["warehous
 async function run(
   frames: AiGatewayStreamFrame[],
   callModel: (signal: AbortSignal) => AsyncIterable<AiGatewayStreamFrame>,
-  options: { trim?: AiGatewayCompletionTrim; now?: () => number } = {},
+  options: { trim?: AiGatewayCompletionTrim; now?: () => number; signal?: AbortSignal } = {},
 ) {
   const records: Record<string, unknown>[] = [];
   let calls = 0;
   const out: AiGatewayStreamFrame[] = [];
   for await (const frame of trimCompletionStream(framesOf(frames), {
     trim: options.trim ?? TRIM,
-    signal: new AbortController().signal,
+    signal: options.signal ?? new AbortController().signal,
     callModel: (_prompt, signal) => {
       calls += 1;
       return callModel(signal);
@@ -265,6 +267,139 @@ describe("trimCompletionStream", () => {
     }), { trim: slow });
     expect(records[0]).toMatchObject({ outcome: "failed", errorCode: "trim_timeout" });
     expect(out.at(-1)).toEqual({ type: "done", stopReason: "end_turn" });
+  });
+
+  it("bounds a trim iterator that ignores abort, keeps the stream alive and handles late rejections", async () => {
+    vi.useFakeTimers();
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      let rejectNext!: (reason: Error) => void;
+      let rejectReturn!: (reason: Error) => void;
+      const pending = new Promise<IteratorResult<AiGatewayStreamFrame>>((_resolve, reject) => { rejectNext = reject; });
+      const closing = new Promise<IteratorResult<AiGatewayStreamFrame>>((_resolve, reject) => { rejectReturn = reject; });
+      const next = vi.fn(() => pending);
+      const close = vi.fn(() => closing);
+      let callSignal: AbortSignal | undefined;
+      const timeoutMs = 2 * COMPLETION_TRIM_KEEPALIVE_MS + 50;
+      let settled = false;
+      const result = run(fillFrames(), (signal) => {
+        callSignal = signal;
+        return { [Symbol.asyncIterator]: () => ({ next, return: close }) };
+      }, { trim: { ...TRIM, timeoutMs } }).then((value) => {
+        settled = true;
+        return value;
+      });
+
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(settled).toBe(false);
+      expect(next).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const { out, records } = await result;
+
+      expect(callSignal?.aborted).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(out.filter((frame) => frame.type === "reasoning_delta" && frame.text === "")).toHaveLength(2);
+      expect(out.filter((frame) => frame.type === "content_delta")).toEqual([{
+        type: "content_delta",
+        text: "Работа: менеджер склада (10.2026), работа нравится, но давно думает о чём-то новом",
+      }]);
+      expect(out.at(-1)).toEqual({ type: "done", stopReason: "end_turn" });
+      expect(records[0]).toMatchObject({ outcome: "failed", errorCode: "trim_timeout", durationMs: timeoutMs });
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Both operations can fail after the fill was already sent. Neither
+      // rejection may escape as an unhandled rejection in the SSE/CLI host.
+      rejectNext(new Error("late next failure"));
+      rejectReturn(new Error("late return failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      vi.useRealTimers();
+    }
+  }, 1_000);
+
+  it("never applies a timed-out pass even after receiving its text, usage and done", async () => {
+    vi.useFakeTimers();
+    try {
+      const apply = vi.fn(TRIM.apply);
+      const result = run(fillFrames(), () => ({
+        async *[Symbol.asyncIterator]() {
+          yield* answerFrames("Работа: работа нравится, но \n");
+          await new Promise(() => {});
+        },
+      }), { trim: { ...TRIM, apply, timeoutMs: 20 } });
+      await vi.advanceTimersByTimeAsync(20);
+      const { out, records } = await result;
+
+      expect(apply).not.toHaveBeenCalled();
+      expect(records[0]).toMatchObject({ outcome: "failed", errorCode: "trim_timeout", usage: PASS_USAGE });
+      expect(out[1]).toMatchObject({ type: "content_delta", text: expect.stringContaining("работа нравится") });
+      expect(out[2]).toMatchObject({ type: "usage", usage: sumAiGatewayUsage(FILL_USAGE, PASS_USAGE) });
+      expect(out.at(-1)).toEqual({ type: "done", stopReason: "end_turn" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 1_000);
+
+  it("never applies a pass aborted after receiving its terminal frames", async () => {
+    const abort = new AbortController();
+    const apply = vi.fn(TRIM.apply);
+    const { out, records } = await run(fillFrames(), () => ({
+      async *[Symbol.asyncIterator]() {
+        yield* answerFrames("Работа: работа нравится, но \n");
+        abort.abort();
+      },
+    }), { trim: { ...TRIM, apply }, signal: abort.signal });
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(records[0]).toMatchObject({ outcome: "failed" });
+    expect(out[1]).toMatchObject({ type: "content_delta", text: expect.stringContaining("работа нравится") });
+    expect(out[2]).toMatchObject({ type: "usage", usage: sumAiGatewayUsage(FILL_USAGE, PASS_USAGE) });
+  });
+
+  it.each([false, true])("flushes held fill text and usage before rethrowing, without done (held done: %s)", async (heldDone) => {
+    const error = new Error("fill socket failed");
+    async function* failedFill() {
+      yield* fillFrames().slice(0, heldDone ? undefined : -1);
+      throw error;
+    }
+    const callModel = vi.fn(() => framesOf([]));
+    const onRecord = vi.fn();
+    const out: AiGatewayStreamFrame[] = [];
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    const consume = async () => {
+      for await (const frame of trimCompletionStream(failedFill(), {
+        trim: TRIM,
+        signal: new AbortController().signal,
+        callModel,
+        estimateCostMicroUsd: () => 90_000,
+        onRecord,
+      })) {
+        out.push(frame);
+        consumer.note(frame);
+      }
+    };
+
+    await expect(consume()).rejects.toBe(error);
+    expect(out).toEqual([
+      fillFrames()[0],
+      { type: "content_delta", text: "Работа: менеджер склада (10.2026), работа нравится, но давно думает о чём-то новом" },
+      fillFrames()[3],
+    ]);
+    expect(callModel).not.toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    // The SSE pump and CLI use this same consumer and failed-record builder.
+    expect(buildAiGatewayTerminalRecord(consumer, {
+      outcome: "failed", failure: null, durationMs: 0, completedAt: new Date(0),
+    })).toMatchObject({
+      outcome: "failed",
+      completionText: "Работа: менеджер склада (10.2026), работа нравится, но давно думает о чём-то новом",
+      usage: FILL_USAGE,
+      providerResponseId: "msg_fill",
+    });
   });
 
   it("calls no pass for a cut-off, failed or empty fill and passes its frames on", async () => {
