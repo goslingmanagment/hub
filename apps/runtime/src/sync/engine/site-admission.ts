@@ -50,6 +50,16 @@ export const SITE_END_WAIT_MS = 60_000;
  *  login operations (PR 15), these among them. */
 export const LOGIN_SCREEN_READS: ReadonlySet<string> = new Set(["/versioning", "/thirdpartyconnect/providers", "/device/id"]);
 
+/** Only these automatic GETs can bootstrap a fresh Chrome's live session.
+ *  The operator's map still decides first; this grants no additional route. */
+export const BOOTSTRAP_SITE_READS: ReadonlySet<string> = new Set([...LOGIN_SCREEN_READS, "/account/me"]);
+
+export function isBootstrapSiteRequest(request: PendingSiteRequest): boolean {
+  const path = request.path.split("?", 1)[0]!.replace(/\/$/, "");
+  return request.host === "api" && request.method.toUpperCase() === "GET"
+    && BOOTSTRAP_SITE_READS.has(path.replace(/^\/api\/v1(?=\/)/, ""));
+}
+
 /** A site request the engine can admit: its route, whose it is, and whether
  *  the manual login's exemption covers it. */
 export interface ClassifiedSiteRequest {
@@ -93,6 +103,8 @@ export interface SiteContext {
   /** The stored credentials are not the verified ones: only identity checks
    *  go out (G2). */
   checksOnly: boolean;
+  /** Unknown browser session: no ordinary data reads before it is seen. */
+  bootstrapOnly?: boolean;
   /** When the route next admits a send (null: now), and whether a hold — not
    *  only its budget — keeps it closed. */
   routeOpensAt(route: FanslyRoute): { at: Date } | null;
@@ -128,6 +140,10 @@ export function decideSite(pending: readonly PendingSiteRequest[], ctx: SiteCont
       continue;
     }
     const manual = classified.exempt;
+    if (ctx.bootstrapOnly && !manual && !isBootstrapSiteRequest(request)) {
+      refuse.push({ id: request.id, reason: "credentials" });
+      continue;
+    }
     if (ctx.pausedAll && !manual) {
       refuse.push({ id: request.id, reason: "paused" });
       continue;
@@ -167,6 +183,10 @@ export class SiteTurns {
   /** The site's turn has come. */
   due(): boolean {
     return this.#engineSinceSite >= SITE_TURN_EVERY;
+  }
+
+  snapshot(): { due: boolean; engineAdmissions: number } {
+    return { due: this.due(), engineAdmissions: this.#engineSinceSite };
   }
 
   engineAdmitted(): void {

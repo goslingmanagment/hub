@@ -472,13 +472,21 @@ export class PageBrowserRpcClient {
    *  asked on it — or nothing could be written. */
   answerSiteAdmit(epoch: number, answer: DistributiveOmit<SiteAdmitResult, "type" | "ownerGeneration">): boolean {
     if (epoch !== this.#epoch) return false;
-    return this.#write({ ...answer, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
+    // A minor-1/2 operator's strict HTTP parser does not know credentials.
+    // The decision/metrics retain the actual reason; only its wire changes.
+    const compatible = !answer.admit && answer.reason === "credentials" && (this.#status.kind !== "up" || this.#status.protocol.minor < 3)
+      ? { ...answer, reason: "held" as const } : answer;
+    return this.#write({ ...compatible, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
   }
 
   /** The answer to a `wsAdmit` asked on the connection of `epoch` (PR 14). */
   answerWsAdmit(epoch: number, answer: DistributiveOmit<WsAdmitResult, "type" | "ownerGeneration">): boolean {
     if (epoch !== this.#epoch) return false;
-    return this.#write({ ...answer, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
+    // A minor-1/2 operator's strict HTTP parser does not know credentials.
+    // The decision/metrics retain the actual reason; only its wire changes.
+    const compatible = !answer.admit && answer.reason === "credentials" && (this.#status.kind !== "up" || this.#status.protocol.minor < 3)
+      ? { ...answer, reason: "held" as const } : answer;
+    return this.#write({ ...compatible, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
   }
 
   start(): void {

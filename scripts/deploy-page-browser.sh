@@ -198,6 +198,7 @@ host() {
       "$APP_DIR/host/page.sh" \
       "$APP_DIR/host/page-browser-egress.service" \
       scripts/page-browser-update.sh \
+      scripts/archive-container-logs.sh \
       "$APP_DIR/host/profile-check.mjs" \
       "$APP_DIR/host/google-linux-signing-key.asc" \
       "$APP_DIR/host/page-browser-update.service" \
@@ -212,6 +213,8 @@ host() {
     install -m 644 \"\$staging/${APP_DIR}/security/seccomp-chrome.json\" ${REMOTE_BASE}/security/seccomp-chrome.json
     install -m 755 \"\$staging/${APP_DIR}/host/egress-rules.sh\" ${REMOTE_BASE}/egress-rules.sh
     install -m 755 \"\$staging/${APP_DIR}/host/page.sh\" ${REMOTE_BASE}/page.sh
+    install -m 755 \"\$staging/scripts/archive-container-logs.sh\" ${REMOTE_BASE}/archive-container-logs.sh
+    install -d -m 700 ${REMOTE_BASE}/container-logs
     install -d -m 700 ${REMOTE_BASE}/update ${REMOTE_BASE}/snapshots ${REMOTE_BASE}/build ${REMOTE_BASE}/build/context ${REMOTE_BASE}/vendor
     install -d -m 755 ${REMOTE_BASE}/chrome
     install -m 755 \"\$staging/scripts/page-browser-update.sh\" ${REMOTE_BASE}/page-browser-update.sh

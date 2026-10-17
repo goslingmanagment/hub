@@ -11,12 +11,13 @@
 # says "snapshot":true, and the lines it writes after the read are not kept.
 #
 #   archive-container-logs.sh --dir D --project-dir P --reason R
-#     [--max-age-days 30] [--max-bytes 536870912] [--max-disk-percent 90]
+#     [--project-name NAME] [--max-age-days 30] [--max-bytes 536870912] [--max-disk-percent 90]
 #     [--logs-timeout 60] SERVICE...
 #
 # Containers are those with the Compose labels working_dir=P (normalized
 # through `cd P && pwd`), service=S and oneoff=False, whatever the Compose
-# file says now. Each one becomes D/S/<created>_<archived>_<id12>_<rev12>.log.gz
+# file says now. Optional --project-name further narrows the project label
+# (page-browser containers share one working directory). Each one becomes D/S/<created>_<archived>_<id12>_<rev12>.log.gz
 # (0600, directories 0700): a `# hub-container-log {json}` header, then
 # `docker logs --timestamps`. A read that failed or timed out, or a gzip that
 # failed, is kept as ….truncated.log.gz. Archives older than --max-age-days
@@ -35,7 +36,7 @@
 # optional, without it a log is read without a time limit.
 
 usage() {
-  printf 'usage: %s --dir D --project-dir P --reason R [--max-age-days N] [--max-bytes N] [--max-disk-percent N] [--logs-timeout N] SERVICE...\n' "${0##*/}" >&2
+  printf 'usage: %s --dir D --project-dir P --reason R [--project-name NAME] [--max-age-days N] [--max-bytes N] [--max-disk-percent N] [--logs-timeout N] SERVICE...\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -229,9 +230,11 @@ archive_container() {
 
 main() {
   local service id ids count disk_percent normalized
+  local project_filter=()
 
   DIR=""
   PROJECT_DIR=""
+  PROJECT_NAME=""
   REASON=""
   MAX_AGE_DAYS=30
   MAX_BYTES=536870912
@@ -240,11 +243,12 @@ main() {
   SERVICES=()
   while (( $# > 0 )); do
     case "$1" in
-      --dir | --project-dir | --reason | --max-age-days | --max-bytes | --max-disk-percent | --logs-timeout)
+      --dir | --project-dir | --project-name | --reason | --max-age-days | --max-bytes | --max-disk-percent | --logs-timeout)
         (( $# >= 2 )) || usage
         case "$1" in
           --dir) DIR="$2" ;;
           --project-dir) PROJECT_DIR="$2" ;;
+          --project-name) [[ -n "$2" ]] || bad "--project-name cannot be empty"; PROJECT_NAME="$2" ;;
           --reason) REASON="$2" ;;
           --max-age-days) MAX_AGE_DAYS="$2" ;;
           --max-bytes) MAX_BYTES="$2" ;;
@@ -264,6 +268,12 @@ main() {
   done
 
   [[ -n "$DIR" && -n "$PROJECT_DIR" && -n "$REASON" && ${#SERVICES[@]} -gt 0 ]] || usage
+  if [[ -n "$PROJECT_NAME" ]]; then
+    case "$PROJECT_NAME" in
+      *[!a-z0-9_-]* | [!a-z0-9]*) bad "not a Compose project name: ${PROJECT_NAME}" ;;
+    esac
+    project_filter=(--filter "label=com.docker.compose.project=${PROJECT_NAME}")
+  fi
   # The reason goes into the JSON header unescaped.
   case "$REASON" in
     *[!A-Za-z0-9\ ._:-]*) bad "--reason may hold only letters, digits, spaces and . _ : -" ;;
@@ -311,7 +321,7 @@ main() {
     if ! ids="$(docker ps -a -q --no-trunc \
       --filter "label=com.docker.compose.project.working_dir=${PROJECT_DIR}" \
       --filter "label=com.docker.compose.service=${service}" \
-      --filter "label=com.docker.compose.oneoff=False" 2>/dev/null)"; then
+      --filter "label=com.docker.compose.oneoff=False" ${project_filter[@]+"${project_filter[@]}"} 2>/dev/null)"; then
       printf 'service=%s found=0 error=docker_ps_failed\n' "$service"
       INCOMPLETE=1
       continue
