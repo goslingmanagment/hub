@@ -30,7 +30,10 @@ import {
 // The client says what OnlyFans says now; the hub's rows say what was seen
 // before. A purchase does not come undone, so `purchased` from either side
 // stands. The price on a mark is the hub's own; the client's is used only for a
-// message whose row carries none (a fresh message, or a row without its price).
+// message that carries no label at all (a fresh message the archive has not
+// caught, a paid text). A message the hub holds with media and no price is the
+// hub's free media: it is left as it is, since the image notes read its label
+// as written and may describe it (media-notes.ts), never a paid body.
 
 export type AiLivePpvItem = AiLivePpvContext["items"][number];
 
@@ -60,14 +63,14 @@ export function assertLivePpvRequestShape(input: {
 
 /** A transcript's PPV mark: the media label's body before it, if any, then the price and the state. */
 const PPV_MARK = /^\[(?:(.+) - )?PPV \$(\d+\.\d{2}), (purchased|not purchased|unknown)\]$/;
-/** A media label as the normalizer writes it (normalize.ts): the label a paid message's mark goes on. */
-const MEDIA_LABEL = /^\[(Photo|Video|Audio|GIF|Media|Media Bundle(?:: [^\]]+)?)\]$/;
 
 export type AiLivePpvIgnoredReason =
   /** The id is not in the served transcript (older than its window, or unknown). */
   | "absent"
   /** The transcript holds the id as the fan's message: a fan's message has no PPV state. */
   | "fan"
+  /** The hub holds the message with labels and no price (its free media): left as the image notes read it. */
+  | "unpriced"
   /** The same id a second time (the schema refuses it; kept for a direct caller). */
   | "duplicate";
 
@@ -122,14 +125,11 @@ export function applyLivePpv(messages: readonly TranscriptMessage[], items: read
         return message;
       }
       labels[at] = `[${body !== undefined ? `${body} - ` : ""}PPV $${price}, ${next}]`;
+    } else if (labels.length > 0) {
+      ignored.push({ id: message.id, reason: "unpriced" });
+      return message;
     } else {
-      const state = item.purchased ? "purchased" : "not purchased";
-      const media = labels.findIndex((label) => MEDIA_LABEL.test(label));
-      if (media >= 0) {
-        labels[media] = `${(labels[media] as string).slice(0, -1)} - PPV $${usd(item.priceUsd)}, ${state}]`;
-      } else {
-        labels.unshift(`[PPV $${usd(item.priceUsd)}, ${state}]`);
-      }
+      labels.push(`[PPV $${usd(item.priceUsd)}, ${item.purchased ? "purchased" : "not purchased"}]`);
     }
     changed.push(message.id);
     return { ...message, labels };

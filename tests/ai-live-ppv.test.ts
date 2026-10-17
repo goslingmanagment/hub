@@ -111,19 +111,18 @@ describe("applyLivePpv: the transcript of one generation", () => {
     expect(applied.messages[0]).toBe(messages[0]);
   });
 
-  it("a paid message the hub holds without a price gets the client's, on its media label or alone", () => {
+  it("a message without any label gets the client's price; one the hub holds with media and no price stays its free media", () => {
     const messages = [
       message("1", "Model", ["[Video]"]),
       message("2", "Model", [], "fresh, the archive has not caught it"),
       message("3", "Model", ["[GIF]", "[Tip: $5.00]"]),
     ];
     const applied = applyLivePpv(messages, [ppv("1", 15, false), ppv("2", 25, true), ppv("3", 7.5, true)]);
-    expect(applied.messages.map((m) => m.labels)).toEqual([
-      ["[Video - PPV $15.00, not purchased]"],
-      ["[PPV $25.00, purchased]"],
-      ["[GIF - PPV $7.50, purchased]", "[Tip: $5.00]"],
-    ]);
-    expect(applied.changed).toEqual(["1", "2", "3"]);
+    // The image notes read `[Video]` as written and may describe it: the hub's free media is never relabelled.
+    expect(applied.messages.map((m) => m.labels)).toEqual([["[Video]"], ["[PPV $25.00, purchased]"], ["[GIF]", "[Tip: $5.00]"]]);
+    expect(applied.messages[0]).toBe(messages[0]);
+    expect(applied.changed).toEqual(["2"]);
+    expect(applied.ignored).toEqual([{ id: "1", reason: "unpriced" }, { id: "3", reason: "unpriced" }]);
   });
 
   it("what it cannot place is ignored, never guessed: an id outside the window, a fan's message, a repeat", () => {

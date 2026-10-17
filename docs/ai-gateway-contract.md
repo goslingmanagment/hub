@@ -722,9 +722,10 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
   and counts); `serve` changes the transcript after the fresh text joined.
 - What changes: a model's message in the served transcript whose id is listed. Its PPV mark takes
   the client's state on the hub's own price, and a `purchased` from either side stands (a purchase
-  does not come undone). A message without a mark (a fresh one, a row without its price) gets one
-  with the client's price, on its media label or alone. An id outside the window or a fan's
-  message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
+  does not come undone). A message without any label (a fresh one the archive has not caught, a
+  paid text) gets `[PPV $X.XX, …]` with the client's price. A message the hub holds with media and
+  no price stays as it is: it is the hub's free media, and the image notes read its label as
+  written. An id outside the window or a fan's message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
 
 The merge, in `serve` and `shadow` alike:
 
