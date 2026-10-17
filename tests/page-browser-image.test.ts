@@ -469,4 +469,20 @@ describe("the stand's checks of the image", () => {
     expect(last).toContain('svc("-d", CHROME)');
     expect(last).toContain('if (operatorStopped) svc("-u", OPERATOR)');
   });
+
+  it("the resource-timing check last passed on the image's Chrome, and runs on every Chrome update", () => {
+    // Chrome keeps Hub's isolated-world requests out of the site's resource
+    // timeline and its service worker; CDP does not promise it. A new Chrome
+    // in the Dockerfile: run stand/resource-timing-check.sh --image <its
+    // image>, and once it passes, PASSED_ON names that Chrome.
+    const check = read("apps/page-browser/stand/resource-timing-check.ts");
+    const chrome = read("apps/page-browser/Dockerfile").match(/^ARG CHROME_VERSION=(\S+)-\d+$/m)?.[1];
+    expect(chrome).toBeDefined();
+    expect(check.match(/^const PASSED_ON = "([^"]+)";$/m)?.[1], "stand/resource-timing-check.ts: PASSED_ON is not the Dockerfile's Chrome").toBe(chrome);
+    // The operator's own request path, never a copy of it.
+    expect(check).toContain('import { attemptOf, ISSUE, issuedUrl, PLACEHOLDER_SUFFIX, realUrl, WORLD } from "../src/hub-requests/page.ts";');
+    expect(check).toContain('await cdp.send("Fetch.enable", { patterns: FETCH_PATTERNS });');
+    expect(read("apps/page-browser/stand/chrome-update.sh")).toContain('bash "$APP/stand/resource-timing-check.sh" --image "$TO" --apparmor "$APPARMOR"');
+    expect(spawnSync("bash", ["-n", path.join(app, "stand", "resource-timing-check.sh")]).status).toBe(0);
+  });
 });

@@ -299,6 +299,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   `ssh root@<server> systemctl enable --now page-browser-update.timer`.
 - **Stand check**: `apps/page-browser/stand/chrome-update.sh --from <image> --to <image>` — an update and both
   rollbacks of a page with a live profile, on the Docker of the machine it runs on (its header: how on agency-de).
+  Its last step, `stand/resource-timing-check.sh --image <to>`, checks that the new Chrome still keeps Hub's
+  isolated-world requests out of the site's resource timeline and service worker; a FAIL there goes to the owner
+  before any page moves.
 
 ## A page's browser: what it says, and the owner's levers (Project Browser)
 
