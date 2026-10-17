@@ -1614,9 +1614,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     if (!server) return context.skip();
     await seedChat();
     const state = livePpv([{ platformMessageId: "9002", priceUsd: 25, purchased: true }]);
-    for (const feature of ["chat-review", "fan-summary", "coach-chat"]) {
-      expectRefused((await ask({ feature, body: state })).response, 400, "bad_request", "live_text_not_allowed");
+    // Recap never takes it, either length. Review and Coach take it as they take the fresh text (X52):
+    // Review on this short chat passes the check and stops at its own gate.
+    for (const body of [state, { ...state, summaryMode: "short" }]) {
+      expectRefused((await ask({ feature: "fan-summary", body })).response, 400, "bad_request", "live_text_not_allowed");
     }
+    expectRefused((await ask({ feature: "chat-review", body: state })).response, 400, "gate_min_messages");
     expectRefused((await ask({ page: "lora-fansly", platform: "fansly", body: state })).response, 400, "bad_request", "live_text_not_allowed");
     const bootstrap = await server.inject({
       method: "GET",
