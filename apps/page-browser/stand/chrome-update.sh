@@ -34,6 +34,10 @@
 #  6. A halt held for the owner's decision on the page's buffer volume
 #     (written by the image's own halt store, PR 17): the update refuses the
 #     page, nothing touched; the halt is cleared again by the same store.
+#  7. The page's view of Hub's requests on <to>'s Chrome
+#     (stand/resource-timing-check.sh, in a container of its own with no
+#     network): Hub's API request from its isolated world leaves no entry in
+#     the site's resource timeline and no fetch event in its service worker.
 # What this run made goes at the end, and nothing else — its page, its
 # volumes (never a --profile's), its derived image, the networks if it made
 # them; --keep leaves it. Every name is this run's own: runs side by side,
@@ -219,6 +223,14 @@ else
 fi
 check "a halted page: untouched" "$(docker inspect -f '{{.Config.Image}} {{.State.Health.Status}}' "$CONTAINER")" "$FROM healthy"
 halt_store '{ halt: null, lastClearedId: held.halt === null ? held.lastClearedId : held.halt.id }'
+
+# 7. What the site's page sees of Hub's requests on the new Chrome, under
+# the page's own AppArmor profile.
+if bash "$APP/stand/resource-timing-check.sh" --image "$TO" --apparmor "$APPARMOR" --name "pb-resource-timing-pr18-$RUN_ID" >&2; then
+  check "the page's view of Hub's requests on Chrome $TO_CHROME" "hidden" "hidden"
+else
+  check "the page's view of Hub's requests on Chrome $TO_CHROME" "not hidden, or not checked (resource-timing-check.sh)" "hidden"
+fi
 
 if ((FAILED == 0)); then log "passed"; else log "FAILED"; fi
 exit "$FAILED"
