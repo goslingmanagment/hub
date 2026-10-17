@@ -4403,4 +4403,81 @@ describe("fan-notes-fill (the Fansly notes panel's «fill with AI»)", () => {
     expect(res.json().error).toBe("gate_min_messages");
     expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("cuts the water with a second call when the switch is on, and records both", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const fill = "Имя: =\nРабота: менеджер склада (10.2026), работа нравится, но давно думает о новом\n> «Im a warehouse manager»\nХобби: зал и бургеры, готовит";
+    const inputs: AiGatewayProviderInput[] = [];
+    const usage = (costMicroUsd: number) => ({
+      type: "usage" as const,
+      providerResponseId: `msg_${costMicroUsd}`,
+      cacheHit: false,
+      usage: { inputTokens: 50, outputTokens: 5, cacheWriteTokens: 0, cacheReadTokens: 0, costMicroUsd, costApproximate: false },
+    });
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream(input) {
+        inputs.push(input);
+        const trimPass = inputs.length === 2;
+        yield { type: "content_delta", text: trimPass ? "Работа: работа нравится, но \n" : fill };
+        yield usage(trimPass ? 30 : 100);
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    appContext.config.aiNotesTrimEnabled = true;
+    try {
+      const res = await post("fan-notes-fill", notesPayload({ noteValues: NOTE_FIELDS.map((label) => (label === "Работа" ? "warehouse manager" : "")) }));
+      expect(res.statusCode, res.body).toBe(200);
+      const frames = aiFrames(res.body);
+      const trimmed = "Имя: =\nРабота: менеджер склада (10.2026), давно думает о новом\n> «Im a warehouse manager»\nХобби: зал и бургеры, готовит";
+      expect(frames.filter((frame) => frame.type === "content_delta").map((frame) => frame.text).join("")).toBe(trimmed);
+      expect(frames.find((frame) => frame.type === "usage")).toMatchObject({ usage: { costMicroUsd: 130 } });
+      expect(frames.at(-1)?.type).toBe("done");
+
+      expect(inputs).toHaveLength(2);
+      const pass = inputs[1]!;
+      expect(pass.body).toMatchObject({ feature: "fan-notes-fill", model: "anthropic:claude-opus-5-5", reasoningEffort: "low", maxTokens: 4096 });
+      expect(pass.disableAdaptiveThinking).toBe(true);
+      expect(pass.page).toEqual(inputs[0]!.page);
+      const passUser = pass.body.prompt.userBlocks.map((block) => block.text).join("");
+      expect(passUser).toContain("Работа: warehouse manager");
+      expect(passUser).toContain(`<filled_note>\n${fill}\n</filled_note>`);
+      expect(passUser).not.toContain("Fan: im Mike");
+
+      const { rows } = await testDb.pool.query<{ completion: string; params: Record<string, unknown>; cost_micro_usd: string }>(
+        `select c.completion, c.params, e.cost_micro_usd from ai_generation_content c
+         join ai_usage_events e on e.id = c.usage_event_id
+         where c.feature = 'fan-notes-fill' order by c.id desc limit 1`,
+      );
+      expect(rows[0]!.completion).toBe(trimmed);
+      expect(Number(rows[0]!.cost_micro_usd)).toBe(130);
+      expect(rows[0]!.params.completionTrim).toMatchObject({
+        outcome: "trimmed",
+        version: 1,
+        applied: [{ label: "Работа", piece: "работа нравится, но" }],
+        untrimmedCompletion: fill,
+      });
+    } finally {
+      appContext.config.aiNotesTrimEnabled = false;
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("makes no second call while the switch is off", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await post("fan-notes-fill", notesPayload({ noteValues: NOTE_FIELDS.map(() => "") }));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(capture.calls).toBe(1);
+    const { rows } = await testDb.pool.query<{ params: Record<string, unknown> }>(
+      `select params from ai_generation_content where feature = 'fan-notes-fill' order by id desc limit 1`,
+    );
+    expect(rows[0]!.params).not.toHaveProperty("completionTrim");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

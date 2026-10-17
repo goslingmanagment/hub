@@ -19,6 +19,7 @@ import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
   type AiFeatureContextFrameBody,
+  type AiGatewayCompletionTrim,
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
@@ -36,6 +37,7 @@ import {
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
 import { isPageAllowlisted } from "@agency_hub_core/shared";
+import { notesTrimPass } from "../notes-trim.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import { personaLocalTime } from "../persona-local-time.ts";
@@ -1378,6 +1380,20 @@ export async function prepareAiFeatureStream(
       now: new Date(),
     });
   }
+  // The questionnaire fill's cut-only second pass (owner 2026-10-17): merge
+  // mode only, behind its live switch, and fail-open like every enrichment
+  // here — a switch lookup that fails leaves the fill as it always was.
+  let trimCompletion: AiGatewayCompletionTrim | undefined;
+  if (feature === "fan-notes-fill" && body.noteFields !== undefined && body.noteValues !== undefined) {
+    try {
+      const effective = await loadEffectiveConfig(app.db, app.config);
+      if (effective.aiNotesTrimEnabled === true) {
+        trimCompletion = notesTrimPass(body.noteFields, body.noteValues);
+      }
+    } catch (error) {
+      app.logger.warn({ feature, pageId, error }, "ai notes trim switch lookup failed");
+    }
+  }
   return prepareAiGatewayStream(
     app,
     principal,
@@ -1389,6 +1405,7 @@ export async function prepareAiFeatureStream(
       || attachedRecaps !== undefined
       || presetQuestion !== undefined
       || splitAll
+      || trimCompletion !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
@@ -1408,6 +1425,7 @@ export async function prepareAiFeatureStream(
               : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
           }
           : {}),
+        ...(trimCompletion !== undefined ? { trimCompletion } : {}),
       }
       : undefined,
   );
