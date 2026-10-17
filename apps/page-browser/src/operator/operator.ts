@@ -862,7 +862,7 @@ export class Operator {
     this.#identity = null;
     this.hub.endAll(note);
     this.site.endAll(note);
-    this.observer.reset();
+    this.observer.reset(note);
     this.sockets.endAll(note);
   }
 
