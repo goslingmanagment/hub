@@ -46,6 +46,14 @@ export {
   parseAiStreamCapabilities,
 } from "./prompt-debug-echo.ts";
 export { personaLocalTime, type PersonaLocalTime } from "./persona-local-time.ts";
+export {
+  NOTES_TRIM_SYSTEM_PROMPT,
+  applyNotesTrim,
+  buildNotesTrimPrompt,
+  notesTrimPass,
+  parseNotesTrimPieces,
+  tidyTrimmedValue,
+} from "./notes-trim.ts";
 
 interface PersonaRecord {
   key: string;

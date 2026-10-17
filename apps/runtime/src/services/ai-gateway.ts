@@ -4,6 +4,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureContextFrame,
   AiFeatureDebugInputFrame,
+  AiGatewayPromptBlock,
   AiGatewayQuota,
   AiGatewayStreamBody,
   AiGatewayStreamFrame,
@@ -277,6 +278,23 @@ export interface AiGatewayStreamInternalOptions {
    * params.outputStructure key of the restricted generation record. Write-only:
    * the stream has already been sent, so it can never filter or change it. */
   describeOutput?: (completionText: string) => Record<string, unknown>;
+  /** Feature-lane-only cut-only second pass over the FINISHED completion
+   * (fan-notes-fill). The stream holds its content back, see
+   * trimCompletionStream; the pass is recorded as the ADDITIVE
+   * params.completionTrim key of the restricted generation record. */
+  trimCompletion?: AiGatewayCompletionTrim;
+}
+
+/** A second call to the same provider, through the same page proxy, over the
+ * finished completion: the client gets the pass's result instead of the
+ * completion, or the completion as the model wrote it when the pass fails or
+ * runs out of time. The feature owns the prompt and what the answer means. */
+export interface AiGatewayCompletionTrim {
+  prompt(completionText: string): { systemBlocks: AiGatewayPromptBlock[]; userBlocks: AiGatewayPromptBlock[] };
+  maxTokens: number;
+  timeoutMs: number;
+  /** The completion with the pass's answer applied, and what to record of it. */
+  apply(completionText: string, answer: string): { text: string; record: Record<string, unknown> };
 }
 
 /** The feature service builds a stream input from the wire body plus optional
@@ -424,6 +442,30 @@ export async function prepareAiGatewayStream(
     remainingRequestsToday: quota.remainingRequestsToday,
     remainingMicroUsdToday: quota.remainingMicroUsdToday,
   };
+  const providerPage = {
+    id: page.id,
+    label: page.label,
+    platform: page.platform,
+    proxy,
+    egressKey,
+  };
+  // The trim pass is the same generation: same request, page, proxy and
+  // model, its own prompt and a small budget at low effort.
+  const trimCompletion = internal?.trimCompletion;
+  const trimBody = (prompt: AiGatewayStreamBody["prompt"], maxTokens: number): AiGatewayStreamBody => ({
+    clientRequestId: input.clientRequestId,
+    feature: input.feature,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    platformUserId: input.platformUserId,
+    ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
+    model: input.model,
+    reasoningEffort: "low",
+    maxTokens,
+    isRegeneration: input.isRegeneration,
+    prompt,
+  });
+  let completionTrimRecord: Record<string, unknown> | undefined;
 
   return {
     requestId,
@@ -461,22 +503,45 @@ export async function prepareAiGatewayStream(
       ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
       : {}),
     stream(signal) {
-      return provider.stream({
+      const frames = provider.stream({
         requestId,
         principal,
-        page: {
-          id: page.id,
-          label: page.label,
-          platform: page.platform,
-          proxy,
-          egressKey,
-        },
+        page: providerPage,
         body: input,
         quota: quotaFrame,
         signal,
         ...(input.disableAdaptiveThinking
           ? { disableAdaptiveThinking: true }
           : {}),
+      });
+      if (trimCompletion === undefined) {
+        return frames;
+      }
+      return trimCompletionStream(frames, {
+        trim: trimCompletion,
+        signal,
+        callModel: (prompt, callSignal) => provider.stream({
+          requestId,
+          principal,
+          page: providerPage,
+          body: trimBody(prompt, trimCompletion.maxTokens),
+          quota: quotaFrame,
+          signal: callSignal,
+          disableAdaptiveThinking: true,
+        }),
+        estimateCostMicroUsd: (prompt) => {
+          const body = trimBody(prompt, trimCompletion.maxTokens);
+          try {
+            return provider.provider === "openrouter"
+              ? estimateOpenrouterGatewayRequestCost(body).costMicroUsd
+              : estimateAnthropicGatewayRequestCost(body).costMicroUsd;
+          } catch {
+            return 0;
+          }
+        },
+        onRecord: (record) => {
+          completionTrimRecord = record;
+        },
       });
     },
     async recordTerminal(record) {
@@ -593,6 +658,7 @@ export async function prepareAiGatewayStream(
             ? { contextManifest: internal.contextManifest }
             : {}),
           ...(outputStructure !== undefined ? { outputStructure } : {}),
+          ...(completionTrimRecord !== undefined ? { completionTrim: completionTrimRecord } : {}),
         },
       });
       if (usageEventId !== null) {
@@ -827,4 +893,141 @@ export class AiGatewayTerminalStreamConsumer {
       providerHttpStatus: null,
     };
   }
+}
+
+/** A provider stop that ends a whole answer: Anthropic's and OpenRouter's. */
+const NATURAL_STOP_REASONS = new Set(["end_turn", "stop"]);
+/** Silence the extension tolerates is 45 s (its llm-idle timeout); while the
+ * content is held back an empty reasoning_delta keeps the stream alive, as any
+ * provider event does on the client. */
+export const COMPLETION_TRIM_KEEPALIVE_MS = 5_000;
+
+export function sumAiGatewayUsage(a: AiGatewayUsage, b: AiGatewayUsage): AiGatewayUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    costMicroUsd: a.costMicroUsd + b.costMicroUsd,
+    costApproximate: a.costApproximate || b.costApproximate,
+  };
+}
+
+/**
+ * The completion's frames with its content held back for a trim pass. Every
+ * other frame goes out as it comes. Only a whole answer (a natural stop, usage,
+ * text) is trimmed: the client then gets the trimmed text as one content_delta,
+ * one usage frame carrying both calls and the held done frame — the frames it
+ * would have got, in the same order. Anything else (an error frame, a cut-off
+ * or empty stream) goes out untouched for the terminal consumer to judge. The
+ * pass never fails the generation: an error, a refusal, a cut-off answer or
+ * its timeout leaves the completion as the model wrote it, and a pass that
+ * spent without reporting usage is charged its estimate, never zero.
+ */
+export async function* trimCompletionStream(
+  frames: AsyncIterable<AiGatewayStreamFrame>,
+  options: {
+    trim: AiGatewayCompletionTrim;
+    signal: AbortSignal;
+    callModel(prompt: AiGatewayStreamBody["prompt"], signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
+    estimateCostMicroUsd(prompt: AiGatewayStreamBody["prompt"]): number;
+    onRecord(record: Record<string, unknown>): void;
+    now?: () => number;
+  },
+): AsyncGenerator<AiGatewayStreamFrame> {
+  const now = options.now ?? Date.now;
+  let lastSentAt = now();
+  const keepAlive = (): AiGatewayStreamFrame[] => {
+    if (now() - lastSentAt < COMPLETION_TRIM_KEEPALIVE_MS) return [];
+    lastSentAt = now();
+    return [{ type: "reasoning_delta", text: "" }];
+  };
+  let text = "";
+  let usage: Extract<AiGatewayStreamFrame, { type: "usage" }> | null = null;
+  let done: Extract<AiGatewayStreamFrame, { type: "done" }> | null = null;
+  let passThrough = false;
+  for await (const frame of frames) {
+    if (passThrough) {
+      yield frame;
+    } else if (frame.type === "content_delta") {
+      text += frame.text;
+      yield* keepAlive();
+    } else if (frame.type === "usage") {
+      usage = frame;
+    } else if (frame.type === "done") {
+      done = frame;
+    } else if (frame.type === "error") {
+      // The completion failed: what was held goes out as it came.
+      passThrough = true;
+      if (text !== "") yield { type: "content_delta", text };
+      if (usage !== null) yield usage;
+      yield frame;
+    } else {
+      lastSentAt = now();
+      yield frame;
+    }
+  }
+  if (passThrough) return;
+  if (
+    usage === null
+    || done === null
+    || done.stopReason === null
+    || !NATURAL_STOP_REASONS.has(done.stopReason)
+    || text.trim() === ""
+  ) {
+    if (text !== "") yield { type: "content_delta", text };
+    if (usage !== null) yield usage;
+    if (done !== null) yield done;
+    return;
+  }
+
+  const prompt = options.trim.prompt(text);
+  const callSignal = AbortSignal.any([options.signal, AbortSignal.timeout(options.trim.timeoutMs)]);
+  const pass = new AiGatewayTerminalStreamConsumer();
+  const startedAt = now();
+  let callFailed = false;
+  try {
+    for await (const frame of options.callModel(prompt, callSignal)) {
+      pass.note(frame);
+      yield* keepAlive();
+    }
+    pass.finish();
+  } catch {
+    callFailed = true;
+  }
+  const passUsage = pass.usage ?? {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0,
+    costMicroUsd: options.estimateCostMicroUsd(prompt),
+    costApproximate: true,
+  };
+  let finalText = text;
+  let record: Record<string, unknown>;
+  if (!callFailed && pass.outcome === "completed" && NATURAL_STOP_REASONS.has(pass.stopReason ?? "")) {
+    try {
+      const applied = options.trim.apply(text, pass.completionText);
+      finalText = applied.text;
+      record = {
+        ...applied.record,
+        outcome: finalText === text ? "unchanged" : "trimmed",
+        ...(finalText !== text ? { untrimmedCompletion: text } : {}),
+      };
+    } catch {
+      record = { outcome: "failed", errorCode: "trim_apply_failed" };
+    }
+  } else {
+    const timedOut = callSignal.aborted && !options.signal.aborted;
+    record = {
+      outcome: "failed",
+      errorCode: timedOut
+        ? "trim_timeout"
+        : pass.failureDetail?.errorCode ?? (callFailed ? "trim_call_failed" : `trim_stop_${pass.stopReason ?? "none"}`),
+    };
+  }
+  options.onRecord({ ...record, durationMs: Math.max(0, now() - startedAt), usage: passUsage });
+  yield { type: "content_delta", text: finalText };
+  yield { ...usage, usage: sumAiGatewayUsage(usage.usage, passUsage) };
+  yield done;
 }

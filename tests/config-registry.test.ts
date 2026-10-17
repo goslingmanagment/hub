@@ -131,6 +131,8 @@ describe("config registry", () => {
     "voiceNotesGlobalDailyCharBudget",
     "voiceNotesScriptMaxChars",
     "voiceNotesMaxConcurrentSyntheses",
+    // The notes fill's cut-only second pass, read per generation.
+    "aiNotesTrimEnabled",
     // AI media describer: master switch, page policies, model, caps and source policy, read per sweep/generation.
     "aiMediaDescribeEnabled",
     "aiMediaDescribePagePolicies",
