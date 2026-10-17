@@ -34,6 +34,13 @@ concurrency:
 # or DB proofs; a proof miss or lookup error executes the affected checks in
 # full. CI never publishes an image: production images build on the server.
 #
+# Integration scope (owner, 2026-10-18): a PR runs the integration shards only
+# when it touches DB, schema/migrations, sync or network code, the integration
+# suite or its toolchain (scripts/ci-integration-scope.mjs), or carries the
+# label ci:full; otherwise its Quality Gate passes on static checks alone.
+# Every push to main runs the whole suite, and main's Quality Gate is what a
+# deploy requires (scripts/main-ci-gate.sh).
+#
 # Runner pool: the repository variable CI_POOL=pc sends every job — the gate
 # fingerprint, static, integration and the Quality Gate — to the owner's
 # self-hosted runners; any other value, and every re-run (the PC may have died
@@ -70,12 +77,17 @@ jobs:
       proven_by: ${{ steps.lookup.outputs.proven_by }}
       integration_hash: ${{ steps.fingerprint.outputs.integration_hash }}
       integration_proven_by: ${{ steps.lookup.outputs.integration_proven_by }}
+      integration_needed: ${{ steps.scope.outputs.integration_needed }}
       shards: ${{ steps.shards.outputs.shards }}
       shard_total: ${{ steps.shards.outputs.shard_total }}
 
     steps:
+      # Two commits deep: on a PR, the merge commit GitHub tests and its first
+      # parent, the base branch's tip — the integration scope diffs the two.
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
 
       # ubuntu-slim ships Node.js; the PC has none on PATH. Node 22 comes from
       # the runner's own tool cache: static and integration jobs keep it warm
@@ -107,6 +119,15 @@ jobs:
           [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
           echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           echo "fingerprint=${hash}"
+
+      # A PR needs the integration shards only for DB/sync/network changes;
+      # push and manual runs, ci:full and anything unreadable always need them.
+      - name: Decide whether this PR needs integration
+        id: scope
+        env:
+          SCOPE_EVENT: ${{ github.event_name }}
+          SCOPE_FORCE: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: node scripts/ci-integration-scope.mjs
 
       - name: Look up earlier passing checks
         id: lookup
@@ -386,6 +407,11 @@ jobs:
   # an open, reopen or ready-for-review, and carries no ci:full label, skips
   # the shards; the Quality Gate then fails and says how to run them.
   #
+  # A PR whose change needs no integration (the fingerprint job's
+  # integration_needed is 'false', see scripts/ci-integration-scope.mjs) skips
+  # the shards and its Quality Gate passes without them. Only a pull_request
+  # event can skip that way: main and manual runs always run them.
+  #
   # The fingerprint job plans the shard count: three, or the repository
   # variable CI_PC_SHARDS (1..8) on a first attempt on the PC. "Re-run failed
   # jobs" reuses the first attempt's plan, so a re-run leg keeps its shard
@@ -395,7 +421,7 @@ jobs:
     name: Integration ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
     runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false') && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
     # 30 stopped fitting on 2026-08-17: vitest --shard then split by FILE
     # COUNT, not duration, and after a week that added four integration files
     # one shard drew a slow-heavy set and was cancelled at 30:18 with every
@@ -485,7 +511,10 @@ jobs:
   # With a proven fingerprint the test jobs are skipped by design and the gate
   # passes on the earlier run's evidence; a fingerprint job that failed leaves
   # `proven_by` empty, so every skip that is NOT backed by a proof still fails
-  # — including integration skipped by economy mode.
+  # — including integration skipped by economy mode. The one other skip that
+  # passes is a PR whose change needs no integration (INTEGRATION_NEEDED is
+  # false only on a pull_request event): its static checks must still pass,
+  # and it publishes no full-tree proof, so main runs integration for it.
   #
   # The name is the literal "Quality Gate" in every event and the job runs in
   # every event. GitHub resolves a required check against the NEWEST check
@@ -556,6 +585,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           STATIC: ${{ needs.static.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          INTEGRATION_NEEDED: ${{ github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false' }}
         run: |
           [ "$IS_DRAFT" != "true" ] || { echo "Draft PR: mark ready for review to run checks."; exit 1; }
           [ "$FINGERPRINT_RESULT" = "success" ] || exit 1
@@ -565,7 +595,7 @@ jobs:
             case "$STATIC" in success|skipped) ;; *) exit 1 ;; esac
             echo "Quality Gate reused run ${PROVEN_BY}." >> "$GITHUB_STEP_SUMMARY"
           else
-            if [ -z "$INTEGRATION_PROVEN_BY" ] && [ "$INTEGRATION" = "skipped" ] && [ "$ECONOMY" = "true" ]; then
+            if [ -z "$INTEGRATION_PROVEN_BY" ] && [ "$INTEGRATION" = "skipped" ] && [ "$INTEGRATION_NEEDED" != "false" ] && [ "$ECONOMY" = "true" ]; then
               echo "::error title=Integration tests did not run::Economy mode (CI_POOL is not pc) runs only static checks on pushes to a ready PR. When this PR is final, run: gh pr edit ${PR_NUMBER} --add-label ci:full (or convert it to draft and mark it ready again)."
               exit 1
             fi
@@ -573,6 +603,9 @@ jobs:
             if [ -n "$INTEGRATION_PROVEN_BY" ]; then
               [ "$INTEGRATION" = "skipped" ] || exit 1
               echo "Static checks fresh; integration reused run ${INTEGRATION_PROVEN_BY}." >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$INTEGRATION_NEEDED" = "false" ]; then
+              [ "$INTEGRATION" = "skipped" ] || exit 1
+              echo "Static checks fresh; this change needs no integration on the PR (main runs it)." >> "$GITHUB_STEP_SUMMARY"
             else
               [ "$INTEGRATION" = "success" ] || exit 1
               echo "All checks ran fresh." >> "$GITHUB_STEP_SUMMARY"
@@ -585,8 +618,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/quality-gate"
           printf '%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/quality-gate/run-id"
 
+      # A full-tree proof needs integration evidence: a PR that skipped the
+      # shards as out of scope publishes none, so main runs them for its tree.
       - name: Publish the proof for later identical trees
-        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == ''
+        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == '' && (needs.integration.result == 'success' || needs.fingerprint.outputs.integration_proven_by != '')
         uses: actions/upload-artifact@v7
         with:
           name: quality-gate-${{ needs.fingerprint.outputs.hash }}

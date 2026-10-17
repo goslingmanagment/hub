@@ -57,6 +57,10 @@ Options:
                         Do not rebuild this machine's production-pinned `hub`
                         CLI after the deploy is verified (it is rebuilt by
                         default; see scripts/rebuild-hub-cli-prod.sh).
+  --skip-ci-gate         Owner-approved emergencies only: deploy without the
+                        green CI of a main commit (scripts/main-ci-gate.sh).
+                        By default only a clean checkout of a commit on
+                        origin/main whose "Quality Gate" passed is deployed.
   -h, --help             Show this help text
 
 Environment variable equivalents:
@@ -79,6 +83,7 @@ Environment variable equivalents:
   DEPLOY_IMAGE_GC
   DEPLOY_SKIP_IMAGE_GC
   DEPLOY_SKIP_HUB_CLI_REBUILD
+  DEPLOY_SKIP_CI_GATE
 EOF
 }
 
@@ -244,6 +249,10 @@ while [[ $# -gt 0 ]]; do
       HUB_CLI_REBUILD_ENABLED=0
       shift
       ;;
+    --skip-ci-gate)
+      export DEPLOY_SKIP_CI_GATE=1
+      shift
+      ;;
     --port)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       HTTP_PORT="$2"
@@ -354,6 +363,9 @@ BUILD_PLATFORM="linux/amd64"
 # One checksum definition for local builds, dist overlays and CI publication.
 # shellcheck source=./scripts/deploy-metadata.sh
 source "${SCRIPT_DIR}/deploy-metadata.sh"
+# The deploy gate: only a commit of main whose CI passed (owner, 2026-10-18).
+# shellcheck source=./scripts/main-ci-gate.sh
+source "${SCRIPT_DIR}/main-ci-gate.sh"
 
 VERIFY_VIA_SSH=0
 if [[ -z "$VERIFY_URL" ]]; then
@@ -2206,6 +2218,13 @@ load_candidate_image() {
   docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 }
 
+# PR CI runs the integration suite only for DB/sync/network changes; main's
+# push run runs everything, so its Quality Gate is what production needs.
+verify_main_ci_gate() {
+  require_green_main_ci "$ROOT_DIR" \
+    || fail "Deploy refused: this checkout is not a clean commit of main with a green Quality Gate (see [ci-gate] above). Fix main or wait for its CI; --skip-ci-gate is for owner-approved emergencies only"
+}
+
 validate_pull_checkout() {
   [[ "$BUILD_MODE" == "pull" ]] || return 0
   local revision untracked
@@ -2727,6 +2746,7 @@ LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 initialize_deploy_metadata_and_tags
 validate_pull_checkout || fail "Pull checkout validation failed"
 start_phase preflight
+verify_main_ci_gate
 acquire_local_deploy_lock
 preflight_migration_files
 acquire_remote_deploy_lock

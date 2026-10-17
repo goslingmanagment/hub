@@ -41,7 +41,9 @@ Usage:
             rules accept it — the page rules need it, and Docker loads it
             for pb-egress anyway.
   build     Builds hub-page-browser:<Chrome version>-<commit> on the server
-            from this checkout's HEAD (committed files only) and the vendor
+            from this checkout's HEAD (committed files only; a clean commit
+            of origin/main whose CI passed, scripts/main-ci-gate.sh —
+            DEPLOY_SKIP_CI_GATE=1 for owner-approved emergencies) and the vendor
             cache (PB_VENDOR_CACHE, default ~/code/.cache/page-browser:
             chrome/, kasmvnc/, s6-overlay/), checked against vendor.sha256.
             Chrome's .deb is ~120 MB: around a VPN see the deploy notes.
@@ -128,6 +130,9 @@ fail() {
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The deploy gate: only a commit of main whose CI passed (owner, 2026-10-18).
+# shellcheck source=./scripts/main-ci-gate.sh
+source "${ROOT_DIR}/scripts/main-ci-gate.sh"
 APP_DIR="apps/page-browser"
 REMOTE_BASE=/opt/agency-hub/page-browser
 VENDOR_CACHE="${PB_VENDOR_CACHE:-$HOME/code/.cache/page-browser}"
@@ -251,6 +256,7 @@ host() {
 build() {
   local revision chrome_version kasm_version arch deb_arch s6_arch tag files=() file
   git -C "$ROOT_DIR" diff --quiet HEAD -- "$APP_DIR" || fail "$APP_DIR has uncommitted changes: the image is built from HEAD"
+  require_green_main_ci "$ROOT_DIR" || fail "build refused: HEAD is not a clean commit of main with a green Quality Gate (see [ci-gate] above)"
   revision="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
   chrome_version="$(sed -n 's/^ARG CHROME_VERSION=//p' "$ROOT_DIR/$APP_DIR/Dockerfile")"
   kasm_version="$(sed -n 's/^ARG KASMVNC_VERSION=//p' "$ROOT_DIR/$APP_DIR/Dockerfile")"
