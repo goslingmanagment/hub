@@ -82,6 +82,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // not using it: the fresh text's switch (`aiLiveTextContextMode`, the page's
   // `freshText` flag) decides.
   "live-ppv-v1",
+  // chat-extension X52: the AI feature stream takes `liveTextContext` on
+  // `chat-review` and `coach-chat` too, not only on the four features that
+  // draft a message to the fan (AI_LIVE_TEXT_FEATURES). Recap still refuses it.
+  "live-text-review-coach-v1",
 ];
 
 /**

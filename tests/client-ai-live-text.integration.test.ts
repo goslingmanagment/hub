@@ -56,6 +56,13 @@ const AUDIT = { source: "cli" } as const;
 const FAN = "777000777";
 const OTHER_FAN = "777000888";
 const EXTENSION_VERSION = "chat-extension/1.4.2";
+/**
+ * The features that take fresh text and run on the three-message chat of these
+ * tests. Review (chat-extension X52) needs at least 30 messages
+ * (`gate_min_messages`): on that chat it stops at its gate, past the fresh-text
+ * check, and its own test seeds a long chat.
+ */
+const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) => feature !== "chat-review");
 /** In every fresh-text item of these tests, and in no archive row. */
 const MARK = "FRESH-TEXT-ONLY-THE-CLIENT-SAW";
 /** The platform account ids of the pages (`pages.external_page_id`). */
@@ -440,7 +447,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("refuses fresh text on every feature but the four that draft a message to the fan", async (context) => {
+  it("refuses fresh text on every feature but the four that draft a message to the fan, Review and Coach (X52)", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     // The refusal does not depend on the owner's switch: both states.
@@ -451,6 +458,11 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       for (const feature of OPERATION_FEATURES) {
         const callsBefore = provider.calls;
         const asked = await ask({ feature, live: [freshFanMessage()] });
+        if (feature === "chat-review") {
+          // Taken, and stopped by its own gate on this short chat (its test below).
+          expectRefused(asked.response, 400, "gate_min_messages");
+          continue;
+        }
         if ((AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature)) {
           expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
           expect(asked.context!.live.status, feature).toBe(switchedOn ? "served" : "disabled");
@@ -467,7 +479,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     }
     // Nothing a refused request named was recorded.
     expect((await generations()).map((row) => row.feature).sort()).toEqual(
-      [...AI_LIVE_TEXT_FEATURES, ...AI_LIVE_TEXT_FEATURES].sort(),
+      [...SHORT_CHAT_FEATURES, ...SHORT_CHAT_FEATURES].sort(),
     );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -657,13 +669,42 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
     expect(JSON.stringify(row.params)).not.toContain(MARK);
 
-    // Each of the four features reads it.
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    // Each of the six features reads it.
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await ask({ feature, live: [freshFanMessage()] });
       expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
       expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
       expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
       expect((await lastGeneration()).params.contextScope, feature).toBe("principal-draft");
+    }
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X52] Review and Coach read it: the generation is the asker's own, never a recap", async (context) => {
+    if (!server) return context.skip();
+    // A chat long enough for Review (30 messages), the last of them an hour old.
+    for (let index = 0; index < 30; index += 1) {
+      await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
+    }
+    await switchFreshText("serve");
+    const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
+
+    for (const feature of ["chat-review", "coach-chat"] as const) {
+      const asked = await ask({ feature, live });
+      expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
+      expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
+      expect(asked.transcript, feature).toContain(`${MARK} right here`);
+      expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 1 });
+      const row = await lastGeneration();
+      expect(row.feature).toBe(feature);
+      expect(row.params.contextScope, feature).toBe(AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT);
+    }
+    // Neither is a recap: the shared readers have nothing to give.
+    expect(await getFreshestUsableRecaps(app.db, { pageId: pageIds["lora-of"]!, conversationRefs: [FAN] }))
+      .toEqual({ full: null, short: null });
+    // Recap, both lengths, still refuses it.
+    for (const body of [{}, { summaryMode: "short" }]) {
+      expectRefused((await ask({ feature: "fan-summary", live, body })).response, 400, "bad_request", "live_text_not_allowed");
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -945,7 +986,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     };
     const before = await counts();
 
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await ask({ feature, live: [freshFanMessage(), fresh("9005", "model", `${MARK} here`, 0.5)] });
       expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
       expect(asked.context!.live).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 0 });
@@ -958,9 +999,9 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
             + (select count(*) from page_dm_messages where platform_message_id in ('9004', '9005'))::int as n`,
     );
     expect(rows[0]!.n).toBe(0);
-    // The only place the text exists is the four generations' restricted records.
+    // The only place the text exists is the six generations' restricted records.
     const recorded = await generations();
-    expect(recorded).toHaveLength(AI_LIVE_TEXT_FEATURES.length);
+    expect(recorded).toHaveLength(SHORT_CHAT_FEATURES.length);
     for (const row of recorded) {
       expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
       expect(row.params.contextScope).toBe("principal-draft");
@@ -1125,7 +1166,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await switchFreshText("shadow");
     expect((await ask({ live: snapshot })).context!.live.status).toBe("shadow");
     await switchFreshText("serve");
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       expect((await ask({ feature, live: snapshot, body: { knownFanMessageIds: ["9004"] } })).context!.live.status).toBe("served");
     }
     expect((await ask({ live: [fresh("7001", "fan", "x", 30)] })).status).toBe(400);
@@ -1301,9 +1342,9 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       headRef: fsId(5), archiveSawHead: false, acceptedRefs: [fsId(4), fsId(5)],
     });
     expect(row.params.contextManifest).toMatchObject({ source: "live_union" });
-    // Each of the four features reads it. Ping on Fansly is for a fan who went
+    // Each of the six features reads it. Ping on Fansly is for a fan who went
     // quiet: the fan wrote minutes ago, so it is refused, as without the tail.
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await askFansly({ feature, live: [fsFresh(4, "fan", `${MARK} are you there?`, 1)] });
       if (feature === "ping") {
         expectRefused(asked.response, 400, "gate_ping_active");
@@ -1529,7 +1570,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       return (await testDb!.pool.query<Record<string, number>>(`select ${columns}`)).rows[0]!;
     };
     const before = await counts();
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await askFansly({
         feature, live: [fsFresh(4, "fan", `${MARK} are you there?`, SILENT), fsFresh(5, "model", `${MARK} here`, 0.5)],
       });
