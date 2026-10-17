@@ -234,9 +234,51 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.sent).toHaveLength(1);
     extra("reset");
     w.observer.reset();
+    // The request that left ends with Chrome; the early info of another goes.
+    expect(w.sent[1]).toMatchObject({ type: "siteEnded", siteRequestId: `bounded-${OBSERVED_KEPT}`, status: 429 });
     request(w, "reset", "/api/v1/account/me");
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a request followed no further ends as a failed load would: Chrome went, its id came again, too many followed — a redirect's hop ends with its answer", () => {
+    const w = world();
+    const left = (id: string, path = "/api/v1/settings", method = "GET") => {
+      request(w, id, path, method);
+      w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: id, headers: {} }, "S1");
+    };
+    left("hop");
+    w.cdp.emit("Network.requestWillBeSent", { requestId: "hop", frameId: "F1", type: "XHR", request: { url: `${API}/api/v1/account/me`, method: "GET" }, redirectResponse: { status: 302 } }, "S1");
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "hop", headers: {} }, "S1");
+    left("again");
+    request(w, "again", "/api/v1/settings");
+    left("flying-429");
+    w.cdp.emit("Network.responseReceivedExtraInfo", { requestId: "flying-429", statusCode: 429, headers: { "Retry-After": "12" } }, "S1");
+    left("flying-preflight", "/api/v1/account/1/wallets", "OPTIONS");
+    request(w, "never-left", "/api/v1/settings");
+    w.reads.length = 0;
+    w.observer.reset("control lost: Chrome's network service restarted");
+    const gone = "followed no further: control lost: Chrome's network service restarted";
+    expect(w.sent.map((m) => m.type === "siteEnded" ? [m.type, m.siteRequestId, m.status, m.error] : [m.type, "siteRequestId" in m ? m.siteRequestId : null])).toEqual([
+      ["siteSent", "hop"], ["siteEnded", "hop", 302, null], ["siteSent", "hop"],
+      ["siteSent", "again"], ["siteEnded", "again", null, "followed no further: its request id came again"],
+      ["siteSent", "flying-429"], ["siteSent", "flying-preflight"],
+      ["siteEnded", "hop", null, gone], ["siteEnded", "flying-429", 429, gone], ["siteEnded", "flying-preflight", null, gone],
+    ]);
+    expect(w.sent[1]).toMatchObject({ retryAfter: null });
+    expect(w.sent.at(-2)).toMatchObject({ retryAfter: "12" });
+    expect(w.sent[2]).toMatchObject({ path: "/api/v1/account/me", route: "account.me" });
+    // Its answer never came whole: no read for the login desk; each is journaled.
+    expect(w.reads).toEqual([]);
+    expect(w.journal.filter((line) => line.result === gone).map((line) => line.path)).toEqual(["/api/v1/account/me", "/api/v1/settings", "/api/v1/settings", "/api/v1/account/1/wallets", "/api/v1/settings"]);
+    expect(w.observer.inFlight).toBe(0);
+
+    w.sent.length = 0;
+    for (let n = 0; n <= OBSERVED_KEPT; n++) left(`kept-${n}`);
+    expect(w.observer.inFlight).toBe(OBSERVED_KEPT);
+    expect(w.sent.filter((m) => m.type === "siteEnded")).toEqual([
+      expect.objectContaining({ siteRequestId: "kept-0", status: null, error: "followed no further: too many requests followed" }),
+    ]);
   });
 
   it("keeps the original send time when ExtraInfo is early, and the latest site send across Chrome resets", () => {
@@ -315,8 +357,14 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     }
     w.link.up = true;
     w.observer.linkChanged(true);
-    expect(w.sent).toHaveLength(OBSERVED_OUTBOX_MAX);
-    expect(w.sent[0]).toMatchObject({ type: "siteSent", siteRequestId: "outbox-1" });
+    // Past OBSERVED_KEPT in flight the oldest is followed no further: its end
+    // is queued, and goes with its send once that send left the outbox.
+    expect(w.sent).toHaveLength(OBSERVED_OUTBOX_MAX + OBSERVED_KEPT);
+    expect(w.sent.slice(0, 3)).toMatchObject([
+      { type: "siteSent", siteRequestId: "outbox-1" },
+      { type: "siteEnded", siteRequestId: "outbox-1", error: "followed no further: too many requests followed" },
+      { type: "siteSent", siteRequestId: `outbox-${OBSERVED_KEPT + 1}` },
+    ]);
     expect(w.sent.at(-1)).toMatchObject({ type: "siteSent", siteRequestId: `outbox-${OBSERVED_OUTBOX_MAX}` });
   });
 
