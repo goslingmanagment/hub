@@ -1551,6 +1551,98 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // chat-extension X51: the PPV state of the open chat, read by the client from
+  // OnlyMonster's API (`livePpvContext`, context/live-ppv.ts).
+  async function paidArchive(ref: string, price: number, opened: boolean | null, minutes: number) {
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id,
+         is_sent_by_me, occurred_at, text_plain, is_tip, tip_amount_mills, price_mills, is_opened, media_metadata)
+       values ($1, 'onlyfans', $2, $3, null, true, $4, 'just for you', false, 0, $5, $6, '[{"type":"video"}]'::jsonb)`,
+      [pageIds["lora-of"], FAN, ref, minutesAgo(minutes), price * 1000, opened],
+    );
+  }
+  const livePpv = (items: Array<{ platformMessageId: string; priceUsd: number; purchased: boolean }>) => ({
+    livePpvContext: { capturedAt: new Date().toISOString(), items },
+  });
+  const ppvManifest = (row: GenerationRow) => (
+    (row.params.contextManifest as Record<string, unknown> | undefined)?.livePpv as Record<string, unknown> | undefined
+  );
+
+  it("[X51] the PPV state is refused where it can never be used, and announced as live-ppv-v1", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    const state = livePpv([{ platformMessageId: "9002", priceUsd: 25, purchased: true }]);
+    for (const feature of ["chat-review", "fan-summary", "coach-chat"]) {
+      expectRefused((await ask({ feature, body: state })).response, 400, "bad_request", "live_text_not_allowed");
+    }
+    expectRefused((await ask({ page: "lora-fansly", platform: "fansly", body: state })).response, 400, "bad_request", "live_text_not_allowed");
+    const bootstrap = await server.inject({
+      method: "GET",
+      url: "/api/v1/client/bootstrap",
+      headers: { authorization: `Bearer ${grishaExtensionToken}`, "x-client-version": EXTENSION_VERSION },
+    });
+    expect(bootstrap.json<{ capabilities: string[] }>().capabilities).toContain("live-ppv-v1");
+    expect(provider.calls).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X51] off it is ignored, in shadow recorded, in serve the prompt says what OnlyFans says now", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    await paidArchive("9004", 25, null, 45);
+    await paidArchive("9005", 40, false, 40);
+    const state = livePpv([
+      { platformMessageId: "9004", priceUsd: 25, purchased: true },
+      { platformMessageId: "9005", priceUsd: 40, purchased: true },
+      { platformMessageId: "9006", priceUsd: 15, purchased: false },
+    ]);
+
+    // The archive read keeps no purchase state (context/index.ts): both paid messages read `unknown`.
+    const plain = await ask();
+    expect(plain.transcript).toContain("Model: [PPV $25.00, unknown] just for you");
+    expect(plain.transcript).toContain("Model: [PPV $40.00, unknown] just for you");
+    const off = await ask({ body: state });
+    expect(off.status, off.response.body).toBe(200);
+    expect(off.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toBeUndefined();
+
+    await switchFreshText("shadow");
+    const shadow = await ask({ body: state });
+    expect(shadow.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toMatchObject({
+      source: "client-supplied", mode: "shadow", sent: 3, changed: 2, matched: 0, ignored: 1,
+      changedRefs: ["9004", "9005"], ignoredRefs: ["9006"],
+    });
+
+    await switchFreshText("serve");
+    // The model's paid message the archive has not caught yet comes with the fresh text and gets its mark too.
+    const served = await ask({ live: [fresh("9006", "model", `${MARK} one more`, 1)], body: state });
+    expect(served.status, served.response.body).toBe(200);
+    expect(served.transcript).toContain("Model: [PPV $25.00, purchased] just for you");
+    expect(served.transcript).toContain("Model: [PPV $40.00, purchased] just for you");
+    expect(served.transcript).toContain(`Model: [PPV $15.00, not purchased] ${MARK} one more`);
+    expect(served.transcript!.slice(served.transcript!.indexOf("<transcript>"))).not.toContain(", unknown]");
+    const row = await lastGeneration();
+    expect(row.params.contextScope).toBe(AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT);
+    expect(ppvManifest(row)).toMatchObject({ mode: "serve", sent: 3, changed: 3, ignored: 0 });
+
+    // Alone, without fresh text, it still scopes the generation it changed; a state that changes nothing does not.
+    await ask({ body: livePpv([{ platformMessageId: "9004", priceUsd: 25, purchased: true }]) });
+    expect((await lastGeneration()).params.contextScope).toBe("principal-draft");
+    const outside = await ask({ body: livePpv([{ platformMessageId: "8000", priceUsd: 10, purchased: true }]) });
+    expect(outside.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toMatchObject({ mode: "serve", changed: 0, ignored: 1, ignoredRefs: ["8000"] });
+
+    // Nothing of it is stored: the archive still holds what it held.
+    const { rows } = await testDb!.pool.query<{ message_ref: string; is_opened: boolean | null }>(
+      "select message_ref, is_opened from message_archive where message_ref in ('9004', '9005') order by message_ref",
+    );
+    expect(rows).toEqual([{ message_ref: "9004", is_opened: null }, { message_ref: "9005", is_opened: false }]);
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("the Hi gate on OnlyFans with automatic messages (critic item 11)", () => {

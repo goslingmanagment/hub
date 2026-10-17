@@ -3,6 +3,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiLivePpvContext,
   AiLiveTextContext,
   AiStartProofV1,
   AiStreamCapability,
@@ -54,10 +55,12 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProof,
   assertHiStartProofRequestShape,
   assertHiStartProofSent,
+  assertLivePpvRequestShape,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
@@ -179,6 +182,9 @@ export interface AiFeatureRequestBody {
    * since R20 HF-8б), merged into the hub's transcript for this generation
    * only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
+  /** chat-extension X51: the PPV state of the open OnlyFans chat, applied to
+   * the transcript of this generation only (context/live-ppv.ts). */
+  livePpvContext?: AiLivePpvContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -506,6 +512,15 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
+  // chat-extension X51: the PPV state rides where the fresh text does, on an
+  // OnlyFans page only; refused before any context loads.
+  if (body.livePpvContext !== undefined) {
+    assertLivePpvRequestShape({
+      feature,
+      isFanslyPage: isFanslyRequest,
+      hasClientContext: body.clientContext !== undefined,
+    });
+  }
 
   // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
   // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
@@ -807,6 +822,19 @@ export async function prepareAiFeatureStream(
       transcript: loaded,
       liveTextContext: body.liveTextContext,
     });
+    // chat-extension X51: the PPV state applies to what the generation reads,
+    // fresh text included, under the same switch; it scopes the generation
+    // like served fresh text when it changed a mark.
+    const livePpv = await applyLivePpvContext(app, {
+      page: stored.page,
+      transcript: liveText.transcript,
+      livePpvContext: body.livePpvContext,
+    });
+    liveText = {
+      ...liveText,
+      transcript: livePpv.transcript,
+      ...(liveText.contextScope === undefined && livePpv.contextScope !== undefined ? { contextScope: livePpv.contextScope } : {}),
+    };
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };

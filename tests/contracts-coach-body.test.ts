@@ -6,6 +6,8 @@ import {
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   AI_LIVE_TEXT_MAX_CHARS,
+  AI_LIVE_PPV_MAX_ITEMS,
+  AI_LIVE_PPV_PRICE_MAX_USD,
   AI_LIVE_TEXT_MAX_ITEMS,
   AI_NOTE_FIELD_LABEL_MAX_CHARS,
   AI_NOTE_FIELDS_MAX,
@@ -205,6 +207,17 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
         text: unit.repeat(AI_LIVE_TEXT_MAX_CHARS),
       })),
     },
+    // chat-extension X51, the PPV state of the open chat: 100 ids of 30 digits
+    // with a price and a flag. Digits and numbers only, so ~9KB whatever `unit`
+    // is; refused beside clientContext only after this limit and the schema.
+    livePpvContext: {
+      capturedAt: "2026-10-17T06:00:00.123456789+03:00",
+      items: Array.from({ length: AI_LIVE_PPV_MAX_ITEMS }, (_, index) => ({
+        platformMessageId: `3${String(index).padStart(29, "0")}`,
+        priceUsd: AI_LIVE_PPV_PRICE_MAX_USD - Number.EPSILON * 1024,
+        purchased: false,
+      })),
+    },
     clientContext: {
       transcript: unit.repeat(300_000),
       messageCount: 5000,
@@ -238,7 +251,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     },
   });
 
-  it("a 3-byte-UTF-8 (の) worst case is schema-valid and fits 12 MiB (>4 MiB)", () => {
+  it("a 3-byte-UTF-8 (の) worst case is schema-valid and fits 13 MiB (>4 MiB)", () => {
     // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit -- the byte-per-char worst
     // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
     // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~1.69M
@@ -254,7 +267,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
   });
 
-  it("a lone-high-surrogate (U+D800) worst case is schema-valid and fits 12 MiB (>8 MiB)", () => {
+  it("a lone-high-surrogate (U+D800) worst case is schema-valid and fits 13 MiB (>8 MiB)", () => {
     // Round-4 P2-4: with the control-char ban reverted, the TRUE worst case is a
     // lone surrogate. "\ud800" is a legal JSON string value (1 UTF-16 code unit,
     // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
@@ -263,7 +276,8 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // the notes fill's values, 12.56MB with the released clients' greeting
     // fields (27KB, uncounted here until R20 HF-5) and HF-5's start proof and
     // top-level avatar (29KB). The former 8 MiB limit would have 413'd this
-    // contract-valid body; 12 MiB (12.58MB) still clears it, by about 18KB.
+    // contract-valid body; 12 MiB (12.58MB) cleared it by about 18KB, and with
+    // X51's PPV state (9KB) 13 MiB (13.63MB) clears it by about 1MB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -305,6 +319,16 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     expect(added).toBeLessThan(30 * 1024);
     // What is left under the limit with every field counted.
     expect(AI_FEATURE_STREAM_BODY_LIMIT_BYTES - size(withProof)).toBeGreaterThan(16 * 1024);
+  });
+
+  it("the PPV state of the open chat is about 9KB of that worst case (X51)", () => {
+    const withState = maxBodyFilledWith("\ud800");
+    const { livePpvContext, ...withoutState } = withState;
+    expect(livePpvContext.items).toHaveLength(100);
+    const added = Buffer.byteLength(JSON.stringify(withState), "utf8")
+      - Buffer.byteLength(JSON.stringify(withoutState), "utf8");
+    expect(added).toBeGreaterThan(100 * 30);
+    expect(added).toBeLessThan(10 * 1024);
   });
 
   it("the notes fill's current values are about 360KB of that worst case", () => {

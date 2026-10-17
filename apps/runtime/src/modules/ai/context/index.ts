@@ -56,6 +56,7 @@ export * from "./fansly-media.ts";
 export * from "./fansly-ppv.ts";
 export * from "./hi-start-proof.ts";
 export * from "./live-text.ts";
+export * from "./live-ppv.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";
 export * from "./ping-summary.ts";
