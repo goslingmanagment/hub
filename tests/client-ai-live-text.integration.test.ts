@@ -23,6 +23,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
   AI_LIVE_TEXT_FEATURES,
+  AI_LIVE_TEXT_SHARED_FEATURES,
   OPERATION_FEATURES,
   createBundledPersonalities,
 } from "../apps/runtime/src/modules/ai/index.ts";
@@ -58,11 +59,13 @@ const OTHER_FAN = "777000888";
 const EXTENSION_VERSION = "chat-extension/1.4.2";
 /**
  * The features that take fresh text and run on the three-message chat of these
- * tests. Review (chat-extension X52) needs at least 30 messages
- * (`gate_min_messages`): on that chat it stops at its gate, past the fresh-text
- * check, and its own test seeds a long chat.
+ * tests. Review and the full Recap (chat-extension X52) need at least 30
+ * messages (`gate_min_messages`): on that chat they stop at their gate, past the
+ * fresh-text check, and their own tests seed a long chat.
  */
-const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) => feature !== "chat-review");
+const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) => feature !== "chat-review" && feature !== "fan-summary");
+/** The scope a generation that served client text is recorded with: none for the recap, which stays shared (X52). */
+const scopeOf = (feature: string): string | undefined => ((AI_LIVE_TEXT_SHARED_FEATURES as readonly string[]).includes(feature) ? undefined : "principal-draft");
 /** In every fresh-text item of these tests, and in no archive row. */
 const MARK = "FRESH-TEXT-ONLY-THE-CLIENT-SAW";
 /** The platform account ids of the pages (`pages.external_page_id`). */
@@ -447,7 +450,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("refuses fresh text on every feature but the four that draft a message to the fan, Review and Coach (X52)", async (context) => {
+  it("refuses fresh text on every feature but the four that draft a message to the fan, Review, Coach and Recap (X52)", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     // The refusal does not depend on the owner's switch: both states.
@@ -458,8 +461,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       for (const feature of OPERATION_FEATURES) {
         const callsBefore = provider.calls;
         const asked = await ask({ feature, live: [freshFanMessage()] });
-        if (feature === "chat-review") {
-          // Taken, and stopped by its own gate on this short chat (its test below).
+        if (feature === "chat-review" || feature === "fan-summary") {
+          // Taken, and stopped by its own gate on this short chat (their tests below).
           expectRefused(asked.response, 400, "gate_min_messages");
           continue;
         }
@@ -471,11 +474,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
         expectRefused(asked.response, 400, "bad_request", "live_text_not_allowed");
         expect(provider.calls, feature).toBe(callsBefore);
       }
-      // Both recap sizes.
-      expectRefused(
-        (await ask({ feature: "fan-summary", live: [freshFanMessage()], body: { summaryMode: "short" } })).response,
-        400, "bad_request", "live_text_not_allowed",
-      );
+      // The short recap (X52) too: taken, and stopped by the same gate.
+      expectRefused((await ask({ feature: "fan-summary", live: [freshFanMessage()], body: { summaryMode: "short" } })).response, 400, "gate_min_messages");
     }
     // Nothing a refused request named was recorded.
     expect((await generations()).map((row) => row.feature).sort()).toEqual(
@@ -675,7 +675,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
       expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
       expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
-      expect((await lastGeneration()).params.contextScope, feature).toBe("principal-draft");
+      expect((await lastGeneration()).params.contextScope, feature).toBe(scopeOf(feature));
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -702,10 +702,31 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // Neither is a recap: the shared readers have nothing to give.
     expect(await getFreshestUsableRecaps(app.db, { pageId: pageIds["lora-of"]!, conversationRefs: [FAN] }))
       .toEqual({ full: null, short: null });
-    // Recap, both lengths, still refuses it.
-    for (const body of [{}, { summaryMode: "short" }]) {
-      expectRefused((await ask({ feature: "fan-summary", live, body })).response, 400, "bad_request", "live_text_not_allowed");
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X52] Recap reads it and stays the fan's shared recap: never scoped, the shared read gives it, it proves a dossier", async (context) => {
+    if (!server) return context.skip();
+    for (let index = 0; index < 30; index += 1) {
+      await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
     }
+    await switchFreshText("serve");
+    const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
+    for (const body of [{}, { summaryMode: "short" }]) {
+      const asked = await ask({ feature: "fan-summary", live, body });
+      expect(asked.status, asked.response.body).toBe(200);
+      expect(asked.transcript).toContain(`${MARK} are you there?`);
+      expect(asked.context!.live).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 1 });
+      const row = await lastGeneration();
+      expect(row.params).not.toHaveProperty("contextScope");
+      // The manifest still says what the client added, by id.
+      expect(liveManifest(row)).toMatchObject({ status: "served", accepted: 2, acceptedRefs: ["9004", "9005"] });
+    }
+    // Both slots are the recaps just built: shared with every chatter of the page.
+    const recaps = await getFreshestUsableRecaps(app.db, { pageId: pageIds["lora-of"]!, conversationRefs: [FAN] });
+    expect([recaps.full?.feature, recaps.short?.feature]).toEqual(["fan-summary", "fan-summary"]);
+    expect(recaps.full?.params).toMatchObject({ summaryMode: "full" });
+    expect(recaps.short?.params).toMatchObject({ summaryMode: "short" });
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -1004,7 +1025,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(recorded).toHaveLength(SHORT_CHAT_FEATURES.length);
     for (const row of recorded) {
       expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
-      expect(row.params.contextScope).toBe("principal-draft");
+      expect(row.params.contextScope, row.feature).toBe(scopeOf(row.feature));
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -1017,8 +1038,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const scope = (await lastGeneration()).params.contextScope;
     expect(scope).toBe("principal-draft");
 
-    // Fresh text is refused on fan-summary, so no recap can carry the scope
-    // today. Should a later lane write one, the readers already skip it: the
+    // A recap never carries the scope (AI_LIVE_TEXT_SHARED_FEATURES, X52), so
+    // none of the readers meets one on a recap row. Should a later lane write one, the readers already skip it: the
     // same scope value on a recap row, beside an older plain one.
     const recap = async (completion: string, minutes: number, scoped: boolean) => {
       const generationRef = randomUUID();
@@ -1588,7 +1609,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     for (const row of await generations()) {
       expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
       expect(JSON.stringify(row.params)).not.toContain(MARK);
-      expect(row.params.contextScope).toBe("principal-draft");
+      expect(row.params.contextScope, row.feature).toBe(scopeOf(row.feature));
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -1614,11 +1635,9 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     if (!server) return context.skip();
     await seedChat();
     const state = livePpv([{ platformMessageId: "9002", priceUsd: 25, purchased: true }]);
-    // Recap never takes it, either length. Review and Coach take it as they take the fresh text (X52):
-    // Review on this short chat passes the check and stops at its own gate.
-    for (const body of [state, { ...state, summaryMode: "short" }]) {
-      expectRefused((await ask({ feature: "fan-summary", body })).response, 400, "bad_request", "live_text_not_allowed");
-    }
+    // A feature without fresh text never takes it. Review, Coach and Recap take it as they take the fresh text
+    // (X52): Review on this short chat passes the check and stops at its own gate.
+    expectRefused((await ask({ feature: "help-me", body: state })).response, 400, "bad_request", "live_text_not_allowed");
     expectRefused((await ask({ feature: "chat-review", body: state })).response, 400, "gate_min_messages");
     expectRefused((await ask({ page: "lora-fansly", platform: "fansly", body: state })).response, 400, "bad_request", "live_text_not_allowed");
     const bootstrap = await server.inject({

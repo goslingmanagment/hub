@@ -254,7 +254,7 @@ describe("GET /api/v1/client/bootstrap", () => {
     // the voice notes in the narrow token (R20 HF-4б), who sent each
     // outgoing message (send-attribution-v1), the PPV state of the open
     // chat in the AI stream (live-ppv-v1, chat-extension X54) and fresh text
-    // on Review and Coach (chat-extension X52).
+    // on Review and Coach and on Recap (chat-extension X52).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -275,6 +275,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "send-attribution-v1",
       "live-ppv-v1",
       "live-text-review-coach-v1",
+      "live-text-recap-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

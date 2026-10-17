@@ -117,6 +117,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // chat-extension X54: the AI feature stream takes `livePpvContext`.
   "live-ppv-v1",
   "live-text-review-coach-v1",
+  "live-text-recap-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the

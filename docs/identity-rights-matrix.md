@@ -92,7 +92,9 @@ stops exactly there:
 - never a generation that carries a `contextScope`: one whose context held
   something only its caller saw is that person's draft, not a shared recap, so
   it is excluded from this read, from the recap status, from the Coach attach
-  and from the proof of a dossier alike;
+  and from the proof of a dossier alike. A recap itself is never scoped: one
+  built with the open chat's latest messages (chat-extension X52, owner ruling
+  2026-10-17) is the fan's shared recap like any other;
 - only on a page granted to the caller (page scope, as on every page route),
   and only while the owner's `recap` switch is on for it;
 - only the text and its provenance (`generationRef`, time, persona, coverage):
