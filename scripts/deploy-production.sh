@@ -999,6 +999,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # The new storage_relation_daily table (one row per table per day, written
   # by the disk check). The previous image never names it.
   "0285_storage_relation_daily.sql"
+  # Who sent each outgoing message (send-attribution-v1): the new, empty table
+  # client_send_attributions, its checks, indexes and comment. The previous
+  # image never names it and does not list send-attribution-v1, so the
+  # extension stops reporting within its bootstrap cache and keeps what it owes
+  # until a forward deploy returns; rows already written stay unread.
+  "0286_client_send_attributions.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-25 routes marked "yes", and every route marked "no" refuses it with 403 in
+26 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (313)
+## Routes (314)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -231,6 +231,7 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/send-attributions` | `clientSendAttributions` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/awaiting-reply` | `clientSpenderAwaitingReply` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — | no |

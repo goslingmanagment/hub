@@ -113,6 +113,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
   "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1", "voice-notes-v1",
+  "send-attribution-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -1549,6 +1550,74 @@ export const clientAudienceNewResponseSchema = z.object({
   nextCursor: clientCursorSchema.nullable(),
 });
 
+// ── who sent each outgoing message (send-attribution-v1) ────────────────────
+//
+// The chat extension observes each send a person makes in the platform page's
+// own composer and, once the page's own response named the platform's message
+// id, reports it: this message of this page, to this fan, observed then, with a
+// price or media or neither. The chatter is the user of the token that reports,
+// never a field of the body. No text of the message travels.
+
+/**
+ * The clients that observe a send, by the page they run on: the `source` of a
+ * report. Open on the wire; a platform admits its own (the hub's
+ * CLIENT_SEND_ATTRIBUTION_ADMISSIONS): OnlyFans `chatspace-extension`, the
+ * extension on OnlyMonster ChatSpace. Another one is 409
+ * `client_feature_disabled` / `platform_unsupported`.
+ */
+export const CLIENT_SEND_ATTRIBUTION_SOURCES = ["chatspace-extension"] as const;
+/**
+ * What the hub did with one fact; every one is final, nothing is retried:
+ * - `recorded`: the first report of this message; it is stored.
+ * - `duplicate`: the message was already reported by the same person for the same fan: a repeat.
+ * - `conflict`: the message was already reported by another person, or for another fan. The first
+ *   report stands.
+ * - `out_of_range`: `observedAt` is more than CLIENT_SEND_ATTRIBUTION_MAX_AHEAD_MS ahead of the hub's
+ *   clock or more than CLIENT_SEND_ATTRIBUTION_MAX_AGE_DAYS old; nothing is stored.
+ */
+export const CLIENT_SEND_ATTRIBUTION_OUTCOMES = ["recorded", "duplicate", "conflict", "out_of_range"] as const;
+/** Facts in one report. */
+export const CLIENT_SEND_ATTRIBUTION_MAX_FACTS = 50;
+/** How far ahead of the hub's clock an `observedAt` may be (a client clock that runs fast). */
+export const CLIENT_SEND_ATTRIBUTION_MAX_AHEAD_MS = 5 * 60_000;
+/** How old an `observedAt` may be: a report owed longer than that is not taken. */
+export const CLIENT_SEND_ATTRIBUTION_MAX_AGE_DAYS = 30;
+/** RFC 3339 with a zone, as `Date.prototype.toISOString` writes it. */
+export const CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+
+export type ClientSendAttributionSource = (typeof CLIENT_SEND_ATTRIBUTION_SOURCES)[number];
+export type ClientSendAttributionOutcome = (typeof CLIENT_SEND_ATTRIBUTION_OUTCOMES)[number];
+
+export const clientSendAttributionFactSchema = z.object({
+  /** The platform's id of the message, from the page's own response to exactly this send. */
+  platformMessageId: clientNumericIdSchema,
+  /** The fan the message went to (on OnlyFans the fan id, which is the chat id). */
+  fanRef: clientFanRefSchema,
+  /** When the client saw the page confirm the send, by the client's clock. */
+  observedAt: z.string().regex(CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN),
+  /** The send carried a price (a PPV). */
+  priced: z.boolean(),
+  /** The send carried media. */
+  withMedia: z.boolean(),
+}).strict();
+
+export const clientSendAttributionsBodySchema = z.object({
+  /** Open token; known values: CLIENT_SEND_ATTRIBUTION_SOURCES. */
+  source: clientOpenToken,
+  facts: z.array(clientSendAttributionFactSchema).min(1).max(CLIENT_SEND_ATTRIBUTION_MAX_FACTS),
+}).strict();
+
+export const clientSendAttributionsResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** One per fact, in the order of the body. */
+  results: z.array(z.object({
+    platformMessageId: z.string(),
+    /** Open token; known values: CLIENT_SEND_ATTRIBUTION_OUTCOMES. */
+    outcome: clientOpenToken,
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -1833,6 +1902,35 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientSendAttributions: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Report who sent outgoing messages: the caller sent these messages of the page from the platform page's own composer",
+    description: "Database-only: no platform request, no queued work; the hub never sends anything. The chat "
+      + "extension observed a person's send in the page's own composer and the page's own response named the "
+      + "platform's message id: one fact per message, at most 50 a report, all of the page in the path. The "
+      + "chatter is the user of the token, never a field of the body; no text of a message travels or is "
+      + "stored. `source` names the client that observed the sends and must be one the page's platform admits "
+      + "(OnlyFans: `chatspace-extension`), else 409 `client_feature_disabled` with the reason "
+      + "`platform_unsupported`. One row per message of a page, the first report wins: each fact is answered "
+      + "`recorded`, `duplicate` (the same person already reported it for the same fan), `conflict` (another "
+      + "person, or another fan, reported it first; nothing changes) or `out_of_range` (`observedAt` more than "
+      + "5 minutes ahead of the hub's clock or more than 30 days old; nothing is stored). Every answer is final: "
+      + "a client never repeats a fact the hub answered, and a repeat of a lost answer reads `duplicate`. "
+      + "It needs only the page grant: a send that already happened is recorded whatever the owner's switches "
+      + "and the minimum version say, like `registerNativeSend`. A page that is not an active page granted to "
+      + "the caller is 409 `client_feature_disabled` with the reason `not_granted`.",
+    params: clientPageParamsSchema,
+    body: clientSendAttributionsBodySchema,
+    response: {
+      200: clientSendAttributionsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -1978,6 +2076,9 @@ export type ClientSendCustodyItem = z.infer<typeof clientSendCustodyItemSchema>;
 export type ClientSendCustodyListQuery = z.infer<typeof clientSendCustodyListQuerySchema>;
 export type ClientSendCustodyListItem = z.infer<typeof clientSendCustodyListItemSchema>;
 export type ClientSendCustodyListResponse = z.infer<typeof clientSendCustodyListResponseSchema>;
+export type ClientSendAttributionFact = z.infer<typeof clientSendAttributionFactSchema>;
+export type ClientSendAttributionsBody = z.infer<typeof clientSendAttributionsBodySchema>;
+export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;
 export type ClientAudienceNewItem = z.infer<typeof clientAudienceNewItemSchema>;

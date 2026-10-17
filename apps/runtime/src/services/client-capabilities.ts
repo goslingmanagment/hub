@@ -72,6 +72,11 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // not serve. With it the hub serves all of `voice`; the owner's switches and
   // the lane decide from here on.
   "voice-notes-v1",
+  // Who sent each outgoing message: POST
+  // /api/v1/client/pages/:pageLabel/send-attributions (clientSendAttributions),
+  // the person's own sends from the page's composer as the extension observed
+  // them (0286). No owner switch: the extension reports while the hub lists it.
+  "send-attribution-v1",
 ];
 
 /**
