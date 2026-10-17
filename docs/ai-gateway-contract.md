@@ -698,6 +698,35 @@ generations. Two conditions, both read per generation:
 | `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
 | `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
 
+### Feature-lane PPV state of the open chat (`livePpvContext`)
+
+chat-extension X54. The transcript marks the model's paid message `[… - PPV $X.XX, purchased]`,
+`not purchased` or `unknown` from the hub's stores; the archive read keeps no purchase state
+(`unknown`), and a store's `isOpened: false` may be from before the fan bought it. The extension
+reads the chat the person has open from OnlyMonster's API, whose messages carry OnlyFans' own
+`isOpened`, and sends the model's paid messages with it, for that one generation
+(`apps/runtime/src/modules/ai/context/live-ppv.ts`). The bootstrap lists `live-ppv-v1`.
+
+```json
+{ "capturedAt": "2026-10-17T06:00:00.000Z",
+  "items": [{ "platformMessageId": "4301234567890", "priceUsd": 25, "purchased": true }] }
+```
+
+- `items`: 1 to 100 (`AI_LIVE_PPV_MAX_ITEMS`), each id once; `priceUsd` above 0 and at most
+  10 000 (`AI_LIVE_PPV_PRICE_MAX_USD`); no text.
+- Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`; never
+  beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
+  `live_text_not_allowed`. It needs no capability header: nothing of it rides the frame.
+- Used under the fresh text's switch (`aiLiveTextContextMode` and the page's `freshText` flag);
+  off, it is ignored. `shadow` records what would change in the context manifest (`livePpv`: ids
+  and counts); `serve` changes the transcript after the fresh text joined.
+- What changes: a model's message in the served transcript whose id is listed. Its PPV mark takes
+  the client's state on the hub's own price, and a `purchased` from either side stands (a purchase
+  does not come undone). A message without any label (a fresh one the archive has not caught, a
+  paid text) gets `[PPV $X.XX, …]` with the client's price. A message the hub holds with media and
+  no price stays as it is: it is the hub's free media, and the image notes read its label as
+  written. An id outside the window or a fan's message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
+
 The merge, in `serve` and `shadow` alike:
 
 - Only by platform message id, never by text. The hub's rows come first and win: for an id the
