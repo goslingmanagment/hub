@@ -41,7 +41,7 @@ git -C "$REPO" archive --format=tar "$rev" apps/page-browser docker-compose.page
   | remote "rm -rf $BASE/src/$rev && mkdir $BASE/src/$rev && tar -xf - -C $BASE/src/$rev && echo $rev > $BASE/src/$rev/.pb-suite-rev"
 
 files=(
-  chrome/google-chrome-stable_155.0.8059.39-1_amd64.deb
+  chrome/google-chrome-stable_155.0.8059.84-1_amd64.deb
   kasmvnc/kasmvncserver_bookworm_1.5.0_amd64.deb
   s6-overlay/s6-overlay-noarch.tar.xz
   s6-overlay/s6-overlay-x86_64.tar.xz
