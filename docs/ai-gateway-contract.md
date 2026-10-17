@@ -670,12 +670,18 @@ Refused before any context loads, after the page was admitted (a client bug, nev
 
 | Case | Answer |
 |---|---|
-| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
+| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping`, `chat-review`, `coach-chat`, `fan-summary` | 400 `bad_request`, reason `live_text_not_allowed` |
 | together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
 | no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
 
-Recap (full and short), Review, Coach and Help never take it: a recap built on one person's page
-would be shared with everyone.
+Help never takes it. Review and Coach take it since chat-extension X52 (bootstrap capability
+`live-text-review-coach-v1`): each answers only the person who asked, and its record, scoped like
+any other (below), is read back by no one else. Recap, full and short, takes it since the same
+decision (`live-text-recap-v1`, owner ruling 2026-10-17): a recap built with the open chat's latest
+messages is the fan's recap like any other — never scoped, shared with every chatter of the page
+and a dossier's proof — as the released Fansly extension's recap on its own transcript always was
+(`AI_LIVE_TEXT_SHARED_FEATURES`). A client sends it to these features only where the bootstrap
+lists their capability; an older hub refuses it there.
 
 Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
 refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail
@@ -697,6 +703,35 @@ generations. Two conditions, both read per generation:
 | `shadow` | Merged and recorded in the context manifest; the hub's own transcript served. `accepted` is what `serve` would have added. A conflict is recorded and counted in `rejected`, never thrown: shadow changes no generation. |
 | `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
 | `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
+
+### Feature-lane PPV state of the open chat (`livePpvContext`)
+
+chat-extension X54. The transcript marks the model's paid message `[… - PPV $X.XX, purchased]`,
+`not purchased` or `unknown` from the hub's stores; the archive read keeps no purchase state
+(`unknown`), and a store's `isOpened: false` may be from before the fan bought it. The extension
+reads the chat the person has open from OnlyMonster's API, whose messages carry OnlyFans' own
+`isOpened`, and sends the model's paid messages with it, for that one generation
+(`apps/runtime/src/modules/ai/context/live-ppv.ts`). The bootstrap lists `live-ppv-v1`.
+
+```json
+{ "capturedAt": "2026-10-17T06:00:00.000Z",
+  "items": [{ "platformMessageId": "4301234567890", "priceUsd": 25, "purchased": true }] }
+```
+
+- `items`: 1 to 100 (`AI_LIVE_PPV_MAX_ITEMS`), each id once; `priceUsd` above 0 and at most
+  10 000 (`AI_LIVE_PPV_PRICE_MAX_USD`); no text.
+- Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`, and since
+  chat-extension X52 `chat-review`, `coach-chat` and `fan-summary`; never beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
+  `live_text_not_allowed`. It needs no capability header: nothing of it rides the frame.
+- Used under the fresh text's switch (`aiLiveTextContextMode` and the page's `freshText` flag);
+  off, it is ignored. `shadow` records what would change in the context manifest (`livePpv`: ids
+  and counts); `serve` changes the transcript after the fresh text joined.
+- What changes: a model's message in the served transcript whose id is listed. Its PPV mark takes
+  the client's state on the hub's own price, and a `purchased` from either side stands (a purchase
+  does not come undone). A message without any label (a fresh one the archive has not caught, a
+  paid text) gets `[PPV $X.XX, …]` with the client's price. A message the hub holds with media and
+  no price stays as it is: it is the hub's free media, and the image notes read its label as
+  written. An id outside the window or a fan's message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
 
 The merge, in `serve` and `shadow` alike:
 
@@ -1037,9 +1072,9 @@ ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
   which recap exists.
 - `params.contextScope` marks a generation whose context held something only its caller saw (the
   fresh text of an open chat, `principal-draft`). Such a row is that person's draft: it is never a
-  status slot, never attached to Coach, never returned here and never proves a dossier. Fresh text
-  is refused on `fan-summary`, so nothing writes the key on a `fan-summary` row and the condition
-  is a guard.
+  status slot, never attached to Coach, never returned here and never proves a dossier. A recap is
+  never scoped, fresh text or not (`AI_LIVE_TEXT_SHARED_FEATURES`, chat-extension X52), so nothing
+  writes the key on a `fan-summary` row and the condition is a guard.
 - `fanRef` is the OnlyFans fan id, which is the chat id; on Fansly the fan's account id, with the
   group as `conversationRef` (reads by conversation, above). `personaDefinitionId` (optional, as
   on the recap status) narrows both slots to one persona.

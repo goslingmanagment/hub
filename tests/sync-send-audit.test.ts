@@ -286,10 +286,14 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     });
   });
 
-  it.each([true, false])("equal recorded site and Hub send instants leave their order unknown (site has the smaller id: %s)", (siteFirst) => {
+  it.each([true, false])("equal recorded site and Hub send instants leave their order unknown when Hub was admitted at that instant too (site has the smaller id: %s)", (siteFirst) => {
     const before = engine(10, "notifications.page");
     const observed = site(21, "site.other", { ref: siteFirst ? 1 : 2 });
-    const hub = engine(21, "notifications.page", { ref: siteFirst ? 2 : 1 });
+    // Admitted earlier, the site's send would be after the admission: Б12.
+    expect(auditPagePace([before, observed, engine(21, "notifications.page", { ref: siteFirst ? 2 : 1 })], WINDOW)).toMatchObject({
+      verdict: "pass", violations: [], inconclusive: [], siteAfterAdmission: [expect.objectContaining({ prevRef: observed.ref, gapMs: 0 })],
+    });
+    const hub = engine(21, "notifications.page", { ref: siteFirst ? 2 : 1, admittedAt: at(21) });
     for (const rows of [[before, hub, observed], [observed, hub, before]]) {
       const audit = auditPagePace(rows, WINDOW);
       expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
@@ -357,6 +361,34 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     const audit = auditPagePace([observed, first, second], WINDOW);
     expect(audit).toMatchObject({ verdict: "fail", pairs: 1, inconclusive: [expect.objectContaining({ ref: first.ref })] });
     expect(audit.violations).toEqual([expect.objectContaining({ ref: second.ref, prevRef: first.ref, gapMs: 1_000 })]);
+  });
+});
+
+describe("plan-b Б12: a site send after a Hub send's admission is never its predecessor", () => {
+  it("the site sends 40 ms after Hub's admission, Hub's request leaves 20 ms later: listed, not a violation; Hub is judged against the send before", () => {
+    const hubBefore = engine(5, "notifications.page");
+    const siteSend = site(10.04, "site.other");
+    const hub = engine(10.06, "notifications.page", { admittedAt: at(10) });
+    const audit = auditPagePace([hubBefore, siteSend, hub], WINDOW);
+    expect(audit).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
+    expect(audit.siteAfterAdmission).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref })]);
+    expect(Math.round(audit.siteAfterAdmission[0]!.gapMs)).toBe(20);
+  });
+
+  it("a site send before the admission was known: it is the predecessor, and a short gap fails", () => {
+    const siteSend = site(9.99, "site.other");
+    const hub = engine(10.06, "notifications.page", { admittedAt: at(10) });
+    const audit = auditPagePace([engine(5, "notifications.page"), siteSend, hub], WINDOW);
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref })]);
+    expect(audit.siteAfterAdmission).toEqual([]);
+  });
+
+  it("never hides a real violation: Hub admitted too soon after its own previous send fails against it", () => {
+    const hubBefore = engine(9, "notifications.page");
+    const hub = engine(9.62, "notifications.page", { admittedAt: at(9.5) });
+    const audit = auditPagePace([hubBefore, site(9.6, "site.other"), hub], WINDOW);
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: hubBefore.ref })]);
+    expect(audit.siteAfterAdmission).toHaveLength(1);
   });
 });
 

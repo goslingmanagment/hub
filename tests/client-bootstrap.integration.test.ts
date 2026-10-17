@@ -250,8 +250,11 @@ describe("GET /api/v1/client/bootstrap", () => {
     // lease and send custody (H-7b), the "new subscribers" list (H-7c), the
     // manual greeting group with the custody's admission by platform (R20 HF-3),
     // the AI stream's window coverage check (R20 HF-8в), the reads by
-    // conversation (R20 HF-10), Hi on Fansly by the start proof (R20 HF-5) and
-    // the voice notes in the narrow token (R20 HF-4б).
+    // conversation (R20 HF-10), Hi on Fansly by the start proof (R20 HF-5),
+    // the voice notes in the narrow token (R20 HF-4б), who sent each
+    // outgoing message (send-attribution-v1), the PPV state of the open
+    // chat in the AI stream (live-ppv-v1, chat-extension X54) and fresh text
+    // on Review and Coach and on Recap (chat-extension X52).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -269,6 +272,10 @@ describe("GET /api/v1/client/bootstrap", () => {
       "conversation-recaps-v1",
       "hi-start-proof-v1",
       "voice-notes-v1",
+      "send-attribution-v1",
+      "live-ppv-v1",
+      "live-text-review-coach-v1",
+      "live-text-recap-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

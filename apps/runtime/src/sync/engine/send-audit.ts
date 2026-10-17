@@ -54,6 +54,11 @@ import {
 // to `countedAt`: only an admission after L + its pause clears that uncertainty.
 // Equal recorded site and Hub instants leave their order unknown too.
 //
+// A site send recorded after a Hub send's admission and before that send
+// (plan-b Б12, accepted) is not its predecessor: Hub could not know of it
+// when its request was let go. It is listed (`siteAfterAdmission`), and the
+// Hub send is judged against the send before it.
+//
 // What cannot be judged is `inconclusive`, never a pass: a pair whose later
 // send recorded no pause or interval (an attempt admitted before 0237, a
 // legacy row without its pause), one whose later send was never recorded and
@@ -227,6 +232,12 @@ export interface PaceAudit {
   minCrossJournalGapMs: number | null;
   /** The smallest gap − pause of a judged pair. */
   minMarginMs: number | null;
+  /** Plan-b Б12, accepted: a recorded Hub send closer than its pause to a
+   *  site request the page's browser sent on its own after that Hub send's
+   *  admission — nobody could know of it when Hub's request was let go. Never
+   *  a violation; the Hub send is judged against the send before them. One
+   *  pair per such Hub send (its nearest such site send). */
+  siteAfterAdmission: PacePair[];
 }
 
 function judgePlacedPaceGap(later: Placed, prev: Placed): PaceGapJudgement | null {
@@ -273,11 +284,29 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
     minGapMs: null,
     minCrossJournalGapMs: null,
     minMarginMs: null,
+    siteAfterAdmission: [],
   };
   for (let index = 0; index < sends.length; index += 1) {
     const later = sends[index]!;
     if (later.row.observed || !inWindow(later.laterMs, window)) continue;
-    let prev = sends[index - 1];
+    // Б12: the site's own recorded sends after this send's admission.
+    let prevIndex = index - 1;
+    const admittedMs = later.row.admittedAt.getTime();
+    while (later.row.sentAt !== null && prevIndex >= 0) {
+      const candidate = sends[prevIndex]!;
+      if (!(candidate.row.observed && candidate.row.sentAt !== null && candidate.ms > admittedMs)) break;
+      prevIndex -= 1;
+    }
+    const nearestAfterAdmission = prevIndex < index - 1 ? sends[index - 1]! : null;
+    if (nearestAfterAdmission !== null && later.row.pauseMs !== null && paceGapViolates(later.laterMs - nearestAfterAdmission.ms, "wall", later.row.pauseMs)) {
+      const gapMs = later.laterMs - nearestAfterAdmission.ms;
+      audit.siteAfterAdmission.push({
+        journal: later.journal, ref: later.row.ref, sentAt: new Date(later.laterMs), judgedAt: "send",
+        prevJournal: nearestAfterAdmission.journal, prevRef: nearestAfterAdmission.row.ref, prevSentAt: new Date(nearestAfterAdmission.ms),
+        gapMs, clock: "wall", wallGapMs: gapMs, pauseMs: later.row.pauseMs, open: null,
+      });
+    }
+    let prev = prevIndex >= 0 ? sends[prevIndex] : undefined;
     let judged = prev === undefined ? null : judgePlacedPaceGap(later, prev);
     const recorded = later.row.sentAt !== null;
     const sendOrderUnknown = prev !== undefined && prev.row.observed && recorded

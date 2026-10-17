@@ -435,8 +435,8 @@ describe("assertLiveTextRequestShape", () => {
     return null;
   };
 
-  it("accepts the four features that draft a message to the fan, and no other", () => {
-    expect(AI_LIVE_TEXT_FEATURES).toEqual(["fast-reply", "improve-draft", "hi-greeting", "ping"]);
+  it("accepts the four features that draft a message to the fan, Review, Coach and Recap (X52), and no other", () => {
+    expect(AI_LIVE_TEXT_FEATURES).toEqual(["fast-reply", "improve-draft", "hi-greeting", "ping", "chat-review", "coach-chat", "fan-summary"]);
     for (const feature of OPERATION_FEATURES) {
       const allowed = (AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature);
       expect(refusal(shape({ feature })), feature).toEqual(
@@ -460,7 +460,7 @@ describe("assertLiveTextRequestShape", () => {
     expect(refusal(shape({ capabilities: undefined }))).toEqual(required);
     expect(refusal(shape({ capabilities: new Set<AiStreamCapability>(["debug-input-v1", "split-all-v1"]) }))).toEqual(required);
     // A request wrong in two ways names the one a newer client could not fix.
-    for (const wrong of [{ feature: "coach-chat" as const }, { hasClientContext: true }]) {
+    for (const wrong of [{ feature: "help-me" as const }, { hasClientContext: true }]) {
       expect(refusal(shape({ ...wrong, capabilities: undefined }))).toMatchObject({ reason: "live_text_not_allowed" });
     }
   });

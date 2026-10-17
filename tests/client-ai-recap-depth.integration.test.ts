@@ -692,7 +692,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("Fansly: one setting for both platforms on the hub's own transcript, and the old extension's own transcript untouched", async (context) => {
+  it("[AI-143] Fansly: one setting for both platforms on the hub's own transcript, and the old extension's own transcript untouched", async (context) => {
     if (!server) return context.skip();
     const fansly = { pageLabel: "lora-fansly", platform: "fansly", conversationRef: FANSLY_GROUP, fanRef: FANSLY_FAN };
     // The released Fansly extension (2.10.1, fansly-chat@ff30d00

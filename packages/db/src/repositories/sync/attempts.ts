@@ -466,12 +466,21 @@ export interface CaptureAttemptInput {
 export interface CaptureAttemptResult {
   /** False: the attempt was settled already (a repeated capture). */
   captured: boolean;
-  /** `sync_pages.last_send_at` before this capture (any owner). */
+  /** The page's previous send this one is judged against: the newest
+   *  recorded send of the page at or before it (any owner) — but not a site
+   *  request the page's browser sent on its own after this attempt's
+   *  admission (plan-b Б12: nobody could know of it when this one was let
+   *  go). Null: none within `PACE_GAP_LOOKBACK_MS` (`sync_pages.last_send_at`
+   *  then, when it is older than that). */
   previousSendAt: Date | null;
-  /** This send minus the previous recorded send of the page, ms; the caller
-   *  compares it with the attempt's pause (alert 1 `pace_violation`). */
+  /** This send minus `previousSendAt`, ms; the caller compares it with the
+   *  attempt's pause (alert 1 `pace_violation`). */
   paceGapMs: number | null;
 }
+
+/** How far back a capture looks for the previous send of its page: far past
+ *  any pause, so a send older than this never fails one. */
+export const PACE_GAP_LOOKBACK_MS = 120_000;
 
 /**
  * Capture (tx 2, live, after `lockOwnedPage`): the attempt's outcome, its
@@ -510,7 +519,20 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and page_id = ${input.pageId}
          and not shadow
          and outcome in ('admitted', 'sent')
-      returning id, sent_at
+      returning id, sent_at, admitted_at
+    ), known as (
+      -- The previous send as this attempt's release could know it: the
+      -- site's own observed sends that left after its admission are plan-b
+      -- Б12 (accepted), never this send's predecessor.
+      select max(a.sent_at) as sent_at
+        from sync_attempts a, att
+       where a.page_id = ${input.pageId}
+         and not a.shadow
+         and a.id <> att.id
+         and a.admitted_at >= att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond'
+         and a.sent_at is not null
+         and a.sent_at <= att.sent_at
+         and not (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false) and a.sent_at > att.admitted_at)
     ), page as (
       update sync_pages sp
          set last_send_at = greatest(coalesce(sp.last_send_at, '-infinity'::timestamptz), att.sent_at),
@@ -524,7 +546,11 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
       returning sp.page_id
     )
     select (select count(*) from att)::int as captured,
-           (select last_send_at from prev) as "previousSendAt",
+           coalesce(
+             (select sent_at from known),
+             (select prev.last_send_at from prev, att
+               where prev.last_send_at < att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond')
+           ) as "previousSendAt",
            (select sent_at from att) as "sentAt"
   `);
   const row = result.rows[0];

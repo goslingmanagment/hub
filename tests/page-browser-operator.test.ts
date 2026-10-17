@@ -667,6 +667,19 @@ describe("a lost control (plan §4.9)", () => {
     await until(() => s.operator.page.step === "site_loaded", START_MS, "the page back");
   });
 
+  it("CDP lost with the site's request in flight: the engine hears it ended, never left flying until its next start (variant Б)", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    s.chrome.event("Network.requestWillBeSent", { requestId: "site-flying", request: { url: "https://apiv3.fansly.com/api/v1/settings", method: "OPTIONS" } }, tab);
+    s.chrome.event("Network.requestWillBeSentExtraInfo", { requestId: "site-flying", headers: {} }, tab);
+    await s.engine.waitFor("siteSent", (message) => message.siteRequestId === "site-flying");
+    s.chrome.live!.destroy("a CDP break");
+    const ended = await s.engine.waitFor("siteEnded", (message) => message.siteRequestId === "site-flying");
+    expect(ended).toMatchObject({ status: null, error: expect.stringMatching(/^followed no further: control lost/) });
+    expect(s.operator.observer.inFlight).toBe(0);
+  });
+
   it("Chrome crashed: the reason says so", async () => {
     const s = await setUp();
     await started(s);

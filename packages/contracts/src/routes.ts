@@ -2324,10 +2324,15 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // 27KB). The worst schema-valid body is measured 12.56MB, which 12 MiB still
 // clears by about 18KB: the next field of any size raises the limit.
 //
+// chat-extension X54 adds the PPV state of the open chat (`livePpvContext`:
+// 100 ids of digits with a price and a flag, about 9KB), which left 9.5KB under
+// 12 MiB: the limit is 13 MiB (13.63MB) from here on, about 1MB above the
+// worst schema-valid body, so the next small field does not raise it again.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
-export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 13 * 1024 * 1024;
 
 // chat-extension H-4c — the fresh text of the open chat (OnlyFans; Fansly since
 // R20 HF-8б): the last confirmed messages the client reads off the page it is
@@ -2406,6 +2411,32 @@ export const aiLiveTextContextSchema = z.object({
     /** Text only: a message that is media alone is not sent. */
     text: z.string().min(1).max(AI_LIVE_TEXT_MAX_CHARS),
   }).strict()).min(1).max(AI_LIVE_TEXT_MAX_ITEMS),
+}).strict();
+
+// chat-extension X54 — the PPV state of the open OnlyFans chat as the platform
+// gives it right now: the client reads the chat it is showing from
+// OnlyMonster's API, whose messages carry OnlyFans' own `isOpened` (on the
+// model's paid message, the purchase). The hub's archive may hold a paid
+// message without it, or with a `false` from before the fan bought it; this
+// fills that for ONE generation of the features that draft a message to the
+// fan, and is stored nowhere else (context/live-ppv.ts). Ids and facts only:
+// no text.
+export const AI_LIVE_PPV_MAX_ITEMS = 100;
+/** Above any price OnlyFans allows on a message, in USD. */
+export const AI_LIVE_PPV_PRICE_MAX_USD = 10_000;
+
+export const aiLivePpvContextSchema = z.object({
+  /** When the client read the messages from the platform. */
+  capturedAt: aiLiveTextInstantSchema,
+  items: z.array(z.object({
+    /** The model's paid message, by the platform's own id. */
+    platformMessageId: clientNumericIdSchema,
+    /** Its listed price in USD, as the platform gives it. */
+    priceUsd: z.number().positive().max(AI_LIVE_PPV_PRICE_MAX_USD),
+    /** The fan bought it (OnlyFans' `isOpened` on the model's paid message). */
+    purchased: z.boolean(),
+  }).strict()).min(1).max(AI_LIVE_PPV_MAX_ITEMS)
+    .refine((items) => new Set(items.map((item) => item.platformMessageId)).size === items.length, { message: "livePpvContext ids repeat" }),
 }).strict();
 
 // chat-extension R20 HF-8в — the window coverage check (above). Ids only: no
@@ -2607,6 +2638,13 @@ export const aiFeatureStreamBodySchema = z.object({
   // page's `freshText` flag); switched off, it is ignored and the `context_v1`
   // frame says `live.status: "disabled"`.
   liveTextContext: aiLiveTextContextSchema.optional(),
+  // chat-extension X54: the PPV state of the open OnlyFans chat (above).
+  // Accepted where `liveTextContext` is (fast-reply, improve-draft,
+  // hi-greeting, ping; never beside clientContext), and on an OnlyFans page
+  // only: anything else is a 400 with a machine reason. Used under the same
+  // owner's switch as the fresh text (`aiLiveTextContextMode` and the page's
+  // `freshText` flag); switched off, it is ignored.
+  livePpvContext: aiLivePpvContextSchema.optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -8897,6 +8935,7 @@ export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlock
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
+export type AiLivePpvContext = z.infer<typeof aiLivePpvContextSchema>;
 export type AiCoverageCheck = z.infer<typeof aiCoverageCheckSchema>;
 export type AiStartProofV1 = z.infer<typeof aiStartProofV1Schema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;

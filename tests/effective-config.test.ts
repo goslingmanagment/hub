@@ -211,6 +211,8 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiTranscriptDeepMaxRows",
       // H-11b: the health intake's switch.
       "chatExtensionHealthIngestEnabled",
+      // The notes fill's cut-only second pass, read per generation.
+      "aiNotesTrimEnabled",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
@@ -223,6 +225,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     // Traffic plan PR 10: the fan sweep reads its finished-link interval per
     // chunk, so the owner trims the paid sweep without a restart.
     expect(LIVE_CONFIG_KEYS.has("ofapiFanIdentitiesFinishedLinkIntervalHours")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(51);
+    expect(LIVE_CONFIG_KEYS.size).toBe(52);
   });
 });

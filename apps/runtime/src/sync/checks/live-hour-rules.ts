@@ -248,6 +248,9 @@ export function paceCombinedCheck(sends: readonly FanslySendAuditRow[], window: 
       minMarginMs: roundTo(audit.minMarginMs, 1),
       firstViolations: audit.violations.slice(0, 5).map(pair),
       firstInconclusive: audit.inconclusive.slice(0, 5).map(pair),
+      // Plan-b Б12 (accepted residual): listed, never a violation.
+      siteAfterAdmission: audit.siteAfterAdmission.length,
+      firstSiteAfterAdmission: audit.siteAfterAdmission.slice(0, 5).map(pair),
     },
   };
 }

@@ -3,6 +3,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiLivePpvContext,
   AiLiveTextContext,
   AiStartProofV1,
   AiStreamCapability,
@@ -19,6 +20,7 @@ import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
   type AiFeatureContextFrameBody,
+  type AiGatewayCompletionTrim,
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
@@ -36,6 +38,7 @@ import {
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
 import { isPageAllowlisted } from "@agency_hub_core/shared";
+import { notesTrimPass } from "../notes-trim.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import { personaLocalTime } from "../persona-local-time.ts";
@@ -52,10 +55,12 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProof,
   assertHiStartProofRequestShape,
   assertHiStartProofSent,
+  assertLivePpvRequestShape,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
@@ -177,6 +182,9 @@ export interface AiFeatureRequestBody {
    * since R20 HF-8б), merged into the hub's transcript for this generation
    * only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
+  /** chat-extension X54: the PPV state of the open OnlyFans chat, applied to
+   * the transcript of this generation only (context/live-ppv.ts). */
+  livePpvContext?: AiLivePpvContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -504,6 +512,15 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
+  // chat-extension X54: the PPV state rides where the fresh text does, on an
+  // OnlyFans page only; refused before any context loads.
+  if (body.livePpvContext !== undefined) {
+    assertLivePpvRequestShape({
+      feature,
+      isFanslyPage: isFanslyRequest,
+      hasClientContext: body.clientContext !== undefined,
+    });
+  }
 
   // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
   // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
@@ -801,10 +818,24 @@ export async function prepareAiFeatureStream(
       principal,
       page: stored.page,
       conversationRef: body.conversationRef,
+      feature,
       limit: resolvedMessageLimit,
       transcript: loaded,
       liveTextContext: body.liveTextContext,
     });
+    // chat-extension X54: the PPV state applies to what the generation reads,
+    // fresh text included, under the same switch; it scopes the generation
+    // like served fresh text when it changed a mark.
+    const livePpv = await applyLivePpvContext(app, {
+      page: stored.page,
+      transcript: liveText.transcript,
+      livePpvContext: body.livePpvContext,
+    });
+    liveText = {
+      ...liveText,
+      transcript: livePpv.transcript,
+      ...(liveText.contextScope === undefined && livePpv.contextScope !== undefined ? { contextScope: livePpv.contextScope } : {}),
+    };
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
@@ -1378,6 +1409,20 @@ export async function prepareAiFeatureStream(
       now: new Date(),
     });
   }
+  // The questionnaire fill's cut-only second pass (owner 2026-10-17): merge
+  // mode only, behind its live switch, and fail-open like every enrichment
+  // here — a switch lookup that fails leaves the fill as it always was.
+  let trimCompletion: AiGatewayCompletionTrim | undefined;
+  if (feature === "fan-notes-fill" && body.noteFields !== undefined && body.noteValues !== undefined) {
+    try {
+      const effective = await loadEffectiveConfig(app.db, app.config);
+      if (effective.aiNotesTrimEnabled === true) {
+        trimCompletion = notesTrimPass(body.noteFields, body.noteValues);
+      }
+    } catch (error) {
+      app.logger.warn({ feature, pageId, error }, "ai notes trim switch lookup failed");
+    }
+  }
   return prepareAiGatewayStream(
     app,
     principal,
@@ -1389,6 +1434,7 @@ export async function prepareAiFeatureStream(
       || attachedRecaps !== undefined
       || presetQuestion !== undefined
       || splitAll
+      || trimCompletion !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
@@ -1408,6 +1454,7 @@ export async function prepareAiFeatureStream(
               : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
           }
           : {}),
+        ...(trimCompletion !== undefined ? { trimCompletion } : {}),
       }
       : undefined,
   );

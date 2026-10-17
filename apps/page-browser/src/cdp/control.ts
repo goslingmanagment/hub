@@ -172,7 +172,7 @@ export class BrowserControl {
     return world.executionContextId;
   }
 
-  /** "Chrome/155.0.8059.39" */
+  /** "Chrome/155.0.8059.84" */
   async version(): Promise<string> {
     const version = await this.#cdp.send<{ product?: string }>("Browser.getVersion");
     return String(version.product ?? "");

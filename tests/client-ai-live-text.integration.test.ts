@@ -23,6 +23,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
   AI_LIVE_TEXT_FEATURES,
+  AI_LIVE_TEXT_SHARED_FEATURES,
   OPERATION_FEATURES,
   createBundledPersonalities,
 } from "../apps/runtime/src/modules/ai/index.ts";
@@ -56,6 +57,15 @@ const AUDIT = { source: "cli" } as const;
 const FAN = "777000777";
 const OTHER_FAN = "777000888";
 const EXTENSION_VERSION = "chat-extension/1.4.2";
+/**
+ * The features that take fresh text and run on the three-message chat of these
+ * tests. Review and the full Recap (chat-extension X52) need at least 30
+ * messages (`gate_min_messages`): on that chat they stop at their gate, past the
+ * fresh-text check, and their own tests seed a long chat.
+ */
+const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) => feature !== "chat-review" && feature !== "fan-summary");
+/** The scope a generation that served client text is recorded with: none for the recap, which stays shared (X52). */
+const scopeOf = (feature: string): string | undefined => ((AI_LIVE_TEXT_SHARED_FEATURES as readonly string[]).includes(feature) ? undefined : "principal-draft");
 /** In every fresh-text item of these tests, and in no archive row. */
 const MARK = "FRESH-TEXT-ONLY-THE-CLIENT-SAW";
 /** The platform account ids of the pages (`pages.external_page_id`). */
@@ -440,7 +450,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("refuses fresh text on every feature but the four that draft a message to the fan", async (context) => {
+  it("refuses fresh text on every feature but the four that draft a message to the fan, Review, Coach and Recap (X52)", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     // The refusal does not depend on the owner's switch: both states.
@@ -451,6 +461,11 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       for (const feature of OPERATION_FEATURES) {
         const callsBefore = provider.calls;
         const asked = await ask({ feature, live: [freshFanMessage()] });
+        if (feature === "chat-review" || feature === "fan-summary") {
+          // Taken, and stopped by its own gate on this short chat (their tests below).
+          expectRefused(asked.response, 400, "gate_min_messages");
+          continue;
+        }
         if ((AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature)) {
           expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
           expect(asked.context!.live.status, feature).toBe(switchedOn ? "served" : "disabled");
@@ -459,15 +474,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
         expectRefused(asked.response, 400, "bad_request", "live_text_not_allowed");
         expect(provider.calls, feature).toBe(callsBefore);
       }
-      // Both recap sizes.
-      expectRefused(
-        (await ask({ feature: "fan-summary", live: [freshFanMessage()], body: { summaryMode: "short" } })).response,
-        400, "bad_request", "live_text_not_allowed",
-      );
+      // The short recap (X52) too: taken, and stopped by the same gate.
+      expectRefused((await ask({ feature: "fan-summary", live: [freshFanMessage()], body: { summaryMode: "short" } })).response, 400, "gate_min_messages");
     }
     // Nothing a refused request named was recorded.
     expect((await generations()).map((row) => row.feature).sort()).toEqual(
-      [...AI_LIVE_TEXT_FEATURES, ...AI_LIVE_TEXT_FEATURES].sort(),
+      [...SHORT_CHAT_FEATURES, ...SHORT_CHAT_FEATURES].sort(),
     );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -657,14 +669,64 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
     expect(JSON.stringify(row.params)).not.toContain(MARK);
 
-    // Each of the four features reads it.
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    // Each of the six features reads it.
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await ask({ feature, live: [freshFanMessage()] });
       expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
       expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
       expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
-      expect((await lastGeneration()).params.contextScope, feature).toBe("principal-draft");
+      expect((await lastGeneration()).params.contextScope, feature).toBe(scopeOf(feature));
     }
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X52] Review and Coach read it: the generation is the asker's own, never a recap", async (context) => {
+    if (!server) return context.skip();
+    // A chat long enough for Review (30 messages), the last of them an hour old.
+    for (let index = 0; index < 30; index += 1) {
+      await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
+    }
+    await switchFreshText("serve");
+    const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
+
+    for (const feature of ["chat-review", "coach-chat"] as const) {
+      const asked = await ask({ feature, live });
+      expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
+      expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
+      expect(asked.transcript, feature).toContain(`${MARK} right here`);
+      expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 1 });
+      const row = await lastGeneration();
+      expect(row.feature).toBe(feature);
+      expect(row.params.contextScope, feature).toBe(AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT);
+    }
+    // Neither is a recap: the shared readers have nothing to give.
+    expect(await getFreshestUsableRecaps(app.db, { pageId: pageIds["lora-of"]!, conversationRefs: [FAN] }))
+      .toEqual({ full: null, short: null });
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X52] Recap reads it and stays the fan's shared recap: never scoped, the shared read gives it, it proves a dossier", async (context) => {
+    if (!server) return context.skip();
+    for (let index = 0; index < 30; index += 1) {
+      await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
+    }
+    await switchFreshText("serve");
+    const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
+    for (const body of [{}, { summaryMode: "short" }]) {
+      const asked = await ask({ feature: "fan-summary", live, body });
+      expect(asked.status, asked.response.body).toBe(200);
+      expect(asked.transcript).toContain(`${MARK} are you there?`);
+      expect(asked.context!.live).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 1 });
+      const row = await lastGeneration();
+      expect(row.params).not.toHaveProperty("contextScope");
+      // The manifest still says what the client added, by id.
+      expect(liveManifest(row)).toMatchObject({ status: "served", accepted: 2, acceptedRefs: ["9004", "9005"] });
+    }
+    // Both slots are the recaps just built: shared with every chatter of the page.
+    const recaps = await getFreshestUsableRecaps(app.db, { pageId: pageIds["lora-of"]!, conversationRefs: [FAN] });
+    expect([recaps.full?.feature, recaps.short?.feature]).toEqual(["fan-summary", "fan-summary"]);
+    expect(recaps.full?.params).toMatchObject({ summaryMode: "full" });
+    expect(recaps.short?.params).toMatchObject({ summaryMode: "short" });
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -945,7 +1007,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     };
     const before = await counts();
 
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await ask({ feature, live: [freshFanMessage(), fresh("9005", "model", `${MARK} here`, 0.5)] });
       expect(asked.status, `${feature}: ${asked.response.body}`).toBe(200);
       expect(asked.context!.live).toEqual({ status: "served", accepted: 2, rejected: 0, matched: 0 });
@@ -958,12 +1020,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
             + (select count(*) from page_dm_messages where platform_message_id in ('9004', '9005'))::int as n`,
     );
     expect(rows[0]!.n).toBe(0);
-    // The only place the text exists is the four generations' restricted records.
+    // The only place the text exists is the six generations' restricted records.
     const recorded = await generations();
-    expect(recorded).toHaveLength(AI_LIVE_TEXT_FEATURES.length);
+    expect(recorded).toHaveLength(SHORT_CHAT_FEATURES.length);
     for (const row of recorded) {
       expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
-      expect(row.params.contextScope).toBe("principal-draft");
+      expect(row.params.contextScope, row.feature).toBe(scopeOf(row.feature));
     }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -976,8 +1038,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const scope = (await lastGeneration()).params.contextScope;
     expect(scope).toBe("principal-draft");
 
-    // Fresh text is refused on fan-summary, so no recap can carry the scope
-    // today. Should a later lane write one, the readers already skip it: the
+    // A recap never carries the scope (AI_LIVE_TEXT_SHARED_FEATURES, X52), so
+    // none of the readers meets one on a recap row. Should a later lane write one, the readers already skip it: the
     // same scope value on a recap row, beside an older plain one.
     const recap = async (completion: string, minutes: number, scoped: boolean) => {
       const generationRef = randomUUID();
@@ -1125,7 +1187,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await switchFreshText("shadow");
     expect((await ask({ live: snapshot })).context!.live.status).toBe("shadow");
     await switchFreshText("serve");
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       expect((await ask({ feature, live: snapshot, body: { knownFanMessageIds: ["9004"] } })).context!.live.status).toBe("served");
     }
     expect((await ask({ live: [fresh("7001", "fan", "x", 30)] })).status).toBe(400);
@@ -1301,9 +1363,9 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       headRef: fsId(5), archiveSawHead: false, acceptedRefs: [fsId(4), fsId(5)],
     });
     expect(row.params.contextManifest).toMatchObject({ source: "live_union" });
-    // Each of the four features reads it. Ping on Fansly is for a fan who went
+    // Each of the six features reads it. Ping on Fansly is for a fan who went
     // quiet: the fan wrote minutes ago, so it is refused, as without the tail.
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await askFansly({ feature, live: [fsFresh(4, "fan", `${MARK} are you there?`, 1)] });
       if (feature === "ping") {
         expectRefused(asked.response, 400, "gate_ping_active");
@@ -1529,7 +1591,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       return (await testDb!.pool.query<Record<string, number>>(`select ${columns}`)).rows[0]!;
     };
     const before = await counts();
-    for (const feature of AI_LIVE_TEXT_FEATURES) {
+    for (const feature of SHORT_CHAT_FEATURES) {
       const asked = await askFansly({
         feature, live: [fsFresh(4, "fan", `${MARK} are you there?`, SILENT), fsFresh(5, "model", `${MARK} here`, 0.5)],
       });
@@ -1547,8 +1609,101 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     for (const row of await generations()) {
       expect(JSON.stringify(row.prompt_blocks)).toContain(MARK);
       expect(JSON.stringify(row.params)).not.toContain(MARK);
-      expect(row.params.contextScope).toBe("principal-draft");
+      expect(row.params.contextScope, row.feature).toBe(scopeOf(row.feature));
     }
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // chat-extension X54: the PPV state of the open chat, read by the client from
+  // OnlyMonster's API (`livePpvContext`, context/live-ppv.ts).
+  async function paidArchive(ref: string, price: number, opened: boolean | null, minutes: number) {
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id,
+         is_sent_by_me, occurred_at, text_plain, is_tip, tip_amount_mills, price_mills, is_opened, media_metadata)
+       values ($1, 'onlyfans', $2, $3, null, true, $4, 'just for you', false, 0, $5, $6, '[{"type":"video"}]'::jsonb)`,
+      [pageIds["lora-of"], FAN, ref, minutesAgo(minutes), price * 1000, opened],
+    );
+  }
+  const livePpv = (items: Array<{ platformMessageId: string; priceUsd: number; purchased: boolean }>) => ({
+    livePpvContext: { capturedAt: new Date().toISOString(), items },
+  });
+  const ppvManifest = (row: GenerationRow) => (
+    (row.params.contextManifest as Record<string, unknown> | undefined)?.livePpv as Record<string, unknown> | undefined
+  );
+
+  it("[X54] the PPV state is refused where it can never be used, and announced as live-ppv-v1", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    const state = livePpv([{ platformMessageId: "9002", priceUsd: 25, purchased: true }]);
+    // A feature without fresh text never takes it. Review, Coach and Recap take it as they take the fresh text
+    // (X52): Review on this short chat passes the check and stops at its own gate.
+    expectRefused((await ask({ feature: "help-me", body: state })).response, 400, "bad_request", "live_text_not_allowed");
+    expectRefused((await ask({ feature: "chat-review", body: state })).response, 400, "gate_min_messages");
+    expectRefused((await ask({ page: "lora-fansly", platform: "fansly", body: state })).response, 400, "bad_request", "live_text_not_allowed");
+    const bootstrap = await server.inject({
+      method: "GET",
+      url: "/api/v1/client/bootstrap",
+      headers: { authorization: `Bearer ${grishaExtensionToken}`, "x-client-version": EXTENSION_VERSION },
+    });
+    expect(bootstrap.json<{ capabilities: string[] }>().capabilities).toContain("live-ppv-v1");
+    expect(provider.calls).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("[X54] off it is ignored, in shadow recorded, in serve the prompt says what OnlyFans says now", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    await paidArchive("9004", 25, null, 45);
+    await paidArchive("9005", 40, false, 40);
+    const state = livePpv([
+      { platformMessageId: "9004", priceUsd: 25, purchased: true },
+      { platformMessageId: "9005", priceUsd: 40, purchased: true },
+      { platformMessageId: "9006", priceUsd: 15, purchased: false },
+    ]);
+
+    // The archive read keeps no purchase state (context/index.ts): both paid messages read `unknown`.
+    const plain = await ask();
+    expect(plain.transcript).toContain("Model: [PPV $25.00, unknown] just for you");
+    expect(plain.transcript).toContain("Model: [PPV $40.00, unknown] just for you");
+    const off = await ask({ body: state });
+    expect(off.status, off.response.body).toBe(200);
+    expect(off.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toBeUndefined();
+
+    await switchFreshText("shadow");
+    const shadow = await ask({ body: state });
+    expect(shadow.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toMatchObject({
+      source: "client-supplied", mode: "shadow", sent: 3, changed: 2, matched: 0, ignored: 1,
+      changedRefs: ["9004", "9005"], ignoredRefs: ["9006"],
+    });
+
+    await switchFreshText("serve");
+    // The model's paid message the archive has not caught yet comes with the fresh text and gets its mark too.
+    const served = await ask({ live: [fresh("9006", "model", `${MARK} one more`, 1)], body: state });
+    expect(served.status, served.response.body).toBe(200);
+    expect(served.transcript).toContain("Model: [PPV $25.00, purchased] just for you");
+    expect(served.transcript).toContain("Model: [PPV $40.00, purchased] just for you");
+    expect(served.transcript).toContain(`Model: [PPV $15.00, not purchased] ${MARK} one more`);
+    expect(served.transcript!.slice(served.transcript!.indexOf("<transcript>"))).not.toContain(", unknown]");
+    const row = await lastGeneration();
+    expect(row.params.contextScope).toBe(AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT);
+    expect(ppvManifest(row)).toMatchObject({ mode: "serve", sent: 3, changed: 3, ignored: 0 });
+
+    // Alone, without fresh text, it still scopes the generation it changed; a state that changes nothing does not.
+    await ask({ body: livePpv([{ platformMessageId: "9004", priceUsd: 25, purchased: true }]) });
+    expect((await lastGeneration()).params.contextScope).toBe("principal-draft");
+    const outside = await ask({ body: livePpv([{ platformMessageId: "8000", priceUsd: 10, purchased: true }]) });
+    expect(outside.prompt).toBe(plain.prompt);
+    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
+    expect(ppvManifest(await lastGeneration())).toMatchObject({ mode: "serve", changed: 0, ignored: 1, ignoredRefs: ["8000"] });
+
+    // Nothing of it is stored: the archive still holds what it held.
+    const { rows } = await testDb!.pool.query<{ message_ref: string; is_opened: boolean | null }>(
+      "select message_ref, is_opened from message_archive where message_ref in ('9004', '9005') order by message_ref",
+    );
+    expect(rows).toEqual([{ message_ref: "9004", is_opened: null }, { message_ref: "9005", is_opened: false }]);
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

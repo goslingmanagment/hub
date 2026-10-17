@@ -42,15 +42,30 @@ import type { AiContextMessageRef, TranscriptServedSnapshot } from "./context-fr
 // loader is the hub's own truth and stays exactly what it was for every caller
 // that sends no fresh text.
 
-/** The features that draft a message to the fan. Recap, Review and Coach read
- *  the hub's transcript only: a recap built on one person's page would be
- *  shared with everyone. */
+/** The features that draft a message to the fan, and since chat-extension
+ *  X52 Review and Coach (`live-text-review-coach-v1`) and Recap, full and
+ *  short (`live-text-recap-v1`). */
 export const AI_LIVE_TEXT_FEATURES = [
   "fast-reply",
   "improve-draft",
   "hi-greeting",
   "ping",
+  "chat-review",
+  "coach-chat",
+  "fan-summary",
 ] as const satisfies readonly OperationFeature[];
+
+/** The features whose generation stays shared when it read fresh text: the
+ *  recap. The owner ruled (chat-extension X52, 2026-10-17) that a Recap built
+ *  with the open chat's latest messages is the fan's recap like any other —
+ *  shared with every chatter of the page and a dossier's proof — as the
+ *  released Fansly extension's recap on its own transcript always was. So
+ *  there is still no private recap per chatter: a recap is never scoped. Every
+ *  other feature's generation that served a client item is scoped
+ *  `principal-draft`. */
+export const AI_LIVE_TEXT_SHARED_FEATURES = [
+  "fan-summary",
+] as const satisfies readonly (typeof AI_LIVE_TEXT_FEATURES)[number][];
 
 /** `params.contextScope` of a generation whose transcript held text only its
  *  caller's client supplied. Shared readers skip every row that carries a scope
@@ -456,7 +471,8 @@ export interface AppliedLiveText<T extends LiveTextTranscript> {
  *   thrown: a shadow mode never changes what a caller gets.
  * - `serve`: a conflict refuses the request (400 `context_conflict`). Otherwise
  *   the merged transcript serves; with at least one accepted item the
- *   generation is scoped `principal-draft`.
+ *   generation is scoped `principal-draft`, unless its feature is a shared one
+ *   (the recap, AI_LIVE_TEXT_SHARED_FEATURES).
  *
  * One database read (the store lookup for the ids the transcript does not
  * hold), and only for a page the caller was already admitted to. It fails
@@ -474,6 +490,8 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
     principal: HumanAuthPrincipal;
     page: LiveTextPage;
     conversationRef: string;
+    /** The generation's feature: a shared one (AI_LIVE_TEXT_SHARED_FEATURES) is never scoped. */
+    feature: OperationFeature;
     /** The transcript window of this generation. */
     limit: number;
     transcript: T;
@@ -555,6 +573,8 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
       served: { ...loaded.served, window: merge.window },
     },
     live,
-    ...(merge.accepted.length > 0 ? { contextScope: AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT } : {}),
+    ...(merge.accepted.length > 0 && !(AI_LIVE_TEXT_SHARED_FEATURES as readonly string[]).includes(input.feature)
+      ? { contextScope: AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT }
+      : {}),
   };
 }

@@ -137,9 +137,12 @@ export class SiteObserver {
     cdp.on("Network.loadingFailed", (event) => this.#onFailed(event));
   }
 
-  /** Chrome went: whatever was followed is gone with it. */
-  reset(): void {
+  /** Chrome went: whatever was followed is gone with it — each one that left
+   *  ends as a failure, never left flying in the engine's journal. */
+  reset(why = "the page's browser went"): void {
+    const followed = [...this.#requests.values()];
     this.#requests.clear();
+    for (const r of followed) this.#abandon(r, why);
     for (const id of this.#early.keys()) this.#takeEarly(id);
   }
 
@@ -202,10 +205,29 @@ export class SiteObserver {
   }
 
   #onWillBeSent(event: CdpEvent): void {
-    const p = event.params as { requestId?: string; frameId?: string; type?: string; request?: { url?: string; method?: string } };
+    const p = event.params as {
+      requestId?: string;
+      frameId?: string;
+      type?: string;
+      request?: { url?: string; method?: string };
+      redirectResponse?: { status?: number };
+    };
     const id = p.requestId;
     if (typeof id !== "string") return;
     const early = this.#takeEarly(id);
+    const previous = this.#requests.get(id);
+    if (previous !== undefined) {
+      // A redirect goes on under the same id: the hop before it ended with
+      // its answer (no loadingFinished comes for it).
+      this.#requests.delete(id);
+      const hop = p.redirectResponse?.status;
+      if (typeof hop === "number") {
+        previous.status = hop;
+        this.#ended(previous, null);
+      } else {
+        this.#abandon(previous, "its request id came again");
+      }
+    }
     if (this.#deps.isHubRequest(id)) return;
     let url: URL;
     try {
@@ -218,7 +240,6 @@ export class SiteObserver {
     const verdict = mapDecide({ method, url: url.href, ...(typeof p.type === "string" ? { resourceType: p.type } : {}) }, this.#deps.mode());
     const route = "route" in verdict && typeof verdict.route === "string" ? verdict.route : "site.other";
     const platformData = "platformData" in verdict && verdict.platformData === true;
-    this.#requests.delete(id);
     const r: Observed = {
       id,
       sessionId: event.sessionId ?? null,
@@ -237,7 +258,11 @@ export class SiteObserver {
       fingerprint: null,
     };
     this.#requests.set(id, r);
-    if (this.#requests.size > OBSERVED_KEPT) this.#requests.delete(this.#requests.keys().next().value!);
+    if (this.#requests.size > OBSERVED_KEPT) {
+      const oldest = this.#requests.values().next().value!;
+      this.#requests.delete(oldest.id);
+      this.#abandon(oldest, "too many requests followed");
+    }
     if (early?.response !== undefined) this.#responseExtra(r, early.response);
     if (early?.request !== undefined) this.#sent(r, early.request);
   }
@@ -378,7 +403,15 @@ export class SiteObserver {
     this.#ended(r, p.canceled ? "canceled" : (p.errorText ?? "failed"));
   }
 
-  #ended(r: Observed, error: string | null, bytes: number | null = null): void {
+  /** Followed no further: it ends as a failed load would — what Chrome showed
+   *  of its answer kept, a 429 or 401 still holding — so its attempt never
+   *  stays unfinished until the engine's next start. Not a read the login
+   *  desk may take: its answer never came whole. */
+  #abandon(r: Observed, why: string): void {
+    this.#ended(r, `followed no further: ${why}`, null, false);
+  }
+
+  #ended(r: Observed, error: string | null, bytes: number | null = null, read = true): void {
     const sent = r.sentMono !== null;
     if (sent) {
       this.#send({
@@ -405,7 +438,7 @@ export class SiteObserver {
       bytes,
       bytesSource: bytes === null ? null : "loading_finished",
     });
-    if (!r.preflight) this.#deps.readEnded?.({ route: r.route, status: r.status, sent, session: r.fingerprint });
+    if (read && !r.preflight) this.#deps.readEnded?.({ route: r.route, status: r.status, sent, session: r.fingerprint });
   }
 
   /** The answer's body, as Chrome kept it, to the buffer (attempt 0: the

@@ -72,6 +72,24 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // not serve. With it the hub serves all of `voice`; the owner's switches and
   // the lane decide from here on.
   "voice-notes-v1",
+  // Who sent each outgoing message: POST
+  // /api/v1/client/pages/:pageLabel/send-attributions (clientSendAttributions),
+  // the person's own sends from the page's composer as the extension observed
+  // them (0286). No owner switch: the extension reports while the hub lists it.
+  "send-attribution-v1",
+  // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
+  // state of the open OnlyFans chat read from the platform. Taking the field is
+  // not using it: the fresh text's switch (`aiLiveTextContextMode`, the page's
+  // `freshText` flag) decides.
+  "live-ppv-v1",
+  // chat-extension X52: the AI feature stream takes `liveTextContext` on
+  // `chat-review` and `coach-chat` too, not only on the four features that
+  // draft a message to the fan (AI_LIVE_TEXT_FEATURES). Recap still refuses it.
+  "live-text-review-coach-v1",
+  // chat-extension X52: Recap (`fan-summary`, full and short) takes
+  // `liveTextContext` too, and a recap built with it stays shared and a
+  // dossier's proof (AI_LIVE_TEXT_SHARED_FEATURES; owner ruling 2026-10-17).
+  "live-text-recap-v1",
 ];
 
 /**

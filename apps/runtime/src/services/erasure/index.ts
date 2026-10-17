@@ -1029,6 +1029,9 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   { column: "client_send_custody.fan_ref", target: "client_send_custody", reach: "predicate" },
   { column: "client_greetings.fan_ref", target: "client_greetings", reach: "predicate" },
   { column: "client_fan_leases.fan_ref", target: "client_fan_leases", reach: "predicate" },
+  // Who sent each outgoing message (0286): its own predicate, `page_id in the
+  // platform's pages and (fan_ref = ref or conversation_ref = ref)`.
+  { column: "client_send_attributions.fan_ref", target: "client_send_attributions", reach: "predicate" },
   // Only the two earnings endpoint planes use subject_ref as a fan reference.
   { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
@@ -1189,6 +1192,15 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       run: tx => execCount(tx, sql`delete from ${sql.raw(table)} where ${clientClaimPred}`),
     });
   }
+
+  // Who sent each outgoing message (0286): a fan's sends name the fan, and on a
+  // platform whose chats have ids of their own, the chat.
+  const sendAttributionPred = sql`page_id in ${scope.pageIds} and (fan_ref = ${ref} or conversation_ref = ${ref})`;
+  targets.push({
+    plane: "hot", target: "client_send_attributions", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from client_send_attributions where ${sendAttributionPred}`),
+    run: tx => execCount(tx, sql`delete from client_send_attributions where ${sendAttributionPred}`),
+  });
 
   // Fansly Sync Engine (0228). Work and attempts name the fan by subject — a
   // thread's work by the fan's chat (group id), fan work (`fan-profiles.*`) by
@@ -1794,6 +1806,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_send_custody", "page_id"],
     ["client_greetings", "page_id"],
     ["client_fan_leases", "page_id"],
+    // Who sent each outgoing message (0286).
+    ["client_send_attributions", "page_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
     // Desktop media images (0210): signed file locators, where media appear and the decision log.
