@@ -42,14 +42,18 @@ import type { AiContextMessageRef, TranscriptServedSnapshot } from "./context-fr
 // loader is the hub's own truth and stays exactly what it was for every caller
 // that sends no fresh text.
 
-/** The features that draft a message to the fan. Recap, Review and Coach read
- *  the hub's transcript only: a recap built on one person's page would be
- *  shared with everyone. */
+/** The features that draft a message to the fan, and since chat-extension
+ *  X52 (`live-text-review-coach-v1`) Review and Coach: each of them answers the
+ *  one person who asked, and no shared reader selects its record. Recap (full
+ *  and short) reads the hub's transcript only: recaps are shared, and there is
+ *  no private recap per chatter. */
 export const AI_LIVE_TEXT_FEATURES = [
   "fast-reply",
   "improve-draft",
   "hi-greeting",
   "ping",
+  "chat-review",
+  "coach-chat",
 ] as const satisfies readonly OperationFeature[];
 
 /** `params.contextScope` of a generation whose transcript held text only its

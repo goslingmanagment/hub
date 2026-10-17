@@ -670,12 +670,16 @@ Refused before any context loads, after the page was admitted (a client bug, nev
 
 | Case | Answer |
 |---|---|
-| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
+| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping`, `chat-review`, `coach-chat` | 400 `bad_request`, reason `live_text_not_allowed` |
 | together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
 | no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
 
-Recap (full and short), Review, Coach and Help never take it: a recap built on one person's page
-would be shared with everyone.
+Recap (full and short) and Help never take it: recaps are shared, and a recap built on one
+person's page would be that person's alone (no private recap per chatter). Review and Coach take it
+since chat-extension X52 (bootstrap capability `live-text-review-coach-v1`): each answers only the
+person who asked, and its record, scoped like any other (below), is read back by no one else. A
+client sends it to them only where the bootstrap lists that capability; an older hub refuses it
+there.
 
 Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
 refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail
@@ -714,8 +718,8 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
 
 - `items`: 1 to 100 (`AI_LIVE_PPV_MAX_ITEMS`), each id once; `priceUsd` above 0 and at most
   10 000 (`AI_LIVE_PPV_PRICE_MAX_USD`); no text.
-- Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`; never
-  beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
+- Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`, and since
+  chat-extension X52 `chat-review` and `coach-chat`; never beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
   `live_text_not_allowed`. It needs no capability header: nothing of it rides the frame.
 - Used under the fresh text's switch (`aiLiveTextContextMode` and the page's `freshText` flag);
   off, it is ignored. `shadow` records what would change in the context manifest (`livePpv`: ids

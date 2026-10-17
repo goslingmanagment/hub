@@ -70,7 +70,7 @@ describe("livePpvContext: the wire shape", () => {
     expect(() => assertLivePpvRequestShape({ feature: "fast-reply", isFanslyPage: true, hasClientContext: false })).toThrow(/OnlyFans/);
     let refused: unknown;
     try {
-      assertLivePpvRequestShape({ feature: "chat-review", isFanslyPage: false, hasClientContext: false });
+      assertLivePpvRequestShape({ feature: "fan-summary", isFanslyPage: false, hasClientContext: false });
     } catch (error) {
       refused = error;
     }
