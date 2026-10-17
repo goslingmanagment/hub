@@ -9,20 +9,22 @@
 // - Tunnels to the API host pass through the send gate (gate.ts): a new one
 //   only for the request just released, and every TLS record Chrome writes
 //   into one is decided on its own.
-// - Tunnels to the socket host carry one socket each, and each is admitted
-//   by the engine (PR 10; ws/sockets.ts): the CONNECT waits for the
-//   admission and is refused without one (stage 1, amendment 8). Admitted,
+// - Tunnels to the socket host carry the site's socket, as any browser's
+//   would (variant Б, plan-b §4.1.9): a CONNECT opens at once, nothing waits
+//   for the engine. The socket's path (ws/sockets.ts) hears of each tunnel:
 //   its handshake request — the first big application-data record after the
 //   TLS handshake (the second in TLS 1.3, whose client Finished is
-//   application data too; the first if it rides early data) — goes up only
-//   before the admission's deadline; at the deadline, with the request not
-//   sent, the tunnel is cut (spec §9). After the request, until the server
-//   answers, Chrome's records are the request's; then every record Chrome
-//   writes is decided by the socket gate (socket-gate.ts): only what a
-//   message of spec §2.6 or Chrome's own control frame can be goes up —
-//   anything else is held, the tunnel is cut and the page stops. A tunnel
-//   that is not TLS, or whose TLS the gate cannot measure, is cut before its
-//   request goes.
+//   application data too; the first if it rides early data) — and its end.
+//   After the request, until the server answers, Chrome's records are the
+//   request's; then every record Chrome writes is decided by the socket gate
+//   (socket-gate.ts): only what a message of spec §2.6 or Chrome's own
+//   control frame can be goes up. A record before the connection's
+//   authorization that may be it under a token not observed yet is held
+//   with what follows, decided again as the site's session is observed, and
+//   at most `authHoldMs`: then that tunnel alone is cut. Anything else the
+//   gate does not let up never goes: the tunnel is cut and the page stops.
+//   A tunnel that is not TLS, or whose TLS the gate cannot measure, is cut
+//   before its request goes.
 // - Every other host the site loads goes through as a plain tunnel: Fansly's
 //   page, static files and media, and third-party hosts as any browser's
 //   would (owner decision №2); the hosts the map of operations closes are
@@ -71,17 +73,19 @@ export interface TunnelRecord {
 export type SocketTunnelEvent =
   | { kind: "open" }
   | { kind: "handshake_sent"; mono: number; wall: number }
-  /** The socket gate held a record (it never went up); the tunnel is cut. */
-  | { kind: "refused"; recordBytes: number; why: string }
+  /** The socket gate holds a record that may be the authorization under a
+   *  token not observed yet: the site's session is to be read again. */
+  | { kind: "holding"; recordBytes: number; why: string }
+  /** The socket gate did not let a record up (it never went); the tunnel is
+   *  cut. `late`: one held for the authorization's size that did not come in
+   *  time — not proven to be a forbidden message. */
+  | { kind: "refused"; recordBytes: number; why: string; late: boolean }
   | { kind: "ended"; result: string; handshakeSent: boolean };
 
-/** A socket's CONNECT waiting for the engine's admission. */
+/** A tunnel of the site's socket, as its path takes it. */
 export interface SocketTicket {
-  /** The admission's connection id. */
+  /** The tunnel's id for the socket's path (cutSocket). */
   id: string;
-  /** The admission's deadline (CLOCK_MONOTONIC ms) to let the CONNECT
-   *  through, or null to refuse it. */
-  granted: Promise<number | null>;
   event: (event: SocketTunnelEvent) => void;
   /** What the socket gate needs to know when it decides a record. */
   rules: () => SocketRules;
@@ -89,9 +93,12 @@ export interface SocketTicket {
 
 export interface EgressOptions {
   classify: HostClassifier;
-  /** A CONNECT to the socket host: its admission (a ticket), or why it is
-   *  refused now. Without it every such CONNECT is refused. */
-  admitSocket?: (host: string, port: number) => SocketTicket | string;
+  /** A CONNECT to the socket host: its ticket, or why it is refused.
+   *  Without it every such CONNECT is refused. */
+  openSocket?: (host: string, port: number) => SocketTicket | string;
+  /** How long the socket gate holds a record for the authorization's size
+   *  (default SOCKET_AUTH_HOLD_MS). */
+  authHoldMs?: number;
   gate?: ApiGate;
   /** Every refusal and every closed tunnel (the connection journal). */
   onRecord?: (record: TunnelRecord) => void;
@@ -108,12 +115,21 @@ export interface EgressOptions {
 
 const EMPTY = Buffer.alloc(0);
 const RECENT_RECORDS = 1000;
+/** A record that may be the socket's authorization waits this long at most
+ *  for the site's session to be observed (plan-b §4.1.9: a few seconds). */
+export const SOCKET_AUTH_HOLD_MS = 5_000;
+
+interface SocketHold {
+  /** The held record and everything Chrome wrote after it, in order. */
+  data: Buffer[];
+  bytes: number;
+  recordBytes: number;
+  why: string;
+  timer: NodeJS.Timeout;
+}
 
 interface SocketTunnel {
   ticket: SocketTicket;
-  /** The admission's deadline; 0 while it waits for it. */
-  deadline: number;
-  timer: NodeJS.Timeout | null;
   /** Chrome's first record was a TLS handshake record. */
   tls: boolean;
   /** Big application-data records Chrome wrote before its request. */
@@ -124,6 +140,8 @@ interface SocketTunnel {
   phase: "handshake" | "request" | "frames";
   /** Measured from the server's hello. */
   gate: SocketRecordGate | null;
+  /** A record held for the authorization's size, with what follows. */
+  hold: SocketHold | null;
 }
 
 class Tunnel {
@@ -210,9 +228,29 @@ export class Egress {
     return this.#cutWhere((tunnel) => tunnel.record.cls === cls, reason);
   }
 
-  /** Cut the tunnel of one socket's admission; returns whether it was there. */
+  /** Cut the tunnel of one socket; returns whether it was there. */
   cutSocket(id: string, reason: string): boolean {
     return this.#cutWhere((tunnel) => tunnel.socket?.ticket.id === id, reason) > 0;
+  }
+
+  /** What the socket gate knows changed (the site's session was observed):
+   *  every record held for the authorization's size is decided again. */
+  socketRulesChanged(): void {
+    for (const tunnel of [...this.#tunnels]) {
+      const socket = tunnel.socket;
+      const hold = socket?.hold ?? null;
+      if (socket == null || hold === null) continue;
+      // Its deadline stands: kept if it is held again, cleared once it goes.
+      socket.hold = null;
+      this.#onSocketData(tunnel, socket, Buffer.concat(hold.data), hold);
+    }
+  }
+
+  /** Records held for the authorization's size now (tests, diagnostics). */
+  get socketHolds(): number {
+    let held = 0;
+    for (const tunnel of this.#tunnels) if (tunnel.socket?.hold) held += 1;
+    return held;
   }
 
   /** Refusals of CONNECTs to `host:port` since `sinceMono` (the self-test
@@ -276,7 +314,7 @@ export class Egress {
     const record = tunnel.record;
     record.closedMono = monoMs();
     record.closedWall = wallMs();
-    record.held += tunnel.heldBytes;
+    record.held += tunnel.heldBytes + (tunnel.socket?.hold?.bytes ?? 0);
     record.result = result;
     if (!endClient) tunnel.client.destroy();
     tunnel.upstream?.destroy();
@@ -288,8 +326,7 @@ export class Egress {
   #socketEnded(tunnel: Tunnel, result: string): void {
     const socket = tunnel.socket;
     if (socket === null) return;
-    if (socket.timer) clearTimeout(socket.timer);
-    socket.timer = null;
+    if (socket.hold !== null) clearTimeout(socket.hold.timer);
     this.#tell(socket, { kind: "ended", result, handshakeSent: socket.handshakeSent });
   }
 
@@ -301,13 +338,6 @@ export class Egress {
     } catch (error) {
       this.#log("socket.event_failed", { kind: event.kind, error: errorMessage(error) });
     }
-  }
-
-  /** A socket's CONNECT that waited, refused after all. */
-  #refuseWaiting(tunnel: Tunnel, result: string): void {
-    if (!this.#tunnels.delete(tunnel)) return;
-    this.#refuse(tunnel.record, tunnel.client, result);
-    this.#socketEnded(tunnel, result);
   }
 
   #refuse(record: TunnelRecord, client: Socket, result: string): void {
@@ -333,6 +363,12 @@ export class Egress {
     if (bytes.length === 0 || !upstream) return;
     tunnel.record.up += bytes.length;
     if (!upstream.write(bytes)) tunnel.client.pause();
+    const socket = tunnel.socket;
+    if (socket !== null && socket.phase === "request" && !socket.handshakeSent) {
+      // Its request's bytes went up, not just its header through the gate.
+      socket.handshakeSent = true;
+      this.#tell(socket, { kind: "handshake_sent", mono: monoMs(), wall: wallMs() });
+    }
   }
 
   #onClientData(tunnel: Tunnel, chunk: Buffer): void {
@@ -347,11 +383,18 @@ export class Egress {
   }
 
   /** Chrome's bytes on a socket's tunnel, decided record by record at
-   *  their headers: before the request, the request itself only before the
-   *  admission's deadline (Astra's review of the prototype, finding 6); after
-   *  it, the socket gate. A record that is not let up never goes, nor
-   *  anything after it: the tunnel is cut. */
-  #onSocketData(tunnel: Tunnel, socket: SocketTunnel, chunk: Buffer): void {
+   *  their headers: before the request, the request itself; after it, the
+   *  socket gate. A record held for the authorization's size keeps what
+   *  follows behind it (`held`: the hold it is decided again for, its
+   *  deadline kept). A record that is not let up never goes, nor anything
+   *  after it: the tunnel is cut. */
+  #onSocketData(tunnel: Tunnel, socket: SocketTunnel, chunk: Buffer, held: SocketHold | null = null): void {
+    if (socket.hold !== null) {
+      socket.hold.data.push(chunk);
+      socket.hold.bytes += chunk.length;
+      if (socket.hold.bytes > (this.#options.heldLimitBytes ?? 4 * 1024 * 1024)) this.#refuseHeld(tunnel, socket, "held bytes over the limit");
+      return;
+    }
     const data = tunnel.partial.length > 0 ? Buffer.concat([tunnel.partial, chunk]) : chunk;
     tunnel.partial = EMPTY;
     let offset = 0;
@@ -369,21 +412,52 @@ export class Egress {
       }
       const total = 5 + data.readUInt16BE(offset + 3);
       const stop = this.#socketRecord(tunnel, socket, data[offset]!, total);
+      if (stop !== null && "hold" in stop) {
+        // What was let up before it goes; it and what follows wait.
+        this.#up(tunnel, data.subarray(0, offset));
+        const rest = Buffer.from(data.subarray(offset));
+        const first = held === null;
+        const timer = held?.timer ?? setTimeout(() => this.#refuseHeld(tunnel, socket, `no session of the site it could be the authorization of within ${this.#options.authHoldMs ?? SOCKET_AUTH_HOLD_MS} ms`), this.#options.authHoldMs ?? SOCKET_AUTH_HOLD_MS);
+        timer.unref();
+        socket.hold = { data: [rest], bytes: rest.length, recordBytes: total, why: stop.hold, timer };
+        if (first) {
+          this.#log("socket.record_held", { id: tunnel.record.id, recordBytes: total, why: stop.hold });
+          this.#tell(socket, { kind: "holding", recordBytes: total, why: stop.hold });
+        }
+        return;
+      }
+      if (held !== null) {
+        // The held record goes on: its deadline is over.
+        clearTimeout(held.timer);
+        held = null;
+      }
       if (stop !== null) {
         // What was let up before it goes; it and what follows never do.
         this.#up(tunnel, data.subarray(0, offset));
         this.#finish(tunnel, stop.cut);
-        if (stop.refused) this.#tell(socket, { kind: "refused", ...stop.refused });
+        if (stop.refused) this.#tell(socket, { kind: "refused", ...stop.refused, late: false });
         return;
       }
       tunnel.recordLeft = total;
     }
+    if (held !== null) clearTimeout(held.timer);
     this.#up(tunnel, data.subarray(0, offset));
   }
 
-  /** One record of a socket's tunnel: null — it goes up; else why the
-   *  tunnel is cut (and, for the socket gate, what it held). */
-  #socketRecord(tunnel: Tunnel, socket: SocketTunnel, type: number, total: number): { cut: string; refused?: { recordBytes: number; why: string } } | null {
+  /** A record held for the authorization's size that did not come in time:
+   *  it and what follows never go, the tunnel is cut — this one alone. */
+  #refuseHeld(tunnel: Tunnel, socket: SocketTunnel, why: string): void {
+    const hold = socket.hold;
+    if (hold === null || !this.#tunnels.has(tunnel)) return;
+    clearTimeout(hold.timer);
+    this.#finish(tunnel, `cut: the socket gate held a record of ${hold.recordBytes} bytes (${hold.why}): ${why}`);
+    this.#tell(socket, { kind: "refused", recordBytes: hold.recordBytes, why: `${hold.why}: ${why}`, late: true });
+  }
+
+  /** One record of a socket's tunnel: null — it goes up; `hold` — it waits
+   *  for the authorization's size (why); else why the tunnel is cut (and,
+   *  for the socket gate, what it did not let up). */
+  #socketRecord(tunnel: Tunnel, socket: SocketTunnel, type: number, total: number): { hold: string } | { cut: string; refused?: { recordBytes: number; why: string } } | null {
     if (!socket.tls) {
       if (type !== 22) return { cut: "cut: a socket's tunnel that is not TLS" };
       socket.tls = true;
@@ -395,12 +469,7 @@ export class Egress {
         // TLS 1.3: the client's Finished is application data too — unless
         // the request rides early data, before the server's hello.
         if (tunnel.tls13 === true && socket.appRecords < 2) return null;
-        if (!(monoMs() < socket.deadline)) return { cut: "cut: the socket's admission expired before its handshake request" };
-        socket.handshakeSent = true;
         socket.phase = "request";
-        if (socket.timer) clearTimeout(socket.timer);
-        socket.timer = null;
-        this.#tell(socket, { kind: "handshake_sent", mono: monoMs(), wall: wallMs() });
         return null;
       }
       case "request":
@@ -413,8 +482,9 @@ export class Egress {
         } catch {
           rules = { authorizationBytes: null };
         }
-        const verdict = socket.gate === null ? { up: false as const, why: "the tunnel's records cannot be measured" } : socket.gate.decide(type, total, rules);
+        const verdict = socket.gate === null ? { up: false as const, hold: false, why: "the tunnel's records cannot be measured" } : socket.gate.decide(type, total, rules);
         if (verdict.up) return null;
+        if (verdict.hold) return { hold: verdict.why };
         // Cut first (the journal says why), then the page stops.
         return { cut: `cut: the socket gate held a record of ${total} bytes (${verdict.why})`, refused: { recordBytes: total, why: verdict.why } };
       }
@@ -523,17 +593,18 @@ export class Egress {
     // container reaches nothing but that proxy (init-net; spec §2.1).
     if (local) return this.#refuse(record, client, "refused: local or private address");
     if (refusedClass(cls)) return this.#refuse(record, client, cls === "closed" ? "refused: host closed by the map" : "refused: special-use name");
-    // Each socket of the site is its own tunnel, admitted by the engine.
+    // Each tunnel of the socket host is the site's socket's: its records
+    // are decided by the socket gate.
     let ticket: SocketTicket | null = null;
     if (cls === "ws") {
-      let admission: SocketTicket | string;
+      let opened: SocketTicket | string;
       try {
-        admission = this.#options.admitSocket?.(host, record.port) ?? "no admitting path";
+        opened = this.#options.openSocket?.(host, record.port) ?? "no socket path";
       } catch (error) {
-        admission = `the admission failed: ${errorMessage(error)}`;
+        opened = `the socket's path failed: ${errorMessage(error)}`;
       }
-      if (typeof admission === "string") return this.#refuse(record, client, `refused: socket not admitted (${admission})`);
-      ticket = admission;
+      if (typeof opened === "string") return this.#refuse(record, client, `refused: socket (${opened})`);
+      ticket = opened;
     }
     if (cls === "api") {
       // A new connection to the API serves only the request just released.
@@ -544,34 +615,12 @@ export class Egress {
       this.gate.noteTunnel(record.id);
     }
     const tunnel = new Tunnel(record, client);
-    if (ticket !== null) tunnel.socket = { ticket, deadline: 0, timer: null, tls: false, appRecords: 0, handshakeSent: false, phase: "handshake", gate: null };
+    if (ticket !== null) tunnel.socket = { ticket, tls: false, appRecords: 0, handshakeSent: false, phase: "handshake", gate: null, hold: null };
     this.#tunnels.add(tunnel);
     client.on("close", () => this.#finish(tunnel, tunnel.record.result || "closed by Chrome"));
     client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
     if (head.length > 0) this.#onClientData(tunnel, head);
-    if (ticket === null) {
-      this.#connect(tunnel, socks);
-      return;
-    }
-    // The socket's CONNECT waits for the engine; closing the exit, or Chrome
-    // dropping it, ends the wait (its end is reported in #finish).
-    const socketTunnel = tunnel.socket!;
-    ticket.granted.then(
-      (deadline) => {
-        if (!this.#tunnels.has(tunnel)) return;
-        if (deadline === null) return this.#refuseWaiting(tunnel, "refused: socket not admitted");
-        if (!(monoMs() < deadline)) return this.#refuseWaiting(tunnel, "refused: the socket's admission came expired");
-        const now = this.#socks;
-        if (!this.#exitOpen || now === null) return this.#refuseWaiting(tunnel, "refused: exit closed");
-        socketTunnel.deadline = deadline;
-        socketTunnel.timer = setTimeout(() => {
-          if (!socketTunnel.handshakeSent) this.#finish(tunnel, "cut: the socket's admission expired before its handshake request");
-        }, Math.max(0, deadline - monoMs()));
-        socketTunnel.timer.unref();
-        this.#connect(tunnel, now);
-      },
-      (error: unknown) => this.#refuseWaiting(tunnel, `refused: the socket's admission failed (${errorMessage(error)})`),
-    );
+    this.#connect(tunnel, socks);
   }
 
   #connect(tunnel: Tunnel, socks: SocksConfig): void {
@@ -584,11 +633,6 @@ export class Egress {
           upstream.destroy();
           return;
         }
-        if (tunnel.socket !== null && !(monoMs() < tunnel.socket.deadline)) {
-          upstream.destroy();
-          this.#finish(tunnel, "cut: the socket's admission expired before its connection");
-          return;
-        }
         tunnel.upstream = upstream;
         upstream.on("data", (chunk: Buffer) => {
           tunnel.record.down += chunk.length;
@@ -596,9 +640,12 @@ export class Egress {
             if (tunnel.serverFirst !== null) this.#serverHello(tunnel, chunk);
             if (!this.#tunnels.has(tunnel)) return;
           }
-          // The server answers the socket's request: what Chrome writes from
-          // now on is frames.
-          if (tunnel.socket?.phase === "request") tunnel.socket.phase = "frames";
+          // What Chrome writes after the server speaks goes through the
+          // frame gate. These bytes prove no answer to the request: TLS 1.3
+          // may send a NewSessionTicket first; CDP tells the socket's status.
+          if (tunnel.socket?.phase === "request") {
+            tunnel.socket.phase = "frames";
+          }
           // Before Chrome can react to them (a refusal it would repeat on).
           if (cls === "api") this.gate.noteServerBytes(tunnel.record.id);
           if (!client.write(chunk)) upstream.pause();

@@ -21,6 +21,11 @@
 //   operator says the live one in `state` and `check`: a request is never
 //   released under another session than the one its headers were built
 //   with.
+// - The socket's authorization (plan-b §4.1.9): its size from the token of
+//   the site's own `session_active_session` in its storage (DOMStorage) — the
+//   socket may authorize before the document's first API GET. Only the size
+//   is kept, never the token. Until the storage was seen, the template's
+//   token stands in.
 // - Header parity (plan §4.7): the names and their order, never the
 //   values, of a Hub request as Chrome sent it (requestWillBeSentExtraInfo)
 //   against the site's last request to the same path. The cache's own
@@ -141,6 +146,9 @@ export class SiteSession {
   readonly #siteNames = new Map<string, string[]>();
   readonly #hubNames = new Map<string, string[]>();
   #parityBroken = false;
+  /** The socket's authorization bytes from the site's stored session; null:
+   *  none stored; undefined: the storage not seen yet. */
+  #storedAuthorizationBytes: number | null | undefined = undefined;
 
   constructor(options: SiteSessionOptions = {}) {
     this.#options = options;
@@ -155,10 +163,27 @@ export class SiteSession {
 
   /** The bytes of the site socket's authorization with the live token —
    *  what the socket gate lets go once a connection (egress/socket-gate.ts);
-   *  null: no live session. The token itself stays here. */
+   *  null: no live session. From the site's stored session once its storage
+   *  was seen; before, from the template's token. */
   socketAuthorizationBytes(): number | null {
+    if (this.#storedAuthorizationBytes !== undefined) return this.#storedAuthorizationBytes;
     const token = this.#template === null ? undefined : header(this.#template, "authorization");
     return token === undefined || token === "" ? null : authorizationBytes(token);
+  }
+
+  /** The site's `session_active_session` as its storage holds it: its JSON
+   *  (`{id, accountId, deviceId, token, metadata}`, Fansly's session model),
+   *  or null — none. Only the authorization's size is kept. */
+  noteStoredSession(value: string | null): void {
+    let token: unknown = null;
+    if (value !== null && value !== "") {
+      try {
+        token = (JSON.parse(value) as { token?: unknown } | null)?.token ?? null;
+      } catch {
+        token = null;
+      }
+    }
+    this.#storedAuthorizationBytes = typeof token === "string" && token !== "" ? authorizationBytes(token) : null;
   }
 
   /** Our fansly-client-check matched the site's own (null: not seen yet). */
@@ -272,6 +297,7 @@ export class SiteSession {
     this.#siteNames.clear();
     this.#hubNames.clear();
     this.#parityBroken = false;
+    this.#storedAuthorizationBytes = undefined;
     if (had) this.#options.onChange?.(null);
   }
 }

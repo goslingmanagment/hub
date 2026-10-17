@@ -6,12 +6,13 @@
 // The offset (operator − Chrome) lies in [t0 − T, t1 − T]; the lower bound
 // is taken, so a timestamp mapped by it is at most (t1 − t0) before the same
 // instant on the operator's clock, never after. A reading whose round trip is
-// longer than `CALIBRATION_MAX_MS` is refused.
+// longer than `CALIBRATION_MAX_MS` is refused as a tight calibration, but
+// keeps its lower bound for a session with no clock yet.
 
 import type { CdpPort } from "./client.ts";
 import { monoMs } from "../shared/util.ts";
 
-/** The longest round trip a reading of Chrome's clock is taken from. */
+/** The longest round trip a tight calibration of Chrome's clock takes. */
 export const CALIBRATION_MAX_MS = 1_000;
 
 export interface ChromeClockReading {
@@ -24,8 +25,8 @@ export interface ChromeClockReading {
 }
 
 /** One reading of Chrome's clock in `sessionId` (`Performance` enabled
- *  first when `enable`), or why it is refused. */
-export async function readChromeClock(cdp: CdpPort, sessionId: string, options: { enable: boolean; timeoutMs?: number }): Promise<ChromeClockReading | { refused: string }> {
+ *  first when `enable`), or why it is refused (a slow one's bound kept). */
+export async function readChromeClock(cdp: CdpPort, sessionId: string, options: { enable: boolean; timeoutMs?: number }): Promise<ChromeClockReading | { refused: string; reading?: ChromeClockReading }> {
   const timeoutMs = options.timeoutMs ?? 5_000;
   if (options.enable) await cdp.send("Performance.enable", {}, sessionId, timeoutMs);
   const t0 = monoMs();
@@ -33,8 +34,9 @@ export async function readChromeClock(cdp: CdpPort, sessionId: string, options: 
   const t1 = monoMs();
   const value = reply.metrics?.find((metric) => metric.name === "Timestamp")?.value;
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return { refused: "no Timestamp in Chrome's metrics" };
-  if (t1 - t0 > CALIBRATION_MAX_MS) return { refused: `a round trip of ${Math.round(t1 - t0)} ms` };
-  return { offset: t0 - value * 1000, spread: t1 - t0, takenMono: t1 };
+  const reading = { offset: t0 - value * 1000, spread: t1 - t0, takenMono: t1 };
+  if (reading.spread > CALIBRATION_MAX_MS) return { refused: `a round trip of ${Math.round(reading.spread)} ms`, reading };
+  return reading;
 }
 
 /** Readings taken together (one calibration), as one: the largest lower

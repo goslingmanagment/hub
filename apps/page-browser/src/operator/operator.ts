@@ -43,18 +43,19 @@
 // and journaled. Their answers with platform data go to the buffer whole or
 // as a mark (`site.response`), their ends to the engine (`siteDone`).
 //
-// The site's socket (ws/, PR 10; plan §4.3, §4.4; mandatory condition №3):
-// the guard (inpage/ws-guard.js) goes into every tab, frame and worker
-// before the site's code, and lets no message but spec §2.6's leave — the
-// first other one stops the page; the proxy's socket gate holds the same
-// allow-list outside the page's JavaScript, record by record; each socket's
-// CONNECT waits at the proxy for the engine's `wsAdmit`, and its handshake
-// goes only before the admission's deadline; its frames go from CDP into
-// the buffer — acknowledged to the holder once durable — its handshake's
-// outcome to the engine as `wsDone`, and gaps mark where frames may be
-// missing. After a restart, what the holder delivers again of the previous
-// Chrome's sockets is dropped, and the connections the buffer kept from
-// before are ended there.
+// The site's socket (ws/, PR 10; plan §4.3, §4.4; mandatory condition №3;
+// variant Б, plan-b §4.1.9): the guard (inpage/ws-guard.js) goes into every
+// tab, frame and worker before the site's code, and lets no message but spec
+// §2.6's leave — the first other one stops the page; the proxy's socket gate
+// holds the same allow-list outside the page's JavaScript, record by record,
+// the authorization's size from the site's own `session_active_session`
+// (DOMStorage). Each socket's CONNECT goes on at once — the engine admits
+// none; its handshake goes to the engine as an observed send of the site's
+// (`siteSent`/`siteEnded`, route `ws.upgrade`), its frames from CDP into the
+// buffer — acknowledged to the holder once durable — and gaps mark where
+// frames may be missing. After a restart, what the holder delivers again of
+// the previous Chrome's sockets is dropped, and the connections the buffer
+// kept from before are ended there.
 //
 // The manual login (login/, PR 15; plan §4.8; spec §7): the engine's
 // `setMode` of the current owner generation switches it on — the map lets
@@ -70,12 +71,10 @@
 // hand-over: never in a log line, a journal, the buffer or an error.
 //
 // What holds, whatever happens:
-// - No API request leaves without the engine's admission. A Hub request goes
-//   only by its `check` and through the gate's window; a socket only by its
-//   `wsAdmit`, through a tunnel of its own; a site request only by its
-//   `siteAdmit` and through the gate's window — the session is learned from
-//   the site's requests as they stop. Nothing the map closes leaves, and no
-//   other request to the socket host (no socket may ride it). Nothing of the
+// - No Hub request leaves without the engine's admission: only by its
+//   `check` and through the gate's window. The site's own requests and its
+//   socket go as a browser's do and are observed (variant Б). Nothing the map
+//   closes leaves, and no socket message off spec §2.6's list. Nothing of the
 //   site goes before the exit opens.
 // - A page starts only on the engine's restartBrowser; a failure stops it
 //   and retries after 10 s, 30 s, 2 min, then every 5 min; a halt (the
@@ -106,7 +105,7 @@ import { join } from "node:path";
 import { EventBuffer, type BufferAlarm, type BufferOptions, type BufferUnavailable, type FullReason } from "../buffer/buffer.ts";
 import { OutcomeReplay } from "../buffer/replay.ts";
 import { EventStream } from "../buffer/stream.ts";
-import { Cdp, type CdpEvent, type HolderLink } from "../cdp/client.ts";
+import { Cdp, CdpError, type CdpEvent, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
 import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
@@ -206,7 +205,8 @@ const DEFAULT_TIMINGS: OperatorTimings = {
 /** The site the work tab loads (plan §4.1, step 8). */
 export const SITE_URL = `${SITE_ORIGIN}/`;
 
-/** The work tab's storage events the site's sign-out shows in (DOMStorage). */
+/** The work tab's storage events the site's sign-out and its live session
+ *  show in (DOMStorage). */
 const SITE_STORAGE_EVENTS = ["DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated", "DOMStorage.domStorageItemRemoved", "DOMStorage.domStorageItemsCleared"] as const;
 // Fansly's StorageHelper("session_") prefixes these keys; see
 // artifacts/fansly-app-bundle-2026-10-08/analysis/main.2e6b96097a4bb73b.pretty.js:35051 (helper :863).
@@ -469,7 +469,7 @@ export class Operator {
       gate: new ApiGate({ slotLimitMs: this.#timings.slotLimitMs, passive: deps.gatePassive ?? true }),
       classify: this.#classify,
       serve: (req, res) => this.extension.serve(req, res),
-      admitSocket: (host, port) => this.sockets.admit(host, port),
+      openSocket: (host, port) => this.sockets.openTunnel(host, port),
       onRecord: (record) =>
         this.journals.connection({
           id: record.id,
@@ -574,7 +574,8 @@ export class Operator {
           if (message.type === "send") this.hub.onSend(message);
           else this.hub.onCheckResult(message);
         },
-        onSocket: (message) => this.sockets.onAdmitResult(message),
+        // Variant Б: no socket is admitted, so none is asked for.
+        onSocket: (message) => this.#log("socket.admission_unasked", { connectionId: message.connectionId, admit: message.admit }),
         onSite: (message) => this.site.onAdmitResult(message),
         onLogin: (request) => this.#onLogin(request),
         onLink: (up, reason) => {
@@ -583,8 +584,6 @@ export class Operator {
           // A new connection subscribes anew; the outcomes not acknowledged
           // go to it again (spec §6.2), a page at a time.
           this.stream.reset();
-          // An admission is answered only on the connection it was asked on.
-          this.sockets.linkChanged();
           // The site's requests still waiting are asked on the new one — or
           // wait for one (plan §4.9).
           this.site.linkChanged(up);
@@ -655,7 +654,7 @@ export class Operator {
         backlog: () => this.rpc.backlog(),
         drained: () => this.rpc.drained(),
       },
-      { stateOf: (attemptId) => this.sockets.recoverState(attemptId) ?? this.site.recoverState(attemptId) ?? this.hub.recoverState(attemptId) },
+      { stateOf: (attemptId) => this.site.recoverState(attemptId) ?? this.hub.recoverState(attemptId) },
     );
 
     this.hub = new HubRequests({
@@ -724,9 +723,11 @@ export class Operator {
       readEnded: (end) => this.login.readEnded(end),
       log: makeLog("observe"),
     });
-    // Variant Б (plan-b §4.1.6): the site clearing its own login is seen in
-    // its storage — never a token's value read, kept or written.
+    // Variant Б (plan-b §4.1.6, §4.1.9): the site clearing its own login is
+    // seen in its storage, and so is the size of its socket's authorization
+    // (the token itself is never kept, logged or written).
     for (const event of SITE_STORAGE_EVENTS) this.cdp.on(event, (message) => this.#onSiteStorage(event, message));
+    this.cdp.on("Page.frameNavigated", (event) => this.#onWorkDocument(event));
     // A GET whose document Chrome named after it paused (page 0's
     // confirmation, `#siteShowedSession`).
     this.site.documents.onLoader = (networkId, loaderId) => {
@@ -749,25 +750,12 @@ export class Operator {
     this.sockets = new SiteSockets({
       cdp: this.cdp,
       buffer: this.buffer,
-      link: { send: (message) => this.rpc.send(message), epoch: () => this.rpc.epoch },
-      // The site's socket is not of the manual login (spec §2.4).
-      notAdmitting: () => (this.#mode === "manual_login" ? "the manual login: no socket of the site" : this.admissionsOpen() ? null : this.#noAdmissionWhy()),
+      observe: { sent: (handshake) => this.observer.socketSent(handshake), ended: (end) => this.observer.socketEnded(end) },
       sessionFingerprint: () => this.hub.session.fingerprint,
       authorizationBytes: () => this.hub.session.socketAuthorizationBytes(),
+      refreshAuthorization: () => void this.#readStoredSession("the socket gate holds a record for the authorization's size"),
       targetType: (sessionId) => this.control.targets.find((target) => target.sessionId === sessionId)?.type ?? null,
       socketHost: (host) => this.#classify(host) === "ws",
-      workTab: () => this.control.workTab,
-      isWorkDocumentTarget: (sessionId) => {
-        const targets = this.control.targets;
-        let target = targets.find((t) => t.sessionId === sessionId);
-        if (target === undefined || (target.type !== "page" && target.type !== "iframe")) return false;
-        while (target !== undefined) {
-          if (target.sessionId === this.control.workTab?.sessionId) return true;
-          target = targets.find((t) => t.sessionId === target?.parentSessionId);
-        }
-        return false;
-      },
-      cutTunnel: (connectionId, reason) => this.egress.cutSocket(connectionId, reason),
       journal: (line) => this.journals.socket(line),
       alarm: (kind, detail) => this.#alarm(kind, detail),
       stop: (reason, note, how) => this.#socketStop(reason, note, how),
@@ -839,12 +827,6 @@ export class Operator {
    *  §4.1) — and the buffer taking writes (plan §4.3). */
   admissionsOpen(): boolean {
     return this.rpc.linkUp && this.#siteNotUp() === null && this.buffer.refusal() === null;
-  }
-
-  /** Why `admissionsOpen` says no. */
-  #noAdmissionWhy(): string {
-    if (!this.rpc.linkUp) return "no engine link";
-    return this.#siteNotUp() ?? `the buffer takes no writes (${this.buffer.refusal() ?? "?"})`;
   }
 
   /** Why the page takes none of the site's requests now (the exit closed,
@@ -1309,9 +1291,8 @@ export class Operator {
         return;
       }
       this.#siteReloaded = true;
-      const socketsRevoked = this.sockets.documentChanging();
       this.site.reloading(this.control.workTab?.mainFrameId ?? null);
-      this.#log("site.reload", { failed, socketsRevoked });
+      this.#log("site.reload", { failed });
       this.page.back("exit_open", `the session is confirmed; ${failed} API request${failed === 1 ? "" : "s"} of the site failed before it, none sent: the work tab is loaded anew, once`);
       // From here it is a load like step 8's: confirmed again when it is in.
       this.#reloadPending = false;
@@ -1356,6 +1337,9 @@ export class Operator {
       this.page.back("site_loaded", "the site's live session changed: it is confirmed again");
     }
     this.#sendState();
+    // A socket that opened before the session was known opens in the
+    // stream now.
+    if (fingerprint !== null) this.sockets.sessionKnown();
   }
 
   async #selfTestNow(): Promise<SelfTestResult> {
@@ -1640,11 +1624,56 @@ export class Operator {
     const cleared = event === "DOMStorage.domStorageItemsCleared";
     const sessionGone = p.key === SITE_ACTIVE_SESSION_KEY && (event === "DOMStorage.domStorageItemRemoved" || p.newValue === "null" || p.newValue === "");
     const clearInfo = p.key === SITE_ACTIVE_SESSION_CLEAR_INFO_KEY && (event === "DOMStorage.domStorageItemAdded" || event === "DOMStorage.domStorageItemUpdated");
+    // The socket's authorization follows the site's live session (plan-b
+    // §4.1.9), in whatever mode: only its size is kept.
+    if (!message.replayed && (cleared || p.key === SITE_ACTIVE_SESSION_KEY)) this.#storedSession(cleared || event === "DOMStorage.domStorageItemRemoved" ? null : (p.newValue ?? null));
     if (!cleared && !sessionGone && !clearInfo) return;
     const what = cleared ? "the site's storage was cleared" : sessionGone ? `its ${SITE_ACTIVE_SESSION_KEY} was cleared` : `it wrote ${SITE_ACTIVE_SESSION_CLEAR_INFO_KEY}`;
     this.#log("site.login_lost", { what, mode: this.#mode, step: this.page.step });
     if (this.#mode !== "automation" || this.page.halted || this.#stopped || !atLeast(this.page.step, "exit_open")) return;
     void this.#halt("login_required", `Fansly signed the browser out: ${what}`, "stop");
+  }
+
+  /** The work tab's new document of the site (its main frame committed):
+   *  the site's live session is read from its storage before its socket can
+   *  connect (plan-b §4.1.9). */
+  #onWorkDocument(message: CdpEvent): void {
+    if (message.replayed) return;
+    const tab = this.control.workTab;
+    const frame = (message.params as { frame?: { parentId?: string; url?: string } }).frame;
+    if (tab === null || message.sessionId !== tab.sessionId || frame === undefined || frame.parentId !== undefined) return;
+    if (URL.canParse(frame.url ?? "") && new URL(frame.url!).origin === SITE_ORIGIN) void this.#readStoredSession("the work tab's document of the site committed");
+  }
+
+  /** The site's `session_active_session` as its storage has it now: the
+   *  socket gate's authorization size. Read in memory, never kept, logged or
+   *  written. A read that fails, or finds no such key, leaves what the
+   *  storage's events (or the site's requests) said. */
+  async #readStoredSession(why: string): Promise<void> {
+    const tab = this.control.workTab;
+    if (tab === null || !this.cdp.cdpUp) return;
+    let entries: unknown = null;
+    // By its origin; a Chrome that takes only the storage key, by that.
+    for (const storageId of [{ securityOrigin: SITE_ORIGIN, isLocalStorage: true }, { storageKey: `${SITE_ORIGIN}/`, isLocalStorage: true }]) {
+      try {
+        ({ entries } = await this.cdp.send<{ entries?: unknown }>("DOMStorage.getDOMStorageItems", { storageId }, tab.sessionId, 2_000));
+        break;
+      } catch (error) {
+        this.#log("site.session_unread", { why, by: "securityOrigin" in storageId ? "origin" : "storage_key", error: errorMessage(error) });
+        if (!(error instanceof CdpError)) return;
+      }
+    }
+    if (this.control.workTab !== tab || !Array.isArray(entries)) return;
+    const found = entries.find((entry): entry is [string, string] => Array.isArray(entry) && entry[0] === SITE_ACTIVE_SESSION_KEY && typeof entry[1] === "string");
+    if (found !== undefined) this.#storedSession(found[1]);
+    this.#log("site.session_read", { why, found: found !== undefined, authorization: this.hub.session.socketAuthorizationBytes() !== null });
+  }
+
+  /** The site's live session as its storage showed it (`value` the stored
+   *  JSON, null: none): what the socket gate holds is decided again. */
+  #storedSession(value: string | null): void {
+    this.hub.session.noteStoredSession(value);
+    this.egress.socketRulesChanged();
   }
 
   /** A Hub request without a proven end: wait without a deadline for fresh
@@ -1749,15 +1778,10 @@ export class Operator {
   /** The site's socket stops the page (ws/): a message the guard did not let
    *  go — or that went past it — or a context the guard could not go into.
    *  The exit closes now, in this turn; the page stands until the engine
-   *  starts it again (spec §2.6; stage 1, amendment 17). A socket that
-   *  could not be accounted for is a failure instead: Chrome goes with
-   *  whatever it holds of that socket, and the page starts again. */
+   *  starts it again (spec §2.6; stage 1, amendment 17) — Chrome is not
+   *  started again for it. */
   #socketStop(reason: SocketStop, note: string, how: "stop" | "kill"): void {
     this.egress.closeExit(note);
-    if (reason === "ws_unaccounted") {
-      void this.#fail(reason, note);
-      return;
-    }
     if (this.page.halted && this.page.snapshot.stopReason === reason) return;
     void this.#halt(reason, note, how);
   }
@@ -1822,7 +1846,6 @@ export class Operator {
       restartBackoffMs: params.restartBackoffMs.filter((ms) => ms >= 10),
     };
     this.rpc.setTiming(this.#params.pingMs, this.#params.linkLossMs);
-    this.sockets.setAdmitWait(this.#params.siteAdmitWaitMs);
     this.site.setTimings(this.#params.siteAdmitWaitMs, this.#params.siteRequestLimitMs);
     this.page.setBackoff(this.#params.restartBackoffMs);
     this.control.networkBuffer = this.#params.chromeBodyBuffer;
@@ -1849,9 +1872,7 @@ export class Operator {
     if (this.#starting) this.#standing = this.#stand("a new owner of the page");
     await this.#standing;
     // The earlier owners' Hub requests: refused if not released, ended
-    // (their limits hold them to it) if they were. Their sockets whose
-    // handshake has not gone up never go.
-    this.sockets.quiesce(this.rpc.generation);
+    // (their limits hold them to it) if they were.
     await Promise.all([this.hub.quiesce(this.rpc.generation), this.site.quiesce(this.rpc.generation)]);
     const sends = [this.egress.gate.lastSend, this.hub.lastMediaSend, this.sockets.lastHandshake, this.observer.lastSend].filter((send): send is { mono: number; wall: number } => send !== null);
     const last = sends.length === 0 ? null : sends.reduce((a, b) => (b.mono > a.mono ? b : a));

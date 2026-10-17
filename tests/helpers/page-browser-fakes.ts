@@ -1636,7 +1636,7 @@ export const TLS13_OVERHEAD = 22;
  *  (AES-128-GCM) at once, its answer to the handshake request (a record
  *  standing for the 101) once the request reached it, and records of its
  *  own on demand. It keeps what reached it. */
-export async function socketServer(options: { tls12Suite?: number } = {}): Promise<{ port: number; received: () => Buffer; send: (record: Buffer) => void; close: () => Promise<void> }> {
+export async function socketServer(options: { tls12Suite?: number; answer?: boolean } = {}): Promise<{ port: number; received: () => Buffer; send: (record: Buffer) => void; close: () => Promise<void> }> {
   const chunks: Buffer[] = [];
   const sockets = new Set<Socket>();
   const server = createTcpServer((socket) => {
@@ -1646,7 +1646,7 @@ export async function socketServer(options: { tls12Suite?: number } = {}): Promi
     let answered = false;
     socket.on("data", (chunk) => {
       chunks.push(chunk);
-      if (!answered && chunk.includes(SOCKET_FILL.request)) {
+      if (options.answer !== false && !answered && chunk.includes(SOCKET_FILL.request)) {
         answered = true;
         socket.write(tlsRecord(23, 150, 0x55));
       }
