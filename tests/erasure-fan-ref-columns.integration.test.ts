@@ -129,6 +129,7 @@ describe("erasure column-shape ratchet (§9.3)", () => {
     expect(discovered).toContain("client_send_custody.fan_ref");
     expect(discovered).toContain("client_greetings.fan_ref");
     expect(discovered).toContain("client_fan_leases.fan_ref");
+    expect(discovered).toContain("client_send_attributions.fan_ref");
     expect(discovered.length).toBeGreaterThan(4);
 
     // A plan for a fan nobody has ever seen still enumerates every target the

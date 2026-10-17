@@ -11,6 +11,8 @@ export * from "./repositories/client-claim-transition.ts";
 export * from "./repositories/client-send-custody-list.ts";
 // chat-extension "new subscribers" list reads (H-7c).
 export * from "./repositories/client-audience-new.ts";
+// Who sent each outgoing message (send-attribution-v1, 0286).
+export * from "./repositories/client-send-attributions.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).
