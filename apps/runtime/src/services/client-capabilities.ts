@@ -77,7 +77,7 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // the person's own sends from the page's composer as the extension observed
   // them (0286). No owner switch: the extension reports while the hub lists it.
   "send-attribution-v1",
-  // chat-extension X51: the AI feature stream takes `livePpvContext`, the PPV
+  // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
   // not using it: the fresh text's switch (`aiLiveTextContextMode`, the page's
   // `freshText` flag) decides.

@@ -207,7 +207,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
         text: unit.repeat(AI_LIVE_TEXT_MAX_CHARS),
       })),
     },
-    // chat-extension X51, the PPV state of the open chat: 100 ids of 30 digits
+    // chat-extension X54, the PPV state of the open chat: 100 ids of 30 digits
     // with a price and a flag. Digits and numbers only, so ~9KB whatever `unit`
     // is; refused beside clientContext only after this limit and the schema.
     livePpvContext: {
@@ -277,7 +277,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // fields (27KB, uncounted here until R20 HF-5) and HF-5's start proof and
     // top-level avatar (29KB). The former 8 MiB limit would have 413'd this
     // contract-valid body; 12 MiB (12.58MB) cleared it by about 18KB, and with
-    // X51's PPV state (9KB) 13 MiB (13.63MB) clears it by about 1MB.
+    // X54's PPV state (9KB) 13 MiB (13.63MB) clears it by about 1MB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -321,7 +321,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     expect(AI_FEATURE_STREAM_BODY_LIMIT_BYTES - size(withProof)).toBeGreaterThan(16 * 1024);
   });
 
-  it("the PPV state of the open chat is about 9KB of that worst case (X51)", () => {
+  it("the PPV state of the open chat is about 9KB of that worst case (X54)", () => {
     const withState = maxBodyFilledWith("\ud800");
     const { livePpvContext, ...withoutState } = withState;
     expect(livePpvContext.items).toHaveLength(100);

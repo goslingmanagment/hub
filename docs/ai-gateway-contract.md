@@ -700,7 +700,7 @@ generations. Two conditions, both read per generation:
 
 ### Feature-lane PPV state of the open chat (`livePpvContext`)
 
-chat-extension X51. The transcript marks the model's paid message `[… - PPV $X.XX, purchased]`,
+chat-extension X54. The transcript marks the model's paid message `[… - PPV $X.XX, purchased]`,
 `not purchased` or `unknown` from the hub's stores; the archive read keeps no purchase state
 (`unknown`), and a store's `isOpened: false` may be from before the fan bought it. The extension
 reads the chat the person has open from OnlyMonster's API, whose messages carry OnlyFans' own

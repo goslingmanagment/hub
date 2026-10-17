@@ -1552,7 +1552,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  // chat-extension X51: the PPV state of the open chat, read by the client from
+  // chat-extension X54: the PPV state of the open chat, read by the client from
   // OnlyMonster's API (`livePpvContext`, context/live-ppv.ts).
   async function paidArchive(ref: string, price: number, opened: boolean | null, minutes: number) {
     await testDb!.pool.query(
@@ -1569,7 +1569,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     (row.params.contextManifest as Record<string, unknown> | undefined)?.livePpv as Record<string, unknown> | undefined
   );
 
-  it("[X51] the PPV state is refused where it can never be used, and announced as live-ppv-v1", async (context) => {
+  it("[X54] the PPV state is refused where it can never be used, and announced as live-ppv-v1", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     const state = livePpv([{ platformMessageId: "9002", priceUsd: 25, purchased: true }]);
@@ -1586,7 +1586,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(provider.calls).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("[X51] off it is ignored, in shadow recorded, in serve the prompt says what OnlyFans says now", async (context) => {
+  it("[X54] off it is ignored, in shadow recorded, in serve the prompt says what OnlyFans says now", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     await paidArchive("9004", 25, null, 45);

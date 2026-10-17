@@ -2324,7 +2324,7 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // 27KB). The worst schema-valid body is measured 12.56MB, which 12 MiB still
 // clears by about 18KB: the next field of any size raises the limit.
 //
-// chat-extension X51 adds the PPV state of the open chat (`livePpvContext`:
+// chat-extension X54 adds the PPV state of the open chat (`livePpvContext`:
 // 100 ids of digits with a price and a flag, about 9KB), which left 9.5KB under
 // 12 MiB: the limit is 13 MiB (13.63MB) from here on, about 1MB above the
 // worst schema-valid body, so the next small field does not raise it again.
@@ -2413,7 +2413,7 @@ export const aiLiveTextContextSchema = z.object({
   }).strict()).min(1).max(AI_LIVE_TEXT_MAX_ITEMS),
 }).strict();
 
-// chat-extension X51 — the PPV state of the open OnlyFans chat as the platform
+// chat-extension X54 — the PPV state of the open OnlyFans chat as the platform
 // gives it right now: the client reads the chat it is showing from
 // OnlyMonster's API, whose messages carry OnlyFans' own `isOpened` (on the
 // model's paid message, the purchase). The hub's archive may hold a paid
@@ -2638,7 +2638,7 @@ export const aiFeatureStreamBodySchema = z.object({
   // page's `freshText` flag); switched off, it is ignored and the `context_v1`
   // frame says `live.status: "disabled"`.
   liveTextContext: aiLiveTextContextSchema.optional(),
-  // chat-extension X51: the PPV state of the open OnlyFans chat (above).
+  // chat-extension X54: the PPV state of the open OnlyFans chat (above).
   // Accepted where `liveTextContext` is (fast-reply, improve-draft,
   // hi-greeting, ping; never beside clientContext), and on an OnlyFans page
   // only: anything else is a 400 with a machine reason. Used under the same

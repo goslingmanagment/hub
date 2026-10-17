@@ -182,7 +182,7 @@ export interface AiFeatureRequestBody {
    * since R20 HF-8б), merged into the hub's transcript for this generation
    * only (context/live-text.ts). */
   liveTextContext?: AiLiveTextContext;
-  /** chat-extension X51: the PPV state of the open OnlyFans chat, applied to
+  /** chat-extension X54: the PPV state of the open OnlyFans chat, applied to
    * the transcript of this generation only (context/live-ppv.ts). */
   livePpvContext?: AiLivePpvContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
@@ -512,7 +512,7 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
-  // chat-extension X51: the PPV state rides where the fresh text does, on an
+  // chat-extension X54: the PPV state rides where the fresh text does, on an
   // OnlyFans page only; refused before any context loads.
   if (body.livePpvContext !== undefined) {
     assertLivePpvRequestShape({
@@ -822,7 +822,7 @@ export async function prepareAiFeatureStream(
       transcript: loaded,
       liveTextContext: body.liveTextContext,
     });
-    // chat-extension X51: the PPV state applies to what the generation reads,
+    // chat-extension X54: the PPV state applies to what the generation reads,
     // fresh text included, under the same switch; it scopes the generation
     // like served fresh text when it changed a mark.
     const livePpv = await applyLivePpvContext(app, {

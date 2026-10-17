@@ -12,7 +12,7 @@ import {
   type LiveTextTranscript,
 } from "./live-text.ts";
 
-// chat-extension X51 — the PPV state of the open OnlyFans chat as the platform
+// chat-extension X54 — the PPV state of the open OnlyFans chat as the platform
 // gives it right now.
 //
 // The transcript marks the model's paid message `[… - PPV $X.XX, purchased]`,

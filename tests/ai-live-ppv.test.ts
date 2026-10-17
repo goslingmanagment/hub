@@ -18,10 +18,10 @@ import {
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
 import { BadRequestError } from "../apps/runtime/src/services/errors.ts";
 
-// chat-extension X51: the PPV state of the open OnlyFans chat, read by the
+// chat-extension X54: the PPV state of the open OnlyFans chat, read by the
 // client from OnlyMonster's API (`livePpvContext`), and how it changes the
 // transcript of one generation (context/live-ppv.ts). The wire shape is the
-// client's (chat-extension contracts, decision X51).
+// client's (chat-extension contracts, decision X54).
 
 const T0 = Date.parse("2026-10-17T06:00:00.000Z");
 
