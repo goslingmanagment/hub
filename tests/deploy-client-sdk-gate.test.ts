@@ -248,7 +248,9 @@ describe("deploy gate: a candidate keeps every registered client SDK", () => {
     // the run's temp directory inside the fixture. The preflight requires
     // docker, gh, unzip and curl on PATH but calls none of them before the
     // remote lock; a CI runner need not have them, so each is a stub that
-    // records a call the expected log does not allow.
+    // records a call the expected log does not allow. The main-CI gate
+    // (scripts/main-ci-gate.sh, tests/main-ci-gate.test.ts) would fetch from
+    // GitHub first: this run skips it the way an owner's emergency does.
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DEPLOY_")));
     // A plain string: a template literal would take the array expansion for its own.
     const recordDrops = 'printf \'drop %s\\n\' "${DROP_CLIENT_SDKS[@]}" >> "$TEST_COMMAND_LOG"';
@@ -273,9 +275,10 @@ describe("deploy gate: a candidate keeps every registered client SDK", () => {
     `, "fixture", deployPath, "--drop-client-sdk", retiredHash, "root@localhost", "--drop-client-sdk", retiredBuild], {
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...inherited, TEST_COMMAND_LOG: commandLog, TMPDIR: fixtureRoot },
+      env: { ...inherited, TEST_COMMAND_LOG: commandLog, TMPDIR: fixtureRoot, DEPLOY_SKIP_CI_GATE: "1" },
     });
     expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DEPLOY_SKIP_CI_GATE is set");
     expect(result.stderr).not.toContain("--drop-client-sdk takes");
     expect(result.stderr).toContain("error: Remote deploy lock exists");
     expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([

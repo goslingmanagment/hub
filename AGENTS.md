@@ -16,11 +16,18 @@
   Clients needing those changes re-vendor via `scripts/vendor-sdk.mjs`.
 - `pnpm check` excludes integration tests; they need Docker (Testcontainers).
 - CI (repo variable `CI_POOL`: `pc` = owner's self-hosted runners, else GitHub-hosted):
-  - Open PRs as Draft; a Draft's red Quality Gate is expected.
-  - Run `pnpm check` locally before marking Ready; mark Ready once.
-  - With `CI_POOL` not `pc`, a push to a Ready PR runs static checks only and
-    the Quality Gate stays red until integration runs. When the PR is final,
-    add the label: `gh pr edit <number> --add-label ci:full`.
+  - Open PRs ready, then `gh pr merge --auto --squash`. Locally run only
+    typecheck/lint/tests of what you touched; full suites are CI's job.
+  - PR CI runs static checks always, integration only when the PR touches
+    DB/schema/sync/network code, the integration suite or the toolchain
+    (`scripts/ci-integration-scope.mjs`; label `ci:full` forces it).
+    Every push to main runs everything.
+  - With `CI_POOL` not `pc`, a later push to a PR that needs integration runs
+    static checks only and the Quality Gate stays red until integration runs.
+    When the PR is final: `gh pr edit <number> --add-label ci:full`.
+  - Deploys take only a clean main commit with a green Quality Gate
+    (`scripts/main-ci-gate.sh`). A red main blocks deploys; whoever deploys
+    fixes it. `--skip-ci-gate` / `DEPLOY_SKIP_CI_GATE=1`: owner's call only.
   - Jobs queue behind busy PC runners. `ci-pool status` lists a run as stuck
     only when no runner is online or an idle one does not pick it up; then
     tell the owner (they switch pools with `ci-pool`).

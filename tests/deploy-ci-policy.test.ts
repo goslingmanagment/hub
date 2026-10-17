@@ -159,6 +159,8 @@ type EventOptions = {
   pcShards?: string;
   provenBy?: string;
   integrationProvenBy?: string;
+  /** The fingerprint job's integration scope: 'true', 'false', or '' when it did not set it. */
+  integrationNeeded?: string;
   /** The fingerprint job's shard plan outputs; '' when it did not set them. */
   shards?: string;
   shardTotal?: string;
@@ -185,6 +187,7 @@ function eventContext(options: EventOptions = {}): Context {
     "vars.CI_PC_SHARDS": options.pcShards ?? "",
     "needs.fingerprint.outputs.proven_by": options.provenBy ?? "",
     "needs.fingerprint.outputs.integration_proven_by": options.integrationProvenBy ?? "",
+    "needs.fingerprint.outputs.integration_needed": options.integrationNeeded ?? "true",
     "needs.fingerprint.outputs.shards": options.shards ?? "[1,2,3]",
     "needs.fingerprint.outputs.shard_total": options.shardTotal ?? "3",
     "matrix.shard": options.shard ?? 1,
@@ -205,6 +208,7 @@ function runGate(env: Record<string, string>) {
       ECONOMY: "false",
       PR_NUMBER: "",
       FINGERPRINT: "f".repeat(64),
+      INTEGRATION_NEEDED: "true",
       GITHUB_STEP_SUMMARY: "/dev/null",
       ...env,
     },
@@ -253,7 +257,24 @@ describe("CI Quality Gate policy", () => {
       FINGERPRINT: "${{ needs.fingerprint.outputs.hash }}",
       STATIC: "${{ needs.static.result }}",
       INTEGRATION: "${{ needs.integration.result }}",
+      INTEGRATION_NEEDED: "${{ github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false' }}",
     });
+  });
+
+  // Only a PR's own scope decision can excuse the shards: main and manual
+  // runs need them whatever the output says, and an unset output needs them.
+  it.each([
+    // event, integration_needed output, INTEGRATION_NEEDED
+    ["pull_request", "false", "false"],
+    ["pull_request", "true", "true"],
+    ["pull_request", "", "true"],
+    ["pull_request", "False", "true"],
+    ["push", "false", "true"],
+    ["push", "true", "true"],
+    ["workflow_dispatch", "false", "true"],
+  ] as const)("on %s an integration_needed output %j binds INTEGRATION_NEEDED=%s", (event, integrationNeeded, expected) => {
+    const needed = step("quality", "Every gate job succeeded").env?.INTEGRATION_NEEDED ?? "";
+    expect(field(needed, eventContext({ event, integrationNeeded }))).toBe(expected);
   });
 
   it.each([
@@ -323,27 +344,57 @@ describe("CI Quality Gate policy", () => {
     },
   );
 
+  // A PR whose change needs no integration passes on fresh static checks
+  // alone, in economy mode too; it never excuses static checks, a draft, a
+  // failed fingerprint job or a shard that ran and did not pass.
+  it.each([
+    // draft, fingerprint result, economy, static, DB, allowed
+    [false, "success", false, "success", "skipped", true],
+    [false, "success", true, "success", "skipped", true],
+    [false, "success", false, "failure", "skipped", false],
+    [false, "success", true, "failure", "skipped", false],
+    [false, "success", false, "skipped", "skipped", false],
+    [false, "success", false, "cancelled", "skipped", false],
+    [false, "success", false, "success", "failure", false],
+    [false, "success", false, "success", "success", false],
+    [false, "failure", false, "success", "skipped", false],
+    [true, "success", false, "success", "skipped", false],
+  ] as const)("gate without needed integration: draft=%s fingerprint=%s economy=%s static=%s DB=%s allowed=%s",
+    (draft, fingerprintResult, economy, staticResult, integrationResult, allowed) => {
+      const result = runGate({ IS_DRAFT: String(draft), FINGERPRINT_RESULT: fingerprintResult, ECONOMY: String(economy),
+        PR_NUMBER: "7", STATIC: staticResult, INTEGRATION: integrationResult, INTEGRATION_NEEDED: "false" });
+      expect(result.status === 0, result.stdout + result.stderr).toBe(allowed);
+      // No economy hint for shards the change does not need.
+      expect(result.stdout).not.toContain("Integration tests did not run");
+    },
+  );
+
   // Exhaustive: the gate passes exactly when the reference rule says so, the
   // economy flag never changes a verdict, and no pass exists without the
-  // integration shards having run green or been proven for this tree.
-  it("never passes without integration evidence, whatever economy mode says", () => {
+  // integration shards having run green or been proven for this tree — unless
+  // the PR's change needs none, and then only on fresh green static checks.
+  it("never passes without integration evidence, whatever economy mode says, unless the change needs none", () => {
     const results = ["success", "failure", "cancelled", "skipped"] as const;
-    const reference = (proven: string, integrationProven: string, staticResult: string, integrationResult: string) => {
+    const reference = (proven: string, integrationProven: string, needed: string, staticResult: string, integrationResult: string) => {
       if (proven) return integrationResult === "skipped" && (staticResult === "success" || staticResult === "skipped");
       if (staticResult !== "success") return false;
-      return integrationProven ? integrationResult === "skipped" : integrationResult === "success";
+      if (integrationProven) return integrationResult === "skipped";
+      return needed === "false" ? integrationResult === "skipped" : integrationResult === "success";
     };
     for (const proven of ["", "123"]) {
       for (const integrationProven of ["", "456"]) {
-        for (const staticResult of results) {
-          for (const integrationResult of results) {
-            const expected = reference(proven, integrationProven, staticResult, integrationResult);
-            if (expected) expect(integrationResult === "success" || proven !== "" || integrationProven !== "").toBe(true);
-            for (const economy of ["false", "true"]) {
-              const label = JSON.stringify({ proven, integrationProven, staticResult, integrationResult, economy });
-              const result = runGate({ PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven, STATIC: staticResult,
-                INTEGRATION: integrationResult, ECONOMY: economy, PR_NUMBER: "7" });
-              expect(result.status === 0, label).toBe(expected);
+        for (const needed of ["true", "false"]) {
+          for (const staticResult of results) {
+            for (const integrationResult of results) {
+              const expected = reference(proven, integrationProven, needed, staticResult, integrationResult);
+              if (expected && needed === "true") expect(integrationResult === "success" || proven !== "" || integrationProven !== "").toBe(true);
+              if (expected && needed === "false" && !proven) expect(staticResult).toBe("success");
+              for (const economy of ["false", "true"]) {
+                const label = JSON.stringify({ proven, integrationProven, needed, staticResult, integrationResult, economy });
+                const result = runGate({ PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven, STATIC: staticResult,
+                  INTEGRATION: integrationResult, ECONOMY: economy, PR_NUMBER: "7", INTEGRATION_NEEDED: needed });
+                expect(result.status === 0, label).toBe(expected);
+              }
             }
           }
         }
@@ -481,16 +532,62 @@ describe("CI job admission", () => {
     },
   );
 
+  // The scope decision can only take the shards off a PR: 'false' skips them
+  // on every PR event and pool, and never on main or a manual run.
+  it.each([
+    // pool, run attempt, event, action, integration_needed, integration runs
+    ["pc", "1", "pull_request", "synchronize", "false", false],
+    ["pc", "1", "pull_request", "opened", "false", false],
+    ["", "1", "pull_request", "opened", "false", false],
+    ["pc", "2", "pull_request", "synchronize", "false", false],
+    ["pc", "1", "pull_request", "synchronize", "true", true],
+    ["pc", "1", "pull_request", "synchronize", "", true],
+    ["pc", "1", "push", null, "false", true],
+    ["", "1", "push", null, "false", true],
+    ["pc", "1", "workflow_dispatch", null, "false", true],
+  ] as const)("integration with CI_POOL=%s attempt %s on %s/%s integration_needed=%j runs: %s",
+    (pool, attempt, event, action, integrationNeeded, runs) => {
+      expect(condition(job("integration").if, eventContext({ pool, attempt, event, action, integrationNeeded }))).toBe(runs);
+    },
+  );
+
+  // The step decides from the event and the ci:full label only; the script
+  // (tests/ci-integration-scope.test.ts) reads the PR's change.
+  it("decides the integration scope in the fingerprint job from the event and the ci:full label", () => {
+    const scope = step("fingerprint", "Decide whether this PR needs integration");
+    expect(scope.id).toBe("scope");
+    expect(scope.if).toBeUndefined();
+    expect(shell(scope)).toBe("node scripts/ci-integration-scope.mjs");
+    expect(scope.env).toEqual({
+      SCOPE_EVENT: "${{ github.event_name }}",
+      SCOPE_FORCE: "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}",
+    });
+    for (const [labels, force] of [[[], "false"], [["ci:full"], "true"], [["needs-review", "ci:full"], "true"], [["ci:fuller"], "false"]] as const) {
+      expect(field(scope.env?.SCOPE_FORCE ?? "", eventContext({ labels: [...labels] })), JSON.stringify(labels)).toBe(force);
+    }
+    expect(field(scope.env?.SCOPE_FORCE ?? "", eventContext({ event: "push" }))).toBe("false");
+    // The merge commit and its first parent: the PR's own change.
+    expect(step("fingerprint", "Checkout").with).toEqual({ "fetch-depth": 2 });
+  });
+
   it("pins the integration admission text and the proof recording steps", () => {
     const unproven = "needs.fingerprint.outputs.proven_by == ''";
     expect(job("integration").needs).toEqual(["fingerprint"]);
-    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))`);
+    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == '' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false') && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))`);
     // A metadata-only event has no fingerprint at all, so it must not reach
     // the proof steps: an empty hash would publish `quality-gate-` as a proof.
     const freshProof = `env.METADATA_ONLY != 'true' && ${unproven}`;
     expect(step("quality", "Record this fingerprint as proven").if).toBe(freshProof);
     const upload = step("quality", "Publish the proof for later identical trees");
-    expect(upload.if).toBe(freshProof);
+    // A full-tree proof also needs integration evidence: a PR that skipped
+    // the shards as out of scope must not let main skip them for its tree.
+    expect(upload.if).toBe(`${freshProof} && (needs.integration.result == 'success' || needs.fingerprint.outputs.integration_proven_by != '')`);
+    for (const [integration, integrationProvenBy, published] of [
+      ["success", "", true], ["skipped", "456", true], ["skipped", "", false], ["failure", "", false],
+    ] as const) {
+      const context = { ...eventContext({ integrationProvenBy }), "env.METADATA_ONLY": "false", "needs.integration.result": integration };
+      expect(condition(upload.if, context), `${integration} ${integrationProvenBy}`).toBe(published);
+    }
     expect(upload.with?.name).toBe("quality-gate-${{ needs.fingerprint.outputs.hash }}");
     expect(upload.with?.overwrite).toBe(true);
     expect(step("quality", "Publish fresh integration proof").with?.overwrite).toBe(true);
@@ -1375,6 +1472,7 @@ describe("CI integration shards", () => {
       proven_by: "${{ steps.lookup.outputs.proven_by }}",
       integration_hash: "${{ steps.fingerprint.outputs.integration_hash }}",
       integration_proven_by: "${{ steps.lookup.outputs.integration_proven_by }}",
+      integration_needed: "${{ steps.scope.outputs.integration_needed }}",
       shards: "${{ steps.shards.outputs.shards }}",
       shard_total: "${{ steps.shards.outputs.shard_total }}",
     });
