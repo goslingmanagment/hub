@@ -38,6 +38,9 @@ export type SyncWorkKind = (typeof SYNC_WORK_KINDS)[number];
 
 export const SYNC_WORK_CLASSES = ["urgent", "requests", "planned"] as const;
 export type SyncEngineWorkClass = (typeof SYNC_WORK_CLASSES)[number];
+/** A `sync_attempts` row's class: a work class, or `site` for the page's own
+ *  site requests and login operations (Project Browser, 0271), which serve no work. */
+export type SyncAttemptClass = SyncEngineWorkClass | "site";
 
 export const SYNC_WORK_STATES = ["open", "running", "quarantined", "done", "cancelled", "superseded"] as const;
 export type SyncWorkState = (typeof SYNC_WORK_STATES)[number];

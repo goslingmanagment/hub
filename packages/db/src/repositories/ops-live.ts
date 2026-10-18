@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
-import type { SyncEngineWorkClass } from "./sync/work.ts";
+import type { SyncAttemptClass } from "./sync/work.ts";
 import { timestampParam, toDate, toNumber, toRequiredDate } from "./sync/values.ts";
 
 export interface OpsLivePageRow {
@@ -46,7 +46,7 @@ export interface OpsLiveAttemptRow {
   resource: string;
   operation: string;
   /** Null in the older journal: it has no work classes. */
-  class: SyncEngineWorkClass | null;
+  class: SyncAttemptClass | null;
   sentAt: Date;
   /** Null while the request is unanswered. */
   completedAt: Date | null;
@@ -63,7 +63,7 @@ type AttemptSqlRow = {
   pageLabel: string;
   resource: string;
   operation: string;
-  class: SyncEngineWorkClass | null;
+  class: SyncAttemptClass | null;
   sentAt: Date | string;
   completedAt: Date | string | null;
   failed: boolean;

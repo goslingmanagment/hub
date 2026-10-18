@@ -433,6 +433,15 @@ describe("wire schema", () => {
     expect(opsLiveResponseSchema.safeParse({ ...answer, debug: true }).success).toBe(false);
   });
 
+  it("takes every class the attempts journal stores, a site request's too, and no other", () => {
+    for (const cls of ["urgent", "requests", "planned", "site", null] as const) {
+      const attempt = opsLiveAttemptsOf([attemptRow({ class: cls })])[0]!;
+      expect(opsLiveResponseSchema.safeParse({ ...answer, attempts: [attempt] }).success, String(cls)).toBe(true);
+    }
+    const attempt = opsLiveAttemptsOf([attemptRow()])[0]!;
+    expect(opsLiveResponseSchema.safeParse({ ...answer, attempts: [{ ...attempt, class: "bulk" }] }).success).toBe(false);
+  });
+
   it("names a waiting reason only from the engine's dictionary", () => {
     const page = {
       label: "lora-1", platform: "fansly", engine: true, pausedAll: false, pausedRequests: false, pausedResources: [],
