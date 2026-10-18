@@ -3,7 +3,6 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 
 import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
-import { SYNC_PACE_AUDIT_LOOKBACK_MS } from "./attempts.ts";
 import { countUnavailableChats, openChatUnavailabilitySql, syncWorkOfUnavailableChatSql } from "./chat-unavailability.ts";
 import { jsonParam, textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
@@ -755,10 +754,6 @@ export async function readLedgerTransactionsCreatedAt(
 export interface SyncJournalMetrics {
   pageId: number;
   sends: { urgent: number; requests: number; planned: number };
-  /** Smallest gap between two consecutive sends of the window (null: < 2 sends). */
-  minGapMs: number | null;
-  /** Pairs closer than the setting in force for the later send. */
-  paceViolations: number;
   breakersOpen: number;
   /** Open work the vendor blocks, a chat Fansly does not serve to the page
    *  left out (`syncWorkOfUnavailableChatSql`: counted in `chatsUnavailable`). */
@@ -770,9 +765,9 @@ export interface SyncJournalMetrics {
 }
 
 /**
- * The pace and queue families of the golden signals (design §9.5) per page
- * since `since`. The gap of a window's first send counts against the page's
- * previous send within the pace-audit look-back.
+ * The sends and queue families of the golden signals (design §9.5) per page
+ * since `since`. The pace families are the send audit's
+ * (`readFanslySendAudit`, `apps/runtime/src/sync/engine/send-audit.ts`).
  */
 export async function readSyncJournalMetrics(
   db: Database,
@@ -781,32 +776,18 @@ export async function readSyncJournalMetrics(
   if (input.pageIds.length === 0) return [];
   const pages = sql`${sql.param([...input.pageIds])}::bigint[]`;
   const until = input.until === undefined ? sql`'infinity'::timestamptz` : sql`${input.until}::timestamptz`;
-  const sends = await db.execute<{
-    pageId: string;
-    urgent: number;
-    requests: number;
-    planned: number;
-    minGapMs: number | string | null;
-    violations: number;
-  }>(sql`
-    select s.page_id::text as "pageId",
-           count(*) filter (where s.class = 'urgent')::int as urgent,
-           count(*) filter (where s.class = 'requests')::int as requests,
-           count(*) filter (where s.class = 'planned')::int as planned,
-           min(s.gap_ms) as "minGapMs",
-           count(*) filter (where s.gap_ms < s.setting_ms)::int as violations
-      from (
-        select a.page_id, a.class, a.setting_ms, a.sent_at,
-               extract(epoch from a.sent_at - lag(a.sent_at) over (partition by a.page_id order by a.sent_at, a.id)) * 1000 as gap_ms
-          from sync_attempts a
-         where a.page_id = any(${pages})
-           and not a.shadow
-           and a.sent_at is not null
-           and a.sent_at >= ${input.since}::timestamptz - ${SYNC_PACE_AUDIT_LOOKBACK_MS}::double precision * interval '1 millisecond'
-           and a.sent_at < ${until}
-      ) s
-     where s.sent_at >= ${input.since}::timestamptz
-     group by s.page_id
+  const sends = await db.execute<{ pageId: string; urgent: number; requests: number; planned: number }>(sql`
+    select a.page_id::text as "pageId",
+           count(*) filter (where a.class = 'urgent')::int as urgent,
+           count(*) filter (where a.class = 'requests')::int as requests,
+           count(*) filter (where a.class = 'planned')::int as planned
+      from sync_attempts a
+     where a.page_id = any(${pages})
+       and not a.shadow
+       and a.sent_at is not null
+       and a.sent_at >= ${input.since}::timestamptz
+       and a.sent_at < ${until}
+     group by a.page_id
   `);
   const queue = await db.execute<{ pageId: string; breakers: number; blocked: number; quarantined: number }>(sql`
     select w.page_id::text as "pageId",
@@ -829,8 +810,6 @@ export async function readSyncJournalMetrics(
     return {
       pageId,
       sends: { urgent: Number(sent?.urgent ?? 0), requests: Number(sent?.requests ?? 0), planned: Number(sent?.planned ?? 0) },
-      minGapMs: sent?.minGapMs === null || sent?.minGapMs === undefined ? null : Number(sent.minGapMs),
-      paceViolations: Number(sent?.violations ?? 0),
       breakersOpen: Number(work?.breakers ?? 0),
       blockedByVendor: Number(work?.blocked ?? 0),
       quarantined: Number(work?.quarantined ?? 0),

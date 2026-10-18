@@ -8,6 +8,7 @@ import {
   ensureSyncPage,
   getNotificationIncidentByKey,
   getSyncAttempt,
+  getSyncPage,
   listUnfinishedAttempts,
   paceFloorFromDb,
   readFanslySendAudit,
@@ -20,6 +21,7 @@ import {
 
 import { SYNC_ENGINE_PACE_VIOLATION_SUBKEY, syncEngineIncidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
 import { SyncAlertEvaluator } from "../apps/runtime/src/sync/engine/alerts.ts";
+import { computeSyncMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { createPacer, type Admission, type Pacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -28,6 +30,7 @@ import { commitSiteEnd, observedSend, recordObservedSiteSend } from "../apps/run
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
+import { readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { currentIntervals } from "./helpers/sync-acceptance-fixtures.ts";
 import {
@@ -39,6 +42,7 @@ import {
   ScriptedLiveTransport,
   seedSyncPage,
   setModeDirect,
+  testConfig,
   testRegistry,
   testSpec,
   waitFor,
@@ -211,8 +215,17 @@ describe("the send audit on recorded rows", () => {
 
     const rows = await readFanslySendAudit(db(), { pageId, since });
     expect(rows.filter((row) => row.observed)).toHaveLength(3);
-    expect(auditPagePace(rows, { start: since, until: null })).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [] });
+    expect(auditPagePace(rows, { start: since, until: null })).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [], siteClose: 2 });
     expect(auditRouteIntervals(rows, { start: since, until: null })).toMatchObject({ violations: [], inconclusive: [] });
+
+    // The page status and the sampler's families judge by the same audit:
+    // Hub's sends are clean, the site's burst is its own number.
+    const page = (await getSyncPage(db(), pageId))!;
+    const status = await readSyncPageStatus(db(), testConfig(testDb.connectionString), page);
+    expect(status.pause).toMatchObject({ violationsLastDay: 0, siteCloseLastDay: 2 });
+    expect(status.pause.minGapLastHourMs).toBeGreaterThan(2_700);
+    expect(status.pause.minGapLastHourMs).toBeLessThan(2_900);
+    expect(await computeSyncMetrics(db(), { page, windowMs: 3_600_000 })).toMatchObject({ paceViolations: 0, siteCloseSends: 2 });
 
     // A site send the engine admitted (protocol 1.3) is no observation: judged.
     await engineSend(pageId, { secondsAgo: 21.5, operation: "site.other", origin: "site" });

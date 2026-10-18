@@ -12,7 +12,8 @@ import {
 } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, SYNC_POOL_TIMEOUTS, type SyncContext } from "./context.ts";
 import { createIncidentAlertSink, SyncAlertEvaluator } from "./engine/alerts.ts";
-import { createEffectiveConfigPauseSource } from "./engine/ports.ts";
+import { EngineCounters, startEngineCounterFlush } from "./engine/counters.ts";
+import { createEffectiveConfigPauseSource, noopMetrics, type Metrics } from "./engine/ports.ts";
 import { buildFanslySendHolderIdentity, createDefaultFanslySendOsProbe } from "../services/fansly-send-guard/os-probe.ts";
 import type { SyncLogger } from "./engine/commit.ts";
 import { SyncEngineHost } from "./engine/host.ts";
@@ -66,16 +67,22 @@ export interface SyncRuntimeTask {
 }
 export type SyncRuntimeHost = SyncRuntimeTask;
 
-/** The production host: the Fansly registry over this process's context.
+/** The production host: the Fansly registry over this process's context,
+ *  counting into `metrics` (the process's `EngineCounters`).
  *  Nothing here may loosen a pace or live gate (pinned by a grep test). */
-export function createSyncRuntimeHost(context: SyncContext, watchdog: StallTracking | null = null): SyncRuntimeHost {
+export function createSyncRuntimeHost(
+  context: SyncContext,
+  watchdog: StallTracking | null = null,
+  metrics: Metrics = noopMetrics,
+): SyncRuntimeHost {
   return new SyncEngineHost({
     db: context.db,
     connectionString: context.config.databaseUrl,
     config: context.config,
     rawConfig: context.rawConfig,
     logger: context.logger,
-    registry: createFanslyRegistry(),
+    registry: createFanslyRegistry({ metrics }),
+    metrics,
     // Alerts 1–4 (design §9.6): an alert opens its latch at once; the
     // evaluator resolves.
     alerts: createIncidentAlertSink({ db: context.db, logger: context.logger }),
@@ -127,12 +134,13 @@ export function createSyncPublicLookupTask(context: SyncContext): SyncRuntimeTas
 /** The onboarding links of new pages' browsers (Project Browser PR 16):
  *  one process at a time drives them, under their own advisory lock; nothing
  *  runs while no profile without a page is being onboarded. */
-export function createSyncBrowserOnboardingTask(context: SyncContext): SyncRuntimeTask {
+export function createSyncBrowserOnboardingTask(context: SyncContext, metrics: Metrics = noopMetrics): SyncRuntimeTask {
   const task = new BrowserOnboardingTask({
     db: context.db,
     connectionString: context.config.databaseUrl,
     config: context.config,
     logger: context.logger,
+    metrics,
     pause: createEffectiveConfigPauseSource(context.db, context.rawConfig),
     holder: buildFanslySendHolderIdentity(createDefaultFanslySendOsProbe(), "sync"),
   });
@@ -148,7 +156,8 @@ export interface SyncRuntime {
   readonly instanceId: string;
   /** Stops the stall watchdog, then the engine host (the step in flight
    *  finishes, every page is released), then the heartbeat (its row is
-   *  removed). Idempotent; does not close the context. */
+   *  removed) beside the counters' last write. Idempotent; does not close the
+   *  context. */
   stop(): Promise<void>;
 }
 
@@ -171,6 +180,10 @@ export interface StartSyncRuntimeOptions {
    *  `createSyncBrowserOnboardingTask(context)` with the default host, none
    *  otherwise. */
   onboarding?: SyncRuntimeTask | null;
+  /** The engine's in-process counters (`engine/counters.ts`), written into
+   *  ops_metric_samples every 5 min and at stop; default: new ones that the
+   *  default host and onboarding count into, none with a host passed in. */
+  counters?: EngineCounters | null;
   /** The stall watchdog (`engine/watchdog.ts`); default: 120 s, its incident
    *  through `createStallIncidentReport`, `process.exit(70)`; null: none. It
    *  watches every heartbeat beat and the default host and evaluator (a host
@@ -201,7 +214,10 @@ export async function startSyncRuntime(
     intervalMs: options.heartbeatIntervalMs ?? SYNC_HEARTBEAT_INTERVAL_MS,
     watchBeat: watchdog === null ? undefined : () => watchdog.track({ component: "heartbeat" }, "beat"),
   });
-  const host = options.host === undefined ? createSyncRuntimeHost(context, watchdog) : options.host;
+  const counters = options.counters !== undefined
+    ? options.counters
+    : options.host === undefined ? new EngineCounters() : null;
+  const host = options.host === undefined ? createSyncRuntimeHost(context, watchdog, counters ?? noopMetrics) : options.host;
   const alerts = options.alerts !== undefined
     ? options.alerts
     : options.host === undefined ? createSyncAlertEvaluator(context, watchdog) : null;
@@ -210,7 +226,7 @@ export async function startSyncRuntime(
     : options.host === undefined ? createSyncPublicLookupTask(context) : null;
   const onboarding = options.onboarding !== undefined
     ? options.onboarding
-    : options.host === undefined ? createSyncBrowserOnboardingTask(context) : null;
+    : options.host === undefined ? createSyncBrowserOnboardingTask(context, counters ?? noopMetrics) : null;
   try {
     await host?.start();
     await alerts?.start();
@@ -226,6 +242,7 @@ export async function startSyncRuntime(
     await heartbeat.stop();
     throw error;
   }
+  const countersFlush = counters === null ? null : startEngineCounterFlush(context, counters);
   let stopping: Promise<void> | null = null;
 
   return {
@@ -240,7 +257,8 @@ export async function startSyncRuntime(
         await alerts?.stop();
         await Promise.all([publicLookup?.stop(), host?.stop(), onboarding?.stop()]);
         clearInterval(keepAlive);
-        await heartbeat.stop();
+        // The counters' last window, once nothing counts any more.
+        await Promise.all([countersFlush?.stop(), heartbeat.stop()]);
       })();
       return stopping;
     },

@@ -43,6 +43,11 @@ function pauseText(status: EnginePageStatus): string {
     parts.push(`наименьший промежуток за час ${engineCount(status.pause.minGapLastHourMs)} мс`);
   }
   if (status.pause.violationsLastDay > 0) parts.push(`нарушений за сутки: ${status.pause.violationsLastDay}`);
+  // The site's own pace: requests the page's browser sent by itself, closer
+  // than the pause to the request before them. Never a violation of Hub's.
+  if (status.pause.siteCloseLastDay > 0) {
+    parts.push(`запросов самого сайта ближе паузы за сутки: ${engineCount(status.pause.siteCloseLastDay)} (не нарушение)`);
+  }
   return parts.join(" · ");
 }
 

@@ -313,7 +313,17 @@ export interface PageStatus {
   pageLabel: string | null;
   mode: SyncPageModeView;
   owner: { generation: string; host: string | null; acquiredAt: string | null; heartbeatAt: string | null; running: boolean };
-  pause: { settingMs: number; lastSendAt: string | null; minGapLastHourMs: number | null; violationsLastDay: number };
+  /** The send audit's record (`send-audit.ts`): the smallest gap before one
+   *  of Hub's sends over the hour, Hub's sends closer than their pause over
+   *  the day, and — never a violation — the site's own requests closer than
+   *  their S to the request before them over the day. */
+  pause: {
+    settingMs: number;
+    lastSendAt: string | null;
+    minGapLastHourMs: number | null;
+    violationsLastDay: number;
+    siteCloseLastDay: number;
+  };
   sendsLastHour: { urgent: number; requests: number; planned: number; byResource: Record<string, number> };
   queue: QueueStatus;
   holds: {
@@ -353,6 +363,7 @@ export interface PageStatusInput {
     lastHour: { urgent: number; requests: number; planned: number; byResource: Record<string, number> };
     minGapLastHourMs: number | null;
     violationsLastDay: number;
+    siteCloseLastDay: number;
   };
   requests?: readonly RequestProgressView[];
   ws?: WsStatusView | null;
@@ -402,6 +413,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
       lastSendAt: page.lastSendAt?.toISOString() ?? null,
       minGapLastHourMs: input.sends.minGapLastHourMs,
       violationsLastDay: input.sends.violationsLastDay,
+      siteCloseLastDay: input.sends.siteCloseLastDay,
     },
     // The engine's classes, as the status contract names them; a page's own
     // site requests (Project Browser, 0271) show under their resource only.

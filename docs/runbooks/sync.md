@@ -49,7 +49,7 @@ pnpm cli sync ownership status
 |---|---|
 | `mode` | `live` for every page the engine runs. A new page is born `live`; no lever takes a page there or out of it |
 | `owner` | the `sync` container that runs the page, its heartbeat (every 10 s) and `running` (a heartbeat younger than 30 s). `sync ownership status` concludes the same in its `runs` column: `yes`, or `no:` and why (the heartbeat's age, a release, never taken, a mode no actor runs) |
-| `pause` | S (`settingMs`), the last send, the smallest gap of the last hour, `violationsLastDay` (must be 0) |
+| `pause` | S (`settingMs`), the last send, and by the send audit (the alert evaluator's judgement): the smallest gap before one of Hub's sends in the last hour, `violationsLastDay` — Hub's sends closer than their pause to the request before them, of any origin (must be 0) — and `siteCloseLastDay`: the site's own requests (a page's browser sent them by itself) closer than their S to the request before them. The site's pace is the site's: informational, never a violation |
 | `sendsLastHour` | sends by class (`urgent`, `requests`, `planned`) and by resource |
 | `queue` | per class: `runnable`, and the open work by waiting reason |
 | `holds` | the page hold (`until` is `"infinity"` for a credentials hold) and the resource-file breakers |
@@ -582,6 +582,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `evaluator` (global) | `failing`, `unrecorded`, `late` | while `sync` beats, a rule of the alert evaluator has not judged a `handover`/`live` page for 5 minutes, counted from its last full judgement or the page's mode change (a restart does not reset it): `failing` — a fact it reads, the rule itself, or its open or resolve keeps failing (the summary names the pages, rules and the error, e.g. `journal: database query failed (57014)`); `unrecorded` — no record for the pair (a `sync` that predates the table, or one that never reached the page); `late` — no failure, but judged less often than every 5 minutes (slow passes). Meanwhile the alerts that rule derives can neither page nor resolve | the `sync` log (`Fansly sync alerts: rules not evaluated`), then the evaluation check under [Read-only data checks](#read-only-data-checks); a code fault is fixed forward or rolled back |
 | `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
+| `site_journal` (global) | `sync_site_observed_commit_failed` | a 5-minute window of the `sync` process counted a site request a page's browser sent by itself that the engine could not journal: the pace audit and the route clocks miss it. Resolves at the next window that counted none | the `sync` log (`an observed site request could not be journaled`: the page and the error) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
@@ -611,6 +612,18 @@ pnpm cli sync alerts ack --page lora-1 --note 'two sends 1.9 s apart at 14:02 UT
 ```
 
 A violation sent before the acknowledgement never reopens the latch; a new one does.
+
+**The engine's counters.** What the `sync` process counts in memory (refusals, dropped frames, a socket's ends,
+the site requests it could not journal …) lands in `ops_metric_samples` every 5 minutes and at its stop:
+one row per series that counted, `counter_<name>{<label>=<value>,…}`, its value the count since the previous write
+(a quiet window writes nothing). Labels of a closed vocabulary only (a reason, an outcome, a kind); a page, a route,
+an origin, a resource and an error's name are folded into the series:
+
+```sql
+select metric, sum(value_ms) as n from ops_metric_samples
+ where metric like 'counter\_%' and sampled_at > now() - interval '1 day'
+ group by metric order by n desc;
+```
 
 ## The socket and its repair
 

@@ -157,6 +157,7 @@ describe("sync status: the page status on the wire", () => {
         lastHour: { urgent: 3, requests: 0, planned: 2, byResource: { "transactions.head": 3, "posts.refresh": 2 } },
         minGapLastHourMs: 2_100.5,
         violationsLastDay: 0,
+        siteCloseLastDay: 4,
       },
       requests: [],
     });

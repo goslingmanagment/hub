@@ -8,6 +8,7 @@ import {
   createModel,
   ensureFanslyPageSendGuard,
   ensurePollRows,
+  getLatestOpsMetricSampleAt,
   getNotificationIncidentByKey,
   getSyncPage,
   listSyncPages,
@@ -27,6 +28,7 @@ import {
   notifySyncEngineIncident,
   SYNC_ENGINE_EVALUATOR_SUBKEY,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
+  SYNC_ENGINE_SITE_JOURNAL_SUBKEY,
   syncEngineIncidentKey,
   syncEngineRouteSubKey,
 } from "../apps/runtime/src/services/notification-incidents.ts";
@@ -43,6 +45,7 @@ import {
   SYNC_LEDGER_BACKFILL_STALL_MS,
   SyncAlertEvaluator,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
+import { EngineCounters, judgeEngineCounterAlerts, startEngineCounterFlush } from "../apps/runtime/src/sync/engine/counters.ts";
 import { computeSyncMetrics, sampleSyncEngineMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { createEngineRegistry, demandToUpsert, pollsFor, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -1049,6 +1052,34 @@ describe("the golden signals (design §9.5)", () => {
     expect(await query<{ value: string }>(
       "select value_ms::text as value from ops_metric_samples where metric = 'sync_sends' and quantile = 'p95'",
     )).toEqual([{ value: "3" }]);
+  });
+
+  it("the sync process's counters: what counted as counter_* series without a page's label; a failed site journal opens its latch until a clean window", async (context) => {
+    if (!testDb) return context.skip();
+    const counters = new EngineCounters();
+    counters.increment("sync_site_observed_commit_failed", { error: "57014" });
+    counters.increment("sync_send_refused", { reason: "pace", pageId: 7 });
+    counters.increment("sync_send_refused", { reason: "pace", pageId: 8 });
+    // The stop writes the last window.
+    await startEngineCounterFlush({ db: db(), logger }, counters, { intervalMs: 3_600_000 }).stop();
+    const rows = await query<{ metric: string; quantile: string; value: string }>(
+      "select metric, quantile, value_ms::text as value from ops_metric_samples where metric like 'counter\\_%'",
+    );
+    expect(Object.fromEntries(rows.map((row) => [row.metric, [row.quantile, row.value]]))).toEqual({
+      "counter_sync_send_refused{reason=pace}": ["p95", "2"],
+      "counter_sync_site_observed_commit_failed": ["p95", "1"],
+    });
+    expect(await incident(SYNC_ENGINE_SITE_JOURNAL_SUBKEY, null)).toMatchObject({
+      status: "open", kind: "fansly_sync_engine", errorCode: "sync_site_observed_commit_failed",
+    });
+    // Not the sampler's: its deadman reads none of them.
+    expect(await getLatestOpsMetricSampleAt(db())).toBeNull();
+
+    // A window that counted none resolves the latch; a stop's short one never does.
+    await judgeEngineCounterAlerts({ db: db(), logger }, new EngineCounters().drain(), { windowMs: 300_000, final: true });
+    expect(await incident(SYNC_ENGINE_SITE_JOURNAL_SUBKEY, null)).toMatchObject({ status: "open" });
+    await judgeEngineCounterAlerts({ db: db(), logger }, new EngineCounters().drain(), { windowMs: 300_000, final: false });
+    expect(await incident(SYNC_ENGINE_SITE_JOURNAL_SUBKEY, null)).toMatchObject({ status: "resolved" });
   });
 });
 
