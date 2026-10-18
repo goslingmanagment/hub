@@ -19,8 +19,11 @@ const DISPATCHER_KEEP_ALIVE_TIMEOUT_THRESHOLD_MS = 250;
 const HTTP_RETRY_BASE_DELAY_MS = 5_000;
 export const MAX_RETRY_DELAY_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
-const ANTHROPIC_LOW_CREDIT_MESSAGE =
-  "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+// The observed production wording (2026-09-06) is "Your credit balance is too
+// low to access the Anthropic API. Please go to Plans & Billing to upgrade or
+// purchase credits." Only its stable core is matched, so a reworded tail does
+// not silently turn an empty account into an unclassified failure.
+const ANTHROPIC_LOW_CREDIT_FRAGMENT = "credit balance is too low";
 
 const TIMEOUT_ERROR_NAMES = new Set([
   "AbortError",
@@ -321,15 +324,7 @@ export function normalizeProviderStreamFailure(
     return providerFailureClassification("provider_unavailable", "provider_response", status, null);
   }
 
-  // The observed Anthropic production billing response has no distinct
-  // billing type: it is a BadRequestError / HTTP 400 invalid_request_error.
-  // Keep the sole message fallback exact and gated by provider+status+type.
-  if (
-    provider === "anthropic"
-    && status === 400
-    && metadata.providerErrorType === "invalid_request_error"
-    && metadata.providerErrorMessage === ANTHROPIC_LOW_CREDIT_MESSAGE
-  ) {
+  if (isAnthropicCreditExhausted(provider, metadata)) {
     return providerFailureClassification("provider_billing", "provider_response", status, null);
   }
 
@@ -383,6 +378,53 @@ function providerFailureClassification(
     providerHttpStatus,
     retryAfterMs,
   };
+}
+
+/**
+ * The Anthropic account has no credit left. The observed production response
+ * has no distinct billing type: it is a BadRequestError / HTTP 400
+ * invalid_request_error whose message says so (gated by provider+status+type);
+ * the documented HTTP 402 billing_error counts too.
+ */
+function isAnthropicCreditExhausted(provider: AiProviderId | null, metadata: ProviderHttpMetadata) {
+  if (provider !== "anthropic") {
+    return false;
+  }
+  if (metadata.providerHttpStatus === 402 || metadata.providerErrorType === "billing_error") {
+    return true;
+  }
+  return metadata.providerHttpStatus === 400
+    && metadata.providerErrorType === "invalid_request_error"
+    && (metadata.providerErrorMessage ?? "").toLowerCase().includes(ANTHROPIC_LOW_CREDIT_FRAGMENT);
+}
+
+export type AiProviderAccountFailure = "credit_exhausted" | "key_invalid";
+
+/**
+ * An account-level refusal before any output: the account's credit ran out,
+ * or Anthropic does not know the key (401). Both are answered before the
+ * model runs and bill nothing, so the same request may go to another account.
+ * A 403 is deliberately not one: a refusal by policy is not to be walked
+ * around by switching accounts. Everything else (429, 5xx, a dropped stream)
+ * is null: another account would not help, or the request may have run.
+ */
+export function classifyAiProviderAccountFailure(error: unknown): AiProviderAccountFailure | null {
+  const normalized = findAiProviderFailure(error);
+  if (!normalized || normalized.failurePhase === "stream") {
+    return null;
+  }
+  const metadata = providerHttpMetadata(error, normalized);
+  if (isAnthropicCreditExhausted(normalized.provider, metadata)) {
+    return "credit_exhausted";
+  }
+  if (
+    metadata.sdkFailureKind === "authentication"
+    || metadata.providerErrorType === "authentication_error"
+    || metadata.providerHttpStatus === 401
+  ) {
+    return "key_invalid";
+  }
+  return null;
 }
 
 function findAiProviderFailure(error: unknown) {

@@ -9,6 +9,7 @@ import { type UsagePeriod, usageRange, shiftAnchor, usageDateLabel } from "@/lib
 import { ruPlural } from "@/lib/plural";
 // The chatter cabinet names the AI features; the owner reads the same names.
 import { featureLabel } from "./account/accountView.js";
+import { AiAccountsSection } from "./AiAccountsSection.js";
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
 
@@ -274,6 +275,7 @@ export function UsagePage() {
 
   return (
     <div className="space-y-5">
+      <AiAccountsSection />
       {header}
       {body}
     </div>

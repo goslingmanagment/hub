@@ -104,27 +104,44 @@ describe("provider failure classification (Stage 1B conscious diff)", () => {
     expect(JSON.stringify(frame)).not.toContain(error.message);
   });
 
-  it("allows only the exact observed Anthropic low-credit 400 signature", () => {
+  it("knows an Anthropic low-credit 400 by its stable core, and nothing else by it", () => {
     const billing = providerHttpFailureFixtures.find(
       (fixture) => fixture.id === "anthropic-billing-400",
     )!;
-    const nearMiss = errorFromProviderHttpFixture({
+    const withMessage = (message: string) => errorFromProviderHttpFixture({
       ...billing,
-      body: {
-        ...billing.body,
-        error: {
-          ...billing.body.error,
-          message: `${billing.body.error.message} `,
-        },
-      },
+      body: { ...billing.body, error: { ...billing.body.error, message } },
     });
 
     expect(billing.status).toBe(400);
     expect(billing.body.error.type).toBe("invalid_request_error");
-    expect(normalizeProviderStreamFailure(nearMiss, { provider: "anthropic" })).toEqual({
+    // A reworded tail must not turn an empty account into an unclassified
+    // failure: the account switch hangs on this class.
+    expect(normalizeProviderStreamFailure(
+      withMessage("Your credit balance is too low to access the Claude API. Add credits."),
+      { provider: "anthropic" },
+    )).toEqual({
+      code: "provider_billing",
+      failurePhase: "provider_response",
+      providerHttpStatus: 400,
+      retryAfterMs: null,
+    });
+    expect(normalizeProviderStreamFailure(
+      withMessage("Your account balance could not be read."),
+      { provider: "anthropic" },
+    )).toEqual({
       code: "provider_stream_failed",
       failurePhase: "provider_response",
       providerHttpStatus: 400,
+      retryAfterMs: null,
+    });
+    expect(normalizeProviderStreamFailure(
+      Object.assign(new Error("billing"), { status: 402, error: { type: "billing_error", message: "billing" } }),
+      { provider: "anthropic" },
+    )).toEqual({
+      code: "provider_billing",
+      failurePhase: "provider_response",
+      providerHttpStatus: 402,
       retryAfterMs: null,
     });
   });

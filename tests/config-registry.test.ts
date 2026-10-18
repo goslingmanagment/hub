@@ -353,6 +353,7 @@ describe("config registry", () => {
       "telegramChatId",
       "ofapiApiKey",
       "anthropicApiKey",
+      "anthropicApiKeys",
       "serviceEgressProxyUrl",
       "serviceEgressProxyUsername",
       "serviceEgressProxyPassword",

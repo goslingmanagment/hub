@@ -26,6 +26,10 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 // signatures keep accepting `config` so the many call sites stay unchanged.
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
+/** ai_provider_billing of one Anthropic account (`account:<label>`): it ran
+ * out of credit or its key was rejected while the others serve. The latch
+ * without a sub-key stays the "nothing serves" one. */
+export const AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX = "account:";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
 /** The Fansly fast lane's "unavailable > 10 min" latch. The lane is deleted
  * (step 4, S4-12): nothing opens it any more, and one an older build left
@@ -344,6 +348,9 @@ function openTitleForIncident(
     case "ofapi_link_stats_reconcile_failed":
       return "🚨 OFAPI link-stats reconcile failed";
     case "ai_provider_billing":
+      if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
+        return `🚨 Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} stopped serving`;
+      }
       return "🚨 AI provider billing needs attention";
     case "ai_provider_failed":
       return "🚨 AI provider generation failed";
@@ -486,6 +493,9 @@ function resolveDetailForIncident(
       }
       return "OFAPI link-stats reconcile recovered";
     case "ai_provider_billing":
+      if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
+        return `Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} is serving again`;
+      }
       return "AI provider billing recovered";
     case "ai_provider_failed":
       if (input.subKey === AI_MEDIA_DESCRIBE_BREAKER_SUBKEY) {

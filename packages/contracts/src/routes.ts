@@ -12,6 +12,7 @@ import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
+import { aiAccountRouteSchemas } from "./routes-ai-accounts.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -7710,6 +7711,7 @@ const baseRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  ...aiAccountRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

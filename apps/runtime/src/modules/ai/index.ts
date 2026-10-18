@@ -28,6 +28,7 @@ import {
 } from "../../services/ai-gateway.ts";
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
+import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
 import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
@@ -419,6 +420,26 @@ export async function pipeAiGatewaySse(
 export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
+
+  server.get("/api/v1/admin/ai/accounts", {
+    schema: routeSchemas.adminAiAccountsList,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return getAdminAiAccountsReport(appContext);
+  });
+
+  server.patch("/api/v1/admin/ai/accounts/:accountId", {
+    schema: routeSchemas.adminAiAccountUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return updateAdminAiAccount(appContext, {
+      actorUserId: principal.user.id,
+      accountId: request.params.accountId,
+      body: request.body,
+    });
+  });
 
   server.get("/api/v1/admin/usage/chatters", {
     schema: routeSchemas.adminChatterUsage,

@@ -9,6 +9,7 @@ import {
   type PoolLifetime,
 } from "@agency_hub_core/db";
 import {
+  anthropicKeyPoolEntries,
   createLogger,
   loadConfig,
   listRetiredFanslyEnv,
@@ -25,10 +26,11 @@ import { ofapiCredentialPolicy } from "./services/ofapi-credential-policy.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
 import { createOpenrouterAiGatewayProvider } from "./services/ai-gateway-openrouter-provider.ts";
+import { createAnthropicAiGatewayProvider } from "./services/ai-gateway-anthropic-provider.ts";
 import {
-  createAnthropicAiGatewayProvider,
-  createPageProxyAnthropicClientResolver,
-} from "./services/ai-gateway-anthropic-provider.ts";
+  createAnthropicAccountPool,
+  type AnthropicAccountPool,
+} from "./services/ai-provider-account-pool.ts";
 import {
   createElevenLabsVoiceProvider,
   type VoiceTtsProvider,
@@ -69,6 +71,10 @@ export interface AppContext {
   // Stage 29: second provider ("openrouter:*" models route here); absent
   // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
   aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
+  // The Anthropic accounts of ANTHROPIC_API_KEYS (or the single
+  // ANTHROPIC_API_KEY) that the gateway and the image describer spend in
+  // order; absent without a key.
+  anthropicAccountPool?: AnthropicAccountPool | null | undefined;
   // Voice notes vendor TTS (ElevenLabs). Constructed whenever ELEVENLABS_API_KEY
   // and the complete service proxy are configured at boot — INDEPENDENT of the
   // live voiceNotesEnabled flag, which is a DB override bootstrap never sees.
@@ -189,10 +195,13 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       : undefined;
     // Preflight failure leaves database-only work available; stateful dispatch stays closed.
     await ofapi?.getCredentialPreflight?.();
-    const aiGatewayProvider = config.chatMuseAiGatewayEnabled && config.anthropicApiKey
-      ? createAnthropicAiGatewayProvider({
-        resolveClient: createPageProxyAnthropicClientResolver(config.anthropicApiKey),
-      })
+    const anthropicAccountPool = createAnthropicAccountPool({
+      db,
+      logger,
+      entries: anthropicKeyPoolEntries(config),
+    });
+    const aiGatewayProvider = config.chatMuseAiGatewayEnabled && anthropicAccountPool
+      ? createAnthropicAiGatewayProvider({ accountPool: anthropicAccountPool })
       : undefined;
     const aiGatewayOpenrouterProvider = config.chatMuseAiGatewayEnabled && config.openrouterApiKey
       ? createOpenrouterAiGatewayProvider({ apiKey: config.openrouterApiKey })
@@ -213,6 +222,7 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       ofapi,
       aiGatewayProvider,
       aiGatewayOpenrouterProvider,
+      anthropicAccountPool,
       voiceTtsProvider,
       fanslySendGuards,
       poolLifetime,

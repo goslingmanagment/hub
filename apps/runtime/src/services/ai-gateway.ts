@@ -72,6 +72,9 @@ export interface AiGatewayProviderInput {
   disableAdaptiveThinking?: boolean;
   /** Server-only: the bounded completion trim pass must not retry SDK calls. */
   disableRetries?: boolean;
+  /** Server-only: the Anthropic account (ai_provider_accounts) that accepted
+   * the call, named on its ledger row. */
+  onProviderAccount?: (accountId: number) => void;
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
    * completion lane that did was removed with the Workboard (Decision 376) —
@@ -468,6 +471,10 @@ export async function prepareAiGatewayStream(
     prompt,
   });
   let completionTrimRecord: Record<string, unknown> | undefined;
+  let servedAccountId: number | null = null;
+  const onProviderAccount = (accountId: number) => {
+    servedAccountId = accountId;
+  };
 
   return {
     requestId,
@@ -512,6 +519,7 @@ export async function prepareAiGatewayStream(
         body: input,
         quota: quotaFrame,
         signal,
+        onProviderAccount,
         ...(input.disableAdaptiveThinking
           ? { disableAdaptiveThinking: true }
           : {}),
@@ -529,6 +537,7 @@ export async function prepareAiGatewayStream(
           body: trimBody(prompt, trimCompletion.maxTokens),
           quota: quotaFrame,
           signal: callSignal,
+          onProviderAccount,
           disableAdaptiveThinking: true,
           disableRetries: true,
         }),
@@ -598,6 +607,7 @@ export async function prepareAiGatewayStream(
         userId: principal.user.id,
         event: {
           clientEventId: input.clientRequestId,
+          providerAccountId: servedAccountId,
           providerResponseId: record.providerResponseId,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,

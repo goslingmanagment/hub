@@ -268,6 +268,9 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
+  // Several Anthropic accounts, in the order they are spent: "main=sk-...,
+  // second=sk-...". Set, it replaces ANTHROPIC_API_KEY (parseAnthropicApiKeys).
+  ANTHROPIC_API_KEYS: optionalTrimmedStringSchema,
   // AI media describer (docs/runbooks/ai-media-describe.md): ships inert. Every
   // knob is live-wired (read per sweep / per generation). The page policies
   // FAIL CLOSED: "{}" grants no page; a page describes only messages newer than
@@ -375,6 +378,55 @@ const envSchema = z.object({
 export const ENV_CONFIG_KEYS = Object.keys(envSchema.shape) as Array<
   keyof typeof envSchema.shape
 >;
+
+/** One Anthropic account's key: `label` names the account in Hub (ledger,
+ * usage screen, alerts); the key itself never leaves the config. */
+export interface AnthropicApiKeyEntry {
+  label: string;
+  apiKey: string;
+}
+
+const ANTHROPIC_ACCOUNT_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/**
+ * ANTHROPIC_API_KEYS: `label=key` pairs separated by commas or whitespace, in
+ * the order the accounts are spent. A label is lowercase latin, digits, `_`
+ * or `-` (up to 32); a key holds none of `,` `=` or whitespace. Malformed
+ * input refuses to boot rather than silently dropping an account.
+ */
+export function parseAnthropicApiKeys(raw: string | undefined | null): AnthropicApiKeyEntry[] {
+  if (!raw) {
+    return [];
+  }
+  const entries: AnthropicApiKeyEntry[] = [];
+  for (const part of raw.split(/[\s,]+/).filter(Boolean)) {
+    const separator = part.indexOf("=");
+    const label = separator > 0 ? part.slice(0, separator) : "";
+    const apiKey = separator > 0 ? part.slice(separator + 1) : "";
+    if (!ANTHROPIC_ACCOUNT_LABEL.test(label) || apiKey.length === 0 || apiKey.includes("=")) {
+      throw new Error("ANTHROPIC_API_KEYS entries must use the format label=key (label: a-z, 0-9, _ or -)");
+    }
+    if (entries.some((entry) => entry.label === label)) {
+      throw new Error(`ANTHROPIC_API_KEYS repeats the label ${label}`);
+    }
+    if (entries.some((entry) => entry.apiKey === apiKey)) {
+      throw new Error(`ANTHROPIC_API_KEYS gives the key of ${label} to another label too`);
+    }
+    entries.push({ label, apiKey });
+  }
+  return entries;
+}
+
+/** The accounts Hub spends: ANTHROPIC_API_KEYS, else the single
+ * ANTHROPIC_API_KEY as the account `default`, else none. */
+export function anthropicKeyPoolEntries(
+  config: Pick<AppConfig, "anthropicApiKeys" | "anthropicApiKey">,
+): AnthropicApiKeyEntry[] {
+  if (config.anthropicApiKeys && config.anthropicApiKeys.length > 0) {
+    return config.anthropicApiKeys;
+  }
+  return config.anthropicApiKey ? [{ label: "default", apiKey: config.anthropicApiKey }] : [];
+}
 
 export interface AppConfig {
   databaseUrl: string;
@@ -517,6 +569,9 @@ export interface AppConfig {
   voiceNotesMaxConcurrentSyntheses?: number;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
+  /** ANTHROPIC_API_KEYS: the Anthropic accounts in their spending order. Empty
+   * = the single ANTHROPIC_API_KEY (anthropicKeyPoolEntries). */
+  anthropicApiKeys?: AnthropicApiKeyEntry[];
   // AI media describer — ships inert; every knob live-wired.
   /** Optional separate Anthropic key/workspace for the describer (spend
    * accounting and a provider-side limit). Unset = the main key. */
@@ -884,6 +939,7 @@ export function loadConfig(
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
+    anthropicApiKeys: parseAnthropicApiKeys(parsed.ANTHROPIC_API_KEYS),
     anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,
     aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,

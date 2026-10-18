@@ -589,7 +589,7 @@ async function processRow(
 
   const startedAt = Date.now();
   // The base64 copy lives only inside this call's scope.
-  const outcome: MediaDescribeOutcome = await describeMedia({
+  const outcome: MediaDescribeOutcome & { providerAccountId?: number | null } = await describeMedia({
     model: input.model,
     jpegBase64: prepared.jpeg.toString("base64"),
     proxy: page.proxy,
@@ -612,6 +612,7 @@ async function processRow(
     userId: null,
     event: {
       clientEventId,
+      providerAccountId: outcome.providerAccountId ?? null,
       providerResponseId: fields.providerResponseId ?? null,
       inputTokens: fields.inputTokens ?? 0,
       outputTokens: fields.outputTokens ?? 0,
