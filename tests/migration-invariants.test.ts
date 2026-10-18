@@ -661,7 +661,7 @@ describe("database migration invariants", () => {
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0288_page_browser_telemetry.sql"');
   });
 
-  it("adds the Hub request's grant and release and the exit's refusals (0289) nullable, under brief retried locks, read-only to the read role and rollback-compatible", async () => {
+  it("keeps when a Hub request was let go and released, and the exit's refusals (0289): nullable, under brief retried locks, readable by the read role, rollback-compatible", async () => {
     const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
     const text = await readFile("packages/db/migrations/0289_page_browser_quiet_and_egress.sql", "utf8");
     expect(text.startsWith("-- agency-hub:no-transaction")).toBe(true);
