@@ -15,7 +15,16 @@
 //     pause and the live fingerprint) — its answer is an admission with an
 //     absolute deadline on CLOCK_MONOTONIC, or a refusal: refused, gone
 //     past its deadline, no answer — the request fails and never leaves.
-//  4. Admitted: the step "released" is written, durably; then, with the
+//  4. Admitted: the step "released" is written, durably. The operation's
+//     first request then waits for the page's quiet by the operator's own
+//     sight (variant Б, plan-b Б2 and Б12): the admission's pause
+//     (`checkResult.pauseMs`) since the last write to the API in any tunnel
+//     (the proxy's bytes) and the last send of the site's own (CDP), and no
+//     request of the site's own to the API in flight. The engine's grant
+//     knows the site's sends only once they reached it; the proxy's bytes are
+//     here first. A quiet that would come only past the deadline refuses the
+//     request (`pace`, never sent). When it is released goes to the engine
+//     with its `sent`. Then, with the
 //     deadline still ahead, the exit open and the same session, the gate
 //     opens the request's window (egress/gate.ts; spec §9): its records go
 //     up only before the deadline, a repeat of Chrome's own is held, a new
@@ -105,6 +114,19 @@ export interface HubTimings {
 
 const DEFAULT_TIMINGS: HubTimings = { pauseWaitMs: 5000, checkWaitMs: 5000, opLimitMs: 21_000, mainWaitMs: 5000, maxRequestMs: 120_000 };
 
+/** While a request of the site's own is in flight, the release looks again
+ *  this often. */
+export const QUIET_RECHECK_MS = 50;
+
+/** What the operator itself saw of the page's sends (plan-b Б12): the last
+ *  write to the API by its proxy's bytes or a send of the site's own by CDP
+ *  (CLOCK_MONOTONIC ms; null: none), and whether a request of the site's own
+ *  to the API is in flight. */
+export interface PageQuiet {
+  lastSendMono: number | null;
+  siteInFlight: boolean;
+}
+
 type Outcome = Result["outcome"];
 type Role = "preflight" | "main";
 
@@ -153,6 +175,10 @@ export interface HubDeps {
    *  Chrome's timing; null: not known) and its body, sealed in the buffer —
    *  read before this returns, it goes with the outcome's resultAck. */
   identityAnswer?: (answer: { fingerprint: string; status: number; bodyId: string; bytes: number; gateSentMono: number | null }) => void;
+  /** The page's sends as the operator saw them (plan-b Б12): an operation's
+   *  first request is released only after its admission's pause since the
+   *  last of them, with none of the site's in flight. Absent: no wait. */
+  quiet?: () => PageQuiet;
   timings?: Partial<HubTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -201,6 +227,13 @@ interface Attempt {
   /** Pauses held and not resolved yet. */
   held: Set<PausedRequest>;
   deadline: number | null;
+  /** The admission's pause (`checkResult.pauseMs`); null: the engine gave
+   *  none — no quiet is waited for. */
+  pauseMs: number | null;
+  /** When the operation's first request began to wait for the quiet, and
+   *  when it was released (this process's clock). */
+  quietFromMono: number | null;
+  releasedMono: number | null;
   recoveredNotSent: boolean;
   preflight: Physical | null;
   main: Physical | null;
@@ -402,6 +435,9 @@ export class HubRequests {
       waiting: null,
       held: new Set(),
       deadline: null,
+      pauseMs: null,
+      quietFromMono: null,
+      releasedMono: null,
       recoveredNotSent: false,
       preflight: null,
       main: null,
@@ -454,6 +490,7 @@ export class HubRequests {
     }
     attempt.stage = "admitted";
     attempt.deadline = result.deadlineMono;
+    attempt.pauseMs = result.pauseMs ?? null;
     void this.#admitted(attempt, waiting);
   }
 
@@ -713,6 +750,22 @@ export class HubRequests {
     else if (this.session.fingerprint !== attempt.fingerprint) why = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: "the session changed between the preflight and the request" } : { kind: "aborted_before_send", refusal: "session_mismatch" };
     else if (this.#navigated(attempt)) why = { kind: "transport_error", sent: this.#sent(attempt), message: "the site's document changed while the request waited" };
     if (why !== null) return this.#refuseAt(attempt, request, why);
+    if (attempt.preflight === null && attempt.main === null) {
+      // The operation's first request: the page's quiet first (plan-b Б12).
+      const wait = this.#quietWait(attempt, deadline!, now);
+      if (wait === "late") {
+        this.#log("release.no_quiet", { attemptId: attempt.id, waitedMs: attempt.quietFromMono === null ? 0 : Math.round(now - attempt.quietFromMono) });
+        return this.#refuseAt(attempt, request, { kind: "aborted_before_send", refusal: "pace" }, "no quiet of the page's sends before the admission's deadline");
+      }
+      if (wait > 0) {
+        attempt.quietFromMono ??= now;
+        await this.#sleep(attempt, wait);
+        // Ended meanwhile: its end failed the pause it held.
+        if (attempt.done) return;
+        // Everything is asked again: time went by.
+        return this.#release(attempt, request, role);
+      }
+    }
     const phys: Physical = {
       role,
       networkId: request.networkId,
@@ -747,6 +800,10 @@ export class HubRequests {
     if (attempt.limitTimer === null) this.#restartLimit(attempt);
     this.#armRequestDeadline(attempt);
     attempt.held.delete(request);
+    if (attempt.releasedMono === null) {
+      attempt.releasedMono = now;
+      if (attempt.quietFromMono !== null) this.#log("release.quiet", { attemptId: attempt.id, waitedMs: Math.round(now - attempt.quietFromMono), pauseMs: attempt.pauseMs });
+    }
     const resolution = await this.#resolve(request, { action: "continue", params: { url: realUrl(request.url, attempt.real.hostname), interceptResponse: true } });
     if (resolution === "refused" && !attempt.done) {
       // The pause was gone (the page dropped the request): it never left.
@@ -1240,7 +1297,31 @@ export class HubRequests {
   #reportSent(attempt: Attempt, sentMono: number, sentWall: number, connectionReused: boolean): void {
     if (attempt.sentReported) return;
     attempt.sentReported = true;
-    this.#deps.link.send({ type: "sent", attemptId: attempt.id, sentMono, sentWall, connectionReused });
+    this.#deps.link.send({ type: "sent", attemptId: attempt.id, sentMono, sentWall, connectionReused, ...(attempt.releasedMono === null ? {} : { releasedMono: attempt.releasedMono }) });
+  }
+
+  /** Plan-b Б2, Б12: how long the operation's first request still waits for
+   *  the page's quiet — its admission's pause since the last send the
+   *  operator saw (the proxy's write to the API, the site's own by CDP), and
+   *  no request of the site's own in flight (looked at again every
+   *  `QUIET_RECHECK_MS`) — 0: none; `late`: the quiet would come only at or
+   *  past the admission's deadline. */
+  #quietWait(attempt: Attempt, deadline: number, now: number): number | "late" {
+    const pause = attempt.pauseMs;
+    const seen = pause === null ? undefined : this.#deps.quiet?.();
+    if (pause === null || seen === undefined) return 0;
+    let readyAt = seen.lastSendMono === null ? now : seen.lastSendMono + pause;
+    if (seen.siteInFlight) readyAt = Math.max(readyAt, now + QUIET_RECHECK_MS);
+    if (readyAt <= now) return 0;
+    return readyAt < deadline ? readyAt - now : "late";
+  }
+
+  /** A wait of the attempt's own: over at its end too. */
+  #sleep(attempt: Attempt, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.#timer(attempt, ms, resolve);
+      void attempt.ended.then(resolve);
+    });
   }
 
   /** The operation's limit: from its admission, again from each send. */

@@ -1031,6 +1031,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # page_browsers by named columns; an operator writes `browser.transition`
   # only for an engine of minor 5, which the previous image is not.
   "0288_page_browser_telemetry.sql"
+  # 0289: sync_attempts.granted_at, released_at and page_browsers.egress_failures,
+  # egress_failures_since — nullable without a default (catalog only), each
+  # ALTER retrying a 1 s lock (the 0272 pattern). The previous image never
+  # names them; the fields an operator adds to its messages it skips.
+  "0289_page_browser_quiet_and_egress.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

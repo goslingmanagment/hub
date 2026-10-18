@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { checkExitIp, ExitIpError } from "../apps/page-browser/src/egress/exit-ip.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
-import { Egress, localOrPrivate, type EgressOptions, type SocketTunnelEvent, type TunnelRecord } from "../apps/page-browser/src/egress/proxy.ts";
+import { Egress, localOrPrivate, type EgressOptions, type SocketTunnelEvent, type TunnelRecord, type TunnelSocksFailure } from "../apps/page-browser/src/egress/proxy.ts";
 import { SocksError, socksConnect, type SocksConfig } from "../apps/page-browser/src/egress/socks5.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, socketServer, SocketTunnelClient, SOCKS_PASSWORD, SOCKS_USER, tlsRecord, until } from "./helpers/page-browser-fakes.ts";
@@ -27,10 +27,14 @@ async function setUp(options: Pick<EgressOptions, "openSocket"> = {}) {
   cleanups.push(() => socks.stop());
   const records: TunnelRecord[] = [];
   const socksFailures: string[] = [];
+  const failures: TunnelSocksFailure[] = [];
   const egress = new Egress({
     classify: classifyFanslyHost,
     onRecord: (record) => records.push(record),
-    onSocksFailure: (kind) => socksFailures.push(kind),
+    onSocksFailure: (failure) => {
+      failures.push(failure);
+      socksFailures.push(failure.kind);
+    },
     socksTimeoutMs: 2000,
     log: quiet,
     ...options,
@@ -38,7 +42,7 @@ async function setUp(options: Pick<EgressOptions, "openSocket"> = {}) {
   const port = await egress.listen(0);
   cleanups.push(() => egress.close());
   const config: SocksConfig = { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD };
-  return { egress, port, socks, records, socksFailures, config };
+  return { egress, port, socks, records, socksFailures, failures, config };
 }
 
 function readSome(socket: Socket): Promise<Buffer> {
@@ -206,6 +210,31 @@ describe("the open exit", () => {
     expect(records[0]?.result).toMatch(/^failed: /);
   });
 
+  it("tells every tunnel the SOCKS5 failed — how, at which step, its reply, the host's class — and Chrome sees it failed", async () => {
+    const { egress, port, socks, failures, records, config } = await setUp();
+    socks.answers.set("fansly.com:443", 2);
+    socks.answers.set("tracker.adnet-cdn.com:443", "drop");
+    egress.setSocks(config);
+    egress.openExit();
+    for (const target of ["fansly.com:443", "tracker.adnet-cdn.com:443", "nowhere.adnet-cdn.com:443"]) {
+      const { status, socket } = await proxyConnect(port, target);
+      socket.destroy();
+      expect(status).toBe(502);
+    }
+    await until(() => failures.length === 3);
+    expect(failures).toEqual([
+      { kind: "refused", step: "connect", rep: 2, host: "fansly.com", port: 443, cls: "site" },
+      { kind: "unavailable", step: "connect", rep: null, host: "tracker.adnet-cdn.com", port: 443, cls: "third_party" },
+      { kind: "refused", step: "connect", rep: 4, host: "nowhere.adnet-cdn.com", port: 443, cls: "third_party" },
+    ]);
+    await until(() => records.length === 3);
+    expect(records.map((record) => record.result)).toEqual([
+      "failed: SOCKS5: not allowed by the ruleset (REP 2)",
+      "failed: SOCKS5 closed the connection at connect",
+      "failed: SOCKS5: host unreachable (REP 4)",
+    ]);
+  });
+
   it("reports a SOCKS5 that is not there", async () => {
     const { egress, port, socksFailures, config } = await setUp();
     egress.setSocks({ ...config, port: 1 });
@@ -315,6 +344,11 @@ describe("the page's SOCKS5", () => {
     expect((down as SocksError).kind).toBe("unavailable");
     const refused = await socksConnect(config, "nowhere.example", 443).catch((error: unknown) => error);
     expect((refused as SocksError).kind).toBe("refused");
+    // The step it failed at, and the server's reply to the CONNECT.
+    expect([auth, down, refused].map((error) => [(error as SocksError).step, (error as SocksError).rep])).toEqual([["auth", null], ["greeting", null], ["connect", 4]]);
+    socks.answers.set("dropped.example:443", "drop");
+    const dropped = await socksConnect(config, "dropped.example", 443).catch((error: unknown) => error);
+    expect([(dropped as SocksError).kind, (dropped as SocksError).step, (dropped as SocksError).rep]).toEqual(["unavailable", "connect", null]);
     for (const error of [auth, down, refused]) expect(String((error as Error).message)).not.toContain(SOCKS_PASSWORD);
     expect(socks.logins.filter((login) => !login.ok)).toHaveLength(1);
   });

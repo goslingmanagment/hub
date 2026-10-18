@@ -796,11 +796,13 @@ export class SyncActor {
         // without the send mark — the pacer marks the send at the instant
         // the transport reports, or at the completion (I1).
         grant: () => d.pacer.checkRemoteGrant(armed),
+        released: (mono) => d.pacer.noteReleased(armed, mono),
       }, abort, {
         attemptId: armed.attemptId,
         ownerGeneration: d.generation,
         issuedMono: armed.issuedMono,
         sendDeadlineMono: armed.sendDeadlineMono,
+        pauseMs: armed.pauseMs,
       });
     } catch (error) {
       // Transports report outcomes, they do not throw; a throw is treated as a
@@ -818,7 +820,7 @@ export class SyncActor {
   ): Promise<ActorExit | null> {
     const d = this.#d;
     if (outcome.kind === "aborted_before_send") {
-      const settled = await this.#committed(() => settleNotSent(d, admission, outcome));
+      const settled = await this.#committed(() => settleNotSent(d, admission, outcome, armed));
       if (!settled.ok) await this.#markCommitFailed(admission, settled.exit);
       else this.#settled(admission.attemptId);
       return exitOf(settled);

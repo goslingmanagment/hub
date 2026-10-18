@@ -54,10 +54,14 @@ import {
 // to `countedAt`: only an admission after L + its pause clears that uncertainty.
 // Equal recorded site and Hub instants leave their order unknown too.
 //
-// A site send recorded after a Hub send's admission and before that send
+// A site send recorded after a Hub send was let go and before that send
 // (plan-b Б12, accepted) is not its predecessor: Hub could not know of it
 // when its request was let go. It is listed (`siteAfterAdmission`), and the
-// Hub send is judged against the send before it.
+// Hub send is judged against the send before it. "Let go" is the page's
+// browser's release, after its own sight of the page's quiet (0289,
+// `released_at`); a row without one counts from its grant (`granted_at`),
+// else from its admission. A site send between the admission and the release
+// was in the browser's sight: a short gap to it is a violation.
 //
 // What cannot be judged is `inconclusive`, never a pass: a pair whose later
 // send recorded no pause or interval (an attempt admitted before 0237, a
@@ -233,8 +237,9 @@ export interface PaceAudit {
   /** The smallest gap − pause of a judged pair. */
   minMarginMs: number | null;
   /** Plan-b Б12, accepted: a recorded Hub send closer than its pause to a
-   *  site request the page's browser sent on its own after that Hub send's
-   *  admission — nobody could know of it when Hub's request was let go. Never
+   *  site request the page's browser sent on its own after that Hub send was
+   *  let go (its release; else its grant, else its admission) — nobody could
+   *  know of it when Hub's request was let go. Never
    *  a violation; the Hub send is judged against the send before them. One
    *  pair per such Hub send (its nearest such site send). */
   siteAfterAdmission: PacePair[];
@@ -307,12 +312,12 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
       continue;
     }
     if (!inWindow(later.laterMs, window)) continue;
-    // Б12: the site's own recorded sends after this send's admission.
+    // Б12: the site's own recorded sends after this send was let go.
     let prevIndex = index - 1;
-    const admittedMs = later.row.admittedAt.getTime();
+    const letGoMs = (later.row.releasedAt ?? later.row.grantedAt ?? later.row.admittedAt).getTime();
     while (later.row.sentAt !== null && prevIndex >= 0) {
       const candidate = sends[prevIndex]!;
-      if (!(candidate.row.observed && candidate.row.sentAt !== null && candidate.ms > admittedMs)) break;
+      if (!(candidate.row.observed && candidate.row.sentAt !== null && candidate.ms > letGoMs)) break;
       prevIndex -= 1;
     }
     const nearestAfterAdmission = prevIndex < index - 1 ? sends[index - 1]! : null;

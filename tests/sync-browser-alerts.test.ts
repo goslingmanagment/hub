@@ -87,6 +87,8 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     crashDumpsPending: 0,
     crashDumpsPendingNewestAt: null,
     crashDumpsCountedAt: at(-30 * MINUTE),
+    egressFailures: null,
+    egressFailuresSince: null,
     ...overrides,
   };
 }

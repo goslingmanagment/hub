@@ -78,6 +78,24 @@
 // event of the buffer (`browser.transition`), acknowledged with the stream,
 // its note's IPs masked. They wait in memory (the newest few hundred) while
 // the buffer takes no writes or no engine that reads them (minor 5) is linked.
+// Every `state` also counts the exit's refusals since the operator started
+// (`egressFailures`): the page's SOCKS5 failing a tunnel by how, at which
+// step, its reply and the host's class; the rules extension's blocks by the
+// host's class, the self-test's probes apart.
+//
+// The page's SOCKS5 failing one tunnel (variant Б: the site goes as a
+// browser's): on a tunnel to Fansly, the greeting or the login failing is the
+// proxy failing the site — the page fails (`proxy_unavailable`,
+// `proxy_auth`); a CONNECT the server dropped or refused there, or any failure
+// on a third party's tunnel but a refusal of its destination, runs the exit
+// IP check out of turn (at most every `proxyRecheckMs`) — a proxy that is down
+// fails the page by it; a third party's destination refused is that tunnel's
+// alone. Chrome sees each such tunnel failed.
+//
+// A Hub request goes only after the page's quiet by the operator's own sight
+// (plan-b Б12; hub-requests/hub.ts): the admission's pause since the last
+// write to the API by the proxy's bytes, the last send of the site's own and
+// its socket's handshake, with no request of the site's own in flight.
 //
 // What holds, whatever happens:
 // - No Hub request leaves without the engine's admission: only by its
@@ -117,11 +135,12 @@ import { EventStream } from "../buffer/stream.ts";
 import { Cdp, CdpError, type CdpEvent, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
-import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
+import { HubRequests, type HubTimings, type PageQuiet } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
+import { BlockedRequests } from "../intercept/blocked.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -135,8 +154,8 @@ import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
 import { ExtensionFiles } from "../egress/extension-files.ts";
 import { ApiGate, SLOT_LIMIT_MS } from "../egress/gate.ts";
-import { classifyFanslyHost, FANSLY_HOSTS, type HostClassifier } from "../egress/hosts.ts";
-import { Egress } from "../egress/proxy.ts";
+import { classifyFanslyHost, FANSLY_HOSTS, type HostClass, type HostClassifier } from "../egress/hosts.ts";
+import { Egress, type TunnelSocksFailure } from "../egress/proxy.ts";
 import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
@@ -148,6 +167,7 @@ import { ProbeDriver } from "../selftest/probes.ts";
 import { HaltStore, heldForTheOwner, LOGIN_DECIDES, newHalt, replacesHeld, type HeldHalt } from "../state/halt-store.ts";
 import { PageState, type Transition } from "../state/page-state.ts";
 import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
+import { EgressFailureCounts } from "../state/egress-failures.ts";
 import { atLeast, type StopReason } from "../state/steps.ts";
 import type { OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
@@ -181,6 +201,9 @@ export interface OperatorTimings {
   failureQuitMs: number;
   /** The site's document in the work tab (plan §4.1, step 8). */
   siteLoadMs: number;
+  /** A tunnel the page's SOCKS5 failed runs the exit IP check out of turn at
+   *  most this often. */
+  proxyRecheckMs: number;
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
@@ -207,6 +230,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   quitWaitMs: 5000,
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
+  proxyRecheckMs: 30_000,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
   sessionShowWaitMs: 3_000,
@@ -233,6 +257,13 @@ const TRANSITIONS_KEPT = 256;
 const TRANSITIONS_MINOR = 5;
 /** Chrome's crash dumps' count is read again at most this often. */
 const CRASH_DUMPS_READ_MS = 5_000;
+/** A request of the site's own counts as in flight for a Hub request's quiet
+ *  this long at most (the engine's bound of a foreign send, its request
+ *  timeout): a lost end stands Hub's requests no longer. */
+const SITE_QUIET_IN_FLIGHT_MS = 20_000;
+/** The hosts of Fansly's own classes: the proxy failing a tunnel to one is the
+ *  proxy failing the site. */
+const FANSLY_CLASSES: ReadonlySet<HostClass> = new Set(["site", "api", "ws", "cdn"]);
 
 type TransitionEvent = Omit<Extract<BufferEvent, { kind: "browser.transition" }>, "seq" | "atMono" | "atWall">;
 
@@ -326,6 +357,10 @@ export class Operator {
   readonly site: SiteRequests;
   /** Variant Б: the site's own API traffic, observed. */
   readonly observer: SiteObserver;
+  /** The exit's refusals since this operator started (`state.egressFailures`). */
+  readonly egressFailures = new EgressFailureCounts();
+  /** The rules extension's blocks, as Chrome reports them. */
+  readonly blocked: BlockedRequests;
   /** The login form's desk (plan §4.8): the screen, its screenshot, the
    *  owner's input. */
   readonly login: LoginDesk;
@@ -437,6 +472,8 @@ export class Operator {
   #retryTimer: NodeJS.Timeout | null = null;
   #ipTimer: NodeJS.Timeout | null = null;
   #ipChecking = false;
+  /** When a failed tunnel last ran the exit IP check out of turn. */
+  #proxyRecheckMono = Number.NEGATIVE_INFINITY;
   #heartbeatTimer: NodeJS.Timeout | null = null;
   #stateTimer: NodeJS.Timeout | null = null;
   #commandChain: Promise<void> = Promise.resolve();
@@ -514,10 +551,7 @@ export class Operator {
           refused: record.refused,
           result: record.result,
         }),
-      onSocksFailure: (kind, message) => {
-        if (!atLeast(this.page.step, "exit_open")) return;
-        void this.#fail(kind === "auth" ? "proxy_auth" : "proxy_unavailable", `the page's SOCKS5 failed a tunnel: ${message}`);
-      },
+      onSocksFailure: (failure, message) => this.#onSocksFailure(failure, message),
     });
 
     this.cdp = new Cdp({ socketPath: this.config.holderSock });
@@ -539,7 +573,11 @@ export class Operator {
     this.envCheck = new EnvCheck(this.cdp, this.control);
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
-      onDecided: (request, decision) => this.#journalRequest(request, decision),
+      onDecided: (request, decision) => {
+        // Failed here, not by the rules extension: no block of its to count.
+        if (decision.action === "fail" && request.networkId !== null) this.blocked.failedHere(request.networkId);
+        this.#journalRequest(request, decision);
+      },
       // An answer resolved at the response stage — and confirmed by Chrome,
       // never merely decided — ends its request for the page's slot,
       // whoever decided it (a path, or a decision for an operation that
@@ -715,6 +753,7 @@ export class Operator {
       },
       sessionChanged: (fingerprint) => this.#onSessionChanged(fingerprint),
       identityAnswer: (answer) => this.#onIdentity(answer),
+      quiet: () => this.#pageQuiet(),
       ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
     });
     this.site = new SiteRequests({
@@ -759,6 +798,8 @@ export class Operator {
       readEnded: (end) => this.login.readEnded(end),
       log: makeLog("observe"),
     });
+    this.blocked = new BlockedRequests(this.cdp, ({ networkId, host }) =>
+      this.egressFailures.dnr({ cls: this.#classify(host), probe: this.probes.probeOf(networkId) !== null, host }));
     // Variant Б (plan-b §4.1.6, §4.1.9): the site clearing its own login is
     // seen in its storage, and so is the size of its socket's authorization
     // (the token itself is never kept, logged or written).
@@ -906,7 +947,45 @@ export class Operator {
       lastClearedHaltId: this.#lastClearedId,
       hubSend: this.#hubSend(),
       crashDumps: this.#crashDumpsNow(),
+      egressFailures: this.egressFailures.snapshot(),
     };
+  }
+
+  /** The page's sends as this operator saw them, for a Hub request's quiet
+   *  (plan-b Б12): the last write to the API by the proxy's bytes, the last
+   *  send of the site's own (CDP) and its socket's handshake; and a request
+   *  of the site's own in flight. */
+  #pageQuiet(): PageQuiet {
+    const sends = [this.egress.gate.lastApiWriteMono, this.observer.lastSend?.mono ?? null, this.sockets.lastHandshake?.mono ?? null].filter((mono): mono is number => mono !== null);
+    return { lastSendMono: sends.length === 0 ? null : Math.max(...sends), siteInFlight: this.observer.activeSince(monoMs() - SITE_QUIET_IN_FLIGHT_MS) > 0 };
+  }
+
+  /** A tunnel the page's SOCKS5 failed (egress/proxy.ts): counted; the page
+   *  fails only when the proxy itself failed the site (its greeting or login
+   *  on a tunnel to Fansly). A CONNECT dropped or refused on a tunnel to
+   *  Fansly, or a third party's tunnel failing but by its destination's
+   *  refusal, has the exit IP check run out of turn: it fails the page if the
+   *  proxy is down indeed. A third party's destination refused: that tunnel's
+   *  alone. */
+  #onSocksFailure(failure: TunnelSocksFailure, message: string): void {
+    this.egressFailures.socks(failure);
+    if (!atLeast(this.page.step, "exit_open")) return;
+    const fansly = FANSLY_CLASSES.has(failure.cls);
+    if (fansly && failure.step !== "connect") {
+      void this.#fail(failure.kind === "auth" ? "proxy_auth" : "proxy_unavailable", `the page's SOCKS5 failed a tunnel to ${failure.host}: ${message}`);
+      return;
+    }
+    if (fansly || failure.kind !== "refused") this.#recheckProxy(`a tunnel to ${failure.host} (${failure.cls}) failed at its ${failure.step}: ${message}`);
+  }
+
+  /** The exit IP check out of turn, at most every `proxyRecheckMs` (none
+   *  while one runs): a proxy that is down fails the page by it. */
+  #recheckProxy(why: string): void {
+    const now = monoMs();
+    if (this.#ipChecking || now - this.#proxyRecheckMono < this.#timings.proxyRecheckMs) return;
+    this.#proxyRecheckMono = now;
+    this.#log("proxy.recheck", { why });
+    void this.#periodicIpCheck();
   }
 
   /** Whether a Hub request can go now (minor 5): what a `send` would be

@@ -34,6 +34,8 @@ interface Pairs {
   selfTestMechanism: [Engine.SelfTestMechanism, Operator.SelfTestMechanism];
   hubSendBlock: [Engine.HubSendBlock, Operator.HubSendBlock];
   crashDumpCount: [Engine.CrashDumpCount, Operator.CrashDumpCount];
+  egressFailures: [Engine.EgressFailures, Operator.EgressFailures];
+  hubAdmit: [Engine.HubAdmit, Operator.HubAdmit];
   state: [Engine.State, Operator.State];
   pingPong: [Engine.PingPong, Operator.PingPong];
   send: [Engine.Send, Operator.Send];
@@ -89,6 +91,8 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   selfTestMechanism: true,
   hubSendBlock: true,
   crashDumpCount: true,
+  egressFailures: true,
+  hubAdmit: true,
   state: true,
   pingPong: true,
   send: true,
@@ -163,10 +167,24 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
     hubSend: { allowed: false, reason: "header_parity", sinceWall: 1_700_000_000_000 },
     crashDumps: { completed: { count: 25, newestAtWall: 1_699_999_000_000 }, pending: { count: 0, newestAtWall: null }, countedAtWall: 1_700_000_000_500 },
   },
+  // The exit's refusals counted (an addition, 2026-10-18).
+  { ...STATE, egressFailures: { sinceWall: 1_700_000_000_000, socks: [], dnr: [] } },
+  {
+    ...STATE,
+    egressFailures: {
+      sinceWall: 1_700_000_000_000,
+      socks: [
+        { kind: "refused", step: "connect", rep: 2, cls: "api", count: 3, lastAtWall: 1_700_000_100_000, lastHost: "apiv3.fansly.com" },
+        { kind: "unavailable", step: "connect", rep: null, cls: "third_party", count: 1, lastAtWall: 1_700_000_200_000, lastHost: "tracker.adnet-cdn.com" },
+      ],
+      dnr: [{ cls: "api", probe: true, count: 2, lastAtWall: 1_700_000_000_100, lastHost: "apiv3.fansly.com" }, { cls: "site", probe: false, count: 9, lastAtWall: 1_700_000_300_000, lastHost: "metrics.fansly.com" }],
+    },
+  },
   { type: "ping", n: 1 },
   { type: "pong", n: 2 },
   { type: "check", attemptId: 9, pausedMono: 100.25, liveSessionFingerprint: FP },
   { type: "sent", attemptId: 9, sentMono: 101.5, sentWall: 1_700_000_000_000, connectionReused: false },
+  { type: "sent", attemptId: 9, sentMono: 101.5, sentWall: 1_700_000_000_000, connectionReused: true, releasedMono: 100.75 },
   {
     type: "result",
     attemptId: 9,
@@ -225,6 +243,7 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   { type: "pong", n: 1, ownerGeneration: 2 },
   { type: "send", ownerGeneration: 2, attemptId: 9, route: "account.me", credentialsGeneration: FP, sessionFingerprint: FP, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me", headers: {}, kind: "api", maxBodyBytes: 1024, sendDeadlineMono: 10, requestDeadlineMono: 20 },
   { type: "checkResult", ownerGeneration: 2, attemptId: 9, admit: true, deadlineMono: 10 },
+  { type: "checkResult", ownerGeneration: 2, attemptId: 9, admit: true, deadlineMono: 10, pauseMs: 2_150 },
   { type: "checkResult", ownerGeneration: 2, attemptId: 9, admit: false, reason: "pace" },
   { type: "resultAck", ownerGeneration: 2, attemptId: 9 },
   { type: "recover", ownerGeneration: 2, attemptIds: [9, 10] },
@@ -321,6 +340,16 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, hubSend: { allowed: false, reason: "because", sinceWall: 1 } })).ok).toBe(false);
     expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, hubSend: { allowed: true, reason: "header_parity", sinceWall: 1 } })).ok).toBe(false);
     expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, crashDumps: { completed: { count: -1, newestAtWall: null }, pending: { count: 0, newestAtWall: null }, countedAtWall: 1 } })).ok).toBe(false);
+    // The exit's refusals, strictly: their kinds, steps, classes and bounds.
+    const socks = { kind: "refused", step: "connect", rep: 2, cls: "api", count: 1, lastAtWall: 1, lastHost: "apiv3.fansly.com" };
+    const egress = (entry: Record<string, unknown>) => JSON.stringify({ ...STATE, egressFailures: { sinceWall: 1, socks: [entry], dnr: [] } });
+    expect(Engine.parseOperatorMessage(egress(socks)).ok).toBe(true);
+    for (const wrong of [{ kind: "lost" }, { step: "hello" }, { cls: "elsewhere" }, { rep: 0 }, { rep: 256 }, { count: 0 }, { lastHost: "x".repeat(256) }]) {
+      expect(Engine.parseOperatorMessage(egress({ ...socks, ...wrong })).ok, JSON.stringify(wrong)).toBe(false);
+    }
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, egressFailures: { sinceWall: 1, socks: Array(Operator.EGRESS_FAILURE_ENTRIES_MAX + 1).fill(socks), dnr: [] } })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "sent", attemptId: 9, sentMono: 1, sentWall: 1, connectionReused: false, releasedMono: "soon" })).ok).toBe(false);
+    expect(Operator.parseEngineMessage(JSON.stringify({ type: "checkResult", ownerGeneration: 2, attemptId: 9, admit: true, deadlineMono: 10, pauseMs: -1 })).ok).toBe(false);
     const transition = { seq: 1, atMono: 1, atWall: 2, kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: null, halted: false, retryAtWall: null, note: "", chromeVersion: "", operatorVersion: "", crashDumps: null };
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [transition] })).ok).toBe(true);
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [{ ...transition, to: "flying" }] })).ok).toBe(false);

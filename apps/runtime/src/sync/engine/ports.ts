@@ -193,6 +193,10 @@ export type SendRefusal = FanslySendRefusalReason;
 export interface SendHooks {
   check: FanslySendCheck;
   grant: FanslySendCheck;
+  /** A sender outside the process (a page's browser) tells when it let the
+   *  request go after its own sight of the page's quiet (plan-b Б12), on
+   *  the engine's monotonic clock. */
+  released?: (mono: number) => void;
 }
 
 /**
@@ -215,6 +219,10 @@ export interface SendAdmission {
    *  a transport that hands it to another process converts it by that one
    *  shift (`services/egress/page-browser-rpc.ts` `kernelMonoBridge`). */
   sendDeadlineMono: number;
+  /** The admission's pause (S × (1 + u)): a sender outside the process keeps
+   *  it by its own sight of the page's sends before it lets the request go
+   *  (plan-b Б12). Absent: nothing to keep there. */
+  pauseMs?: number;
 }
 
 /** What one physical request came to: the wire layer's outcomes

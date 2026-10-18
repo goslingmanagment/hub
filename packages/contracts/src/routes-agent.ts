@@ -2562,8 +2562,9 @@ const agentSyncClassQueueSchema = z.object({
  *  stop, the login, the session (no token), the exit IP against the pinned
  *  one (never the proxy's address or credentials), the buffer against its
  *  caps, the delivery of its events, the versions, the last self-test,
- *  whether a Hub request can go now, Chrome's crash dumps counted, the last
- *  alarm with its age, and the browser's alerts that hold now. The operator's steps,
+ *  whether a Hub request can go now, Chrome's crash dumps counted, the exit's
+ *  refusals counted, the last alarm with its age, and the browser's alerts
+ *  that hold now. The operator's steps,
  *  stop reasons and alarm kinds grow with its protocol (spec §6.3): strings. */
 export const agentSyncBrowserStatusSchema = z.object({
   profileId: z.string().uuid(),
@@ -2635,6 +2636,29 @@ export const agentSyncBrowserStatusSchema = z.object({
     completed: z.object({ count: z.number().int().nonnegative(), newestAt: agentIsoTimestamp.nullable() }).strict(),
     pending: z.object({ count: z.number().int().nonnegative(), newestAt: agentIsoTimestamp.nullable() }).strict(),
     countedAt: agentIsoTimestamp,
+  }).strict().nullable(),
+  /** The exit's refusals since the operator started (`since`): the page's SOCKS5 failing tunnels by kind
+   *  (`unavailable`, `auth`, `refused`), step (`greeting`, `auth`, `connect`), its reply (REP; null: none) and the
+   *  host's class; the rules extension's blocks (net::ERR_BLOCKED_BY_CLIENT) by the host's class, `probe` — the
+   *  self-test's own. Each with its count, last instant and host. Null: not counted (an operator from before). */
+  egressFailures: z.object({
+    since: agentIsoTimestamp,
+    socks: z.array(z.object({
+      kind: z.string(),
+      step: z.string(),
+      rep: z.number().int().nullable(),
+      cls: z.string(),
+      count: z.number().int().nonnegative(),
+      lastAt: agentIsoTimestamp,
+      lastHost: z.string(),
+    }).strict()),
+    dnr: z.array(z.object({
+      cls: z.string(),
+      probe: z.boolean(),
+      count: z.number().int().nonnegative(),
+      lastAt: agentIsoTimestamp,
+      lastHost: z.string(),
+    }).strict()),
   }).strict().nullable(),
   /** The operator's last alarm and its age: what it once said, not a condition (those are `alerts`). */
   lastAlarm: z.object({

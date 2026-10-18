@@ -24,7 +24,10 @@ import {
 // its events; Chrome's and the operator's versions; the last self-test;
 // whether a Hub request can go now (a page may be `ready` while its transport
 // refuses them) and since when not; Chrome's crash dumps on the profile, as
-// counted; the last alarm with its age — what the operator once said, apart
+// counted; the exit's refusals since the operator started (the page's SOCKS5
+// by kind, step, reply and the host's class; the rules extension's blocks by
+// the host's class, the self-test's probes apart); the last alarm with its
+// age — what the operator once said, apart
 // from the alerts that hold now (`engine/browser-alerts.ts`, the evaluator's
 // own rule).
 
@@ -71,6 +74,13 @@ export interface BrowserStatusView {
     completed: { count: number; newestAt: string | null };
     pending: { count: number; newestAt: string | null };
     countedAt: string;
+  } | null;
+  /** The exit's refusals since the operator started (`since`), as its last
+   *  state said; null: not counted (an operator from before). */
+  egressFailures: {
+    since: string;
+    socks: Array<{ kind: string; step: string; rep: number | null; cls: string; count: number; lastAt: string; lastHost: string }>;
+    dnr: Array<{ cls: string; probe: boolean; count: number; lastAt: string; lastHost: string }>;
   } | null;
   /** The operator's last alarm and how old it is: a word of the past, not a
    *  condition — those are `alerts`. */
@@ -172,6 +182,9 @@ export function buildBrowserStatus(
         pending: { count: browser.crashDumpsPending, newestAt: iso(browser.crashDumpsPendingNewestAt) },
         countedAt: browser.crashDumpsCountedAt.toISOString(),
       },
+    egressFailures: browser.egressFailures === null || browser.egressFailuresSince === null
+      ? null
+      : { since: browser.egressFailuresSince.toISOString(), socks: browser.egressFailures.socks.map((e) => ({ ...e })), dnr: browser.egressFailures.dnr.map((e) => ({ ...e })) },
     lastAlarm: browser.alarmKind === null || browser.alarmAt === null
       ? null
       : { kind: browser.alarmKind, at: browser.alarmAt.toISOString(), ageMs: ageMs(browser.alarmAt, now), detail: { ...(browser.alarmDetail ?? {}) } },

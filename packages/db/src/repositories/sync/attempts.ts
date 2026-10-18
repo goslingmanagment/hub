@@ -452,6 +452,11 @@ export interface CaptureAttemptInput {
   sendMonoOffsetMs?: number | null;
   /** Monotonic gap to this owner's previous send of the page. */
   gapPrevMs?: number | null;
+  /** A page's browser (0289): when the engine granted the request and when
+   *  the browser released it after its own sight of the page's quiet
+   *  (plan-b Б12). Absent or null: not known (kept as recorded). */
+  grantedAt?: Date | null;
+  releasedAt?: Date | null;
   httpStatus?: number | null;
   retryAfterMs?: number | null;
   errorClass?: string | null;
@@ -505,6 +510,8 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
                else ${input.sent ? input.sendMark ?? "request_start" : null}::text end,
              send_mono_offset_ms = ${input.sendMonoOffsetMs ?? null}::double precision,
              gap_prev_ms = ${input.gapPrevMs ?? null}::double precision,
+             granted_at = coalesce(${timestampParam(input.grantedAt)}, granted_at),
+             released_at = coalesce(${timestampParam(input.releasedAt)}, released_at),
              completed_at = clock_timestamp(),
              http_status = ${boundedInt(input.httpStatus, 32_767)}::smallint,
              retry_after_ms = ${boundedInt(input.retryAfterMs)}::integer,
@@ -519,11 +526,12 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and page_id = ${input.pageId}
          and not shadow
          and outcome in ('admitted', 'sent')
-      returning id, sent_at, admitted_at
+      returning id, sent_at, admitted_at, granted_at, released_at
     ), known as (
       -- The previous send as this attempt's release could know it: the
-      -- site's own observed sends that left after its admission are plan-b
-      -- Б12 (accepted), never this send's predecessor.
+      -- site's own observed sends that left after its release (plan-b Б12,
+      -- accepted; before 0289, or not reported: after its grant, else its
+      -- admission) are never this send's predecessor.
       select max(a.sent_at) as sent_at
         from sync_attempts a, att
        where a.page_id = ${input.pageId}
@@ -532,7 +540,8 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and a.admitted_at >= att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond'
          and a.sent_at is not null
          and a.sent_at <= att.sent_at
-         and not (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false) and a.sent_at > att.admitted_at)
+         and not (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false)
+                  and a.sent_at > coalesce(att.released_at, att.granted_at, att.admitted_at))
     ), page as (
       update sync_pages sp
          set last_send_at = greatest(coalesce(sp.last_send_at, '-infinity'::timestamptz), att.sent_at),
@@ -577,12 +586,15 @@ export async function settleAttemptWithoutCapture(
     attemptId: number;
     outcome: "aborted_before_send" | "unknown";
     errorClass?: string | null;
+    /** Granted to a page's browser that then did not send it (0289). */
+    grantedAt?: Date | null;
   },
 ): Promise<boolean> {
   const result = await db.execute(sql`
     update sync_attempts
        set outcome = ${input.outcome}::text,
            error_class = coalesce(${input.errorClass ?? null}::text, error_class),
+           granted_at = coalesce(${timestampParam(input.grantedAt)}, granted_at),
            completed_at = clock_timestamp()
      where id = ${input.attemptId}
        and outcome in ('admitted', 'sent')
@@ -1000,6 +1012,12 @@ export interface FanslySendAuditRow {
   admittedAt: Date;
   /** The recorded actual send instant (`sent_at`); null: none recorded. */
   sentAt: Date | null;
+  /** A send through a page's browser (0289): when the engine granted it, and
+   *  when the browser released it after its own sight of the page's quiet
+   *  (plan-b Б12). A site send recorded after the release (else the grant,
+   *  else the admission) is Б12's. Null or absent: not recorded. */
+  grantedAt?: Date | null;
+  releasedAt?: Date | null;
   /** Where the route clocks count it (`readRouteJournal`): the recorded send,
    *  else — a send that may have gone out — its upper bound (admission + the
    *  send window; a legacy capture's completion or lease end). Null: it
@@ -1050,6 +1068,8 @@ export async function readFanslySendAudit(
     ownerGeneration: string | null;
     admittedAt: Date | string;
     sentAt: Date | string | null;
+    grantedAt: Date | string | null;
+    releasedAt: Date | string | null;
     countedAt: Date | string | null;
     settingMs: number | string | null;
     pauseMs: number | string | null;
@@ -1062,6 +1082,7 @@ export async function readFanslySendAudit(
     select 'engine'::text as journal, null::text as source, a.id::text as ref, a.operation,
            (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false)) as observed,
            a.owner_generation::text as "ownerGeneration", a.admitted_at as "admittedAt", a.sent_at as "sentAt",
+           a.granted_at as "grantedAt", a.released_at as "releasedAt",
            case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown')
                 then coalesce(a.sent_at, a.admitted_at + ${sendWindow}) end as "countedAt",
            a.setting_ms as "settingMs", a.pause_ms as "pauseMs", a.gap_prev_ms as "gapPrevMs",
@@ -1074,6 +1095,7 @@ export async function readFanslySendAudit(
        and a.admitted_at < ${until}
     union all
     select 'legacy'::text, l.source, l.id::text, l.operation, false, null::text, l.captured_at, l.sent_at,
+           null::timestamptz, null::timestamptz,
            case when l.sent_at is not null or l.outcome is distinct from 'aborted_before_send'
                 then coalesce(l.sent_at, l.completed_at, l.lease_until, l.captured_at + ${sendWindow}) end,
            l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer,
@@ -1093,6 +1115,8 @@ export async function readFanslySendAudit(
     ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
     admittedAt: toRequiredDate(row.admittedAt),
     sentAt: toDate(row.sentAt),
+    grantedAt: toDate(row.grantedAt),
+    releasedAt: toDate(row.releasedAt),
     countedAt: toDate(row.countedAt),
     settingMs: num(row.settingMs),
     pauseMs: num(row.pauseMs),

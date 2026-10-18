@@ -158,7 +158,9 @@ export type LinkStatus =
   | { kind: "closed" };
 
 /** The answer to an operator's check: the admission, or why not. */
-export type CheckReply = { admit: true; deadlineMono: number } | { admit: false; reason: Refusal };
+/** `pauseMs`: the admission's pause, which the operator keeps by its own
+ *  sight of the page's sends before it releases the request (plan-b Б12). */
+export type CheckReply = { admit: true; deadlineMono: number; pauseMs?: number } | { admit: false; reason: Refusal };
 
 /** A result as the client hands it over: its body checked, or why it is
  *  missing. */
@@ -969,7 +971,7 @@ export class PageBrowserRpcClient {
 
   #answerCheck(check: Check, reply: CheckReply): void {
     const answer: CheckResult = reply.admit
-      ? { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: true, deadlineMono: reply.deadlineMono }
+      ? { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: true, deadlineMono: reply.deadlineMono, ...(reply.pauseMs === undefined ? {} : { pauseMs: reply.pauseMs }) }
       : { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: false, reason: reply.reason };
     this.#write(answer);
   }

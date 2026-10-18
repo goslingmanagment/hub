@@ -171,6 +171,25 @@ describe("the browser's telemetry for audits (0288, protocol minor 5)", () => {
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ hubSendAllowed: null, hubSendBlockedReason: null });
   });
 
+  it("the exit's refusals (0289): kept as the last state said them, shown in the status; an operator that says nothing of them leaves them unknown", async (context) => {
+    if (!testDb) return context.skip();
+    const { profileId, pageId } = await browserPage();
+    const since = new Date(Date.now() - 3_600_000);
+    const egressFailures = {
+      since,
+      socks: [{ kind: "refused", step: "connect", rep: 2, cls: "api", count: 3, lastAt: new Date(Date.now() - 60_000).toISOString(), lastHost: "apiv3.fansly.com" }],
+      dnr: [{ cls: "api", probe: true, count: 2, lastAt: new Date(Date.now() - 50_000).toISOString(), lastHost: "apiv3.fansly.com" }],
+    };
+    await recordPageBrowserState(db(), state(profileId, { egressFailures }));
+    const { since: _since, ...kept } = egressFailures;
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ egressFailures: kept, egressFailuresSince: since });
+    const page = (await listSyncPages(db())).find((row) => row.pageId === pageId)!;
+    const view = (await readPageBrowserStatuses(db(), [page])).get(pageId)!;
+    expect(view.egressFailures).toEqual({ since: since.toISOString(), ...kept });
+    await recordPageBrowserState(db(), state(profileId));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ egressFailures: null, egressFailuresSince: null });
+  });
+
   it("every transition once, by its buffer and number; a window's history sums its stops and Chrome's starts", async (context) => {
     if (!testDb) return context.skip();
     const { profileId, pageId, label } = await browserPage();

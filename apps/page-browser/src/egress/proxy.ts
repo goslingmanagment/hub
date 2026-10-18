@@ -33,6 +33,10 @@
 //   private destinations holds for the address in the request.
 // - Each tunnel is one line of the connection journal: host, port, opened,
 //   closed, bytes both ways, what was held, the result.
+// - A tunnel the page's SOCKS5 failed is told to the operator with how, at
+//   which step, its reply and the host's class (`onSocksFailure`): the
+//   operator counts each and decides whether the page stops (a refusal of one
+//   destination is that tunnel's alone; Chrome sees a failed tunnel).
 //
 // On this port the operator also serves the rules extension's package to
 // Chrome's policy (extension-files.ts, PR 6): a direct request for one of
@@ -47,7 +51,7 @@ import type { Socket } from "node:net";
 import { ApiGate, controlRecordLimit, readServerHello } from "./gate.ts";
 import { refusedClass, type HostClass, type HostClassifier } from "./hosts.ts";
 import { recordOverhead, SocketRecordGate, type SocketRules } from "./socket-gate.ts";
-import { SocksError, socksConnect, type SocksConfig, type SocksFailure } from "./socks5.ts";
+import { SocksError, socksConnect, type SocksConfig, type SocksFailure, type SocksStep } from "./socks5.ts";
 import { isLocalAddress } from "../policy/operations.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 
@@ -67,6 +71,17 @@ export interface TunnelRecord {
   held: number;
   refused: boolean;
   result: string;
+}
+
+/** A tunnel the page's SOCKS5 failed: how, at which step of its exchange,
+ *  its reply to the CONNECT (null: none), and the tunnel's host. */
+export interface TunnelSocksFailure {
+  kind: SocksFailure;
+  step: SocksStep;
+  rep: number | null;
+  host: string;
+  port: number;
+  cls: HostClass;
 }
 
 /** What became of a socket's tunnel (ws/sockets.ts hears it). */
@@ -102,8 +117,8 @@ export interface EgressOptions {
   gate?: ApiGate;
   /** Every refusal and every closed tunnel (the connection journal). */
   onRecord?: (record: TunnelRecord) => void;
-  /** The page's SOCKS5 failed us (not the destination). */
-  onSocksFailure?: (kind: Exclude<SocksFailure, "refused">, message: string) => void;
+  /** The page's SOCKS5 failed a tunnel (any way: the operator decides). */
+  onSocksFailure?: (failure: TunnelSocksFailure, message: string) => void;
   /** Answers a plain request the proxy serves itself (the rules
    *  extension's package); false — it is refused. */
   serve?: (req: IncomingMessage, res: ServerResponse) => boolean;
@@ -662,8 +677,14 @@ export class Egress {
       })
       .catch((error: unknown) => {
         if (!this.#tunnels.has(tunnel)) return;
-        const failure = error instanceof SocksError ? error.kind : "unavailable";
-        if (failure !== "refused") this.#options.onSocksFailure?.(failure, errorMessage(error));
+        const failure: TunnelSocksFailure = error instanceof SocksError
+          ? { kind: error.kind, step: error.step, rep: error.rep, host, port: record.port, cls }
+          : { kind: "unavailable", step: "greeting", rep: null, host, port: record.port, cls };
+        try {
+          this.#options.onSocksFailure?.(failure, errorMessage(error));
+        } catch (thrown) {
+          this.#log("socks.failure_unheard", { error: errorMessage(thrown) });
+        }
         // Chrome sees a failed tunnel; the tunnel's line says why.
         tunnel.client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         this.#finish(tunnel, `failed: ${errorMessage(error)}`, true);
