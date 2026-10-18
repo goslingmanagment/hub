@@ -755,6 +755,7 @@ export class Operator {
       sessionChanged: (fingerprint) => this.#onSessionChanged(fingerprint),
       identityAnswer: (answer) => this.#onIdentity(answer),
       quiet: () => this.#pageQuiet(),
+      siteHold: (route, since) => this.observer.holdSince(route, since),
       ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
     });
     this.site = new SiteRequests({

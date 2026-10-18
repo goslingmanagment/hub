@@ -14,6 +14,9 @@
 //   attempt 0 — no engine attempt is behind it;
 // - journals each request with its end.
 //
+// The ends that hold Hub's routes stay here across Chrome resets to guard
+// each release.
+//
 // The site's socket's handshake is a send of the site's too (route
 // `ws.upgrade`, Б-2d): ws/sockets.ts tells its send here from the proxy's
 // write, under the tunnel's id; CDP gives the answer. It goes to the engine
@@ -75,6 +78,8 @@ export const SITE_STALE_IN_FLIGHT_MS = 60_000;
 export const WS_UPGRADE_ROUTE = "ws.upgrade";
 /** Socket handshakes followed at most (each ends within seconds). */
 const SOCKETS_KEPT = 64;
+/** Routes with a 429 end kept at most; the oldest end is forgotten first. */
+const ROUTE_HOLDS_KEPT = 256;
 
 const NO_SESSION = "0".repeat(64);
 
@@ -139,6 +144,12 @@ interface ResponseExtra {
   headers: Record<string, string>;
 }
 
+interface HoldEnd {
+  mono: number;
+  status: number;
+  route: string;
+}
+
 interface EarlyInfo {
   request?: RequestExtra;
   response?: ResponseExtra;
@@ -176,6 +187,9 @@ export class SiteObserver {
   /** The site socket's handshakes told and not ended, by their id. */
   readonly #sockets = new Map<string, SiteSent>();
   #lastSend: { mono: number; wall: number } | null = null;
+  /** Holds outlive Chrome, like the last send. */
+  readonly #routeHolds = new Map<string, HoldEnd>();
+  #credentialsHold: HoldEnd | null = null;
 
   constructor(deps: SiteObserverDeps) {
     this.#deps = deps;
@@ -212,6 +226,15 @@ export class SiteObserver {
   /** Kept across Chrome resets, like the gate's last send: a takeover floor. */
   get lastSend(): { mono: number; wall: number } | null {
     return this.#lastSend;
+  }
+
+  /** The latest end at or after this instant that would hold the route:
+   *  its own 429, or a 401 or 403 on any route. */
+  holdSince(route: string, sinceMono: number): { status: number; route: string } | null {
+    const own = this.#routeHolds.get(route);
+    const credentials = this.#credentialsHold;
+    const latest = own !== undefined && (credentials === null || own.mono > credentials.mono) ? own : credentials;
+    return latest !== null && latest.mono >= sinceMono ? { status: latest.status, route: latest.route } : null;
   }
 
   /** A new engine needs both the missed history and what is still flying:
@@ -292,7 +315,9 @@ export class SiteObserver {
     const sent = this.#sockets.get(end.id);
     if (sent === undefined) return;
     this.#sockets.delete(end.id);
-    this.#send({ message: { type: "siteEnded", siteRequestId: end.id, endedMono: monoMs(), status: end.status, retryAfter: null, error: end.error, requestKey: end.id, hop: 0 }, sent });
+    const endedMono = monoMs();
+    this.#noteHold(WS_UPGRADE_ROUTE, end.status, endedMono);
+    this.#send({ message: { type: "siteEnded", siteRequestId: end.id, endedMono, status: end.status, retryAfter: null, error: end.error, requestKey: end.id, hop: 0 }, sent });
   }
 
   #onWillBeSent(event: CdpEvent): void {
@@ -533,12 +558,17 @@ export class SiteObserver {
 
   #ended(r: Observed, error: string | null, bytes: number | null = null, read = true): void {
     const sent = r.sentMono !== null;
+    // A probe of the self-test is the operator's, not the site's: journaled
+    // as its own — and one that went out says so.
+    const probe = this.#deps.probeOf?.(r.id) ?? null;
     if (sent) {
+      const endedMono = monoMs();
+      if (probe === null) this.#noteHold(r.route, r.status, endedMono);
       this.#send({
         message: {
           type: "siteEnded",
           siteRequestId: r.id,
-          endedMono: monoMs(),
+          endedMono,
           status: r.status,
           retryAfter: header(r.headers, "retry-after"),
           error,
@@ -548,9 +578,6 @@ export class SiteObserver {
         sent: this.#siteSent(r),
       });
     }
-    // A probe of the self-test is the operator's, not the site's: journaled
-    // as its own — and one that went out says so.
-    const probe = this.#deps.probeOf?.(r.id) ?? null;
     const result = error ?? (r.status === null ? "no answer" : `${r.status}${sent ? "" : " (not from the network)"}`);
     this.#deps.journal({
       method: r.method,
@@ -565,6 +592,16 @@ export class SiteObserver {
       bytesSource: bytes === null ? null : "loading_finished",
     });
     if (read && !r.preflight) this.#deps.readEnded?.({ route: r.route, status: r.status, sent, session: r.fingerprint });
+  }
+
+  #noteHold(route: string, status: number | null, mono: number): void {
+    if (status === 429) {
+      this.#routeHolds.delete(route);
+      this.#routeHolds.set(route, { mono, status, route });
+      if (this.#routeHolds.size > ROUTE_HOLDS_KEPT) this.#routeHolds.delete(this.#routeHolds.keys().next().value!);
+    } else if (status === 401 || status === 403) {
+      this.#credentialsHold = { mono, status, route };
+    }
   }
 
   /** The answer's body, as Chrome kept it, to the buffer (attempt 0: the
