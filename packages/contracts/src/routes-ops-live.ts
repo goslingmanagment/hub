@@ -80,6 +80,10 @@ export const opsLivePageSchema = z.object({
   lastSentAt: isoTimestamp.nullable(),
 }).strict();
 
+/** A sent request's class: the engine's work classes, and `site` — the page's
+ *  own site requests and login operations (Project Browser), which serve no work. */
+export const opsLiveAttemptClassEnum = z.enum([...agentSyncWorkClassEnum.options, "site"]);
+
 export const opsLiveAttemptSchema = z.object({
   /** Unique across both journals: `e…` the Sync Engine's, `l…` the older one. */
   id: z.string().regex(/^[el][1-9][0-9]*$/),
@@ -87,7 +91,7 @@ export const opsLiveAttemptSchema = z.object({
   resource: z.string(),
   operation: z.string(),
   /** null in the older journal. */
-  class: agentSyncWorkClassEnum.nullable(),
+  class: opsLiveAttemptClassEnum.nullable(),
   sentAt: isoTimestamp,
   /** null while unanswered. */
   completedAt: isoTimestamp.nullable(),

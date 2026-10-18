@@ -609,6 +609,22 @@ describe("attempts", () => {
     expect(after.attempts.some((attempt) => attempt.id === `e${ancient}`)).toBe(false);
   });
 
+  it("carries the page's browser's own requests: a site request by the class 'site', a socket upgrade as urgent", async () => {
+    const siteAttempt = async (klass: "site" | "urgent", operation: string) => Number((await testDb!.pool.query<{ id: string }>(
+      `insert into sync_attempts (page_id, origin, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+              admitted_at, sent_at, operation, request, outcome)
+       values ($1, 'site', 'site', '', $2, 1, 2500, 0.1, 2750,
+               clock_timestamp() - interval '3 seconds', clock_timestamp() - interval '2 seconds', $3, '{}'::jsonb, 'sent')
+       returning id::text`,
+      [pages.running, klass, operation],
+    )).rows[0]!.id);
+    const read = await siteAttempt("site", "GET /api/v1/account/me");
+    const upgrade = await siteAttempt("urgent", "ws.upgrade");
+    const byId = new Map((await live()).attempts.map((attempt) => [attempt.id, attempt]));
+    expect(byId.get(`e${read}`)).toMatchObject({ page: "lora-1", resource: "site", class: "site" });
+    expect(byId.get(`e${upgrade}`)).toMatchObject({ page: "lora-1", resource: "site", operation: "ws.upgrade", class: "urgent" });
+  });
+
   it("tells a caller that was away for a quarter of an hour what completed meanwhile", async () => {
     // Sent twenty minutes ago, answered twelve minutes ago: after the cursor was issued.
     const meanwhile = await engineAttempt({ pageId: pages.running, sentSecondsAgo: 1_200, completedSecondsAgo: 720, outcome: "response", httpStatus: 200 });

@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import { OwnershipLostError } from "./pages.ts";
-import type { SyncEngineWorkClass } from "./work.ts";
+import type { SyncAttemptClass, SyncEngineWorkClass } from "./work.ts";
 import {
   generationParam,
   jsonParam,
@@ -1245,7 +1245,7 @@ export async function countSendsSince(
   db: Database,
   input: { pageId: number; since: Date },
 ): Promise<SyncSendCounts> {
-  const result = await db.execute<{ class: SyncEngineWorkClass | "site"; resource: string; sends: number }>(sql`
+  const result = await db.execute<{ class: SyncAttemptClass; resource: string; sends: number }>(sql`
     select a.class, a.resource, count(*)::int as sends
       from sync_attempts a
      where a.page_id = ${input.pageId}
