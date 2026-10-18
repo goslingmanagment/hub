@@ -17,7 +17,7 @@ import { HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/s
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
 import { decodeBodyFrame, type EgressFailures } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
-import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
+import { monoMs, setLogSink, sleep } from "../apps/page-browser/src/shared/util.ts";
 import {
   BrowserModel,
   FakeChrome,
@@ -179,7 +179,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.proxyRecheckMs !== undefined ? { proxyRecheckMs: options.proxyRecheckMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, observedDrainMs: 600, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.proxyRecheckMs !== undefined ? { proxyRecheckMs: options.proxyRecheckMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -438,6 +438,33 @@ describe("the site's observations delivered for sure (protocol minor 6)", () => 
     s.engine.send({ type: "siteObservedAck", ownerGeneration: 1, deliverySeqs: [sent.deliverySeq as number] });
     await until(() => s.operator.observer.outbox.unconfirmed === 0, 5_000);
     expect(s.operator.state.siteObserved).toEqual({ unconfirmed: 0, oldestAtWall: null, dropped: 0 });
+  });
+
+  it("a planned stop waits for the engine's word on what the observer keeps", async () => {
+    const s = await setUp({ minor: 6 });
+    const stopLine = () => s.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "stop.observed");
+    const confirmed = "1f8d3f0e-6a1c-4c2e-9f3a-7d5e1b2c4a6f";
+    s.operator.observer.socketSent({ id: confirmed, url: new URL("wss://wsv3.fansly.com/"), sentMono: monoMs() });
+    const sent = await s.engine.waitFor("siteSent", (message) => message.siteRequestId === confirmed);
+    const began = monoMs();
+    const stopped = s.operator.stop();
+    await sleep(150);
+    // Still linked while it waits: the confirmation lands and the stop goes on at once.
+    s.engine.send({ type: "siteObservedAck", ownerGeneration: 1, deliverySeqs: [sent.deliverySeq as number] });
+    await stopped;
+    expect(monoMs() - began).toBeLessThan(550);
+    expect(stopLine()).toMatchObject({ kept: 1, unconfirmed: 0 });
+  });
+
+  it("a planned stop past its bound goes on and says what the engine did not confirm", async () => {
+    const t = await setUp({ minor: 6 });
+    const unconfirmed = "2f8d3f0e-6a1c-4c2e-9f3a-7d5e1b2c4a6f";
+    t.operator.observer.socketSent({ id: unconfirmed, url: new URL("wss://wsv3.fansly.com/"), sentMono: monoMs() });
+    await t.engine.waitFor("siteSent", (message) => message.siteRequestId === unconfirmed);
+    const t0 = monoMs();
+    await t.operator.stop();
+    expect(monoMs() - t0).toBeGreaterThanOrEqual(550);
+    expect(t.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.e === "stop.observed")).toMatchObject({ kept: 1, unconfirmed: 1, linkUp: true });
   });
 });
 

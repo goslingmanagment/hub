@@ -66,7 +66,7 @@ import {
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
-import { isSiteSocket, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
+import { isSiteSocket, siteAnswerEffect, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
 import { admitSite, commitObservedSiteEnd, commitSiteEnd, recordObservedSiteSend, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 import {
@@ -272,7 +272,9 @@ export class SyncActor {
   // ── variant Б: the site's own traffic, observed (plan-b §4.2.2–4.2.3) ──
 
   /** At once: the pause counts the site's send, and an end lets the next own
-   *  slot open — once per hop, however often it is told. Then, in order, the
+   *  slot open — once per hop, however often it is told; an end that holds
+   *  (its 429, 401, 403, a 5xx naming `Retry-After`) only once its hold
+   *  committed (`Pacer.observeForeignEnd`). Then, in order, the
    *  journal: the attempt, its end with the holds it sets, the identity proof
    *  — each hop once by its row (0289), and each fact acknowledged once
    *  committed (the operator keeps it until then and tells it again). An end
@@ -304,13 +306,20 @@ export class SyncActor {
       }
       case "ended": {
         this.#tellObserved(hop, "ended");
-        d.pacer.observeForeignEnd(event.id);
         const end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }> = event.status !== null
           ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
           : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
+        // An end that holds (the commit's own rule: observed, never exempt)
+        // keeps the own slots closed until its hold commits — a failed
+        // commit keeps them closed until the operator tells it again.
+        const holds = siteAnswerEffect(end, false).kind !== "none";
+        d.pacer.observeForeignEnd(event.id, holds ? hop : undefined);
         this.#journalObserved(`${hop}:ended`, event.ack, async () => {
           const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS });
-          if (committed === "committed") return true;
+          if (committed === "committed") {
+            if (holds) d.pacer.foreignHoldJournaled(hop);
+            return true;
+          }
           d.metrics.increment("sync_site_observed_early", { kind: "ended" });
           return false;
         });

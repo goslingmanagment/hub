@@ -602,6 +602,27 @@ describe("minor 6: the site's observations, delivered for sure", () => {
     expect((await observedRows(r.page.pageId, requestKey)).map((row) => row.attemptId)).toEqual(rows.map((row) => row.id));
   }, 30_000);
 
+  it("a site 429 whose hold did not commit keeps the own slots closed; once it commits they open", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    const { made } = await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const pacer = made.deps.pacer;
+    const requestKey = randomUUID();
+    // The send's message, built but never told yet: its end commits nothing.
+    const sent = { type: "siteSent" as const, siteRequestId: "940.1", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", route: "account.me", sessionFingerprint: SESSION_A, sentMono: monoMs(), requestKey, hop: 0, deliverySeq: 901 };
+    const early = r.operator.siteEnded(sent, { status: 429, retryAfter: "60" });
+    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_site_observed_early") >= 1, 5_000, "the early end taken");
+    expect(r.operator.observedAcks).not.toContain(early.deliverySeq);
+    expect(pacer.slotOpensAtMono(40) - systemClock.monoNow()).toBeGreaterThan(60_000);
+    r.operator.tellAgain(sent);
+    r.operator.tellAgain(early);
+    await until(async () => r.operator.observedAcks.includes(early.deliverySeq!), 5_000, "the end confirmed");
+    const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
+    expect(held.rows).toHaveLength(1);
+    expect(pacer.slotOpensAtMono(40) - systemClock.monoNow()).toBeLessThan(5_000);
+  }, 30_000);
+
   it("an end kept across the engine's start finds its attempt closed unknown by the recovery: reopened, it is captured and its 429 holds the route", async () => {
     const r = await rig();
     await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);

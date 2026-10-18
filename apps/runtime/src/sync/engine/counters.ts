@@ -27,7 +27,9 @@ import type { Metrics, SyncMetricLabels } from "./ports.ts";
 // the series of the sample table, and the page status and the logs carry them.
 //
 // A counter of `ENGINE_COUNTER_ALERTS` opens its latch when a write's window
-// counted it, and resolves it at the next window that counted none.
+// counted it, and resolves it at the next window that counted none. An open
+// that did not land (the latch's own write failed — the database the alarm
+// is about) is owed: the next window opens it with what it counted.
 
 /** The counts of one write cover this long: the sampler's cadence of the
  *  engine's families. */
@@ -144,17 +146,19 @@ export const ENGINE_COUNTER_ALERTS: readonly EngineCounterAlert[] = [
 ];
 
 /** Open the latch of every alerted counter the window counted; resolve the
- *  others' — unless `final` (a stop's short window proves nothing clean). */
+ *  others' — unless `final` (a stop's short window proves nothing clean).
+ *  Returns the counts of the alerts whose latch did not open. */
 export async function judgeEngineCounterAlerts(
   app: IncidentApp,
-  window: EngineCounterWindow,
+  window: Pick<EngineCounterWindow, "totals">,
   input: { windowMs: number; final: boolean; now?: Date },
-): Promise<void> {
+): Promise<Map<string, number>> {
   const at = input.now ?? new Date();
+  const unopened = new Map<string, number>();
   for (const alert of ENGINE_COUNTER_ALERTS) {
     const count = window.totals.get(alert.name) ?? 0;
     if (count > 0) {
-      await notifySyncEngineIncident(app, {
+      const opened = await notifySyncEngineIncident(app, {
         subKey: alert.subKey,
         pageId: null,
         pageLabel: null,
@@ -162,10 +166,12 @@ export async function judgeEngineCounterAlerts(
         errorSummary: alert.summary(count, input.windowMs),
         occurredAt: at,
       });
+      if (!opened) unopened.set(alert.name, count);
     } else if (!input.final) {
       await resolveSyncEngineIncident(app, { subKey: alert.subKey, pageId: null, pageLabel: null, recoveredAt: at });
     }
   }
+  return unopened;
 }
 
 export interface EngineCounterFlush {
@@ -177,7 +183,8 @@ export interface EngineCounterFlush {
 /**
  * Write the counters' windows every `intervalMs`, one write at a time; a
  * write that fails puts its counts back into the next window. Each write
- * judges `ENGINE_COUNTER_ALERTS` on its window.
+ * judges `ENGINE_COUNTER_ALERTS` on its window, with what an earlier one
+ * could not open (owed, never resolved by a clean window first).
  */
 export function startEngineCounterFlush(
   app: IncidentApp,
@@ -189,23 +196,43 @@ export function startEngineCounterFlush(
   let windowStartedMs = Date.now();
   let inFlight: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
+  /** The alerts' counts no latch took yet, and since when they count. */
+  let owed = new Map<string, number>();
+  let owedSinceMs: number | null = null;
 
   const flush = async (final: boolean) => {
     const window = counters.drain();
-    const windowMs = Date.now() - windowStartedMs;
+    const startedMs = owedSinceMs ?? windowStartedMs;
     windowStartedMs = Date.now();
     const samples = engineCounterSamples(window);
+    let restored = false;
     try {
       if (samples.length > 0) await insertOpsMetricSamples(app.db, samples);
     } catch (error) {
       counters.restore(window);
+      restored = true;
       app.logger.warn({ err: error, series: samples.length }, "Fansly sync engine counters not written; they count in the next write");
     }
+    const totals = new Map(window.totals);
+    for (const [name, count] of owed) totals.set(name, (totals.get(name) ?? 0) + count);
+    let unopened: Map<string, number>;
     try {
-      await judgeEngineCounterAlerts(app, window, { windowMs, final });
+      unopened = await judgeEngineCounterAlerts(app, { totals }, { windowMs: windowStartedMs - startedMs, final });
     } catch (error) {
       app.logger.warn({ err: error }, "Fansly sync engine counter alerts not judged");
+      unopened = new Map(ENGINE_COUNTER_ALERTS.flatMap((alert) => {
+        const count = totals.get(alert.name) ?? 0;
+        return count > 0 ? [[alert.name, count] as const] : [];
+      }));
     }
+    // What a restore put back counts again in the next window: owed is the rest.
+    owed = new Map();
+    for (const [name, count] of unopened) {
+      const rest = count - (restored ? window.totals.get(name) ?? 0 : 0);
+      if (rest > 0) owed.set(name, rest);
+    }
+    if (unopened.size > 0) app.logger.warn({ alerts: [...unopened.keys()] }, "Fansly sync engine counter alert not opened; the next write opens it");
+    owedSinceMs = unopened.size > 0 ? startedMs : null;
   };
 
   const run = () => {
