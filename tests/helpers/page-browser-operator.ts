@@ -236,6 +236,10 @@ export class FakeOperator {
   resultSession: string | null = null;
   /** The engine's answers to the site path (PR 14). */
   readonly siteAnswers: SiteAdmitResult[] = [];
+  /** The observations the engine confirmed (`siteObservedAck`, minor 6), by
+   *  delivery number, in order. */
+  readonly observedAcks: number[] = [];
+  #deliverySeq = 0;
   readonly wsAnswers: WsAdmitResult[] = [];
   /** The engine's commands, in order. */
   readonly commands: Command[] = [];
@@ -372,6 +376,9 @@ export class FakeOperator {
         onSite: (message) => {
           this.siteAnswers.push(message);
         },
+        onObservedAck: (message) => {
+          this.observedAcks.push(...message.deliverySeqs);
+        },
         onSocket: (message) => {
           this.wsAnswers.push(message);
         },
@@ -455,13 +462,18 @@ export class FakeOperator {
   }
 
   /** A site response with its body (sent before the batch that names it). */
-  siteResponse(input: { route: string; path: string; query?: string; status?: number; body: string | Buffer; complete?: boolean; source?: "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed"; headers?: Record<string, string>; method?: string }, atWall?: number): BufferEvent {
+  siteResponse(input: {
+    route: string; path: string; query?: string; status?: number; body: string | Buffer; complete?: boolean;
+    source?: "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed"; headers?: Record<string, string>; method?: string;
+    /** Minor 6: the request it answers (its id, key and hop). */
+    siteRequestId?: string; requestKey?: string; hop?: number;
+  }, atWall?: number): BufferEvent {
     const body = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
     const bodyId = randomUUID();
     this.bodies.set(bodyId, body);
     return this.append({
       kind: "site.response",
-      siteRequestId: randomUUID(),
+      siteRequestId: input.siteRequestId ?? randomUUID(),
       attemptId: 0,
       route: input.route,
       method: input.method ?? "GET",
@@ -473,6 +485,7 @@ export class FakeOperator {
       complete: input.complete ?? true,
       source: input.source ?? "network",
       sessionFingerprint: this.live ?? SESSION_A,
+      ...(input.requestKey === undefined ? {} : { requestKey: input.requestKey, hop: input.hop ?? 0 }),
     }, atWall);
   }
 
@@ -565,7 +578,9 @@ export class FakeOperator {
     return done;
   }
 
-  /** Variant Б (minor 4): a request of the site that left on its own — observed, not admitted. */
+  /** Variant Б (minor 4): a request of the site that left on its own —
+   *  observed, not admitted. With a `requestKey` (minor 6): its hop (0 by
+   *  default) and the next delivery number, unless given. */
   siteSent(input: Partial<Omit<SiteSent, "type">> & { path: string }): SiteSent {
     const message: SiteSent = {
       type: "siteSent",
@@ -576,12 +591,14 @@ export class FakeOperator {
       route: input.route ?? "site.other",
       sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
       sentMono: input.sentMono ?? monoMs(),
+      ...this.#delivery(input.requestKey, input.hop, input.deliverySeq),
     };
     this.server.send(message);
     return message;
   }
 
-  /** Variant Б: how an observed site request ended. */
+  /** Variant Б: how an observed site request ended (of a keyed send: its
+   *  key and hop, the next delivery number unless given). */
   siteEnded(sent: SiteSent, end: Partial<Omit<SiteEnded, "type" | "siteRequestId">> = {}): SiteEnded {
     const message: SiteEnded = {
       type: "siteEnded",
@@ -590,9 +607,21 @@ export class FakeOperator {
       status: end.status === undefined ? 200 : end.status,
       retryAfter: end.retryAfter ?? null,
       error: end.error ?? null,
+      ...this.#delivery(sent.requestKey, sent.hop, end.deliverySeq),
     };
     this.server.send(message);
     return message;
+  }
+
+  /** An observation told again as it was (minor 6: the operator repeats
+   *  what the engine has not confirmed). */
+  tellAgain(message: SiteSent | SiteEnded | SiteIdentity): void {
+    this.server.send(message);
+  }
+
+  #delivery(requestKey: string | undefined, hop: number | undefined, deliverySeq: number | undefined): Pick<SiteSent, "requestKey" | "hop" | "deliverySeq"> {
+    if (requestKey === undefined) return {};
+    return { requestKey, hop: hop ?? 0, deliverySeq: deliverySeq ?? ++this.#deliverySeq };
   }
 
   /** Variant Б: the site's own `/account/me` named this account, from the network. */
@@ -603,6 +632,7 @@ export class FakeOperator {
       accountId,
       sessionFingerprint: input.sessionFingerprint ?? sent.sessionFingerprint ?? this.live!,
       sentNotBeforeMono: input.sentNotBeforeMono ?? sent.sentMono - 5,
+      ...this.#delivery(sent.requestKey, sent.hop, input.deliverySeq),
     };
     this.server.send(message);
     return message;

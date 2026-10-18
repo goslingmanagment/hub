@@ -1,5 +1,6 @@
 import {
   ensurePollRows,
+  findObservedSiteRequest,
   getSyncAttempt,
   getSyncPage,
   LiveGateClosedError,
@@ -13,6 +14,7 @@ import {
   pickRequests,
   pickUrgent,
   readRouteJournal,
+  recordObservedSiteIdentity,
   SYNC_WORK_PICK_LIMIT,
   type Database,
   type SyncPageMode,
@@ -65,7 +67,7 @@ import {
   type Wake,
 } from "./ports.ts";
 import { isSiteSocket, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
-import { admitSite, commitSiteEnd, observedSend, recordObservedSiteSend, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
+import { admitSite, commitObservedSiteEnd, commitSiteEnd, recordObservedSiteSend, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 import {
   beforeGateKeys,
@@ -130,9 +132,10 @@ export const ROUTE_STATE_RECHECK_MS = 5_000;
  *  it goes on next lap, so a step that leaves its work due at once (an
  *  overflowed deletion batch) never keeps the page from its requests. */
 export const STEPS_BEFORE_GATE_PER_LAP = 10;
-/** Variant Б: observed site requests remembered (their attempt, for an end
- *  or an identity proof that comes after); the oldest is forgotten first. */
-export const OBSERVED_SITE_KEPT = 512;
+/** Variant Б: hops of observed site requests whose send or end the pacer was
+ *  told (a fact told again is not told twice); the oldest is forgotten
+ *  first. Only the pace reads it: the journal takes a hop once by its row. */
+export const OBSERVED_SITE_TOLD_KEPT = 4_096;
 /** Variant Б: the site's own sends in an hour past which the owner is warned
  *  (decision Б8: a warning, never a refusal; spec §3's ceiling). */
 export const OBSERVED_SITE_HOUR_WARN = 300;
@@ -176,14 +179,6 @@ export interface ActorSignals {
 }
 
 type Committed<T> = { ok: true; value: T } | { ok: false; exit: ActorExit };
-
-interface ObservedSiteEntry {
-  attemptId: number | null;
-  route: FanslyRoute;
-  sentWall: Date;
-  sessionFingerprint: string | null;
-  credentialsGeneration: string | null;
-}
 
 /** Where an actor is, as the stall watchdog reports it. */
 export type ActorPhase =
@@ -234,10 +229,13 @@ export class SyncActor {
   #lapState = { workId: null as string | null, resource: null as string | null, prepare: "not_run", siteCandidate: false, phase: "idle" as ActorPhase };
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
-  /** Variant Б: observed site requests by their browser id. */
-  readonly #observed = new Map<string, ObservedSiteEntry>();
+  /** Variant Б: what the pacer was told of each observed hop, oldest first. */
+  readonly #observedTold = new Map<string, "sent" | "ended">();
   /** Variant Б: the journal of observed facts, one commit at a time, in order. */
   #observedChain: Promise<void> = Promise.resolve();
+  /** Variant Б: the facts waiting in the chain, by hop and kind — with the
+   *  acks of every repeat of each, called once it commits. */
+  readonly #observedWaiting = new Map<string, Array<() => void>>();
   /** Variant Б: the monotonic instants of this hour's observed sends. */
   #observedHour: number[] = [];
   #observedWarnedMono = Number.NEGATIVE_INFINITY;
@@ -266,69 +264,117 @@ export class SyncActor {
   // ── variant Б: the site's own traffic, observed (plan-b §4.2.2–4.2.3) ──
 
   /** At once: the pause counts the site's send, and an end lets the next own
-   *  slot open. Then, in order, the journal: the attempt, its end with the
-   *  holds it sets, the identity proof. */
+   *  slot open — once per hop, however often it is told. Then, in order, the
+   *  journal: the attempt, its end with the holds it sets, the identity proof
+   *  — each hop once by its row (0289), and each fact acknowledged once
+   *  committed (the operator keeps it until then and tells it again). An end
+   *  or an identity whose send's attempt is not journaled yet commits
+   *  nothing and is not acknowledged: the operator tells the send again
+   *  first. */
   #onSiteObserved(event: SiteObservation): void {
     const d = this.#d;
+    const hop = `${event.key.requestKey}#${event.key.hop}`;
     switch (event.kind) {
       case "sent": {
-        d.pacer.observeForeignSend(event.id, event.sentMono);
-        this.#countObservedSend(event.sentMono);
+        if (!this.#observedTold.has(hop)) {
+          this.#tellObserved(hop, "sent");
+          d.pacer.observeForeignSend(event.id, event.sentMono);
+          this.#countObservedSend(event.sentMono);
+        }
         // A route the catalogue does not know is the site's other read.
         const route: FanslyRoute = isFanslyRoute(event.route) ? event.route : SITE_OTHER_ROUTE;
-        this.#journalObserved(async () => {
+        this.#journalObserved(`${hop}:sent`, event.ack, async () => {
           // Bind the send to this settings snapshot before a later identity
           // message can see a changed proxy or session.
           const credentialsGeneration = event.sessionFingerprint === null ? null
             : await d.transport.siteCredentialsGeneration?.(event.sessionFingerprint) ?? null;
-          const { attemptId } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS });
-          this.#rememberObserved(event.id, { attemptId, route, sentWall: event.sentWall, sessionFingerprint: event.sessionFingerprint, credentialsGeneration });
+          const { recorded } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS, credentialsGeneration });
+          if (!recorded) d.metrics.increment("sync_site_observed_repeated", { kind: "sent" });
+          return true;
         });
         return;
       }
-      case "ended":
+      case "ended": {
+        this.#tellObserved(hop, "ended");
         d.pacer.observeForeignEnd(event.id);
-        this.#journalObserved(async () => {
-          const sent = this.#observed.get(event.id);
-          if (sent?.attemptId == null) return;
-          const end: SiteRequestEnd = event.status !== null
-            ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
-            : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
-          await commitSiteEnd(d, { attemptId: sent.attemptId, send: observedSend(sent.sentWall, FANSLY_PAUSE_MIN_MS), end, classified: { route: sent.route, exempt: false }, observed: true });
+        const end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }> = event.status !== null
+          ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
+          : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
+        this.#journalObserved(`${hop}:ended`, event.ack, async () => {
+          const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS });
+          if (committed === "committed") return true;
+          d.metrics.increment("sync_site_observed_early", { kind: "ended" });
+          return false;
         });
         return;
+      }
       case "identity":
-        this.#journalObserved(async () => {
-          const sent = this.#observed.get(event.id);
+        this.#journalObserved(`${hop}:identity`, event.ack, async () => {
           const generationOf = d.transport.siteCredentialsGeneration;
-          if (sent?.attemptId == null || generationOf === undefined) return;
+          if (generationOf === undefined) return true;
+          const sent = await findObservedSiteRequest(d.db, { pageId: d.pageId, ...event.key });
+          if (sent?.attemptId == null) {
+            d.metrics.increment("sync_site_observed_early", { kind: "identity" });
+            return false;
+          }
+          if (sent.identityRecordedAt !== null) return true;
           const currentGeneration = await generationOf.call(d.transport, event.sessionFingerprint);
           const credentialsGeneration = sent.credentialsGeneration;
           const outcome = credentialsGeneration === null || currentGeneration !== credentialsGeneration || event.sessionFingerprint !== sent.sessionFingerprint
             ? "superseded_settings"
             : await commitSiteIdentity(d, { attemptId: sent.attemptId, accountId: event.accountId, credentialsGeneration, sentNotBefore: event.sentNotBeforeWall });
+          await recordObservedSiteIdentity(d.db, { pageId: d.pageId, ...event.key });
           d.metrics.increment("sync_site_identity", { outcome });
           if (outcome !== "recorded") {
             d.logger.warn({ pageId: d.pageId, outcome, attemptId: sent.attemptId }, "Fansly sync actor: the site's own account read proves nothing of this page");
           }
+          return true;
         });
         return;
     }
   }
 
-  #journalObserved(commit: () => Promise<void>): void {
+  /** One fact into the journal's chain — once while it waits there: a repeat
+   *  only adds its ack. `commit` says whether it committed (then every ack
+   *  of it goes); a failure is counted (the `site_journal` latch) and
+   *  acknowledges nothing — the operator tells it again. */
+  #journalObserved(fact: string, ack: () => void, commit: () => Promise<boolean>): void {
     const d = this.#d;
-    this.#observedChain = this.#observedChain.then(commit).catch((error: unknown) => {
-      if (error instanceof OwnershipLostError) return;
-      d.metrics.increment("sync_site_observed_commit_failed", { error: errorName(error) });
-      d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: an observed site request could not be journaled");
+    const waiting = this.#observedWaiting.get(fact);
+    if (waiting !== undefined) {
+      waiting.push(ack);
+      return;
+    }
+    const acks = [ack];
+    this.#observedWaiting.set(fact, acks);
+    this.#observedChain = this.#observedChain.then(async () => {
+      let committed = false;
+      try {
+        committed = await commit();
+      } catch (error) {
+        if (!(error instanceof OwnershipLostError)) {
+          d.metrics.increment("sync_site_observed_commit_failed", { error: errorName(error) });
+          d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: an observed site request could not be journaled");
+        }
+      } finally {
+        this.#observedWaiting.delete(fact);
+      }
+      if (!committed) return;
+      // The chain goes on whatever an ack does.
+      for (const done of acks) {
+        try {
+          done();
+        } catch (error) {
+          d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: an observed site fact's ack could not be written");
+        }
+      }
     });
   }
 
-  #rememberObserved(id: string, entry: ObservedSiteEntry): void {
-    this.#observed.delete(id);
-    this.#observed.set(id, entry);
-    if (this.#observed.size > OBSERVED_SITE_KEPT) this.#observed.delete(this.#observed.keys().next().value!);
+  #tellObserved(hop: string, told: "sent" | "ended"): void {
+    this.#observedTold.delete(hop);
+    this.#observedTold.set(hop, told);
+    if (this.#observedTold.size > OBSERVED_SITE_TOLD_KEPT) this.#observedTold.delete(this.#observedTold.keys().next().value!);
   }
 
   /** Decision Б8: past the hour's ceiling a warning (once per ten minutes) —

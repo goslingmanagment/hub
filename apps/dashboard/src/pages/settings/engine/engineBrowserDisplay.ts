@@ -61,6 +61,7 @@ const ALERT_WORDS: Record<string, string> = {
   selftest_failed: "самопроверка",
   protocol_changed: "Fansly изменил протокол",
   cdp_lost: "потеряно управление Chrome",
+  site_unconfirmed: "запросы сайта ждут записи в Hub больше 2 мин",
 };
 
 const ALARM_WORDS: Record<string, string> = {
@@ -277,6 +278,8 @@ export function browserAlertLines(browser: EngineBrowser, now: number): string[]
 
 function alarmDetailWords(detail: string): string | null {
   if (detail === "no_state") return "оператор молчит больше 2 мин";
+  // The kind's own words say it all.
+  if (detail === "site_unconfirmed") return null;
   if (detail.startsWith("link_")) return LINK_ERROR_WORDS[detail.slice(5)] ?? detail;
   if (detail.startsWith("alarm_")) return browserAlarmWords(detail.slice(6));
   if (detail.startsWith("buffer_")) return `заполнен на ${detail.slice(7)}${NBSP}%`;

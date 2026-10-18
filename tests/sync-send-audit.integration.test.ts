@@ -240,8 +240,8 @@ describe("the send audit on recorded rows", () => {
     const since = new Date(Date.now() - 60_000);
     const sentWall = new Date(Date.now() - 1_000);
     const { attemptId } = await recordObservedSiteSend(deps, {
-      id: "observed-pending", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/notifications",
-      route: "notifications.page", settingMs: S, sentWall,
+      id: "observed-pending", key: { requestKey: `observed-pending-${endKind}`, hop: 0 }, method: "GET", host: "apiv3.fansly.com", path: "/api/v1/notifications",
+      route: "notifications.page", settingMs: S, sentWall, sessionFingerprint: null, credentialsGeneration: null,
     });
     // A send is known immediately, but there is no outcome or completion.
     expect(await listUnfinishedAttempts(db(), { pageId, phase: "send" })).toEqual([

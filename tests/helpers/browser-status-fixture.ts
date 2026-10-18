@@ -26,6 +26,13 @@ export function browserStatus(overrides: Partial<AgentSyncBrowserStatus> = {}): 
     hubSend: { allowed: true, reason: null, since: null, forMs: null },
     crashDumps: { completed: { count: 0, newestAt: null }, pending: { count: 0, newestAt: null }, countedAt: ago(3_600_000) },
     lastAlarm: null,
+    siteObserved: {
+      unconfirmed: 0,
+      oldestAt: null,
+      oldestAgeMs: null,
+      dropped: 0,
+      lastHour: { sent: 120, ended: 120, unended: 0, responses: 64, responsesWithoutSend: 0, lastRecordedAt: ago(3_000) },
+    },
     alerts: [],
     ...overrides,
   };

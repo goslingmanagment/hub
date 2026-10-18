@@ -77,9 +77,9 @@ describe("the link", () => {
     await up(made);
     expect(fake.hellos).toHaveLength(1);
     const hello = fake.hellos[0]!;
-    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 5 } });
+    expect(hello).toMatchObject({ ownerGeneration: 3, token: OPERATOR_TOKEN, pageId: 7, expectedAccountId: "300000000000000001", protocol: { majors: [1], minor: 6 } });
     expect(hello.socks5).toEqual({ ip: "127.0.0.1", port: 1080, username: "pb-user", password: "pb-pass" });
-    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 5 } });
+    expect(made.status).toMatchObject({ kind: "up", bufferId: "00000000-0000-4000-8000-000000000001", protocol: { major: 1, minor: 6 } });
     expect(made.state).toMatchObject({ step: "exit_open", sessionFingerprint: SESSION_A });
     expect(made.helloDigest).toBe(linkSettingsDigest(linkSettings()));
     expect(fake.server.generation).toBe(3);
@@ -447,6 +447,33 @@ describe("a Hub request", () => {
     // The operator's answer would come after the hello; the link goes first.
     fake.server.protocolError("a test drops the engine");
     await expect(recovering).rejects.toBeInstanceOf(PageBrowserLinkError);
+  });
+
+  it.each([5, 6])("the site's observations are confirmed only to an operator of minor 6, on the connection they came on (minor %i)", async (minor) => {
+    const acks: Array<Record<string, unknown>> = [];
+    const server = createServer();
+    server.on("upgrade", (req, socket, head) => {
+      const ws = acceptWebSocket(req, socket, head, 1024 * 1024);
+      if (!ws) return;
+      cleanups.push(() => ws.close(1000));
+      ws.onText = (payload) => {
+        const message = JSON.parse(payload.toString("utf8")) as Record<string, unknown>;
+        if (message.type === "hello") ws.sendText(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor }, bufferId: "b", state: new FakeOperatorState().state }));
+        else if (message.type === "ping") ws.sendText(JSON.stringify({ type: "pong", n: message.n }));
+        else if (message.type === "siteObservedAck") acks.push(message);
+      };
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+    const port = (server.address() as { port: number }).port;
+    const made = client(`ws://127.0.0.1:${port}/rpc`, 4n);
+    await up(made);
+    expect(made.siteObservedAck(made.epoch + 1, [1])).toBe(false);
+    expect(made.siteObservedAck(made.epoch, [])).toBe(false);
+    expect(made.siteObservedAck(made.epoch, [2, 3])).toBe(minor >= 6);
+    if (minor < 6) return;
+    await until(() => acks.length === 1, 3_000, "the ack");
+    expect(acks[0]).toEqual({ type: "siteObservedAck", ownerGeneration: 4, deliverySeqs: [2, 3] });
   });
 
   it("resultAck reaches the operator with the generation", async () => {

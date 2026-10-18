@@ -94,6 +94,13 @@ export interface PageBrowserRow {
   crashDumpsPending: number | null;
   crashDumpsPendingNewestAt: Date | null;
   crashDumpsCountedAt: Date | null;
+  /** The site's observations the operator keeps for the engine's word
+   *  (0289; `state.siteObserved`, minor 6): how many, the oldest one's
+   *  instant (null: none), how many it dropped since its start. Null: not
+   *  said. */
+  siteObservedUnconfirmed: number | null;
+  siteObservedOldestAt: Date | null;
+  siteObservedDropped: number | null;
 }
 
 type SqlRow = Omit<
@@ -101,8 +108,9 @@ type SqlRow = Omit<
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
   | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt" | "hubSendBlockedSince" | "crashDumpsCompletedNewestAt" | "crashDumpsPendingNewestAt"
-  | "crashDumpsCountedAt"
+  | "crashDumpsCountedAt" | "siteObservedOldestAt"
 > & {
+  siteObservedOldestAt: Date | string | null;
   hubSendBlockedSince: Date | string | null;
   crashDumpsCompletedNewestAt: Date | string | null;
   crashDumpsPendingNewestAt: Date | string | null;
@@ -180,7 +188,10 @@ const publicColumns = sql`
   b.crash_dumps_completed_newest_at as "crashDumpsCompletedNewestAt",
   b.crash_dumps_pending as "crashDumpsPending",
   b.crash_dumps_pending_newest_at as "crashDumpsPendingNewestAt",
-  b.crash_dumps_counted_at as "crashDumpsCountedAt"
+  b.crash_dumps_counted_at as "crashDumpsCountedAt",
+  b.site_observed_unconfirmed as "siteObservedUnconfirmed",
+  b.site_observed_oldest_at as "siteObservedOldestAt",
+  b.site_observed_dropped as "siteObservedDropped"
 `;
 
 const columns = sql`
@@ -226,6 +237,7 @@ function rowOf(row: SqlRow): PageBrowserRow {
     crashDumpsCompletedNewestAt: dateOf(row.crashDumpsCompletedNewestAt),
     crashDumpsPendingNewestAt: dateOf(row.crashDumpsPendingNewestAt),
     crashDumpsCountedAt: dateOf(row.crashDumpsCountedAt),
+    siteObservedOldestAt: dateOf(row.siteObservedOldestAt),
   };
 }
 
@@ -322,6 +334,9 @@ export interface PageBrowserStateInput {
     pending: { count: number; newestAt: Date | null };
     countedAt: Date;
   } | null;
+  /** The site's observations kept for the engine's word (`state.siteObserved`,
+   *  minor 6). Null or absent: not said. */
+  siteObserved?: { unconfirmed: number; oldestAt: Date | null; dropped: number } | null;
 }
 
 const isoOrNull = (value: Date | null | undefined): string | null => (value == null ? null : value.toISOString());
@@ -339,6 +354,8 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
   const hubSend = input.hubSend ?? null;
   const blocked = hubSend !== null && !hubSend.allowed && hubSend.reason !== null && hubSend.since !== null ? hubSend : null;
   const dumps = input.crashDumps ?? null;
+  const kept = input.siteObserved ?? null;
+  const unconfirmed = kept === null ? null : Math.max(0, Math.round(kept.unconfirmed));
   // Whether the halt said (or none) replaces the one the mirror holds.
   const takes = sql`when halt_reason is null
                       or (halt_id is not null and halt_id = ${cleared}::text)
@@ -382,6 +399,9 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            crash_dumps_pending = ${dumps === null ? null : Math.max(0, Math.round(dumps.pending.count))}::integer,
            crash_dumps_pending_newest_at = ${isoOrNull(dumps?.pending.newestAt)}::timestamptz,
            crash_dumps_counted_at = ${isoOrNull(dumps?.countedAt)}::timestamptz,
+           site_observed_unconfirmed = ${unconfirmed}::integer,
+           site_observed_oldest_at = ${unconfirmed === null || unconfirmed === 0 ? null : isoOrNull(kept?.oldestAt)}::timestamptz,
+           site_observed_dropped = ${kept === null ? null : Math.max(0, Math.round(kept.dropped))}::integer,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()
