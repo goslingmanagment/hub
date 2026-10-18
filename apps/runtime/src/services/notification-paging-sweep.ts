@@ -6,6 +6,7 @@ import {
   markNotificationIncidentCyclesPaged,
   recordNotificationIncidentCycle,
   settleNotificationIncidentCycle,
+  settleSupersededNotificationIncidentCycles,
   settleUndeliveredPage,
   summarizeNotificationIncidentCycles,
   upsertNotificationIncidentPaging,
@@ -231,6 +232,11 @@ async function evaluateCandidate(
       now,
     });
     result.episodesRecorded += 1;
+    // The episode before it may have resolved between two sweeps, unseen.
+    await settleSupersededNotificationIncidentCycles(app.db, {
+      notificationIncidentId: candidate.incidentId,
+      before: candidate.openedAt,
+    });
   }
   if (candidate.status === "resolved" && candidate.resolvedAt) {
     await settleNotificationIncidentCycle(app.db, {
