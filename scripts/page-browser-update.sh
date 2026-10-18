@@ -30,7 +30,8 @@
 #   page-browser-update.sh resume --page <page> [--detach]
 #       An update, rollback or snapshot cut off at any step goes on from it.
 #   page-browser-update.sh rollback --page <page> [--reason <text>] [--detach]
-#       The page's last update undone: its previous image WITH its snapshot.
+#       The page's last update undone: its previous image WITH its snapshot
+#       (none when the update changed no Chrome: the profile stays).
 #   page-browser-update.sh snapshot --page <page> [--engine hub|none]
 #       A standing page's profile now (Chrome down — on its browser, under
 #       the owner's stop, answered; the container stopped for it and
@@ -63,7 +64,9 @@
 #  5. host checks, exit closed: the new Chrome opens the profile and its
 #     policy installs the image's rules extension (profile-check.mjs in the
 #     container), and the profile now names the new Chrome;
-#  6. give back — `sync browser start --if-no-halt --if-stop <its stop>`:
+#  6. give back — what stands unfinished on the page read first (the
+#     window tells these tails from what the new browser leaves), then
+#     `sync browser start --if-no-halt --if-stop <its stop>`:
 #     the update's stop and its pause lifted — only while the stop in force
 #     is the update's own (a stop or start of the owner's since stays his:
 #     the update holds) — the browser started by the engine (plan §4.1)
@@ -75,15 +78,21 @@
 #     exit IP the pinned one, the site loaded, the session confirmed by the
 #     engine's identity read: the same account and session fingerprint as
 #     before, no new login;
-#  8. the window (first page): ready all along, then `sync check live-hour`.
+#  8. the window (first page; jq reads what it judges by): the browser
+#     stood at no moment of it — by the operator's own record of every
+#     transition (its states journal, page.sh log), not a look every few
+#     minutes — and never started again (its self-test is the one it was
+#     ready with); then `sync check live-hour`, accepted, or left short of a
+#     pass only by what says nothing of a browser on a page live for long
+#     (window_accepts).
 # Any failure before the new image ran puts the page back as it was (its
 # old container, its transport); after it, a rollback — reading the page as
 # it is then, never the update's old hand-over: its own confirmed stop of a
 # browser that serves (unless Hub shows it stopped now), no container
 # stopped under a running Chrome, a start only of a stop it made —: the page out again,
-# the snapshot restored, the old image, the same checks — never the old
-# Chrome on a profile the new one wrote: every container start goes through
-# page.sh's start_state, which refuses it.
+# the snapshot restored (when the update changed the Chrome), the old image,
+# the same checks — never the old Chrome on a profile the new one wrote:
+# every container start goes through page.sh's start_state, which refuses it.
 #
 # Rules everything here keeps:
 # - One guard (guard_quiet) right before every deed on the page's container
@@ -172,6 +181,12 @@ now_s() { date -u +%s; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # An epoch (seconds) as ISO 8601, GNU date or BSD date.
 iso_of() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+# An instant in milliseconds as ISO 8601 with its milliseconds, as the
+# operator's journals write theirs (`at`): the two compare as text.
+iso_ms_of() {
+  local s=$(( 10#$1 / 1000 ))
+  printf '%s.%03dZ' "$(date -u -d "@$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -r "$s" +%Y-%m-%dT%H:%M:%S)" "$(( 10#$1 % 1000 ))"
+}
 # An RFC 2822 date (a Release's Date:) as an epoch.
 epoch_of_rfc2822() {
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%a, %d %b %Y %H:%M:%S %Z' "$1" +%s 2>/dev/null
@@ -575,14 +590,14 @@ host_checks() {
 
 hub_compose() { (cd "$HUB_DIR" && docker compose --env-file .env.production -f docker-compose.production.yml "$@"); }
 
-# A lever of the Hub's CLI; its output to the operator's terminal, its
-# refusal journaled.
+# A lever of the Hub's CLI; its output to the operator's terminal (and in
+# HUB_OUT), its refusal journaled.
 hub_lever() {
-  local out rc=0
-  out="$(hub_compose exec -T api node apps/runtime/dist/cli.js "$@" </dev/null 2>&1)" || rc=$?
-  [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+  local rc=0
+  HUB_OUT="$(hub_compose exec -T api node apps/runtime/dist/cli.js "$@" </dev/null 2>&1)" || rc=$?
+  [[ -z "$HUB_OUT" ]] || printf '%s\n' "$HUB_OUT" >&2
   if ((rc != 0)); then
-    journal hub_refused "$* → exit $rc: $(printf '%s' "$out" | tail -n 3 | scrub)"
+    journal hub_refused "$* → exit $rc: $(printf '%s' "$HUB_OUT" | tail -n 3 | scrub)"
     return "$rc"
   fi
 }
@@ -636,6 +651,49 @@ SQL
   [[ "$H_TRANSPORT" == node || "$H_TRANSPORT" == browser ]] || return 1
 }
 
+# What stands unfinished on the page now, of what `sync check live-hour`'s
+# nothing_stuck counts, by name and at any age: "<kind> <id>" a line —
+# attempt (admitted or sent, never ended), apply (an answer captured or
+# deferred, not applied), receipt (a socket frame not acknowledged live),
+# work (quarantined). 1: the Hub cannot be read.
+stuck_read() {
+  hub_compose exec -T postgres sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtqX' <<SQL
+-- pb-update:stuck $PAGE
+BEGIN READ ONLY;
+SELECT 'attempt ' || a.id FROM sync_attempts a
+ WHERE a.page_id = (SELECT id FROM pages WHERE label = '$PAGE') AND NOT a.shadow AND a.outcome IN ('admitted', 'sent')
+UNION ALL
+SELECT 'apply ' || a.id FROM sync_attempts a
+ WHERE a.page_id = (SELECT id FROM pages WHERE label = '$PAGE') AND NOT a.shadow AND a.apply_state IN ('captured', 'deferred')
+UNION ALL
+SELECT 'receipt ' || r.observation_id FROM fansly_ws_decode_receipts r
+ WHERE r.page_id = (SELECT id FROM pages WHERE label = '$PAGE') AND r.live_state = 'pending'
+UNION ALL
+SELECT 'work ' || w.id FROM sync_work w
+ WHERE w.page_id = (SELECT id FROM pages WHERE label = '$PAGE') AND NOT w.shadow AND w.state = 'quarantined';
+COMMIT;
+SQL
+}
+
+# The owner asked a self-test of the page's browser since <ms> (`sync
+# browser selftest`): one that runs with no start. 0 he did; 1 not; 2 the
+# Hub cannot be read.
+owner_selftest_since() {
+  local row
+  row="$(hub_compose exec -T postgres sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtqX' <<SQL
+-- pb-update:selftest $PAGE
+BEGIN READ ONLY;
+SELECT count(*) FROM page_browser_commands c
+ WHERE c.page_id = (SELECT id FROM pages WHERE label = '$PAGE') AND c.kind = 'selfTest'
+   AND c.requested_at >= to_timestamp($(( 10#$1 / 1000 )));
+COMMIT;
+SQL
+)" || return 2
+  row="$(sed -n '1p' <<<"$row")"
+  [[ "$row" =~ ^[0-9]+$ ]] || return 2
+  ((row > 0)) || return 1
+}
+
 # ── the state of a page's update (key=value, rewritten whole) ─────────────
 
 STATE=""
@@ -659,6 +717,8 @@ step_to() {
   sset "STEP=$1"
   journal step "$1"
 }
+# What stood unfinished on the page before its hand-over (stuck_read).
+tails_file() { printf '%s/tails' "$(dirname "$STATE")"; }
 
 # ── the lock: one update, rollback, build or prune at a time ──────────────
 
@@ -1233,6 +1293,19 @@ step_give_back() {
     step_to engine_checked
     return
   fi
+  # What stands unfinished before the new browser has the page — the old
+  # Chrome's last requests, the update's own stop —: the window tells these
+  # tails from what the new one leaves (tails_explain). Read once, before
+  # the start is asked.
+  if [[ "$(sget WINDOW_S)" != 0 && -z "$(sget TAILS_BEFORE)" ]]; then
+    local tails
+    if ! tails="$(stuck_read)"; then
+      hold "the Hub cannot be read: what stands unfinished on the page before its hand-over is unknown (the window tells its tails by it)"
+      return
+    fi
+    printf '%s\n' "$tails" | sed '/^$/d' > "$(tails_file)"
+    sset "TAILS_BEFORE=$(grep -c . "$(tails_file)" || true)"
+  fi
   local rc=0
   handover_back GIVEN_BACK_MS back "the update starts the page's browser on the new image" || rc=$?
   if ((rc != 0)); then
@@ -1328,14 +1401,185 @@ step_engine_checks() {
   esac
 }
 
+# ── the window ────────────────────────────────────────────────────────────
+#
+# A look at the engine's record every few minutes cannot say the browser
+# was ready all along: Chrome .39 on lilly-1 lost its control and was back
+# in 30–140 s, between two looks. The window judges by what the page's
+# operator recorded of every transition, and by its self-test, which runs
+# only at a start; then by `sync check live-hour`, read for what it says of
+# a browser.
+
+# The page's browser stood at no moment of [<from ms>, <to ms>], by its
+# operator's own record of every transition: its states journal on the
+# page's buffer volume, read here by page.sh log (plan §4.11). 0 never; 2 a
+# stop not the owner's came first (ENGINE_WHY: which, when); 3 the owner's —
+# his stop of the browser, or a halt held for his decision; 4 the record
+# cannot be read, or lost lines (a gap) before anything else said.
+browser_stood() {
+  local from to out verdict
+  from="$(iso_ms_of "$1")"
+  to="$(iso_ms_of "$2")"
+  if ! command -v jq >/dev/null 2>&1; then
+    ENGINE_WHY="no jq here: the operator's record of the page's transitions cannot be read"
+    return 4
+  fi
+  if ! out="$("$PAGE_SH" log --page "$PAGE" --kind states --since "$from" 2>&1)"; then
+    ENGINE_WHY="the operator's record of the page's transitions cannot be read: $(printf '%s' "$out" | tail -n 1 | scrub)"
+    return 4
+  fi
+  # shellcheck disable=SC2016
+  if ! verdict="$(jq -nrR --arg from "$from" --arg to "$to" '
+      first(inputs | select(length > 0) | (try fromjson catch null)
+        | if type == "object" then . else {unreadable: true} end
+        | select(.unreadable == true or ((.at | type) == "string" and .at >= $from and .at <= $to))
+        | if .unreadable == true then "4\ta line of it cannot be read"
+          elif .gap == true then "4\t\(.dropped // "some") lines of it lost at \(.at)"
+          elif .stopReason == null then empty
+          elif .stopReason == "owner_stop" then "3\tthe owner stopped its browser at \(.at)"
+          elif .halted == true then "3\tits browser stands for a decision of the owner since \(.at) (\(.stopReason))"
+          else "2\tstopped: \(.stopReason) at \(.at) (\((.note // "")[0:160]))" end)
+      // "0\t"' <<<"$out")"; then
+    ENGINE_WHY="the operator's record of the page's transitions cannot be read (jq)"
+    return 4
+  fi
+  ENGINE_WHY="${verdict#*$'\t'}"
+  return "${verdict%%$'\t'*}"
+}
+
+# One look of the window at the page ready since <ready ms>, its record
+# read up to <to ms>: the operator's transitions (browser_stood); the
+# engine's record now — ready on the new Chrome (judge_engine), fresh; and
+# its self-test the one it was ready with — a self-test after it is a start
+# again, unless the owner asked one. 0 well; 1 not ready now; 2 failed; 3
+# the owner's; 4 not seen (ENGINE_WHY says).
+window_look() {
+  local ready="$1" to="$2" rc=0
+  if ! hub_read; then
+    ENGINE_WHY="the Hub cannot be read"
+    return 4
+  fi
+  browser_stood "$ready" "$to" || rc=$?
+  ((rc == 0)) || return "$rc"
+  judge_engine "$(sget TO_CHROME)" "$(sget GIVEN_BACK_MS)" "$(sget TO_REVISION)" || rc=$?
+  ((rc == 0)) || return "$rc"
+  if ((10#$H_SELFTEST_AT > 10#$ready)); then
+    # A self-test of the owner's runs with no start: his doing.
+    owner_selftest_since "$ready" || rc=$?
+    case "$rc" in
+      0) ENGINE_WHY="the owner's self-test of its browser ran at $(iso_ms_of "$H_SELFTEST_AT")"; return 3 ;;
+      1) ENGINE_WHY="its browser started again: a self-test at $(iso_ms_of "$H_SELFTEST_AT"), after it was ready at $(iso_ms_of "$ready")"; return 2 ;;
+      *) ENGINE_WHY="the Hub cannot be read: whose self-test ran at $(iso_ms_of "$H_SELFTEST_AT") is unknown"; return 4 ;;
+    esac
+  fi
+  if (( 10#$H_NOW - 10#$H_STATE_AT > STATE_FRESH_S * 1000 )); then
+    ENGINE_WHY="no state of the operator for $(( (10#$H_NOW - 10#$H_STATE_AT) / 1000 )) s"
+    return 1
+  fi
+}
+
+# A nothing_stuck the tails explain: each of its counts no more than what
+# stood unfinished before the page's hand-over (stuck_read then, its tails
+# file) and stands so still (stuck_read now). nothing_stuck stays the check
+# of the page as it stands — it counts what was left before the window too
+# (lilly-1, 2026-10-17 07:48: two site requests of 06:42, the old Chrome's,
+# before the update began); only the window, which knows what it was
+# handed, tells those from what the new browser left. <report> the Hub's.
+# 0 (WINDOW_TAILS: which); 1 not (TAILS_WHY).
+tails_explain() {
+  local report="$1" counts now tails name count kind n ids
+  local -a told=()
+  WINDOW_TAILS="" TAILS_WHY=""
+  if [[ -z "$(sget TAILS_BEFORE)" || ! -f "$(tails_file)" ]]; then
+    TAILS_WHY="nothing_stuck: what stood unfinished before the hand-over was not read"
+    return 1
+  fi
+  # shellcheck disable=SC2016
+  if ! counts="$(jq -r '.pages[].checks[] | select(.name == "nothing_stuck") | .detail | to_entries[]
+                         | select((.value | type) == "number" and .value > 0) | "\(.key) \(.value)"' <<<"$report")"; then
+    TAILS_WHY="nothing_stuck: its counts cannot be read"
+    return 1
+  fi
+  if ! now="$(stuck_read)"; then
+    TAILS_WHY="nothing_stuck: the Hub cannot be read to tell its tails"
+    return 1
+  fi
+  tails="$(grep -Fx -f "$(tails_file)" <<<"$now" || true)"
+  while read -r name count; do
+    [[ -n "$name" ]] || continue
+    case "$name" in
+      attemptUnfinished) kind=attempt ;;
+      applyPending) kind=apply ;;
+      receiptsPending) kind=receipt ;;
+      workQuarantined) kind=work ;;
+      *)
+        TAILS_WHY="nothing_stuck: $name $count — the page as it stands, never a tail"
+        return 1
+        ;;
+    esac
+    n="$(grep -c "^$kind " <<<"$tails" || true)"
+    if ((count > n)); then
+      TAILS_WHY="nothing_stuck: $name $count, $n of them standing from before the hand-over"
+      return 1
+    fi
+    ids="$(awk -v kind="$kind" '$1 == kind && shown < 5 { printf "%s%s", (shown++ ? "," : ""), $2 }' <<<"$tails")"
+    told+=("$name $count ($kind ${ids}$( ((n > 5)) && printf ' …' ), from before the hand-over)")
+  done <<<"$counts"
+  if ((${#told[@]} == 0)); then
+    TAILS_WHY="nothing_stuck failed with no count over 0"
+    return 1
+  fi
+  WINDOW_TAILS="$(IFS=';'; printf '%s' "${told[*]}")"
+}
+
+# What `sync check live-hour` left short of a pass that says nothing of a
+# browser on a page live for long — its report on stdin (jq); <tails> true:
+# nothing_stuck failed only by tails (tails_explain). Every page of it with
+# its window complete, at most one route with a 429 (two are the owner's
+# review), and every check that did not pass one of:
+#  - a latency SLO (slo_*) short of its minimum of samples, none of them
+#    over its bound (none at all, or a few within it): a quiet hour (lilly-1,
+#    2026-10-17 19:47: rolled back on a clean hour for one money head read
+#    of 2.9 s against 12 s);
+#  - confirm_mismatches with no message confirmed: no fan wrote;
+#  - media_start: the first media request within a minute of going live
+#    (ruling 13) — a page live for long walks its media on its own schedule,
+#    paused or not by its owner: whether its next request falls in the
+#    window's first minute says nothing of the browser (07:48 the same day:
+#    after 2621 s);
+#  - nothing_stuck by the tails alone.
+# Anything else — another check failed, a pair the pace audit could not
+# judge, the hand-over boundary, a route's budget, a 429's recovery
+# unproven — fails the window: `sync check live-hour` and its exit code
+# stay as strict as ever, only the window reads them so. Prints the checks
+# it accepts; 1 otherwise, or when the report or jq cannot be read.
+window_accepts() {
+  # shellcheck disable=SC2016
+  jq -er --argjson tails "$1" '
+    def accepted:
+      ((.name | startswith("slo_")) and .verdict == "inconclusive" and (.detail.samples | type) == "number"
+        and (.detail.maxSeconds == null or .detail.maxSeconds <= .detail.boundSeconds))
+      or (.name == "confirm_mismatches" and .verdict == "inconclusive" and .detail.confirmed == 0)
+      or (.name == "media_start" and (.detail.firstRequestAfterSeconds == null or .detail.firstRequestAfterSeconds > .detail.boundSeconds))
+      or (.name == "nothing_stuck" and .verdict == "fail" and $tails);
+    [.pages[]?.checks[]? | select(.verdict != "pass") | .name] as $open
+    | if .windowComplete == true and (.pages | length) > 0 and ($open | length) > 0
+         and all(.pages[]; any(.checks[]; .name == "window_complete" and .verdict == "pass")
+                           and all(.checks[] | select(.verdict != "pass"); accepted)
+                           and all(.checks[] | select(.name == "route_429"); (.detail.routesWith429 // 0) <= 1))
+      then $open | unique | join(", ")
+      else empty end'
+}
+
 step_window() {
-  local window until misses=0 blind=0 rc
+  local window until ready misses=0 blind=0 rc
   window="$(sget WINDOW_S)"
   if [[ "$(sget ENGINE_CHECKS)" != passed || "${window:-0}" == 0 ]]; then
     sset WINDOW=none
     step_to done
     return
   fi
+  ready="$(sget READY_MS)"
   until="$(sget WINDOW_UNTIL)"
   if [[ -z "$until" ]]; then
     until=$(( $(now_s) + window ))
@@ -1345,41 +1589,68 @@ step_window() {
   while (( $(now_s) < until )); do
     local left=$(( until - $(now_s) ))
     sleep "$(( left < WINDOW_POLL_S ? left : WINDOW_POLL_S ))"
-    if ! hub_read; then
-      # Not seen is not failed: the window holds for the owner.
-      blind=$((blind + 1))
-      if ((blind >= 2)); then hold "the Hub cannot be read: the window cannot judge the page"; return; fi
-      continue
-    fi
-    blind=0
     rc=0
-    judge_engine "$(sget TO_CHROME)" "$(sget GIVEN_BACK_MS)" "$(sget TO_REVISION)" || rc=$?
-    if ((rc == 0)) && (( 10#$H_NOW - 10#$H_STATE_AT > STATE_FRESH_S * 1000 )); then
-      rc=1
-      ENGINE_WHY="no state of the operator for $(( (10#$H_NOW - 10#$H_STATE_AT) / 1000 )) s"
-    fi
+    window_look "$ready" "$(( until * 1000 ))" || rc=$?
     case "$rc" in
-      0) misses=0 ;;
-      3) hold "during the window: $ENGINE_WHY"; return ;;
+      0) misses=0 blind=0 ;;
+      1) misses=$((misses + 1)) blind=0 ;;
       2) forward_failed "during the window: $ENGINE_WHY"; return ;;
-      *) misses=$((misses + 1)) ;;
+      3) hold "during the window: $ENGINE_WHY"; return ;;
+      *)
+        # Not seen is not failed: the window holds for the owner.
+        blind=$((blind + 1))
+        if ((blind >= 2)); then hold "the window cannot judge the page: $ENGINE_WHY"; return; fi
+        ;;
     esac
     if ((misses >= 2)); then forward_failed "during the window: $ENGINE_WHY"; return; fi
   done
-  if ! hub_read; then hold "the Hub cannot be read: the window's end cannot be judged"; return; fi
-  local since out=0
-  since="$(iso_of $(( 10#$(sget READY_MS) / 1000 )))"
+  rc=0
+  window_look "$ready" "$(( until * 1000 ))" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) if ((misses >= 1)); then forward_failed "at the window's end: $ENGINE_WHY"; return; fi ;;
+    2) forward_failed "at the window's end: $ENGINE_WHY"; return ;;
+    3) hold "at the window's end: $ENGINE_WHY"; return ;;
+    *) hold "the window's end cannot be judged: $ENGINE_WHY"; return ;;
+  esac
+  local since out=0 report accepted tails=false
+  since="$(iso_of $(( 10#$ready / 1000 )))"
   hub_lever sync check live-hour --page "$PAGE" --since "$since" --until "$(iso_of "$until")" || out=$?
-  if ((out != 0)); then
-    forward_failed "sync check live-hour over the window: exit $out (1 failed, 2 inconclusive)"
+  if ((out == 0)); then
+    sset WINDOW=passed
+    say window "passed: its browser stood at no moment of it, sync check live-hour accepted"
+    step_to done
     return
   fi
-  sset WINDOW=passed
-  say window "passed: ready all along, sync check live-hour accepted"
-  step_to done
+  # The report as the CLI prints it, among whatever else it wrote.
+  report="$(sed -n '/^{$/,/^}$/p' <<<"$HUB_OUT")"
+  if ! command -v jq >/dev/null 2>&1 || ! jq -e '(.pages | type) == "array" and (.pages | length) > 0' <<<"$report" >/dev/null 2>&1; then
+    hold "sync check live-hour over the window gave no report to judge (exit $out): $(printf '%s' "$HUB_OUT" | tail -n 1 | scrub)"
+    return
+  fi
+  TAILS_WHY="" WINDOW_TAILS=""
+  if jq -e 'any(.pages[].checks[]; .name == "nothing_stuck" and .verdict == "fail")' <<<"$report" >/dev/null 2>&1 && tails_explain "$report"; then
+    tails=true
+  fi
+  if accepted="$(window_accepts "$tails" <<<"$report")"; then
+    sset WINDOW=passed "WINDOW_OPEN=$accepted" "WINDOW_TAILS=$WINDOW_TAILS"
+    say window "passed: its browser stood at no moment of it; sync check live-hour (exit $out) left short of a pass only what says nothing of the browser ($accepted)${WINDOW_TAILS:+ — $WINDOW_TAILS}"
+    step_to done
+    return
+  fi
+  # shellcheck disable=SC2016
+  forward_failed "sync check live-hour over the window: exit $out ($(jq -r '[.pages[] | "\(.page) \(.verdict): \(.reasons | join(", "))"] | join("; ")' <<<"$report" 2>/dev/null || echo "1 failed, 2 inconclusive")${TAILS_WHY:+; $TAILS_WHY})"
 }
 
 # ── rollback: the page out again, its snapshot, its previous image ────────
+
+# The update changed no Chrome — another revision of the image, its Chrome
+# the same —: the previous image's Chrome opens the profile as the new one
+# left it (page.sh's start_state reads it again at the start). Its rollback
+# restores no snapshot then: an hour of the page's profile — the session its
+# site refreshed meanwhile — stays, never put back an hour (lilly-1,
+# 2026-10-17 19:47: .84 -> .84 back to the snapshot of 18:45).
+same_chrome() { [[ -n "$(sget FROM_CHROME)" && "$(sget FROM_CHROME)" == "$(sget TO_CHROME)" ]]; }
 
 rollback_failed() {
   sset "RB_FAILED=$1"
@@ -1387,15 +1658,15 @@ rollback_failed() {
   step_to rollback_failed
 }
 
-# Before anything of a rollback: the snapshot to restore is whole, and the
-# profile is still the page's — never another page's volume restored. 1
-# (RB_WHY) when not.
+# Before anything of a rollback: the snapshot to restore is whole (when it
+# restores one: same_chrome), and the profile is still the page's — never
+# another page's volume restored. 1 (RB_WHY) when not.
 rollback_ready() {
   local profile name rc=0
   profile="$(sget PROFILE)"
   name="$(sget SNAPSHOT)"
   RB_WHY=""
-  if ! snapshot_valid "$profile" "$name"; then
+  if ! same_chrome && ! snapshot_valid "$profile" "$name"; then
     RB_WHY="the snapshot ${name:-(none)} is missing or does not match its SHA-256: Chrome $(sget FROM_CHROME) must not open a profile Chrome $(sget TO_CHROME) wrote"
     return 1
   fi
@@ -1474,6 +1745,11 @@ rb_restore() {
   profile="$(sget PROFILE)"
   name="$(sget SNAPSHOT)"
   expected="$(sget SNAP_CHROME)"
+  if same_chrome; then
+    say restored "no snapshot restored: Chrome $(sget FROM_CHROME) on both images — the profile stays as the page left it"
+    sset RB_STEP=restored RB_RESTORED=none
+    return
+  fi
   if ! guard_quiet "$(sget RB_STOP)"; then rb_guard_held "the snapshot is not restored"; return; fi
   if ! snapshot_valid "$profile" "$name"; then
     rollback_failed "the snapshot ${name:-(none)} is missing or does not match its SHA-256: Chrome $(sget FROM_CHROME) must not open a profile Chrome $(sget TO_CHROME) wrote"
@@ -1488,7 +1764,7 @@ rb_restore() {
     return
   fi
   say restored "snapshots/$profile/$name restored (Chrome ${expected:-none})"
-  sset RB_STEP=restored
+  sset RB_STEP=restored "RB_RESTORED=$name"
 }
 
 rb_start_old() {
@@ -1532,11 +1808,13 @@ rb_engine_checks() {
       3|4) hold "rollback: $ENGINE_WHY"; return ;;
       *)
         sset RB_CHECKS=failed
-        alert rollback_checks "back on $(sget FROM_IMAGE) with its snapshot, but its start did not pass: $ENGINE_WHY"
+        alert rollback_checks "back on $(sget FROM_IMAGE) $( [[ "$(sget RB_RESTORED)" == none ]] && echo "(its profile kept: the same Chrome)" || echo "with its snapshot"), but its start did not pass: $ENGINE_WHY"
         ;;
     esac
   fi
-  alert rolled_back "the update to $(sget TO_IMAGE) is rolled back ($(sget REASON)): the page is on $(sget FROM_IMAGE) with its profile from before (engine checks: $(sget RB_CHECKS))"
+  local profile_was="with its profile from before"
+  [[ "$(sget RB_RESTORED)" == none ]] && profile_was="with its profile as the page left it (Chrome $(sget FROM_CHROME) on both)"
+  alert rolled_back "the update to $(sget TO_IMAGE) is rolled back ($(sget REASON)): the page is on $(sget FROM_IMAGE) $profile_was (engine checks: $(sget RB_CHECKS))"
   step_to rolled_back
 }
 
@@ -1710,8 +1988,13 @@ plan_update() {
       handover_why="the page is on Node: its browser stands"
     fi
   fi
+  # The window judges by the operator's record of the page's transitions
+  # and by sync check live-hour's report: both read with jq.
+  if ((handover == 1)) && [[ "$window" != 0 ]] && ! command -v jq >/dev/null 2>&1; then
+    fail "no jq here: the window reads the operator's record of the page and the Hub's report of the hour with it (install jq, or --window 0)"
+  fi
   RUN="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-  rm -f "$STATE"
+  rm -f "$STATE" "$(tails_file)"
   sset "RUN=$RUN" "PAGE=$PAGE" "PROFILE=$profile" "ENGINE=$engine" \
     "FROM_IMAGE=$from" "TO_IMAGE=$image" "FROM_CHROME=$from_chrome" "TO_CHROME=$to_chrome" \
     "FROM_REVISION=$from_revision" "TO_REVISION=$to_revision" \
@@ -1839,7 +2122,7 @@ cmd_rollback() {
     done)
       [[ "$(value PB_IMAGE "$(page_env "$PAGE")")" == "$(sget TO_IMAGE)" ]] \
         || fail "$PAGE is not on $(sget TO_IMAGE) any more: its last update is not the page's state to undo"
-      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_START= RB_STOP= RB_GIVEN_BACK_MS= STOP_rbout= START_rbback=
+      sset "REASON=$reason" NEW_RAN=1 RB_STEP= RB_START= RB_STOP= RB_GIVEN_BACK_MS= RB_RESTORED= STOP_rbout= START_rbback=
       step_to rolling_back
       ;;
     *)

@@ -5,7 +5,9 @@
 // systemd-run and date — one JSON state (FAKE_STATE), every call logged
 // (FAKE_LOG, JSON lines). The engine is played as the Hub would: a leave of
 // the browser is confirmed after a few reads, a page given back to its
-// browser is started on the Chrome of its container's image.
+// browser is started on the Chrome of its container's image. The operator's
+// record of every transition (its states journal, `page.sh log`) is kept on
+// the page (`states`), as the operator would write it.
 //
 //   node page-browser-update-fake.mjs <tool> <args…>
 
@@ -75,6 +77,12 @@ const now = () => Date.now();
 /** The stops PR 17's operator holds for the owner's decision. */
 const HALTS = new Set(["exit_ip_changed", "header_mismatch", "unknown_ws_message", "ws_guard_failed", "login_required", "halt_unreadable"]);
 
+/** A transition of the page as its operator journals it (logs/journal.ts). */
+function transition(page, from, to, stopReason = null, note = "") {
+  page.states ??= [];
+  page.states.push({ at: new Date().toISOString(), from, to, stopReason, retryAtWall: null, halted: stopReason !== null && (stopReason === "owner_stop" || HALTS.has(stopReason)), note });
+}
+
 function hubRead(label) {
   const page = state.hub?.pages?.[label];
   if (page === undefined) return "";
@@ -89,6 +97,7 @@ function hubRead(label) {
       page.leftGen = page.leave;
       page.leave = null;
       container.chrome = behaviour.chromeUpAfterLeave ? "up" : "down";
+      transition(page, page.pb.step ?? "ready", "exit_closed", "owner_stop", "the leave of its browser");
       Object.assign(page.pb, { step: "exit_closed", stop: "owner_stop", exitOpen: false, stateAt: now() });
     }
   }
@@ -100,6 +109,8 @@ function hubRead(label) {
     if (outcome !== "never" && page.startReads >= (behaviour.startAfterReads ?? 1)) {
       page.startPending = false;
       page.readyReads = 0;
+      // Started by the engine since: what comes "between two looks" comes now.
+      page.started = true;
       // The session the profile holds: the one from before, unless the new
       // Chrome lost it (a new login).
       page.baseFp ??= page.pb.fp;
@@ -116,9 +127,16 @@ function hubRead(label) {
         stateAt: now(),
         exitIp: page.pb.pinned,
       };
+      transition(page, "exit_closed", "exit_closed", null, "the engine's restartBrowser");
+      if (outcome === "ready" || outcome === "fingerprint") {
+        transition(page, "session_confirmed", "ready");
+        // What stands unfinished from now on (stuck_read), once the page is back.
+        if (behaviour.stuckAfterReady !== undefined) page.stuck = behaviour.stuckAfterReady;
+      }
       if (outcome === "ready") Object.assign(page.pb, ready);
       else if (outcome === "fingerprint") Object.assign(page.pb, ready, { fp: "e".repeat(64) });
       else {
+        transition(page, "exit_open", "exit_closed", outcome);
         Object.assign(page.pb, { step: "exit_open", stop: outcome, exitOpen: false, stateAt: now() });
         // A stop only the owner decides: the operator holds it, Hub mirrors it.
         if (HALTS.has(outcome)) Object.assign(page.pb, { haltReason: outcome, haltId: "66666666-6666-4666-8666-666666666666" });
@@ -129,7 +147,46 @@ function hubRead(label) {
     page.readyReads = (page.readyReads ?? 0) + 1;
     page.pb.stateAt = now();
     if (behaviour.failAfterReadyReads !== undefined && page.readyReads >= behaviour.failAfterReadyReads) {
+      transition(page, "ready", "exit_closed", behaviour.failStop ?? "chrome_crashed");
       Object.assign(page.pb, { step: "exit_closed", stop: behaviour.failStop ?? "chrome_crashed", exitOpen: false });
+    }
+    // Between two looks of the engine's record: the browser stopped and came
+    // back (Chrome .39: cdp_lost, ready again in 30–140 s) — journaled by its
+    // operator unless `journal: false`, its self-test run again at the start
+    // unless `selftest: false`. The record shows it ready, as before.
+    const crash = behaviour.crashBetweenLooks;
+    if (crash !== undefined && page.started === true && page.readyReads >= (crash.afterReadyReads ?? 1)) {
+      delete behaviour.crashBetweenLooks;
+      if (crash.journal !== false) {
+        transition(page, "ready", "exit_closed", crash.reason ?? "cdp_lost", "control lost: Chrome's network service restarted");
+        transition(page, "exit_closed", "exit_closed", null, `a retry after ${crash.reason ?? "cdp_lost"}`);
+        transition(page, "session_confirmed", "ready");
+      }
+      if (crash.selftest !== false) page.pb.stAt = now();
+    }
+    // The owner's stop and start of the browser between two looks.
+    const owner = behaviour.ownerStopsBetweenLooks;
+    if (owner !== undefined && page.started === true && page.readyReads >= (owner.afterReadyReads ?? 1)) {
+      delete behaviour.ownerStopsBetweenLooks;
+      transition(page, "ready", "exit_closed", "owner_stop", "the engine's stopPage");
+      transition(page, "exit_closed", "exit_closed", null, "the engine's restartBrowser");
+      transition(page, "session_confirmed", "ready");
+      page.pb.stAt = now();
+    }
+    // The owner's self-test of the browser (`sync browser selftest`): the exit
+    // closed for it and opened again, no start.
+    const selfTest = behaviour.ownerSelfTestBetweenLooks;
+    if (selfTest !== undefined && page.started === true && page.readyReads >= (selfTest.afterReadyReads ?? 1)) {
+      delete behaviour.ownerSelfTestBetweenLooks;
+      command(page, label, "selfTest", "the owner's", "ok");
+      page.pb.stAt = now();
+    }
+    // The operator's journal fell behind: lines dropped, then a gap line.
+    const gap = behaviour.gapAfterReadyReads;
+    if (gap !== undefined && page.started === true && page.readyReads >= gap) {
+      delete behaviour.gapAfterReadyReads;
+      page.states ??= [];
+      page.states.push({ at: new Date().toISOString(), gap: true, dropped: 3 });
     }
   }
   const pb = page.pb;
@@ -220,6 +277,7 @@ function browserLever(cli) {
     command(page, label, "stopPage", note, outcome);
     if (outcome === "ok") {
       if (container !== undefined) container.chrome = behaviour.chromeUpAfterStop ? "up" : "down";
+      transition(page, page.pb.step ?? "ready", "exit_closed", "owner_stop", "the engine's stopPage");
       Object.assign(page.pb, { step: "exit_closed", stop: "owner_stop", exitOpen: false, stateAt: now() });
     }
     out(`${JSON.stringify({ page: label, operatorConfirmed: outcome === "ok" })}\n`);
@@ -306,7 +364,9 @@ function hubCli(cli) {
     return 0;
   }
   if (cli[0] === "sync" && cli[1] === "check" && cli[2] === "live-hour") {
-    out(`${JSON.stringify({ verdict: behaviour.liveHourExit ?? 0 })}\n`);
+    // What the CLI printed (liveHourOutput), the report as it prints it
+    // (liveHourReport), or a stand-in.
+    out(behaviour.liveHourOutput ?? `${JSON.stringify(behaviour.liveHourReport ?? { verdict: behaviour.liveHourExit ?? 0 }, null, 2)}\n`);
     return behaviour.liveHourExit ?? 0;
   }
   err(`unknown hub command ${cli.join(" ")}\n`);
@@ -411,6 +471,17 @@ function docker(argv) {
         const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
         const last = (state.commands ?? []).filter((row) => row.page === stopNow[1] && row.kind === "stopPage").at(-1);
         out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}|${page.transport}|${page.leave ?? ""}\n`);
+        return 0;
+      }
+      const stuck = /-- pb-update:stuck (\S+)/.exec(input);
+      if (stuck !== null && /BEGIN READ ONLY;/.test(input)) {
+        if (behaviour.stuckFails) return 1;
+        for (const line of state.hub?.pages?.[stuck[1]]?.stuck ?? []) out(`${line}\n`);
+        return 0;
+      }
+      const selftest = /-- pb-update:selftest (\S+)/.exec(input);
+      if (selftest !== null && /BEGIN READ ONLY;/.test(input)) {
+        out(`${(state.commands ?? []).filter((row) => row.page === selftest[1] && row.kind === "selfTest").length}\n`);
         return 0;
       }
       const guard = /-- pb-update:guard (\S+)/.exec(input);
@@ -630,6 +701,23 @@ function pageSh(argv) {
   const page = rest[rest.indexOf("--page") + 1];
   const name = `page-browser-${page}`;
   const env = pageEnvPath(page);
+  if (command === "log") {
+    // The operator's journals of the page, from --since on (page.sh compares
+    // the instants as text).
+    if (behaviour.logFails) {
+      err(`page: no volume pb-buffer-${envValue(env, "PB_PROFILE_ID")}\n`);
+      return 1;
+    }
+    const kind = rest.includes("--kind") ? rest[rest.indexOf("--kind") + 1] : "requests";
+    const since = rest.includes("--since") ? rest[rest.indexOf("--since") + 1] : "";
+    if (kind !== "states") return 0;
+    for (const line of state.hub?.pages?.[page]?.states ?? []) {
+      const text = typeof line === "string" ? line : JSON.stringify(line);
+      const at = /"at":"([^"]*)"/.exec(text)?.[1] ?? "";
+      if (since === "" || at >= since) out(`${text}\n`);
+    }
+    return 0;
+  }
   if (command === "down") {
     if (behaviour.downFails) return 1;
     delete state.containers[name];
@@ -701,6 +789,7 @@ function gpgv(argv) {
 
 // What a call did (as tests/helpers/page-browser-update.ts names it).
 function opOf(name, a) {
+  if (name === "page.sh" && a[0] === "log") return null;
   if (name === "page.sh") return `page.sh ${a[0]}${a.includes("--image") ? ` ${a[a.indexOf("--image") + 1]}` : ""}`;
   if (name !== "docker") return null;
   if (a[0] === "compose" && a.includes("api")) {

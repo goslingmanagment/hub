@@ -681,9 +681,10 @@ describe("what the Hub cannot tell holds the update for the owner", () => {
   it("the Hub stops answering during the engine checks: held, not rolled back blind", () => {
     host = makeHost((state) => {
       state.behaviour.engine = { [TO_CHROME]: "never" };
-      // The plan, the stop (now, its answer), the guard of each deed (3), the
-      // start (the page, its stop, its answer): then nothing.
-      state.behaviour.sqlFailAfter = 9;
+      // The plan, the stop (now, its answer), the guard of each deed (3),
+      // what stands unfinished before the hand-over, the start (the page, its
+      // stop, its answer): then nothing.
+      state.behaviour.sqlFailAfter = 10;
     });
     const run = host.run(UPDATE);
     expect(run.status).toBe(1);
