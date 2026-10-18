@@ -429,6 +429,31 @@ describe("sync pacer: a send the transport reports (transport_reported)", () => 
     expect(ctx.clock.monoNow()).toBeGreaterThan(grantedAt + next.pauseMs);
   });
 
+  it("the browser's release (plan-b Б12) is kept between the grant and now, once; none before a grant", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    ctx.pacer.noteReleased(admission, ctx.clock.monoNow());
+    expect(admission.releasedMono).toBeNull();
+    expect(ctx.pacer.checkRemoteGrant(admission)).toBeNull();
+    const grantedAt = ctx.clock.monoNow();
+    ctx.clock.advance(700);
+    // Reported before the grant (the clocks' shift): taken as the grant.
+    ctx.pacer.noteReleased(admission, grantedAt - 30);
+    expect(admission.releasedMono).toBe(grantedAt);
+    ctx.pacer.noteReleased(admission, grantedAt + 500);
+    expect(admission.releasedMono).toBe(grantedAt);
+    // After now: taken as now.
+    const later = ctx.pacer.arm(await (async () => {
+      ctx.pacer.complete(admission, reported(grantedAt + 600));
+      return ctx.pacer.waitForSlot(live());
+    })(), 2, ctx.clock.monoNow());
+    expect(ctx.pacer.checkRemoteGrant(later)).toBeNull();
+    ctx.pacer.noteReleased(later, ctx.clock.monoNow() + 10_000);
+    expect(later.releasedMono).toBe(ctx.clock.monoNow());
+  });
+
   it("a reported instant before the grant is taken as the grant; one after the completion as the completion", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);

@@ -614,15 +614,20 @@ export async function settleNotSent(
   d: CommitDeps,
   admission: AdmissionRecord,
   outcome: Extract<FanslyWireOutcome, { kind: "aborted_before_send" }>,
+  armed: Admission | null = null,
 ): Promise<void> {
   const refusal = outcome.refusal;
   d.metrics.increment("sync_send_refused", { reason: refusal });
+  // Granted and still not sent: the page's browser refused it after (its
+  // quiet never came before the deadline, plan-b Б12) — the grant says so.
+  const grantedAt = armed === null ? null : wallOfMono(d, armed.grantedMono);
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     await settleAttemptWithoutCapture(tx, {
       attemptId: admission.attemptId,
       outcome: "aborted_before_send",
       errorClass: `not_sent:${refusal}`,
+      grantedAt,
     });
     await settleWork(tx, {
       workId: admission.work.id,
@@ -1057,11 +1062,24 @@ export interface CaptureSend {
   /** The pause and the setting it was admitted under (I1's check). */
   pauseMs: number;
   settingMs: number | null;
+  /** A sender outside the process (a page's browser): when the engine let it
+   *  go (its grant) and when it let the request go after its own sight of
+   *  the page's quiet (plan-b Б12), on the wall clock. Absent or null: not
+   *  known. */
+  grantedWall?: Date | null;
+  releasedWall?: Date | null;
+}
+
+/** The wall-clock instant of a reading of the engine's monotonic clock. */
+function wallOfMono(d: CommitDeps, mono: number | null): Date | null {
+  return mono === null ? null : new Date(d.clock.wallNow().getTime() - (d.clock.monoNow() - mono));
 }
 
 /** The send facts of the pacer's admission, now. */
 export function captureSendOf(d: CommitDeps, armed: Admission): CaptureSend {
   return {
+    grantedWall: wallOfMono(d, armed.grantedMono),
+    releasedWall: wallOfMono(d, armed.releasedMono),
     sent: armed.sentMono !== null,
     sentWall: armed.sentWall,
     sendMark: armed.sendMark,
@@ -1163,6 +1181,8 @@ export async function capture(
       sendMark: armed.sendMark,
       sendMonoOffsetMs: armed.sendMonoOffsetMs,
       gapPrevMs: armed.gapPrevMs,
+      grantedAt: armed.grantedWall ?? null,
+      releasedAt: armed.releasedWall ?? null,
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
       errorClass: classified.errorClass === "ok" ? null : classified.errorClass,

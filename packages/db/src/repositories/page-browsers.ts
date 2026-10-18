@@ -101,6 +101,19 @@ export interface PageBrowserRow {
   siteObservedUnconfirmed: number | null;
   siteObservedOldestAt: Date | null;
   siteObservedDropped: number | null;
+  /** The exit's refusals since the operator started (0290;
+   *  `state.egressFailures`), as its last state said. Null: not counted. */
+  egressFailures: PageBrowserEgressFailures | null;
+  egressFailuresSince: Date | null;
+}
+
+/** The exit's refusals as kept (0290): the page's SOCKS5 failing tunnels by
+ *  kind, step, reply (REP; null: none) and the host's class; the rules
+ *  extension's blocks by the host's class, the self-test's probes apart. Each
+ *  with its count, last instant and host. */
+export interface PageBrowserEgressFailures {
+  socks: Array<{ kind: string; step: string; rep: number | null; cls: string; count: number; lastAt: string; lastHost: string }>;
+  dnr: Array<{ cls: string; probe: boolean; count: number; lastAt: string; lastHost: string }>;
 }
 
 type SqlRow = Omit<
@@ -108,9 +121,11 @@ type SqlRow = Omit<
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
   | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt" | "hubSendBlockedSince" | "crashDumpsCompletedNewestAt" | "crashDumpsPendingNewestAt"
-  | "crashDumpsCountedAt" | "siteObservedOldestAt"
+  | "crashDumpsCountedAt" | "siteObservedOldestAt" | "egressFailures" | "egressFailuresSince"
 > & {
   siteObservedOldestAt: Date | string | null;
+  egressFailures: unknown;
+  egressFailuresSince: Date | string | null;
   hubSendBlockedSince: Date | string | null;
   crashDumpsCompletedNewestAt: Date | string | null;
   crashDumpsPendingNewestAt: Date | string | null;
@@ -191,7 +206,9 @@ const publicColumns = sql`
   b.crash_dumps_counted_at as "crashDumpsCountedAt",
   b.site_observed_unconfirmed as "siteObservedUnconfirmed",
   b.site_observed_oldest_at as "siteObservedOldestAt",
-  b.site_observed_dropped as "siteObservedDropped"
+  b.site_observed_dropped as "siteObservedDropped",
+  b.egress_failures as "egressFailures",
+  b.egress_failures_since as "egressFailuresSince"
 `;
 
 const columns = sql`
@@ -238,6 +255,35 @@ function rowOf(row: SqlRow): PageBrowserRow {
     crashDumpsPendingNewestAt: dateOf(row.crashDumpsPendingNewestAt),
     crashDumpsCountedAt: dateOf(row.crashDumpsCountedAt),
     siteObservedOldestAt: dateOf(row.siteObservedOldestAt),
+    egressFailures: egressFailuresOf(row.egressFailures),
+    egressFailuresSince: dateOf(row.egressFailuresSince),
+  };
+}
+
+const text = (value: unknown, max: number): string | null => (typeof value === "string" ? value.slice(0, max) : null);
+const count = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null);
+
+/** The kept refusals as written, their entries of the shape only (the row
+ *  is the operator's word through the engine; nothing else is shown). */
+export function egressFailuresOf(value: unknown): PageBrowserEgressFailures | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const { socks, dnr } = value as { socks?: unknown; dnr?: unknown };
+  const list = (items: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(items) ? items.filter((item): item is Record<string, unknown> => item !== null && typeof item === "object" && !Array.isArray(item)) : [];
+  return {
+    socks: list(socks).flatMap((e) => {
+      const kind = text(e.kind, 32), step = text(e.step, 32), cls = text(e.cls, 32), lastAt = text(e.lastAt, 40), n = count(e.count);
+      const rep = e.rep === null ? null : count(e.rep);
+      return kind === null || step === null || cls === null || lastAt === null || n === null || (e.rep !== null && rep === null)
+        ? []
+        : [{ kind, step, rep, cls, count: n, lastAt, lastHost: text(e.lastHost, 255) ?? "" }];
+    }),
+    dnr: list(dnr).flatMap((e) => {
+      const cls = text(e.cls, 32), lastAt = text(e.lastAt, 40), n = count(e.count);
+      return cls === null || lastAt === null || n === null || typeof e.probe !== "boolean"
+        ? []
+        : [{ cls, probe: e.probe, count: n, lastAt, lastHost: text(e.lastHost, 255) ?? "" }];
+    }),
   };
 }
 
@@ -337,6 +383,9 @@ export interface PageBrowserStateInput {
   /** The site's observations kept for the engine's word (`state.siteObserved`,
    *  minor 6). Null or absent: not said. */
   siteObserved?: { unconfirmed: number; oldestAt: Date | null; dropped: number } | null;
+  /** The exit's refusals since the operator started (`state.egressFailures`):
+   *  kept as said, with since when. Null or absent: not counted. */
+  egressFailures?: (PageBrowserEgressFailures & { since: Date }) | null;
 }
 
 const isoOrNull = (value: Date | null | undefined): string | null => (value == null ? null : value.toISOString());
@@ -356,6 +405,7 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
   const dumps = input.crashDumps ?? null;
   const kept = input.siteObserved ?? null;
   const unconfirmed = kept === null ? null : Math.max(0, Math.round(kept.unconfirmed));
+  const egress = input.egressFailures ?? null;
   // Whether the halt said (or none) replaces the one the mirror holds.
   const takes = sql`when halt_reason is null
                       or (halt_id is not null and halt_id = ${cleared}::text)
@@ -402,6 +452,8 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            site_observed_unconfirmed = ${unconfirmed}::integer,
            site_observed_oldest_at = ${unconfirmed === null || unconfirmed === 0 ? null : isoOrNull(kept?.oldestAt)}::timestamptz,
            site_observed_dropped = ${kept === null ? null : Math.max(0, Math.round(kept.dropped))}::integer,
+           egress_failures = ${egress === null ? null : JSON.stringify({ socks: egress.socks, dnr: egress.dnr })}::jsonb,
+           egress_failures_since = ${isoOrNull(egress?.since)}::timestamptz,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()

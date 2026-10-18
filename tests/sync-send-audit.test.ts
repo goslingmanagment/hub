@@ -399,6 +399,26 @@ describe("plan-b Б12: a site send after a Hub send's admission is never its pre
     expect(audit.siteAfterAdmission).toEqual([]);
   });
 
+  it("counts from the release (0290), else the grant: a site send the page's browser saw before its release is the predecessor, and a short gap fails", () => {
+    const hubBefore = engine(5, "notifications.page");
+    // Granted at 10.01 s, released at 10.05 s after the browser's quiet.
+    const hub = engine(10.06, "notifications.page", { admittedAt: at(10), grantedAt: at(10.01), releasedAt: at(10.05) });
+    // In the browser's sight (before the release): a violation, not Б12.
+    const seen = site(10.04, "site.other");
+    const failed = auditPagePace([hubBefore, seen, hub], WINDOW);
+    expect(failed.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: seen.ref })]);
+    expect(failed.siteAfterAdmission).toEqual([]);
+    // After the release: Б12, listed.
+    const after = site(10.055, "site.other");
+    const accepted = auditPagePace([hubBefore, after, hub], WINDOW);
+    expect(accepted).toMatchObject({ verdict: "pass", violations: [] });
+    expect(accepted.siteAfterAdmission).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: after.ref })]);
+    // No release reported (an operator from before): from the grant.
+    const granted = auditPagePace([hubBefore, site(10.005, "site.other"), { ...hub, releasedAt: null }], WINDOW);
+    expect(granted.verdict).toBe("fail");
+    expect(auditPagePace([hubBefore, seen, { ...hub, releasedAt: null }], WINDOW).siteAfterAdmission).toHaveLength(1);
+  });
+
   it("never hides a real violation: Hub admitted too soon after its own previous send fails against it", () => {
     const hubBefore = engine(9, "notifications.page");
     const hub = engine(9.62, "notifications.page", { admittedAt: at(9.5) });

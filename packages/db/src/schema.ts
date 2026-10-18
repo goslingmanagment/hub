@@ -500,6 +500,9 @@ export const pageBrowsers = pgTable("page_browsers", {
   siteObservedUnconfirmed: integer("site_observed_unconfirmed"),
   siteObservedOldestAt: timestamp("site_observed_oldest_at", { withTimezone: true }),
   siteObservedDropped: integer("site_observed_dropped"),
+  // 0290: the exit's refusals since the operator started (state.egressFailures).
+  egressFailures: jsonbSafe("egress_failures"),
+  egressFailuresSince: timestamp("egress_failures_since", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -1398,6 +1401,10 @@ export const syncAttempts = pgTable(
     // 0272 (Project Browser): the operator's id of a request the engine did
     // not choose (a site request, a site socket).
     browserRequestId: text("browser_request_id"),
+    // 0290 (Project Browser, plan-b Б12): when the engine granted a request a
+    // page's browser sends, and when the browser released it after its quiet.
+    grantedAt: timestamp("granted_at", { withTimezone: true }),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),

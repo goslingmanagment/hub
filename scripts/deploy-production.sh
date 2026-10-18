@@ -1038,6 +1038,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # no observation, which an operator of minor 6 then takes as told once
   # written (as before).
   "0289_sync_observed_site_requests.sql"
+  # 0290: sync_attempts.granted_at, released_at and page_browsers.egress_failures,
+  # egress_failures_since — nullable without a default (catalog only), each
+  # ALTER retrying a 1 s lock (the 0272 pattern). The previous image never
+  # names them; the fields an operator adds to its messages it skips.
+  "0290_page_browser_quiet_and_egress.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

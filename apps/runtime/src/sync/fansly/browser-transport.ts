@@ -503,7 +503,9 @@ export async function createBrowserPageTransport(
       const refusal = hooks.grant();
       if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
       granted = true;
-      return { admit: true, deadlineMono: bridge.toKernel(admission.sendDeadlineMono) };
+      // The pause goes with it: the operator keeps it by its own sight of
+      // the page's sends before the release (plan-b Б12).
+      return { admit: true, deadlineMono: bridge.toKernel(admission.sendDeadlineMono), ...(admission.pauseMs === undefined ? {} : { pauseMs: admission.pauseMs }) };
     };
     const unregister = client.register(attemptId, {
       onCheck(check): Promise<CheckReply> {
@@ -515,6 +517,7 @@ export async function createBrowserPageTransport(
       },
       onSent(sent) {
         reported ??= bridge.fromKernel(sent.sentMono) + SEND_REPORT_GUARD_MS;
+        if (sent.releasedMono !== undefined) hooks.released?.(bridge.fromKernel(sent.releasedMono));
       },
       onResult(delivered) {
         const { outcome, whole } = outcomeOf(delivered, meta, req, reported, credentialsChanged);

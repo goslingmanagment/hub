@@ -25,6 +25,7 @@ export function browserStatus(overrides: Partial<AgentSyncBrowserStatus> = {}): 
     selfTest: { ok: true, at: ago(3_600_000), failed: null },
     hubSend: { allowed: true, reason: null, since: null, forMs: null },
     crashDumps: { completed: { count: 0, newestAt: null }, pending: { count: 0, newestAt: null }, countedAt: ago(3_600_000) },
+    egressFailures: { since: ago(86_400_000), socks: [], dnr: [] },
     lastAlarm: null,
     siteObserved: {
       unconfirmed: 0,

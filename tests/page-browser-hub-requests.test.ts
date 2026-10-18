@@ -8,7 +8,7 @@ import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
 import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cdp/paused.ts";
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
-import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, type HubTimings } from "../apps/page-browser/src/hub-requests/hub.ts";
+import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, type HubTimings, type PageQuiet } from "../apps/page-browser/src/hub-requests/hub.ts";
 import { ABORT, attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
 import { cyrb53, fanslyClientCheck, sessionFingerprint, SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
@@ -72,7 +72,7 @@ interface World {
   ready: { why: string | null };
 }
 
-async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean } = {}): Promise<World> {
+async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean; quiet?: () => PageQuiet } = {}): Promise<World> {
   let dir = options.dir;
   if (dir === undefined) {
     const temp = tempDir("pb-hub-");
@@ -127,6 +127,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     link: engine.link(),
     alarm: (kind, detail) => alarms.push({ kind, detail }),
     timings: { pauseWaitMs: 1000, checkWaitMs: 1000, opLimitMs: 2000, mainWaitMs: 1000, ...options.timings },
+    ...(options.quiet ? { quiet: options.quiet } : {}),
     log: makeLog("hub"),
   });
   hub = created;
@@ -207,7 +208,8 @@ describe("a Hub request (plan §4.2)", () => {
     const order = w.cdp.commands.map((command) => command.method);
     expect(order.indexOf("Network.streamResourceContent")).toBeLessThan(order.indexOf("Fetch.continueResponse"));
     // `sent`: the gate saw the first bytes, on a warm connection.
-    expect(w.engine.of("sent")).toEqual([{ type: "sent", attemptId: message.attemptId, sentMono: expect.any(Number), sentWall: expect.any(Number), connectionReused: true }]);
+    expect(w.engine.of("sent")).toEqual([{ type: "sent", attemptId: message.attemptId, sentMono: expect.any(Number), sentWall: expect.any(Number), connectionReused: true, releasedMono: expect.any(Number) }]);
+    expect(w.engine.of("sent")[0]!.releasedMono as number).toBeLessThanOrEqual(w.engine.of("sent")[0]!.sentMono as number);
     // The answer: status, headers as the engine has them, the body kept whole.
     expect(outcome).toEqual({
       kind: "response",
@@ -467,6 +469,78 @@ describe("a Hub request (plan §4.2)", () => {
     expect(w.chrome.wire).toHaveLength(1);
     expect(held).toContain("held");
     expect(held).toContain("no_response");
+  });
+});
+
+describe("the page's quiet before a Hub request (plan-b Б2, Б12)", () => {
+  const admitWith = (w: World, pauseMs: number, deadlineMs = 15_000) => {
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs, pauseMs });
+  };
+
+  it("is released only once the admission's pause passed since the last send the operator saw — the proxy's write the engine did not know of yet — and says when", async () => {
+    const seen: PageQuiet = { lastSendMono: null, siteInFlight: false };
+    const w = await world({ passive: true, quiet: () => seen });
+    admitWith(w, 300);
+    // The site wrote to the API a moment ago; the engine granted all the same.
+    seen.lastSendMono = monoMs();
+    const message = send(w);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    const sent = w.engine.of("sent")[0]!;
+    expect(sent.releasedMono as number).toBeGreaterThanOrEqual(seen.lastSendMono + 300);
+    expect(sent.sentMono as number).toBeGreaterThanOrEqual(sent.releasedMono as number);
+    expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
+    expect(w.lines.some((line) => line.includes('"release.quiet"'))).toBe(true);
+  });
+
+  it("waits while a request of the site's own is in flight, then goes", async () => {
+    const seen: PageQuiet = { lastSendMono: null, siteInFlight: true };
+    const w = await world({ passive: true, quiet: () => seen });
+    admitWith(w, 100);
+    const message = send(w);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(w.cdp.sent("Fetch.continueRequest")).toEqual([]);
+    const endedMono = monoMs();
+    seen.siteInFlight = false;
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(w.engine.of("sent")[0]!.releasedMono as number).toBeGreaterThanOrEqual(endedMono);
+  });
+
+  it("whose quiet would come only past the admission's deadline: refused \"pace\", never released, and the next admission is not held by it", async () => {
+    const seen: PageQuiet = { lastSendMono: monoMs(), siteInFlight: false };
+    const w = await world({ passive: true, quiet: () => seen });
+    admitWith(w, 5_000, 300);
+    const refused = send(w);
+    expect(await outcomeOf(w, refused.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    expect(w.cdp.sent("Fetch.continueRequest")).toEqual([]);
+    expect(w.chrome.wire).toEqual([]);
+    expect(w.lines.some((line) => line.includes('"release.no_quiet"'))).toBe(true);
+    // Nothing of it took the page's slot.
+    seen.lastSendMono = null;
+    admitWith(w, 100);
+    const next = send(w);
+    expect(await outcomeOf(w, next.attemptId)).toMatchObject({ kind: "response", status: 200 });
+  });
+
+  it("an engine that gives no pause (from before): released at once, whatever the operator saw", async () => {
+    const w = await world({ passive: true, quiet: () => ({ lastSendMono: monoMs(), siteInFlight: true }) });
+    const message = send(w);
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(w.lines.some((line) => line.includes('"release.quiet"'))).toBe(false);
+  });
+
+  it("ended while it waits (the page stopped): its pause failed once, never released", async () => {
+    const seen: PageQuiet = { lastSendMono: monoMs(), siteInFlight: false };
+    const w = await world({ passive: true, quiet: () => seen });
+    admitWith(w, 2_000);
+    const message = send(w);
+    await until(() => w.engine.of("check").length === 1, 2000, "the check");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    w.hub.endAll("a test stop", false);
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: false, message: "the page stopped: a test stop" });
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    expect(w.cdp.sent("Fetch.continueRequest")).toEqual([]);
+    // The site's own request in the world's set-up, then this one's pause.
+    expect(w.cdp.sent("Fetch.failRequest")).toHaveLength(2);
   });
 });
 

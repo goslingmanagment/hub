@@ -86,6 +86,10 @@ export interface Admission extends SlotGrant {
   /** The instant `checkRemoteGrant` let a sender outside the process go
    *  (monotonic), or null: such a sender never sends before it. */
   grantedMono: number | null;
+  /** When that sender let the request go after its own sight of the page's
+   *  quiet (plan-b Б12), as it reported — never before the grant, never
+   *  after it was told (monotonic); null: not reported. */
+  releasedMono: number | null;
   /** This pacer's previous actual send when the admission was armed: the
    *  gap of a send marked later (`transport_reported`) is measured from it. */
   prevSendMono: number | null;
@@ -304,6 +308,7 @@ export class Pacer {
       sentWall: null,
       sendMark: null,
       grantedMono: null,
+      releasedMono: null,
       prevSendMono: this.#st.lastSendMono,
       gapPrevMs: null,
       refusal: null,
@@ -373,6 +378,14 @@ export class Pacer {
     if (this.#foreignUntil() > now) return this.#refuse(admission, "pace");
     admission.grantedMono = now;
     return null;
+  }
+
+  /** A sender outside the process let the granted request go at `atMono`
+   *  (its report of the release, plan-b Б12): kept between the grant and
+   *  now. Before a grant, or once more: nothing. */
+  noteReleased(admission: Admission, atMono: number): void {
+    if (admission.grantedMono === null || admission.releasedMono !== null || !Number.isFinite(atMono)) return;
+    admission.releasedMono = Math.min(Math.max(atMono, admission.grantedMono), this.#deps.clock.monoNow());
   }
 
   /**

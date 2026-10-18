@@ -147,6 +147,13 @@ export type { Step, StopReason };
 // its write). The engine takes a key and hop it holds once: a repeat
 // journals no second attempt. `site.response` names the same key and hop;
 // `state.siteObserved` says what waits for the engine's word.
+// Additions without a minor of their own (2026-10-18; optional
+// fields, which a reader older than them skips, spec §6.3, 2):
+// `checkResult.pauseMs` — the admission's pause, which the operator keeps by
+// its own sight before it releases the request (plan-b Б12); `sent.releasedMono`
+// — when it released it; `state.egressFailures` — the exit's refusals counted
+// (the page's SOCKS5 by kind, step, reply and the host's class; the rules
+// extension's blocks by the host's class, the self-test's probes apart).
 export const PROTOCOL = { major: 1, minor: 6 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
@@ -261,6 +268,28 @@ export interface CrashDumpCount {
   count: number;
   newestAtWall: WallMs | null;
 }
+/** The classes of the operator's map of hosts (policy/operations.ts). */
+export const EGRESS_HOST_CLASSES = ["site", "api", "ws", "cdn", "closed", "third_party", "denied"] as const;
+export type EgressHostClass = (typeof EGRESS_HOST_CLASSES)[number];
+/** How the page's SOCKS5 failed a tunnel (egress/socks5.ts): `unavailable` —
+ *  not reached, garbage, or the connection dropped; `auth` — the login
+ *  refused; `refused` — it could not reach the destination (its reply `rep`,
+ *  null: no reply in time). At which step of the SOCKS5 exchange. */
+export const SOCKS_FAILURE_KINDS = ["unavailable", "auth", "refused"] as const;
+export type SocksFailureKind = (typeof SOCKS_FAILURE_KINDS)[number];
+export const SOCKS_STEPS = ["greeting", "auth", "connect"] as const;
+export type SocksStep = (typeof SOCKS_STEPS)[number];
+/** Entries of each list at most. */
+export const EGRESS_FAILURE_ENTRIES_MAX = 64;
+/** The exit's refusals since the operator started (`sinceWall`), counted
+ *  apart by what tells them apart; each with its last instant and host. */
+export interface EgressFailures {
+  sinceWall: WallMs;
+  socks: Array<{ kind: SocksFailureKind; step: SocksStep; rep: number | null; cls: EgressHostClass; count: number; lastAtWall: WallMs; lastHost: string }>;
+  /** Requests the rules extension blocked (net::ERR_BLOCKED_BY_CLIENT);
+   *  `probe`: the self-test's own. */
+  dnr: Array<{ cls: EgressHostClass; probe: boolean; count: number; lastAtWall: WallMs; lastHost: string }>;
+}
 export interface State {
   type: "state";
   step: Step;
@@ -306,6 +335,9 @@ export interface State {
    *  Null: not counted (no count was written, or it could not be read).
    *  Absent: an operator from before the addition. */
   crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
+  /** (An addition, 2026-10-18.) The exit's refusals since the operator
+   *  started. Absent: an operator from before — not counted. */
+  egressFailures?: EgressFailures;
   /** (Minor 6.) The site's observations kept for the engine's word
    *  (`siteObservedAck`): how many, the oldest one's instant (the operator's
    *  wall clock; null: none), and how many this operator dropped unconfirmed
@@ -339,13 +371,24 @@ export interface Check {
   pausedMono: MonoMs;
   liveSessionFingerprint: Sha256Hex;
 }
-export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (Admit | { admit: false; reason: Refusal });
+/** A Hub request admitted. `pauseMs` (an addition, 2026-10-18): the pause
+ *  the admission keeps from the page's last send of any origin (S × (1 + u)):
+ *  the operator releases the request only once the API has been quiet that
+ *  long by its proxy's bytes and by the site's sends it saw, and no request
+ *  of the site's own is in flight (plan-b Б2, Б12) — or refuses it `pace` at
+ *  the deadline. Absent: an engine from before; the operator releases at once. */
+export type HubAdmit = Admit & { pauseMs?: number };
+export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (HubAdmit | { admit: false; reason: Refusal });
 export interface Sent {
   type: "sent";
   attemptId: AttemptId;
   sentMono: MonoMs;
   sentWall: WallMs;
   connectionReused: boolean;
+  /** (An addition, 2026-10-18.) When the operator released the operation's
+   *  first request (Fetch.continueRequest), after its quiet. Absent: not
+   *  known (an operator from before). */
+  releasedMono?: MonoMs;
 }
 export interface Result {
   type: "result";
@@ -816,9 +859,15 @@ function parseSend(m: Record<string, unknown>): Send {
   };
 }
 
+/** An admission's pause, at most (the owner's setting is seconds). */
+const MAX_PAUSE_MS = 10 * 60_000;
+
 function parseCheckResult(m: Record<string, unknown>): CheckResult {
   const base = { type: "checkResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), attemptId: int(m.attemptId, "attemptId", 1) };
-  if (m.admit === true) return { ...base, admit: true, deadlineMono: num(m.deadlineMono, "deadlineMono") };
+  if (m.admit === true) {
+    const admitted = { ...base, admit: true as const, deadlineMono: num(m.deadlineMono, "deadlineMono") };
+    return m.pauseMs === undefined ? admitted : { ...admitted, pauseMs: int(m.pauseMs, "pauseMs", 0, MAX_PAUSE_MS) };
+  }
   if (m.admit !== false) throw new Invalid("admit is not a boolean");
   const reason = str(m.reason, "reason", 64);
   if (!REFUSALS.has(reason)) throw new Invalid(`an unknown refusal ${reason}`);

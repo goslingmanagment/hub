@@ -15,17 +15,28 @@ export interface SocksConfig {
 }
 
 /** Why a SOCKS5 connection failed:
- *  - unavailable: the SOCKS5 server is not reached, or answers garbage;
+ *  - unavailable: the SOCKS5 server is not reached, answers garbage, or drops
+ *    the connection without a reply;
  *  - auth: it refused the login (or offers no password method);
- *  - refused: it is fine, but it could not reach the destination. */
+ *  - refused: it is fine, but it could not reach the destination (its reply,
+ *    or none in time). */
 export type SocksFailure = "unavailable" | "auth" | "refused";
+/** The step of the exchange it failed at: the greeting (and the connection
+ *  to the server), the login, or the CONNECT — once the server took the
+ *  login, a failure there is of the destination as much as of the server. */
+export type SocksStep = "greeting" | "auth" | "connect";
 
 export class SocksError extends Error {
   readonly kind: SocksFailure;
-  constructor(kind: SocksFailure, message: string) {
+  readonly step: SocksStep;
+  /** The server's reply to the CONNECT (REP, RFC 1928 §6); null: none. */
+  readonly rep: number | null;
+  constructor(kind: SocksFailure, message: string, step: SocksStep = "greeting", rep: number | null = null) {
     super(message);
     this.name = "SocksError";
     this.kind = kind;
+    this.step = step;
+    this.rep = rep;
   }
 }
 
@@ -49,11 +60,11 @@ export function socksConnect(socks: SocksConfig, host: string, port: number, tim
     const pass = Buffer.from(socks.password, "utf8");
     const name = Buffer.from(host, "utf8");
     if (user.length === 0 || user.length > 255 || pass.length === 0 || pass.length > 255) {
-      reject(new SocksError("auth", "the SOCKS5 login or password is empty or too long"));
+      reject(new SocksError("auth", "the SOCKS5 login or password is empty or too long", "auth"));
       return;
     }
     if (name.length === 0 || name.length > 255) {
-      reject(new SocksError("refused", "the destination's name is empty or too long"));
+      reject(new SocksError("refused", "the destination's name is empty or too long", "connect"));
       return;
     }
     const socket = tcpConnect({ host: socks.ip, port: socks.port });
@@ -68,23 +79,23 @@ export function socksConnect(socks: SocksConfig, host: string, port: number, tim
       socket.destroy();
       reject(error);
     };
-    const timer = setTimeout(() => fail(new SocksError(step === "connect" ? "refused" : "unavailable", `SOCKS5 ${step}: no answer in ${timeoutMs} ms`)), timeoutMs);
-    socket.once("error", (error: NodeJS.ErrnoException) => fail(new SocksError("unavailable", `SOCKS5: ${error.code ?? error.message}`)));
-    socket.once("close", () => fail(new SocksError(step === "auth" ? "auth" : "unavailable", `SOCKS5 closed the connection at ${step}`)));
+    const timer = setTimeout(() => fail(new SocksError(step === "connect" ? "refused" : "unavailable", `SOCKS5 ${step}: no answer in ${timeoutMs} ms`, step)), timeoutMs);
+    socket.once("error", (error: NodeJS.ErrnoException) => fail(new SocksError("unavailable", `SOCKS5 ${step}: ${error.code ?? error.message}`, step)));
+    socket.once("close", () => fail(new SocksError(step === "auth" ? "auth" : "unavailable", `SOCKS5 closed the connection at ${step}`, step)));
     socket.on("connect", () => socket.write(Buffer.from([5, 1, 2])));
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
       if (step === "greeting") {
         if (buffered.length < 2) return;
-        if (buffered[0] !== 5) return fail(new SocksError("unavailable", "not a SOCKS5 server"));
-        if (buffered[1] !== 2) return fail(new SocksError("auth", "the SOCKS5 server offers no password login"));
+        if (buffered[0] !== 5) return fail(new SocksError("unavailable", "not a SOCKS5 server", "greeting"));
+        if (buffered[1] !== 2) return fail(new SocksError("auth", "the SOCKS5 server offers no password login", "greeting"));
         buffered = buffered.subarray(2);
         socket.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([pass.length]), pass]));
         step = "auth";
       }
       if (step === "auth") {
         if (buffered.length < 2) return;
-        if (buffered[1] !== 0) return fail(new SocksError("auth", "the SOCKS5 server refused the login"));
+        if (buffered[1] !== 0) return fail(new SocksError("auth", "the SOCKS5 server refused the login", "auth"));
         buffered = buffered.subarray(2);
         const portBytes = Buffer.alloc(2);
         portBytes.writeUInt16BE(port, 0);
@@ -93,11 +104,11 @@ export function socksConnect(socks: SocksConfig, host: string, port: number, tim
       }
       if (step === "connect") {
         if (buffered.length < 5) return;
-        if (buffered[0] !== 5) return fail(new SocksError("unavailable", "a malformed SOCKS5 reply"));
-        if (buffered[1] !== 0) return fail(new SocksError("refused", `SOCKS5: ${REPLIES[buffered[1]!] ?? `reply ${buffered[1]}`}`));
+        if (buffered[0] !== 5) return fail(new SocksError("unavailable", "a malformed SOCKS5 reply", "connect"));
+        if (buffered[1] !== 0) return fail(new SocksError("refused", `SOCKS5: ${REPLIES[buffered[1]!] ?? `reply ${buffered[1]}`} (REP ${buffered[1]})`, "connect", buffered[1]!));
         const atyp = buffered[3];
         const addressLength = atyp === 1 ? 4 : atyp === 4 ? 16 : atyp === 3 ? 1 + buffered[4]! : -1;
-        if (addressLength < 0) return fail(new SocksError("unavailable", "a malformed SOCKS5 reply"));
+        if (addressLength < 0) return fail(new SocksError("unavailable", "a malformed SOCKS5 reply", "connect"));
         const total = 4 + addressLength + 2;
         if (buffered.length < total) return;
         settled = true;

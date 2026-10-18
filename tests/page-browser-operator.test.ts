@@ -15,7 +15,7 @@ import { SITE_STALE_IN_FLIGHT_MS } from "../apps/page-browser/src/intercept/obse
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { HaltStore, SLOT_BYTES, type HeldHalt } from "../apps/page-browser/src/state/halt-store.ts";
 import { buildRules } from "../apps/page-browser/src/policy/rules.ts";
-import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
+import { decodeBodyFrame, type EgressFailures } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import {
@@ -107,6 +107,8 @@ async function setUp(
     slotLimitMs?: number;
     /** How long a request of the site in flight is waited out (30 s in the operator). */
     reloadWaitMs?: number;
+    /** A failed tunnel's exit IP check out of turn, at most this often (30 s in the operator). */
+    proxyRecheckMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
@@ -177,7 +179,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.proxyRecheckMs !== undefined ? { proxyRecheckMs: options.proxyRecheckMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -196,6 +198,9 @@ async function setUp(
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
+
+/** The exit's refusals the operator's last state counted. */
+const egressOf = (s: SetUp) => s.engine.of("state").at(-1)?.egressFailures as EgressFailures | undefined;
 
 let commandN = 0;
 /** A command with its arguments (`setMode`, `clearHalt`). */
@@ -1745,7 +1750,7 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
     expect(outcome.headers).not.toHaveProperty("set-cookie");
     expect(s.engine.of("check")).toEqual([{ type: "check", attemptId: 9100, pausedMono: expect.any(Number), liveSessionFingerprint: FINGERPRINT }]);
     // `sent`: the gate saw the request's first bytes, on a new connection.
-    expect(s.engine.of("sent")).toEqual([{ type: "sent", attemptId: 9100, sentMono: expect.any(Number), sentWall: expect.any(Number), connectionReused: false }]);
+    expect(s.engine.of("sent")).toEqual([{ type: "sent", attemptId: 9100, sentMono: expect.any(Number), sentWall: expect.any(Number), connectionReused: false, releasedMono: expect.any(Number) }]);
     // What reached the server: the connection's records and the request, once.
     expect(server.received().length).toBe(300 + 58 + 70 + 90);
     // The body: one frame, the last, before the result that names it.
@@ -2296,6 +2301,74 @@ describe("the site's own requests (PR 7; plan §4.1 steps 8–10, §4.3, §4.9)"
     await until(() => s.control.calls.filter((call) => call === "start").length > starts, 5000, "the page starting again");
     // Nothing of it is asked again.
     expect(s.engine.of("siteAdmit")).toHaveLength(1);
+  });
+
+  it("a third party's tunnel the SOCKS5 drops or refuses is that tunnel's alone: counted in the state, a drop has the proxy checked out of turn, the page stays", async () => {
+    const s = await setUp({ proxyRecheckMs: 0 });
+    await started(s);
+    const ipChecks = () => s.socks.connects.filter((target) => target === "api.ipify.org:443").length;
+    const connect = async (target: string) => {
+      const { status, socket } = await proxyConnect(s.model.proxyPort, target);
+      socket.destroy();
+      expect(status).toBe(502);
+    };
+    // Its destination refused (REP): nothing to check.
+    // The start's own checks (its site's refusals in this model, too) are over.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = ipChecks();
+    s.socks.answers.set("pixel.adnet-cdn.com:443", 2);
+    await connect("pixel.adnet-cdn.com:443");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(ipChecks()).toBe(before);
+    // Dropped without a reply: the proxy is checked, and stands.
+    s.socks.answers.set("tracker.adnet-cdn.com:443", "drop");
+    await connect("tracker.adnet-cdn.com:443");
+    await connect("tracker.adnet-cdn.com:443");
+    await until(() => ipChecks() > before, 5000, "the exit IP check out of turn");
+    await expect.poll(() => egressOf(s)?.socks.filter((entry) => entry.cls === "third_party"), SETTLED).toEqual([
+      { kind: "refused", step: "connect", rep: 2, cls: "third_party", count: 1, lastAtWall: expect.any(Number), lastHost: "pixel.adnet-cdn.com" },
+      { kind: "unavailable", step: "connect", rep: null, cls: "third_party", count: 2, lastAtWall: expect.any(Number), lastHost: "tracker.adnet-cdn.com" },
+    ]);
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.operator.egress.exitOpen).toBe(true);
+  });
+
+  it("a CONNECT to Fansly the SOCKS5 refuses or drops has the proxy checked: one that passes the check stops nothing; one that fails it fails the page (proxy_unavailable)", async () => {
+    const s = await setUp({ proxyRecheckMs: 0, params: { restartBackoffMs: [60_000] } });
+    await started(s);
+    const ipChecks = () => s.socks.connects.filter((target) => target === "api.ipify.org:443").length;
+    // The start's own checks (its site's refusals in this model, too) are over.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = ipChecks();
+    s.socks.answers.set("fansly.com:443", 2);
+    const refused = await proxyConnect(s.model.proxyPort, "fansly.com:443");
+    refused.socket.destroy();
+    expect(refused.status).toBe(502);
+    await until(() => ipChecks() === before + 1, 5000, "the exit IP check out of turn");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.operator.page.snapshot.stopReason).toBeNull();
+    expect(s.operator.egress.exitOpen).toBe(true);
+    // The provider now drops every CONNECT: the check fails with them.
+    s.socks.answers.set("cdn3.fansly.com:443", "drop");
+    s.socks.answers.set("api.ipify.org:443", "drop");
+    const dropped = await proxyConnect(s.model.proxyPort, "cdn3.fansly.com:443");
+    dropped.socket.destroy();
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 5000, "the page to fail");
+    expect(s.operator.egress.exitOpen).toBe(false);
+    // (Beside the model's own site, which no route serves: REP 4.)
+    expect(s.operator.egressFailures.snapshot().socks).toEqual(expect.arrayContaining([
+      { kind: "refused", step: "connect", rep: 2, cls: "site", count: 1, lastAtWall: expect.any(Number), lastHost: "fansly.com" },
+      { kind: "unavailable", step: "connect", rep: null, cls: "cdn", count: 1, lastAtWall: expect.any(Number), lastHost: "cdn3.fansly.com" },
+    ]));
+  });
+
+  it("the rules extension's blocks are counted by the host's class in the state, the self-test's probes apart", async () => {
+    const s = await setUp();
+    await started(s);
+    await expect.poll(() => egressOf(s)?.dnr, SETTLED).toEqual([
+      { cls: "api", probe: true, count: expect.any(Number), lastAtWall: expect.any(Number), lastHost: "apiv3.fansly.com" },
+    ]);
+    expect(egressOf(s)?.sinceWall).toEqual(expect.any(Number));
   });
 
   it("an operator that starts again ends what the previous one admitted: siteDone for the kept request, the paused one failed on the holder's replay", async () => {

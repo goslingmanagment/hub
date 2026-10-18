@@ -1197,7 +1197,9 @@ export class OnboardingLink {
             reply = { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
             return;
           }
-          reply = { admit: true, deadlineMono: this.#bridge.toKernel(admission.sendDeadlineMono) };
+          // With its pause: the operator keeps it by its own sight of the
+          // page's sends before the release (plan-b Б12).
+          reply = { admit: true, deadlineMono: this.#bridge.toKernel(admission.sendDeadlineMono), pauseMs: admission.pauseMs };
           await this.#o.overrides?.beforeCheckAnswer?.(admission.attemptId);
           // Written now, under the lock (false: the link changed — the
           // operator failed the paused request already).

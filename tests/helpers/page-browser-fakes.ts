@@ -247,6 +247,9 @@ export class FakeSocks {
   readonly username: string;
   readonly password: string;
   readonly routes = new Map<string, number>();
+  /** Destinations whose CONNECT is answered by this reply (REP), or — `drop`
+   *  — by closing the connection without one. */
+  readonly answers = new Map<string, number | "drop">();
   readonly logins: Array<{ username: string; password: string; ok: boolean }> = [];
   readonly connects: string[] = [];
   #server: TcpServer | null = null;
@@ -320,6 +323,15 @@ export class FakeSocks {
         this.connects.push(`${host}:${port}`);
         const local = this.routes.get(`${host}:${port}`);
         const reply = (code: number) => Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0]);
+        const answer = this.answers.get(`${host}:${port}`);
+        if (answer === "drop") {
+          socket.destroy();
+          return;
+        }
+        if (answer !== undefined) {
+          socket.end(reply(answer));
+          return;
+        }
         if (local === undefined) {
           socket.end(reply(4));
           return;

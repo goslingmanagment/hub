@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
+
 import {
   acquireSyncPageOwnership,
   captureAttempt,
@@ -1217,6 +1219,25 @@ describe("sync_attempts", () => {
     await siteSend(other, otherGeneration, before);
     const knownSent = new Date(known.admittedAt.getTime() + 50);
     expect(await capture(other, known.attemptId, knownSent)).toEqual({ captured: true, previousSendAt: before, paceGapMs: 80 });
+
+    // Released by the page's browser after its quiet (0290): a site send
+    // between the admission and the release was in its sight — the
+    // predecessor; the grant and the release are kept on the attempt.
+    const seen = await seedPage("capture-b12-released");
+    const seenGeneration = await own(seen);
+    const released = await hub(seen, seenGeneration, "a");
+    const grantedAt = new Date(released.admittedAt.getTime() + 10);
+    const releasedAt = new Date(released.admittedAt.getTime() + 50);
+    const inSight = new Date(released.admittedAt.getTime() + 40);
+    await siteSend(seen, seenGeneration, inSight);
+    const releasedSent = new Date(released.admittedAt.getTime() + 60);
+    expect(await captureAttempt(db(), {
+      attemptId: released.attemptId, pageId: seen, outcome: "response", sent: true, sentAt: releasedSent, sendMark: "transport_reported", httpStatus: 200, applyState: "none",
+      grantedAt, releasedAt,
+    })).toEqual({ captured: true, previousSendAt: inSight, paceGapMs: 20 });
+    const row = await db().execute<{ grantedAt: Date | string; releasedAt: Date | string }>(sql`select granted_at as "grantedAt", released_at as "releasedAt" from sync_attempts where id = ${released.attemptId}`);
+    expect(new Date(row.rows[0]!.grantedAt).getTime()).toBe(grantedAt.getTime());
+    expect(new Date(row.rows[0]!.releasedAt).getTime()).toBe(releasedAt.getTime());
   });
 
   it("settles a refused attempt without the send facts", async (context) => {

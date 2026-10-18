@@ -91,6 +91,8 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     siteObservedUnconfirmed: 0,
     siteObservedOldestAt: null,
     siteObservedDropped: 0,
+    egressFailures: null,
+    egressFailuresSince: null,
     ...overrides,
   };
 }

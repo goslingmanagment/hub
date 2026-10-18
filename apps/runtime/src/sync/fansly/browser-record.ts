@@ -37,6 +37,13 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 // - the site's observations the operator keeps for the engine's word
 //   (`state.siteObserved`, minor 6) — like the buffer's figures, they move
 //   with every observation and are written with the refresh, not at once;
+// - the exit's refusals since the operator started (`state.egressFailures`:
+//   the page's SOCKS5 by kind, step, reply and the host's class; the rules
+//   extension's blocks by the host's class, the self-test's probes apart),
+//   kept with the state, and what grew of them since the state before into
+//   the engine's counters (`sync_browser_socks_failures`,
+//   `sync_browser_dnr_blocks`) — the first state this recorder hears is only
+//   its baseline: an engine before it may have counted it;
 // - its last `alarm` (kind, instant, scalar details);
 // - the delivery of its events to the engine's commit: p50 and p95 over the
 //   last `deliveryWindowMs`, written every `deliveryWriteMs` while events
@@ -82,14 +89,22 @@ function stateKey(state: State): string {
 const wallDate = (wall: number | null): Date | null => (wall === null ? null : new Date(wall));
 
 /** What a state of minor 5 says for audits, as Hub keeps it: whether a Hub
- *  request can go now, and Chrome's crash dumps — and of minor 6, the site's
- *  observations kept for the engine's word. An older operator's: null. */
-export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSend" | "crashDumps" | "siteObserved"> {
-  const { hubSend, crashDumps, siteObserved } = state;
+ *  request can go now, Chrome's crash dumps, the exit's refusals counted —
+ *  and of minor 6, the site's observations kept for the engine's word. An
+ *  older operator's: null. */
+export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSend" | "crashDumps" | "siteObserved" | "egressFailures"> {
+  const { hubSend, crashDumps, siteObserved, egressFailures } = state;
   return {
     siteObserved: siteObserved === undefined
       ? null
       : { unconfirmed: siteObserved.unconfirmed, oldestAt: wallDate(siteObserved.oldestAtWall), dropped: siteObserved.dropped },
+    egressFailures: egressFailures === undefined
+      ? null
+      : {
+        since: new Date(egressFailures.sinceWall),
+        socks: egressFailures.socks.map(({ lastAtWall, ...entry }) => ({ ...entry, lastAt: new Date(lastAtWall).toISOString() })),
+        dnr: egressFailures.dnr.map(({ lastAtWall, ...entry }) => ({ ...entry, lastAt: new Date(lastAtWall).toISOString() })),
+      },
     hubSend: hubSend === undefined ? null : { allowed: hubSend.allowed, reason: hubSend.reason, since: wallDate(hubSend.sinceWall) },
     crashDumps: crashDumps === undefined || crashDumps === null
       ? null
@@ -99,6 +114,19 @@ export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSe
         countedAt: new Date(crashDumps.countedAtWall),
       },
   };
+}
+
+/** The exit's refusals of a state by entry, each with its counter's name and
+ *  labels (closed vocabularies: engine/counters.ts keeps them). */
+function egressCounts(failures: NonNullable<State["egressFailures"]>): Map<string, { name: string; labels: Record<string, string>; count: number }> {
+  const out = new Map<string, { name: string; labels: Record<string, string>; count: number }>();
+  for (const e of failures.socks) {
+    out.set(`socks|${e.kind}|${e.step}|${e.rep ?? ""}|${e.cls}`, { name: "sync_browser_socks_failures", labels: { kind: e.kind, how: e.step, status: e.rep === null ? "none" : String(e.rep), of: e.cls }, count: e.count });
+  }
+  for (const e of failures.dnr) {
+    out.set(`dnr|${e.cls}|${e.probe}`, { name: "sync_browser_dnr_blocks", labels: { of: e.cls, as: e.probe ? "probe" : "page" }, count: e.count });
+  }
+  return out;
 }
 
 function quantile(sorted: readonly number[], q: number): number {
@@ -116,6 +144,9 @@ export class BrowserRecorder {
   #timer: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
   #latest: State | null = null;
+  /** The exit's refusals of the last state heard (by entry), and since when
+   *  its operator counts (null: none heard yet). */
+  #egressSeen: { sinceWall: number; counts: Map<string, number> } | null = null;
   /** A state came that is not written yet. */
   #unwritten = false;
   #writing: Promise<void> | null = null;
@@ -179,6 +210,7 @@ export class BrowserRecorder {
 
   #onState(state: State): void {
     if (this.#stopped) return;
+    this.#countEgress(state);
     this.#latest = state;
     this.#unwritten = true;
     this.#writeState();
@@ -232,6 +264,24 @@ export class BrowserRecorder {
       // A newer state came meanwhile.
       if (written && !this.#stopped) this.#writeState();
     })();
+  }
+
+  /** What grew of the exit's refusals since the state before (a new
+   *  operator's: all of it) into the engine's counters; the first state this
+   *  recorder hears is its baseline. */
+  #countEgress(state: State): void {
+    const failures = state.egressFailures;
+    if (failures === undefined) return;
+    const counts = egressCounts(failures);
+    const seen = this.#egressSeen;
+    this.#egressSeen = { sinceWall: failures.sinceWall, counts: new Map([...counts].map(([key, entry]) => [key, entry.count])) };
+    if (seen === null) return;
+    const before = seen.sinceWall === failures.sinceWall ? seen.counts : new Map<string, number>();
+    const { metrics, pageId } = this.#d;
+    for (const [key, entry] of counts) {
+      const grew = entry.count - (before.get(key) ?? 0);
+      if (grew > 0) metrics.increment(entry.name, { pageId, ...entry.labels }, grew);
+    }
   }
 
   #onAlarm(alarm: Alarm): void {

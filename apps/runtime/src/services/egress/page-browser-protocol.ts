@@ -31,6 +31,11 @@
 // to an operator of minor 6), the operator keeps them until then and sends
 // them again. `site.response` names the key and hop; `state.siteObserved`
 // says what waits for the engine's word.
+// Additions without a minor of their own (2026-10-18; optional
+// fields a reader older than them skips): `checkResult.pauseMs` (the
+// admission's pause, which the operator keeps by its own sight before the
+// release, plan-b Б12), `sent.releasedMono` (when it released the request) and
+// `state.egressFailures` (the exit's refusals counted).
 export const PROTOCOL = { major: 1, minor: 6 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
@@ -166,6 +171,24 @@ export interface CrashDumpCount {
   count: number;
   newestAtWall: WallMs | null;
 }
+/** The classes of the operator's map of hosts. */
+export const EGRESS_HOST_CLASSES = ["site", "api", "ws", "cdn", "closed", "third_party", "denied"] as const;
+export type EgressHostClass = (typeof EGRESS_HOST_CLASSES)[number];
+/** How the page's SOCKS5 failed a tunnel, and at which step of its exchange. */
+export const SOCKS_FAILURE_KINDS = ["unavailable", "auth", "refused"] as const;
+export type SocksFailureKind = (typeof SOCKS_FAILURE_KINDS)[number];
+export const SOCKS_STEPS = ["greeting", "auth", "connect"] as const;
+export type SocksStep = (typeof SOCKS_STEPS)[number];
+/** Entries of each list at most. */
+export const EGRESS_FAILURE_ENTRIES_MAX = 64;
+/** The exit's refusals since the operator started (`sinceWall`): the page's
+ *  SOCKS5 by kind, step, reply (null: none) and the host's class; the rules
+ *  extension's blocks by the host's class, the self-test's probes apart. */
+export interface EgressFailures {
+  sinceWall: WallMs;
+  socks: Array<{ kind: SocksFailureKind; step: SocksStep; rep: number | null; cls: EgressHostClass; count: number; lastAtWall: WallMs; lastHost: string }>;
+  dnr: Array<{ cls: EgressHostClass; probe: boolean; count: number; lastAtWall: WallMs; lastHost: string }>;
+}
 export interface State {
   type: "state";
   step: Step;
@@ -204,6 +227,9 @@ export interface State {
    *  and `pending`), as counted at Chrome's last start or exit. Null: not
    *  counted. Absent: an operator from before. */
   crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
+  /** (An addition, 2026-10-18.) The exit's refusals since the operator
+   *  started. Absent: an operator from before — not counted. */
+  egressFailures?: EgressFailures;
   /** (Minor 6.) The site's observations the operator keeps for the engine's
    *  word: how many, the oldest one's instant (null: none), how many it
    *  dropped unconfirmed since its start. */
@@ -234,13 +260,20 @@ export interface Check {
   pausedMono: MonoMs;
   liveSessionFingerprint: Sha256Hex;
 }
-export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (Admit | { admit: false; reason: Refusal });
+/** A Hub request admitted; `pauseMs` (an addition): the pause the admission
+ *  keeps from the page's last send of any origin — the operator releases the
+ *  request only after that long a quiet by its own sight (plan-b Б12). */
+export type HubAdmit = Admit & { pauseMs?: number };
+export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (HubAdmit | { admit: false; reason: Refusal });
 export interface Sent {
   type: "sent";
   attemptId: AttemptId;
   sentMono: MonoMs;
   sentWall: WallMs;
   connectionReused: boolean;
+  /** (An addition.) When the operator released the operation's first
+   *  request, after its quiet; absent: not known. */
+  releasedMono?: MonoMs;
 }
 export interface Result {
   type: "result";
@@ -644,6 +677,48 @@ function parseState(m: Record<string, unknown>): State {
     ...(m.hubSend === undefined ? {} : { hubSend: parseHubSend(m.hubSend) }),
     ...(m.crashDumps === undefined ? {} : { crashDumps: parseCrashDumps(m.crashDumps) }),
     ...(m.siteObserved === undefined ? {} : { siteObserved: parseSiteObservedState(m.siteObserved) }),
+    ...(m.egressFailures === undefined ? {} : { egressFailures: parseEgressFailures(m.egressFailures) }),
+  };
+}
+
+const EGRESS_HOST_CLASS_SET: ReadonlySet<string> = new Set(EGRESS_HOST_CLASSES);
+const SOCKS_FAILURE_KIND_SET: ReadonlySet<string> = new Set(SOCKS_FAILURE_KINDS);
+const SOCKS_STEP_SET: ReadonlySet<string> = new Set(SOCKS_STEPS);
+
+function entries(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value) || value.length > EGRESS_FAILURE_ENTRIES_MAX) throw new Invalid(`${what} is not a list of at most ${EGRESS_FAILURE_ENTRIES_MAX}`);
+  return value;
+}
+
+/** `state.egressFailures` (an addition, 2026-10-18). */
+function parseEgressFailures(value: unknown): EgressFailures {
+  const failures = record(value, "egressFailures");
+  return {
+    sinceWall: num(failures.sinceWall, "egressFailures.sinceWall"),
+    socks: entries(failures.socks, "egressFailures.socks").map((item, i) => {
+      const what = `egressFailures.socks[${i}]`;
+      const e = record(item, what);
+      return {
+        kind: oneOf<SocksFailureKind>(e.kind, SOCKS_FAILURE_KIND_SET, `${what}.kind`),
+        step: oneOf<SocksStep>(e.step, SOCKS_STEP_SET, `${what}.step`),
+        rep: e.rep === null ? null : int(e.rep, `${what}.rep`, 1, 255),
+        cls: oneOf<EgressHostClass>(e.cls, EGRESS_HOST_CLASS_SET, `${what}.cls`),
+        count: int(e.count, `${what}.count`, 1),
+        lastAtWall: num(e.lastAtWall, `${what}.lastAtWall`),
+        lastHost: str(e.lastHost, `${what}.lastHost`, 255),
+      };
+    }),
+    dnr: entries(failures.dnr, "egressFailures.dnr").map((item, i) => {
+      const what = `egressFailures.dnr[${i}]`;
+      const e = record(item, what);
+      return {
+        cls: oneOf<EgressHostClass>(e.cls, EGRESS_HOST_CLASS_SET, `${what}.cls`),
+        probe: bool(e.probe, `${what}.probe`),
+        count: int(e.count, `${what}.count`, 1),
+        lastAtWall: num(e.lastAtWall, `${what}.lastAtWall`),
+        lastHost: str(e.lastHost, `${what}.lastHost`, 255),
+      };
+    }),
   };
 }
 
@@ -841,7 +916,14 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
     case "check":
       return { type, attemptId: int(m.attemptId, "attemptId", 1), pausedMono: num(m.pausedMono, "pausedMono"), liveSessionFingerprint: sha256(m.liveSessionFingerprint, "liveSessionFingerprint") };
     case "sent":
-      return { type, attemptId: int(m.attemptId, "attemptId", 1), sentMono: num(m.sentMono, "sentMono"), sentWall: num(m.sentWall, "sentWall"), connectionReused: bool(m.connectionReused, "connectionReused") };
+      return {
+        type,
+        attemptId: int(m.attemptId, "attemptId", 1),
+        sentMono: num(m.sentMono, "sentMono"),
+        sentWall: num(m.sentWall, "sentWall"),
+        connectionReused: bool(m.connectionReused, "connectionReused"),
+        ...(m.releasedMono === undefined ? {} : { releasedMono: num(m.releasedMono, "releasedMono") }),
+      };
     case "result":
       return parseResult(m);
     case "recoverResult":
