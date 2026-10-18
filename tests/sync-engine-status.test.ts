@@ -324,13 +324,13 @@ describe("sync status: estimates and summaries", () => {
         work({ breakerUntil: at(60_000) }),
         work({ blockedByVendorAt: at(-1), breakerUntil: at(86_000_000) }),
       ],
-      sends: { lastHour: { urgent: 4, requests: 0, planned: 9, byResource: { "subscribers.poll": 1 } }, minGapLastHourMs: 2_013, violationsLastDay: 0 },
+      sends: { lastHour: { urgent: 4, requests: 0, planned: 9, byResource: { "subscribers.poll": 1 } }, minGapLastHourMs: 2_013, violationsLastDay: 0, siteCloseLastDay: 3 },
     });
     expect(status).toMatchObject({
       pageLabel: "lora-1",
       mode: "live",
       owner: { generation: "3", host: "sync-1", running: true },
-      pause: { settingMs: 2_000, lastSendAt: at(-10_000).toISOString(), minGapLastHourMs: 2_013, violationsLastDay: 0 },
+      pause: { settingMs: 2_000, lastSendAt: at(-10_000).toISOString(), minGapLastHourMs: 2_013, violationsLastDay: 0, siteCloseLastDay: 3 },
       holds: {
         page: { kind: "auth", until: "infinity", since: at(-60_000).toISOString() },
         resources: [{ file: "media-stats", until: at(600_000).toISOString(), step: 1 }],
@@ -363,7 +363,7 @@ describe("sync status: estimates and summaries", () => {
         // Quarantined work of the chat still needs the owner.
         work({ resource: "dm-messages.catchup", subject: "362195", state: "quarantined" }),
       ],
-      sends: { lastHour: { urgent: 0, requests: 0, planned: 0, byResource: {} }, minGapLastHourMs: null, violationsLastDay: 0 },
+      sends: { lastHour: { urgent: 0, requests: 0, planned: 0, byResource: {} }, minGapLastHourMs: null, violationsLastDay: 0, siteCloseLastDay: 0 },
       unavailableChats: new Set(["362195", "218893"]),
     });
     expect(status).toMatchObject({ breakers: { open: 0, blockedByVendor: 2 }, quarantined: 1, chatsUnavailable: 2 });

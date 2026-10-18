@@ -7,10 +7,10 @@ import {
   getWorkForStatus,
   insertAuditEvent,
   latestClosedWorkForKey,
-  listSendsForPaceAudit,
   listBrowserPageHandovers,
   listUnavailableChatGroups,
   listSyncPages,
+  readFanslySendAudit,
   readRouteJournal,
   readSyncPageWsStatus,
   requeueQuarantinedWork,
@@ -41,6 +41,7 @@ import { holdSetOf, type RouteAdmissionView } from "./engine/admission.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
 import { routeAdmissionView, routeJournalLookbackMs, RouteClocks, routeStatusView } from "./engine/route-policy.ts";
+import { auditPagePace } from "./engine/send-audit.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
@@ -179,9 +180,13 @@ export async function readSyncPageStatus(
     limit: 1_000,
   });
   const lastHour = await countSendsSince(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS) });
-  const hourSends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS) });
-  const daySends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - DAY_MS) });
-  const gaps = hourSends.map((send) => send.gapMs).filter((gap): gap is number => gap !== null);
+  // The pause record by the send audit's own judgement (`engine/send-audit.ts`,
+  // the alert evaluator's): Hub's sends against the send before them of any
+  // origin; the site's own requests are never judged, only counted apart.
+  const dayAgo = new Date(now.getTime() - DAY_MS);
+  const journal = await readFanslySendAudit(db, { pageId: page.pageId, since: dayAgo });
+  const day = auditPagePace(journal, { start: dayAgo, until: null });
+  const hour = auditPagePace(journal, { start: new Date(now.getTime() - HOUR_MS), until: null });
   // The socket is the engine's to report only on a page it owns; history
   // requests exist only there too (the intake refuses every other page).
   const owned = !runsNoActor(page);
@@ -202,8 +207,9 @@ export async function readSyncPageStatus(
     works: works.map(statusWork),
     sends: {
       lastHour,
-      minGapLastHourMs: gaps.length === 0 ? null : Math.min(...gaps),
-      violationsLastDay: daySends.filter((send) => send.gapMs !== null && send.gapMs < send.settingMs).length,
+      minGapLastHourMs: hour.minGapMs,
+      violationsLastDay: day.violations.length,
+      siteCloseLastDay: day.siteClose,
     },
     requests,
     unavailableChats,

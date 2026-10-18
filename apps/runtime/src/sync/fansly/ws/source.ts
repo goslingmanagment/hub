@@ -40,7 +40,7 @@ import { errorName, type SyncLogger } from "../../engine/commit.ts";
 import { REQUEST_TIMEOUT_MS } from "../../engine/pacer.ts";
 import type { AlertSink, Clock, Metrics, Rng, SendHooks, TransportOutcome } from "../../engine/ports.ts";
 import type { DemandSignal } from "../../engine/resource.ts";
-import { routeFanslyWsReceiptDemand } from "./route-receipt.ts";
+import { createFanslyWsReceiptRouter } from "./route-receipt.ts";
 
 // The page's WebSocket in the `sync` process (step-3 design §3.3, S2 §6.3): the
 // step-1 receiver re-cut around the engine's pacer; the legacy receiver it came
@@ -629,7 +629,7 @@ export class FanslyWsSource {
     // The receipt's demand is routed in the transaction that acks it (I18).
     const applier = createFanslyWsLiveApplier(
       { db: this.#d.db, logger: logger as never },
-      { afterAck: routeFanslyWsReceiptDemand },
+      { afterAck: createFanslyWsReceiptRouter({ metrics: this.#d.metrics }) },
     );
     const opener = this.#d.openSocket ?? openFanslyReceiverSocket;
     const run = async (): Promise<FanslyWsStopReason> => {

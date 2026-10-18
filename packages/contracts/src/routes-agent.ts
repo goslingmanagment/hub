@@ -2647,9 +2647,17 @@ export const agentSyncPageStatusSchema = z.object({
     /** The owner's pause setting S, as the engine reads it. */
     settingMs: z.number().int().positive(),
     lastSendAt: agentIsoTimestamp.nullable(),
+    /** The smallest gap before one of Hub's sends over the last hour, to the
+     *  page's send before it of any origin (the send audit's). */
     minGapLastHourMs: z.number().nonnegative().nullable(),
-    /** Sends closer than their S over the last day (the owner's rule says 0). */
+    /** Hub's sends closer than their pause to the page's send before them over
+     *  the last day, by the send audit (the owner's rule says 0). The site's
+     *  own requests are never judged. */
     violationsLastDay: agentSyncCountSchema,
+    /** The site's own requests (sent by the page's browser, never admitted)
+     *  closer than their S to the page's request before them over the last
+     *  day: the site's pace, never a violation. */
+    siteCloseLastDay: agentSyncCountSchema,
   }).strict(),
   sendsLastHour: z.object({
     urgent: agentSyncCountSchema,

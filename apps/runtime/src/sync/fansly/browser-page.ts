@@ -29,7 +29,7 @@ import { createBrowserPageTransport, type BrowserPageTransportOptions } from "./
 import { BrowserWsGuard, type BrowserWsGuardTiming } from "./ws/browser-guard.ts";
 import { BrowserWsSource } from "./ws/browser-source.ts";
 import { SYNC_WS_APPLY_DRAIN_MS } from "./ws/source.ts";
-import { routeFanslyWsReceiptDemand } from "./ws/route-receipt.ts";
+import { createFanslyWsReceiptRouter } from "./ws/route-receipt.ts";
 
 // A browser page's slot (Project Browser, plan §3.2 «Выбор транспорта
 // страницы», §4.7, §4.13; stage 3 PR 14): what the host builds for a page
@@ -350,7 +350,7 @@ export function browserIntakeOf(
 ): { socket: BrowserWsSource; applier: ReturnType<typeof createFanslyWsLiveApplier>; intake: BrowserBufferIntake } {
   const { db, pageId, logger, metrics } = deps;
   const socket = new BrowserWsSource({ db, pageId });
-  const applier = createFanslyWsLiveApplier({ db, logger: logger as never }, { afterAck: routeFanslyWsReceiptDemand });
+  const applier = createFanslyWsLiveApplier({ db, logger: logger as never }, { afterAck: createFanslyWsReceiptRouter({ metrics }) });
   const intakeTiming = deps.overrides?.intakeTiming;
   const intake = new BrowserBufferIntake({
     db,
